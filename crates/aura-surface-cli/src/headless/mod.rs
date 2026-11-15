@@ -284,6 +284,7 @@ async fn build(
         approvals: None,
         web_tools,
         post_edit_check: post_edit_check_from_env(),
+        trace_snapshots: false,
     });
     let notices = hub.take_notices();
     Ok(Headless {

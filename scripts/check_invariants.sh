@@ -80,10 +80,13 @@ run_band() {
 #     handing it over)
 #   - the memory subsystem, which only ever holds an Arc<KernelModelGateway>
 #     (`aura-context-memory/`)
+#   - the trace `ReplayProvider` (`aura-agent-trace/src/replay.rs`), a
+#     provider decorator handed to `Kernel::new`, so its hand-off to the
+#     live provider is still recorded by the kernel
 #   - any *test* file (unit, integration, harness shims)
 run_band "§1/§3" "direct ModelProvider::complete call outside the recording seam" \
     '\.complete\(' \
-    '^(crates/aura-agent-kernel/|crates/aura-agent/src/kernel_gateway\.rs|crates/aura-agent/src/recording_stream\.rs|crates/aura-agent/src/agent_loop/|crates/aura-agent/src/event_sequence_tests\.rs|crates/aura-model-reasoner/|crates/aura-automaton/|crates/aura-context-memory/|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/aura-agent-kernel/|crates/aura-agent/src/kernel_gateway\.rs|crates/aura-agent/src/recording_stream\.rs|crates/aura-agent/src/agent_loop/|crates/aura-agent/src/event_sequence_tests\.rs|crates/aura-model-reasoner/|crates/aura-automaton/|crates/aura-context-memory/|crates/aura-agent-trace/src/replay\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §2 — direct store append functions bypass the per-agent kernel's
 # seq/context-hash pipeline unless they are inside:

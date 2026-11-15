@@ -257,7 +257,7 @@ fn allowed_after_no_write_task_done_reject(tool_name: &str) -> bool {
 /// is safe (it just means we don't count it against the error ratio),
 /// and the `last_command_failed` short-circuit is still protected by
 /// the tool-name check on `run_command`.
-fn is_policy_denial(content: &str) -> bool {
+pub(crate) fn is_policy_denial(content: &str) -> bool {
     let trimmed = content.trim_start();
     trimmed.starts_with("Tool '") && trimmed.contains("is not allowed")
         || trimmed.starts_with("Tool '") && trimmed.contains("requires approval")

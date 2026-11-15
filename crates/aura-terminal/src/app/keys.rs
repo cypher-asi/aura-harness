@@ -52,6 +52,12 @@ impl App {
             }
             return;
         }
+        if self.detail == Some(super::DetailView::Graph) {
+            if self.handle_graph_key(key) {
+                self.close_detail();
+            }
+            return;
+        }
         let page = self.detail_page_rows();
         match key.code {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.close_detail(),
@@ -388,6 +394,10 @@ impl App {
                 SidePanelTab::Sandbox => self.handle_sandbox_key(key),
                 SidePanelTab::Processes => {
                     self.handle_processes_key(key);
+                    KeyResult::continue_running()
+                }
+                SidePanelTab::Trace => {
+                    self.handle_trace_key(key);
                     KeyResult::continue_running()
                 }
             },

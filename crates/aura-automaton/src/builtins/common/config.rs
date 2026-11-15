@@ -94,7 +94,7 @@ impl AgentIdentityEnvelope {
             && self
                 .system_prompt
                 .as_deref()
-                .map_or(true, |s| s.trim().is_empty())
+                .is_none_or(|s| s.trim().is_empty())
     }
 
     /// Borrow this envelope as an [`aura_context_prompts::AgentInfo`].

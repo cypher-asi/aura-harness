@@ -892,8 +892,17 @@ impl TurnEventSink for OutboundMessageSink<'_> {
 }
 
 pub(super) async fn forward_events_to_ws(
+    event_rx: mpsc::Receiver<AgentLoopEvent>,
+    outbound: mpsc::Sender<OutboundMessage>,
+) {
+    forward_and_record(event_rx, outbound, None).await;
+}
+
+/// [`forward_events_to_ws`], also recording each event to `recorder`.
+pub(super) async fn forward_and_record(
     mut event_rx: mpsc::Receiver<AgentLoopEvent>,
     outbound: mpsc::Sender<OutboundMessage>,
+    recorder: Option<Arc<aura_agent_trace::RunRecorder>>,
 ) {
     let mut sink = OutboundMessageSink {
         outbound: &outbound,
@@ -901,6 +910,9 @@ pub(super) async fn forward_events_to_ws(
         pending_delta: None,
     };
     while let Some(event) = event_rx.recv().await {
+        if let Some(rec) = &recorder {
+            rec.on_event(&event);
+        }
         map_agent_loop_event(event, &mut sink).await;
         if sink.closed {
             break;
@@ -909,12 +921,55 @@ pub(super) async fn forward_events_to_ws(
     sink.flush_pending_delta().await;
 }
 
+/// Run trace of `session`, started on first use. `None` unless the
+/// operator set `AURA_TRACE`, or when the bundle can't be created.
+pub(super) fn trace_recorder(
+    session: &mut Session,
+    model: &str,
+) -> Option<Arc<aura_agent_trace::RunRecorder>> {
+    if session.trace.is_none() && aura_config::trace().explicit {
+        let mut meta = aura_agent_trace::RunMeta::new(model, aura_agent_trace::RunSource::Gateway);
+        meta.workspace = session.workspace.display().to_string();
+        meta.mode = format!("{:?}", session.mode).to_lowercase();
+        meta.task_id = Some(
+            session
+                .aura_session_id
+                .clone()
+                .unwrap_or_else(|| session.session_id.clone()),
+        );
+        session.trace = aura_agent_trace::RunRecorder::start_default(meta);
+    }
+    session.trace.clone()
+}
+
+fn record_turn_end(
+    session: &Session,
+    join_result: &Result<anyhow::Result<AgentLoopResult>, tokio::task::JoinError>,
+) {
+    let Some(rec) = &session.trace else {
+        return;
+    };
+    match join_result {
+        Ok(Ok(result)) => rec.end_turn(result),
+        Ok(Err(e)) => rec.end_turn(&AgentLoopResult {
+            llm_error: Some(e.to_string()),
+            ..AgentLoopResult::default()
+        }),
+        Err(e) => rec.end_turn(&AgentLoopResult {
+            llm_error: Some(format!("turn task panicked: {e}")),
+            ..AgentLoopResult::default()
+        }),
+    }
+    rec.finish();
+}
+
 pub(super) async fn finalize_turn(
     session: &mut Session,
     join_result: Result<anyhow::Result<AgentLoopResult>, tokio::task::JoinError>,
     message_id: &str,
     outbound_tx: &mpsc::Sender<OutboundMessage>,
 ) {
+    record_turn_end(session, &join_result);
     let result = match join_result {
         Ok(inner) => inner,
         Err(e) => {
@@ -993,7 +1048,9 @@ pub(super) async fn apply_turn_result(
     session.cumulative_cache_creation_input_tokens += cache_creation_input_tokens;
     session.cumulative_cache_read_input_tokens += cache_read_input_tokens;
 
-    let stop_reason = if loop_result.timed_out {
+    let stop_reason = if loop_result.budget_exhausted {
+        "budget"
+    } else if loop_result.timed_out {
         "cancelled"
     } else if loop_result.insufficient_credits {
         "insufficient_credits"

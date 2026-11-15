@@ -742,8 +742,10 @@ async fn run_task_turn(
 
     // Nothing sends to a spawn mid-task, so its steering stays empty.
     let steering = Steering::new(cancel);
-    let (result, forwarded) =
-        run_agent_turn(session, agent_loop, tools, ui, cancel, &steering, limits).await;
+    let (result, forwarded) = run_agent_turn(
+        session, agent_loop, tools, ui, cancel, &steering, limits, None,
+    )
+    .await;
     steering.finish(&[]);
     let result = match result {
         Ok(result) => result,

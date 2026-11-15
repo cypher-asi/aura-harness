@@ -7,6 +7,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Run traces (`aura-agent-trace`)
+
+##### Added
+
+- Every terminal and desktop conversation is recorded as a run under
+  `AURA_HOME/runs/`, one run per agent conversation, with a scorecard
+  written after each turn. Kernel snapshots are kept with the runs so
+  `aura runs` can replay them. See [`docs/run-traces.md`](docs/run-traces.md).
+- `/graph [id]` opens a run's live graph (step labels, record and file
+  links), `/runs` lists recorded runs and `/status` shows this
+  conversation's scorecard. The status line shows each model call's
+  iteration and running token count.
+- `aura runs` (list, show, diff, label, verify, branch), `aura dataset
+  build` and `aura eval run/compare` with the `evals/coding` suite.
+
 ### Surface — native desktop app (`aura-desktop`)
 
 ##### Added

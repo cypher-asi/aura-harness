@@ -155,6 +155,8 @@ pub struct Session {
     /// Messages from agents this session spawned, waiting for an idle
     /// moment to run as a turn.
     pub(crate) agent_mailbox: Arc<super::agent_inbox::AgentMailbox>,
+    /// Run trace of this conversation, started on its first turn.
+    pub(crate) trace: Option<Arc<aura_agent_trace::RunRecorder>>,
 }
 
 impl Session {
@@ -205,6 +207,7 @@ impl Session {
             computer_executor_url: None,
             mode: aura_core_types::AgentMode::Agent,
             agent_mailbox: Arc::default(),
+            trace: None,
         }
     }
 

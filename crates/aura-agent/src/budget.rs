@@ -1,7 +1,5 @@
 //! Budget tracking — exploration, token, and credit budget management.
 
-use aura_config::{BUDGET_WARNING_30, BUDGET_WARNING_40_NO_WRITE, BUDGET_WARNING_60};
-
 /// Budget tracking state.
 #[derive(Debug, Default)]
 pub struct BudgetState {
@@ -33,7 +31,8 @@ pub fn check_budget_warning(
     utilization: f64,
     had_any_write: bool,
 ) -> Option<String> {
-    if utilization >= BUDGET_WARNING_60 && !budget.warned_60 {
+    let thresholds = aura_config::agent().thinking;
+    if utilization >= thresholds.budget_warning_60 && !budget.warned_60 {
         budget.warned_60 = true;
         return Some(
             "WARNING: You have used over 60% of your iteration budget. \
@@ -42,7 +41,10 @@ pub fn check_budget_warning(
         );
     }
 
-    if utilization >= BUDGET_WARNING_40_NO_WRITE && !had_any_write && !budget.warned_40_no_write {
+    if utilization >= thresholds.budget_warning_40_no_write
+        && !had_any_write
+        && !budget.warned_40_no_write
+    {
         budget.warned_40_no_write = true;
         return Some(
             "CRITICAL WARNING: You have used 40% of your budget without making ANY writes. \
@@ -51,7 +53,7 @@ pub fn check_budget_warning(
         );
     }
 
-    if utilization >= BUDGET_WARNING_30 && !budget.warned_30 {
+    if utilization >= thresholds.budget_warning_30 && !budget.warned_30 {
         budget.warned_30 = true;
         return Some(
             "NOTE: You have used 30% of your iteration budget. \

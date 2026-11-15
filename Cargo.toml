@@ -59,6 +59,7 @@ members = [
     "crates/aura-terminal",
     "crates/aura-agent",
     "crates/aura-agent-steering",
+    "crates/aura-agent-trace",
     "crates/aura-auth",
     # One crate per auth method; aura-auth composes them.
     "crates/aura-auth-kit",
@@ -121,6 +122,7 @@ crossterm = "0.28"
 
 # Hashing
 blake3 = "1.5"
+zstd = { version = "0.13", default-features = false }
 
 # YAML
 serde_yaml = "0.9"
@@ -236,6 +238,8 @@ aura-agent-kernel = { path = "crates/aura-agent-kernel" }
 aura-store-db = { path = "crates/aura-store-db" }
 aura-model-reasoner = { path = "crates/aura-model-reasoner" }
 aura-agent = { path = "crates/aura-agent" }
+aura-agent-trace = { path = "crates/aura-agent-trace" }
+chrono = { workspace = true }
 aura-automaton = { path = "crates/aura-automaton" }
 aura-tools = { path = "crates/aura-tools" }
 aura-protocol = { path = "crates/aura-protocol" }

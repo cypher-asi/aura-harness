@@ -272,8 +272,7 @@ mod tests {
             assert!(kind.allowed_tools.iter().any(|tool| tool == "run_command"));
             assert!(
                 kind.allowed_capabilities
-                    .iter()
-                    .any(|capability| *capability == Capability::InvokeProcess),
+                    .contains(&Capability::InvokeProcess),
                 "{name} must retain InvokeProcess for verification commands"
             );
         }
@@ -288,8 +287,7 @@ mod tests {
             }
             assert!(
                 kind.allowed_capabilities
-                    .iter()
-                    .any(|capability| *capability == Capability::InvokeProcess),
+                    .contains(&Capability::InvokeProcess),
                 "{} exposes run_command without InvokeProcess",
                 kind.name
             );

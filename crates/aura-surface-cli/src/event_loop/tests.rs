@@ -207,6 +207,8 @@ fn loop_state<'a>(fixture: &'a Fixture, b: &'a mut Borrowed) -> LoopState<'a> {
         pending_link: None,
         processes: Arc::clone(&fixture.hub.processes),
         approvals: Arc::clone(&fixture.approvals),
+        traces: HashMap::new(),
+        record_router: Arc::new(aura_agent_trace::RecordRouter::new()),
     }
 }
 

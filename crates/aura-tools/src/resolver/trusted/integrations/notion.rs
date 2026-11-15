@@ -737,7 +737,7 @@ fn notion_id_from_ref(value: &str) -> String {
     if let Ok(url) = Url::parse(trimmed) {
         if let Some(segment) = url
             .path_segments()
-            .and_then(|segments| segments.filter(|segment| !segment.is_empty()).last())
+            .and_then(|segments| segments.filter(|segment| !segment.is_empty()).next_back())
         {
             let candidate = segment.rsplit('-').next().unwrap_or(segment);
             if is_notion_id(candidate) {

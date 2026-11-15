@@ -1,0 +1,4 @@
+title = "Write a file"
+prompt = "Create a file named greeting.txt in the workspace root containing exactly one line: hello, aura"
+verify = "grep -qx 'hello, aura' greeting.txt"
+max_iterations = 5

@@ -23,7 +23,9 @@ use tracing::{debug, error, info, warn};
 
 /// Run one turn of `session` on `agent_loop` with `tools`, streaming it
 /// into `ui`. `cancel` stops it early, `steering` feeds it messages while
-/// it runs, and `limits` may stop it for time or cost.
+/// it runs, and `limits` may stop it for time or cost. `recorder` traces
+/// the turn's events into its conversation's run.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn run_agent_turn(
     session: &AgentSession,
     agent_loop: &aura_agent::AgentLoop,
@@ -32,6 +34,7 @@ pub(super) async fn run_agent_turn(
     cancel: &CancellationToken,
     steering: &Steering,
     limits: LongRunSettings,
+    recorder: Option<std::sync::Arc<aura_agent_trace::RunRecorder>>,
 ) -> (
     Result<aura_agent::AgentLoopResult, aura_agent::AgentError>,
     ForwarderState,
@@ -56,6 +59,7 @@ pub(super) async fn run_agent_turn(
                 .then(|| session.active_plan.clone())
                 .flatten(),
         },
+        recorder,
     ));
 
     let process_result = drive_turn(
@@ -228,7 +232,6 @@ async fn emit_response_to_ui(
 /// saying why, while the agent is busy.
 pub(super) async fn handle_new_session(state: &mut LoopState<'_>) -> bool {
     debug!("New session requested");
-
     let agent_id = state.active;
     let Some(session) = state.idle.get_mut(&agent_id) else {
         let _ = state
@@ -243,6 +246,7 @@ pub(super) async fn handle_new_session(state: &mut LoopState<'_>) -> bool {
 
     mark_session_start(session).await;
     session.reset();
+    super::trace::close(state, agent_id);
     let ui =
         AgentUi::new(state.commands.clone(), agent_id).with_shown(state.hub.record_panel.clone());
     ui.send(UiCommand::SetTodos(Vec::new())).await;

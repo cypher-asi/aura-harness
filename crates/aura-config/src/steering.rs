@@ -22,6 +22,14 @@ pub const IMPLEMENT_NOW_MAX_PATHS_IN_MESSAGE: usize = 5;
 /// nudge. Compile-time only.
 pub const REPEATED_READ_THRESHOLD: usize = 3;
 
+/// Identical failed `edit_file` attempts before the loop tells the
+/// model to stop repeating the edit.
+pub const FAILED_EDIT_WARN_AFTER: u32 = 3;
+
+/// Identical failed `edit_file` attempts before the loop stops the
+/// turn as stalled.
+pub const FAILED_EDIT_STOP_AFTER: u32 = 4;
+
 // ---------------------------------------------------------------------------
 // Config struct
 // ---------------------------------------------------------------------------
@@ -54,6 +62,12 @@ pub struct SteeringConfig {
     /// [`IMPLEMENT_NOW_MAX_PATHS_IN_MESSAGE`] = `5`). Cap on how many
     /// read paths the gate surfaces in the rendered message body.
     pub implement_now_max_paths_in_message: usize,
+    /// Compile-time only (default: [`FAILED_EDIT_WARN_AFTER`] = `3`).
+    /// Identical failed edits before the stop-repeating warning.
+    pub failed_edit_warn_after: u32,
+    /// Compile-time only (default: [`FAILED_EDIT_STOP_AFTER`] = `4`).
+    /// Identical failed edits before the turn stops as stalled.
+    pub failed_edit_stop_after: u32,
 }
 
 impl SteeringConfig {
@@ -66,6 +80,8 @@ impl SteeringConfig {
             implement_now_hard_block: true,
             repeated_read_threshold: REPEATED_READ_THRESHOLD,
             implement_now_max_paths_in_message: IMPLEMENT_NOW_MAX_PATHS_IN_MESSAGE,
+            failed_edit_warn_after: FAILED_EDIT_WARN_AFTER,
+            failed_edit_stop_after: FAILED_EDIT_STOP_AFTER,
         }
     }
 

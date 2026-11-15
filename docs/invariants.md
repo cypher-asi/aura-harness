@@ -412,6 +412,11 @@ credential authority. Org-level credential persistence and canonical secret
 retrieval live in the surface-layer [`aura-auth`](../crates/aura-auth/)
 crate, not inside any agent kernel.
 
+The trace [`ReplayProvider`](../crates/aura-agent-trace/src/replay.rs)
+is the one `.complete(` caller outside these crates. It wraps a provider and
+is itself passed to `Kernel::new`, so the kernel still records every call,
+including the hand-off to the live provider after the replayed prefix.
+
 ### Type-level enforcement: sealed `RecordingModelProvider`
 
 In addition to the `rg`-band CI gate on `.complete(`, automatons

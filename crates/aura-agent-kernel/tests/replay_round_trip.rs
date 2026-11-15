@@ -29,7 +29,9 @@
 //!    Replaying against the default [`NoopSnapshotStore`] (which
 //!    never returns bytes) aborts with
 //!    [`ReplayError::SnapshotMissing`] carrying the recorded
-//!    `full_hash`.
+//!    `full_hash`. When the live kernel writes to an
+//!    [`FsSnapshotStore`], replay against that store resolves the
+//!    summary instead.
 
 use std::sync::Arc;
 
@@ -45,7 +47,7 @@ use aura_core_types::{
 };
 use aura_model_reasoner::{MockProvider, ModelProvider};
 use aura_store_db::{RocksStore, Store, WriteStore};
-use aura_store_snapshot::{NoopSnapshotStore, SnapshotStore};
+use aura_store_snapshot::{FsSnapshotStore, NoopSnapshotStore, SnapshotStore};
 use tempfile::TempDir;
 
 // =============================================================================
@@ -115,6 +117,14 @@ struct LiveFixture {
 }
 
 fn build_live_kernel(payload: Vec<u8>, kernel_mode: KernelMode) -> LiveFixture {
+    build_live_kernel_with(payload, kernel_mode, Arc::new(NoopSnapshotStore))
+}
+
+fn build_live_kernel_with(
+    payload: Vec<u8>,
+    kernel_mode: KernelMode,
+    snapshot_store: Arc<dyn SnapshotStore>,
+) -> LiveFixture {
     let db_dir = TempDir::new().expect("temp dir");
     let ws_dir = TempDir::new().expect("temp dir");
     let agent_id = AgentId::generate();
@@ -133,6 +143,7 @@ fn build_live_kernel(payload: Vec<u8>, kernel_mode: KernelMode) -> LiveFixture {
         // Force every AuditedLite effect path to summarise; the
         // default 1 KiB threshold is too coarse for fast tests.
         audited_lite_threshold_bytes: 16,
+        snapshot_store,
         ..KernelConfig::default()
     };
 
@@ -410,6 +421,31 @@ async fn replay_aborts_on_snapshot_missing_for_audited_lite_summary() {
         }
         Err(other) => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn replay_resolves_audited_lite_summary_from_fs_snapshot_store() {
+    let blobs = TempDir::new().expect("temp dir");
+    let snapshots: Arc<dyn SnapshotStore> =
+        Arc::new(FsSnapshotStore::open(blobs.path()).expect("open snapshot store"));
+    let fixture =
+        build_live_kernel_with(vec![0x5Au8; 64], KernelMode::AuditedLite, snapshots.clone());
+
+    let proposal = ToolProposal::new(
+        "tool-use-lite",
+        "read_file",
+        serde_json::json!({ "path": "lite.txt" }),
+    );
+    let tool_tx =
+        Transaction::tool_proposal(fixture.agent_id, &proposal).expect("tool proposal tx");
+    let _ = fixture
+        .kernel
+        .process_direct(tool_tx)
+        .await
+        .expect("process tool");
+
+    build_replay_kernel(&fixture, 0, snapshots)
+        .expect("replay must resolve the summary from the snapshot store");
 }
 
 // =============================================================================

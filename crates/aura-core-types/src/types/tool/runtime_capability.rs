@@ -53,15 +53,15 @@ pub fn integration_match(
     requirement
         .integration_id
         .as_deref()
-        .map_or(true, |expected| candidate.integration_id == expected)
+        .is_none_or(|expected| candidate.integration_id == expected)
         && requirement
             .provider
             .as_deref()
-            .map_or(true, |expected| candidate.provider == expected)
+            .is_none_or(|expected| candidate.provider == expected)
         && requirement
             .kind
             .as_deref()
-            .map_or(true, |expected| candidate.kind == expected)
+            .is_none_or(|expected| candidate.kind == expected)
 }
 
 /// Return `true` if any element of `installed` satisfies `requirement`

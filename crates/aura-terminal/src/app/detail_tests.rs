@@ -17,7 +17,7 @@ fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
     }
 }
 
-fn record(seq: u64) -> RecordSummary {
+pub(super) fn record(seq: u64) -> RecordSummary {
     RecordSummary {
         seq,
         timestamp: "12:00:00".to_string(),

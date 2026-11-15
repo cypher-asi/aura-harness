@@ -1,0 +1,4 @@
+title = "Rename a function across files"
+prompt = "Rename the function `calc_total` to `compute_total` everywhere in this project, including its definition, every call site, and the docs."
+verify = "! grep -rq calc_total . && grep -q 'def compute_total' src/billing.py && grep -q compute_total src/report.py && grep -q compute_total src/cli.py && grep -q compute_total README.md"
+max_iterations = 20

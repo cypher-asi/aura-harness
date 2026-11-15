@@ -92,13 +92,13 @@ pub struct KernelConfig {
     /// Wiring this field replaces the Phase 6a `replay_mode: bool`
     /// placeholder that had no consumer.
     pub replay_from: Option<u64>,
-    /// Snapshot-store backend consulted during replay for
-    /// AuditedLite payloads. Defaults to
-    /// [`aura_store_snapshot::NoopSnapshotStore`] (always returns
-    /// `None`), so replay of an AuditedLite turn surfaces
-    /// [`crate::ReplayError::SnapshotMissing`] unless a real
-    /// content-addressed backend is wired here. The stub is the
-    /// V1 default per the architecture plan.
+    /// Content-addressed store for AuditedLite payloads: the kernel
+    /// writes each summarised effect's full bytes here, and replay
+    /// reads them back. Defaults to
+    /// [`aura_store_snapshot::NoopSnapshotStore`] (keeps nothing), so
+    /// replay of an AuditedLite turn surfaces
+    /// [`crate::ReplayError::SnapshotMissing`] unless a real backend
+    /// such as [`aura_store_snapshot::FsSnapshotStore`] is wired here.
     pub snapshot_store: Arc<dyn SnapshotStore>,
     /// Timeout for reasoner proposals in milliseconds.
     pub proposal_timeout_ms: u64,

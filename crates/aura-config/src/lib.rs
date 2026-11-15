@@ -68,6 +68,7 @@
 //! | `AURA_SUBAGENT_DEFAULT_TIMEOUT_MS` | u64 | `300_000` | [`SubagentConfig::default_timeout_ms`] |
 //! | `AURA_CONFLICT_ENABLED` | bool | `true` | [`ConflictConfig::enabled`] |
 //! | `AURA_CONFLICT_DEFAULT_WAIT_MS` | u64 | `30_000` | [`ConflictConfig::default_wait_ms`] |
+//! | `AURA_TRACE` | `off`/`decisions`/`full` | `decisions` | [`TraceConfig::level`] |
 //! | `AURA_HOME` | path | `~/.aura` | [`AuraHome::resolve`] (read-only `CODEX_HOME` compat alias also honoured during V1 transition) |
 //!
 //! Tool-sandbox knobs (`file_ops::SKIP_DIRS`, `INCLUDE_EXTENSIONS`),
@@ -130,6 +131,7 @@ pub mod steering;
 pub mod subagent;
 pub mod thinking;
 pub mod tools;
+pub mod trace;
 pub mod verify;
 
 use std::sync::{Mutex, OnceLock, PoisonError};
@@ -168,7 +170,8 @@ pub use prompts::{
     REPEATED_READ_HASH_DISPLAY_CHARS,
 };
 pub use steering::{
-    IMPLEMENT_NOW_DEFAULT_THRESHOLD, IMPLEMENT_NOW_MAX_PATHS_IN_MESSAGE, REPEATED_READ_THRESHOLD,
+    FAILED_EDIT_STOP_AFTER, FAILED_EDIT_WARN_AFTER, IMPLEMENT_NOW_DEFAULT_THRESHOLD,
+    IMPLEMENT_NOW_MAX_PATHS_IN_MESSAGE, REPEATED_READ_THRESHOLD,
 };
 pub use thinking::{
     AUTO_BUILD_COOLDOWN, BUDGET_WARNING_30, BUDGET_WARNING_40_NO_WRITE, BUDGET_WARNING_60,
@@ -181,6 +184,7 @@ pub use tools::{
     READS_AFTER_WRITE_ALLOWANCE, TOOL_ERROR_PREVIEW_LIMIT, WRITE_FILE_CHUNK_BYTES,
     WRITE_FILE_HARD_MAX_BYTES, WRITE_TOOLS,
 };
+pub use trace::{HarnessParams, TraceConfig, TraceLevel};
 pub use verify::{
     BUILD_FIX_SNAPSHOT_BUDGET, BUILD_TIMEOUT_SECS, ERROR_SOURCE_BUDGET, GIT_READ_TIMEOUT_SECS,
     MAX_OUTPUT_BYTES, MAX_TYPE_FILES, RESOLVE_BUDGET,
@@ -214,6 +218,8 @@ pub struct AuraConfig {
     /// Plugin enable/disable + per-plugin overrides (Phase 4a;
     /// populated from operator config in Phase 4b).
     pub plugins: PluginsConfig,
+    /// Run-trace capture level.
+    pub trace: TraceConfig,
 }
 
 impl AuraConfig {
@@ -226,6 +232,7 @@ impl AuraConfig {
             subagent: SubagentConfig::defaults(),
             conflict: ConflictConfig::defaults(),
             plugins: PluginsConfig::defaults(),
+            trace: TraceConfig::defaults(),
         }
     }
 
@@ -246,6 +253,7 @@ impl AuraConfig {
             // from the on-disk TOML in Phase 4b. Default = empty
             // (no plugins active), which matches V1 behaviour.
             plugins: PluginsConfig::defaults(),
+            trace: TraceConfig::from_env(),
         })
     }
 }
@@ -315,6 +323,18 @@ pub fn agent() -> AgentConfig {
 #[must_use]
 pub fn reasoner() -> ReasonerConfig {
     current().reasoner
+}
+
+/// Shortcut for `loaded().trace`.
+#[must_use]
+pub fn trace() -> TraceConfig {
+    current().trace
+}
+
+/// Replace the process-wide config. For process-start overrides such
+/// as eval arms; tests use [`install_for_test`] instead.
+pub fn install(cfg: AuraConfig) {
+    *slot().lock().unwrap_or_else(PoisonError::into_inner) = cfg;
 }
 
 /// RAII guard returned by [`install_for_test`]. Restores the previous

@@ -15,6 +15,7 @@ aura-agent-steering = { path = "../aura-agent-steering" }
 aura-context-compaction = { path = "../aura-context-compaction" }
 aura-model-reasoner = { path = "../aura-model-reasoner" }
 aura-store-db = { path = "../aura-store-db" }
+aura-store-snapshot = { path = "../aura-store-snapshot" }
 aura-tools = { path = "../aura-tools" }
 # Phase 9: aura-agent no longer depends on aura-auth.
 # Credential storage was moved out to the surface layer

@@ -16,23 +16,35 @@ pub enum SidePanelTab {
     Sandbox,
     /// Live agent turns, spawned agents and background commands.
     Processes,
+    /// Live feed of recorded steps and harness decisions.
+    Trace,
 }
 
 impl SidePanelTab {
-    pub const ALL: [Self; 2] = [Self::Sandbox, Self::Processes];
+    pub const ALL: [Self; 3] = [Self::Sandbox, Self::Processes, Self::Trace];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Sandbox => "SANDBOX",
             Self::Processes => "PROCESSES",
+            Self::Trace => "TRACE",
         }
     }
 
-    const fn other(self) -> Self {
+    pub(super) const fn next(self) -> Self {
         match self {
             Self::Sandbox => Self::Processes,
+            Self::Processes => Self::Trace,
+            Self::Trace => Self::Sandbox,
+        }
+    }
+
+    pub(super) const fn prev(self) -> Self {
+        match self {
+            Self::Sandbox => Self::Trace,
             Self::Processes => Self::Sandbox,
+            Self::Trace => Self::Processes,
         }
     }
 }
@@ -63,6 +75,10 @@ impl App {
                     .count()
                     .to_string(),
             ),
+            SidePanelTab::Trace => {
+                let issues = self.trace_feed.issues();
+                (issues > 0).then(|| format!("{issues}!"))
+            }
         }
     }
 
@@ -116,10 +132,6 @@ impl App {
         self.pending_kill = None;
     }
 
-    pub(super) fn toggle_side_tab(&mut self) {
-        self.show_side_tab(self.side_tab.other());
-    }
-
     /// Replace the list, keeping the highlight on the same process when it
     /// is still listed, and refreshing an open process detail view.
     pub(super) fn set_processes(&mut self, processes: Vec<ProcessSummary>) {
@@ -165,19 +177,23 @@ impl App {
             KeyCode::Home => self.select_process(0),
             KeyCode::End => self.select_process(usize::MAX),
             KeyCode::Enter => self.open_selected_process(),
-            KeyCode::Left | KeyCode::Right => self.toggle_side_tab(),
+            KeyCode::Left => self.show_side_tab(self.side_tab.prev()),
+            KeyCode::Right => self.show_side_tab(self.side_tab.next()),
             _ => {}
         }
     }
 
     /// Shift+Left/Right switches the side panel's tab from either tab.
     pub(super) fn handle_side_tab_key(&mut self, key: KeyEvent) -> bool {
-        let switch = key.modifiers.contains(KeyModifiers::SHIFT)
-            && matches!(key.code, KeyCode::Left | KeyCode::Right);
-        if switch {
-            self.toggle_side_tab();
+        if !key.modifiers.contains(KeyModifiers::SHIFT) {
+            return false;
         }
-        switch
+        match key.code {
+            KeyCode::Left => self.show_side_tab(self.side_tab.prev()),
+            KeyCode::Right => self.show_side_tab(self.side_tab.next()),
+            _ => return false,
+        }
+        true
     }
 
     /// Letter shortcuts of the Processes tab, used while the input is empty.
@@ -297,6 +313,14 @@ impl App {
                     self.selected_process = index;
                 }
             }
+            SidePanelTab::Trace => {
+                if let Some(index) = self.trace_row_at(column, row) {
+                    if index == self.trace_feed.selected() {
+                        self.open_selected_trace_entry();
+                    }
+                    self.trace_feed.select(index);
+                }
+            }
         }
     }
 
@@ -309,6 +333,15 @@ impl App {
         self.side_tab_layout()
             .find(|&(_, start, width)| offset >= start && offset < start.saturating_add(width))
             .map(|(tab, _, _)| tab)
+    }
+
+    fn trace_row_at(&self, column: u16, row: u16) -> Option<usize> {
+        let rows = self
+            .areas
+            .trace_rows
+            .filter(|&rows| contains(Some(rows), column, row))?;
+        let index = self.areas.trace_scroll + usize::from(row - rows.y);
+        (index < self.trace_feed.entries().len()).then_some(index)
     }
 
     fn process_row_at(&self, column: u16, row: u16) -> Option<usize> {
@@ -382,6 +415,8 @@ mod tests {
         app.handle_key(key(KeyCode::Left));
         assert_eq!(app.side_tab(), SidePanelTab::Sandbox);
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+        assert_eq!(app.side_tab(), SidePanelTab::Trace);
+        app.handle_key(key(KeyCode::Left));
         assert_eq!(app.side_tab(), SidePanelTab::Processes);
     }
 

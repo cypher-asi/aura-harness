@@ -45,7 +45,7 @@ use tracing::{debug, instrument};
 use super::cx::TurnCtx;
 use super::tool_pipeline::{self, ToolBatch, ToolEffectCtx};
 use super::transport::{self, SamplingCtx, TransportOutcome};
-use super::{context, is_cancelled, iteration, streaming, LoopState};
+use super::{context, decisions, exchange, is_cancelled, iteration, streaming, LoopState};
 
 /// Outcome of a single sampling request inside a turn.
 ///
@@ -162,6 +162,25 @@ pub(crate) async fn run_sampling_request(
         }
     };
 
+    if let Some(effort) = request.thinking_effort {
+        let next = format!("{effort:?}").to_lowercase();
+        if state.last_thinking_effort.as_deref() != Some(next.as_str()) {
+            let decision = decisions::thinking_effort(
+                state.last_thinking_effort.as_deref(),
+                &next,
+                run.agent.config.user_thinking_effort.is_some(),
+                state,
+            );
+            state.decide(decision);
+            state.last_thinking_effort = Some(next);
+        }
+    }
+    decisions::flush(state, run.event_tx, iteration);
+    let trace_blobs = run.agent.config.trace_blobs.as_ref();
+    let observation = exchange::observe(&request, trace_blobs);
+    let model_name = request.model.to_string();
+    let sample_started_at = Instant::now();
+
     // Phase 4 + 7: route the model call through the pump transport
     // returned by `active_transport`. The transport produces a
     // [`TransportOutcome`] that flattens to a
@@ -212,6 +231,17 @@ pub(crate) async fn run_sampling_request(
         }
     };
 
+    exchange::emit(
+        run.event_tx,
+        iteration,
+        &model_name,
+        observation,
+        &response,
+        trace_blobs,
+        u64::try_from(sample_started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+    );
+    decisions::flush(state, run.event_tx, iteration);
+
     let produced_visible_output = response_has_visible_output(&response);
 
     let scrubbed_tool_markup =
@@ -245,6 +275,7 @@ pub(crate) async fn run_sampling_request(
     };
     let dispatch_says_break =
         tool_pipeline::dispatch(run.agent, state, &response, batch, tool_ctx).await;
+    decisions::flush(state, run.event_tx, iteration);
 
     SamplingRequestResult {
         needs_follow_up: !dispatch_says_break,

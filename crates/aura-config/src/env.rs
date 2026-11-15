@@ -56,6 +56,10 @@ pub const AURA_CONFLICT_DEFAULT_WAIT_MS: &str = "AURA_CONFLICT_DEFAULT_WAIT_MS";
 pub const AURA_HOME: &str = "AURA_HOME";
 pub const CODEX_HOME: &str = "CODEX_HOME";
 
+/// Run-trace capture level: `off`, `decisions` (default) or `full`.
+/// Consumed by [`crate::TraceConfig::level`].
+pub const AURA_TRACE: &str = "AURA_TRACE";
+
 /// The full list of env-var names this crate owns. Boundary tests use
 /// this to enforce that no other crate calls `std::env::var(...)` on
 /// any of these names.
@@ -85,6 +89,7 @@ pub const ENV_VAR_NAMES: &[&str] = &[
     AURA_CONFLICT_DEFAULT_WAIT_MS,
     AURA_HOME,
     CODEX_HOME,
+    AURA_TRACE,
 ];
 
 // ---------------------------------------------------------------------------

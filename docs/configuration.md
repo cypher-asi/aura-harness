@@ -29,6 +29,7 @@ Further optional tuning (read by `AnthropicConfig::from_env`): `AURA_LLM_BACKOFF
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AURA_DEFAULT_MODE` | `agent` | Session mode when the request (or `--mode`) does not set one: `agent`, `plan`, `ask` or `debug`. A non-`agent` default makes dev-loop and task-run requests fail with `400` unless they pass `mode: "agent"`. The older name `AURA_FLEET_DEFAULT_MODE` is still read when the new one is unset. |
+| `AURA_TRACE` | `decisions` in the terminal UI; unset elsewhere | Run-trace capture level: `off`, `decisions` or `full`. The terminal UI records every conversation unless set to `off`; the gateway and automaton tasks record only when it is set. See [run-traces.md](run-traces.md). |
 | `AURA_SUBAGENT_MAX_RUNNING` | `32` | Most spawned agents (from `task` or `spawn_agent`) that may run at once across the node. A spawn beyond the limit fails with an error the parent agent sees. |
 
 ## Terminal long runs

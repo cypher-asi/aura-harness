@@ -27,6 +27,7 @@ mod rewind;
 pub(crate) mod run_command;
 pub(crate) mod steering;
 pub(crate) mod subagents;
+pub(crate) mod trace;
 pub(crate) mod turns;
 
 pub(crate) use agent_events::forward_agent_events;
@@ -34,7 +35,7 @@ pub use agents::{AgentSession, KernelBuilder, KernelFactory};
 pub use approvals::TerminalApprovals;
 pub use host::{TerminalAgents, TerminalChildKernels};
 pub use processes::{BackgroundCommands, ProcessTable};
-pub use record_ui::{RecordPanelAgent, UiRecordObserver};
+pub use record_ui::{FanoutObserver, RecordPanelAgent, UiRecordObserver};
 pub use subagents::{AgentHub, AgentHubParts, TurnBase};
 
 use crate::model_selection::ModelSelection;
@@ -42,6 +43,7 @@ use agent_events::AgentUi;
 use approvals::Answer;
 use aura_agent::AgentLoop;
 use aura_agent_kernel::Kernel;
+use aura_agent_trace::RunRecorder;
 use aura_auth::{AuthManager, PendingLink};
 use aura_core_types::{AgentId, Transaction};
 use aura_model_reasoner::model_catalog::local_model_name;
@@ -79,6 +81,8 @@ pub struct EventLoopContext<'a> {
     pub auth: Arc<AuthManager>,
     /// Tool calls waiting for the user's answer.
     pub approvals: Arc<TerminalApprovals>,
+    /// Routes kernel record entries to the run recording each agent.
+    pub record_router: Arc<aura_agent_trace::RecordRouter>,
 }
 
 /// Mutable state threaded through all event handlers.
@@ -105,6 +109,9 @@ pub(super) struct LoopState<'a> {
     /// Plan sign-in waiting for a pasted code.
     pub(super) pending_link: Option<PendingLink>,
     pub(super) approvals: Arc<TerminalApprovals>,
+    /// Open run traces, one per agent conversation.
+    pub(super) traces: HashMap<AgentId, trace::LiveRun>,
+    pub(super) record_router: Arc<aura_agent_trace::RecordRouter>,
 }
 
 impl LoopState<'_> {
@@ -157,6 +164,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         models,
         auth,
         approvals,
+        record_router,
     } = ctx;
     let processes = Arc::clone(&hub.processes);
     let publisher = processes::spawn_publisher(Arc::clone(&processes), commands.clone());
@@ -180,6 +188,8 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         auth,
         pending_link: None,
         approvals,
+        traces: HashMap::new(),
+        record_router,
     };
     let mut notice_rx = state.hub.take_notices();
     state.hub.name_agents();
@@ -221,6 +231,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
     }
     shut_down(&mut state, &mut done_rx).await;
     publisher.abort();
+    trace::close_all(&mut state);
     Ok(())
 }
 
@@ -412,7 +423,13 @@ async fn handle_ui_event(
                     .await;
             }
         }
-        UiEvent::ShowStatus | UiEvent::ShowHelp | UiEvent::ShowHistory(_) => {}
+        UiEvent::ShowStatus => trace::status_report(state).await,
+        UiEvent::OpenGraph(id) => trace::open_graph(state, id).await,
+        UiEvent::ListRuns => trace::list(state).await,
+        UiEvent::LabelStep { run_id, seq, value } => {
+            trace::label(state, &run_id, seq, value).await;
+        }
+        UiEvent::ShowHelp | UiEvent::ShowHistory(_) => {}
         UiEvent::Clear => {
             if handlers::handle_new_session(state).await {
                 let _ = state.commands.send(UiCommand::ClearConversation).await;
@@ -572,7 +589,10 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
                 prompt: (!shown).then(|| prompt.text.clone()),
             })
             .await;
-            let (agent_loop, tools) = prepare_turn(state, &session).await;
+            let (agent_loop, tools, recorder) = prepare_turn(state, &session).await;
+            if let Some(rec) = &recorder {
+                rec.begin_turn(&prompt.text);
+            }
             row = Some(handlers::turn_summary(
                 agent_id,
                 &prompt.text,
@@ -586,6 +606,7 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
                 tools,
                 steering: turn_steering,
                 limits: state.hub.long_run,
+                recorder,
             }
         }
         Work::Command { command, cols } => Task::Command { command, cols },
@@ -622,11 +643,12 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
     agents::send_agent_list(state).await;
 }
 
-/// The agent loop and tools for a turn of `session`.
+/// The agent loop and tools for a turn of `session`, and the recorder of
+/// its conversation's run when tracing is on.
 async fn prepare_turn(
     state: &mut LoopState<'_>,
     session: &AgentSession,
-) -> (AgentLoop, Vec<ToolDefinition>) {
+) -> (AgentLoop, Vec<ToolDefinition>, Option<Arc<RunRecorder>>) {
     for problem in subagents::lock(&state.hub.definitions).reload() {
         warn!(%problem, "Skipping agent definition");
     }
@@ -657,7 +679,11 @@ async fn prepare_turn(
                 None,
             ));
     }
-    (AgentLoop::new(config), tools)
+    let recorder = trace::recorder(state, session, &config.model);
+    if let Some(rec) = &recorder {
+        config.trace_blobs = rec.blob_store();
+    }
+    (AgentLoop::new(config), tools, recorder)
 }
 
 /// Take back the session of work that ended, report a failure, and start

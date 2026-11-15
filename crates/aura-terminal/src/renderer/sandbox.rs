@@ -63,6 +63,7 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
         SidePanelTab::Processes => {
             super::processes::render_processes(frame, area, body, app, theme);
         }
+        SidePanelTab::Trace => super::trace_feed::render_trace_feed(frame, body, app, theme),
     }
 }
 

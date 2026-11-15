@@ -10,6 +10,7 @@ mod definitions;
 pub mod file_view;
 pub mod folder_picker;
 pub(crate) use aura_ui_core::format;
+pub mod graph;
 pub mod hud;
 pub mod images;
 mod input_editor;
@@ -22,6 +23,7 @@ mod selection;
 pub(crate) mod shell_input;
 mod shell_prompt;
 mod slash_menu;
+pub mod trace_feed;
 mod turn;
 pub mod vim;
 
@@ -312,6 +314,11 @@ pub struct App {
     pub(super) processes_scroll: usize,
     /// Process waiting for `y` to confirm killing it
     pub(super) pending_kill: Option<String>,
+    /// Run graph shown by `/graph`
+    pub(super) graph: graph::GraphState,
+    pub(super) trace_feed: trace_feed::TraceFeed,
+    /// Node to select once the requested graph loads.
+    pub(super) pending_graph_node: Option<String>,
 }
 
 /// Screen areas of the content panels from the last rendered frame.
@@ -351,6 +358,10 @@ pub struct PanelAreas {
     pub process_rows: Option<Rect>,
     /// Process row shown at the top of `process_rows`
     pub processes_scroll: usize,
+    /// Rows of the Trace tab inside the panel
+    pub trace_rows: Option<Rect>,
+    /// Feed row shown at the top of `trace_rows`
+    pub trace_scroll: usize,
 }
 
 /// What is shown over the chat panel.
@@ -362,6 +373,8 @@ pub enum DetailView {
     File(Box<FileView>),
     /// A process from the Processes tab, refreshed while it stays listed.
     Process(Box<ProcessSummary>),
+    /// The run graph (`/graph`).
+    Graph,
 }
 
 /// Clickable item under the pointer.
@@ -564,6 +577,9 @@ impl App {
             selected_process: 0,
             processes_scroll: 0,
             pending_kill: None,
+            graph: graph::GraphState::default(),
+            trace_feed: trace_feed::TraceFeed::default(),
+            pending_graph_node: None,
         }
     }
 
@@ -912,6 +928,7 @@ impl App {
                 match self.side_tab {
                     SidePanelTab::Sandbox => self.sandbox.move_by(delta),
                     SidePanelTab::Processes => self.scroll_processes(delta),
+                    SidePanelTab::Trace => self.trace_feed.move_by(delta),
                 }
             }
         }
@@ -947,6 +964,7 @@ impl App {
                 match self.side_tab {
                     SidePanelTab::Sandbox => self.sandbox.move_by(delta),
                     SidePanelTab::Processes => self.scroll_processes(delta),
+                    SidePanelTab::Trace => self.trace_feed.move_by(delta),
                 }
             }
         }

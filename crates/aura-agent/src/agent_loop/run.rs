@@ -169,6 +169,7 @@ impl AgentLoop {
                                 output_truncated: false,
                                 task_done_completed: false,
                                 timed_out: false,
+                                budget_exhausted: false,
                                 insufficient_credits: false,
                                 stalled: false,
                                 llm_error: Some(format!("prompt blocked by plugin hook: {reason}")),

@@ -144,6 +144,7 @@ fn headless_in(
         approvals: None,
         web_tools,
         post_edit_check: aura_agent::PostEditCheckConfig::from_lookup(|_| None),
+        trace_snapshots: false,
     });
     let notices = hub.take_notices();
     let headless = Headless {

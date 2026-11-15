@@ -362,6 +362,7 @@ dependencies = [
  "aura-agent",
  "aura-agent-kernel",
  "aura-agent-subagent",
+ "aura-agent-trace",
  "aura-auth",
  "aura-automaton",
  "aura-config",
@@ -380,6 +381,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "bytes",
+ "chrono",
  "dashmap 5.5.3",
  "dotenvy",
  "futures",
@@ -411,6 +413,7 @@ dependencies = [
  "aura-model-reasoner",
  "aura-plugin-hooks",
  "aura-store-db",
+ "aura-store-snapshot",
  "aura-tools",
  "chrono",
  "colored",
@@ -479,6 +482,30 @@ dependencies = [
  "proptest",
  "serde",
  "thiserror 1.0.69",
+ "uuid",
+]
+
+[[package]]
+name = "aura-agent-trace"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "aura-agent",
+ "aura-agent-kernel",
+ "aura-config",
+ "aura-core-types",
+ "aura-model-reasoner",
+ "aura-store-snapshot",
+ "blake3",
+ "bytes",
+ "chrono",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -582,6 +609,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "aura-agent",
+ "aura-agent-trace",
  "aura-config",
  "aura-context-prompts",
  "aura-core-types",
@@ -781,6 +809,7 @@ dependencies = [
  "aura-model-reasoner",
  "aura-protocol",
  "aura-store-db",
+ "aura-store-snapshot",
  "aura-tools",
  "bytes",
  "dashmap 5.5.3",
@@ -928,6 +957,7 @@ dependencies = [
  "aura-agent",
  "aura-agent-kernel",
  "aura-agent-subagent",
+ "aura-agent-trace",
  "aura-automaton",
  "aura-config",
  "aura-context-compaction",
@@ -1014,9 +1044,11 @@ dependencies = [
 name = "aura-store-snapshot"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "bytes",
  "tempfile",
  "thiserror 1.0.69",
+ "zstd",
 ]
 
 [[package]]
@@ -1027,6 +1059,7 @@ dependencies = [
  "async-trait",
  "aura-agent",
  "aura-agent-kernel",
+ "aura-agent-trace",
  "aura-auth",
  "aura-config",
  "aura-context-compaction",
@@ -8170,6 +8203,24 @@ name = "zmij"
 version = "1.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2fc5a66a20078bf1251bde995aa2fdcc4b800c70b5d92dd2c62abc5c60f679f8"
+
+[[package]]
+name = "zstd"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
+dependencies = [
+ "zstd-safe",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "7.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f49c4d5f0abb602a93fb8736af2a4f4dd9512e36f7f570d66e65ff867ed3b9d"
+dependencies = [
+ "zstd-sys",
+]
 
 [[package]]
 name = "zstd-sys"

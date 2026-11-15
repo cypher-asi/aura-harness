@@ -1,0 +1,4 @@
+title = "Fix an off-by-one in a shell script"
+prompt = "`sh sum.sh 10` should print 55 (the sum of 1..10) but prints the wrong number. Fix sum.sh. Do not hard-code the answer."
+verify = "[ \"$(sh sum.sh 10)\" = 55 ] && [ \"$(sh sum.sh 4)\" = 10 ] && [ \"$(sh sum.sh 1)\" = 1 ]"
+max_iterations = 15

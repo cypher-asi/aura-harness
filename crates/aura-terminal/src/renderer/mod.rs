@@ -5,6 +5,7 @@ mod chat_lines;
 mod command;
 mod detail;
 mod diff;
+mod graph;
 mod hud;
 mod input;
 mod markdown;
@@ -17,6 +18,7 @@ mod sandbox;
 mod segments;
 mod slash_menu;
 mod text;
+mod trace_feed;
 
 #[cfg(test)]
 mod tests;

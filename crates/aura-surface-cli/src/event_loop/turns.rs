@@ -13,10 +13,12 @@ use super::run_command::run_user_command;
 use super::steering::{SteerSource, Steering};
 use crate::long_run::LongRunSettings;
 use aura_agent::{AgentLoop, CompactHistoryError};
+use aura_agent_trace::RunRecorder;
 use aura_core_types::{AgentId, RecordEntry, Transaction};
 use aura_model_reasoner::{ContentBlock, ImageSource, Message, Role, ToolDefinition};
 use aura_terminal::events::ImageAttachment;
 use aura_terminal::UiCommand;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -75,6 +77,7 @@ pub(super) enum Task {
         tools: Vec<ToolDefinition>,
         steering: Steering,
         limits: LongRunSettings,
+        recorder: Option<Arc<RunRecorder>>,
     },
     /// A typed shell command.
     Command { command: String, cols: u16 },
@@ -153,12 +156,14 @@ async fn run(
             tools,
             steering,
             limits,
+            recorder,
         } => {
             let turn = TurnParts {
                 agent_loop: &agent_loop,
                 tools,
                 steering: &steering,
                 limits,
+                recorder,
             };
             run_prompt(&mut session, prompt, turn, &ui, &cancel).await
         }
@@ -180,6 +185,7 @@ struct TurnParts<'a> {
     tools: Vec<ToolDefinition>,
     steering: &'a Steering,
     limits: LongRunSettings,
+    recorder: Option<Arc<RunRecorder>>,
 }
 
 /// Record `text` on `session` as a prompt from the user. The kernels'
@@ -241,6 +247,7 @@ async fn run_prompt(
         cancel,
         turn.steering,
         turn.limits,
+        turn.recorder.clone(),
     )
     .await;
     if let Some(files) = &session.file_checkpoints {
@@ -257,6 +264,9 @@ async fn run_prompt(
             .map_or(&[][..], |result| result.messages.as_slice()),
     );
     let cancelled = cancel.is_cancelled();
+    if let Some(rec) = &turn.recorder {
+        super::trace::end_turn(rec, &process_result, cancelled);
+    }
     if cancelled {
         ui.send(UiCommand::ShowWarning("Turn cancelled".to_string()))
             .await;

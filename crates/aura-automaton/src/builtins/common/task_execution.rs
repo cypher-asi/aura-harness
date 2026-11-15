@@ -21,7 +21,7 @@ use aura_tools::catalog::{ToolCatalog, ToolProfile};
 use aura_tools::domain_tools::{ProjectDescriptor, SpecDescriptor, TaskDescriptor};
 
 use super::config::AgentIdentityEnvelope;
-use super::forward_event::spawn_agent_event_forwarder;
+use super::forward_event::spawn_recording_forwarder;
 use crate::builtins::noop_executor::NoOpExecutor;
 use crate::context::TickContext;
 use crate::error::AutomatonError;
@@ -172,11 +172,21 @@ pub(crate) async fn run_tracked_task(
     // post-E.4 drop policy that keeps this from flooding the operator
     // log when the outer consumer is briefly behind or has already
     // torn down.
+    let recorder = task_recorder(
+        &runner.config.default_model,
+        &task.id,
+        &task.title,
+        &effective_path,
+    );
+    if let Some(rec) = &recorder {
+        rec.begin_turn(&format!("{}\n\n{}", task.title, task_description));
+    }
     let (event_tx, event_rx) = tokio::sync::mpsc::channel(1024);
-    let _forwarder = spawn_agent_event_forwarder(
+    let forwarder = spawn_recording_forwarder(
         ctx.forwarder_sender_clone(),
         event_rx,
         Some(task.id.clone()),
+        recorder.clone(),
     );
 
     let inner_executor: Arc<dyn aura_agent::types::AgentToolExecutor> =
@@ -191,8 +201,45 @@ pub(crate) async fn run_tracked_task(
     };
 
     let cancel = ctx.cancellation_token().clone();
-    runner
+    let result = runner
         .execute_task_tracked(provider, tracking, &params, Some(event_tx), Some(cancel))
-        .await
-        .map_err(|e| AutomatonError::agent_execution(Some(task.id.clone()), e))
+        .await;
+    if let Some(rec) = recorder {
+        let _ = tokio::time::timeout(RECORDER_DRAIN, forwarder).await;
+        rec.end_turn(&match &result {
+            Ok(done) => aura_agent::AgentLoopResult {
+                total_input_tokens: done.input_tokens,
+                total_output_tokens: done.output_tokens,
+                ..aura_agent::AgentLoopResult::default()
+            },
+            Err(e) => aura_agent::AgentLoopResult {
+                llm_error: Some(e.to_string()),
+                ..aura_agent::AgentLoopResult::default()
+            },
+        });
+        rec.finish();
+    }
+    result.map_err(|e| AutomatonError::agent_execution(Some(task.id.clone()), e))
+}
+
+/// How long a task waits for its forwarder to hand the last events to
+/// the recorder before recording the turn end.
+const RECORDER_DRAIN: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Run trace for one automaton task. Like the gateway, automatons record
+/// only when the operator set `AURA_TRACE`.
+fn task_recorder(
+    model: &str,
+    task_id: &str,
+    title: &str,
+    workspace: &str,
+) -> Option<Arc<aura_agent_trace::RunRecorder>> {
+    if !aura_config::trace().explicit {
+        return None;
+    }
+    let mut meta = aura_agent_trace::RunMeta::new(model, aura_agent_trace::RunSource::Automaton);
+    meta.task_id = Some(task_id.to_string());
+    meta.title = title.to_string();
+    meta.workspace = workspace.to_string();
+    aura_agent_trace::RunRecorder::start_default(meta)
 }

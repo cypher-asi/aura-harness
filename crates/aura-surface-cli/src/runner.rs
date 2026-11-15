@@ -90,6 +90,9 @@ pub async fn run() -> anyhow::Result<std::process::ExitCode> {
         Some(Commands::Auth(args)) => auth_commands::cmd_auth(args),
         Some(Commands::Migrate(args)) => cmd_migrate(args),
         Some(Commands::Plugins(args)) => cmd_plugins(args),
+        Some(Commands::Runs(args)) => crate::trace_commands::cmd_runs(args).await,
+        Some(Commands::Dataset(args)) => crate::trace_commands::cmd_dataset(args),
+        Some(Commands::Eval(args)) => crate::trace_commands::cmd_eval(args).await,
         Some(Commands::Run(args)) => run_with_args(args, requested_mode).await,
         None => run_with_args(RunArgs::default(), requested_mode).await,
     }
@@ -457,6 +460,9 @@ pub(crate) struct HubSetup {
     pub web_tools: WebTools,
     /// Run after each step that edits files; results go to `commands`
     pub post_edit_check: aura_agent::PostEditCheckConfig,
+    /// Keep kernel snapshots where run traces can replay them, instead of
+    /// the kernel's default store
+    pub trace_snapshots: bool,
 }
 
 /// What [`build_hub`] built.
@@ -536,8 +542,9 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
         approvals,
         web_tools,
         post_edit_check,
+        trace_snapshots,
     } = setup;
-    let kernel_config = KernelConfig {
+    let mut kernel_config = KernelConfig {
         workspace_base: workspace_root.clone(),
         use_workspace_base_as_root: true,
         policy,
@@ -547,6 +554,13 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
         record_observer: record_observer.clone(),
         ..KernelConfig::default()
     };
+    if let Some(store) = trace_snapshots
+        .then(|| aura_config::AuraHome::resolve().ok())
+        .flatten()
+        .and_then(|home| aura_agent_trace::kernel_snapshot_store(&home.path).ok())
+    {
+        kernel_config.snapshot_store = store;
+    }
     let kernel_store = store.clone() as Arc<dyn aura_store_db::Store>;
 
     let host = background_agents.then(|| {
@@ -561,7 +575,8 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
         if let Some(observer) = &record_observer {
             scheduler = scheduler.with_record_observer(Arc::clone(observer));
         }
-        let scheduler = Arc::new(scheduler);
+        let scheduler =
+            Arc::new(scheduler.with_snapshot_store(Arc::clone(&kernel_config.snapshot_store)));
         let host = aura_engine::AgentHost::new(
             Arc::clone(&kernel_store),
             Arc::clone(&scheduler),

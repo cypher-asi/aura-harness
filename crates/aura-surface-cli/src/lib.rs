@@ -62,6 +62,7 @@ pub mod agent_registry;
 pub mod api_server;
 mod auth_commands;
 pub mod cli;
+pub mod evals;
 pub mod event_loop;
 pub mod file_checkpoints;
 mod headless;
@@ -69,9 +70,11 @@ mod long_run;
 pub mod model_selection;
 pub mod project_instructions;
 pub mod record_loader;
+pub mod recorded_runs;
 pub mod session;
 pub mod session_checkpoint;
 pub mod session_helpers;
+mod trace_commands;
 
 mod runner;
 

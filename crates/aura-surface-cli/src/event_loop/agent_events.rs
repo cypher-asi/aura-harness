@@ -135,6 +135,8 @@ struct UiCommandSink {
     open_tools: Vec<String>,
     cost_cap: Option<CostCap>,
     plan: TurnPlan,
+    /// Tokens used by the turn's finished model calls
+    turn_tokens: u64,
 }
 
 impl UiCommandSink {
@@ -392,29 +394,63 @@ impl TurnEventSink for UiCommandSink {
     async fn on_progress(
         &mut self,
         stage: String,
-        _tool_name: Option<String>,
+        tool_name: Option<String>,
         _elapsed_ms: Option<u64>,
         message: Option<String>,
     ) {
-        let Some(message) = message else {
-            return;
-        };
-        match stage.as_str() {
-            PROGRESS_TODOS_UPDATED => match serde_json::from_str::<Vec<TodoItem>>(&message) {
-                Ok(todos) => {
-                    self.ui.send(UiCommand::SetTodos(todo_views(&todos))).await;
-                    self.sync_plan(&todos).await;
+        match (stage.as_str(), message) {
+            (PROGRESS_TODOS_UPDATED, Some(message)) => {
+                match serde_json::from_str::<Vec<TodoItem>>(&message) {
+                    Ok(todos) => {
+                        self.ui.send(UiCommand::SetTodos(todo_views(&todos))).await;
+                        self.sync_plan(&todos).await;
+                    }
+                    Err(e) => debug!(error = %e, "Unreadable todo list update"),
                 }
-                Err(e) => debug!(error = %e, "Unreadable todo list update"),
-            },
-            PROGRESS_CONTEXT_SUMMARIZED => self.ui.send(UiCommand::Compacted(message)).await,
-            _ => {}
+            }
+            (PROGRESS_CONTEXT_SUMMARIZED, Some(message)) => {
+                self.ui.send(UiCommand::Compacted(message)).await;
+            }
+            (PROGRESS_TODOS_UPDATED | PROGRESS_CONTEXT_SUMMARIZED, None) => {}
+            (_, Some(message)) => self.ui.send(UiCommand::SetStatus(message)).await,
+            (_, None) => {
+                let status = match tool_name {
+                    Some(tool) => format!("{stage}: {tool}"),
+                    None => stage,
+                };
+                self.ui.send(UiCommand::SetStatus(status)).await;
+            }
         }
     }
 
-    // `IterationComplete`, `StepComplete`, `ToolComplete` — intentionally
-    // use the default no-op impls; the TUI derives UI transitions from the
-    // events above.
+    async fn on_iteration_complete(
+        &mut self,
+        iteration: usize,
+        input_tokens: u64,
+        output_tokens: u64,
+    ) {
+        self.turn_tokens += input_tokens + output_tokens;
+        self.ui
+            .send(UiCommand::SetStatus(iteration_status(
+                iteration,
+                self.turn_tokens,
+            )))
+            .await;
+    }
+
+    // `StepComplete` and `ToolComplete` use the default no-op impls; the
+    // TUI derives UI transitions from the events above.
+}
+
+/// Status line after a model call: `Iteration 3 · 41.2k tokens`.
+fn iteration_status(iteration: usize, tokens: u64) -> String {
+    #[allow(clippy::cast_precision_loss)]
+    let tokens = if tokens >= 1_000 {
+        format!("{:.1}k", tokens as f64 / 1_000.0)
+    } else {
+        tokens.to_string()
+    };
+    format!("Iteration {} · {tokens} tokens", iteration + 1)
 }
 
 /// Reads [`AgentLoopEvent`]s and translates them into [`UiCommand`]s for
@@ -425,6 +461,7 @@ pub(crate) async fn forward_agent_events(
     cost_cap: Option<CostCap>,
     context_limit: Option<u64>,
     plan: TurnPlan,
+    recorder: Option<std::sync::Arc<aura_agent_trace::RunRecorder>>,
 ) -> ForwarderState {
     let mut sink = UiCommandSink {
         ui,
@@ -435,9 +472,13 @@ pub(crate) async fn forward_agent_events(
         open_tools: Vec::new(),
         cost_cap,
         plan,
+        turn_tokens: 0,
     };
 
     while let Some(event) = rx.recv().await {
+        if let Some(rec) = &recorder {
+            rec.on_event(&event);
+        }
         map_agent_loop_event(event, &mut sink).await;
     }
 

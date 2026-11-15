@@ -15,9 +15,21 @@ pub(crate) fn create_response_transaction(agent_id: AgentId, response_text: &str
     )
 }
 
-/// The agent on screen, whose record the RECORD panel shows. Every agent
-/// kernel shares one [`UiRecordObserver`]; entries from other agents stay
-/// in the store until the panel switches to them.
+/// Hands each record entry to several observers.
+#[derive(Debug)]
+pub struct FanoutObserver(pub Vec<Arc<dyn RecordObserver>>);
+
+impl RecordObserver for FanoutObserver {
+    fn on_entry(&self, entry: &RecordEntry) {
+        for observer in &self.0 {
+            observer.on_entry(entry);
+        }
+    }
+}
+
+/// The agent whose record the RECORD panel shows. Every agent kernel
+/// shares one [`UiRecordObserver`]; entries from other agents stay in the
+/// store until the panel switches to them.
 #[derive(Debug, Clone, Default)]
 pub struct RecordPanelAgent(Arc<Mutex<Option<AgentId>>>);
 

@@ -1,0 +1,46 @@
+name: Live coding evals
+
+# Opt-in: runs the evals/coding suite against a live model and fails when
+# it regresses against evals/coding/baseline.json. Needs the
+# AURA_ROUTER_JWT secret.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Model id to evaluate
+        required: true
+      repeat:
+        description: Runs per task
+        default: "3"
+      write_baseline:
+        description: Refresh the baseline instead of comparing (uploaded as an artifact)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      AURA_EVAL_MODEL: ${{ inputs.model }}
+      AURA_EVAL_REPEAT: ${{ inputs.repeat }}
+      AURA_ROUTER_JWT: ${{ secrets.AURA_ROUTER_JWT }}
+      AURA_HOME: ${{ github.workspace }}/.aura-eval
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run suite
+        run: bash scripts/eval-live.sh ${{ inputs.write_baseline && '--write' || '' }}
+      - name: Upload runs and baseline
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-runs
+          path: |
+            .aura-eval/runs
+            evals/coding/baseline.json
+          if-no-files-found: ignore

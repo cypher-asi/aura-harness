@@ -88,6 +88,7 @@ const KNOWN_CRATES: &[(&str, &str)] = &[
     ("aura-agent", "agent"),
     // Phase 3 placeholder, populated in Phase 6a.
     ("aura-agent-steering", "agent"),
+    ("aura-agent-trace", "agent"),
     // Phase 9 reclassifies aura-auth from `core` to `surface`: the
     // network client (ZosClient) and credential persistence
     // (CredentialStore) are surface-side concerns. Token primitive

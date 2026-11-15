@@ -9,6 +9,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
+use aura_core_types::trace::HarnessDecision;
 use aura_model_reasoner::{
     Message, ModelRequest, ModelRequestKind, Role, ThinkingEffort, ToolDefinition,
 };
@@ -104,9 +105,20 @@ pub(crate) struct LoopState {
     /// a row left it unchanged. See `turn::open_todo_nudge`.
     pub(crate) todos_at_last_nudge: Option<Vec<aura_tools::todo::TodoItem>>,
     pub(crate) stalled_todo_nudges: u32,
+    /// Harness decisions made since the last flush to the event
+    /// channel. Sites without an event sender queue here and
+    /// [`super::decisions::flush`] drains them.
+    pub(crate) decisions: Vec<HarnessDecision>,
+    /// Reasoning effort sent on the previous request, so effort
+    /// changes are recorded once rather than every iteration.
+    pub(crate) last_thinking_effort: Option<String>,
 }
 
 impl LoopState {
+    pub(crate) fn decide(&mut self, decision: HarnessDecision) {
+        self.decisions.push(decision);
+    }
+
     pub(super) fn new(config: &AgentLoopConfig, messages: Vec<Message>) -> Self {
         Self {
             result: AgentLoopResult {
@@ -147,6 +159,8 @@ impl LoopState {
                 config.early_test_oracle.clone(),
             ),
             failed_edit_attempts: std::collections::HashMap::new(),
+            decisions: Vec::new(),
+            last_thinking_effort: None,
             todos_at_last_nudge: None,
             stalled_todo_nudges: 0,
         }
@@ -222,6 +236,8 @@ impl LoopState {
         self.steering.begin_turn();
         for kind in self.steering.drain_for_next_turn() {
             steering::inject(&mut self.messages, &kind);
+            let decision = super::decisions::steering_nudge(&kind, self, iteration);
+            self.decide(decision);
         }
         // Mirror the registry's `implement_now_injected` latch back
         // onto `LoopState` so the pre-dispatch circling-read gate in

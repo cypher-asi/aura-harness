@@ -26,6 +26,9 @@ Defined in [`crates/aura-surface-cli/src/cli.rs`](../crates/aura-surface-cli/src
 | `aura plugins install <dir> [--trust]` | Install a plugin from a local directory into `AURA_HOME/plugins/`. |
 | `aura plugins list` | List installed plugins and their active versions. |
 | `aura plugins enable <id> [--yes\|--no]` / `disable <id>` | Toggle a plugin in `AURA_HOME/config.toml`, answering the trust prompt if required. |
+| `aura runs list\|show\|diff\|label\|verify\|branch` | Inspect, compare, label and branch recorded runs in `AURA_HOME/runs/`. See [run-traces.md](run-traces.md). |
+| `aura eval run [SUITE]` / `aura eval compare` | Run a task suite (default `evals/coding`) with optional `--set key=value` harness arms, and compare arms or a baseline. |
+| `aura dataset build --format sft\|preference\|rl\|harness-bandit` | Export recorded runs as training data. |
 
 ## Sign-in and model routes
 

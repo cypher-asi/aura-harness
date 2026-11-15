@@ -151,6 +151,20 @@ pub enum UiEvent {
     /// User confirmed killing the process with this [`ProcessSummary::id`]
     KillProcess(String),
 
+    /// User asked for the run graph: the active conversation's run
+    /// (`None`) or a recorded run by id or prefix
+    OpenGraph(Option<String>),
+
+    /// User labeled a recorded step (`seq`) or the whole run (`None`);
+    /// positive is good
+    LabelStep {
+        run_id: String,
+        seq: Option<u64>,
+        value: f64,
+    },
+
+    /// User asked for the list of recorded runs
+    ListRuns,
     /// User asked the agent with this hex id to build a plan: the given
     /// workspace-relative path, or the agent's latest plan
     BuildPlan {
@@ -468,6 +482,23 @@ pub enum UiCommand {
 
     /// Replace the Processes tab: everything running, plus recently finished work
     SetProcesses(Vec<ProcessSummary>),
+
+    /// Replace the run graph and show it over the chat panel
+    GraphLoad {
+        /// Run the nodes belong to
+        run_id: String,
+        /// Nodes in parent-before-child order
+        nodes: Vec<TraceNode>,
+    },
+
+    /// Add or update nodes of the run graph while the run is live.
+    /// Ignored when the graph shows a different run.
+    GraphUpsert {
+        /// Run the nodes belong to
+        run_id: String,
+        /// New or changed nodes, parents before children
+        nodes: Vec<TraceNode>,
+    },
 
     /// Set the API status (URL and whether it's active)
     SetApiStatus {
@@ -1119,4 +1150,42 @@ mod tests {
         assert_eq!(MessageRole::User, MessageRole::User);
         assert_ne!(MessageRole::User, MessageRole::Assistant);
     }
+}
+
+/// Health of a run-graph node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum TraceNodeStatus {
+    /// Still running or waiting for a result
+    #[default]
+    Pending,
+    /// Finished normally
+    Ok,
+    /// Needed a nudge, retry or block
+    Warn,
+    /// Failed
+    Error,
+}
+
+/// One node of the run graph: a run, turn, iteration, tool call,
+/// harness decision, reward, subagent or branch.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TraceNode {
+    /// Stable id within the run
+    pub id: String,
+    /// Kind label (`run`, `turn`, `iteration`, `tool`, `decision`, ...)
+    pub kind: String,
+    /// Containing node
+    pub parent: Option<String>,
+    /// Short label
+    pub label: String,
+    /// One-line detail shown after the label
+    pub detail: String,
+    /// Health
+    pub status: TraceNodeStatus,
+    /// Trajectory step the node came from
+    pub seq: Option<u64>,
+    /// Metadata shown in the side pane, in display order
+    pub meta: Vec<(String, String)>,
+    /// Non-containment edges from this node: (edge kind, other node id)
+    pub links: Vec<(String, String)>,
 }
