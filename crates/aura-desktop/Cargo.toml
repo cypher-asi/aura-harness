@@ -1,0 +1,35 @@
+[package]
+name = "aura-desktop"
+description = "Native GPU desktop UI for AURA, built on iced"
+version.workspace = true
+edition.workspace = true
+# iced 0.14 needs Rust 1.88; the rest of the workspace keeps the 1.85 floor.
+rust-version = "1.88"
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "aura-desktop"
+path = "src/main.rs"
+
+[dependencies]
+aura-ui-core = { path = "../aura-ui-core" }
+aura-surface-cli = { path = "../aura-surface-cli" }
+
+iced = { version = "0.14", features = ["tokio", "canvas", "markdown", "highlighter", "advanced"] }
+
+anyhow = { workspace = true }
+chrono = { workspace = true }
+clap = { version = "4.5", features = ["derive"] }
+dotenvy = { workspace = true }
+futures = "0.3"
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+iced_runtime = "0.14"
+
+[lints]
+workspace = true

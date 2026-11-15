@@ -82,6 +82,9 @@ const KNOWN_CRATES: &[(&str, &str)] = &[
     ("aura-agent-kernel", "agent"),
     ("aura-agent-subagent", "agent"),
     ("aura-terminal", "surface"),
+    // UI protocol shared by the terminal and the native desktop app.
+    ("aura-ui-core", "surface"),
+    ("aura-desktop", "surface"),
     ("aura-agent", "agent"),
     // Phase 3 placeholder, populated in Phase 6a.
     ("aura-agent-steering", "agent"),

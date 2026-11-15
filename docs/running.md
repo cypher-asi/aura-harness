@@ -30,6 +30,30 @@ cargo run -- run --ui none
 cargo run -p aura-runtime --bin aura-node
 ```
 
+## Desktop app
+
+`aura-desktop` runs the same agent session as the terminal UI in a native window drawn on the GPU (wgpu, through [iced](https://iced.rs)), with a CPU fallback (tiny-skia) when no GPU is available. It needs Rust 1.88 or later.
+
+```sh
+cargo run --release -p aura-desktop                        # agent in the current directory
+cargo run --release -p aura-desktop -- --workspace ~/proj  # agent in another folder
+cargo run --release -p aura-desktop -- --mode plan
+cargo run --release -p aura-desktop -- --demo              # scripted session, no model needed
+```
+
+It takes the terminal's `--dir`, `--provider`, `--mode`, `--verbose` and `--allow-unrestricted-full-access`. Keys: Enter sends, Shift+Enter adds a line, Ctrl+K picks a model, Ctrl+B toggles the side panel, Ctrl+1…4 opens Agents / Records / Processes / Files, Ctrl+J switches between chat and shell, and Ctrl+/ lists the rest. Text in the transcript can't be selected; use the Copy buttons on replies, command output and files.
+
+Text is set in Geist and code in Geist Mono, both bundled (SIL Open Font License, [`assets/fonts/OFL.txt`](../crates/aura-desktop/assets/fonts/OFL.txt)). To use other fonts:
+
+| Variable | Effect |
+|---|---|
+| `AURA_DESKTOP_FONT` | Family for UI text, e.g. `Inter` |
+| `AURA_DESKTOP_MONO_FONT` | Family for code and command output, e.g. `JetBrains Mono` |
+| `AURA_DESKTOP_FONT_FILES` | Extra font files to load, separated like `PATH` |
+| `AURA_DESKTOP_PERF` | Log startup time and frame / update / view timings to stderr |
+
+On Linux the window opens on Wayland, or on X11 when `WAYLAND_DISPLAY` is unset; nothing beyond the packages above is needed to build it. `WGPU_BACKEND=gl` forces OpenGL when Vulkan drivers misbehave, and `ICED_BACKEND=tiny-skia` forces the CPU renderer. Editing a permanent agent opens `$VISUAL` / `$EDITOR`; editors that need a terminal (vim, nano, helix…) can't run in a window, so the file opens in the system's default app instead, and **Done editing** in the status bar reloads it once you've saved.
+
 The node listens on `127.0.0.1:8080` by default. Start work with `POST /v1/run` and follow it on `WS /stream/:run_id`; see [api.md](api.md). Environment variables are listed in [configuration.md](configuration.md); copy [`.env.example`](../.env.example) as a starting point.
 
 ## Local model by default, login optional

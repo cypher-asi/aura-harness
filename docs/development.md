@@ -15,14 +15,19 @@ cargo test -p aura --test layer_boundary
 
 # Crates that build without RocksDB / LLVM
 cargo check -p aura-core-types -p aura-core-modes -p aura-protocol -p aura-config -p aura-model-reasoner
+
+# Desktop app screens, rendered offscreen and saved as PNGs
+AURA_DESKTOP_SNAPSHOTS=target/snapshots cargo test -p aura-desktop snapshot
 ```
+
+The desktop snapshot tests draw whole screens (conversation, agent steps, panels, dialogs) with the CPU renderer, so they run without a display or GPU; without `AURA_DESKTOP_SNAPSHOTS` they only check that something was drawn.
 
 ## CI gates
 
 [`.github/workflows/`](../.github/workflows) runs, on every PR:
 
 - `cargo fmt --check`, `cargo clippy` (warnings reported, not denied), and `cargo test --workspace --all-features`.
-- `cargo check` on the MSRV (1.80).
+- `cargo check` on the MSRV (1.85), except `aura-desktop`, which needs 1.88 for iced.
 - `cargo deny check` (hard fail) and `cargo audit` (soft fail).
 - `cargo machete` for unused dependencies.
 - [`scripts/check_invariants.sh`](../scripts/check_invariants.sh), the invariant grep gate.

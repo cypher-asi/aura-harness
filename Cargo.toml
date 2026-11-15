@@ -94,6 +94,7 @@ members = [
     # Renderer-agnostic UI protocol and state shared by the TUI and the
     # native desktop app (`aura-desktop`, iced).
     "crates/aura-ui-core",
+    "crates/aura-desktop",
 ]
 
 [profile.dev]

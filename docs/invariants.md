@@ -355,9 +355,9 @@ band. Production holders:
   — HTTP-driven tool-permissions append serialized via the scheduler claim.
 - [`crates/aura-runtime/src/gateway/session/cross_agent_hook.rs`](../crates/aura-runtime/src/gateway/session/cross_agent_hook.rs)
   — cross-agent chat/spawn hook.
-- [`crates/aura-surface-cli/src/runner.rs`](../crates/aura-surface-cli/src/runner.rs)
-  — the interactive TUI composition root constructs a per-agent kernel for
-  local sessions.
+- [`crates/aura-surface-cli/src/session.rs`](../crates/aura-surface-cli/src/session.rs)
+  — the interactive UI session (terminal and desktop app) constructs a
+  per-agent kernel for local sessions.
 
 Test-only holders (filenames don't match `*test*.rs` but hits live inside
 `#[cfg(test)] mod tests`): [`crates/aura-agent/src/kernel_gateway.rs`](../crates/aura-agent/src/kernel_gateway.rs),

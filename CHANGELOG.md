@@ -7,6 +7,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Surface — native desktop app (`aura-desktop`)
+
+##### Added
+
+- `aura-desktop`, a native window for the agent built on iced and drawn
+  on the GPU (wgpu, with a tiny-skia CPU fallback). It runs the same
+  in-process session as the terminal (`session::start`) and has the
+  conversation with streamed markdown, collapsible thinking and tool
+  steps, colored diffs and ANSI command output, a chat / shell input
+  with slash-command completion and history, the Agents, Records,
+  Processes (with a timeline) and Files panels, and dialogs for models,
+  sign-in, approvals and projects. Frames are drawn only while
+  something animates.
+- Geist and Geist Mono are bundled; `AURA_DESKTOP_FONT`,
+  `AURA_DESKTOP_MONO_FONT` and `AURA_DESKTOP_FONT_FILES` pick other
+  fonts. `--demo` runs a scripted session and `AURA_DESKTOP_PERF` logs
+  frame timings.
+- Offscreen snapshot tests render whole screens with the CPU renderer;
+  `AURA_DESKTOP_SNAPSHOTS=<dir>` saves them as PNGs.
+
+##### Changed
+
+- The CI MSRV check skips `aura-desktop`, which needs Rust 1.88.
+
 ### Surface — UI protocol and agent session shared by every frontend
 
 ##### Added
