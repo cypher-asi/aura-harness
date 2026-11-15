@@ -31,6 +31,7 @@ tracing = { workspace = true }
 
 # Unicode display width
 unicode-width = { workspace = true }
+similar = "2"
 
 # Phase C / Commit 4: PTY WebSocket handler moved here from
 # aura-runtime. Pulls in the axum WS types, base64, futures-util,

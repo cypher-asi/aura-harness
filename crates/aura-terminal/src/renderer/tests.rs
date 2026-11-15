@@ -539,6 +539,99 @@ fn test_hovered_activity_header_keeps_status_color() {
 }
 
 #[test]
+fn test_edited_file_block_shows_its_diff() {
+    use crate::events::{ToolData, UiCommand};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::ShowTool(ToolData {
+        id: "t1".to_string(),
+        name: "write_file".to_string(),
+        args: r#"{"path":"src/lib.rs","content":"fn a() {}\nfn c() {}\n"}"#.to_string(),
+    }));
+    app.process_command(UiCommand::ToolDiff {
+        id: "t1".to_string(),
+        diff: "@@ -1,2 +1,2 @@\n fn a() {}\n-fn b() {}\n+fn c() {}\n".to_string(),
+    });
+    app.process_command(UiCommand::CompleteTool {
+        id: "t1".to_string(),
+        result: "Wrote 20 bytes to src/lib.rs".to_string(),
+        success: true,
+    });
+
+    let rows = render_rows(&mut app, 120);
+    let text = rows.join("\n");
+    assert!(text.contains("Wrote lib.rs · +1 -1"), "{text}");
+    assert!(!text.contains("fn c()"), "collapsed blocks hide the diff");
+
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('o'),
+        crossterm::event::KeyModifiers::CONTROL,
+    ));
+    let text = render_rows(&mut app, 120).join("\n");
+    assert!(text.contains("│ src/lib.rs"), "{text}");
+    assert!(text.contains("2 │ - fn b() {}"), "{text}");
+    assert!(text.contains("2 │ + fn c() {}"), "{text}");
+    assert!(
+        !text.contains("\"content\""),
+        "the diff replaces the raw args"
+    );
+}
+
+#[test]
+fn test_edit_restored_from_history_diffs_its_arguments() {
+    use crate::events::{ActivityData, MessageData, MessageRole, UiCommand};
+
+    let mut app = crate::App::new();
+    let mut data = MessageData::new(MessageRole::Assistant, "");
+    data.activity = Some(ActivityData::Tool {
+        id: "t1".to_string(),
+        name: "edit_file".to_string(),
+        args: r#"{"path":"a.rs","old_text":"let x = 1;","new_text":"let x = 2;"}"#.to_string(),
+        result: Some("Replaced 1 occurrence(s) in a.rs".to_string()),
+        is_error: false,
+        duration_ms: None,
+    });
+    app.process_command(UiCommand::LoadConversation(vec![data]));
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('o'),
+        crossterm::event::KeyModifiers::CONTROL,
+    ));
+
+    let text = render_rows(&mut app, 120).join("\n");
+    assert!(text.contains("Edited a.rs · +1 -1"), "{text}");
+    assert!(text.contains("│ - let x = 1;"), "{text}");
+    assert!(text.contains("│ + let x = 2;"), "{text}");
+}
+
+#[test]
+fn test_diff_message_shows_each_file() {
+    use crate::events::{FileDiffData, UiCommand};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::ShowDiff {
+        title: "Changes in turn 2 · fix it".to_string(),
+        files: vec![
+            FileDiffData {
+                path: "src/a.rs".to_string(),
+                diff: "@@ -3,1 +3,1 @@\n-old\n+new\n".to_string(),
+            },
+            FileDiffData {
+                path: "notes.md".to_string(),
+                diff: "@@ -0,0 +1,1 @@\n+hello\n".to_string(),
+            },
+        ],
+    });
+
+    let text = render_rows(&mut app, 120).join("\n");
+    assert!(text.contains("Changes in turn 2 · fix it"), "{text}");
+    assert!(text.contains("src/a.rs  +1 -1"), "{text}");
+    assert!(text.contains("3 │ - old"), "{text}");
+    assert!(text.contains("3 │ + new"), "{text}");
+    assert!(text.contains("notes.md  +1 -0"), "{text}");
+    assert!(text.contains("1 │ + hello"), "{text}");
+}
+
+#[test]
 fn test_chat_renders_assistant_markdown() {
     use crate::components::{Message, MessageRole};
 

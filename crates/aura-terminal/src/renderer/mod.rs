@@ -4,6 +4,7 @@ mod activity;
 mod chat_lines;
 mod command;
 mod detail;
+mod diff;
 mod hud;
 mod input;
 mod markdown;

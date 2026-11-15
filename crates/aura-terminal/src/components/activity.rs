@@ -45,6 +45,8 @@ pub struct ToolStep {
     pub started: Option<Instant>,
     /// How long the call took, once finished
     pub duration_ms: Option<u64>,
+    /// What the call did to the file it changed, as unified diff hunks
+    pub diff: Option<String>,
 }
 
 impl Activity {
@@ -71,6 +73,7 @@ impl Activity {
             retry: None,
             started: Some(Instant::now()),
             duration_ms: None,
+            diff: None,
         })
     }
 
@@ -132,6 +135,7 @@ impl From<&ActivityData> for Activity {
                 retry: None,
                 started: None,
                 duration_ms: *duration_ms,
+                diff: None,
             }),
         }
     }

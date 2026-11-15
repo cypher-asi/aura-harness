@@ -38,6 +38,18 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         needs_args: false,
     },
     SlashCommand {
+        name: "rewind",
+        args: "[n] [code|chat|both]",
+        description: "List turns, or undo back to before one",
+        needs_args: false,
+    },
+    SlashCommand {
+        name: "diff",
+        args: "[session]",
+        description: "Show file changes of the last turn or session",
+        needs_args: false,
+    },
+    SlashCommand {
         name: "name",
         args: "[name]",
         description: "Rename the current project",

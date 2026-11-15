@@ -11,6 +11,7 @@ use super::agent_events::AgentUi;
 use super::subagents::lock;
 use super::LoopState;
 use crate::agent_registry::RegisteredAgent;
+use crate::file_checkpoints::FileCheckpoints;
 use crate::record_loader::{conversation_history, recent_record_summaries};
 use crate::session_checkpoint::{
     is_resumable, now_ms, Checkpoints, SessionCheckpoint, SessionUsage,
@@ -44,6 +45,8 @@ pub struct AgentSession {
     pub usage: SessionUsage,
     /// Where the session is checkpointed after each turn, if anywhere
     pub checkpoints: Option<Checkpoints>,
+    /// Where files are checkpointed before each turn changes them, if anywhere
+    pub file_checkpoints: Option<FileCheckpoints>,
 }
 
 impl AgentSession {
@@ -124,6 +127,7 @@ pub struct KernelFactory {
     pub(super) store: Arc<dyn ReadStore>,
     build_kernel: KernelBuilder,
     pub(super) checkpoints: Option<Checkpoints>,
+    pub(super) file_checkpoints: Option<FileCheckpoints>,
 }
 
 impl KernelFactory {
@@ -133,7 +137,16 @@ impl KernelFactory {
             store,
             build_kernel,
             checkpoints: None,
+            file_checkpoints: None,
         }
+    }
+
+    /// Give sessions `files` to checkpoint each turn's file changes in. The
+    /// kernels' executors must report changes to the same checkpoints.
+    #[must_use]
+    pub fn with_file_checkpoints(mut self, files: FileCheckpoints) -> Self {
+        self.file_checkpoints = Some(files);
+        self
     }
 
     /// Checkpoint sessions in `checkpoints` and resume them from there.
@@ -193,6 +206,7 @@ impl KernelFactory {
             started_ms: now_ms(),
             usage: SessionUsage::default(),
             checkpoints: self.checkpoints.clone(),
+            file_checkpoints: self.file_checkpoints.clone(),
         };
         if let Some(checkpoint) = self.restore(session.agent_id()) {
             info!(agent = %session.agent_id(), "Resuming session from checkpoint");

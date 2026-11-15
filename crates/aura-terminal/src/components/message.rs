@@ -11,7 +11,7 @@ use ratatui::{
 };
 
 use crate::components::Activity;
-use crate::events::{CallUsage, MessageRole};
+use crate::events::{CallUsage, FileDiffData, MessageRole};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_MESSAGE_ID: AtomicU64 = AtomicU64::new(0);
@@ -41,6 +41,8 @@ pub struct Message {
     model: Option<String>,
     /// Tokens and cost of the model call that wrote an assistant reply
     usage: Option<CallUsage>,
+    /// Set when the message shows file changes
+    diff: Option<DiffBlock>,
     /// Unique to this message, clones included
     id: u64,
     /// Bumped on every change
@@ -59,10 +61,20 @@ impl Clone for Message {
             expanded: self.expanded,
             model: self.model.clone(),
             usage: self.usage,
+            diff: self.diff.clone(),
             id: next_message_id(),
             revision: 0,
         }
     }
+}
+
+/// File changes shown as a chat message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffBlock {
+    /// What the changes are, e.g. which turn made them
+    pub title: String,
+    /// One entry per changed file
+    pub files: Vec<FileDiffData>,
 }
 
 /// A shell command typed by the user and its terminal output.
@@ -90,9 +102,27 @@ impl Message {
             expanded: false,
             model: None,
             usage: None,
+            diff: None,
             id: next_message_id(),
             revision: 0,
         }
+    }
+
+    /// File changes, drawn as one diff per file under `title`.
+    #[must_use]
+    pub fn diff(title: &str, files: Vec<FileDiffData>) -> Self {
+        let mut message = Self::new(MessageRole::System, title);
+        message.diff = Some(DiffBlock {
+            title: title.to_string(),
+            files,
+        });
+        message
+    }
+
+    /// The file changes this message shows, if it is a diff.
+    #[must_use]
+    pub const fn diff_block(&self) -> Option<&DiffBlock> {
+        self.diff.as_ref()
     }
 
     /// A step the agent took, drawn as a collapsible block.

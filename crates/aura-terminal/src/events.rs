@@ -166,6 +166,85 @@ pub enum UiEvent {
         /// Agent the chat showed (hex id)
         agent_id: String,
     },
+
+    /// User asked for the agent's turns (`turn: None`), or to rewind to
+    /// before the turn with this number in that list
+    Rewind {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        /// Turn number, as `/rewind` lists it
+        turn: Option<usize>,
+        /// What to put back
+        scope: RewindScope,
+    },
+
+    /// User asked what the agent's latest turn changed in files, or the
+    /// whole session with `session`
+    Diff {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        /// Every change since the session started
+        session: bool,
+    },
+}
+
+/// What `/rewind` puts back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RewindScope {
+    /// Files the agent changed with its file tools
+    Code,
+    /// The conversation the model sees
+    Chat,
+    /// Files and conversation
+    #[default]
+    Both,
+}
+
+impl RewindScope {
+    /// Whether files are put back.
+    #[must_use]
+    pub const fn code(self) -> bool {
+        matches!(self, Self::Code | Self::Both)
+    }
+
+    /// Whether the conversation is cut back.
+    #[must_use]
+    pub const fn chat(self) -> bool {
+        matches!(self, Self::Chat | Self::Both)
+    }
+
+    /// `code`, `chat` or `both`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Code => "code",
+            Self::Chat => "chat",
+            Self::Both => "both",
+        }
+    }
+}
+
+impl std::str::FromStr for RewindScope {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "code" | "files" => Ok(Self::Code),
+            "chat" | "conversation" => Ok(Self::Chat),
+            "both" | "all" => Ok(Self::Both),
+            other => Err(format!("unknown rewind scope {other:?}")),
+        }
+    }
+}
+
+/// How one file changed, as a unified diff of its hunks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileDiffData {
+    /// File, relative to the agent's workspace when inside it
+    pub path: String,
+    /// Unified diff hunks (`@@` headers and `+`/`-`/` ` lines), or a note
+    /// such as for a binary file
+    pub diff: String,
 }
 
 /// Commands sent from the application logic to the UI.
@@ -226,6 +305,23 @@ pub enum UiCommand {
         attempt: u32,
         /// Total attempts allowed
         max_attempts: u32,
+    },
+
+    /// What a file-changing tool call did to its file, as unified diff
+    /// hunks, shown in the call's block
+    ToolDiff {
+        /// Tool use ID
+        id: String,
+        /// Unified diff hunks
+        diff: String,
+    },
+
+    /// Show file changes in the chat
+    ShowDiff {
+        /// What the changes are, e.g. which turn made them
+        title: String,
+        /// One entry per changed file
+        files: Vec<FileDiffData>,
     },
 
     /// Update a tool's completion status

@@ -456,6 +456,9 @@ async fn run_terminal(
     let factory_jobs = Arc::clone(&jobs);
     let factory_approvals = Arc::clone(&approvals);
     let checkpoints = crate::session_checkpoint::Checkpoints::new(&data_dir);
+    let file_checkpoints = crate::file_checkpoints::FileCheckpoints::new(&data_dir);
+    let factory_files = file_checkpoints.clone();
+    let diff_commands = cmd_tx.clone();
     let hub = event_loop::AgentHub::new(
         event_loop::AgentHubParts {
             registry,
@@ -483,11 +486,16 @@ async fn run_terminal(
             event_loop::KernelFactory::new(
                 store,
                 Box::new(move |agent_id, parent_chain, folder| {
+                    let chain = std::iter::once(agent_id)
+                        .chain(parent_chain.iter().copied())
+                        .collect();
+                    let file_hook = factory_files.hook(chain, Some(diff_commands.clone()));
                     let mut executor = ToolExecutor::new(tool_config.clone())
                         .with_caller_permissions(AgentPermissions::full_access())
                         .with_parent_chain(parent_chain)
                         .with_subagent_dispatch_hook(Arc::clone(&dispatcher))
-                        .with_background_jobs(Arc::clone(&factory_jobs));
+                        .with_background_jobs(Arc::clone(&factory_jobs))
+                        .with_file_change_hook(file_hook);
                     executor.register(Box::new(TodoWriteTool));
                     let mut executor_router = ExecutorRouter::new();
                     executor_router.add_executor(Arc::new(executor));
@@ -506,6 +514,7 @@ async fn run_terminal(
                 }),
             )
             .with_checkpoints(checkpoints)
+            .with_file_checkpoints(file_checkpoints)
         },
     );
     let _ = cmd_tx.try_send(UiCommand::SetAgents(hub.agent_summaries()));

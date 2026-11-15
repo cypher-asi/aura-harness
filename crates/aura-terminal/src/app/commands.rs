@@ -3,7 +3,7 @@
 use super::{App, AppState, DetailView, NotificationType, PanelFocus, PendingApproval};
 use crate::{
     components::{elapsed_ms, Activity, Message, MessageRole, ToolStatus, ToolStep},
-    events::{CallUsage, UiCommand, UiEvent},
+    events::{CallUsage, RewindScope, UiCommand, UiEvent},
     mode_command::{PermissionMode, SlashModeCommand},
     terminal::KeyResult,
 };
@@ -136,6 +136,8 @@ impl App {
             "mode" => self.handle_mode_command(arg),
             "init" => self.handle_init_command(),
             "resume" => self.handle_resume_command(arg),
+            "rewind" => self.handle_rewind_command(arg),
+            "diff" => self.handle_diff_command(arg),
             "new" | "n" => {
                 self.messages.clear();
                 self.scroll_offset = 0;
@@ -421,6 +423,58 @@ impl App {
         }
     }
 
+    /// `/rewind [n [code|chat|both]]`: list the agent's turns, or put its
+    /// files and/or conversation back to before turn `n`.
+    fn handle_rewind_command(&mut self, arg: &str) {
+        let mut words = arg.split_whitespace();
+        let turn = words
+            .next()
+            .map(|w| w.parse::<usize>().ok().filter(|n| *n > 0));
+        let scope = words.next().map(str::parse::<RewindScope>);
+        let (turn, scope) = match (turn, scope, words.next()) {
+            (None, None, None) => (None, RewindScope::default()),
+            (Some(Some(n)), None, None) => (Some(n), RewindScope::default()),
+            (Some(Some(n)), Some(Ok(scope)), None) => (Some(n), scope),
+            _ => {
+                self.notification = Some((
+                    "Usage: /rewind [n] [code|chat|both] (n from the list /rewind shows)"
+                        .to_string(),
+                    NotificationType::Warning,
+                ));
+                return;
+            }
+        };
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::Rewind {
+                agent_id: self.active_agent_id.clone(),
+                turn,
+                scope,
+            });
+        }
+    }
+
+    /// `/diff [session]`: what the agent's latest turn, or its whole
+    /// session, changed in files.
+    fn handle_diff_command(&mut self, arg: &str) {
+        let session = match arg.to_ascii_lowercase().as_str() {
+            "" | "turn" | "last" => false,
+            "session" | "all" => true,
+            _ => {
+                self.notification = Some((
+                    "Usage: /diff [session]".to_string(),
+                    NotificationType::Warning,
+                ));
+                return;
+            }
+        };
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::Diff {
+                agent_id: self.active_agent_id.clone(),
+                session,
+            });
+        }
+    }
+
     /// `/compact [focus]`: summarize the agent's older history now. A busy
     /// agent does it once its current work ends.
     fn handle_compact_command(&mut self, focus: &str) {
@@ -500,6 +554,12 @@ impl App {
             } => {
                 self.cmd_complete_tool(&id, &result, success);
                 self.refresh_sandbox();
+            }
+            UiCommand::ToolDiff { id, diff } => {
+                self.update_tool(&id, |tool| tool.diff = Some(diff));
+            }
+            UiCommand::ShowDiff { title, files } => {
+                self.add_message(Message::diff(&title, files));
             }
             UiCommand::CommandFinished { output, exit_code } => {
                 if let Some(message) = self

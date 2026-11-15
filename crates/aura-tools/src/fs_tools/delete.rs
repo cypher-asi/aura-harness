@@ -68,6 +68,10 @@ impl Tool for FsDeleteTool {
         }
     }
 
+    fn changed_path<'a>(&self, args: &'a serde_json::Value) -> Option<&'a str> {
+        crate::tool::path_arg(args)
+    }
+
     async fn execute(
         &self,
         ctx: &ToolContext,

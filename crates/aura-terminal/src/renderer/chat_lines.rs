@@ -2,6 +2,7 @@
 
 use super::activity::{activity_lines, group_header, GroupView, TAIL_STEPS};
 use super::command::shell_lines;
+use super::diff::diff_message_lines;
 use super::markdown::{parse_content_segments, ContentSegment};
 use super::segments::{
     message_header, message_style, render_code_segment, render_text_segment, reply_meta,
@@ -231,6 +232,9 @@ pub(super) fn message_lines(
     let timestamp = message.timestamp_local();
     if let Some(run) = message.shell_run() {
         return shell_lines(run, &timestamp, width, theme);
+    }
+    if let Some(block) = message.diff_block() {
+        return diff_message_lines(block, &timestamp, width, theme);
     }
     let (nick, nick_color, msg_color) = message_style(message.role(), theme);
     let meta = reply_meta(message.model(), message.usage());

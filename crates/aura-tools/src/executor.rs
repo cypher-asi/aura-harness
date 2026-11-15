@@ -3,7 +3,8 @@
 use crate::error::ToolError;
 use crate::sandbox::Sandbox;
 use crate::tool::{
-    builtin_tools, AgentControlHook, AgentReadHook, SubagentDispatchHook, Tool, ToolContext,
+    builtin_tools, AgentControlHook, AgentReadHook, FileChangeHook, SubagentDispatchHook, Tool,
+    ToolContext,
 };
 use crate::ToolConfig;
 use async_trait::async_trait;
@@ -54,6 +55,7 @@ pub struct ToolExecutor {
     /// downstream null-model behavior unchanged.
     caller_model_id: Option<String>,
     background_jobs: Option<Arc<crate::jobs::BackgroundJobs>>,
+    file_change_hook: Option<Arc<dyn FileChangeHook>>,
 }
 
 impl ToolExecutor {
@@ -83,7 +85,15 @@ impl ToolExecutor {
             caller_project_id: None,
             caller_model_id: None,
             background_jobs: None,
+            file_change_hook: None,
         }
+    }
+
+    /// Tell `hook` before and after every call that changes a file.
+    #[must_use]
+    pub fn with_file_change_hook(mut self, hook: Arc<dyn FileChangeHook>) -> Self {
+        self.file_change_hook = Some(hook);
+        self
     }
 
     /// Let `run_command` start background jobs in `jobs`, and register the
@@ -306,11 +316,43 @@ impl ToolExecutor {
         tool_ctx.current_tool_use_id = ctx.tool_use_id.clone();
         tool_ctx.background_jobs = self.background_jobs.clone();
 
-        match self.tools.get(tool_name.as_str()) {
-            Some(tool) => tool.execute(&tool_ctx, tool_call.args.clone()).await,
-            None => Err(ToolError::UnknownTool(tool_name.clone())),
+        let Some(tool) = self.tools.get(tool_name.as_str()) else {
+            return Err(ToolError::UnknownTool(tool_name.clone()));
+        };
+        let change = match (&self.file_change_hook, tool.changed_path(&tool_call.args)) {
+            (Some(hook), Some(path)) => resolve_changed_path(&tool_ctx.sandbox, path)
+                .await
+                .map(|path| (hook, path)),
+            _ => None,
+        };
+        let tool_use_id = ctx.tool_use_id.as_deref();
+        if let Some((hook, path)) = &change {
+            hook.before_change(path, tool_use_id).await;
         }
+        let result = tool.execute(&tool_ctx, tool_call.args.clone()).await;
+        if let Some((hook, path)) = &change {
+            let succeeded = result.as_ref().is_ok_and(|r| r.ok);
+            hook.after_change(path, tool_use_id, succeeded).await;
+        }
+        result
     }
+}
+
+/// Where a file-changing call's `path` lands inside `sandbox`, following
+/// symlinks for files that exist. `None` when it escapes the sandbox; the
+/// tool refuses the call then, so there is nothing to checkpoint.
+async fn resolve_changed_path(sandbox: &Sandbox, path: &str) -> Option<std::path::PathBuf> {
+    let sandbox = sandbox.clone();
+    let path = path.to_string();
+    tokio::task::spawn_blocking(move || {
+        sandbox
+            .resolve_existing(&path)
+            .or_else(|_| sandbox.resolve_new(&path))
+            .ok()
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 #[async_trait]
@@ -465,6 +507,88 @@ mod tests {
 
         let result: ToolResult = serde_json::from_slice(&effect.payload).unwrap();
         assert!(!result.ok);
+    }
+
+    /// `(event, path, file existed, succeeded)` as a hook heard it.
+    type HookCall = (String, std::path::PathBuf, bool, Option<bool>);
+
+    /// Records what a [`FileChangeHook`] is told, with whether the file
+    /// existed at the time.
+    #[derive(Default)]
+    struct RecordingHook {
+        calls: std::sync::Mutex<Vec<HookCall>>,
+    }
+
+    #[async_trait]
+    impl FileChangeHook for RecordingHook {
+        async fn before_change(&self, path: &std::path::Path, _tool_use_id: Option<&str>) {
+            self.calls.lock().unwrap().push((
+                "before".to_string(),
+                path.to_path_buf(),
+                path.exists(),
+                None,
+            ));
+        }
+
+        async fn after_change(
+            &self,
+            path: &std::path::Path,
+            _tool_use_id: Option<&str>,
+            succeeded: bool,
+        ) {
+            self.calls.lock().unwrap().push((
+                "after".to_string(),
+                path.to_path_buf(),
+                path.exists(),
+                Some(succeeded),
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn file_change_hook_brackets_file_writes_only() {
+        let (ctx, dir) = create_test_context();
+        let hook = Arc::new(RecordingHook::default());
+        let executor = ToolExecutor::with_defaults().with_file_change_hook(hook.clone());
+
+        let write = ToolCall::new(
+            "write_file",
+            serde_json::json!({"path": "new.txt", "content": "hi"}),
+        );
+        let action = Action::delegate_tool(&write).unwrap();
+        executor.execute(&ctx, &action).await.unwrap();
+        let read = ToolCall::fs_read("new.txt", None);
+        let action = Action::delegate_tool(&read).unwrap();
+        executor.execute(&ctx, &action).await.unwrap();
+
+        let calls = hook.calls.lock().unwrap().clone();
+        let target = dir.path().canonicalize().unwrap().join("new.txt");
+        assert_eq!(
+            calls,
+            [
+                ("before".to_string(), target.clone(), false, None),
+                ("after".to_string(), target, true, Some(true)),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn file_change_hook_hears_about_failed_edits() {
+        let (ctx, dir) = create_test_context();
+        std::fs::write(dir.path().join("a.txt"), "one").unwrap();
+        let hook = Arc::new(RecordingHook::default());
+        let executor = ToolExecutor::with_defaults().with_file_change_hook(hook.clone());
+
+        let edit = ToolCall::new(
+            "edit_file",
+            serde_json::json!({"path": "a.txt", "old_text": "missing", "new_text": "x"}),
+        );
+        let action = Action::delegate_tool(&edit).unwrap();
+        executor.execute(&ctx, &action).await.unwrap();
+
+        let calls = hook.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[1].3, Some(false));
     }
 
     #[tokio::test]
