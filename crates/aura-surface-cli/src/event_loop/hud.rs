@@ -31,7 +31,7 @@ pub(super) fn todo_views(todos: &[TodoItem]) -> Vec<TodoView> {
 }
 
 /// Tokens and cost of one call to `model`.
-pub(super) fn call_stats(model: &str, usage: &Usage, context_limit: Option<u64>) -> CallStats {
+pub(crate) fn call_stats(model: &str, usage: &Usage, context_limit: Option<u64>) -> CallStats {
     let tokens = model_catalog::billed_tokens(model, usage);
     CallStats {
         input_tokens: tokens.uncached_input,

@@ -64,9 +64,16 @@ pub fn hello_world() {
 /// `aura_plugin_core::InstallError`) and bubble up here as
 /// `anyhow::Error` because the root binary's `main` is the only
 /// remaining `anyhow`-using boundary in the workspace.
-pub async fn run() -> anyhow::Result<()> {
+pub async fn run() -> anyhow::Result<std::process::ExitCode> {
     let cli = Cli::parse();
     let requested_mode = cli.mode.map(aura_core_modes::AgentMode::from);
+
+    if let Some(prompt) = cli.print {
+        if cli.command.is_some() {
+            anyhow::bail!("-p runs a prompt on its own; it cannot be combined with a subcommand");
+        }
+        return crate::headless::run(prompt, cli.headless, requested_mode).await;
+    }
 
     match cli.command {
         Some(Commands::Hello) => {
@@ -82,6 +89,7 @@ pub async fn run() -> anyhow::Result<()> {
         Some(Commands::Run(args)) => run_with_args(args, requested_mode).await,
         None => run_with_args(RunArgs::default(), requested_mode).await,
     }
+    .map(|()| std::process::ExitCode::SUCCESS)
 }
 
 // ============================================================================
@@ -380,22 +388,7 @@ async fn run_terminal(
     }
     api_server::start_api_server(cmd_tx.clone(), workspace_root.clone()).await;
 
-    let mut tool_config = ToolConfig::for_autonomous_dev_loop();
-    tool_config.sync_threshold_ms = crate::long_run::COMMAND_TIMEOUT_MS;
-    if args.allow_unrestricted_full_access || unrestricted_full_access_from_env() {
-        tool_config.command.allow_unrestricted_full_access = true;
-        warn!("unrestricted full-access command allowlist bypass enabled by operator config");
-    }
-    if tool_config.command.enabled {
-        info!(
-            binary_allowlist = ?tool_config.command.binary_allowlist,
-            allow_shell = tool_config.command.allow_shell,
-            allow_unrestricted_full_access = tool_config.command.allow_unrestricted_full_access,
-            "run_command enabled"
-        );
-    }
-    let (_, mut tools) = session_helpers::build_executor_router_with_config(&tool_config);
-    add_long_run_tools(&mut tools);
+    let (tool_config, tools) = agent_tools(args.allow_unrestricted_full_access);
     let (job_tx, job_rx) = mpsc::channel::<JobFinished>(64);
     let jobs = BackgroundJobs::new(job_tx);
 
@@ -421,102 +414,42 @@ async fn run_terminal(
     // provider sends `local/*` models to the local server (Ollama),
     // `claude/*` and `chatgpt/*` to the linked plan, and everything else
     // to aura-router.
-    let resolver: Arc<dyn aura_auth::CredentialResolver> = auth.clone();
-    let selection = match args.provider.as_str() {
-        "mock" => Ok(aura_model_reasoner::mock_provider()),
-        _ => aura_model_reasoner::routed_provider(Some(resolver)),
-    }
-    .context("building model provider")?;
+    let selection = build_provider(&args.provider, &auth)?;
     if selection.name == "mock" {
         let _ = cmd_tx.try_send(UiCommand::SetStatus("Mock Mode".to_string()));
     }
-    let provider: Arc<dyn ModelProvider + Send + Sync> = selection.provider;
 
     let mode = initial_permission_mode(requested_mode);
     info!(%mode, "Terminal permission mode");
-    let mut tool_names: Vec<String> = tools.iter().map(|tool| tool.name.clone()).collect();
-    tool_names.push(aura_tools::agents::task::TASK_TOOL_NAME.to_string());
+    let tool_names = policy_tool_names(&tools);
     let approvals = Arc::new(event_loop::TerminalApprovals::new(
         cmd_tx.clone(),
         &data_dir,
     ));
-    let kernel_config = KernelConfig {
-        workspace_base: workspace_root.clone(),
-        use_workspace_base_as_root: true,
-        policy: aura_agent_kernel::PolicyConfig::default()
-            .with_mode(mode.agent_mode())
-            .with_user_default(event_loop::modes::user_defaults(mode, &tool_names)),
-        tool_approval_prompter: Some(Arc::clone(&approvals) as Arc<dyn ToolApprovalPrompter>),
+    let hub = build_hub(HubSetup {
+        data_dir: data_dir.clone(),
+        workspace_root: workspace_root.clone(),
+        registry,
+        definitions,
+        store,
+        provider: selection.provider,
+        tool_config,
+        base: event_loop::TurnBase {
+            config: base_config,
+            tools,
+            limits: models.limits(),
+        },
+        policy: mode_policy(mode, &tool_names),
         tool_audit_observer: Some(Arc::new(event_loop::UiToolAuditObserver::new(
             cmd_tx.clone(),
         ))),
-        ..KernelConfig::default()
-    };
-    let kernel_store = store.clone() as Arc<dyn aura_store_db::Store>;
-    let factory_jobs = Arc::clone(&jobs);
-    let factory_approvals = Arc::clone(&approvals);
-    let checkpoints = crate::session_checkpoint::Checkpoints::new(&data_dir);
-    let file_checkpoints = crate::file_checkpoints::FileCheckpoints::new(&data_dir);
-    let factory_files = file_checkpoints.clone();
-    let diff_commands = cmd_tx.clone();
-    let hub = event_loop::AgentHub::new(
-        event_loop::AgentHubParts {
-            registry,
-            definitions,
-            skills: SkillManager::new(SkillLoader::with_defaults(
-                Some(workspace_root.clone()),
-                None,
-            )),
-            base: event_loop::TurnBase {
-                config: base_config,
-                tools,
-                limits: models.limits(),
-            },
-            commands: cmd_tx.clone(),
-            long_run: crate::long_run::LongRunSettings::from_env(),
-            mode,
-            instructions: ProjectInstructions::new(InstructionSettings::from_env(
-                aura_config::AuraHome::resolve()
-                    .ok()
-                    .map(|home| home.path)
-                    .as_deref(),
-            )),
-        },
-        move |dispatcher| {
-            event_loop::KernelFactory::new(
-                store,
-                Box::new(move |agent_id, parent_chain, folder| {
-                    let chain = std::iter::once(agent_id)
-                        .chain(parent_chain.iter().copied())
-                        .collect();
-                    let file_hook = factory_files.hook(chain, Some(diff_commands.clone()));
-                    let mut executor = ToolExecutor::new(tool_config.clone())
-                        .with_caller_permissions(AgentPermissions::full_access())
-                        .with_parent_chain(parent_chain)
-                        .with_subagent_dispatch_hook(Arc::clone(&dispatcher))
-                        .with_background_jobs(Arc::clone(&factory_jobs))
-                        .with_file_change_hook(file_hook);
-                    executor.register(Box::new(TodoWriteTool));
-                    let mut executor_router = ExecutorRouter::new();
-                    executor_router.add_executor(Arc::new(executor));
-                    let mut config = kernel_config.clone();
-                    if let Some(folder) = folder {
-                        config.workspace_base = folder;
-                    }
-                    factory_approvals.set_folder(agent_id, config.workspace_base.clone());
-                    Ok(Kernel::new(
-                        Arc::clone(&kernel_store),
-                        Arc::clone(&provider),
-                        executor_router,
-                        config,
-                        agent_id,
-                    )?)
-                }),
-            )
-            .with_checkpoints(checkpoints)
-            .with_file_checkpoints(file_checkpoints)
-        },
-    );
+        commands: cmd_tx.clone(),
+        long_run: crate::long_run::LongRunSettings::from_env(),
+        jobs: Arc::clone(&jobs),
+        mode,
+        instructions: project_instructions(),
+        approvals: Some(Arc::clone(&approvals)),
+    });
     let _ = cmd_tx.try_send(UiCommand::SetAgents(hub.agent_summaries()));
     let _ = cmd_tx.try_send(UiCommand::SetActiveAgent(identity.agent_id.to_hex()));
     let _ = cmd_tx.try_send(UiCommand::SetAgentDefinitions(hub.definition_summaries()));
@@ -575,6 +508,194 @@ async fn run_terminal(
     }
 
     Ok(())
+}
+
+// ============================================================================
+// Agent harness shared by the terminal and `aura -p`
+// ============================================================================
+
+/// Tool settings and the model-facing tool list for terminal-style agents:
+/// the autonomous dev-loop tools plus planning and background jobs.
+pub(crate) fn agent_tools(
+    allow_unrestricted_full_access: bool,
+) -> (ToolConfig, Vec<aura_model_reasoner::ToolDefinition>) {
+    let mut tool_config = ToolConfig::for_autonomous_dev_loop();
+    tool_config.sync_threshold_ms = crate::long_run::COMMAND_TIMEOUT_MS;
+    if allow_unrestricted_full_access || unrestricted_full_access_from_env() {
+        tool_config.command.allow_unrestricted_full_access = true;
+        warn!("unrestricted full-access command allowlist bypass enabled by operator config");
+    }
+    if tool_config.command.enabled {
+        info!(
+            binary_allowlist = ?tool_config.command.binary_allowlist,
+            allow_shell = tool_config.command.allow_shell,
+            allow_unrestricted_full_access = tool_config.command.allow_unrestricted_full_access,
+            "run_command enabled"
+        );
+    }
+    let (_, mut tools) = session_helpers::build_executor_router_with_config(&tool_config);
+    add_long_run_tools(&mut tools);
+    (tool_config, tools)
+}
+
+/// The model provider named by `--provider`: `mock` for tests and offline
+/// use; anything else routes `local/*` models to the local server
+/// (Ollama), `claude/*` and `chatgpt/*` to the linked plan, and everything
+/// else to aura-router.
+pub(crate) fn build_provider(
+    name: &str,
+    auth: &Arc<aura_auth::AuthManager>,
+) -> anyhow::Result<aura_model_reasoner::ProviderSelection> {
+    let resolver: Arc<dyn aura_auth::CredentialResolver> = auth.clone();
+    match name {
+        "mock" => Ok(aura_model_reasoner::mock_provider()),
+        _ => aura_model_reasoner::routed_provider(Some(resolver)),
+    }
+    .context("building model provider")
+}
+
+/// Everything [`build_hub`] wires together.
+pub(crate) struct HubSetup {
+    pub data_dir: PathBuf,
+    /// Where tools run for agents with no project folder
+    pub workspace_root: PathBuf,
+    pub registry: AgentRegistry,
+    pub definitions: AgentDefinitions,
+    pub store: Arc<aura_store_db::RocksStore>,
+    pub provider: Arc<dyn ModelProvider + Send + Sync>,
+    pub tool_config: ToolConfig,
+    pub base: event_loop::TurnBase,
+    /// Kernel policy for every agent: mode and tool permissions
+    pub policy: aura_agent_kernel::PolicyConfig,
+    pub tool_audit_observer: Option<Arc<dyn aura_agent_kernel::ToolAuditObserver>>,
+    /// Where agents' chats and panels go
+    pub commands: mpsc::Sender<UiCommand>,
+    pub long_run: crate::long_run::LongRunSettings,
+    pub jobs: Arc<BackgroundJobs>,
+    /// Permission mode agents start in; spawned agents take their
+    /// parent's. Should match the mode `policy` was built for.
+    pub mode: PermissionMode,
+    pub instructions: ProjectInstructions,
+    /// Asks the user about tool calls the policy wants approved. Without
+    /// it the kernel denies those calls, which `aura -p` relies on.
+    pub approvals: Option<Arc<event_loop::TerminalApprovals>>,
+}
+
+/// Names of every tool an agent may be offered: `tools` plus `task`,
+/// which the subagent dispatcher adds.
+pub(crate) fn policy_tool_names(tools: &[aura_model_reasoner::ToolDefinition]) -> Vec<String> {
+    let mut names: Vec<String> = tools.iter().map(|tool| tool.name.clone()).collect();
+    names.push(aura_tools::agents::task::TASK_TOOL_NAME.to_string());
+    names
+}
+
+/// Kernel policy for agents in `mode`, the same table the hub applies
+/// when an agent switches mode or a spawn takes its parent's.
+pub(crate) fn mode_policy(
+    mode: PermissionMode,
+    tool_names: &[String],
+) -> aura_agent_kernel::PolicyConfig {
+    aura_agent_kernel::PolicyConfig::default()
+        .with_mode(mode.agent_mode())
+        .with_user_default(event_loop::modes::user_defaults(mode, tool_names))
+}
+
+/// Project instructions (`AGENTS.md`, `CLAUDE.md`, Cursor rules) as the
+/// environment configures them, with the user's own from the Aura home.
+pub(crate) fn project_instructions() -> ProjectInstructions {
+    ProjectInstructions::new(InstructionSettings::from_env(
+        aura_config::AuraHome::resolve()
+            .ok()
+            .map(|home| home.path)
+            .as_deref(),
+    ))
+}
+
+/// The agent hub: registry, permanent agents, and a kernel factory whose
+/// kernels run the tools in `setup` under its policy and checkpoint their
+/// sessions under `data_dir`.
+pub(crate) fn build_hub(setup: HubSetup) -> Arc<event_loop::AgentHub> {
+    let HubSetup {
+        data_dir,
+        workspace_root,
+        registry,
+        definitions,
+        store,
+        provider,
+        tool_config,
+        base,
+        policy,
+        tool_audit_observer,
+        commands,
+        long_run,
+        jobs,
+        mode,
+        instructions,
+        approvals,
+    } = setup;
+    let kernel_config = KernelConfig {
+        workspace_base: workspace_root.clone(),
+        use_workspace_base_as_root: true,
+        policy,
+        tool_approval_prompter: approvals
+            .clone()
+            .map(|approvals| approvals as Arc<dyn ToolApprovalPrompter>),
+        tool_audit_observer,
+        ..KernelConfig::default()
+    };
+    let kernel_store = store.clone() as Arc<dyn aura_store_db::Store>;
+    let checkpoints = crate::session_checkpoint::Checkpoints::new(&data_dir);
+    let file_checkpoints = crate::file_checkpoints::FileCheckpoints::new(&data_dir);
+    let factory_files = file_checkpoints.clone();
+    let diff_commands = commands.clone();
+    event_loop::AgentHub::new(
+        event_loop::AgentHubParts {
+            registry,
+            definitions,
+            skills: SkillManager::new(SkillLoader::with_defaults(Some(workspace_root), None)),
+            base,
+            commands,
+            long_run,
+            mode,
+            instructions,
+        },
+        move |dispatcher| {
+            event_loop::KernelFactory::new(
+                store,
+                Box::new(move |agent_id, parent_chain, folder| {
+                    let chain = std::iter::once(agent_id)
+                        .chain(parent_chain.iter().copied())
+                        .collect();
+                    let file_hook = factory_files.hook(chain, Some(diff_commands.clone()));
+                    let mut executor = ToolExecutor::new(tool_config.clone())
+                        .with_caller_permissions(AgentPermissions::full_access())
+                        .with_parent_chain(parent_chain)
+                        .with_subagent_dispatch_hook(Arc::clone(&dispatcher))
+                        .with_background_jobs(Arc::clone(&jobs))
+                        .with_file_change_hook(file_hook);
+                    executor.register(Box::new(TodoWriteTool));
+                    let mut executor_router = ExecutorRouter::new();
+                    executor_router.add_executor(Arc::new(executor));
+                    let mut config = kernel_config.clone();
+                    if let Some(folder) = folder {
+                        config.workspace_base = folder;
+                    }
+                    if let Some(approvals) = &approvals {
+                        approvals.set_folder(agent_id, config.workspace_base.clone());
+                    }
+                    Ok(Kernel::new(
+                        Arc::clone(&kernel_store),
+                        Arc::clone(&provider),
+                        executor_router,
+                        config,
+                        agent_id,
+                    )?)
+                }),
+            )
+            .with_checkpoints(checkpoints)
+            .with_file_checkpoints(file_checkpoints)
+        },
+    )
 }
 
 // ============================================================================

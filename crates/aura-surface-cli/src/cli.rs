@@ -3,6 +3,7 @@
 use crate::ModeFlag;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[derive(Parser)]
 #[command(
@@ -16,8 +17,130 @@ pub struct Cli {
     #[arg(long = "mode", value_enum, global = true)]
     pub mode: Option<ModeFlag>,
 
+    /// Run one prompt without the terminal UI, print the result, and exit.
+    /// `-p -`, or `-p` with no prompt, reads the prompt from stdin; piped
+    /// stdin is appended to a prompt given here.
+    #[arg(
+        short = 'p',
+        long = "print",
+        value_name = "PROMPT",
+        num_args = 0..=1,
+        default_missing_value = "-"
+    )]
+    pub print: Option<String>,
+
+    #[command(flatten)]
+    pub headless: HeadlessArgs,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
+}
+
+/// Options for `aura -p`. Each one requires `-p`.
+#[derive(Args, Debug, Clone, Default)]
+#[command(next_help_heading = "Options for -p")]
+pub struct HeadlessArgs {
+    /// What `-p` prints: the final reply (`text`), one result object
+    /// (`json`), or one event per line ending with the result
+    /// (`stream-json`).
+    #[arg(long, value_enum, value_name = "FORMAT", requires = "print")]
+    pub output_format: Option<OutputFormat>,
+
+    /// Continue the saved session with this id (the `session_id` of an
+    /// earlier run).
+    #[arg(
+        long,
+        value_name = "SESSION_ID",
+        requires = "print",
+        conflicts_with = "continue_session"
+    )]
+    pub resume: Option<String>,
+
+    /// Continue the most recent `aura -p` session.
+    #[arg(short = 'c', long = "continue", requires = "print")]
+    pub continue_session: bool,
+
+    /// Only these tools may run (comma-separated); every other tool is
+    /// denied.
+    #[arg(
+        long,
+        value_name = "TOOLS",
+        value_delimiter = ',',
+        num_args = 1..,
+        requires = "print"
+    )]
+    pub allowed_tools: Vec<String>,
+
+    /// These tools may not run (comma-separated).
+    #[arg(
+        long,
+        value_name = "TOOLS",
+        value_delimiter = ',',
+        num_args = 1..,
+        requires = "print"
+    )]
+    pub disallowed_tools: Vec<String>,
+
+    /// Stop after this many model calls.
+    #[arg(
+        long,
+        value_name = "N",
+        requires = "print",
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    pub max_turns: Option<u32>,
+
+    /// Stop after this long: `90s`, `45m`, `2h`, or a bare number of
+    /// minutes. Overrides `AURA_TUI_TURN_TIMEOUT`.
+    #[arg(long, value_name = "DURATION", requires = "print", value_parser = parse_duration_arg)]
+    pub max_time: Option<Duration>,
+
+    /// Stop once model calls cost more than this many US dollars at API
+    /// list prices. Overrides `AURA_TUI_MAX_TURN_COST_USD`.
+    #[arg(long, value_name = "USD", requires = "print", value_parser = parse_cost_arg)]
+    pub max_cost_usd: Option<f64>,
+
+    /// Work in this directory instead of the current one.
+    #[arg(short = 'd', long = "cwd", value_name = "DIR", requires = "print")]
+    pub cwd: Option<PathBuf>,
+
+    /// Model for this run. Not saved as the `/model` choice.
+    #[arg(long, value_name = "MODEL", requires = "print")]
+    pub model: Option<String>,
+
+    /// Model provider: `anthropic` (default; local, plan and aura-router
+    /// models) or `mock`.
+    #[arg(long, value_name = "PROVIDER", requires = "print")]
+    pub provider: Option<String>,
+
+    /// Log debug detail to stderr.
+    #[arg(long, requires = "print")]
+    pub verbose: bool,
+}
+
+/// How `aura -p` prints its result.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum OutputFormat {
+    /// The final reply as plain text.
+    #[default]
+    Text,
+    /// One JSON object describing the run.
+    Json,
+    /// Newline-delimited JSON events, ending with the result object.
+    StreamJson,
+}
+
+fn parse_duration_arg(raw: &str) -> Result<Duration, String> {
+    crate::long_run::parse_duration(raw)
+        .ok_or_else(|| format!("`{raw}` is not a duration like 90s, 45m or 2h"))
+}
+
+fn parse_cost_arg(raw: &str) -> Result<f64, String> {
+    raw.trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|usd| usd.is_finite() && *usd > 0.0)
+        .ok_or_else(|| format!("`{raw}` is not a positive number of US dollars"))
 }
 
 #[derive(Subcommand)]
@@ -202,4 +325,121 @@ pub enum UiMode {
     Terminal,
     /// No UI, run as swarm server
     None,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(std::iter::once("aura").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn print_takes_a_prompt_or_reads_stdin() {
+        let cli = parse(&["-p", "fix the tests"]).unwrap();
+        assert_eq!(cli.print.as_deref(), Some("fix the tests"));
+        assert!(cli.command.is_none());
+
+        assert_eq!(parse(&["-p"]).unwrap().print.as_deref(), Some("-"));
+        assert_eq!(
+            parse(&["--print", "-"]).unwrap().print.as_deref(),
+            Some("-")
+        );
+        assert_eq!(
+            parse(&["-p", "--output-format", "json"])
+                .unwrap()
+                .print
+                .as_deref(),
+            Some("-")
+        );
+        assert!(parse(&[]).unwrap().print.is_none());
+    }
+
+    #[test]
+    fn a_prompt_naming_a_subcommand_is_still_the_prompt() {
+        let cli = parse(&["-p", "hello"]).unwrap();
+        assert_eq!(cli.print.as_deref(), Some("hello"));
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn headless_flags_parse() {
+        let cli = parse(&[
+            "-p",
+            "go",
+            "--output-format",
+            "stream-json",
+            "--resume",
+            "abc:1",
+            "--allowed-tools",
+            "read_file,run_command",
+            "--disallowed-tools",
+            "write_file",
+            "--max-turns",
+            "12",
+            "--max-time",
+            "90s",
+            "--max-cost-usd",
+            "2.5",
+            "-d",
+            "/tmp/project",
+            "--model",
+            "claude/claude-sonnet-4-5",
+            "--provider",
+            "mock",
+            "--mode",
+            "plan",
+        ])
+        .unwrap();
+        let h = &cli.headless;
+        assert_eq!(h.output_format, Some(OutputFormat::StreamJson));
+        assert_eq!(h.resume.as_deref(), Some("abc:1"));
+        assert_eq!(h.allowed_tools, ["read_file", "run_command"]);
+        assert_eq!(h.disallowed_tools, ["write_file"]);
+        assert_eq!(h.max_turns, Some(12));
+        assert_eq!(h.max_time, Some(Duration::from_secs(90)));
+        assert_eq!(h.max_cost_usd, Some(2.5));
+        assert_eq!(h.cwd.as_deref(), Some(std::path::Path::new("/tmp/project")));
+        assert_eq!(h.model.as_deref(), Some("claude/claude-sonnet-4-5"));
+        assert_eq!(h.provider.as_deref(), Some("mock"));
+        assert_eq!(cli.mode, Some(ModeFlag::Plan));
+    }
+
+    #[test]
+    fn continue_and_resume_exclude_each_other() {
+        assert!(parse(&["-p", "x", "-c"]).unwrap().headless.continue_session);
+        assert!(parse(&["-p", "x", "--continue", "--resume", "a:1"]).is_err());
+    }
+
+    #[test]
+    fn headless_flags_require_print() {
+        for args in [
+            &["--output-format", "json"][..],
+            &["--continue"],
+            &["--max-turns", "3"],
+            &["--cwd", "/tmp"],
+            &["--allowed-tools", "read_file"],
+        ] {
+            assert!(parse(args).is_err(), "{args:?} parsed without -p");
+        }
+    }
+
+    #[test]
+    fn limits_reject_nonsense() {
+        assert!(parse(&["-p", "x", "--max-turns", "0"]).is_err());
+        assert!(parse(&["-p", "x", "--max-time", "soon"]).is_err());
+        assert!(parse(&["-p", "x", "--max-cost-usd", "-1"]).is_err());
+        assert!(parse(&["-p", "x", "--output-format", "yaml"]).is_err());
+    }
+
+    #[test]
+    fn run_subcommand_still_owns_its_dir_flag() {
+        let cli = parse(&["run", "-d", "/data"]).unwrap();
+        let Some(Commands::Run(args)) = cli.command else {
+            panic!("expected run");
+        };
+        assert_eq!(args.dir.as_deref(), Some(std::path::Path::new("/data")));
+        assert!(cli.print.is_none());
+    }
 }

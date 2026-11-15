@@ -63,7 +63,7 @@ pub struct TurnBase {
 
 /// Agent state shared by the event loop and the subagent dispatcher.
 pub struct AgentHub {
-    pub(super) registry: Mutex<AgentRegistry>,
+    pub(crate) registry: Mutex<AgentRegistry>,
     pub(super) definitions: Mutex<AgentDefinitions>,
     pub(super) skills: Mutex<SkillManager>,
     pub(super) base: Mutex<TurnBase>,
@@ -99,7 +99,7 @@ pub struct AgentHubParts {
     pub instructions: ProjectInstructions,
 }
 
-pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 

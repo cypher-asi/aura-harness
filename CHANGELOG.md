@@ -7,6 +7,56 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Headless — `aura -p`
+
+##### Added
+
+- `aura -p "prompt"` (`--print`) runs one prompt without the terminal
+  UI, prints the result and exits. `-p -`, or `-p` with no prompt, reads
+  the prompt from stdin; piped stdin is appended to a given prompt.
+- `--output-format text|json|stream-json`: the final reply; one result
+  object with the reply, session id, model calls, usage (cache reads
+  and writes included), cache hit rate, estimated cost, compactions,
+  todo list, changed files and exit reason; or one event per line (text
+  and thinking deltas, tool calls and results, todo updates, per-call
+  usage, warnings) ending with that object.
+- `--resume <session_id>` and `--continue` pick up a saved session.
+  Runs belong to a dedicated "Headless" agent, so they never replace
+  the session of an agent the terminal shows, and the terminal can
+  `/resume` them.
+- `--allowed-tools` / `--disallowed-tools` filter both what the model is
+  offered and what the kernel permits. Nothing prompts: a tool call the
+  policy would ask about is denied.
+- `--max-turns`, `--max-time` and `--max-cost-usd` limit the whole run
+  (the time and cost limits default to `AURA_TUI_TURN_TIMEOUT` and
+  `AURA_TUI_MAX_TURN_COST_USD`). A limit stops the agent between steps
+  and keeps its work in the session.
+- `--cwd`/`-d`, `--model` (not saved as the `/model` choice),
+  `--provider` and `--verbose`. The global `--mode` applies: `plan`,
+  `ask` and `debug` act as the terminal's modes with every approval
+  denied, and `agent` lets edits and commands run instead of asking.
+  Agents spawned with `task` keep the run's mode and tool filter.
+- Exit codes: 0 finished, 1 failed, 2 bad arguments, 3 stopped by a
+  limit, 130 interrupted.
+- The run waits for the agent's background jobs after its turn (up to
+  `AURA_HEADLESS_JOB_WAIT`, default 10 minutes) and gives it each exit
+  notice as a new turn, then stops any still running.
+- stdout carries only the chosen output; logs go to stderr.
+- `evals/long_horizon/`: four multi-file feature tasks (three Python,
+  one Rust) with hidden tests, and `run.py`, which runs `aura -p
+  --output-format json` on each task in a scratch copy, grades it with
+  the hidden tests, and writes a JSON and Markdown report with pass/fail,
+  cost, cache hit rate, compactions, model calls and wall time. Real
+  models run only with `--live` or `AURA_EVALS_LIVE=1`; `--self-check`
+  verifies the fixtures against reference solutions without a model.
+
+##### Fixed
+
+- Every model call now reports its tokens and cost to the turn's
+  listeners. The streaming transport never did, so the terminal's
+  per-reply cost, status line cache and cost figures, and
+  `AURA_TUI_MAX_TURN_COST_USD` saw no model calls.
+
 ### Terminal — long-running tasks
 
 ##### Added

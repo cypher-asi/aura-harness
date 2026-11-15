@@ -40,7 +40,7 @@ A terminal turn has no iteration cap and no time limit: it runs until the agent 
 | `AURA_TUI_TURN_TIMEOUT` | — (no limit) | Stop a turn that runs longer than this: `90s`, `45m`, `2h`, or a bare number of minutes. |
 | `AURA_TUI_MAX_TURN_COST_USD` | — (no limit) | Stop a turn once its model calls cost more than this many US dollars at API list prices. |
 | `AURA_COMPACTION_TRIGGER` | `0.70` | Context use (0.0–1.0) at which the terminal starts compacting history. Below it the transcript is left untouched so its prompt-cache prefix keeps matching. |
-| `AURA_TUI_MODE` | `AURA_DEFAULT_MODE` (`agent` means `default`) | Permission mode the terminal starts in when `--mode` is not given: `default`, `accept-edits`, `plan` or `unrestricted`. Set `unrestricted` to run every tool call without asking. |
+| `AURA_TUI_MODE` | `AURA_DEFAULT_MODE` (`agent` means `default`) | Permission mode the terminal starts in when `--mode` is not given: `default`, `accept-edits`, `plan` or `unrestricted`. Set `unrestricted` to run every tool call without asking. `aura -p` does not read it. |
 | `AURA_TUI_APPROVAL_TIMEOUT_SECS` | `600` | Seconds an approval prompt waits for an answer. When it runs out, the tool call is denied and the turn goes on. |
 | `AURA_TUI_NOTIFY_AFTER_SECS` | `10` | A finished turn that took at least this many seconds rings the bell (and sends a desktop notification if those are on). `0` alerts after every turn. |
 | `AURA_TUI_BELL` | `1` | Set to `0` to stop the terminal bell for finished turns and approval prompts. |
@@ -63,6 +63,17 @@ Ctrl+G in the input, and editing a permanent agent, open the user's editor.
 | `VISUAL` | — | Editor command, tried first. It may carry arguments, e.g. `code --wait`. |
 | `EDITOR` | — | Editor command used when `VISUAL` is unset or empty. With neither set, the terminal runs `vi`. |
 | `TMPDIR` | system temp folder | Where Ctrl+G writes the input for the editor (on Unix, readable only by you). The file is removed when the editor exits. |
+
+## `aura -p` runs
+
+[`aura -p`](cli.md#aura--p-one-prompt-without-the-terminal) reads the variables above too. There, `AURA_TUI_TURN_TIMEOUT` and `AURA_TUI_MAX_TURN_COST_USD` are the defaults for `--max-time` and `--max-cost-usd` and limit the whole run rather than each turn.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AURA_DATA_DIR` | `./aura_data` in the working directory | Data directory: agent list, record store and session checkpoints. A running terminal holds the store's lock, so give `aura -p` its own directory to run both at once. |
+| `AURA_HEADLESS_JOB_WAIT` | `10m` | Longest wait for the agent's background jobs after it ends its turn (`90s`, `45m`, `2h`, or a bare number of minutes). Jobs still running then are stopped. |
+| `RUST_LOG` | warnings only | Log filter. Logs go to stderr so stdout stays machine-readable. |
+| `AURA_EVALS_LIVE` | unset | Set to `1` to let [`evals/long_horizon/run.py`](../evals/long_horizon/README.md) call real models (same as its `--live` flag). |
 
 ## Node runtime
 

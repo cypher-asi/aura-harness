@@ -212,6 +212,14 @@ impl ModelSelection {
 
     /// Switch to `id`. Returns a user-facing problem when the switch is refused.
     pub fn select(&mut self, config: &mut AgentLoopConfig, id: &str) -> Result<(), String> {
+        self.use_for_run(config, id)?;
+        self.persist();
+        Ok(())
+    }
+
+    /// Switch to `id` for this process only, leaving the saved choice
+    /// alone. Returns a user-facing problem when the switch is refused.
+    pub fn use_for_run(&mut self, config: &mut AgentLoopConfig, id: &str) -> Result<(), String> {
         let id = id.trim();
         if id.is_empty() {
             return Err("Model id is empty".to_string());
@@ -220,7 +228,6 @@ impl ModelSelection {
             return Err(unusable_reason(id));
         }
         self.apply(config, id);
-        self.persist();
         Ok(())
     }
 
