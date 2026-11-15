@@ -164,6 +164,70 @@ impl Snapshot {
         }
         Ok(restored)
     }
+
+    /// Unified diff from the snapshot to the workspace now, cut at
+    /// `max_bytes`.
+    #[must_use]
+    pub fn diff(&self, max_bytes: usize) -> String {
+        let mut changed: Vec<(PathBuf, Option<Vec<u8>>)> = Vec::new();
+        let mut seen = HashSet::new();
+        for entry in files(&self.root) {
+            let Ok(rel) = entry.path().strip_prefix(&self.root) else {
+                continue;
+            };
+            let rel = rel.to_path_buf();
+            if self.oversized.contains(&rel) {
+                continue;
+            }
+            let now = std::fs::read(entry.path()).ok();
+            if self.files.get(&rel) != now.as_ref() {
+                changed.push((rel.clone(), now));
+            }
+            seen.insert(rel);
+        }
+        changed.extend(
+            self.files
+                .keys()
+                .filter(|rel| !seen.contains(*rel))
+                .map(|rel| (rel.clone(), None)),
+        );
+        changed.sort();
+
+        let mut out = String::new();
+        for (rel, now) in changed {
+            let name = rel.display();
+            let before = self.files.get(&rel);
+            match (text_of(before), text_of(now.as_ref())) {
+                (Some(old), Some(new)) if now.is_some() => {
+                    let diff = similar::TextDiff::from_lines(old, new);
+                    out.push_str(
+                        &diff
+                            .unified_diff()
+                            .context_radius(2)
+                            .header(&format!("a/{name}"), &format!("b/{name}"))
+                            .to_string(),
+                    );
+                }
+                _ if now.is_none() => out.push_str(&format!("deleted: {name}\n")),
+                _ => out.push_str(&format!("binary file changed: {name}\n")),
+            }
+            if out.len() > max_bytes {
+                let mut cut = max_bytes;
+                while !out.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                out.truncate(cut);
+                out.push_str("\n… (diff cut; read the files for the rest)\n");
+                break;
+            }
+        }
+        out
+    }
+}
+
+/// A file's text: empty when it doesn't exist, `None` when not UTF-8.
+fn text_of(bytes: Option<&Vec<u8>>) -> Option<&str> {
+    bytes.map_or(Some(""), |b| std::str::from_utf8(b).ok())
 }
 
 #[cfg(test)]
@@ -203,6 +267,28 @@ mod tests {
             std::fs::read_to_string(root.join("target/out")).unwrap(),
             "y"
         );
+    }
+
+    #[test]
+    fn diff_shows_edits_creations_and_deletions() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("a.py"), "one\ntwo\nthree\n").unwrap();
+        std::fs::write(root.join("gone.txt"), "bye\n").unwrap();
+        let snap = Snapshot::take(root, Caps::default()).unwrap();
+        assert_eq!(snap.diff(10_000), "");
+
+        std::fs::write(root.join("a.py"), "one\n2\nthree\n").unwrap();
+        std::fs::remove_file(root.join("gone.txt")).unwrap();
+        std::fs::write(root.join("new.txt"), "hi\n").unwrap();
+        let diff = snap.diff(10_000);
+        assert!(diff.contains("--- a/a.py\n+++ b/a.py\n"), "{diff}");
+        assert!(diff.contains("-two\n+2\n"), "{diff}");
+        assert!(diff.contains("deleted: gone.txt"), "{diff}");
+        assert!(diff.contains("+hi\n"), "{diff}");
+        assert!(snap
+            .diff(20)
+            .ends_with("(diff cut; read the files for the rest)\n"));
     }
 
     #[test]

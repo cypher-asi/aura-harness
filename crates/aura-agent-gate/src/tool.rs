@@ -96,7 +96,7 @@ impl Tool for RunBlocksTool {
             Ok(output) => output,
             Err(e) => return Ok(ToolResult::failure(RUN_BLOCKS_TOOL, e)),
         };
-        let body = serde_json::to_vec_pretty(&output)
+        let body = serde_json::to_vec(&output)
             .map_err(|e| ToolError::Serialization(format!("run_blocks: {e}")))?;
         let result = if output.failed == 0 {
             ToolResult::success(RUN_BLOCKS_TOOL, body)

@@ -19,10 +19,21 @@ pub fn coordinator_section(tiers: &Tiers, coordinator_edits: bool) -> String {
         "# Working through the gate\n\
          \n\
          You are the coordinator. You plan, resolve ambiguity, make the hard calls and recover \
-         from failures; cheaper models do the routine work. Hand work to them with \
-         `run_blocks`: each block goes to the cheapest model tier that is likely to pass its \
-         checks, and moves up a tier with the failure evidence when it does not. \
+         from failures; cheaper models do the reading and the routine work. Hand work to them \
+         with `run_blocks`: each block goes to the cheapest model tier that is likely to pass \
+         its checks, and moves up a tier with the failure evidence when it does not. \
          Tiers: fast = `{fast}`, standard = `{standard}`, frontier = `{frontier}` (you).\n\
+         \n\
+         Each of your steps re-reads this whole conversation at frontier prices, so the \
+         cheapest turn hands work off early and ends soon after:\n\
+         - Hand off before you read. When the request says what to change, or a worker can \
+         find it, send the whole task as one block straight away; finding the right files is \
+         part of the block. Read code yourself only when you cannot write the block or its \
+         checks without it, and use an explore block for anything wider.\n\
+         - Trust the gate. A passed block ran its checks in this workspace and reached the \
+         `level` it reports, and its result carries the summary and the diff. Do not re-read \
+         the changed files or re-run its checks; when every block passed, answer from the \
+         results.\n\
          \n\
          {edits}\n\
          \n\
@@ -34,7 +45,9 @@ pub fn coordinator_section(tiers: &Tiers, coordinator_edits: bool) -> String {
          larger work; order blocks so later ones build on earlier ones.\n\
          - Give every change a way to be checked: `build`, `checks` (tests the worker sees and \
          runs) and `acceptance` (commands kept from the worker, for behaviour you want \
-         verified independently). Unchecked changes never go to the fast tier.\n\
+         verified independently). Unchecked changes never go to the fast tier. Write \
+         acceptance checks from what was asked (the behaviour and the names in the request), \
+         not from the current code.\n\
          - Set `risk` to high for subtle, security-sensitive or hard-to-verify work, low for \
          mechanical changes. Use `min_tier` only when you know a cheaper tier cannot do it.\n\
          - Use `kind: command` for anything a plain shell command does (formatting, codegen, \
@@ -44,8 +57,8 @@ pub fn coordinator_section(tiers: &Tiers, coordinator_edits: bool) -> String {
          \n\
          After `run_blocks` returns, read each result. A failed block's changes are rolled \
          back when the workspace could be saved; re-plan it (split it, add context, or raise \
-         `min_tier`) rather than repeating it unchanged. Verify the whole task before you \
-         finish.",
+         `min_tier`) rather than repeating it unchanged. Check something yourself only when \
+         the task needs it and no block's checks covered it.",
         fast = tiers.fast,
         standard = tiers.standard,
         frontier = tiers.frontier,

@@ -304,6 +304,9 @@ pub struct BlockResult {
     /// Files the block left changed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files_changed: Vec<String>,
+    /// Unified diff of what a passed block changed, cut to a few KB.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub diff: String,
     /// Why it failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<String>,
@@ -332,6 +335,7 @@ impl BlockResult {
             model: None,
             summary: String::new(),
             files_changed: Vec::new(),
+            diff: String::new(),
             failure: Some("not run: an earlier block failed".into()),
             restored: false,
             cost_usd: 0.0,

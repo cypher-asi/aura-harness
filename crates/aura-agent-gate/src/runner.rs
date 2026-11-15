@@ -44,6 +44,9 @@ pub const READ_TOOLS: &[&str] = &[
 /// Tools that change files.
 pub const WRITE_TOOLS: &[&str] = &["write_file", "edit_file", "delete_file"];
 
+/// Longest diff a block result carries back to the coordinator.
+const MAX_DIFF_BYTES: usize = 6 * 1024;
+
 /// Tools a worker of `kind` gets.
 #[must_use]
 pub fn worker_tools(kind: BlockKind) -> Vec<String> {
@@ -316,6 +319,14 @@ impl BlockRunner {
 
         let passed = attempts.last().is_some_and(|a| a.passed);
         let restored = !passed && restore(snapshot.as_ref()).await;
+        let diff = match snapshot {
+            Some(snapshot) if passed => {
+                tokio::task::spawn_blocking(move || snapshot.diff(MAX_DIFF_BYTES))
+                    .await
+                    .unwrap_or_default()
+            }
+            _ => String::new(),
+        };
         let files_changed: Vec<String> = if restored {
             Vec::new()
         } else {
@@ -342,6 +353,7 @@ impl BlockRunner {
             model: last.map(|a| a.model.clone()),
             summary: last.map(|a| a.summary.clone()).unwrap_or_default(),
             files_changed,
+            diff,
             failure: if passed {
                 None
             } else {
@@ -385,6 +397,7 @@ impl BlockRunner {
                 .collect::<Vec<_>>()
                 .join("\n"),
             files_changed: Vec::new(),
+            diff: String::new(),
             failure,
             restored: false,
             cost_usd: 0.0,
