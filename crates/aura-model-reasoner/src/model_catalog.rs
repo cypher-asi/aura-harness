@@ -253,14 +253,21 @@ fn list_price(model: &str) -> Option<Price> {
 }
 
 /// A call's prompt and output tokens, split the way they are billed.
-struct BilledTokens {
-    uncached_input: u64,
-    cache_write: u64,
-    cache_read: u64,
-    output: u64,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BilledTokens {
+    /// Prompt tokens neither read from nor written to the cache
+    pub uncached_input: u64,
+    /// Prompt tokens written to the cache
+    pub cache_write: u64,
+    /// Prompt tokens read from the cache
+    pub cache_read: u64,
+    /// Output tokens
+    pub output: u64,
 }
 
-fn billed_tokens(model: &str, usage: &Usage) -> BilledTokens {
+/// Split `usage` of a call to `model` the way it is billed.
+#[must_use]
+pub fn billed_tokens(model: &str, usage: &Usage) -> BilledTokens {
     let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
     let cache_write = usage.cache_creation_input_tokens.unwrap_or(0);
     // OpenAI counts cached tokens inside `input_tokens`; Anthropic-format

@@ -43,7 +43,6 @@ fn agents(dir: &TempDir, reply: &str) -> TerminalAgents {
             ToolConfig::default(),
             Arc::new(NoBackground),
         )),
-        AgentMode::Agent,
     )
 }
 
@@ -78,6 +77,7 @@ async fn spawned_agent_replies_with_a_notice_and_is_listed() {
         "Lead",
         dir.path().to_path_buf(),
         &default_agent_config_with_auth("mock-model", None),
+        AgentMode::Agent,
         notices,
     );
     table.add_root(root);

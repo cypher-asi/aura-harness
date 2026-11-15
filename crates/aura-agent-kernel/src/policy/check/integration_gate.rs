@@ -16,28 +16,24 @@ impl Policy {
         tool: &str,
         runtime_capabilities: Option<&RuntimeCapabilityInstall>,
     ) -> Option<String> {
+        let config = self.config();
         let required_integration = if let Some(runtime_capabilities) = runtime_capabilities {
             match runtime_capabilities.tool_capability(tool) {
                 Some(tool_capability) => tool_capability.required_integration.as_ref(),
-                None if self.config.tool_integration_requirements.contains_key(tool) => {
+                None if config.tool_integration_requirements.contains_key(tool) => {
                     return Some(format!(
                         "Tool '{tool}' is not installed in the kernel runtime capability ledger"
                     ));
                 }
-                None => self.config.tool_integration_requirements.get(tool),
+                None => config.tool_integration_requirements.get(tool),
             }
         } else {
-            self.config.tool_integration_requirements.get(tool)
+            config.tool_integration_requirements.get(tool)
         };
         let required_integration = required_integration?;
 
         let installed = runtime_capabilities.map_or_else(
-            || {
-                installed_integrations_satisfy(
-                    required_integration,
-                    &self.config.installed_integrations,
-                )
-            },
+            || installed_integrations_satisfy(required_integration, &config.installed_integrations),
             |runtime_capabilities| {
                 runtime_capabilities.integration_requirement_satisfied(required_integration)
             },

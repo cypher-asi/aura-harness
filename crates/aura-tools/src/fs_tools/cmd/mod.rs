@@ -199,7 +199,10 @@ fn program_command(
     // it renders cleanly when the harness forwards it to the LLM and
     // then on into the main chat.
     apply_plain_output_env(&mut cmd);
-    cmd.current_dir(&working_dir);
+    // A child reading the harness's stdin would steal keystrokes from the
+    // terminal UI; agent commands are never interactive.
+    cmd.current_dir(&working_dir)
+        .stdin(std::process::Stdio::null());
     Ok((cmd, display, working_dir))
 }
 
@@ -323,7 +326,8 @@ fn shell_script_command(
     }
 
     apply_plain_output_env(&mut cmd);
-    cmd.current_dir(&working_dir);
+    cmd.current_dir(&working_dir)
+        .stdin(std::process::Stdio::null());
     Ok((cmd, working_dir))
 }
 
@@ -364,7 +368,14 @@ pub fn cmd_run(
     cwd: Option<&str>,
     timeout_ms: u64,
 ) -> Result<ToolResult, ToolError> {
-    run_program(sandbox, program, args, cwd, timeout_ms, &ProcessTags::default())
+    run_program(
+        sandbox,
+        program,
+        args,
+        cwd,
+        timeout_ms,
+        &ProcessTags::default(),
+    )
 }
 
 /// [`cmd_run`] with `tags` in the environment.
@@ -1010,7 +1021,7 @@ impl Tool for CmdRunTool {
                     },
                     "timeout_ms": {
                         "type": "integer",
-                        "description": "Timeout in milliseconds (default: 30000)"
+                        "description": "Timeout in milliseconds; the command is stopped when it runs longer (default set by the host, usually a few seconds to minutes)"
                     },
                     "timeout_secs": {
                         "type": "integer",
@@ -1022,7 +1033,7 @@ impl Tool for CmdRunTool {
                     },
                     "background": {
                         "type": "boolean",
-                        "description": "Start the command and return right away, for servers, watchers and long builds. Output goes to a log file; you get a message with the exit status when it ends. Ignores timeout and tty_cols."
+                        "description": "Start the command and return right away, for servers, watchers and long builds. Output goes to a log file; you get a message with the exit status when it ends, and can check on it with job_output or stop it with job_kill where those tools are offered. Ignores timeout and tty_cols."
                     }
                 }
             }),
@@ -1303,7 +1314,14 @@ async fn execute_run_command(args: RunArgs, ctx: &ToolContext) -> Result<ToolRes
     })?;
 
     super::spawn_blocking_tool(move || {
-        run_program(&sandbox, &program, &cmd_args, cwd.as_deref(), timeout_ms, &tags)
+        run_program(
+            &sandbox,
+            &program,
+            &cmd_args,
+            cwd.as_deref(),
+            timeout_ms,
+            &tags,
+        )
     })
     .await
 }
@@ -1378,8 +1396,10 @@ fn run_in_background(
     Ok(ToolResult::success(
         "run_command",
         format!(
-            "Started in the background (pid {pid}): {command}\nOutput: {log}\n\
-             You will get a message with the exit status when it ends."
+            "Started in the background (pid {pid}): {command}\nJob id: {}\nOutput: {log}\n\
+             You will get a message with the exit status when it ends. Check on it with \
+             job_output and stop it with job_kill.",
+            process_id.to_hex()
         ),
     )
     .with_metadata("background", "true")

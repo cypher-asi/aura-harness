@@ -55,17 +55,24 @@ impl Harness {
     }
 
     fn type_text(&mut self, text: &str) {
-        let _ = self.app.update(Message::Paste(Some(text.into())));
+        for c in text.chars() {
+            let typed = c.to_string();
+            self.key(Key::Character(typed.as_str().into()), Some(&typed));
+        }
     }
 
     fn press(&mut self, named: key::Named) {
+        self.key(Key::Named(named), None);
+    }
+
+    fn key(&mut self, key: Key, text: Option<&str>) {
         let _ = self.app.update(Message::Key(keyboard::Event::KeyPressed {
-            key: Key::Named(named),
-            modified_key: Key::Named(named),
+            modified_key: key.clone(),
+            key,
             physical_key: key::Physical::Unidentified(key::NativeCode::Unidentified),
             location: Location::Standard,
             modifiers: Modifiers::empty(),
-            text: None,
+            text: text.map(Into::into),
             repeat: false,
         }));
     }
@@ -200,7 +207,7 @@ fn steps(h: &mut Harness) {
         ]
     };
     h.apply([
-        UiCommand::TurnStarted,
+        UiCommand::TurnStarted { prompt: None },
         UiCommand::AppendThinking("List the crates, then read the manifest.".into()),
         UiCommand::FinishThinking,
     ]);
@@ -354,6 +361,7 @@ fn approval_request() {
         id: "r1".into(),
         tool: "run_command".into(),
         description: "rm -rf target/".into(),
+        always: "`rm` commands in this project".into(),
     }]);
     snapshot("approval", &h);
 }

@@ -3,7 +3,8 @@
 use super::{App, AppState, DetailView, NotificationType, PanelFocus, PendingApproval};
 use crate::{
     components::{elapsed_ms, Activity, Message, MessageRole, ToolStatus, ToolStep},
-    events::{CallUsage, UiCommand, UiEvent},
+    events::{CallUsage, RewindScope, UiCommand, UiEvent},
+    mode_command::{PermissionMode, SlashModeCommand},
     terminal::KeyResult,
 };
 use tracing::debug;
@@ -76,6 +77,8 @@ impl App {
                 }
             }
             "spawn" => self.handle_spawn_command(arg),
+            "plan" => self.request_mode(PermissionMode::Plan),
+            "build" => self.request_build(arg),
             "login" => self.handle_login_command(arg),
             "model" | "models" | "m" => {
                 if arg.is_empty() {
@@ -112,10 +115,44 @@ impl App {
                     let _ = tx.try_send(UiEvent::Whoami);
                 }
             }
+            "context" | "ctx" => {
+                let report = self.hud.context_report();
+                self.add_message(Message::new(MessageRole::System, &report));
+            }
+            "cost" | "usage" => {
+                let report = self.hud.cost_report();
+                self.add_message(Message::new(MessageRole::System, &report));
+            }
+            "todos" | "todo" => {
+                if self.hud.todos.is_empty() {
+                    self.todos_open = false;
+                    self.notification = Some((
+                        "The agent has no todo list".to_string(),
+                        NotificationType::Warning,
+                    ));
+                } else {
+                    self.todos_open = !self.todos_open;
+                }
+            }
+            "compact" => self.handle_compact_command(arg),
+            "mode" => self.handle_mode_command(arg),
+            "init" => self.handle_init_command(),
+            "resume" => self.handle_resume_command(arg),
+            "rewind" => self.handle_rewind_command(arg),
+            "diff" => self.handle_diff_command(arg),
             "new" | "n" => {
                 self.messages.clear();
                 self.scroll_offset = 0;
                 self.streaming_content.clear();
+                let jobs = std::mem::take(&mut self.hud.jobs);
+                let instructions = self.hud.instructions.take();
+                self.hud = super::hud::Hud {
+                    jobs,
+                    mode: self.hud.mode,
+                    instructions,
+                    ..Default::default()
+                };
+                self.todos_open = false;
                 if let Some(tx) = &self.event_tx {
                     let _ = tx.try_send(UiEvent::NewSession);
                 }
@@ -273,16 +310,6 @@ impl App {
         let mut parts = arg.splitn(2, ' ');
         let first = parts.next().unwrap_or("");
         if first.eq_ignore_ascii_case("new") {
-            if matches!(
-                self.state,
-                AppState::Processing | AppState::AwaitingApproval
-            ) {
-                self.notification = Some((
-                    "Wait for the current turn to finish before creating an agent".to_string(),
-                    NotificationType::Warning,
-                ));
-                return;
-            }
             let name = parts
                 .next()
                 .map(str::trim)
@@ -322,6 +349,56 @@ impl App {
         }
     }
 
+    /// Whether a turn owns the session, so the mode can't change under it.
+    fn turn_running(&self) -> bool {
+        matches!(
+            self.state,
+            AppState::Processing | AppState::AwaitingApproval
+        )
+    }
+
+    /// Ask the event loop to switch the active agent to `mode`. The badge
+    /// changes once the switch is recorded and [`UiCommand::SetMode`] comes
+    /// back.
+    pub(super) fn request_mode(&mut self, mode: PermissionMode) {
+        if self.hud.mode == Some(mode) {
+            self.notification =
+                Some((format!("Already in {mode} mode"), NotificationType::Warning));
+            return;
+        }
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::SetMode {
+                agent_id: self.active_agent_id.clone(),
+                mode,
+            });
+        }
+    }
+
+    /// Handle `/build [path]`: run the given plan, or the latest one.
+    fn request_build(&mut self, arg: &str) {
+        if self.turn_running() {
+            self.notification = Some((
+                "Wait for the current turn to finish before building".to_string(),
+                NotificationType::Warning,
+            ));
+            return;
+        }
+        let path = (!arg.is_empty()).then(|| arg.to_string());
+        if path.is_none() && self.active_plan.is_none() {
+            self.notification = Some((
+                "No plan to build yet. Switch to plan mode with /plan and ask for one.".to_string(),
+                NotificationType::Warning,
+            ));
+            return;
+        }
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::BuildPlan {
+                agent_id: self.active_agent_id.clone(),
+                path,
+            });
+        }
+    }
+
     /// Handle `/spawn <permanent agent>`.
     fn handle_spawn_command(&mut self, arg: &str) {
         let name = self
@@ -339,6 +416,155 @@ impl App {
                     NotificationType::Warning,
                 ));
             }
+        }
+    }
+
+    /// `/resume [n]`: list the agent's earlier sessions, or resume number `n`.
+    fn handle_resume_command(&mut self, arg: &str) {
+        let index = if arg.is_empty() {
+            None
+        } else if let Some(n) = arg.parse::<usize>().ok().filter(|n| *n > 0) {
+            Some(n)
+        } else {
+            self.notification = Some((
+                "Usage: /resume [n] (n from the list /resume shows)".to_string(),
+                NotificationType::Warning,
+            ));
+            return;
+        };
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::Resume {
+                agent_id: self.active_agent_id.clone(),
+                index,
+            });
+        }
+    }
+
+    /// `/mode`: show the agent's permission mode and the others; `/mode
+    /// <name>`: switch to one for the agent's next tool calls.
+    fn handle_mode_command(&mut self, arg: &str) {
+        if arg.is_empty() {
+            let current = self.hud.mode.unwrap_or_default();
+            let mut report = format!("Mode: {current} — {}", current.description());
+            for mode in [
+                PermissionMode::Default,
+                PermissionMode::AcceptEdits,
+                PermissionMode::Plan,
+                PermissionMode::Unrestricted,
+                PermissionMode::Ask,
+                PermissionMode::Debug,
+            ] {
+                report.push_str(&format!("\n  {:<14}{}", mode.name(), mode.description()));
+            }
+            report.push_str("\nShift+Tab cycles default → accept-edits → plan → unrestricted.");
+            self.add_message(Message::new(MessageRole::System, &report));
+            return;
+        }
+        match SlashModeCommand::parse(arg) {
+            Ok(command) => self.request_mode(command.requested),
+            Err(e) => {
+                self.notification = Some((e.to_string(), NotificationType::Warning));
+            }
+        }
+    }
+
+    /// `/rewind [n [code|chat|both]]`: list the agent's turns, or put its
+    /// files and/or conversation back to before turn `n`.
+    fn handle_rewind_command(&mut self, arg: &str) {
+        let mut words = arg.split_whitespace();
+        let turn = words
+            .next()
+            .map(|w| w.parse::<usize>().ok().filter(|n| *n > 0));
+        let scope = words.next().map(str::parse::<RewindScope>);
+        let (turn, scope) = match (turn, scope, words.next()) {
+            (None, None, None) => (None, RewindScope::default()),
+            (Some(Some(n)), None, None) => (Some(n), RewindScope::default()),
+            (Some(Some(n)), Some(Ok(scope)), None) => (Some(n), scope),
+            _ => {
+                self.notification = Some((
+                    "Usage: /rewind [n] [code|chat|both] (n from the list /rewind shows)"
+                        .to_string(),
+                    NotificationType::Warning,
+                ));
+                return;
+            }
+        };
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::Rewind {
+                agent_id: self.active_agent_id.clone(),
+                turn,
+                scope,
+            });
+        }
+    }
+
+    /// `/diff [session]`: what the agent's latest turn, or its whole
+    /// session, changed in files.
+    fn handle_diff_command(&mut self, arg: &str) {
+        let session = match arg.to_ascii_lowercase().as_str() {
+            "" | "turn" | "last" => false,
+            "session" | "all" => true,
+            _ => {
+                self.notification = Some((
+                    "Usage: /diff [session]".to_string(),
+                    NotificationType::Warning,
+                ));
+                return;
+            }
+        };
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::Diff {
+                agent_id: self.active_agent_id.clone(),
+                session,
+            });
+        }
+    }
+
+    /// `/compact [focus]`: summarize the agent's older history now. A busy
+    /// agent does it once its current work ends.
+    fn handle_compact_command(&mut self, focus: &str) {
+        let Some(tx) = &self.event_tx else {
+            return;
+        };
+        let event = UiEvent::Compact {
+            agent_id: self.active_agent_id.clone(),
+            focus: (!focus.is_empty()).then(|| focus.to_string()),
+        };
+        if tx.try_send(event).is_err() {
+            return;
+        }
+        if self.agent_busy(&self.active_agent_id) {
+            self.notification = Some((
+                "Queued: the history is summarized when the current work ends".to_string(),
+                NotificationType::Success,
+            ));
+        } else {
+            self.state = AppState::Processing;
+            self.status = "Summarizing history...".to_string();
+        }
+    }
+
+    /// `/init`: have the agent study the project and write or improve its
+    /// `AGENTS.md`. The chat shows the request once the turn starts; a busy
+    /// agent starts it when its current work ends.
+    fn handle_init_command(&mut self) {
+        let Some(tx) = &self.event_tx else {
+            return;
+        };
+        let event = UiEvent::InitProject {
+            agent_id: self.active_agent_id.clone(),
+        };
+        if tx.try_send(event).is_err() {
+            return;
+        }
+        if self.agent_busy(&self.active_agent_id) {
+            self.notification = Some((
+                "Queued: AGENTS.md is written when the current work ends".to_string(),
+                NotificationType::Success,
+            ));
+        } else {
+            self.state = AppState::Processing;
+            self.status = "Studying the project...".to_string();
         }
     }
 
@@ -379,6 +605,12 @@ impl App {
                 self.cmd_complete_tool(&id, &result, success);
                 self.refresh_sandbox();
             }
+            UiCommand::ToolDiff { id, diff } => {
+                self.update_tool(&id, |tool| tool.diff = Some(diff));
+            }
+            UiCommand::ShowDiff { title, files } => {
+                self.add_message(Message::diff(&title, files));
+            }
             UiCommand::CommandFinished { output, exit_code } => {
                 if let Some(message) = self
                     .messages
@@ -394,14 +626,19 @@ impl App {
                 id,
                 tool,
                 description,
+                always,
             } => {
+                self.status = format!("Waiting for approval to run {tool}");
                 self.pending_approval = Some(PendingApproval {
                     id,
                     tool,
                     description,
+                    always,
                 });
                 self.state = AppState::AwaitingApproval;
             }
+            UiCommand::CloseApproval(id) => self.cmd_close_approval(&id),
+            UiCommand::SetMode(mode) => self.hud.mode = Some(mode),
             UiCommand::ShowError(msg) => {
                 self.cmd_notification(&msg, "error: ", NotificationType::Error);
             }
@@ -411,20 +648,40 @@ impl App {
             UiCommand::ShowWarning(msg) => {
                 self.cmd_notification(&msg, "warning: ", NotificationType::Warning);
             }
-            UiCommand::TurnStarted => {
-                if self.state == AppState::Idle {
-                    self.state = AppState::Processing;
-                    self.status = "Thinking...".to_string();
-                }
-            }
             UiCommand::Complete => {
                 self.cmd_complete();
                 self.refresh_sandbox();
             }
+            UiCommand::TurnStarted { prompt } => self.cmd_turn_started(prompt),
+            UiCommand::UserSteered(text) => self.cmd_user_steered(&text),
+            UiCommand::CallStats(call) => self.hud.stats.add(&call),
+            UiCommand::Compacted(text) => {
+                self.hud.stats.compactions = self.hud.stats.compactions.saturating_add(1);
+                self.add_message(Message::new(MessageRole::System, &text));
+            }
+            UiCommand::SetTodos(todos) => {
+                if todos.is_empty() {
+                    self.todos_open = false;
+                }
+                self.hud.todos = todos;
+            }
+            UiCommand::SetJobs(jobs) => self.hud.jobs = jobs,
+            UiCommand::SetQueued(queued) => self.hud.queued = queued,
+            UiCommand::SetSessionTotals(totals) => self.hud.stats.restore(&totals),
+            UiCommand::SetInstructions(files) => self.hud.instructions = Some(files),
+            UiCommand::SetContext(context) => {
+                if context.limit_tokens.is_some() {
+                    self.hud.stats.context_limit = context.limit_tokens;
+                }
+                self.hud.context = Some(context);
+            }
+            UiCommand::ForAgent { agent_id, command } => {
+                self.process_agent_command(&agent_id, *command);
+            }
             UiCommand::ClearConversation => self.cmd_clear_conversation(),
             UiCommand::NewRecord(record) => self.cmd_new_record(record),
             UiCommand::SetAgents(agents) => self.cmd_set_agents(agents),
-            UiCommand::SetActiveAgent(agent_id) => self.cmd_set_active_agent(agent_id),
+            UiCommand::SetActiveAgent(agent_id) => self.cmd_set_active_agent(&agent_id),
             UiCommand::SetAgentDefinitions(definitions) => self.set_definitions(definitions),
             UiCommand::OpenEditor(path) => self.editor_request = Some(path),
             UiCommand::ClearRecords => {
@@ -449,11 +706,19 @@ impl App {
             } => self.cmd_set_models(options, current, user, plans),
             UiCommand::PromptLinkCode { provider } => self.cmd_prompt_link_code(&provider),
             UiCommand::EndLink => self.cmd_end_link(),
+            UiCommand::SetPlan(plan) => self.active_plan = plan,
         }
     }
 
     fn cmd_start_streaming(&mut self) {
         self.streaming_content.clear();
+        if self
+            .messages
+            .back()
+            .is_some_and(|m| m.is_streaming() && m.content().is_empty())
+        {
+            return;
+        }
         let mut msg = Message::new(MessageRole::Assistant, "");
         msg.set_streaming(true);
         self.add_message(msg);
@@ -614,6 +879,42 @@ impl App {
         self.status = "Ready".to_string();
     }
 
+    /// Drop the prompt for approval `id`, which stopped waiting; the turn
+    /// goes on without it.
+    fn cmd_close_approval(&mut self, id: &str) {
+        if self.pending_approval.as_ref().is_some_and(|a| a.id == id) {
+            self.pending_approval = None;
+            if self.state == AppState::AwaitingApproval {
+                self.state = AppState::Processing;
+            }
+        }
+    }
+
+    fn cmd_turn_started(&mut self, prompt: Option<String>) {
+        if let Some(prompt) = prompt {
+            self.add_message(Message::new(MessageRole::User, &prompt));
+        }
+        // A turn the user did not start (a background completion notice)
+        // must not hide a login prompt or an approval on screen.
+        if self.state == AppState::Idle {
+            self.state = AppState::Processing;
+            self.status = "Thinking...".to_string();
+        }
+    }
+
+    /// Show a message sent into the running turn. A reply still streaming
+    /// is split around it, so the rest of the reply keeps streaming below.
+    fn cmd_user_steered(&mut self, text: &str) {
+        let was_streaming = self.messages.back().is_some_and(Message::is_streaming);
+        if was_streaming {
+            self.cmd_finish_streaming();
+        }
+        self.add_message(Message::new(MessageRole::User, text));
+        if was_streaming {
+            self.cmd_start_streaming();
+        }
+    }
+
     fn cmd_clear_conversation(&mut self) {
         self.messages.clear();
     }
@@ -653,6 +954,14 @@ impl App {
     /// Append a record, oldest first. A selection on the newest record
     /// follows new arrivals; one moved up stays on its record.
     fn cmd_new_record(&mut self, record: crate::events::RecordSummary) {
+        // Agents running in the background write records too; the panel
+        // lists the active agent's.
+        if !record.agent_id.is_empty()
+            && !self.active_agent_id.is_empty()
+            && record.agent_id != self.active_agent_id
+        {
+            return;
+        }
         let follow = self.detail != Some(DetailView::Record)
             && self.selected_record + 1 >= self.records.len();
         self.records.push_back(record);
@@ -672,8 +981,8 @@ impl App {
         self.select_visible_active();
     }
 
-    fn cmd_set_active_agent(&mut self, agent_id: String) {
-        self.active_agent_id = agent_id;
+    fn cmd_set_active_agent(&mut self, agent_id: &str) {
+        self.show_agent_chat(agent_id);
         for agent in &mut self.agents {
             agent.is_active = agent.id == self.active_agent_id;
         }

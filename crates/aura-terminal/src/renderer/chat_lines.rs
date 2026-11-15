@@ -2,6 +2,7 @@
 
 use super::activity::{activity_lines, collapsed_hint, group_header, records_link, GroupView};
 use super::command::shell_lines;
+use super::diff::diff_message_lines;
 use super::markdown::{parse_content_segments, ContentSegment};
 use super::segments::{
     message_header, message_style, notice_lines, render_code_segment, render_text_segment,
@@ -477,6 +478,12 @@ fn message_lines(
         return activity_lines(activity, message.is_expanded(), None, spinner, width, theme);
     }
     let timestamp = message.timestamp_local();
+    if let Some(run) = message.shell_run() {
+        return shell_lines(run, &timestamp, width, theme);
+    }
+    if let Some(block) = message.diff_block() {
+        return diff_message_lines(block, &timestamp, width, theme);
+    }
     let (nick, nick_color, msg_color) = message_style(message.role(), theme);
     if is_notice(message) {
         return notice_lines(

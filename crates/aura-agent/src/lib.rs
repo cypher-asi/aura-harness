@@ -13,7 +13,8 @@
 //! - Context compaction — tiered message truncation to stay within token limits
 //! - Message sanitization — repairs message history for API validity
 //! - Budget tracking — exploration, token, and credit budget management
-//! - Build integration — auto-build checks after write operations
+//! - Build integration — auto-build checks after write operations, and the
+//!   per-project post-edit check ([`post_edit_check`])
 //!
 //! ## Architecture
 //!
@@ -56,6 +57,7 @@ pub mod helpers;
 mod kernel_domain_gateway;
 mod kernel_gateway;
 pub(crate) mod planning;
+pub mod post_edit_check;
 pub(crate) mod prompt_resolve;
 mod recording_stream;
 mod sanitize;
@@ -71,11 +73,20 @@ pub mod session_bootstrap;
 pub(crate) mod task_context;
 pub(crate) mod task_executor;
 
-pub use agent_loop::{AgentLoop, AgentLoopConfig, RunOptions, TaskId};
+pub use agent_loop::{
+    AgentLoop, AgentLoopConfig, CompactHistoryError, CompactedHistory, RunOptions, TaskId,
+};
 pub use aura_config::{tool_result_cache_key, CACHEABLE_TOOLS};
-pub use events::{map_agent_loop_event, AgentLoopEvent, DebugEvent, TurnEvent, TurnEventSink};
+pub use events::{
+    map_agent_loop_event, AgentLoopEvent, DebugEvent, TurnEvent, TurnEventSink,
+    PROGRESS_CONTEXT_SUMMARIZED, PROGRESS_TODOS_UPDATED,
+};
 pub use kernel_domain_gateway::{KernelDomainGateway, KernelDomainGatewayError};
 pub use kernel_gateway::{KernelModelGateway, KernelToolGateway, RecordingModelProvider};
+pub use post_edit_check::{
+    CheckCommand, CheckNotifier, CheckOutcome, CheckReport, CheckSource, PostEditCheck,
+    PostEditCheckConfig, WithPostEditCheck,
+};
 pub use runtime::{
     ProcessInfo, ProcessManager, ProcessManagerConfig, ProcessMeta, ProcessOutput, RunningProcess,
     RuntimeError,

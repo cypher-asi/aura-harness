@@ -37,7 +37,8 @@ impl Policy {
             );
         };
 
-        let mode_rule = PolicyRule::new(PolicySource::Mode, mode_label(self.config.mode));
+        let config = self.config();
+        let mode_rule = PolicyRule::new(PolicySource::Mode, mode_label(config.mode));
         if let Some(verdict) = self.check_mode(&tool_call) {
             trace.push(PolicyCheck {
                 rule: mode_rule.clone(),
@@ -52,7 +53,7 @@ impl Policy {
 
         let capability_rule = PolicyRule::new(
             PolicySource::AgentCapability,
-            self.config
+            config
                 .tool_capability_requirements
                 .get(&tool_call.tool)
                 .map_or_else(

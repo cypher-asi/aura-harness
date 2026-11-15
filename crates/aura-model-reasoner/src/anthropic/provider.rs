@@ -1,8 +1,8 @@
 use super::api_types::{ApiRequest, ApiResponse, StreamingApiRequest};
 use super::convert::{
     build_request_system, convert_messages_to_api, convert_response_to_aura, convert_tool_choice,
-    convert_tool_entries_to_api, request_uses_computer_tool, resolve_output_config,
-    resolve_thinking, COMPUTER_USE_BETA,
+    convert_tool_entries_to_api, extended_cache_ttl, request_uses_computer_tool,
+    resolve_output_config, resolve_thinking, COMPUTER_USE_BETA, EXTENDED_CACHE_TTL_BETA,
 };
 use super::sse::SseStream;
 use super::{AnthropicProvider, ApiError};
@@ -733,6 +733,9 @@ impl AnthropicProvider {
             && Self::supports_anthropic_proxy_features(request_ctx, model)
         {
             beta_tokens.push("prompt-caching-2024-07-31");
+            if extended_cache_ttl() {
+                beta_tokens.push(EXTENDED_CACHE_TTL_BETA);
+            }
         }
         if request_uses_computer_tool(&request_ctx.tools) {
             beta_tokens.push(COMPUTER_USE_BETA);

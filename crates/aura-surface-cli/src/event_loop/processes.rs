@@ -8,7 +8,8 @@
 //! they ended, until [`MAX_FINISHED`] newer ones push them out.
 //!
 //! A publisher task sends the list to the UI whenever it changes, so it
-//! stays live while the event loop is busy with a turn.
+//! stays live while agents work, along with each agent's background jobs
+//! for its status line.
 
 use super::os_processes::{self, OsProcess};
 use super::subagents::lock;
@@ -17,12 +18,12 @@ use aura_core_types::{ActionId, AgentId, Hash, ProcessId};
 use aura_engine::agents::LifecycleAction;
 use aura_engine::{AgentHost, AgentInfo, AgentState};
 use aura_store_db::ReadStore;
-use aura_terminal::events::{ProcessKind, ProcessStatus, ProcessSummary};
+use aura_terminal::events::{JobView, ProcessKind, ProcessStatus, ProcessSummary};
 use aura_terminal::UiCommand;
-use aura_tools::{BackgroundProcess, BackgroundProcessHook};
+use aura_tools::{BackgroundJob, BackgroundProcess, BackgroundProcessHook};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -92,6 +93,9 @@ struct Inner {
     os: HashMap<String, OsProcess>,
     /// Rows the user killed that haven't finished yet.
     killed: HashSet<String>,
+    /// Background commands their own agent stopped (`job_kill`), whose
+    /// end it needn't be told about.
+    stopped_by_owner: HashSet<String>,
     /// Display names of the terminal's agents, by hex id.
     names: HashMap<String, String>,
     /// Root agents registered with the host.
@@ -195,6 +199,50 @@ impl ProcessTable {
         };
         let live = inner.live.remove(index);
         inner.retire(live.summary, status);
+    }
+
+    /// List background command `info` right away, so it has a row (and
+    /// its end a notice) even if it exits before the next snapshot.
+    pub(crate) fn command_started(&self, info: &ProcessInfo) {
+        let mut inner = lock(&self.inner);
+        let row = command_row(&inner, info);
+        inner.seen.insert(row.summary.id.clone(), row.summary);
+    }
+
+    /// Note that the agent that started background command `process` is
+    /// stopping it itself.
+    pub(crate) fn stopped_by_owner(&self, process: ProcessId) {
+        lock(&self.inner)
+            .stopped_by_owner
+            .insert(command_row_id(process));
+    }
+
+    /// Whether the agent that started `process` stopped it itself,
+    /// forgetting that it did.
+    pub(crate) fn take_stopped_by_owner(&self, process: ProcessId) -> bool {
+        lock(&self.inner)
+            .stopped_by_owner
+            .remove(&command_row_id(process))
+    }
+
+    /// Whether `agent` has work running in the background that will tell
+    /// it when it ends: commands, `task` spawns or agents it spawned.
+    #[must_use]
+    pub fn has_background_work(&self, agent: AgentId) -> bool {
+        let hex = agent.to_hex();
+        let tasks = lock(&self.inner).live.iter().any(|live| {
+            live.summary.kind != ProcessKind::Turn && live.summary.owner_agent_id == hex
+        });
+        let commands = self
+            .commands
+            .as_ref()
+            .is_some_and(|m| m.snapshot().iter().any(|info| info.agent_id == agent));
+        let agents = self.host.as_ref().is_some_and(|h| {
+            h.tree(agent)
+                .iter()
+                .any(|info| info.state == AgentState::Running)
+        });
+        tasks || commands || agents
     }
 
     /// Record how background command `process` ended, returning its row.
@@ -543,13 +591,34 @@ fn arrange(rows: Vec<Row>) -> Vec<ProcessSummary> {
         .collect()
 }
 
-/// Send the table to the UI whenever it changes.
+/// Each agent's background commands in `rows`, as its status line lists
+/// them, by agent hex id.
+pub(crate) fn job_views(rows: &[ProcessSummary]) -> HashMap<String, Vec<JobView>> {
+    let mut jobs: HashMap<String, Vec<JobView>> = HashMap::new();
+    for row in rows.iter().filter(|row| row.kind == ProcessKind::Command) {
+        let Some(id) = row.id.strip_prefix("cmd:") else {
+            continue;
+        };
+        jobs.entry(row.owner_agent_id.clone())
+            .or_default()
+            .push(JobView {
+                id: id.to_string(),
+                command: row.label.clone(),
+                running: row.status == ProcessStatus::Running,
+            });
+    }
+    jobs
+}
+
+/// Send the table to the UI whenever it changes, and every agent whose
+/// background jobs changed its new list.
 pub fn spawn_publisher(
     table: Arc<ProcessTable>,
     commands: mpsc::Sender<UiCommand>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut last: Option<Vec<ProcessSummary>> = None;
+        let mut last_jobs: HashMap<String, Vec<JobView>> = HashMap::new();
         let mut tick = tokio::time::interval(PUBLISH_INTERVAL);
         loop {
             tick.tick().await;
@@ -567,26 +636,51 @@ pub fn spawn_publisher(
             {
                 return;
             }
+            let jobs = job_views(&rows);
+            let agents: HashSet<&String> = jobs.keys().chain(last_jobs.keys()).collect();
+            for agent in agents {
+                let now = jobs.get(agent).cloned().unwrap_or_default();
+                if last_jobs.get(agent).is_some_and(|before| *before == now) {
+                    continue;
+                }
+                let _ = commands
+                    .send(UiCommand::ForAgent {
+                        agent_id: agent.clone(),
+                        command: Box::new(UiCommand::SetJobs(now)),
+                    })
+                    .await;
+            }
+            last_jobs = jobs;
             last = Some(rows);
         }
     })
 }
 
 /// Hands `run_command`'s background commands to the [`ProcessManager`],
-/// which reports each one's exit to the agent that started it.
+/// which reports each one's exit to the agent that started it, and lists
+/// them in `table`.
 pub struct BackgroundCommands {
     manager: Arc<ProcessManager>,
     store: Arc<dyn ReadStore>,
     log_dir: PathBuf,
+    /// Weak: the table's agent host reaches this hook through the kernels
+    /// it builds for spawned agents.
+    table: Weak<ProcessTable>,
 }
 
 impl BackgroundCommands {
     #[must_use]
-    pub fn new(manager: Arc<ProcessManager>, store: Arc<dyn ReadStore>, log_dir: PathBuf) -> Self {
+    pub fn new(
+        manager: Arc<ProcessManager>,
+        store: Arc<dyn ReadStore>,
+        log_dir: PathBuf,
+        table: &Arc<ProcessTable>,
+    ) -> Self {
         Self {
             manager,
             store,
             log_dir,
+            table: Arc::downgrade(table),
         }
     }
 
@@ -616,11 +710,12 @@ impl BackgroundProcessHook for BackgroundCommands {
             let _ = child.wait();
             return Err("no async runtime to watch the process".to_string());
         }
+        let process_id = process.process_id;
         self.manager.register_with(
             agent_id,
             reference,
             process.action_id.unwrap_or_else(ActionId::generate),
-            process.process_id,
+            process_id,
             process.child,
             process.command,
             ProcessMeta {
@@ -629,7 +724,60 @@ impl BackgroundProcessHook for BackgroundCommands {
                 tool_use_id: process.tool_use_id,
             },
         );
+        let info = self
+            .manager
+            .snapshot()
+            .into_iter()
+            .find(|info| info.process_id == process_id);
+        if let (Some(info), Some(table)) = (info, self.table.upgrade()) {
+            table.command_started(&info);
+        }
         Ok(())
+    }
+
+    fn running(&self, agent_id: Option<AgentId>) -> Vec<BackgroundJob> {
+        let mut jobs: Vec<BackgroundJob> = self
+            .manager
+            .snapshot()
+            .into_iter()
+            .filter(|info| agent_id.is_none_or(|agent| info.agent_id == agent))
+            .map(|info| BackgroundJob {
+                id: info.process_id.to_hex(),
+                agent_id: info.agent_id,
+                command: info.command,
+                pid: Some(info.pid),
+                log_path: info.meta.log_path.unwrap_or_default(),
+                started_ms: info.started_ms,
+            })
+            .collect();
+        jobs.sort_by_key(|job| job.started_ms);
+        jobs
+    }
+
+    fn kill(&self, id: &str) -> Result<(), String> {
+        let process = ProcessId::from_hex(id).map_err(|e| format!("bad job id {id}: {e}"))?;
+        let table = self.table.upgrade();
+        if let Some(table) = &table {
+            table.stopped_by_owner(process);
+        }
+        if self.manager.cancel(&process) {
+            return Ok(());
+        }
+        if let Some(table) = &table {
+            table.take_stopped_by_owner(process);
+        }
+        Err(format!("job {id} is not running"))
+    }
+}
+
+/// Stop every background command, and everything each one started. They
+/// lead their own process groups, so nothing else stops them when the
+/// harness exits.
+pub(crate) fn stop_background_commands(hook: &dyn BackgroundProcessHook) {
+    for job in hook.running(None) {
+        if let Err(problem) = hook.kill(&job.id) {
+            warn!(job = %job.id, %problem, "Could not stop a background command");
+        }
     }
 }
 

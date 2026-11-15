@@ -2,21 +2,22 @@
 //!
 //! Provides a high-level interface for terminal operations using ratatui and crossterm.
 
-use crate::{clipboard, layout::LayoutMode, renderer, App, Theme};
+use crate::{alerts, clipboard, layout::LayoutMode, renderer, App, Theme};
 use crossterm::{
     cursor::{SetCursorStyle, Show},
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyCode, KeyEventKind, KeyModifiers,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Frame, Terminal as RatatuiTerminal};
-use std::io::{self, Stdout};
+use std::io::{self, Stdout, Write};
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
-use tracing::error;
+use tracing::{error, warn};
 
 /// Most queued input events handled between two frames, so a flood of
 /// input still lets the screen update.
@@ -48,6 +49,7 @@ impl Terminal {
             Show,
             SetCursorStyle::BlinkingBar
         )?;
+        enable_bracketed_paste(&mut stdout);
         let backend = CrosstermBackend::new(stdout);
         let mut inner = RatatuiTerminal::new(backend)?;
         inner.clear()?;
@@ -109,11 +111,15 @@ impl Terminal {
             // Process any pending updates from the command channel FIRST
             // This ensures records loaded at startup are displayed on the first frame
             app.tick();
+            self.raise_alerts(app);
 
             if let Some(path) = app.take_editor_request() {
                 let result = self.edit_file(&path);
                 app.editor_closed(path, &result);
                 continue;
+            }
+            if app.take_paste_request() {
+                app.paste_clipboard(clipboard::read());
             }
 
             // Update size in case of resize
@@ -148,6 +154,27 @@ impl Terminal {
         }
     }
 
+    /// Ring the bell once for everything `app` wants the user to notice,
+    /// and show each as a desktop notification when those are on.
+    fn raise_alerts(&mut self, app: &mut App) {
+        let alerts = app.take_alerts();
+        if alerts.is_empty() {
+            return;
+        }
+        let settings = *app.alert_settings();
+        if settings.bell {
+            let backend = self.inner.backend_mut();
+            if let Err(e) = backend.write_all(b"\x07").and_then(|()| backend.flush()) {
+                warn!(error = %e, "Failed to ring the terminal bell");
+            }
+        }
+        if settings.desktop {
+            for alert in &alerts {
+                alerts::desktop_notify(alert);
+            }
+        }
+    }
+
     /// Apply one terminal event to `app`. Returns `true` to quit.
     fn handle_event(&mut self, app: &mut App, event: &Event) -> bool {
         match *event {
@@ -166,7 +193,7 @@ impl Terminal {
                     if app.request_copy() {
                         return false;
                     }
-                    if !app.is_processing() {
+                    if !app.is_busy() {
                         return true;
                     }
                     app.cancel();
@@ -203,6 +230,10 @@ impl Terminal {
                 app.handle_mouse(mouse);
                 false
             }
+            Event::Paste(ref text) => {
+                app.handle_paste(text);
+                false
+            }
             _ => false,
         }
     }
@@ -211,11 +242,13 @@ impl Terminal {
     /// then `vi`) on `path` and take it back once the editor exits.
     fn edit_file(&mut self, path: &Path) -> io::Result<()> {
         disable_raw_mode()?;
+        let _ = execute!(self.inner.backend_mut(), DisableBracketedPaste);
         execute!(
             self.inner.backend_mut(),
             DisableMouseCapture,
             LeaveAlternateScreen
         )?;
+        // No timeout: the editor is interactive and runs until the user quits it.
         let status = editor_command(path).status();
         enable_raw_mode()?;
         execute!(
@@ -223,6 +256,7 @@ impl Terminal {
             EnterAlternateScreen,
             EnableMouseCapture
         )?;
+        enable_bracketed_paste(self.inner.backend_mut());
         self.mouse_capture_enabled = true;
         self.inner.clear()?;
         match status? {
@@ -259,6 +293,7 @@ impl Drop for Terminal {
         if let Err(e) = disable_raw_mode() {
             error!(error = %e, "Failed to disable raw mode");
         }
+        let _ = execute!(self.inner.backend_mut(), DisableBracketedPaste);
         if let Err(e) = execute!(
             self.inner.backend_mut(),
             DisableMouseCapture,
@@ -266,6 +301,15 @@ impl Drop for Terminal {
         ) {
             error!(error = %e, "Failed to leave alternate screen");
         }
+    }
+}
+
+/// Have the terminal wrap pastes so they arrive as one [`Event::Paste`]:
+/// a pasted image path can be attached, and pasted newlines no longer send
+/// the message line by line. Terminals without it paste as typed keys.
+fn enable_bracketed_paste(out: &mut impl io::Write) {
+    if let Err(e) = execute!(out, EnableBracketedPaste) {
+        tracing::debug!(error = %e, "Bracketed paste is not available");
     }
 }
 

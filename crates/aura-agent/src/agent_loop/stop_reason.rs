@@ -50,7 +50,7 @@ impl AgentLoop {
         &self,
         provider: &dyn ModelProvider,
         tools: &[ToolDefinition],
-        _event_tx: Option<&Sender<AgentLoopEvent>>,
+        event_tx: Option<&Sender<AgentLoopEvent>>,
         cancellation_token: Option<&CancellationToken>,
         state: &mut LoopState,
         input: compaction::SummaryInput,
@@ -59,7 +59,7 @@ impl AgentLoop {
             return;
         }
 
-        let request = match self.build_summary_request(&input) {
+        let request = match self.build_summary_request(&input, None) {
             Ok(request) => request,
             Err(e) => {
                 warn!(error = %e, "failed to build compaction summary request");
@@ -81,7 +81,7 @@ impl AgentLoop {
             }
         };
 
-        let summary_text = response
+        let mut summary_text = response
             .message
             .content
             .iter()
@@ -97,8 +97,15 @@ impl AgentLoop {
             );
             return;
         }
+        // The summary replaces the `todo_write` calls; without the list
+        // the model would lose its plan mid-task.
+        if !state.result.todos.is_empty() {
+            summary_text.push_str("\n\nCurrent todo list (keep it updated with todo_write):\n");
+            summary_text.push_str(&aura_tools::todo::render_todos(&state.result.todos));
+        }
 
-        context::apply_summary_output(
+        let before = state.result.estimated_context_tokens;
+        let applied = context::apply_summary_output(
             &self.config,
             state,
             tools,
@@ -108,13 +115,34 @@ impl AgentLoop {
                 compact_end: input.compact_end,
             },
         );
+        if applied {
+            state.result.summary_compactions = state.result.summary_compactions.saturating_add(1);
+            super::streaming::emit(
+                event_tx,
+                AgentLoopEvent::Progress {
+                    stage: crate::events::PROGRESS_CONTEXT_SUMMARIZED.to_string(),
+                    tool_name: None,
+                    elapsed_ms: None,
+                    message: Some(format!(
+                        "Summarized older history: ~{before} → ~{} tokens",
+                        state.result.estimated_context_tokens
+                    )),
+                },
+            );
+        }
     }
 
-    fn build_summary_request(
+    pub(super) fn build_summary_request(
         &self,
         input: &compaction::SummaryInput,
+        focus: Option<&str>,
     ) -> Result<ModelRequest, crate::AgentError> {
-        let prompt = super::compaction_summary::render_user_prompt(input);
+        let mut prompt = super::compaction_summary::render_user_prompt(input);
+        if let Some(focus) = focus.filter(|f| !f.trim().is_empty()) {
+            prompt.push_str(
+                &aura_context_prompts::auxiliary::compaction::compact_summary_focus(focus),
+            );
+        }
         let max_tokens = (input.max_summary_chars / CHARS_PER_TOKEN)
             .clamp(256, 4_096)
             .try_into()
@@ -206,7 +234,7 @@ mod summary_request_tests {
         let input = sample_summary_input();
 
         let request = agent
-            .build_summary_request(&input)
+            .build_summary_request(&input, None)
             .expect("summary request builder must succeed for valid inputs");
 
         assert_eq!(
@@ -227,7 +255,7 @@ mod summary_request_tests {
         let agent = AgentLoop::new(config);
         let input = sample_summary_input();
 
-        let request = agent.build_summary_request(&input).unwrap();
+        let request = agent.build_summary_request(&input, None).unwrap();
 
         assert_eq!(request.messages.len(), 1, "exactly one user message");
         assert_eq!(request.tools.len(), 0, "no tools attached");

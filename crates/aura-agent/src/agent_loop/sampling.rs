@@ -216,6 +216,7 @@ pub(crate) async fn run_sampling_request(
 
     let scrubbed_tool_markup =
         iteration::accumulate_response(&run.agent.config, state, &response, iteration);
+    state.observe_todo_writes(&response, run.event_tx);
     state.result.iterations = iteration + 1;
     streaming::emit_iteration_complete(run.event_tx, iteration, &response, iteration_started_at);
 

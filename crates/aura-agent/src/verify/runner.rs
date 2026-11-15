@@ -90,6 +90,9 @@ pub struct IndividualTestResult {
 use aura_config::MAX_OUTPUT_BYTES;
 const BUILD_TIMEOUT: Duration = Duration::from_secs(aura_config::BUILD_TIMEOUT_SECS);
 
+/// How long output from a killed, timed-out build is waited for.
+const TIMEOUT_COLLECT_GRACE: Duration = Duration::from_secs(5);
+
 fn truncate_output(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_string();
@@ -143,6 +146,17 @@ pub async fn run_build_command(
     build_command: &str,
     output_tx: Option<UnboundedSender<String>>,
 ) -> Result<BuildResult, BuildRunnerError> {
+    run_build_command_with_timeout(project_dir, build_command, output_tx, BUILD_TIMEOUT).await
+}
+
+/// [`run_build_command`] with a caller-chosen timeout. The process is
+/// killed when the timeout expires or the returned future is dropped.
+pub async fn run_build_command_with_timeout(
+    project_dir: &Path,
+    build_command: &str,
+    output_tx: Option<UnboundedSender<String>>,
+    timeout: Duration,
+) -> Result<BuildResult, BuildRunnerError> {
     if build_command.split_whitespace().next().is_none() {
         return Err(BuildRunnerError::EmptyCommand);
     }
@@ -157,8 +171,14 @@ pub async fn run_build_command(
 
     let (stdout_handle, stderr_handle) = spawn_output_collectors(&mut child, output_tx);
 
-    let result =
-        await_build_result(&mut child, build_command, stdout_handle, stderr_handle).await?;
+    let result = await_build_result(
+        &mut child,
+        build_command,
+        stdout_handle,
+        stderr_handle,
+        timeout,
+    )
+    .await?;
 
     log_build_result(&result, build_command);
     Ok(result)
@@ -175,6 +195,7 @@ fn spawn_build_child(
             let mut c = Command::new("cmd");
             c.as_std_mut().raw_arg(format!("/C {build_command}"));
             c.current_dir(project_dir)
+                .kill_on_drop(true)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
@@ -184,6 +205,7 @@ fn spawn_build_child(
             Command::new("sh")
                 .args(["-c", build_command])
                 .current_dir(project_dir)
+                .kill_on_drop(true)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
@@ -206,6 +228,7 @@ fn spawn_build_child(
         Command::new(&program)
             .args(&parts[1..])
             .current_dir(project_dir)
+            .kill_on_drop(true)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -297,8 +320,9 @@ async fn await_build_result(
     build_command: &str,
     stdout_handle: CollectorHandle,
     stderr_handle: CollectorHandle,
+    timeout: Duration,
 ) -> Result<BuildResult, BuildRunnerError> {
-    match tokio::time::timeout(BUILD_TIMEOUT, child.wait()).await {
+    match tokio::time::timeout(timeout, child.wait()).await {
         Ok(Ok(status)) => {
             let stdout_raw = collect_joined_output(stdout_handle, "stdout", build_command).await?;
             let stderr_raw = collect_joined_output(stderr_handle, "stderr", build_command).await?;
@@ -314,7 +338,9 @@ async fn await_build_result(
             command: build_command.to_string(),
             source: e,
         }),
-        Err(_) => handle_build_timeout(child, build_command, stdout_handle, stderr_handle).await,
+        Err(_) => {
+            handle_build_timeout(child, build_command, stdout_handle, stderr_handle, timeout).await
+        }
     }
 }
 
@@ -335,10 +361,11 @@ async fn handle_build_timeout(
     build_command: &str,
     stdout_handle: CollectorHandle,
     stderr_handle: CollectorHandle,
+    timeout: Duration,
 ) -> Result<BuildResult, BuildRunnerError> {
     warn!(
         command = %build_command,
-        timeout_secs = BUILD_TIMEOUT.as_secs(),
+        timeout_secs = timeout.as_secs(),
         "build command timed out, killing process"
     );
     if let Err(e) = child.kill().await {
@@ -349,7 +376,7 @@ async fn handle_build_timeout(
         "Build command `{build_command}` timed out after {}s. The command may start a long-running \
          process (e.g. a server). Use `cargo build` or `cargo check` instead of \
          `cargo run` for build verification.",
-        BUILD_TIMEOUT.as_secs()
+        timeout.as_secs()
     );
     let stderr = if partial_stderr.is_empty() {
         timeout_msg
@@ -377,9 +404,17 @@ async fn collect_timeout_output(
     stream_name: &str,
     build_command: &str,
 ) -> String {
-    match collect_joined_output(handle, stream_name, build_command).await {
-        Ok(output) => output,
-        Err(e) => format!("[failed to collect build command {stream_name}: {e}]\n"),
+    // Killing a shell leaves its children (e.g. the `cargo` it started)
+    // holding the pipes open, so the collectors may never see EOF.
+    match tokio::time::timeout(
+        TIMEOUT_COLLECT_GRACE,
+        collect_joined_output(handle, stream_name, build_command),
+    )
+    .await
+    {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => format!("[failed to collect build command {stream_name}: {e}]\n"),
+        Err(_) => String::new(),
     }
 }
 

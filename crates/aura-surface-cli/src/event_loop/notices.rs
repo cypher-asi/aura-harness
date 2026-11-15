@@ -1,17 +1,21 @@
 //! Messages for an agent that don't come from the user: a background
-//! command it started has ended, a task it handed off has finished.
+//! command it started has ended, a task it handed off has finished, an
+//! agent it spawned replied.
 //!
-//! A notice for the agent the UI shows starts a turn right away; one for
-//! another agent waits until the user opens that agent.
+//! A notice goes into the agent's running turn if it has one, else it
+//! starts a turn, whether or not the agent is on screen.
 
-use super::{handlers, local_model_unavailable, record_prompt, run_turn, LoopState};
-use aura_core_types::{AgentId, Transaction, TransactionType};
-use aura_model_reasoner::Message;
+use super::agent_events::AgentUi;
+use super::handlers::system_message;
+use super::processes::ProcessTable;
+use super::steering::SteerSource;
+use super::{deliver, LoopState};
+use aura_agent_kernel::Kernel;
+use aura_core_types::{ActionResultPayload, AgentId, Transaction};
 use aura_terminal::events::ProcessSummary;
-use aura_terminal::UiCommand;
 use std::path::Path;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{debug, error, info};
 
 /// Lines of a background command's output included in its notice.
 const LOG_TAIL_LINES: usize = 20;
@@ -29,57 +33,51 @@ pub struct Notice {
 /// Where notices are sent, for work that finishes off the event loop.
 pub type NoticeSender = mpsc::UnboundedSender<Notice>;
 
-/// Deliver `notice`: run a turn now if its agent is on screen, otherwise
-/// keep it for when the agent is opened.
+/// Show `notice` in its agent's chat and give it to the agent.
 pub(super) async fn handle_notice(state: &mut LoopState<'_>, notice: Notice) {
-    state.park_finished_spawns();
-    if notice.to == state.session.agent_id() {
-        run_notice_turn(state, notice).await;
-    } else {
-        info!(agent = %notice.to, "Queueing notice for an agent that isn't open");
-        state.queued_notices.push(notice);
-    }
+    info!(agent = %notice.to, shown = %notice.shown, "Delivering a notice");
+    AgentUi::new(state.commands.clone(), notice.to)
+        .send(system_message(notice.shown))
+        .await;
+    deliver(state, notice.to, SteerSource::Harness, notice.prompt, false).await;
 }
 
-/// Deliver the notices that waited for the agent now on screen.
-pub(super) async fn deliver_queued(state: &mut LoopState<'_>) {
-    let agent = state.session.agent_id();
-    let (mine, rest): (Vec<Notice>, Vec<Notice>) = std::mem::take(&mut state.queued_notices)
-        .into_iter()
-        .partition(|notice| notice.to == agent);
-    state.queued_notices = rest;
-    if mine.is_empty() {
-        return;
+/// The notice for the background command whose completion is `tx`, after
+/// noting in `table` how it ended. `None` when the payload is unreadable,
+/// the command is unknown, or its own agent stopped it.
+pub(crate) fn completion_notice(table: &ProcessTable, tx: &Transaction) -> Option<Notice> {
+    let result = serde_json::from_slice::<ActionResultPayload>(&tx.payload).ok()?;
+    let row = table.command_finished(result.process_id, result.exit_code, result.success);
+    if table.take_stopped_by_owner(result.process_id) {
+        info!(process = %result.process_id.to_hex(), "Background command stopped by its agent");
+        return None;
     }
-    let shown: Vec<String> = mine.iter().map(|n| n.shown.clone()).collect();
-    let prompt: Vec<String> = mine.iter().map(|n| n.prompt.clone()).collect();
-    run_notice_turn(
-        state,
-        Notice {
-            to: agent,
-            shown: shown.join("\n"),
-            prompt: prompt.join("\n\n"),
-        },
-    )
-    .await;
+    row.map(|row| command_notice(tx.agent_id, &row))
 }
 
-async fn run_notice_turn(state: &mut LoopState<'_>, notice: Notice) {
-    info!(agent = %notice.to, "Running a turn for a notice");
-    handlers::show_system_message(state, notice.shown).await;
-    let _ = state.commands.send(UiCommand::TurnStarted).await;
-    if local_model_unavailable(state).await {
-        return;
+/// Append the background command completion `tx` to the record of
+/// `kernel`'s agent. Returns whether it was recorded; failures are logged.
+pub(crate) async fn record_completion(kernel: &Kernel, tx: &Transaction) -> bool {
+    let store = kernel.store();
+    if let Err(e) = store.enqueue_tx(tx) {
+        error!(error = %e, "Failed to enqueue completion transaction");
+        return false;
     }
-    let tx = Transaction::new_chained(
-        notice.to,
-        TransactionType::Trigger,
-        notice.prompt.clone().into_bytes(),
-        None,
-    );
-    if record_prompt(state, tx).await {
-        state.session.messages.push(Message::user(notice.prompt));
-        run_turn(state).await;
+    let Ok(Some((token, dequeued))) = store.dequeue_tx(tx.agent_id) else {
+        return false;
+    };
+    match kernel.process_dequeued(dequeued, token).await {
+        Ok(result) => {
+            debug!(
+                seq = result.entry.seq,
+                "Completion record persisted via kernel"
+            );
+            true
+        }
+        Err(e) => {
+            error!(error = %e, "Failed to persist completion record via kernel");
+            false
+        }
     }
 }
 
@@ -97,7 +95,12 @@ pub fn command_notice(to: AgentId, row: &ProcessSummary) -> Notice {
         .pid
         .map(|pid| format!(" (pid {pid})"))
         .unwrap_or_default();
-    let mut prompt = format!("The background command `{}`{pid} {how}.", row.label);
+    let job = row
+        .id
+        .strip_prefix("cmd:")
+        .map(|id| format!(" (job {id})"))
+        .unwrap_or_default();
+    let mut prompt = format!("The background command `{}`{pid}{job} {how}.", row.label);
     if let Some(log) = &row.log_path {
         let tail = log_tail(log, LOG_TAIL_LINES);
         prompt.push_str(&format!("\nIts output is in {}.", log.display()));
@@ -153,9 +156,9 @@ mod tests {
             notice.shown,
             "Background command exited with code 1: npm run dev"
         );
-        assert!(notice
-            .prompt
-            .starts_with("The background command `npm run dev` (pid 42) exited with code 1."));
+        assert!(notice.prompt.starts_with(
+            "The background command `npm run dev` (pid 42) (job 1) exited with code 1."
+        ));
         assert!(notice.prompt.contains(&log.display().to_string()));
         assert!(notice.prompt.contains("line 30"));
         assert!(notice.prompt.contains("line 11\n"));
@@ -167,7 +170,7 @@ mod tests {
         let notice = command_notice(AgentId::generate(), &row(ProcessStatus::Killed, None, None));
         assert_eq!(
             notice.prompt,
-            "The background command `npm run dev` (pid 42) was stopped from the Processes tab."
+            "The background command `npm run dev` (pid 42) (job 1) was stopped from the Processes tab."
         );
     }
 }

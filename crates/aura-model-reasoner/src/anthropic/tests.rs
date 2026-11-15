@@ -208,10 +208,35 @@ fn test_cache_control_on_last_user_message() {
     } else {
         panic!("Expected Text content");
     }
+}
 
-    if let ApiContent::Text { cache_control, .. } = &api_msgs[0].content[0] {
-        assert!(cache_control.is_none());
-    }
+#[test]
+fn test_cache_control_on_last_two_user_messages_only() {
+    let messages = vec![
+        Message::user("first"),
+        Message::assistant("a"),
+        Message::user("second"),
+        Message::assistant("b"),
+        Message::user("third"),
+    ];
+
+    let api_msgs = convert_messages_to_api(&messages, true);
+    let marked: Vec<bool> = api_msgs
+        .iter()
+        .map(|m| {
+            m.content.iter().any(|block| {
+                matches!(
+                    block,
+                    ApiContent::Text {
+                        cache_control: Some(_),
+                        ..
+                    }
+                )
+            })
+        })
+        .collect();
+
+    assert_eq!(marked, vec![false, false, true, false, true]);
 }
 
 #[test]

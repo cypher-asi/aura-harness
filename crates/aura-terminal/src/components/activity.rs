@@ -45,6 +45,8 @@ pub struct ToolStep {
     pub started: Option<Instant>,
     /// How long the call took, once finished
     pub duration_ms: Option<u64>,
+    /// What the call did to the file it changed, as unified diff hunks
+    pub diff: Option<String>,
     /// Policy verdict and deciding rule, e.g. `allowed by user.on`
     pub policy: Option<String>,
 }
@@ -73,6 +75,7 @@ impl Activity {
             retry: None,
             started: Some(Instant::now()),
             duration_ms: None,
+            diff: None,
             policy: None,
         })
     }
@@ -145,6 +148,7 @@ impl From<&ActivityData> for Activity {
                 retry: None,
                 started: None,
                 duration_ms: *duration_ms,
+                diff: None,
                 policy: policy.clone(),
             }),
         }

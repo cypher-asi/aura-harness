@@ -17,6 +17,8 @@ use aura_terminal::{
     },
     UiCommand,
 };
+use aura_tools::plan_tools::{plan_path_from_output, CREATE_PLAN_TOOL_NAME};
+use aura_tools::todo::TODO_WRITE_TOOL_NAME;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc;
@@ -99,26 +101,125 @@ pub fn load_existing_records(
 pub fn model_history(store: &dyn ReadStore, agent_id: AgentId) -> Result<Vec<Message>, StoreError> {
     let mut messages = Vec::new();
     for entry in scan_tail(store, agent_id, HISTORY_SCAN_LIMIT)? {
-        let tx = &entry.tx;
-        let text = || String::from_utf8_lossy(&tx.payload).trim().to_string();
-        match tx.tx_type {
-            TransactionType::SessionStart => messages.clear(),
-            TransactionType::UserPrompt => {
-                let text = text();
-                if !text.is_empty() {
-                    messages.push(Message::user(text));
-                }
-            }
-            TransactionType::AgentMsg => {
-                let text = text();
-                if !text.is_empty() {
-                    messages.push(Message::assistant(text));
-                }
-            }
-            _ => {}
-        }
+        push_model_message(&mut messages, &entry.tx);
     }
     Ok(messages)
+}
+
+/// The prompts and replies recorded after `after_seq`, for replaying on
+/// top of a checkpoint taken at `after_seq`. `None` when the checkpoint
+/// no longer applies: a session started since, or too much happened to
+/// scan.
+///
+/// # Errors
+/// Returns the store error if the head sequence or scan fails.
+pub fn model_history_since(
+    store: &dyn ReadStore,
+    agent_id: AgentId,
+    after_seq: u64,
+) -> Result<Option<Vec<Message>>, StoreError> {
+    let head_seq = store.get_head_seq(agent_id)?;
+    if head_seq < after_seq {
+        return Ok(None);
+    }
+    let newer = usize::try_from(head_seq - after_seq).unwrap_or(usize::MAX);
+    if newer > HISTORY_SCAN_LIMIT {
+        return Ok(None);
+    }
+    let mut messages = Vec::new();
+    if newer == 0 {
+        return Ok(Some(messages));
+    }
+    for entry in store.scan_record(agent_id, after_seq + 1, newer)? {
+        if entry.tx.tx_type == TransactionType::SessionStart {
+            return Ok(None);
+        }
+        push_model_message(&mut messages, &entry.tx);
+    }
+    Ok(Some(messages))
+}
+
+/// Add what `tx` contributes to the model's view of the conversation.
+fn push_model_message(messages: &mut Vec<Message>, tx: &Transaction) {
+    let text = || String::from_utf8_lossy(&tx.payload).trim().to_string();
+    match tx.tx_type {
+        TransactionType::SessionStart => messages.clear(),
+        TransactionType::UserPrompt => {
+            let text = text();
+            if !text.is_empty() {
+                messages.push(Message::user(text));
+            }
+        }
+        TransactionType::AgentMsg => {
+            let text = text();
+            if !text.is_empty() {
+                messages.push(Message::assistant(text));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A chat transcript of `messages`: their text, and each tool call with
+/// its result.
+#[must_use]
+pub fn chat_from_messages(messages: &[Message]) -> Vec<MessageData> {
+    use aura_model_reasoner::{ContentBlock, Role, ToolResultContent};
+
+    let mut chat: Vec<MessageData> = Vec::new();
+    let mut tool_calls: HashMap<String, usize> = HashMap::new();
+    for message in messages {
+        let role = match message.role {
+            Role::User => MessageRole::User,
+            Role::Assistant => MessageRole::Assistant,
+        };
+        for block in &message.content {
+            match block {
+                ContentBlock::Text { text } if !text.trim().is_empty() => {
+                    chat.push(MessageData::new(role, text));
+                }
+                ContentBlock::ToolUse { id, name, input } => {
+                    tool_calls.insert(id.clone(), chat.len());
+                    chat.push(MessageData {
+                        activity: Some(ActivityData::Tool {
+                            id: id.clone(),
+                            name: name.clone(),
+                            args: input.to_string(),
+                            result: None,
+                            is_error: false,
+                            duration_ms: None,
+                            policy: None,
+                        }),
+                        ..MessageData::new(MessageRole::Assistant, "")
+                    });
+                }
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    is_error,
+                } => {
+                    let Some(&index) = tool_calls.get(tool_use_id) else {
+                        continue;
+                    };
+                    if let Some(ActivityData::Tool {
+                        result,
+                        is_error: failed,
+                        ..
+                    }) = &mut chat[index].activity
+                    {
+                        *result = Some(match content {
+                            ToolResultContent::Text(text) => text.clone(),
+                            ToolResultContent::Json(value) => value.to_string(),
+                        });
+                        *failed = *is_error;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let skip = chat.len().saturating_sub(HISTORY_MESSAGE_LIMIT);
+    chat.into_iter().skip(skip).collect()
 }
 
 /// Rebuild an agent's chat transcript from its record, oldest first.
@@ -295,6 +396,35 @@ fn tool_execution(entry: &RecordEntry) -> Option<ToolExecution> {
         }
     }
     Some(execution)
+}
+
+/// Path of the plan `agent_id` last wrote with `create_plan` or
+/// `todo_write`, from its recent record.
+#[must_use]
+pub fn latest_plan_path(store: &dyn ReadStore, agent_id: AgentId) -> Option<String> {
+    let entries = scan_tail(store, agent_id, HISTORY_SCAN_LIMIT)
+        .inspect_err(|e| warn!(error = %e, "Failed to scan record for plans"))
+        .ok()?;
+    entries
+        .iter()
+        .rev()
+        .filter(|entry| entry.tx.tx_type == TransactionType::ToolExecution)
+        .filter_map(tool_execution)
+        .filter(|execution| {
+            !execution.is_error
+                && execution.decision == ToolGateVerdict::Approved
+                && matches!(
+                    execution.tool.as_str(),
+                    CREATE_PLAN_TOOL_NAME | TODO_WRITE_TOOL_NAME
+                )
+        })
+        .find_map(|execution| {
+            execution
+                .result
+                .as_deref()
+                .and_then(plan_path_from_output)
+                .map(str::to_string)
+        })
 }
 
 /// Build the agents-column rows for every registered agent, each followed
@@ -747,7 +877,7 @@ fn model_family(model: &str) -> &str {
     const FAMILIES: &[&str] = &["opus", "sonnet", "haiku", "gpt", "gemini", "grok"];
     let lower = model.to_ascii_lowercase();
     if let Some(family) = FAMILIES.iter().find(|family| lower.contains(*family)) {
-        return *family;
+        return family;
     }
     let name = model.rsplit('/').next().unwrap_or(model);
     name.split(['-', '_', ':', '.']).next().unwrap_or(name)
@@ -957,6 +1087,10 @@ fn reasoning_tools(payload: &Value) -> Option<String> {
 
 fn summarize_system(payload: &Value) -> String {
     let kind = system_kind(payload);
+    let mode = |key: &str| payload.get(key).and_then(Value::as_str);
+    if let (Some(from), Some(to)) = (mode("from"), mode("to")) {
+        return format!("{kind} · {from} → {to}");
+    }
     let detail = system_detail(payload);
     if detail.is_empty() {
         kind.to_string()

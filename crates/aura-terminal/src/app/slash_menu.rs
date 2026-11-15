@@ -33,12 +33,40 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     command("help", "Show help"),
     command("new", "New session (reset context)"),
     SlashCommand {
+        name: "resume",
+        args: "[n]",
+        description: "List earlier sessions, or resume one",
+        needs_args: false,
+    },
+    SlashCommand {
+        name: "rewind",
+        args: "[n] [code|chat|both]",
+        description: "List turns, or undo back to before one",
+        needs_args: false,
+    },
+    SlashCommand {
+        name: "diff",
+        args: "[session]",
+        description: "Show file changes of the last turn or session",
+        needs_args: false,
+    },
+    SlashCommand {
         name: "name",
         args: "[name]",
         description: "Rename the current project",
         needs_args: false,
     },
     command("clear", "Clear messages"),
+    command("context", "Show what fills the context window"),
+    SlashCommand {
+        name: "compact",
+        args: "[focus]",
+        description: "Summarize older history now",
+        needs_args: false,
+    },
+    command("init", "Have the agent write or improve AGENTS.md"),
+    command("todos", "Toggle the agent's todo list"),
+    command("cost", "Show tokens and cost of the session"),
     SlashCommand {
         name: "agent",
         args: "new [name] | <n|name>",
@@ -58,6 +86,22 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         name: "model",
         args: "[id]",
         description: "Choose model (local or cloud)",
+        needs_args: false,
+    },
+    command(
+        "plan",
+        "Plan mode: research and write a plan, no code edits",
+    ),
+    SlashCommand {
+        name: "build",
+        args: "[plan path]",
+        description: "Leave plan mode and implement the latest plan",
+        needs_args: false,
+    },
+    SlashCommand {
+        name: "mode",
+        args: "[default|accept-edits|plan|unrestricted]",
+        description: "Show or set what runs without asking",
         needs_args: false,
     },
     command("login", "Login for cloud models"),
@@ -179,7 +223,8 @@ impl App {
                 } else if let Some(name) = self.agent_picks().get(cursor).map(|d| d.name.clone()) {
                     if key.code == KeyCode::Tab {
                         self.set_slash_input(format!("/agent {name}"));
-                    } else if self.add_definition_to_project(&name) {
+                    } else {
+                        self.add_definition_to_project(&name);
                         self.set_slash_input(String::new());
                     }
                 }

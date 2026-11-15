@@ -20,6 +20,7 @@ All cloud LLM traffic goes through the AURA router (proxy) with a per-request JW
 | `AURA_GENERATION_STREAM_IDLE_TIMEOUT_SECS` | `300` | Maximum quiet window while proxying generation SSE from the router before emitting `STREAM_IDLE_TIMEOUT`. |
 | `AURA_LLM_MAX_RETRIES` | `8` | Per-model retry budget before falling back. |
 | `AURA_DISABLE_PROMPT_CACHING` | — | `1` / `true` / `yes` disables prompt-caching directives. |
+| `AURA_PROMPT_CACHE_TTL` | `5m` | `1h` keeps Anthropic prompt-cache entries for an hour instead of five minutes, so a session that pauses between turns still gets cache hits. Writes cost more than with the 5-minute cache. Read once at startup. |
 
 Further optional tuning (read by `AnthropicConfig::from_env`): `AURA_LLM_BACKOFF_INITIAL_MS` (`250`), `AURA_LLM_BACKOFF_CAP_MS` (`30000`), `AURA_LLM_MIN_REQUEST_INTERVAL_MS` (`0` = disabled), `AURA_LLM_EMERGENCY_BODY_CAP_BYTES` (`524288`; `0` disables), `AURA_LLM_CLOUDFLARE_MAX_RETRIES` (`3`).
 
@@ -29,6 +30,59 @@ Further optional tuning (read by `AnthropicConfig::from_env`): `AURA_LLM_BACKOFF
 |----------|---------|-------------|
 | `AURA_DEFAULT_MODE` | `agent` | Session mode when the request (or `--mode`) does not set one: `agent`, `plan`, `ask` or `debug`. A non-`agent` default makes dev-loop and task-run requests fail with `400` unless they pass `mode: "agent"`. The older name `AURA_FLEET_DEFAULT_MODE` is still read when the new one is unset. |
 | `AURA_SUBAGENT_MAX_RUNNING` | `32` | Most spawned agents (from `task` or `spawn_agent`) that may run at once across the node. A spawn beyond the limit fails with an error the parent agent sees. |
+
+## Terminal long runs
+
+A terminal turn has no iteration cap and no time limit: it runs until the agent is done, you cancel it, or one of these limits stops it.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AURA_TUI_TURN_TIMEOUT` | — (no limit) | Stop a turn that runs longer than this: `90s`, `45m`, `2h`, or a bare number of minutes. |
+| `AURA_TUI_MAX_TURN_COST_USD` | — (no limit) | Stop a turn once its model calls cost more than this many US dollars at API list prices. |
+| `AURA_COMPACTION_TRIGGER` | `0.70` | Context use (0.0–1.0) at which the terminal starts compacting history. Below it the transcript is left untouched so its prompt-cache prefix keeps matching. |
+| `AURA_TUI_MODE` | `AURA_DEFAULT_MODE` (`agent` means `default`) | Permission mode the terminal starts in when `--mode` is not given: `default`, `accept-edits`, `plan` or `unrestricted`. Set `unrestricted` to run every tool call without asking. `aura -p` does not read it. |
+| `AURA_TUI_APPROVAL_TIMEOUT_SECS` | `600` | Seconds an approval prompt waits for an answer. When it runs out, the tool call is denied and the turn goes on. |
+| `AURA_TUI_NOTIFY_AFTER_SECS` | `10` | A finished turn that took at least this many seconds rings the bell (and sends a desktop notification if those are on). `0` alerts after every turn. |
+| `AURA_TUI_BELL` | `1` | Set to `0` to stop the terminal bell for finished turns and approval prompts. |
+| `AURA_TUI_DESKTOP_NOTIFY` | `0` | Set to `1` to also send desktop notifications, through `notify-send` on Linux or `osascript` on macOS. A notifier that hangs is killed after 5 seconds. |
+| `AURA_CHECK_COMMAND` | — (from `AGENTS.md`) | Command run after each step in which the agent edited files; a failure is given to the agent. Overrides any `check:` line or `check` block in the project's `AGENTS.md`. `off` disables the check entirely. |
+| `AURA_CHECK_TIMEOUT` | `120` | Time limit for one check run: seconds, or `90s` / `5m`. At most 30 minutes. |
+| `AURA_WEB_FETCH_ALLOW_PRIVATE` | `false` | Let `web_fetch` read `localhost` and private-network addresses (e.g. a local dev server). Redirects are checked the same way. |
+| `AURA_WEB_SEARCH_PROVIDER` | first configured | `brave`, `tavily`, `searxng` or `off`. Without it, `web_search` uses the first provider whose variable below is set. |
+| `BRAVE_API_KEY` (alias `BRAVE_SEARCH_API_KEY`) | — | Brave Search API key for `web_search`. |
+| `TAVILY_API_KEY` | — | Tavily API key for `web_search`. |
+| `AURA_SEARXNG_URL` | — | Root URL of a SearXNG instance for `web_search`, e.g. `http://localhost:8888`. Its `settings.yml` must list `json` under `search.formats`. |
+
+Web requests time out after 20 seconds (10 seconds to connect). Without a search provider, `web_search` is still offered and answers with what to set.
+
+## Project instructions
+
+Terminal agents load `AGENTS.md`, `CLAUDE.md` and Cursor rules from their working folder and the folders above it, plus `AGENTS.md` in `AURA_HOME` (default `~/.aura/AGENTS.md`) for instructions that apply to every project. See [Project instructions](cli.md#project-instructions).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AURA_PROJECT_INSTRUCTIONS` | on | Set to `off`, `0`, `false` or `no` to stop loading project instruction files into the terminal's system prompt. |
+
+## Terminal editor
+
+Ctrl+G in the input, and editing a permanent agent, open the user's editor.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VISUAL` | — | Editor command, tried first. It may carry arguments, e.g. `code --wait`. |
+| `EDITOR` | — | Editor command used when `VISUAL` is unset or empty. With neither set, the terminal runs `vi`. |
+| `TMPDIR` | system temp folder | Where Ctrl+G writes the input for the editor (on Unix, readable only by you). The file is removed when the editor exits. |
+
+## `aura -p` runs
+
+[`aura -p`](cli.md#aura--p-one-prompt-without-the-terminal) reads the variables above too. There, `AURA_TUI_TURN_TIMEOUT` and `AURA_TUI_MAX_TURN_COST_USD` are the defaults for `--max-time` and `--max-cost-usd` and limit the whole run rather than each turn.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AURA_DATA_DIR` | `./aura_data` in the working directory | Data directory: agent list, record store and session checkpoints. A running terminal holds the store's lock, so give `aura -p` its own directory to run both at once. |
+| `AURA_HEADLESS_JOB_WAIT` | `10m` | Longest wait for the agent's background jobs after it ends its turn (`90s`, `45m`, `2h`, or a bare number of minutes). Jobs still running then are stopped. |
+| `RUST_LOG` | warnings only | Log filter. Logs go to stderr so stdout stays machine-readable. |
+| `AURA_EVALS_LIVE` | unset | Set to `1` to let [`evals/long_horizon/run.py`](../evals/long_horizon/README.md) call real models (same as its `--live` flag). |
 
 ## Node runtime
 

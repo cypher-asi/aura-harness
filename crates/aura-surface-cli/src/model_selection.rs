@@ -88,6 +88,25 @@ impl ModelSelection {
         selection
     }
 
+    /// Selection fixed on `model`, with no sign-ins and no saved choice.
+    #[cfg(test)]
+    pub(crate) fn fixed(config: &AgentLoopConfig, model: &str) -> Self {
+        Self {
+            current: model.to_string(),
+            default_local: model_catalog::default_local_model_id(),
+            local_url: model_catalog::local_base_url(),
+            local_status: LocalServerStatus::Unreachable,
+            auth: AuthSummary::default(),
+            plan_models: Vec::new(),
+            router_limits: RouterLimits {
+                max_tokens: config.max_tokens,
+                stream_timeout: config.stream_timeout,
+                stream_event_timeout: config.stream_event_timeout,
+            },
+            prefs_path: None,
+        }
+    }
+
     /// Model id used for the next turn.
     pub fn current(&self) -> &str {
         &self.current
@@ -193,6 +212,14 @@ impl ModelSelection {
 
     /// Switch to `id`. Returns a user-facing problem when the switch is refused.
     pub fn select(&mut self, config: &mut AgentLoopConfig, id: &str) -> Result<(), String> {
+        self.use_for_run(config, id)?;
+        self.persist();
+        Ok(())
+    }
+
+    /// Switch to `id` for this process only, leaving the saved choice
+    /// alone. Returns a user-facing problem when the switch is refused.
+    pub fn use_for_run(&mut self, config: &mut AgentLoopConfig, id: &str) -> Result<(), String> {
         let id = id.trim();
         if id.is_empty() {
             return Err("Model id is empty".to_string());
@@ -201,7 +228,6 @@ impl ModelSelection {
             return Err(unusable_reason(id));
         }
         self.apply(config, id);
-        self.persist();
         Ok(())
     }
 

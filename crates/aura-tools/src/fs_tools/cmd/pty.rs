@@ -286,9 +286,16 @@ mod tests {
 
     #[cfg(unix)]
     fn run(sandbox: &Sandbox, command: &PtyCommand<'_>, cols: u16) -> ToolResult {
-        cmd_run_in_pty(sandbox, command, None, cols, 10_000, &crate::ProcessTags::default())
-            .expect("pseudo-terminal available")
-            .expect("command ran")
+        cmd_run_in_pty(
+            sandbox,
+            command,
+            None,
+            cols,
+            10_000,
+            &crate::ProcessTags::default(),
+        )
+        .expect("pseudo-terminal available")
+        .expect("command ran")
     }
 
     #[cfg(unix)]

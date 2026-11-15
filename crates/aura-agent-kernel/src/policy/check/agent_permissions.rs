@@ -26,9 +26,10 @@ impl Policy {
     /// [`Self::resolve_tool_state`] plus the permission layer that decided.
     #[must_use]
     pub fn resolve_tool_state_with_source(&self, tool: &str) -> (ToolState, PermissionLayer) {
+        let config = self.config();
         resolve_effective_permission_with_source(
-            &self.config.user_default,
-            self.config.agent_override.as_ref(),
+            &config.user_default,
+            config.agent_override.as_ref(),
             tool,
         )
     }
@@ -40,13 +41,10 @@ impl Policy {
     ///
     /// Always on — there is no feature flag or opt-out.
     pub(super) fn check_agent_permissions(&self, tool_call: &ToolCall) -> Option<PolicyResult> {
-        let permissions = &self.config.agent_permissions;
+        let config = self.config();
+        let permissions = &config.agent_permissions;
 
-        if let Some(required) = self
-            .config
-            .tool_capability_requirements
-            .get(&tool_call.tool)
-        {
+        if let Some(required) = config.tool_capability_requirements.get(&tool_call.tool) {
             // Route through `Capability::satisfies` so project wildcards
             // (`ReadAllProjects` / `WriteAllProjects`) on the bundle cover
             // an exact-id `ReadProject { id }` / `WriteProject { id }`

@@ -101,6 +101,16 @@ pub fn build_compact_summary_user_prompt(
     prompt
 }
 
+/// Instruction appended to the summary prompt when the user asked for a
+/// summary that keeps something in particular (`/compact <focus>`).
+#[must_use]
+pub fn compact_summary_focus(focus: &str) -> String {
+    format!(
+        "\n## What To Keep\nThe user asked this summary to keep, in particular: {}\n",
+        focus.trim()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

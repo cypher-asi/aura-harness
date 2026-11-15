@@ -4,17 +4,31 @@
 //! - `UiEvent`: Events from the UI to the kernel (user actions)
 //! - `UiCommand`: Commands from the kernel to the UI (state updates)
 
+use crate::mode_command::PermissionMode;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Events sent from the UI to the application logic.
 #[derive(Debug, Clone)]
 pub enum UiEvent {
-    /// User submitted a message
-    UserMessage(String),
+    /// User submitted a message to an agent
+    UserMessage {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        /// Message text
+        text: String,
+        /// Whether the chat already shows the message. It doesn't when the
+        /// agent was busy and the message waits for its turn.
+        shown: bool,
+        /// Images pasted into the message; `text` holds an `[image N]`
+        /// chip for each
+        images: Vec<ImageAttachment>,
+    },
 
     /// User typed a shell command to run in the agent's workspace
     RunCommand {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
         /// Command line
         command: String,
         /// Width of the terminal the command's output is shown in
@@ -24,8 +38,24 @@ pub enum UiEvent {
     /// User approved a pending tool request
     Approve(String),
 
+    /// User approved a pending tool request and wants calls like it to run
+    /// without asking in this project from now on
+    ApproveAlways(String),
+
     /// User denied a pending tool request
     Deny(String),
+
+    /// User picked the permission mode of an agent (`/mode <name>`)
+    SetMode {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        /// Mode for the agent's next tool calls
+        mode: PermissionMode,
+    },
+
+    /// User pressed Shift+Tab to move the agent with this hex id to the
+    /// next permission mode
+    CycleMode(String),
 
     /// User requested to quit
     Quit,
@@ -42,8 +72,8 @@ pub enum UiEvent {
     /// User requested to clear the screen
     Clear,
 
-    /// User cancelled the current operation
-    Cancel,
+    /// User cancelled the turn of the agent with this hex id
+    Cancel(String),
 
     /// User requested a new session (reset context)
     NewSession,
@@ -120,6 +150,117 @@ pub enum UiEvent {
 
     /// User confirmed killing the process with this [`ProcessSummary::id`]
     KillProcess(String),
+
+    /// User asked the agent with this hex id to build a plan: the given
+    /// workspace-relative path, or the agent's latest plan
+    BuildPlan {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        /// Plan file; `None` builds the agent's latest plan
+        path: Option<String>,
+    },
+
+    /// User asked for the agent's earlier sessions (`None`), or to resume
+    /// the one with this number in that list
+    Resume {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        /// 1-based position in the list
+        index: Option<usize>,
+    },
+
+    /// User asked to summarize the older history of an agent now
+    Compact {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        /// What the summary should keep, in the user's words
+        focus: Option<String>,
+    },
+
+    /// User asked an agent to write (or improve) its project's `AGENTS.md`
+    InitProject {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+    },
+
+    /// User asked for the agent's turns (`turn: None`), or to rewind to
+    /// before the turn with this number in that list
+    Rewind {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        /// Turn number, as `/rewind` lists it
+        turn: Option<usize>,
+        /// What to put back
+        scope: RewindScope,
+    },
+
+    /// User asked what the agent's latest turn changed in files, or the
+    /// whole session with `session`
+    Diff {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        /// Every change since the session started
+        session: bool,
+    },
+}
+
+/// What `/rewind` puts back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RewindScope {
+    /// Files the agent changed with its file tools
+    Code,
+    /// The conversation the model sees
+    Chat,
+    /// Files and conversation
+    #[default]
+    Both,
+}
+
+impl RewindScope {
+    /// Whether files are put back.
+    #[must_use]
+    pub const fn code(self) -> bool {
+        matches!(self, Self::Code | Self::Both)
+    }
+
+    /// Whether the conversation is cut back.
+    #[must_use]
+    pub const fn chat(self) -> bool {
+        matches!(self, Self::Chat | Self::Both)
+    }
+
+    /// `code`, `chat` or `both`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Code => "code",
+            Self::Chat => "chat",
+            Self::Both => "both",
+        }
+    }
+}
+
+impl std::str::FromStr for RewindScope {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "code" | "files" => Ok(Self::Code),
+            "chat" | "conversation" => Ok(Self::Chat),
+            "both" | "all" => Ok(Self::Both),
+            other => Err(format!("unknown rewind scope {other:?}")),
+        }
+    }
+}
+
+/// How one file changed, as a unified diff of its hunks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileDiffData {
+    /// File, relative to the agent's workspace when inside it
+    pub path: String,
+    /// Unified diff hunks (`@@` headers and `+`/`-`/` ` lines), or a note
+    /// such as for a binary file
+    pub diff: String,
 }
 
 /// Commands sent from the application logic to the UI.
@@ -193,6 +334,23 @@ pub enum UiCommand {
         max_attempts: u32,
     },
 
+    /// What a file-changing tool call did to its file, as unified diff
+    /// hunks, shown in the call's block
+    ToolDiff {
+        /// Tool use ID
+        id: String,
+        /// Unified diff hunks
+        diff: String,
+    },
+
+    /// Show file changes in the chat
+    ShowDiff {
+        /// What the changes are, e.g. which turn made them
+        title: String,
+        /// One entry per changed file
+        files: Vec<FileDiffData>,
+    },
+
     /// Update a tool's completion status
     CompleteTool {
         /// Tool use ID
@@ -211,15 +369,26 @@ pub enum UiCommand {
         exit_code: Option<i32>,
     },
 
-    /// Request user approval for a tool
+    /// Request user approval for a tool. The agent's turn waits for the
+    /// answer.
     RequestApproval {
-        /// Tool use ID
+        /// Approval request ID, sent back with the answer
         id: String,
         /// Tool name
         tool: String,
         /// Description of the action
         description: String,
+        /// What "always allow" would allow from now on, e.g. "`cargo test`
+        /// commands in this project"
+        always: String,
     },
+
+    /// The approval with this ID stopped waiting (it timed out or the turn
+    /// was cancelled)
+    CloseApproval(String),
+
+    /// The agent's permission mode
+    SetMode(PermissionMode),
 
     /// Show an error notification
     ShowError(String),
@@ -230,11 +399,45 @@ pub enum UiCommand {
     /// Show a warning notification
     ShowWarning(String),
 
-    /// A turn the user didn't send started, e.g. for an agent's reply
-    TurnStarted,
-
     /// Mark the current operation as complete
     Complete,
+
+    /// The agent started a turn the chat didn't start itself (a queued
+    /// message, or a task from the agent that spawned it)
+    TurnStarted {
+        /// Message to show as the user's, when the chat doesn't show it yet
+        prompt: Option<String>,
+    },
+
+    /// A message the user sent to a busy agent went into its running turn
+    UserSteered(String),
+
+    /// Usage of one model call, added to the agent's session totals
+    CallStats(CallStats),
+    /// Older history was summarized to free context; the text says how much
+    Compacted(String),
+    /// The agent's todo list
+    SetTodos(Vec<TodoView>),
+    /// The agent's background jobs
+    SetJobs(Vec<JobView>),
+    /// How many messages and commands wait for the agent's current work
+    SetQueued(usize),
+    /// What the agent's context is made of, as of its last turn
+    SetContext(ContextView),
+    /// Usage of the agent's session so far, when it is opened or resumed
+    SetSessionTotals(SessionTotals),
+    /// The project instruction files the agent's turns load
+    SetInstructions(Vec<InstructionFileView>),
+
+    /// A command for the chat of one agent. Agents work in parallel, so
+    /// anything an agent's turn sends is addressed to it; the UI applies it
+    /// to that agent's chat whether or not it is on screen.
+    ForAgent {
+        /// Agent ID (hex encoded)
+        agent_id: String,
+        /// Command for that agent's chat
+        command: Box<UiCommand>,
+    },
 
     /// Clear the conversation
     ClearConversation,
@@ -295,6 +498,56 @@ pub enum UiCommand {
     /// A plan link attempt finished (successfully or not); drop any model
     /// pick that was waiting on it
     EndLink,
+
+    /// The active agent's current plan, `None` when it has none
+    SetPlan(Option<PlanView>),
+}
+
+/// A plan the agent wrote, as the todo list above the input shows it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanView {
+    /// Workspace-relative path of the plan file
+    pub path: String,
+    /// Plan title
+    pub name: String,
+    /// Steps, in order
+    pub todos: Vec<TodoView>,
+}
+
+impl PlanView {
+    /// `(closed, total)` todo counts.
+    #[must_use]
+    pub fn progress(&self) -> (usize, usize) {
+        let closed = self.todos.iter().filter(|t| t.state.is_closed()).count();
+        (closed, self.todos.len())
+    }
+
+    /// Whether some todo is still pending or in progress.
+    #[must_use]
+    pub fn has_open_todos(&self) -> bool {
+        self.todos.iter().any(|t| !t.state.is_closed())
+    }
+}
+
+/// An image pasted into a user message.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ImageAttachment {
+    /// `image/png`, `image/jpeg`, `image/gif` or `image/webp`
+    pub media_type: String,
+    /// The image, base64-encoded
+    pub data: String,
+    /// Size of the image before encoding
+    pub bytes: usize,
+}
+
+impl std::fmt::Debug for ImageAttachment {
+    // The data is megabytes of base64; logging it would bury everything else.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImageAttachment")
+            .field("media_type", &self.media_type)
+            .field("bytes", &self.bytes)
+            .finish_non_exhaustive()
+    }
 }
 
 /// One entry in the model selector.
@@ -350,6 +603,137 @@ pub struct CallUsage {
     /// Estimated cost at API list prices; `None` for local or unpriced models
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+}
+
+/// Tokens and cost of one model call, for the session totals.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct CallStats {
+    /// Prompt tokens neither read from nor written to the cache
+    pub input_tokens: u64,
+    /// Prompt tokens read from the cache
+    pub cache_read_tokens: u64,
+    /// Prompt tokens written to the cache
+    pub cache_write_tokens: u64,
+    /// Output tokens
+    pub output_tokens: u64,
+    /// Estimated cost at API list prices; `None` for local or unpriced models
+    pub cost_usd: Option<f64>,
+    /// Context window of the model, when known
+    pub context_limit: Option<u64>,
+}
+
+impl CallStats {
+    /// The whole prompt: what the call put in the context window.
+    #[must_use]
+    pub const fn prompt_tokens(&self) -> u64 {
+        self.input_tokens + self.cache_read_tokens + self.cache_write_tokens
+    }
+}
+
+/// Usage of a session so far.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SessionTotals {
+    /// Model calls made
+    pub calls: u32,
+    /// Prompt tokens neither read from nor written to the cache
+    pub input_tokens: u64,
+    /// Prompt tokens read from the cache
+    pub cache_read_tokens: u64,
+    /// Prompt tokens written to the cache
+    pub cache_write_tokens: u64,
+    /// Output tokens
+    pub output_tokens: u64,
+    /// Estimated cost; `None` when no call had a price
+    pub cost_usd: Option<f64>,
+    /// Prompt of the latest call
+    pub context_tokens: u64,
+}
+
+/// Status of a todo item.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TodoState {
+    /// Not started
+    #[default]
+    Pending,
+    /// Being worked on
+    InProgress,
+    /// Done
+    Completed,
+    /// Dropped
+    Cancelled,
+}
+
+impl TodoState {
+    /// Done or dropped: nothing left to do.
+    #[must_use]
+    pub const fn is_closed(self) -> bool {
+        matches!(self, Self::Completed | Self::Cancelled)
+    }
+}
+
+/// One item of an agent's todo list, or a step of a [`PlanView`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TodoView {
+    /// What needs doing
+    pub content: String,
+    /// Where it stands
+    pub state: TodoState,
+}
+
+/// A background job an agent started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobView {
+    /// Job id the agent uses, e.g. `job-1`
+    pub id: String,
+    /// The command line
+    pub command: String,
+    /// Whether it is still running
+    pub running: bool,
+}
+
+/// Estimated make-up of an agent's context.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContextView {
+    /// System prompt
+    pub system_tokens: u64,
+    /// Tool definitions
+    pub tools_tokens: u64,
+    /// Skills
+    pub skills_tokens: u64,
+    /// The conversation so far
+    pub conversation_tokens: u64,
+    /// Everything together
+    pub total_tokens: u64,
+    /// Context window of the model, when known
+    pub limit_tokens: Option<u64>,
+}
+
+/// A project instruction file (`AGENTS.md`, `CLAUDE.md`, a Cursor rule)
+/// and how the agent's system prompt uses it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstructionFileView {
+    /// Where it is, with the home directory shortened to `~`
+    pub path: String,
+    /// Bytes of it in the system prompt
+    pub bytes: usize,
+    /// Globs a scoped rule applies to
+    pub globs: Option<String>,
+    /// How it is used
+    pub status: InstructionStatus,
+}
+
+/// How the system prompt uses an instruction file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstructionStatus {
+    /// Included whole
+    Included,
+    /// Only its start is included; the whole file has this many bytes
+    Truncated(usize),
+    /// Listed for the agent to read when its description matches the work
+    OnRequest,
+    /// Left out because the size limit was reached
+    Omitted,
 }
 
 impl MessageData {
@@ -551,7 +935,8 @@ pub struct AgentSummary {
     /// How many spawning agents it is nested under (0 for top-level agents)
     #[serde(default)]
     pub depth: usize,
-    /// Whether it is running a task for the agent that spawned it
+    /// Whether it is working right now: running a turn, a command, or a
+    /// task for the agent that spawned it
     #[serde(default)]
     pub running: bool,
     /// Project this root agent heads. Empty when the project is unnamed
@@ -701,8 +1086,13 @@ mod tests {
 
     #[test]
     fn test_ui_event_variants() {
-        let event = UiEvent::UserMessage("hello".to_string());
-        assert!(matches!(event, UiEvent::UserMessage(_)));
+        let event = UiEvent::UserMessage {
+            agent_id: "aa".to_string(),
+            text: "hello".to_string(),
+            shown: true,
+            images: Vec::new(),
+        };
+        assert!(matches!(event, UiEvent::UserMessage { .. }));
 
         let event = UiEvent::Approve("tool-1".to_string());
         assert!(matches!(event, UiEvent::Approve(_)));

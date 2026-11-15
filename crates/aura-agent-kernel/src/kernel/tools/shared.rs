@@ -238,7 +238,7 @@ impl Kernel {
                     )));
                 };
                 let defaults = fold_tool_state_into_defaults(
-                    &self.config.policy.user_default,
+                    &self.policy.config().user_default,
                     &prompt.tool_name,
                     response.decision,
                 );

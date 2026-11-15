@@ -1,7 +1,8 @@
 //! Key event handling for the App.
 
 use super::{
-    line_edit::LineEdit, AgentsTab, App, AppState, NotificationType, PanelFocus, SidePanelTab,
+    line_edit::LineEdit, AgentsTab, App, AppState, ChatTab, NotificationType, PanelFocus,
+    SidePanelTab,
 };
 use crate::{events::UiEvent, input::InputHistory, terminal::KeyResult};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -18,6 +19,12 @@ impl App {
             return KeyResult::continue_running();
         }
 
+        let result = self.dispatch_key(key);
+        self.sync_mentions();
+        result
+    }
+
+    fn dispatch_key(&mut self, key: KeyEvent) -> KeyResult {
         match self.state {
             AppState::AwaitingApproval => self.handle_approval_key(key),
             AppState::ShowingHelp => {
@@ -138,33 +145,32 @@ impl App {
         KeyResult::continue_running()
     }
 
-    /// Handle key in approval mode.
+    /// Handle key in approval mode: `y` allows the call once, `a` always
+    /// (in this project), `n` or Esc denies it. The turn goes on either
+    /// way; Ctrl+C cancels it instead.
     fn handle_approval_key(&mut self, key: KeyEvent) -> KeyResult {
-        match key.code {
-            KeyCode::Char('y' | 'Y') => {
-                if let Some(approval) = self.pending_approval.take() {
-                    if let Some(tx) = &self.event_tx {
-                        let _ = tx.try_send(UiEvent::Approve(approval.id));
-                    }
-                    self.state = AppState::Processing;
-                    self.status = "Approved, continuing...".to_string();
-                }
+        let always_offered = self
+            .pending_approval
+            .as_ref()
+            .is_some_and(|a| !a.always.is_empty());
+        let answer = match key.code {
+            KeyCode::Char('y' | 'Y') => "Approved",
+            KeyCode::Char('a' | 'A') if always_offered => "Always allowed",
+            KeyCode::Char('n' | 'N') | KeyCode::Esc => "Denied",
+            _ => return KeyResult::continue_running(),
+        };
+        if let Some(approval) = self.pending_approval.take() {
+            let event = match key.code {
+                KeyCode::Char('y' | 'Y') => UiEvent::Approve(approval.id),
+                KeyCode::Char('a' | 'A') => UiEvent::ApproveAlways(approval.id),
+                _ => UiEvent::Deny(approval.id),
+            };
+            if let Some(tx) = &self.event_tx {
+                let _ = tx.try_send(event);
             }
-            KeyCode::Char('n' | 'N') => {
-                if let Some(approval) = self.pending_approval.take() {
-                    if let Some(tx) = &self.event_tx {
-                        let _ = tx.try_send(UiEvent::Deny(approval.id));
-                    }
-                    self.state = AppState::Idle;
-                    self.status = "Denied".to_string();
-                }
-            }
-            KeyCode::Esc => {
-                self.pending_approval = None;
-                self.state = AppState::Idle;
-            }
-            _ => {}
+            self.status = format!("{answer}, continuing...");
         }
+        self.state = AppState::Processing;
         KeyResult::continue_running()
     }
 
@@ -264,6 +270,9 @@ impl App {
         if self.handle_pending_delete(key) || self.handle_pending_kill(key) {
             return KeyResult::continue_running();
         }
+        if let Some(result) = self.handle_mention_menu_key(key) {
+            return result;
+        }
         if let Some(result) = self.handle_slash_menu_key(key) {
             return result;
         }
@@ -274,12 +283,26 @@ impl App {
             self.focus = self.next_panel_focus();
             return KeyResult::continue_running();
         }
+        if key.code == KeyCode::BackTab {
+            if let Some(tx) = &self.event_tx {
+                let _ = tx.try_send(UiEvent::CycleMode(self.active_agent_id.clone()));
+            }
+            return KeyResult::continue_running();
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('n') {
             self.prompt_new_project();
             return KeyResult::continue_running();
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
             self.toggle_all_activity();
+            return KeyResult::continue_running();
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('v') {
+            self.request_paste();
+            return KeyResult::continue_running();
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') {
+            self.edit_input_in_editor();
             return KeyResult::continue_running();
         }
         if key.modifiers.contains(KeyModifiers::ALT) {
@@ -314,6 +337,14 @@ impl App {
             && key.code == KeyCode::Char(' ')
         {
             self.toggle_selected_project();
+            return KeyResult::continue_running();
+        }
+        if self.focus == PanelFocus::Chat
+            && self.input.is_empty()
+            && key.modifiers.contains(KeyModifiers::SHIFT)
+            && matches!(key.code, KeyCode::Left | KeyCode::Right)
+        {
+            self.toggle_chat_tab();
             return KeyResult::continue_running();
         }
         if self.focus == PanelFocus::Sandbox && self.input.is_empty() && !word_motion {
@@ -363,9 +394,8 @@ impl App {
         }
     }
 
-    /// `$` on an empty line switches to the terminal; Esc, or Backspace on
-    /// an empty line, switches back to chat. Each pane opens at its bottom.
-    /// Returns whether the key was used.
+    /// `$` on an empty line opens the TERMINAL tab; Esc, or Backspace on an
+    /// empty line, goes back to CHAT. Returns whether the key was used.
     fn toggle_terminal_mode(&mut self, key: KeyEvent) -> bool {
         let entering = !self.terminal_mode
             && key.code == KeyCode::Char('$')
@@ -379,15 +409,17 @@ impl App {
         if !(entering || leaving) {
             return false;
         }
-        self.terminal_mode = entering;
-        self.history().reset();
-        self.scroll_chat_to_bottom();
+        self.show_chat_tab(if entering {
+            ChatTab::Terminal
+        } else {
+            ChatTab::Chat
+        });
         true
     }
 
     /// History for the current prompt: commands at the terminal prompt,
     /// messages otherwise.
-    fn history(&mut self) -> &mut InputHistory {
+    pub(super) fn history(&mut self) -> &mut InputHistory {
         if self.terminal_mode {
             &mut self.command_history
         } else {
@@ -442,7 +474,7 @@ impl App {
         }
         match key.code {
             KeyCode::Enter => {
-                if !self.input.is_empty() && self.state != AppState::Processing {
+                if !self.input.is_empty() {
                     return self.submit_input();
                 }
             }
@@ -581,9 +613,20 @@ impl App {
         self.history().add(&text);
         self.scroll_chat_to_bottom();
 
+        let busy = self.state == AppState::Processing;
+        let agent_id = self.active_agent_id.clone();
         if self.terminal_mode {
             let command = text.trim().to_string();
             if command.is_empty() {
+                return KeyResult::continue_running();
+            }
+            if busy {
+                self.input = text;
+                self.cursor_pos = self.input.len();
+                self.notification = Some((
+                    "Wait for this agent's turn to finish before running a command".to_string(),
+                    NotificationType::Warning,
+                ));
                 return KeyResult::continue_running();
             }
             self.add_message(crate::components::Message::shell(&command));
@@ -591,7 +634,11 @@ impl App {
             self.status = "Running...".to_string();
             let cols = self.command_columns();
             if let Some(tx) = &self.event_tx {
-                let _ = tx.try_send(UiEvent::RunCommand { command, cols });
+                let _ = tx.try_send(UiEvent::RunCommand {
+                    agent_id,
+                    command,
+                    cols,
+                });
             }
             return KeyResult::continue_running();
         }
@@ -599,16 +646,38 @@ impl App {
         if text.starts_with('/') {
             return self.handle_command(&text);
         }
+        let images = self.take_images(&text);
 
-        self.add_message(crate::components::Message::new(
-            crate::components::MessageRole::User,
-            &text,
-        ));
-        self.state = AppState::Processing;
-        self.status = "Thinking...".to_string();
+        // A busy agent reads the message before its next step, or once its
+        // current work ends; the chat shows it at that point, so it lands
+        // in order with the reply still streaming.
+        if busy && !images.is_empty() {
+            // A running turn only takes text, so images wait for the next.
+            self.notification = Some((
+                "Queued: the agent gets the images when its current work ends".to_string(),
+                NotificationType::Success,
+            ));
+        } else if busy {
+            self.notification = Some((
+                "Sent: the agent reads it before its next step".to_string(),
+                NotificationType::Success,
+            ));
+        } else {
+            self.add_message(crate::components::Message::new(
+                crate::components::MessageRole::User,
+                &text,
+            ));
+            self.state = AppState::Processing;
+            self.status = "Thinking...".to_string();
+        }
 
         if let Some(tx) = &self.event_tx {
-            let _ = tx.try_send(UiEvent::UserMessage(text));
+            let _ = tx.try_send(UiEvent::UserMessage {
+                agent_id,
+                text,
+                shown: !busy,
+                images,
+            });
         }
         KeyResult::continue_running()
     }

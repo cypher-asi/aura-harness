@@ -45,7 +45,7 @@ pub fn tool_mode_class(tool: &str) -> Option<ToolModeClass> {
     use ToolModeClass as C;
     let class = match tool {
         "read_file" | "list_files" | "stat_file" | "find_files" | "search_code"
-        | "get_agent_state" | "list_agents" => C::Read,
+        | "get_agent_state" | "list_agents" | "todo_write" | "job_output" => C::Read,
 
         "write_file" | "edit_file" | "delete_file" => C::FileWrite,
 
@@ -53,11 +53,12 @@ pub fn tool_mode_class(tool: &str) -> Option<ToolModeClass> {
         | "update_spec"
         | "update_spec_section"
         | "append_to_spec"
-        | "delete_spec" => C::MarkdownDocument,
+        | "delete_spec"
+        | "create_plan" => C::MarkdownDocument,
 
         "git_commit" => C::WorkspaceMutation,
 
-        "run_command" => C::Subprocess,
+        "run_command" | "job_kill" => C::Subprocess,
 
         "git_push"
         | "git_commit_push"
@@ -91,7 +92,11 @@ pub fn tool_mode_class(tool: &str) -> Option<ToolModeClass> {
         | "orbit_list_prs"
         | "get_task_context"
         | "task_done"
-        | "submit_plan" => C::Invoke,
+        | "submit_plan"
+        // Read-only lookups on the public web: Plan and Ask may research,
+        // Debug stays offline.
+        | "web_search"
+        | "web_fetch" => C::Invoke,
 
         _ => return None,
     };
@@ -133,7 +138,7 @@ impl Policy {
     /// Run the session mode gate for `tool_call`. `None` means the
     /// mode permits the call and later stages decide.
     pub(super) fn check_mode(&self, tool_call: &ToolCall) -> Option<PolicyVerdict> {
-        let mode = self.config.mode;
+        let mode = self.mode();
         if mode == AgentMode::Agent {
             return None;
         }

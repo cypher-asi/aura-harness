@@ -46,8 +46,10 @@ It takes the terminal's `--dir`, `--provider`, `--mode`, `--theme`, `--verbose` 
 | Keys (Cmd on macOS) | Action |
 |---|---|
 | Ctrl+Shift+C | Copy the selection |
-| Ctrl+V, Ctrl+Shift+V, Shift+Insert | Paste into the input (line breaks become spaces) |
+| Ctrl+V, Ctrl+Shift+V, Shift+Insert | Paste into the input, as in the terminal: an image, or a path to one, is attached |
 | Ctrl+= / Ctrl+- / Ctrl+0 | Larger / smaller / default text |
+
+Turn alerts follow the terminal's settings; where the terminal rings the bell, the window asks for attention instead.
 
 Text is set in Geist Mono, bundled (SIL Open Font License, [`assets/fonts/OFL.txt`](../crates/aura-desktop/assets/fonts/OFL.txt)).
 

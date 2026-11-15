@@ -85,7 +85,6 @@ pub struct TerminalAgents {
     host: AgentHost,
     scheduler: Arc<Scheduler>,
     factory: Arc<dyn ChildKernelFactory>,
-    mode: AgentMode,
 }
 
 impl TerminalAgents {
@@ -94,13 +93,11 @@ impl TerminalAgents {
         host: AgentHost,
         scheduler: Arc<Scheduler>,
         factory: Arc<dyn ChildKernelFactory>,
-        mode: AgentMode,
     ) -> Self {
         Self {
             host,
             scheduler,
             factory,
-            mode,
         }
     }
 
@@ -116,14 +113,16 @@ impl TerminalAgents {
     }
 
     /// Make `agent` a root that can spawn agents working in `folder` on
-    /// `config`'s model. Called before each of its turns, so a model
-    /// change reaches the agents it spawns next.
+    /// `config`'s model, in session `mode`, which they inherit. Called
+    /// before each of its turns, so a model or mode change reaches the
+    /// agents it spawns next.
     pub fn register(
         &self,
         agent: AgentId,
         name: &str,
         folder: PathBuf,
         config: &AgentLoopConfig,
+        mode: AgentMode,
         notices: NoticeSender,
     ) {
         self.scheduler
@@ -136,7 +135,7 @@ impl TerminalAgents {
             name: name.to_string(),
             permissions: AgentPermissions::full_access(),
             tool_permissions: None,
-            mode: self.mode,
+            mode,
             model: config.model.clone(),
             env,
             inbox: Some(Arc::new(TerminalInbox { notices })),

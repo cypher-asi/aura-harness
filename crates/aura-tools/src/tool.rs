@@ -14,7 +14,7 @@ use aura_core_types::{
     UserToolDefaults,
 };
 use aura_exec_traits::SpawnHook;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Context provided to tools during execution.
@@ -98,8 +98,8 @@ pub struct ToolContext {
     pub current_tool_use_id: Option<String>,
     /// Kernel action id of the tool call currently being executed.
     pub current_action_id: Option<ActionId>,
-    /// Takes over commands `run_command` starts with `background: true`.
-    /// `None` makes such calls fail.
+    /// Takes over commands `run_command` starts with `background: true`,
+    /// and backs the job tools. `None` makes such calls fail.
     pub background_processes: Option<Arc<dyn BackgroundProcessHook>>,
 }
 
@@ -175,6 +175,23 @@ pub trait SubagentDispatchHook: Send + Sync {
     async fn dispatch(&self, request: SubagentDispatchRequest) -> Result<SubagentResult, String>;
 }
 
+/// Told about each file a tool call is about to change and again once the
+/// call is done, so a surface can checkpoint the file and show the change.
+///
+/// Only tools that name the file they change (see [`Tool::changed_path`])
+/// are reported; `run_command` and other tools with side effects the
+/// executor can't see are not.
+#[async_trait]
+pub trait FileChangeHook: Send + Sync {
+    /// `path` (resolved inside the sandbox) is about to be changed by the
+    /// call `tool_use_id`.
+    async fn before_change(&self, path: &Path, tool_use_id: Option<&str>);
+
+    /// The call that [`Self::before_change`] announced is done; `succeeded`
+    /// is whether the tool reported success.
+    async fn after_change(&self, path: &Path, tool_use_id: Option<&str>, succeeded: bool);
+}
+
 /// A command `run_command` started in the background, with its output
 /// going to `log_path`.
 pub struct BackgroundProcess {
@@ -199,6 +216,36 @@ pub trait BackgroundProcessHook: Send + Sync {
     /// # Errors
     /// When the process can't be tracked, after killing it.
     fn adopt(&self, agent_id: AgentId, process: BackgroundProcess) -> Result<(), String>;
+
+    /// Background commands still running, of `agent_id` or of every agent.
+    fn running(&self, agent_id: Option<AgentId>) -> Vec<BackgroundJob> {
+        let _ = agent_id;
+        Vec::new()
+    }
+
+    /// Stop the running background command `id` (its process id in hex)
+    /// and every process it started. Its owner hears that it was killed.
+    ///
+    /// # Errors
+    /// When no such command is running or it can't be stopped.
+    fn kill(&self, id: &str) -> Result<(), String> {
+        Err(format!("background command {id} can't be stopped here"))
+    }
+}
+
+/// A running background command, as [`BackgroundProcessHook::running`]
+/// lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackgroundJob {
+    /// Process id in hex, as `run_command` reported it
+    pub id: String,
+    pub agent_id: AgentId,
+    /// The command as shown to the user
+    pub command: String,
+    pub pid: Option<u32>,
+    pub log_path: PathBuf,
+    /// When it started, in Unix milliseconds
+    pub started_ms: u64,
 }
 
 impl ToolContext {
@@ -261,6 +308,18 @@ pub trait Tool: Send + Sync {
     fn required_capabilities(&self) -> Vec<Capability> {
         Vec::new()
     }
+
+    /// The file a call with `args` writes, renames or deletes, as the model
+    /// gave it. Tools that change files return it so the executor can tell
+    /// a [`FileChangeHook`] before the change; the default is `None`.
+    fn changed_path<'a>(&self, _args: &'a serde_json::Value) -> Option<&'a str> {
+        None
+    }
+}
+
+/// The `path` argument of a file-changing tool call.
+pub(crate) fn path_arg(args: &serde_json::Value) -> Option<&str> {
+    args.get("path").and_then(serde_json::Value::as_str)
 }
 
 /// Returns all built-in tool instances.
@@ -283,5 +342,7 @@ pub fn builtin_tools() -> Vec<Box<dyn Tool>> {
         Box::new(crate::git_tool::GitCommitTool),
         Box::new(crate::git_tool::GitPushTool),
         Box::new(crate::git_tool::GitCommitPushTool),
+        Box::new(crate::plan_tools::CreatePlanTool),
+        Box::new(crate::todo::TodoWriteTool),
     ]
 }

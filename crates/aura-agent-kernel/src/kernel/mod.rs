@@ -41,6 +41,8 @@ use aura_store_snapshot::{NoopSnapshotStore, SnapshotStore};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+#[cfg(test)]
+mod mode_switch_tests;
 mod process;
 mod reason;
 mod stream;

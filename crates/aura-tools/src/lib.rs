@@ -38,11 +38,15 @@ pub(crate) mod fs_tools;
 pub mod git_tool;
 pub mod http_tool;
 pub mod intent_classifier;
+pub mod jobs;
 pub mod permissions;
+pub mod plan_tools;
 pub mod resolver;
 mod sandbox;
 pub mod schema;
+pub mod todo;
 pub(crate) mod tool;
+pub mod web;
 
 pub use catalog::ToolCatalog;
 pub use computer_tool::{computer_tool_definition, ComputerTool, COMPUTER_TOOL_NAME};
@@ -66,8 +70,8 @@ pub use resolver::ToolResolver;
 pub use sandbox::Sandbox;
 pub use schema::{from_claude_json, to_claude_json, SchemaError};
 pub use tool::{
-    AgentControlHook, AgentReadHook, BackgroundProcess, BackgroundProcessHook, SubagentDispatchHook,
-    Tool, ToolContext,
+    AgentControlHook, AgentReadHook, BackgroundJob, BackgroundProcess, BackgroundProcessHook,
+    FileChangeHook, SubagentDispatchHook, Tool, ToolContext,
 };
 
 /// Command execution policy for `run_command`.

@@ -51,7 +51,6 @@ pub enum Message {
     Mouse(mouse::Event),
     Resized(Size),
     Focused(bool),
-    Paste(Option<String>),
     Copied(usize),
     EditorClosed(PathBuf, Result<(), String>),
 }
@@ -116,7 +115,9 @@ impl App {
         options: &Options,
         launched: Instant,
     ) -> (Self, Task<Message>) {
-        let mut tui = aura_terminal::App::new().with_event_sender(handles.events);
+        let mut tui = aura_terminal::App::new()
+            .with_event_sender(handles.events)
+            .with_alert_settings(aura_terminal::AlertSettings::from_env());
         if options.verbose {
             tui.set_verbose(true);
         }
@@ -217,6 +218,7 @@ impl App {
                 self.perf.frame(now);
                 self.tui.tick();
                 self.poll_watch(now);
+                return self.raise_alerts();
             }
             Message::Key(event) => return self.key(event),
             Message::Mouse(event) => self.mouse(event),
@@ -228,12 +230,6 @@ impl App {
                 self.focused = focused;
                 self.restart_blink();
             }
-            Message::Paste(Some(text)) => {
-                for key in input::paste_events(&text) {
-                    let _ = self.tui.handle_key(key);
-                }
-            }
-            Message::Paste(None) => {}
             Message::Copied(chars) => self.tui.notify_copied(chars, &Ok(())),
             Message::EditorClosed(path, result) => {
                 self.tui
@@ -286,8 +282,11 @@ impl App {
             m.control()
         };
         if !chord {
-            return (m.shift() && matches!(key.as_ref(), Key::Named(Named::Insert)))
-                .then(|| iced::clipboard::read().map(Message::Paste));
+            if m.shift() && matches!(key.as_ref(), Key::Named(Named::Insert)) {
+                self.tui.paste_from_clipboard();
+                return Some(Task::none());
+            }
+            return None;
         }
         let size = self.metrics.font_size;
         let zoom = |size: f32| Some(size.clamp(theme::MIN_FONT_SIZE, theme::MAX_FONT_SIZE));
@@ -295,7 +294,11 @@ impl App {
             Key::Character("=" | "+") => zoom(size + 1.0),
             Key::Character("-" | "_") => zoom(size - 1.0),
             Key::Character("0" | ")") => Some(theme::DEFAULT_FONT_SIZE),
-            Key::Character("v" | "V") => return Some(iced::clipboard::read().map(Message::Paste)),
+            // Plain Ctrl+V reaches the UI, which pastes (images too) itself.
+            Key::Character("v" | "V") if m.shift() || cfg!(target_os = "macos") => {
+                self.tui.paste_from_clipboard();
+                return Some(Task::none());
+            }
             // Ctrl+C on its own interrupts the agent, as in a terminal.
             Key::Character("c" | "C") if m.shift() || cfg!(target_os = "macos") => {
                 self.tui.request_copy();
@@ -319,7 +322,7 @@ impl App {
                     if self.tui.request_copy() {
                         return false;
                     }
-                    if !self.tui.is_processing() {
+                    if !self.tui.is_busy() {
                         return true;
                     }
                     self.tui.cancel();
@@ -404,8 +407,33 @@ impl App {
         });
     }
 
+    /// Ring for what the UI wants noticed: a desktop notification when
+    /// those are on, and the window asks for attention in place of the
+    /// terminal bell.
+    fn raise_alerts(&mut self) -> Task<Message> {
+        let alerts = self.tui.take_alerts();
+        if alerts.is_empty() {
+            return Task::none();
+        }
+        let settings = *self.tui.alert_settings();
+        if settings.desktop {
+            for alert in &alerts {
+                aura_terminal::alerts::desktop_notify(alert);
+            }
+        }
+        if !settings.bell {
+            return Task::none();
+        }
+        window::latest().and_then(|id| {
+            window::request_user_attention(id, Some(window::UserAttention::Informational))
+        })
+    }
+
     /// Render the UI into the grid, then act on what the frame asked for.
     fn refresh(&mut self) -> Task<Message> {
+        if self.tui.take_paste_request() {
+            self.tui.paste_from_clipboard();
+        }
         let (cols, rows) = self.metrics.grid(self.window);
         let area = self.terminal.backend().buffer().area;
         if (area.width, area.height) != (cols, rows) {

@@ -86,20 +86,6 @@ pub fn key_events(key: &Key, text: Option<&str>, m: Modifiers) -> Vec<KeyEvent> 
     vec![KeyEvent::new(code, mods)]
 }
 
-/// Pasted text as typed characters. The input line is single-line, so
-/// line breaks and tabs become spaces (a CRLF pair is one space).
-pub fn paste_events(text: &str) -> Vec<KeyEvent> {
-    text.replace("\r\n", "\n")
-        .chars()
-        .filter_map(|c| match c {
-            '\n' | '\r' | '\t' => Some(' '),
-            c if c.is_control() => None,
-            c => Some(c),
-        })
-        .map(|c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,17 +125,5 @@ mod tests {
             vec![(KeyCode::Char(' '), KeyModifiers::NONE)]
         );
         assert!(press(Key::Named(Named::Shift), None, Modifiers::SHIFT).is_empty());
-    }
-
-    #[test]
-    fn paste_flattens_lines() {
-        let codes: String = paste_events("a\r\nb\tc\u{7}")
-            .into_iter()
-            .map(|e| match e.code {
-                KeyCode::Char(c) => c,
-                _ => '?',
-            })
-            .collect();
-        assert_eq!(codes, "a b c");
     }
 }

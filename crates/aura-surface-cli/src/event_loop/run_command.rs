@@ -9,7 +9,9 @@
 //! call and its result (without ANSI styling) are then appended to the
 //! conversation as a tool-use / tool-result pair.
 
-use super::{drain_stale_inbox, LoopState};
+use super::agent_events::AgentUi;
+use super::agents::AgentSession;
+use super::turns::drain_stale_inbox;
 use aura_agent_kernel::{Kernel, KernelError, ProcessResult};
 use aura_core_types::{ToolProposal, Transaction};
 use aura_model_reasoner::{ContentBlock, Message, Role, ToolResultContent};
@@ -32,7 +34,7 @@ pub(crate) fn is_user_tool_use(tool_use_id: &str) -> bool {
 }
 
 /// Characters that need a shell to interpret.
-const SHELL_SYNTAX: &[char] = &[
+pub(crate) const SHELL_SYNTAX: &[char] = &[
     '|', '&', ';', '<', '>', '(', ')', '$', '`', '\\', '"', '\'', '*', '?', '[', ']', '{', '}',
     '~', '#', '=', '%', '\n',
 ];
@@ -143,25 +145,28 @@ pub(crate) fn model_content(content: &str) -> String {
     envelope.to_string()
 }
 
-pub(super) async fn handle_run_command(state: &mut LoopState<'_>, command: &str, cols: u16) {
+/// Run `command`, typed in `session`'s chat, in a terminal `cols` wide.
+pub(super) async fn run_user_command(
+    session: &mut AgentSession,
+    command: &str,
+    cols: u16,
+    ui: &AgentUi,
+) {
     info!(command = %command, cols, "Running user command");
 
-    drain_stale_inbox(state).await;
+    drain_stale_inbox(session).await;
 
     let proposal = user_command_proposal(command, Some(cols));
-    let kernel = state.session.kernel.clone();
-    let (_, result) = match process_user_proposal(&kernel, &proposal).await {
+    let (_, result) = match process_user_proposal(&session.kernel, &proposal).await {
         Ok(processed) => processed,
         Err(e) => {
             error!(error = %e, "Failed to process user command via kernel");
-            let _ = state
-                .commands
-                .send(UiCommand::CommandFinished {
-                    output: format!("aura: kernel error: {e}\n"),
-                    exit_code: None,
-                })
-                .await;
-            let _ = state.commands.send(UiCommand::Complete).await;
+            ui.send(UiCommand::CommandFinished {
+                output: format!("aura: kernel error: {e}\n"),
+                exit_code: None,
+            })
+            .await;
+            ui.send(UiCommand::Complete).await;
             return;
         }
     };
@@ -172,12 +177,10 @@ pub(super) async fn handle_run_command(state: &mut LoopState<'_>, command: &str,
     );
 
     let (output, exit_code) = terminal_output(&content, is_error);
-    let _ = state
-        .commands
-        .send(UiCommand::CommandFinished { output, exit_code })
+    ui.send(UiCommand::CommandFinished { output, exit_code })
         .await;
 
-    state.session.messages.push(Message::new(
+    session.messages.push(Message::new(
         Role::Assistant,
         vec![ContentBlock::tool_use(
             proposal.tool_use_id.clone(),
@@ -185,13 +188,13 @@ pub(super) async fn handle_run_command(state: &mut LoopState<'_>, command: &str,
             proposal.args,
         )],
     ));
-    state.session.messages.push(Message::tool_results(vec![(
+    session.messages.push(Message::tool_results(vec![(
         proposal.tool_use_id,
         ToolResultContent::text(model_content(&content)),
         is_error,
     )]));
 
-    let _ = state.commands.send(UiCommand::Complete).await;
+    ui.send(UiCommand::Complete).await;
 }
 
 #[cfg(test)]

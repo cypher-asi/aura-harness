@@ -14,11 +14,16 @@ struct Fixture {
     commands: mpsc::Receiver<UiCommand>,
     _data: TempDir,
     _db: TempDir,
-    _workspace: TempDir,
+    workspace: TempDir,
 }
 
 /// A hub over seeded permanent agents whose kernels all answer `reply`.
 fn fixture(reply: &str) -> Fixture {
+    slow_fixture(reply, 0)
+}
+
+/// [`fixture`] whose model takes `latency_ms` to answer.
+fn slow_fixture(reply: &str, latency_ms: u64) -> Fixture {
     let data = TempDir::new().unwrap();
     let db = TempDir::new().unwrap();
     let workspace = TempDir::new().unwrap();
@@ -42,6 +47,9 @@ fn fixture(reply: &str) -> Fixture {
                 .collect(),
         },
         commands: tx,
+        long_run: crate::long_run::LongRunSettings::default(),
+        mode: aura_terminal::PermissionMode::Default,
+        instructions: ProjectInstructions::only_in(workspace.path()),
         processes: ProcessTable::without_os_scan(None, None),
         agents: None,
         record_panel: Default::default(),
@@ -56,7 +64,7 @@ fn fixture(reply: &str) -> Fixture {
             store,
             Box::new(move |agent_id, _parent_chain, folder| {
                 let provider: Arc<dyn ModelProvider + Send + Sync> =
-                    Arc::new(MockProvider::simple_response(reply.clone()));
+                    Arc::new(MockProvider::simple_response(reply.clone()).with_latency(latency_ms));
                 Ok(Kernel::new(
                     Arc::clone(&kernel_store) as Arc<dyn aura_store_db::Store>,
                     provider,
@@ -77,7 +85,7 @@ fn fixture(reply: &str) -> Fixture {
         commands,
         _data: data,
         _db: db,
-        _workspace: workspace,
+        workspace,
     }
 }
 
@@ -132,11 +140,12 @@ fn no_task_tool_without_permanent_agents() {
 #[test]
 fn turn_applies_definition_rules_and_tools() {
     let fixture = fixture("unused");
+    let workspace = fixture.workspace.path();
 
-    let (_, plain_tools) = fixture.hub.turn(None);
+    let (_, plain_tools) = fixture.hub.turn(None, workspace);
     assert!(plain_tools.iter().any(|t| t.name == TASK_TOOL_NAME));
 
-    let (config, tools) = fixture.hub.turn(Some("explorer"));
+    let (config, tools) = fixture.hub.turn(Some("explorer"), workspace);
     assert!(config
         .system_prompt
         .contains("<agent_definition name=\"explorer\">"));
@@ -144,10 +153,38 @@ fn turn_applies_definition_rules_and_tools() {
     assert!(tools.iter().any(|t| t.name == "read_file"));
     assert!(tools.iter().all(|t| t.name != "write_file"));
 
-    let (config, tools) = fixture.hub.turn(Some("ui-designer"));
+    let (config, tools) = fixture.hub.turn(Some("ui-designer"), workspace);
     assert!(config.system_prompt.contains("--accent-ink: #1a1a1a;"));
     assert!(tools.iter().any(|t| t.name == "write_file"));
     assert!(tools.iter().all(|t| t.name != TASK_TOOL_NAME));
+}
+
+#[test]
+fn turn_puts_project_instructions_in_the_stable_prompt_prefix() {
+    let fixture = fixture("unused");
+    let workspace = fixture.workspace.path();
+    let base = lock(&fixture.hub.base).config.system_prompt.clone();
+    let (config, _) = fixture.hub.turn(Some("explorer"), workspace);
+    assert!(!config.system_prompt.contains("<project_instructions>"));
+
+    std::fs::write(
+        workspace.join("AGENTS.md"),
+        "Run `make check` before committing.",
+    )
+    .unwrap();
+    let (config, _) = fixture.hub.turn(Some("explorer"), workspace);
+    let prompt = config.system_prompt;
+    let instructions = prompt.find("<project_instructions>").unwrap();
+    let definition = prompt.find("<agent_definition").unwrap();
+    assert!(prompt.starts_with(&format!("{base}\n\n<project_instructions>")));
+    assert!(instructions < definition);
+    assert!(prompt.contains("Run `make check` before committing."));
+
+    let (again, _) = fixture.hub.turn(Some("explorer"), workspace);
+    assert_eq!(
+        again.system_prompt, prompt,
+        "unchanged files keep the prompt cacheable"
+    );
 }
 
 #[tokio::test]
@@ -203,12 +240,63 @@ async fn spawn_runs_an_instance_under_its_parent() {
     assert!(!child_row.running);
 
     let mut saw_running = false;
+    let mut child_chat = Vec::new();
     while let Ok(command) = fixture.commands.try_recv() {
-        if let UiCommand::SetAgents(rows) = command {
-            saw_running |= rows.iter().any(|r| r.name == "reviewer #1" && r.running);
+        match command {
+            UiCommand::SetAgents(rows) => {
+                saw_running |= rows.iter().any(|r| r.name == "reviewer #1" && r.running);
+            }
+            UiCommand::ForAgent { agent_id, command } if agent_id == child_id.to_hex() => {
+                child_chat.push(*command);
+            }
+            _ => {}
         }
     }
     assert!(saw_running);
+    assert!(matches!(
+        child_chat.first(),
+        Some(UiCommand::SetInstructions(_))
+    ));
+    assert!(matches!(
+        child_chat.get(1),
+        Some(UiCommand::TurnStarted { prompt: Some(p) }) if p == "Review the diff"
+    ));
+    assert!(matches!(child_chat.last(), Some(UiCommand::Complete)));
+}
+
+#[tokio::test]
+async fn cancelling_a_spawn_fails_its_task() {
+    let fixture = slow_fixture("unused", 60_000);
+    let parent = lock(&fixture.hub.registry).active().agent_id();
+    let hub = Arc::clone(&fixture.hub);
+
+    let dispatch = tokio::spawn({
+        let dispatcher = Arc::clone(&fixture.dispatcher);
+        async move {
+            dispatcher
+                .dispatch(request(parent, "reviewer", "Review it"))
+                .await
+                .unwrap()
+        }
+    });
+    let child = loop {
+        let running = lock(&hub.running).keys().next().copied();
+        if let Some(child) = running {
+            break child;
+        }
+        tokio::task::yield_now().await;
+    };
+    assert!(hub.cancel(child));
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(10), dispatch)
+        .await
+        .expect("cancel stops the spawn")
+        .unwrap();
+    assert!(
+        matches!(&result.exit, SubagentExit::Failed { reason } if reason == "cancelled by the user")
+    );
+    assert!(!hub.is_running(child));
+    assert_eq!(hub.take_finished().len(), 1);
 }
 
 #[tokio::test]

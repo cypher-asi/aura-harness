@@ -27,5 +27,50 @@ Options:
           - ask:   Read-only
           - debug: Read + sandboxed probes only
 
+  -p, --print [<PROMPT>]
+          Run one prompt without the terminal UI, print the result, and exit. `-p -`, or `-p` with no prompt, reads the prompt from stdin; piped stdin is appended to a prompt given here
+
   -h, --help
           Print help (see a summary with '-h')
+
+Options for -p:
+      --output-format <FORMAT>
+          What `-p` prints: the final reply (`text`), one result object (`json`), or one event per line ending with the result (`stream-json`)
+
+          Possible values:
+          - text:        The final reply as plain text
+          - json:        One JSON object describing the run
+          - stream-json: Newline-delimited JSON events, ending with the result object
+
+      --resume <SESSION_ID>
+          Continue the saved session with this id (the `session_id` of an earlier run)
+
+  -c, --continue
+          Continue the most recent `aura -p` session
+
+      --allowed-tools <TOOLS>...
+          Only these tools may run (comma-separated); every other tool is denied
+
+      --disallowed-tools <TOOLS>...
+          These tools may not run (comma-separated)
+
+      --max-turns <N>
+          Stop after this many model calls
+
+      --max-time <DURATION>
+          Stop after this long: `90s`, `45m`, `2h`, or a bare number of minutes. Overrides `AURA_TUI_TURN_TIMEOUT`
+
+      --max-cost-usd <USD>
+          Stop once model calls cost more than this many US dollars at API list prices. Overrides `AURA_TUI_MAX_TURN_COST_USD`
+
+  -d, --cwd <DIR>
+          Work in this directory instead of the current one
+
+      --model <MODEL>
+          Model for this run. Not saved as the `/model` choice
+
+      --provider <PROVIDER>
+          Model provider: `anthropic` (default; local, plan and aura-router models) or `mock`
+
+      --verbose
+          Log debug detail to stderr

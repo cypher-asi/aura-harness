@@ -3,10 +3,11 @@
 //! drawn as a group under one summary line (`Explored 4 files, 2 searches`).
 
 use super::command::wrap_spans;
+use super::diff::diff_stat_spans;
 use super::panels::format_elapsed;
 use super::text::{display_width, wrap_words};
 use crate::app::format::{file_name, format_tool_label, is_complete_json, parse_tool_args};
-use crate::components::{Activity, ThinkingStep, ToolStatus, ToolStep};
+use crate::components::{Activity, DiffView, ThinkingStep, ToolStatus, ToolStep};
 use crate::Theme;
 use ratatui::{
     style::{Modifier, Style},
@@ -326,6 +327,13 @@ impl Body {
         Line::from(vec![self.rule(theme), Span::styled(text, style)])
     }
 
+    /// `line` (already fitted to the body width) under the rule.
+    fn wrap_line(&self, line: Line<'static>, theme: &Theme) -> Line<'static> {
+        let mut spans = vec![self.rule(theme)];
+        spans.extend(line.spans);
+        Line::from(spans)
+    }
+
     fn push_wrapped(
         &self,
         lines: &mut Vec<Line<'static>>,
@@ -411,11 +419,13 @@ fn tool_lines(
     width: usize,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
-    let mut lines = vec![tool_header(step, marker, width, theme)];
+    let diff = tool_diff(step);
+    let mut lines = vec![tool_header(step, marker, width, diff.as_ref(), theme)];
     if !expanded {
         return lines;
     }
 
+    let muted = Style::default().fg(theme.colors.muted);
     if let Some(policy) = &step.policy {
         let color = if step.status == ToolStatus::Denied {
             theme.colors.warning
@@ -429,11 +439,23 @@ fn tool_lines(
             theme,
         );
     }
-    let args = pretty_args(&step.args);
-    if !args.is_empty() {
-        let style = Style::default().fg(theme.colors.muted);
-        for line in args.lines() {
-            body.push_wrapped(&mut lines, line, style, theme);
+    if let Some(view) = &diff {
+        body.push_wrapped(&mut lines, view.path(), muted, theme);
+        let diff_lines = view.styled_lines(theme, body.width);
+        let total = diff_lines.len();
+        for line in diff_lines.into_iter().take(MAX_RESULT_LINES) {
+            lines.push(body.wrap_line(line, theme));
+        }
+        if total > MAX_RESULT_LINES {
+            lines.push(body.line(
+                format!("… {} more lines", total - MAX_RESULT_LINES),
+                muted.add_modifier(Modifier::ITALIC),
+                theme,
+            ));
+        }
+    } else {
+        for line in pretty_args(&step.args).lines() {
+            body.push_wrapped(&mut lines, line, muted, theme);
         }
     }
 
@@ -445,7 +467,7 @@ fn tool_lines(
     if result.is_empty() {
         return lines;
     }
-    if !args.is_empty() {
+    if lines.len() > 1 {
         lines.push(body.line(String::new(), Style::default(), theme));
     }
     let style = Style::default().fg(
@@ -479,6 +501,7 @@ fn tool_header(
     step: &ToolStep,
     marker: Span<'static>,
     width: usize,
+    diff: Option<&DiffView>,
     theme: &Theme,
 ) -> Line<'static> {
     let (icon, icon_color) = match step.status {
@@ -487,7 +510,14 @@ fn tool_header(
         ToolStatus::Denied => ("⊘ ", theme.colors.warning),
     };
     let meta = tool_meta(step);
-    let used = display_width(&marker.content) + display_width(icon) + display_width(&meta);
+    let mut stat = Vec::new();
+    if let Some(view) = diff.filter(|v| !v.is_empty()) {
+        stat.push(Span::styled(" · ", Style::default().fg(theme.colors.muted)));
+        stat.extend(diff_stat_spans(view, theme));
+    }
+    let stat_width: usize = stat.iter().map(|s| display_width(&s.content)).sum();
+    let used =
+        display_width(&marker.content) + display_width(icon) + display_width(&meta) + stat_width;
     let label = format_tool_label(&step.name, &step.args);
     let label = label.lines().next().unwrap_or_default();
     let label = if label.is_empty() { &step.name } else { label };
@@ -498,8 +528,30 @@ fn tool_header(
         Span::styled(icon.to_string(), Style::default().fg(icon_color)),
     ];
     spans.extend(verb_spans(&label, theme));
+    spans.extend(stat);
     spans.push(Span::styled(meta, Style::default().fg(theme.colors.muted)));
     Line::from(spans)
+}
+
+/// What a file-changing call did to its file: the diff the harness sent
+/// once the call ran, else for `edit_file` the text it replaces against
+/// the replacement (also while the arguments stream in, and for calls
+/// restored from history). `None` for other calls and failed edits.
+fn tool_diff(step: &ToolStep) -> Option<DiffView> {
+    let args = parse_tool_args(&step.args);
+    let text = |key: &str| args.get(key).and_then(serde_json::Value::as_str);
+    let path = text("path").unwrap_or_default();
+    if let Some(diff) = &step.diff {
+        return Some(DiffView::from_unified(path, diff));
+    }
+    if step.name != "edit_file" || matches!(step.status, ToolStatus::Error | ToolStatus::Denied) {
+        return None;
+    }
+    Some(DiffView::from_texts(
+        path,
+        text("old_text")?,
+        text("new_text")?,
+    ))
 }
 
 /// ` · retrying (2/3) · 12s` while running, with ` · 14 KB` while a large
@@ -604,6 +656,7 @@ mod tests {
             retry: None,
             started: None,
             duration_ms: Some(300),
+            diff: None,
             policy: None,
         })
     }
@@ -767,6 +820,7 @@ mod tests {
             retry: Some((2, 3)),
             started: None,
             duration_ms: None,
+            diff: None,
             policy: None,
         });
         let lines = activity_lines(&activity, false, None, "⠋", 40, &Theme::default());

@@ -616,6 +616,100 @@ fn test_hovered_activity_header_keeps_status_color() {
 }
 
 #[test]
+fn test_edited_file_block_shows_its_diff() {
+    use crate::events::{ToolData, UiCommand};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::ShowTool(ToolData {
+        id: "t1".to_string(),
+        name: "write_file".to_string(),
+        args: r#"{"path":"src/lib.rs","content":"fn a() {}\nfn c() {}\n"}"#.to_string(),
+    }));
+    app.process_command(UiCommand::ToolDiff {
+        id: "t1".to_string(),
+        diff: "@@ -1,2 +1,2 @@\n fn a() {}\n-fn b() {}\n+fn c() {}\n".to_string(),
+    });
+    app.process_command(UiCommand::CompleteTool {
+        id: "t1".to_string(),
+        result: "Wrote 20 bytes to src/lib.rs".to_string(),
+        success: true,
+    });
+
+    let rows = render_rows(&mut app, 120);
+    let text = rows.join("\n");
+    assert!(text.contains("Wrote lib.rs · +1 -1"), "{text}");
+    assert!(!text.contains("fn c()"), "collapsed blocks hide the diff");
+
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('o'),
+        crossterm::event::KeyModifiers::CONTROL,
+    ));
+    let text = render_rows(&mut app, 120).join("\n");
+    assert!(text.contains("│ src/lib.rs"), "{text}");
+    assert!(text.contains("2 │ - fn b() {}"), "{text}");
+    assert!(text.contains("2 │ + fn c() {}"), "{text}");
+    assert!(
+        !text.contains("\"content\""),
+        "the diff replaces the raw args"
+    );
+}
+
+#[test]
+fn test_edit_restored_from_history_diffs_its_arguments() {
+    use crate::events::{ActivityData, MessageData, MessageRole, UiCommand};
+
+    let mut app = crate::App::new();
+    let mut data = MessageData::new(MessageRole::Assistant, "");
+    data.activity = Some(ActivityData::Tool {
+        id: "t1".to_string(),
+        name: "edit_file".to_string(),
+        args: r#"{"path":"a.rs","old_text":"let x = 1;","new_text":"let x = 2;"}"#.to_string(),
+        result: Some("Replaced 1 occurrence(s) in a.rs".to_string()),
+        is_error: false,
+        duration_ms: None,
+        policy: None,
+    });
+    app.process_command(UiCommand::LoadConversation(vec![data]));
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('o'),
+        crossterm::event::KeyModifiers::CONTROL,
+    ));
+
+    let text = render_rows(&mut app, 120).join("\n");
+    assert!(text.contains("Edited a.rs · +1 -1"), "{text}");
+    assert!(text.contains("│ - let x = 1;"), "{text}");
+    assert!(text.contains("│ + let x = 2;"), "{text}");
+}
+
+#[test]
+fn test_diff_message_shows_each_file() {
+    use crate::events::{FileDiffData, UiCommand};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::ShowDiff {
+        title: "Changes in turn 2 · fix it".to_string(),
+        files: vec![
+            FileDiffData {
+                path: "src/a.rs".to_string(),
+                diff: "@@ -3,1 +3,1 @@\n-old\n+new\n".to_string(),
+            },
+            FileDiffData {
+                path: "notes.md".to_string(),
+                diff: "@@ -0,0 +1,1 @@\n+hello\n".to_string(),
+            },
+        ],
+    });
+
+    let text = render_rows(&mut app, 120).join("\n");
+    assert!(text.contains("Changes in turn 2 · fix it"), "{text}");
+    assert!(text.contains("src/a.rs  +1 -1"), "{text}");
+    assert!(text.contains("3 │ - old"), "{text}");
+    assert!(text.contains("3 │ + new"), "{text}");
+    assert!(text.contains("notes.md  +1 -0"), "{text}");
+    assert!(text.contains("1 │ + hello"), "{text}");
+}
+
+#[test]
 fn test_chat_renders_assistant_markdown() {
     use crate::components::{Message, MessageRole};
 
@@ -948,6 +1042,26 @@ fn render_rows(app: &mut crate::App, width: u16) -> Vec<String> {
         .collect()
 }
 
+/// The chat panel's top border row and its left and right border columns,
+/// found from its CHAT | TERMINAL tab bar.
+fn chat_panel(rows: &[String]) -> (usize, usize, usize) {
+    const TABS: &str = "│ CHAT  TERMINAL ";
+    let tabs = rows
+        .iter()
+        .position(|r| r.contains(TABS))
+        .unwrap_or_else(|| panic!("no chat tab bar in:\n{}", rows.join("\n")));
+    let row = &rows[tabs];
+    let left = row[..row.find(TABS).unwrap()].chars().count();
+    let right = left
+        + 1
+        + rows[tabs - 1]
+            .chars()
+            .skip(left + 1)
+            .position(|c| c == '┐')
+            .unwrap();
+    (tabs - 1, left, right)
+}
+
 #[test]
 fn test_slash_menu_spans_chat_width_above_input() {
     let mut app = app_with_model(None);
@@ -955,15 +1069,7 @@ fn test_slash_menu_spans_chat_width_above_input() {
     let rows = render_rows(&mut app, 120);
     let n = rows.len();
 
-    let title = rows.iter().find(|r| r.contains("┌ CHAT ")).unwrap();
-    let chat_left = title[..title.find("┌ CHAT ").unwrap()].chars().count();
-    let chat_right = chat_left
-        + 1
-        + title
-            .chars()
-            .skip(chat_left + 1)
-            .position(|c| c == '┐')
-            .unwrap();
+    let (_, chat_left, chat_right) = chat_panel(&rows);
 
     let menu_bottom = &rows[n - 3];
     let chars: Vec<char> = menu_bottom.chars().collect();
@@ -982,6 +1088,80 @@ fn test_slash_menu_spans_chat_width_above_input() {
     type_text(&mut app, " ");
     let rows = render_rows(&mut app, 120);
     assert!(!rows.join("\n").contains(" COMMANDS "));
+}
+
+#[test]
+fn test_mention_picker_lists_files_above_the_input() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/main.rs"), "").unwrap();
+    let mut app = app_with_model(None);
+    app.process_command(crate::events::UiCommand::SetSandboxRoot(
+        dir.path().to_path_buf(),
+    ));
+    type_text(&mut app, "look at @ma");
+    let rows = render_rows(&mut app, 120);
+    let n = rows.len();
+    assert!(rows[n - 5].contains(" FILES "), "{:?}", rows[n - 5]);
+    assert!(rows[n - 4].contains("› @src/main.rs"), "{:?}", rows[n - 4]);
+    assert!(rows[n - 3].contains("Enter insert"), "{:?}", rows[n - 3]);
+
+    type_text(&mut app, " ");
+    let screen = render_rows(&mut app, 120).join("\n");
+    assert!(!screen.contains(" FILES "));
+}
+
+#[test]
+fn test_input_shows_image_chips_and_pasted_newlines() {
+    let theme = test_theme();
+    let mut app = app_with_model(None);
+    app.handle_paste("first\nsecond");
+    app.attach_image(b"\x89PNG\r\n\x1a\nimage").unwrap();
+    let rows = render_rows(&mut app, 120);
+    let input_row = &rows[rows.len() - 2];
+    assert!(
+        input_row.contains("first↵second [image 1]"),
+        "{input_row:?}"
+    );
+
+    let spans = super::input::prose_spans("see @src/a.rs and [image 2] me@x", &theme);
+    let picked: Vec<&str> = spans
+        .iter()
+        .filter(|s| s.style.fg == Some(theme.colors.primary))
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert_eq!(picked, ["@src/a.rs", "[image 2]"]);
+
+    submit(&mut app, "");
+    let screen = render_rows(&mut app, 120).join("\n");
+    assert!(screen.contains("[image 1]"), "the chat shows the chip");
+}
+
+#[test]
+fn test_help_lists_the_input_keys_without_clipping() {
+    let mut app = crate::App::new();
+    submit(&mut app, "/help");
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 50)).unwrap();
+    terminal
+        .draw(|frame| super::render(frame, &mut app, &test_theme()))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let screen: String = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                + "\n"
+        })
+        .collect();
+    for line in [
+        "@path      Attach a file or folder",
+        "Ctrl+V     Paste an image (or text)",
+        "Ctrl+G     Edit the input in $EDITOR",
+        "Press any key to close",
+    ] {
+        assert!(screen.contains(line), "{line:?} missing:\n{screen}");
+    }
 }
 
 #[test]
@@ -1084,14 +1264,7 @@ fn test_typing_starts_at_chat_left_border_with_prompt_under_agents() {
     let rows = render_rows(&mut app, 120);
     let input_row = &rows[rows.len() - 2];
 
-    let chat_border = rows
-        .iter()
-        .find_map(|r| {
-            r.find("┌ CHAT")
-                .or_else(|| r.find("╭ CHAT"))
-                .map(|i| r[..i].chars().count())
-        })
-        .expect("chat title row");
+    let (_, chat_border, _) = chat_panel(&rows);
     let chars: Vec<char> = input_row.chars().collect();
     let typing = chat_border + 1;
     let typed: String = chars[typing..typing + 5].iter().collect();
@@ -1135,30 +1308,27 @@ fn render_with_cursor(app: &mut crate::App, width: u16) -> (Vec<String>, (u16, u
 }
 
 #[test]
-fn test_terminal_types_at_a_prompt_inside_the_pane() {
+fn test_terminal_types_at_the_input_line_after_the_shell_prompt() {
     use crossterm::event::{KeyCode, KeyEvent};
 
     let mut app = app_with_model(None);
     type_text(&mut app, "$ls");
     let (rows, (x, y)) = render_with_cursor(&mut app, 120);
 
-    let title = rows.iter().position(|r| r.contains(" TERMINAL ")).unwrap();
-    let first = &rows[title + 1];
-    let prompt_at = first
-        .find("│ [n3o@arch-aura aura-harness]$ ls")
-        .map_or_else(
-            || panic!("prompt on the pane's first row: {first:?}"),
-            |i| first[..i].chars().count(),
-        );
-    let typed = prompt_at + 2 + "[n3o@arch-aura aura-harness]$ ls".len();
-    assert_eq!((usize::from(x), usize::from(y)), (typed, title + 1));
-
-    let input_row = &rows[rows.len() - 2];
-    assert!(input_row.contains("Esc returns to chat"), "{input_row:?}");
+    let input_y = rows.len() - 2;
+    let input_row = &rows[input_y];
+    let prompt = "[n3o@arch-aura aura-harness]$ ";
     assert!(
-        !input_row.contains("> ") && !input_row.contains("]$"),
+        input_row.starts_with(&format!(" {prompt}ls")),
         "{input_row:?}"
     );
+    assert_eq!(
+        (usize::from(x), usize::from(y)),
+        (1 + prompt.len() + 2, input_y)
+    );
+    let pane = rows[..input_y].join("\n");
+    assert!(!pane.contains("]$ "), "{pane}");
+    assert!(pane.contains("Esc returns to chat"), "{pane}");
 
     app.handle_key(KeyEvent::from(KeyCode::Backspace));
     app.handle_key(KeyEvent::from(KeyCode::Backspace));
@@ -1170,13 +1340,76 @@ fn test_terminal_types_at_a_prompt_inside_the_pane() {
 }
 
 #[test]
+fn test_terminal_input_is_highlighted_as_a_command() {
+    let theme = test_theme();
+    let mut app = app_with_model(None);
+    type_text(&mut app, "$ls -la");
+    let buffer = render_buffer(&mut app, 120);
+    let y = buffer.area.height - 2;
+
+    let (_, program) = find_cell(&buffer, y, "ls -la").unwrap();
+    assert_eq!(program.fg, Some(theme.colors.success));
+    let (_, flag) = find_cell(&buffer, y, "-la").unwrap();
+    assert_eq!(flag.fg, Some(theme.colors.warning));
+}
+
+#[test]
+fn test_chat_panel_tabs_switch_between_chat_and_terminal() {
+    use crate::app::ChatTab;
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
+
+    let mut app = app_with_model(None);
+    let rows = render_rows(&mut app, 120);
+    let (top, left, _) = chat_panel(&rows);
+    let tabs = top + 1;
+    let labels: String = rows[tabs].chars().skip(left + 1).take(16).collect();
+    assert_eq!(labels, " CHAT  TERMINAL ");
+
+    let active = |app: &mut crate::App, label: &str| {
+        let buffer = render_buffer(app, 120);
+        let y = u16::try_from(tabs).unwrap();
+        let (_, style) = find_cell(&buffer, y, label).unwrap();
+        style.add_modifier.contains(Modifier::BOLD)
+    };
+    assert!(active(&mut app, "CHAT  T"));
+    assert!(!active(&mut app, "TERMINAL"));
+
+    type_text(&mut app, "$");
+    assert_eq!(app.chat_tab(), ChatTab::Terminal);
+    assert!(active(&mut app, "TERMINAL"));
+    assert!(!active(&mut app, "CHAT  T"));
+
+    app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    assert_eq!(app.chat_tab(), ChatTab::Chat);
+    app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+    assert_eq!(app.chat_tab(), ChatTab::Terminal);
+
+    let chat_label = u16::try_from(left + 2).unwrap();
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        app.handle_mouse(MouseEvent {
+            kind,
+            column: chat_label,
+            row: u16::try_from(tabs).unwrap(),
+            modifiers: KeyModifiers::empty(),
+        });
+    }
+    assert_eq!(app.chat_tab(), ChatTab::Chat);
+    assert!(app.selection().is_none());
+}
+
+#[test]
 fn test_long_command_wraps_at_the_last_column() {
     let mut app = app_with_model(None);
     app.set_shell_prompt("$ ");
     submit_message(&mut app, "/swarm");
     let command = format!("echo {}", "x".repeat(200));
-    type_text(&mut app, &format!("${command}"));
-    let (rows, (x, y)) = render_with_cursor(&mut app, 120);
+    submit_message(&mut app, &format!("${command}"));
+    let rows = render_rows(&mut app, 120);
 
     let start = rows.iter().position(|r| r.contains("│ $ echo x")).unwrap();
     let chars: Vec<char> = rows[start].chars().collect();
@@ -1192,22 +1425,24 @@ fn test_long_command_wraps_at_the_last_column() {
         .map(|r| r.chars().skip(text_x).take(text_width).collect::<String>())
         .collect();
     assert_eq!(shown.trim_end(), format!("$ {command}"), "wrapped mid-word");
-    let typed = 2 + command.len();
-    assert_eq!(
-        (usize::from(x), usize::from(y)),
-        (text_x + typed % text_width, start + typed / text_width)
-    );
 }
 
 #[test]
-fn test_no_prompt_while_a_command_runs() {
+fn test_pane_shows_only_the_running_command_and_input_keeps_the_prompt() {
     let mut app = app_with_model(None);
     app.set_shell_prompt("[u@h d]$ ");
     submit_message(&mut app, "$sleep 5");
-    let screen = render_rows(&mut app, 120).join("\n");
-    assert_eq!(screen.matches("[u@h d]$ ").count(), 1, "{screen}");
-    assert!(screen.contains("[u@h d]$ sleep 5"), "{screen}");
-    assert!(!screen.contains("running sleep"), "{screen}");
+    let rows = render_rows(&mut app, 120);
+    let input_y = rows.len() - 2;
+    let pane = rows[..input_y].join("\n");
+    assert_eq!(pane.matches("[u@h d]$ ").count(), 1, "{pane}");
+    assert!(pane.contains("[u@h d]$ sleep 5"), "{pane}");
+    assert!(!pane.contains("running sleep"), "{pane}");
+    assert!(
+        rows[input_y].trim_start().starts_with("[u@h d]$ "),
+        "{:?}",
+        rows[input_y]
+    );
 }
 
 #[test]
@@ -1226,14 +1461,13 @@ fn test_terminal_pane_shows_only_commands_and_chat_hides_them() {
     app.process_command(UiCommand::Complete);
 
     let screen = render_rows(&mut app, 120).join("\n");
-    assert!(screen.contains(" TERMINAL "), "{screen}");
-    assert!(!screen.contains(" CHAT "), "{screen}");
+    assert_eq!(app.chat_tab(), crate::app::ChatTab::Terminal);
     assert!(screen.contains("echo hi"), "{screen}");
     assert!(!screen.contains("hello agent"), "{screen}");
 
     app.handle_key(KeyEvent::from(KeyCode::Esc));
     let screen = render_rows(&mut app, 120).join("\n");
-    assert!(screen.contains(" CHAT "), "{screen}");
+    assert_eq!(app.chat_tab(), crate::app::ChatTab::Chat);
     assert!(screen.contains("hello agent"), "{screen}");
     assert!(!screen.contains("echo hi"), "{screen}");
 
@@ -1872,7 +2106,10 @@ fn test_policy_decisions_fold_into_their_tool_calls() {
         decision: "denied by user.off".to_string(),
     });
     let rows = render_rows(&mut app, 120).join("\n");
-    assert!(rows.contains("policy: write_file denied by user.off"), "{rows}");
+    assert!(
+        rows.contains("policy: write_file denied by user.off"),
+        "{rows}"
+    );
 }
 
 #[test]
@@ -2085,7 +2322,13 @@ fn test_command_output_renders_like_a_terminal() {
     let listing = &rows[echo + 2];
     assert!(total.contains("total 0"), "{total:?}");
     assert!(listing.contains("drwxr-xr-x  2 u u  40 src"), "{listing:?}");
-    assert!(rows[echo + 3].contains("[u@h d]$ "), "{:?}", rows[echo + 3]);
+    assert!(
+        !rows[echo + 3].contains("[u@h d]$ "),
+        "{:?}",
+        rows[echo + 3]
+    );
+    let input_row = &rows[rows.len() - 2];
+    assert!(input_row.contains("[u@h d]$ "), "{input_row:?}");
     assert!(!screen.contains('\x1b'));
     let column = |row: &str, needle: &str| row.find(needle).map(|i| row[..i].chars().count());
     assert_eq!(
@@ -2167,8 +2410,15 @@ fn right_border(rows: &[String], title: &str) -> String {
         .collect()
 }
 
+/// The chat panel's right border beside its text, below the tab bar and
+/// the blank row under it.
 fn chat_track(rows: &[String]) -> String {
-    right_border(rows, "┌ CHAT").chars().skip(1).collect()
+    let (top, _, right) = chat_panel(rows);
+    rows[top + 3..]
+        .iter()
+        .map(|r| r.chars().nth(right).unwrap())
+        .take_while(|&c| c != '┘')
+        .collect()
 }
 
 #[test]
@@ -2275,4 +2525,269 @@ fn test_overflowing_panels_show_a_scrollbar() {
     let rows = render_rows(&mut app, 120);
     let chat = chat_track(&rows);
     assert!(chat.starts_with('┃') && chat.ends_with('│'), "{chat:?}");
+}
+
+fn run_slash(app: &mut crate::App, command: &str) {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    type_text(app, command);
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+}
+
+fn todo(content: &str, state: crate::events::TodoState) -> crate::events::TodoView {
+    crate::events::TodoView {
+        content: content.to_string(),
+        state,
+    }
+}
+
+#[test]
+fn test_status_line_shows_context_cache_and_cost() {
+    use crate::events::{CallStats, UiCommand};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::CallStats(CallStats {
+        input_tokens: 4_000,
+        cache_read_tokens: 120_000,
+        cache_write_tokens: 0,
+        output_tokens: 900,
+        cost_usd: Some(3.42),
+        context_limit: Some(200_000),
+    }));
+    app.process_command(UiCommand::SetQueued(1));
+
+    let rows = render_rows(&mut app, 160);
+    let status = rows.last().unwrap();
+    assert!(status.contains("ctx 62% ▰▰▰▰▱ 124k/200k"), "{status:?}");
+    assert!(status.contains("cache 96%"), "{status:?}");
+    assert!(status.contains("$3.42"), "{status:?}");
+    assert!(status.contains("1 call"), "{status:?}");
+    assert!(status.contains("1 queued"), "{status:?}");
+}
+
+#[test]
+fn test_status_line_drops_trailing_parts_when_narrow() {
+    use crate::events::{CallStats, UiCommand};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::CallStats(CallStats {
+        input_tokens: 10_000,
+        context_limit: Some(200_000),
+        cost_usd: Some(0.5),
+        ..CallStats::default()
+    }));
+    let rows = render_rows(&mut app, 40);
+    let status = rows.last().unwrap();
+    assert!(status.contains("ctx 5%"), "{status:?}");
+    assert!(!status.contains("call"), "{status:?}");
+}
+
+#[test]
+fn test_todo_strip_and_list() {
+    use crate::events::{TodoState, UiCommand};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetTodos(vec![
+        todo("Read the parser", TodoState::Completed),
+        todo("Write the lexer", TodoState::InProgress),
+        todo("Run the tests", TodoState::Pending),
+    ]));
+
+    let screen = render_rows(&mut app, 160).join("\n");
+    assert!(screen.contains("[1/3] ▸ Write the lexer"), "{screen}");
+    assert!(!screen.contains("TODOS"));
+
+    run_slash(&mut app, "/todos");
+    let screen = render_rows(&mut app, 160).join("\n");
+    assert!(screen.contains("TODOS 1/3"), "{screen}");
+    assert!(screen.contains("✓ Read the parser"));
+    assert!(screen.contains("○ Run the tests"));
+
+    app.process_command(UiCommand::SetTodos(Vec::new()));
+    let screen = render_rows(&mut app, 160).join("\n");
+    assert!(!screen.contains("TODOS"));
+    assert!(!screen.contains("[1/3]"));
+}
+
+#[test]
+fn test_context_and_cost_commands_write_to_the_chat() {
+    use crate::events::{CallStats, ContextView, UiCommand};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::CallStats(CallStats {
+        input_tokens: 2_000,
+        cache_read_tokens: 8_000,
+        output_tokens: 500,
+        cost_usd: Some(0.02),
+        context_limit: Some(100_000),
+        ..CallStats::default()
+    }));
+    app.process_command(UiCommand::SetContext(ContextView {
+        system_tokens: 3_000,
+        tools_tokens: 4_000,
+        conversation_tokens: 3_000,
+        total_tokens: 10_000,
+        limit_tokens: Some(100_000),
+        ..ContextView::default()
+    }));
+
+    run_slash(&mut app, "/context");
+    run_slash(&mut app, "/cost");
+    let texts: Vec<String> = app
+        .messages()
+        .iter()
+        .map(|m| m.content().to_string())
+        .collect();
+    assert!(texts[0].contains("10.0k of 100k tokens (10%)"), "{texts:?}");
+    assert!(texts[0].contains("tools"), "{texts:?}");
+    assert!(texts[0].contains("Prompt cache hits: 80%"), "{texts:?}");
+    assert!(texts[1].contains("$0.020"), "{texts:?}");
+}
+
+#[test]
+fn test_todos_stay_with_their_agent() {
+    use crate::events::{AgentSummary, TodoState, UiCommand};
+
+    let agent = |id: &str| AgentSummary {
+        id: id.to_string(),
+        name: id.to_string(),
+        ..Default::default()
+    };
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetAgents(vec![agent("aa"), agent("bb")]));
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    app.process_command(UiCommand::ForAgent {
+        agent_id: "bb".to_string(),
+        command: Box::new(UiCommand::SetTodos(vec![todo(
+            "Background work",
+            TodoState::InProgress,
+        )])),
+    });
+
+    let screen = render_rows(&mut app, 160).join("\n");
+    assert!(!screen.contains("Background work"), "{screen}");
+
+    app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
+    let screen = render_rows(&mut app, 160).join("\n");
+    assert!(screen.contains("[0/1] ▸ Background work"), "{screen}");
+}
+
+#[test]
+fn test_status_line_leads_with_the_mode() {
+    use crate::events::{CallStats, UiCommand};
+
+    let mut app = crate::App::new();
+    let rows = render_rows(&mut app, 160);
+    assert!(!rows.last().unwrap().contains("mode"), "unknown until told");
+
+    app.process_command(UiCommand::SetMode(crate::PermissionMode::AcceptEdits));
+    app.process_command(UiCommand::CallStats(CallStats {
+        input_tokens: 10_000,
+        context_limit: Some(200_000),
+        ..CallStats::default()
+    }));
+    let rows = render_rows(&mut app, 160);
+    let status = rows.last().unwrap();
+    let mode = status.find("accept-edits mode").expect(status);
+    let ctx = status.find("ctx 5%").expect(status);
+    assert!(mode < ctx, "{status:?}");
+}
+
+#[test]
+fn test_approval_prompt_offers_three_answers() {
+    use crate::events::UiCommand;
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::RequestApproval {
+        id: "req-1".to_string(),
+        tool: "run_command".to_string(),
+        description: "cargo test -p aura-terminal".to_string(),
+        always: "`cargo test` commands in this project".to_string(),
+    });
+    let screen = render_rows(&mut app, 120).join("\n");
+    assert!(screen.contains("Approval Required"), "{screen}");
+    assert!(screen.contains("run_command wants to:"), "{screen}");
+    assert!(screen.contains("cargo test -p aura-terminal"), "{screen}");
+    assert!(screen.contains("[Y] Allow once"), "{screen}");
+    assert!(
+        screen.contains("[A] Always allow `cargo test` commands in this project"),
+        "{screen}"
+    );
+    assert!(screen.contains("[N] Deny (Esc)"), "{screen}");
+}
+
+#[test]
+fn test_help_lists_mode_command_and_shift_tab() {
+    let mut app = crate::App::new();
+    run_slash(&mut app, "/help");
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 50)).unwrap();
+    terminal
+        .draw(|frame| super::render(frame, &mut app, &test_theme()))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let screen: String = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                + "\n"
+        })
+        .collect();
+    assert!(screen.contains("/mode [name]"), "{screen}");
+    assert!(screen.contains("Shift+Tab"), "{screen}");
+    assert!(screen.contains("Press any key to close"), "{screen}");
+}
+
+#[test]
+fn test_init_command_asks_the_active_agent_and_shows_it_in_the_menu() {
+    use crate::events::UiEvent;
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    let mut app = crate::App::new().with_event_sender(tx);
+    app.process_command(crate::events::UiCommand::SetActiveAgent("aa".to_string()));
+
+    type_text(&mut app, "/ini");
+    let screen = render_rows(&mut app, 120).join("\n");
+    assert!(
+        screen.contains("/init") && screen.contains("write or improve AGENTS.md"),
+        "{screen}"
+    );
+
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyModifiers::empty(),
+    ));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::InitProject { agent_id }) if agent_id == "aa"
+    ));
+    assert_eq!(app.state(), crate::app::AppState::Processing);
+}
+
+#[test]
+fn test_context_command_lists_project_instructions() {
+    use crate::events::{InstructionFileView, InstructionStatus, UiCommand};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetInstructions(vec![InstructionFileView {
+        path: "~/repo/AGENTS.md".to_string(),
+        bytes: 2_000,
+        globs: None,
+        status: InstructionStatus::Included,
+    }]));
+    run_slash(&mut app, "/context");
+    run_slash(&mut app, "/new");
+    run_slash(&mut app, "/context");
+
+    let texts: Vec<String> = app
+        .messages()
+        .iter()
+        .map(|m| m.content().to_string())
+        .collect();
+    let last = texts.last().map(String::as_str).unwrap_or_default();
+    assert!(
+        last.contains("Project instructions (~500 tokens):"),
+        "{texts:?}"
+    );
+    assert!(last.contains("~/repo/AGENTS.md  500"), "{texts:?}");
 }

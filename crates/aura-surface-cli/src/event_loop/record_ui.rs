@@ -15,9 +15,9 @@ pub(crate) fn create_response_transaction(agent_id: AgentId, response_text: &str
     )
 }
 
-/// The agent whose record the RECORD panel shows. Every agent kernel
-/// shares one [`UiRecordObserver`]; entries from other agents stay in the
-/// store until the panel switches to them.
+/// The agent on screen, whose record the RECORD panel shows. Every agent
+/// kernel shares one [`UiRecordObserver`]; entries from other agents stay
+/// in the store until the panel switches to them.
 #[derive(Debug, Clone, Default)]
 pub struct RecordPanelAgent(Arc<Mutex<Option<AgentId>>>);
 
@@ -26,7 +26,9 @@ impl RecordPanelAgent {
         *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(agent_id);
     }
 
-    fn shows(&self, agent_id: AgentId) -> bool {
+    /// Whether `agent_id` is the agent on screen (any agent before one
+    /// is set).
+    pub(crate) fn shows(&self, agent_id: AgentId) -> bool {
         self.0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -36,7 +38,8 @@ impl RecordPanelAgent {
 
 /// Streams every record entry the kernel persists to the RECORD panel, in
 /// sequence order, and the policy rule behind every decision to the tool
-/// call it decided.
+/// call it decided, in the chat of the agent that made the call (agents
+/// work in parallel, so that may not be the one on screen).
 #[derive(Debug)]
 pub struct UiRecordObserver {
     queue: mpsc::UnboundedSender<UiCommand>,
@@ -67,22 +70,24 @@ impl UiRecordObserver {
 
 impl RecordObserver for UiRecordObserver {
     fn on_entry(&self, entry: &RecordEntry) {
-        if !self.panel.shows(entry.tx.agent_id) {
-            return;
+        if self.panel.shows(entry.tx.agent_id) {
+            let timestamp = format_local_time(entry.tx.ts_ms);
+            self.send(UiCommand::NewRecord(build_record_summary(
+                entry.seq, &entry.tx, entry, timestamp,
+            )));
         }
-        let timestamp = format_local_time(entry.tx.ts_ms);
-        self.send(UiCommand::NewRecord(build_record_summary(
-            entry.seq, &entry.tx, entry, timestamp,
-        )));
         if entry.tx.tx_type == TransactionType::PolicyDecision {
             let Ok(decision) = serde_json::from_slice::<PolicyDecision>(&entry.tx.payload) else {
                 return;
             };
             if let Some(outcome) = policy_outcome(&decision) {
-                self.send(UiCommand::ToolPolicy {
-                    id: decision.tool_use_id,
-                    tool: decision.tool,
-                    decision: outcome,
+                self.send(UiCommand::ForAgent {
+                    agent_id: entry.tx.agent_id.to_hex(),
+                    command: Box::new(UiCommand::ToolPolicy {
+                        id: decision.tool_use_id,
+                        tool: decision.tool,
+                        decision: outcome,
+                    }),
                 });
             }
         }

@@ -582,6 +582,31 @@ mod tests {
         ((top, left), (bottom, right))
     }
 
+    /// Corners of the chat panel, the box whose first row holds the
+    /// CHAT | TERMINAL tabs.
+    fn chat_corners(rows: &[Vec<String>]) -> ((usize, usize), (usize, usize)) {
+        let tabs = " CHAT  TERMINAL ";
+        let len = tabs.chars().count();
+        let (top, left) = rows
+            .iter()
+            .enumerate()
+            .skip(1)
+            .find_map(|(y, row)| {
+                let x = (0..row.len().saturating_sub(len))
+                    .find(|&x| row[x] == "│" && row[x + 1..=x + len].concat() == tabs)?;
+                Some((y - 1, x))
+            })
+            .expect("no chat tab bar");
+        assert_eq!(rows[top][left], "┌");
+        let right = (left + 1..rows[top].len())
+            .find(|&x| rows[top][x] == "┐")
+            .unwrap();
+        let bottom = (top + 1..rows.len())
+            .find(|&y| rows[y][left] == "└")
+            .unwrap();
+        ((top, left), (bottom, right))
+    }
+
     #[test]
     fn record_view_covers_exactly_the_chat_panel() {
         use crate::events::{RecordStatus, RecordSummary, UiCommand};
@@ -609,7 +634,7 @@ mod tests {
             ts_ms: 0,
             policy: None,
         }));
-        let chat = box_corners(&screen(&mut app), " CHAT ");
+        let chat = chat_corners(&screen(&mut app));
 
         while app.focus() != crate::app::PanelFocus::Records {
             app.handle_key(KeyEvent::from(KeyCode::Tab));
@@ -622,7 +647,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert_eq!(box_corners(&rows, " Record #60 ✓ "), chat, "{text}");
-        assert!(!text.contains(" CHAT "), "{text}");
+        assert!(!text.contains(" CHAT  TERMINAL "), "{text}");
         assert!(text.contains("Sequence:    60"), "{text}");
         assert!(text.contains("Esc close"), "{text}");
 
@@ -632,7 +657,7 @@ mod tests {
             .map(|r| r.concat())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains(" CHAT "), "{text}");
+        assert!(text.contains(" CHAT  TERMINAL "), "{text}");
     }
 
     #[test]

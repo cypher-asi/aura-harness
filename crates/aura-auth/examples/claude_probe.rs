@@ -26,7 +26,11 @@ async fn main() {
     ]);
     let variants = [
         ("joined system string, aura headers", joined, false),
-        ("identity as its own system block, aura headers", blocks.clone(), false),
+        (
+            "identity as its own system block, aura headers",
+            blocks.clone(),
+            false,
+        ),
         ("identity block + claude-code headers", blocks, true),
     ];
     for (name, system, cc_headers) in variants {

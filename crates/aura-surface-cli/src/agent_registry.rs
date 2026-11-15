@@ -16,6 +16,10 @@ const LEGACY_IDENTITY_FILE: &str = "agent_identity.txt";
 const DEFAULT_AGENT_NAME: &str = "Terminal Agent";
 /// Name of the agent created with a new project.
 const DEFAULT_PROJECT_AGENT: &str = "Agent";
+/// ZNS id of the agent `aura -p` runs as. Fixed, so every headless run in
+/// a data directory finds the same agent and its saved sessions.
+const HEADLESS_ZNS_ID: &str = "0://terminal/headless";
+const HEADLESS_AGENT_NAME: &str = "Headless";
 
 /// One agent known to the terminal UI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -253,6 +257,27 @@ impl AgentRegistry {
         })
     }
 
+    /// The agent `aura -p` runs as, registered on first use. It is a root
+    /// agent of its own, so a headless run never replaces the current
+    /// session of an agent the terminal shows.
+    ///
+    /// # Errors
+    /// Returns an error if the registry cannot be written.
+    pub fn headless(&mut self) -> anyhow::Result<RegisteredAgent> {
+        if let Some(agent) = self
+            .file
+            .agents
+            .iter()
+            .find(|a| a.zns_id == HEADLESS_ZNS_ID)
+        {
+            return Ok(agent.clone());
+        }
+        self.push(RegisteredAgent {
+            zns_id: HEADLESS_ZNS_ID.to_string(),
+            ..Self::new_agent(HEADLESS_AGENT_NAME.to_string())
+        })
+    }
+
     /// A fresh agent named `name`, not yet registered.
     fn new_agent(name: String) -> RegisteredAgent {
         RegisteredAgent {
@@ -366,6 +391,21 @@ mod tests {
         let reloaded = AgentRegistry::load_or_init(dir.path()).unwrap();
         assert_eq!(reloaded.agents(), &[first, named.clone(), unnamed]);
         assert_eq!(reloaded.active(), &named);
+    }
+
+    #[test]
+    fn headless_agent_is_registered_once_and_never_made_active() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = AgentRegistry::load_or_init(dir.path()).unwrap();
+        let active = registry.active().clone();
+
+        let headless = registry.headless().unwrap();
+        assert_eq!(headless.name, HEADLESS_AGENT_NAME);
+        assert_eq!(registry.headless().unwrap(), headless);
+
+        let reloaded = AgentRegistry::load_or_init(dir.path()).unwrap();
+        assert_eq!(reloaded.agents().len(), 2);
+        assert_eq!(reloaded.active(), &active);
     }
 
     #[test]

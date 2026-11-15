@@ -84,6 +84,10 @@ impl Kernel {
         runtime_capabilities: Option<&RuntimeCapabilityInstall>,
     ) -> Result<Authorized, crate::KernelError> {
         let kernel_proposal = self.kernel_proposal_from_tool_proposal(&proposal)?;
+        // Read before evaluating: the session mode can change while a live
+        // approval prompt waits, and the decision must name the
+        // configuration that evaluated the call.
+        let (mode, policy_hash) = self.policy.mode_and_hash();
         let evaluation = self
             .policy
             .evaluate_proposal(&kernel_proposal, runtime_capabilities);
@@ -112,8 +116,8 @@ impl Kernel {
             decided_by: evaluation.decided_by.clone(),
             trace: evaluation.trace.clone(),
             approval: evaluation.approval.clone(),
-            mode: self.policy.mode_label(),
-            policy_hash: self.policy.snapshot_hash().to_string(),
+            mode,
+            policy_hash,
             action_id: action.as_ref().map(|a| a.action_id.to_hex()),
         };
         let tx = Transaction::policy_decision(self.agent_id, &decision, proposal_entry.tx.hash)

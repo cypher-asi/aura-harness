@@ -41,13 +41,13 @@ async fn serve(mut events: mpsc::Receiver<UiEvent>, out: mpsc::Sender<UiCommand>
     demo.seed().await;
     while let Some(event) = events.recv().await {
         match event {
-            UiEvent::UserMessage(text) => demo.turn(&text).await,
+            UiEvent::UserMessage { text, .. } => demo.turn(&text).await,
             UiEvent::RunCommand { command, .. } => demo.command(&command).await,
             UiEvent::SelectModel(id) => {
                 demo.model = id;
                 demo.send(demo.models()).await;
             }
-            UiEvent::Approve(_) | UiEvent::Deny(_) | UiEvent::Cancel => {
+            UiEvent::Approve(_) | UiEvent::Deny(_) | UiEvent::Cancel(_) => {
                 demo.send(UiCommand::Complete).await;
             }
             UiEvent::Quit => break,
@@ -248,7 +248,7 @@ impl Demo {
                 None,
             )
             .await;
-        self.send(UiCommand::TurnStarted).await;
+        self.send(UiCommand::TurnStarted { prompt: None }).await;
         self.record("UserPrompt", "", prompt).await;
 
         self.send(UiCommand::StartThinking).await;

@@ -4,10 +4,14 @@ mod activity;
 mod chat_lines;
 mod command;
 mod detail;
+mod diff;
+mod hud;
 mod input;
 mod markdown;
+mod mention_menu;
 mod overlays;
 mod panels;
+mod plan;
 mod processes;
 mod sandbox;
 mod segments;
@@ -18,11 +22,13 @@ mod text;
 mod tests;
 
 pub(crate) use chat_lines::{ChatLineCache, GroupState};
+pub(crate) use panels::format_elapsed;
 
+use crate::mode_command::PermissionMode;
 use crate::{app::PanelAreas, App, Theme};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::Style,
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -50,17 +56,29 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
         .constraints([
             Constraint::Length(2),
             Constraint::Min(3),
+            Constraint::Length(plan::strip_height(app, area.height)),
             Constraint::Length(2),
         ])
         .split(area);
     let input_row = Rect {
         height: 1,
-        ..main_chunks[2]
+        ..main_chunks[3]
+    };
+    let status_row = Rect {
+        y: input_row.y.saturating_add(1),
+        height: main_chunks[3].height.saturating_sub(1),
+        ..main_chunks[3]
     };
 
     render_header(frame, inset_edges(main_chunks[0]), app, theme);
 
     let chat = render_content_panels(frame, main_chunks[1], app, theme);
+    // The plan strip and the border strip show the same todo list; the
+    // border strip only stands in while the plan strip has no room.
+    if main_chunks[2].height == 0 {
+        hud::render_todo_strip(frame, chat, app, theme);
+    }
+    plan::render_plan_strip(frame, main_chunks[2], app, theme);
     detail::render_detail_view(frame, chat, app, theme);
     if let Some(selection) = app.selection() {
         selection.highlight(frame.buffer_mut());
@@ -68,8 +86,13 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     let chat_left = chat.x.saturating_sub(input_row.x);
 
     input::render_input(frame, input_row, app, theme, chat_left);
+    if status_row.height > 0 {
+        hud::render_status_line(frame, inset_edges(status_row), app, theme);
+    }
 
+    hud::render_todo_panel(frame, chat, app, theme);
     slash_menu::render_slash_menu(frame, chat, app, theme);
+    mention_menu::render_mention_menu(frame, chat, app, theme);
     overlays::render_folder_picker(frame, app, theme);
     overlays::render_overlays(frame, app, theme);
 }
@@ -223,13 +246,35 @@ fn header_status_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
     spans
 }
 
-/// `qwen3:4b` — empty until the kernel reports a model.
+/// `qwen3:4b`, after a `PLAN` / `ASK` / `DEBUG` badge outside agent mode.
+/// The model is left out until the kernel reports it.
 pub(super) fn model_indicator_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
+    let mut spans = Vec::new();
+    let badge = match app.mode() {
+        PermissionMode::Default | PermissionMode::AcceptEdits | PermissionMode::Unrestricted => {
+            None
+        }
+        PermissionMode::Plan => Some("PLAN"),
+        PermissionMode::Ask => Some("ASK"),
+        PermissionMode::Debug => Some("DEBUG"),
+    };
+    if let Some(badge) = badge {
+        spans.push(Span::styled(
+            badge,
+            Style::default()
+                .fg(theme.colors.warning)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
     if app.current_model().is_empty() {
-        return Vec::new();
+        return spans;
+    }
+    if !spans.is_empty() {
+        spans.push(Span::styled(" · ", Style::default().fg(theme.colors.muted)));
     }
     let label = app
         .current_model_option()
         .map_or_else(|| app.current_model(), |m| m.label.as_str());
-    vec![Span::styled(label, Style::default().fg(theme.colors.muted))]
+    spans.push(Span::styled(label, Style::default().fg(theme.colors.muted)));
+    spans
 }

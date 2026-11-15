@@ -3,13 +3,19 @@
 //! Manages the overall application state, conversation history,
 //! panels (Chat, Record and Sandbox), and coordinates between input handling and rendering.
 
+mod agent_views;
+mod chat_tabs;
 mod commands;
 mod definitions;
 pub mod file_view;
 pub mod folder_picker;
 pub(crate) use aura_ui_core::format;
+pub mod hud;
+pub mod images;
+mod input_editor;
 mod keys;
 mod line_edit;
+pub mod mentions;
 mod processes;
 pub use aura_ui_core::sandbox;
 mod selection;
@@ -25,18 +31,21 @@ mod detail_tests;
 mod tests;
 
 use crate::{
+    alerts::AlertSettings,
     components::{Activity, Message},
     events::{
-        AgentDefinitionSummary, AgentSummary, ModelOptionView, ProcessSummary, RecordSummary,
-        UiCommand, UiEvent,
+        AgentDefinitionSummary, AgentSummary, ModelOptionView, PlanView, ProcessSummary,
+        RecordSummary, UiCommand, UiEvent,
     },
     input::InputHistory,
     renderer::{ChatLineCache, GroupState},
 };
+pub use chat_tabs::ChatTab;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 pub use definitions::AgentsTab;
 use file_view::FileView;
 use folder_picker::FolderPicker;
+use hud::Hud;
 pub use processes::SidePanelTab;
 use ratatui::{
     buffer::Buffer,
@@ -116,12 +125,14 @@ pub(super) enum ProjectNamePurpose {
 /// Pending approval request.
 #[derive(Debug, Clone)]
 pub struct PendingApproval {
-    /// Tool use ID
+    /// Approval request ID
     pub id: String,
     /// Tool name
     pub tool: String,
     /// Description of the action
     pub description: String,
+    /// What "always allow" would allow; empty when it isn't offered
+    pub always: String,
 }
 
 /// Main application struct managing UI state.
@@ -205,6 +216,8 @@ pub struct App {
     pub(super) collapsed_projects: HashSet<String>,
     /// Currently active agent ID
     pub(super) active_agent_id: String,
+    /// Chats of the agents not on screen, by agent ID
+    pub(super) views: HashMap<String, agent_views::AgentView>,
     /// API URL for the swarm
     pub(super) api_url: Option<String>,
     /// Whether the API is currently active
@@ -219,6 +232,8 @@ pub struct App {
     pub(super) user: Option<String>,
     /// Labels of the usable linked plans
     pub(super) plans: Vec<String>,
+    /// The active agent's current plan
+    pub(super) active_plan: Option<PlanView>,
     /// Highlighted row in the model selector
     pub(super) model_cursor: usize,
     /// Cloud model to select once the in-chat login completes
@@ -240,8 +255,9 @@ pub struct App {
     pub(super) shell_prompt: String,
     /// Width of the chat text area in the last frame (0 before the first)
     pub(super) chat_width: u16,
-    /// Whether `$` switched to the terminal: the chat panel shows the
-    /// session's shell commands, and Enter runs the line as one
+    /// Whether the chat panel's TERMINAL tab is open (`$` opens it): the
+    /// panel shows the session's shell commands, and Enter runs the line
+    /// as one
     pub(super) terminal_mode: bool,
     /// Commands run at the terminal prompt, recalled there instead of chat
     /// history
@@ -250,6 +266,12 @@ pub struct App {
     pub(super) slash_cursor: usize,
     /// Whether Esc closed the slash menu (until the input is edited)
     pub(super) slash_dismissed: bool,
+    /// `@` file picker shown while an `@path` word is typed
+    pub(super) mentions: mentions::MentionMenu,
+    /// Images pasted into the input, each under an `[image N]` chip
+    pub(super) images: Vec<images::PendingImage>,
+    /// Whether Ctrl+V asked for the clipboard before the next frame
+    pub(super) paste_requested: bool,
     /// Text selected with the mouse, in screen cells
     pub(super) selection: Option<Selection>,
     /// Whether the left button is still held for `selection`
@@ -266,10 +288,20 @@ pub struct App {
     pub(super) definitions_scroll: usize,
     /// File to open in the editor before the next frame
     pub(super) editor_request: Option<PathBuf>,
+    /// Temp file holding the input while Ctrl+G has it in the editor
+    pub(super) input_editor_file: Option<PathBuf>,
     /// Permanent agent waiting for `y` to confirm its deletion
     pub(super) pending_delete: Option<String>,
     /// Folder browser for a new project, while it is open
     pub(super) folder_picker: Option<FolderPicker>,
+    /// Usage, todos and jobs of the agent on screen
+    pub(super) hud: Hud,
+    /// Whether the full todo list is shown above the input
+    pub(super) todos_open: bool,
+    /// When to get the user's attention
+    pub(super) alert_settings: AlertSettings,
+    /// Messages for the user that the terminal should ring the bell for
+    pub(super) alerts: Vec<String>,
     /// Which view the panel below the Record panel shows
     pub(super) side_tab: SidePanelTab,
     /// Rows of the Processes tab
@@ -299,6 +331,8 @@ pub struct PanelAreas {
     pub new_agent_row: Option<Rect>,
     /// Chat panel (including border)
     pub chat: Option<Rect>,
+    /// Tab bar row of the chat panel
+    pub chat_tabs: Option<Rect>,
     /// Message text area inside the chat panel
     pub chat_text: Option<Rect>,
     /// Record panel (including border)
@@ -335,6 +369,8 @@ pub enum DetailView {
 pub(crate) enum HoverTarget {
     /// A label in the agents tab bar.
     AgentTab(AgentsTab),
+    /// A label in the chat panel's tab bar.
+    ChatTab(ChatTab),
     /// A row in the projects list, including "+ New project".
     ProjectRow(usize),
     /// A row in the roster, including "+ New agent".
@@ -482,6 +518,7 @@ impl App {
             selected_agent: 0,
             collapsed_projects: HashSet::new(),
             active_agent_id: String::new(),
+            views: HashMap::new(),
             api_url: None,
             api_active: false,
             login_email: String::new(),
@@ -489,6 +526,7 @@ impl App {
             current_model: String::new(),
             user: None,
             plans: Vec::new(),
+            active_plan: None,
             model_cursor: 0,
             pending_model: None,
             agents_scroll: 0,
@@ -503,6 +541,9 @@ impl App {
             command_history: InputHistory::new(),
             slash_cursor: 0,
             slash_dismissed: false,
+            mentions: mentions::MentionMenu::default(),
+            images: Vec::new(),
+            paste_requested: false,
             selection: None,
             selecting: false,
             copy_requested: false,
@@ -511,14 +552,37 @@ impl App {
             selected_definition: 0,
             definitions_scroll: 0,
             editor_request: None,
+            input_editor_file: None,
             pending_delete: None,
             folder_picker: None,
+            hud: Hud::default(),
+            todos_open: false,
+            alert_settings: AlertSettings::default(),
+            alerts: Vec::new(),
             side_tab: SidePanelTab::default(),
             processes: Vec::new(),
             selected_process: 0,
             processes_scroll: 0,
             pending_kill: None,
         }
+    }
+
+    /// Get the user's attention according to `settings`.
+    #[must_use]
+    pub const fn with_alert_settings(mut self, settings: AlertSettings) -> Self {
+        self.alert_settings = settings;
+        self
+    }
+
+    /// When the terminal gets the user's attention.
+    #[must_use]
+    pub const fn alert_settings(&self) -> &AlertSettings {
+        &self.alert_settings
+    }
+
+    /// Messages to get the user's attention for since the last call.
+    pub fn take_alerts(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.alerts)
     }
 
     /// Set the event sender for communication with kernel.
@@ -556,6 +620,16 @@ impl App {
     #[must_use]
     pub fn is_processing(&self) -> bool {
         self.state == AppState::Processing
+    }
+
+    /// Whether the agent on screen has a turn in flight, including one
+    /// waiting for an approval.
+    #[must_use]
+    pub fn is_busy(&self) -> bool {
+        matches!(
+            self.state,
+            AppState::Processing | AppState::AwaitingApproval
+        )
     }
 
     /// Get the current status message.
@@ -607,6 +681,18 @@ impl App {
     #[must_use]
     pub fn processing_elapsed(&self) -> Option<Duration> {
         self.processing_since.map(|since| since.elapsed())
+    }
+
+    /// Usage, todos and jobs of the agent on screen.
+    #[must_use]
+    pub const fn hud(&self) -> &Hud {
+        &self.hud
+    }
+
+    /// Whether the full todo list is shown above the input.
+    #[must_use]
+    pub const fn todos_open(&self) -> bool {
+        self.todos_open
     }
 
     /// Get the messages.
@@ -733,13 +819,6 @@ impl App {
             &mut self.chat_lines
         };
         (&self.messages, cache, groups)
-    }
-
-    /// Whether the terminal pane ends in a prompt to type at, as a shell's
-    /// does once the last command has finished.
-    #[must_use]
-    pub fn shows_live_prompt(&self) -> bool {
-        self.input_is_command() && !self.messages.back().is_some_and(Message::is_running_shell)
     }
 
     /// Whether the chat panel shows the terminal pane: the shell commands
@@ -1236,7 +1315,11 @@ impl App {
                     PanelFocus::Swarm => self.click_agents_panel(mouse.column, mouse.row),
                     PanelFocus::Sandbox => self.click_side_panel(mouse.column, mouse.row),
                     PanelFocus::Records => self.click_record_row(mouse.column, mouse.row),
-                    PanelFocus::Chat => {}
+                    PanelFocus::Chat => {
+                        if self.click_chat_tabs(mouse.column, mouse.row) {
+                            self.clear_selection();
+                        }
+                    }
                 }
             }
             _ => {}
@@ -1248,6 +1331,9 @@ impl App {
     fn hover_target(&self, column: u16, row: u16) -> Option<HoverTarget> {
         if contains(self.areas.agent_tabs, column, row) {
             return self.hovered_tab(column);
+        }
+        if let Some(target) = self.hovered_chat_tab(column, row) {
+            return Some(target);
         }
         if self.agents_tab == AgentsTab::Projects {
             if let Some(index) = self.project_row_at(column, row) {
@@ -1667,6 +1753,18 @@ impl App {
         &self.plans
     }
 
+    /// Permission mode of the agent on screen.
+    #[must_use]
+    pub fn mode(&self) -> crate::mode_command::PermissionMode {
+        self.hud.mode.unwrap_or_default()
+    }
+
+    /// The active agent's current plan.
+    #[must_use]
+    pub const fn active_plan(&self) -> Option<&PlanView> {
+        self.active_plan.as_ref()
+    }
+
     /// Bash-style `[user@host dir]$ ` prompt shown before the input line at
     /// the terminal prompt.
     #[must_use]
@@ -1847,13 +1945,16 @@ impl App {
         }
     }
 
-    /// Cancel the current operation.
+    /// Cancel the turn of the agent on screen.
     pub fn cancel(&mut self) {
-        if self.state == AppState::Processing {
+        if self.is_busy() {
+            // The event loop denies the waiting call when it cancels the
+            // turn, so the prompt can go now.
+            self.pending_approval = None;
             self.state = AppState::Idle;
             self.status = "Cancelled".to_string();
             if let Some(tx) = &self.event_tx {
-                let _ = tx.try_send(UiEvent::Cancel);
+                let _ = tx.try_send(UiEvent::Cancel(self.active_agent_id.clone()));
             }
         }
     }
@@ -1866,21 +1967,9 @@ impl App {
         }
     }
 
-    /// Request a switch to another agent.
-    ///
-    /// Refused while a turn is in flight, because the backend processes one
-    /// agent's turn at a time and the streamed output belongs to the current agent.
+    /// Request a switch to another agent. Agents keep working while
+    /// another one is shown.
     pub(super) fn request_agent_switch(&mut self, agent_id: String) {
-        if matches!(
-            self.state,
-            AppState::Processing | AppState::AwaitingApproval
-        ) {
-            self.notification = Some((
-                "Wait for the current turn to finish before switching agents".to_string(),
-                NotificationType::Warning,
-            ));
-            return;
-        }
         if agent_id == self.active_agent_id {
             return;
         }

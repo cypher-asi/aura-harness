@@ -203,7 +203,7 @@ pub(super) fn compact_if_needed(
         }
     }
 
-    let report = compaction::compact_messages(CompactionInput {
+    let input = CompactionInput {
         messages: &mut state.messages,
         policy: CompactionPolicy {
             current_context_tokens: Some(estimated_tokens),
@@ -211,7 +211,14 @@ pub(super) fn compact_if_needed(
             request_kind: Some(request_kind),
             ..CompactionPolicy::new(Some(max_ctx), estimated_tokens, reserved_tokens)
         },
-    });
+    };
+    if let Some(trigger) = config.compaction_trigger {
+        if compaction::effective_pressure(&input) < trigger {
+            recompute_breakdown(config, state, tools);
+            return CompactionOutcome::None;
+        }
+    }
+    let report = compaction::compact_messages(input);
     let outcome = match report.action {
         CompactionAction::Applied(tier) => CompactionOutcome::Applied(tier),
         CompactionAction::NeedsSummary(input) => CompactionOutcome::NeedsSummary(input),
@@ -599,6 +606,33 @@ mod tests {
         assert_eq!(
             after_chars, before_chars,
             "kill switch must leave message bytes untouched"
+        );
+    }
+
+    #[test]
+    fn compaction_trigger_leaves_transcript_untouched_below_threshold() {
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let config = AgentLoopConfig {
+            max_context_tokens: Some(200_000),
+            compaction_trigger: Some(0.70),
+            ..AgentLoopConfig::for_agent("claude-test-model")
+        };
+        let mut messages = Vec::new();
+        for i in 0..20 {
+            messages.push(Message::user(format!("step {i}")));
+            messages.push(Message::assistant("R".repeat(20_000)));
+        }
+        messages.push(Message::user("next"));
+        let before = serde_json::to_string(&messages).unwrap();
+        let mut state = LoopState::new(&config, messages);
+
+        let outcome = compact_if_needed(&config, &mut state, &[], 3);
+
+        assert!(matches!(outcome, CompactionOutcome::None), "{outcome:?}");
+        assert_eq!(
+            serde_json::to_string(&state.messages).unwrap(),
+            before,
+            "below the trigger the cached prefix must stay byte-identical"
         );
     }
 

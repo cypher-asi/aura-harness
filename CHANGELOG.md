@@ -23,7 +23,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the font still render. The painted grid is cached until a cell
   changes, and the cursor blinks on its own layer.
 - Window shortcuts: Ctrl+Shift+C copies, Ctrl+V / Ctrl+Shift+V /
-  Shift+Insert paste, Ctrl+= / Ctrl+- / Ctrl+0 zoom (Cmd on macOS).
+  Shift+Insert paste (images attach, as in the terminal), Ctrl+= /
+  Ctrl+- / Ctrl+0 zoom (Cmd on macOS). Turn alerts use the terminal's
+  settings, with the window asking for attention in place of the bell.
   `--theme` picks the terminal theme; `AURA_DESKTOP_MONO_FONT`,
   `AURA_DESKTOP_FONT_FILES` and `AURA_DESKTOP_FONT_SIZE` change the
   font. `--demo` runs a scripted session and `AURA_DESKTOP_PERF` logs
@@ -31,7 +33,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Offscreen snapshot tests render whole screens with the CPU renderer;
   `AURA_DESKTOP_SNAPSHOTS=<dir>` saves them as PNGs. An ignored
   `replay` test reports boot, streaming, keystroke and repaint timings.
-- `aura_terminal::render` is public so other frontends can draw the UI.
+- `aura_terminal::render`, `App::paste_from_clipboard` and
+  `alerts::desktop_notify` are public so other frontends can draw the UI
+  and share its clipboard and notifications.
 
 ##### Changed
 
@@ -49,14 +53,244 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `aura_surface_cli::session::start`, which opens the agent registry,
   record store, model provider and kernel factory and spawns the event
   loop, returning a `UiSession` (event sender, command receiver and
-  `SessionTask`). `SessionTask::finish` surfaces an event loop that
-  stopped on an error and aborts one still running.
+  `SessionTask`). `SessionTask::finish` stops background commands,
+  surfaces an event loop that stopped on an error and aborts one still
+  running.
 
 ##### Changed
 
 - `aura` (terminal mode) runs on `session::start`. The terminal now
   enters the alternate screen after the session is ready, so a startup
   error prints to the normal screen.
+
+### Headless — `aura -p`
+
+##### Added
+
+- `aura -p "prompt"` (`--print`) runs one prompt without the terminal
+  UI, prints the result and exits. `-p -`, or `-p` with no prompt, reads
+  the prompt from stdin; piped stdin is appended to a given prompt.
+- `--output-format text|json|stream-json`: the final reply; one result
+  object with the reply, session id, model calls, usage (cache reads
+  and writes included), cache hit rate, estimated cost, compactions,
+  todo list, changed files and exit reason; or one event per line (text
+  and thinking deltas, tool calls and results, todo updates, per-call
+  usage, warnings) ending with that object.
+- `--resume <session_id>` and `--continue` pick up a saved session.
+  Runs belong to a dedicated "Headless" agent, so they never replace
+  the session of an agent the terminal shows, and the terminal can
+  `/resume` them.
+- `--allowed-tools` / `--disallowed-tools` filter both what the model is
+  offered and what the kernel permits. Nothing prompts: a tool call the
+  policy would ask about is denied.
+- `--max-turns`, `--max-time` and `--max-cost-usd` limit the whole run
+  (the time and cost limits default to `AURA_TUI_TURN_TIMEOUT` and
+  `AURA_TUI_MAX_TURN_COST_USD`). A limit stops the agent between steps
+  and keeps its work in the session.
+- `--cwd`/`-d`, `--model` (not saved as the `/model` choice),
+  `--provider` and `--verbose`. The global `--mode` applies: `plan`,
+  `ask` and `debug` act as the terminal's modes with every approval
+  denied, and `agent` lets edits and commands run instead of asking.
+  Agents spawned with `task` keep the run's mode and tool filter.
+- Exit codes: 0 finished, 1 failed, 2 bad arguments, 3 stopped by a
+  limit, 130 interrupted.
+- The run waits for the agent's background work after its turn
+  (background commands, detached `task` spawns and agents it started
+  with `spawn_agent`; up to `AURA_HEADLESS_JOB_WAIT`, default 10
+  minutes) and gives it each exit notice or reply as a new turn, then
+  stops any command still running.
+- stdout carries only the chosen output; logs go to stderr.
+- `evals/long_horizon/`: four multi-file feature tasks (three Python,
+  one Rust) with hidden tests, and `run.py`, which runs `aura -p
+  --output-format json` on each task in a scratch copy, grades it with
+  the hidden tests, and writes a JSON and Markdown report with pass/fail,
+  cost, cache hit rate, compactions, model calls and wall time. Real
+  models run only with `--live` or `AURA_EVALS_LIVE=1`; `--self-check`
+  verifies the fixtures against reference solutions without a model.
+
+##### Fixed
+
+- Every model call now reports its tokens and cost to the turn's
+  listeners. The streaming transport never did, so the terminal's
+  per-reply cost, status line cache and cost figures, and
+  `AURA_TUI_MAX_TURN_COST_USD` saw no model calls.
+
+### Terminal — long-running tasks
+
+##### Added
+
+- `todo_write` tool: the agent keeps a plan for multi-step work. The
+  loop tracks the list, puts it back after a history summary, and
+  carries it across turns and restarts.
+- A turn that ends with todo items still open is sent back to the next
+  one. It ends anyway when the agent asks the user something, says it
+  is blocked, or two nudges in a row leave the list unchanged.
+- A message sent to a busy agent goes into its running turn instead of
+  waiting for the turn to end. One that arrives too late runs next.
+- `run_command` takes `background: true`. The command keeps running
+  after the call returns and its output goes to a log file. When it
+  exits, the agent that started it gets the exit code and the end of the
+  log, in its running turn or in a new one, whether or not it is on
+  screen. `job_output` reads a job's log and `job_kill` stops it (a job
+  the agent stopped itself sends no message). Quitting the terminal, or
+  the end of an `aura -p` run, stops every background command.
+- `AURA_TUI_TURN_TIMEOUT` and `AURA_TUI_MAX_TURN_COST_USD` set optional
+  per-turn time and cost limits.
+- Anthropic requests mark the last two user messages for prompt
+  caching (four breakpoints with the system prompt and tools), so a
+  large batch of tool results no longer misses the cache.
+  `AURA_PROMPT_CACHE_TTL=1h` uses the one-hour cache.
+- A status line under the input shows, for the agent on screen, how
+  full its context is, its prompt cache hit rate, the session's
+  estimated cost and model calls, running background jobs, and queued
+  work. The Chat panel's bottom border shows todo progress and the item
+  being worked on.
+- `/context` breaks down what fills the context window, `/cost` lists
+  the session's tokens and cost, `/todos` opens the agent's todo list,
+  and `/compact [focus]` summarizes the older history now, keeping
+  `focus` in particular.
+- Typing `@` in the input opens a fuzzy picker of the agent's files and
+  folders. Each `@path` in a sent message is attached for the model:
+  up to 64 KiB of a file, or a listing of a folder. The chat and the
+  record keep the message as typed.
+- Ctrl+V pastes a clipboard image into the message, and pasting the
+  path of an image file attaches it. Each image shows as an
+  `[image N]` chip and reaches the model as an image block. Images are
+  capped at 3.75 MiB each and 5 per message.
+- The terminal turns on bracketed paste, so pasted text with newlines
+  stays in the input instead of sending each line as a message.
+- Ctrl+G opens the input in `$VISUAL` or `$EDITOR` (falling back to
+  `vi`). What is saved replaces the input when the editor exits.
+- The terminal checkpoints each agent's session after every turn under
+  `<data_dir>/sessions/`: the conversation as the model saw it (tool
+  calls included), the todo list and usage totals. A restart continues
+  from the checkpoint plus whatever the record holds after it, instead
+  of from prompts and replies alone. `/resume` lists earlier sessions
+  and `/resume <n>` continues one.
+- Tool calls that need approval pause the turn and ask in the agent's
+  chat. `y` allows the call once, `a` always allows that tool (and, for
+  `run_command`, that command, such as `cargo test`) in the current
+  project, and `n` or Esc denies it. Saved answers live in
+  `<data_dir>/approvals.json`. A prompt nobody answers is denied after
+  10 minutes (`AURA_TUI_APPROVAL_TIMEOUT_SECS`), and Ctrl+C denies it and
+  stops the turn. An agent that is not on screen asks in its own chat
+  and the terminal says which agent is waiting.
+- Permission modes: `/mode [name]` and Shift+Tab switch the agent on
+  screen between `default` (asks before edits and commands),
+  `accept-edits` (file edits run, commands still ask), `plan`
+  (read-only) and `unrestricted` (nothing asks). The status line
+  starts with the current mode. Each switch is written to the agent's
+  record before the next tool call uses it, and spawned agents start in
+  their parent's mode.
+- The terminal rings the bell when a turn that took at least 10 seconds
+  finishes (`AURA_TUI_NOTIFY_AFTER_SECS`) and when an agent needs
+  approval. `AURA_TUI_DESKTOP_NOTIFY=1` also sends a desktop
+  notification through `notify-send` on Linux or `osascript` on macOS,
+  and `AURA_TUI_BELL=0` turns the bell off.
+- Terminal agents follow project instructions. Each turn loads
+  `AGENTS.md`, `CLAUDE.md`, `.cursor/rules.md` and `.cursor/rules/*.md`
+  / `*.mdc` from the agent's working folder and every folder above it
+  up to the home directory, plus the user's own `~/.aura/AGENTS.md`.
+  The nearest file wins when two disagree. Cursor rules with
+  `alwaysApply: true` are included, rules with `globs` are included
+  with their globs noted, and rules with only a `description` are
+  listed for the agent to read when relevant. The instructions are
+  capped at 32 KiB, cutting the most general files first and saying
+  so. Files are re-read only when they change, and the section sits
+  right after the base system prompt, so unchanged files keep the
+  prompt cache warm. `AURA_PROJECT_INSTRUCTIONS=off` turns this off.
+- `/init` asks the agent, as a normal turn, to study the project and
+  write an `AGENTS.md` at its root with the build and test commands,
+  layout and conventions. When the project already has one, the agent
+  improves it instead of starting over.
+- `/context` lists the instruction files the agent loads, with their
+  size and whether any were cut or left out.
+- File checkpoints: before the file tools first change a file in a
+  turn, the terminal saves its content (or its absence) under
+  `<data_dir>/checkpoints/<agent>/`, content-addressed, with a manifest
+  per turn. Files changed by shell commands are not covered.
+- `/rewind` lists the session's turns; `/rewind <n> [code|chat|both]`
+  puts files back as they were before turn `n`, cuts the conversation
+  back to before its prompt, or both. The rewind is noted in the record
+  as a `rewind` system entry.
+- `/diff` shows how the files the latest turn changed differ from before
+  it; `/diff session` covers the whole session.
+- `ToolExecutor::with_file_change_hook` and the `FileChangeHook` trait
+  tell a surface before and after each file a tool changes; tools name
+  that file through `Tool::changed_path`. `aura-store-snapshot` gains
+  `DirSnapshotStore`, a directory-backed snapshot store.
+- `web_fetch` tool: terminal and `aura -p` agents can read a public web
+  page as markdown. Scripts, styles and navigation are dropped, and
+  headings, links, lists and code blocks are kept. Requests time out
+  after 20 seconds, follow at most 5 redirects, read at most 2 MiB, and
+  refuse binary content, non-HTTP URLs and local or private addresses
+  (`AURA_WEB_FETCH_ALLOW_PRIVATE=1` allows those).
+- `web_search` tool: terminal and `aura -p` agents can search the web
+  through Brave Search (`BRAVE_API_KEY`), Tavily (`TAVILY_API_KEY`) or a
+  SearXNG instance (`AURA_SEARXNG_URL`). `AURA_WEB_SEARCH_PROVIDER`
+  picks one when several are set. Without a provider, the tool tells
+  the agent and the user what to set. Plan and Ask modes allow both web
+  tools; Debug mode does not. `aura -p --disallowed-tools` can turn
+  either off.
+- Post-edit check: after a step in which the agent edited files, the
+  terminal (and `aura -p`) runs the project's check command and gives
+  the agent the end of the output if it fails. The command comes from
+  `AURA_CHECK_COMMAND` or from a `check:` line or a fenced `check` block
+  in the project's `AGENTS.md`. Several edits in one step run the check
+  once, and a failure that repeats word for word is reported in one
+  line. `AURA_CHECK_TIMEOUT` bounds a run (2 minutes by default).
+
+##### Changed
+
+- The terminal now starts in `default` mode, so edits and commands the
+  agent proposes wait for approval. Commands you type in the chat still
+  run without asking. Set `AURA_TUI_MODE=unrestricted`, or pick that
+  mode with `/mode`, to get the old behaviour where nothing asks.
+- Ctrl+C while an approval prompt is open cancels the turn instead of
+  quitting the terminal.
+- `write_file`, `edit_file` and `delete_file` blocks in the chat show
+  their change as a diff (with line numbers) instead of the raw
+  arguments, and the block header counts added and removed lines.
+
+- Terminal turns have no iteration cap and no 30-minute timeout.
+- The terminal compacts history only from 70% context use
+  (`AURA_COMPACTION_TRIGGER`). Below it, old tool results are no longer
+  trimmed every step, which rewrote the cached prefix.
+- Foreground `run_command` in the terminal defaults to a 2-minute
+  timeout (was 5 seconds), and agent commands get no stdin, so they
+  can't read keystrokes meant for the terminal UI.
+- Build and check commands started by the agent loop are killed when
+  the turn that started them is cancelled. After a timeout, their
+  output is waited for at most 5 seconds.
+
+### Terminal — plan mode
+
+##### Added
+
+- `/plan` (or Shift+Tab to the `plan` mode) puts the agent on screen in
+  plan mode: its turns get plan-mode instructions, the kernel holds it
+  to reads and Markdown notes, and it researches, asks if the request is
+  unclear, and saves a plan with the new `create_plan` tool to
+  `.aura/plans/<name>_<id>.plan.md` (YAML frontmatter with todos, then
+  Markdown). `/build [plan path]` switches the agent back to a mode that
+  edits (the one it had before `/plan`, else `default`), makes the
+  plan's todos its `todo_write` list and has it implement the plan; the
+  plan file's checklist follows the list as the agent works. The plan's
+  open todos show above the input, and a PLAN, ASK or DEBUG badge sits
+  next to the model name.
+- `/mode ask` and `/mode debug` pick the kernel's read-only `ask` and
+  `debug` ceilings. They are not in the Shift+Tab cycle.
+- `Kernel::switch_mode` changes a live kernel's mode after appending a
+  `mode_change` `System` record; submitted `mode_change` transactions
+  are rejected as kernel-only. `Kernel::switch_permissions` switches
+  the mode and the per-tool permission table together in one
+  `mode_change` entry that names both tables (`ModeChangePayload`
+  gained `from_permissions` / `to_permissions`); the terminal's mode
+  switches go through it. `Policy` keeps the mode (and its snapshot
+  hash) behind a lock, and `mode()` / `set_mode()` wrap the swappable
+  policy config.
+- `create_plan` counts as a Markdown write for the mode gate, so plan
+  mode can use it; `todo_write` is a read.
 
 ### Kernel — task-runner tools and agent-host records go through the kernel
 
@@ -138,16 +372,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Opening a row shows its details, like a record entry: owner, parent
   chain, start and end times, the tool call that started it, pid, cwd
   and command or prompt. From there you can jump to the owning agent,
-  open a command's log, or kill the row after confirming.
-- `run_command` takes `background: true`. The command keeps running
-  after the call returns, its output goes to a log file, and the agent
-  gets a message with the exit code and the end of the log when it
-  exits.
+  open a command's log, or kill the row after confirming. Killing a
+  turn or task that waits for an approval denies the call.
+- The status line's background-job count comes from the same table.
 - `task` takes `spawn_mode: "detached"`. The permanent agent works in
   the background, and its reply arrives as a message when it is done.
-- Terminal agents can use `spawn_agent`, `send_to_agent`,
-  `agent_lifecycle`, `get_agent_state` and `list_agents`. Replies from
-  spawned agents arrive as messages.
+- Terminal and `aura -p` agents can use `spawn_agent`,
+  `send_to_agent`, `agent_lifecycle`, `get_agent_state` and
+  `list_agents`. Spawned agents run in their parent's mode, and their
+  replies arrive as messages.
 - Every command the tools run carries `AURA_AGENT_ID`,
   `AURA_TOOL_USE_ID` and `AURA_HARNESS_PID` in its environment.
 

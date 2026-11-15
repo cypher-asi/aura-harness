@@ -57,12 +57,17 @@ fn test_approval_state() {
         id: "test".to_string(),
         tool: "fs.write".to_string(),
         description: "Write file".to_string(),
+        always: String::new(),
     });
     app.state = AppState::AwaitingApproval;
 
     app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::empty()));
     assert!(app.pending_approval.is_none());
-    assert_eq!(app.state(), AppState::Idle);
+    assert_eq!(
+        app.state(),
+        AppState::Processing,
+        "the turn goes on with the denial"
+    );
 }
 
 // ========================================================================
@@ -89,6 +94,7 @@ fn test_state_transition_to_awaiting_approval() {
         id: "t1".to_string(),
         tool: "write_file".to_string(),
         description: "Write file".to_string(),
+        always: String::new(),
     });
     app.state = AppState::AwaitingApproval;
     assert_eq!(app.state(), AppState::AwaitingApproval);
@@ -176,6 +182,71 @@ fn test_clear_command_emits_clear_event() {
     assert!(matches!(rx.try_recv(), Ok(UiEvent::Clear)));
 }
 
+#[test]
+fn test_rewind_command_parses_turn_and_scope() {
+    use crate::events::RewindScope;
+
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+
+    app.handle_command("/rewind");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::Rewind {
+            turn: None,
+            scope: RewindScope::Both,
+            ..
+        })
+    ));
+    app.handle_command("/rewind 3");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::Rewind {
+            turn: Some(3),
+            scope: RewindScope::Both,
+            ..
+        })
+    ));
+    app.handle_command("/rewind 2 code");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::Rewind {
+            turn: Some(2),
+            scope: RewindScope::Code,
+            ..
+        })
+    ));
+
+    for bad in [
+        "/rewind 0",
+        "/rewind x",
+        "/rewind 2 files later",
+        "/rewind 2 nope",
+    ] {
+        app.handle_command(bad);
+        assert!(rx.try_recv().is_err(), "{bad} should not be sent");
+    }
+}
+
+#[test]
+fn test_diff_command_picks_turn_or_session() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+
+    app.handle_command("/diff");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::Diff { session: false, .. })
+    ));
+    app.handle_command("/diff session");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::Diff { session: true, .. })
+    ));
+    app.handle_command("/diff everything");
+    assert!(rx.try_recv().is_err());
+}
+
 fn submit(app: &mut App, text: &str) {
     for c in text.chars() {
         app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()));
@@ -192,7 +263,7 @@ fn test_terminal_prompt_runs_input_as_command() {
 
     assert!(matches!(
         rx.try_recv(),
-        Ok(UiEvent::RunCommand { command, cols: 80 }) if command == "echo hi"
+        Ok(UiEvent::RunCommand { command, cols: 80, .. }) if command == "echo hi"
     ));
     assert_eq!(app.state(), AppState::Processing);
     let run = app.messages()[0].shell_run().expect("shell message");
@@ -239,7 +310,10 @@ fn test_commands_without_hash_go_to_the_agent() {
 
     submit(&mut app, "ls -la");
 
-    assert!(matches!(rx.try_recv(), Ok(UiEvent::UserMessage(text)) if text == "ls -la"));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::UserMessage { text, .. }) if text == "ls -la"
+    ));
 }
 
 #[test]
@@ -249,7 +323,10 @@ fn test_prose_is_sent_as_user_message() {
 
     submit(&mut app, "what is in here?");
 
-    assert!(matches!(rx.try_recv(), Ok(UiEvent::UserMessage(text)) if text == "what is in here?"));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::UserMessage { text, shown: true, .. }) if text == "what is in here?"
+    ));
 }
 
 #[test]
@@ -426,17 +503,155 @@ fn test_enter_on_active_agent_sends_nothing() {
 }
 
 #[test]
-fn test_agent_switch_refused_while_processing() {
+fn test_agent_switch_allowed_while_processing() {
     let (mut app, mut rx) = app_with_agents();
     app.state = AppState::Processing;
 
     app.handle_command("/agent 2");
 
-    assert!(rx.try_recv().is_err());
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
+}
+
+/// Stream `text` into agent `id`'s chat as a reply in progress.
+fn stream_to(app: &mut App, id: &str, text: &str) {
+    for command in [
+        UiCommand::TurnStarted {
+            prompt: Some(format!("ask {id}")),
+        },
+        UiCommand::StartStreaming,
+        UiCommand::AppendText(text.to_string()),
+    ] {
+        app.process_command(UiCommand::ForAgent {
+            agent_id: id.to_string(),
+            command: Box::new(command),
+        });
+    }
+}
+
+#[test]
+fn test_steered_message_splits_the_streaming_reply() {
+    let (mut app, _rx) = app_with_agents();
+    for command in [
+        UiCommand::TurnStarted {
+            prompt: Some("start".to_string()),
+        },
+        UiCommand::StartStreaming,
+        UiCommand::AppendText("first half".to_string()),
+        UiCommand::UserSteered("also do x".to_string()),
+        UiCommand::StartStreaming,
+        UiCommand::AppendText("second half".to_string()),
+        UiCommand::FinishStreaming,
+    ] {
+        app.process_command(command);
+    }
+
+    let contents: Vec<&str> = app.messages().iter().map(Message::content).collect();
+    assert_eq!(
+        contents,
+        ["start", "first half", "also do x", "second half"]
+    );
+}
+
+#[test]
+fn test_background_agent_streams_into_its_own_chat() {
+    let (mut app, _rx) = app_with_agents();
+    submit(&mut app, "hello aa");
+
+    stream_to(&mut app, "bb", "working on it");
+
+    let contents: Vec<&str> = app.messages().iter().map(Message::content).collect();
+    assert_eq!(contents, ["hello aa"]);
+    assert!(app.agent_busy("bb"));
+
+    app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
+    let contents: Vec<&str> = app.messages().iter().map(Message::content).collect();
+    assert_eq!(contents, ["ask bb", "working on it"]);
+    assert_eq!(app.state(), AppState::Processing);
+    assert!(app.agent_busy("aa"));
+
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    let contents: Vec<&str> = app.messages().iter().map(Message::content).collect();
+    assert_eq!(contents, ["hello aa"]);
+    assert_eq!(app.state(), AppState::Processing);
+}
+
+#[test]
+fn test_switching_back_shows_a_turn_that_finished_meanwhile() {
+    let (mut app, _rx) = app_with_agents();
+    stream_to(&mut app, "aa", "first ");
+    app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
+    assert_eq!(app.state(), AppState::Idle);
+
+    for command in [
+        UiCommand::AppendText("draft".to_string()),
+        UiCommand::FinishStreaming,
+        UiCommand::Complete,
+    ] {
+        app.process_command(UiCommand::ForAgent {
+            agent_id: "aa".to_string(),
+            command: Box::new(command),
+        });
+    }
+    assert!(app.messages().is_empty());
+    assert!(!app.agent_busy("aa"));
     assert!(matches!(
         app.notification(),
-        Some((_, NotificationType::Warning))
+        Some((text, NotificationType::Success)) if text == "Terminal Agent finished"
     ));
+
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    let contents: Vec<&str> = app.messages().iter().map(Message::content).collect();
+    assert_eq!(contents, ["ask aa", "first draft"]);
+    assert_eq!(app.state(), AppState::Idle);
+}
+
+#[test]
+fn test_message_to_busy_agent_is_queued_not_shown() {
+    let (mut app, mut rx) = app_with_agents();
+    submit(&mut app, "first");
+    assert!(rx.try_recv().is_ok());
+
+    submit(&mut app, "second");
+
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::UserMessage { agent_id, text, shown: false, .. })
+            if agent_id == "aa" && text == "second"
+    ));
+    let contents: Vec<&str> = app.messages().iter().map(Message::content).collect();
+    assert_eq!(contents, ["first"]);
+    assert_eq!(app.state(), AppState::Processing);
+}
+
+#[test]
+fn test_records_of_background_agents_are_not_listed() {
+    let (mut app, _rx) = app_with_agents();
+    let record = |agent_id: &str| crate::events::RecordSummary {
+        seq: 1,
+        timestamp: String::new(),
+        full_hash: String::new(),
+        hash_suffix: String::new(),
+        tx_kind: "UserPrompt".to_string(),
+        sender: String::new(),
+        message: String::new(),
+        action_count: 0,
+        effect_status: String::new(),
+        status: crate::events::RecordStatus::Ok,
+        info: String::new(),
+        what: String::new(),
+        group: String::new(),
+        detail: String::new(),
+        error_details: String::new(),
+        tx_id: String::new(),
+        agent_id: agent_id.to_string(),
+        ts_ms: 0,
+        policy: None,
+    };
+
+    app.process_command(UiCommand::NewRecord(record("bb")));
+    app.process_command(UiCommand::NewRecord(record("aa")));
+
+    assert_eq!(app.records().len(), 1);
 }
 
 #[test]
@@ -628,13 +843,16 @@ fn test_spawn_command_matches_name_case_insensitively() {
 }
 
 #[test]
-fn test_spawn_refused_while_processing() {
+fn test_spawn_allowed_while_processing() {
     let (mut app, mut rx) = app_with_definitions();
     app.state = AppState::Processing;
 
     app.handle_key(key(KeyCode::Enter));
 
-    assert!(rx.try_recv().is_err());
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::InstantiateDefinition(_))
+    ));
 }
 
 #[test]
@@ -1957,7 +2175,7 @@ fn test_slash_menu_esc_dismisses_until_next_edit() {
     app.handle_key(key(KeyCode::Tab));
     assert_eq!(app.focus(), PanelFocus::Records);
     app.handle_key(key(KeyCode::Char('o')));
-    assert_eq!(slash_names(&app), ["model"]);
+    assert_eq!(slash_names(&app), ["model", "mode"]);
 }
 
 fn agent_pick_names(app: &App) -> Vec<&str> {
@@ -2019,14 +2237,17 @@ fn test_agent_picker_stays_out_of_agent_new_and_esc() {
 }
 
 #[test]
-fn test_agent_picker_keeps_input_while_busy() {
+fn test_agent_picker_adds_while_busy() {
     let (mut app, mut rx) = app_with_definitions();
     app.focus = PanelFocus::Chat;
     app.state = AppState::Processing;
     type_chars(&mut app, "/agent ");
     app.handle_key(key(KeyCode::Enter));
-    assert!(rx.try_recv().is_err());
-    assert_eq!(app.input(), "/agent ");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::AddDefinitionToProject(name)) if name == "explorer"
+    ));
+    assert_eq!(app.input(), "");
 }
 
 #[test]
@@ -2042,6 +2263,472 @@ fn test_recalled_slash_command_keeps_history_navigation() {
     app.handle_key(key(KeyCode::Up));
     assert_eq!(app.input(), "/clear");
     assert!(app.slash_matches().is_empty());
+}
+
+// ========================================================================
+// Approvals, modes and alerts
+// ========================================================================
+
+fn approval_request(id: &str, always: &str) -> UiCommand {
+    UiCommand::RequestApproval {
+        id: id.to_string(),
+        tool: "run_command".to_string(),
+        description: "cargo test".to_string(),
+        always: always.to_string(),
+    }
+}
+
+fn for_agent(agent_id: &str, command: UiCommand) -> UiCommand {
+    UiCommand::ForAgent {
+        agent_id: agent_id.to_string(),
+        command: Box::new(command),
+    }
+}
+
+#[test]
+fn approval_keys_answer_once_always_or_deny() {
+    for (key_char, expect) in [('y', "approve"), ('a', "always"), ('n', "deny")] {
+        let (tx, mut rx) = mpsc::channel(10);
+        let mut app = App::new().with_event_sender(tx);
+        app.process_command(approval_request("req-1", "`cargo test` commands"));
+        assert_eq!(app.state(), AppState::AwaitingApproval);
+
+        app.handle_key(key(KeyCode::Char(key_char)));
+
+        let event = rx.try_recv().unwrap();
+        let matched = match expect {
+            "approve" => matches!(event, UiEvent::Approve(ref id) if id == "req-1"),
+            "always" => matches!(event, UiEvent::ApproveAlways(ref id) if id == "req-1"),
+            _ => matches!(event, UiEvent::Deny(ref id) if id == "req-1"),
+        };
+        assert!(matched, "{key_char}: {event:?}");
+        assert_eq!(app.state(), AppState::Processing);
+        assert!(app.pending_approval().is_none());
+    }
+}
+
+#[test]
+fn always_is_not_offered_when_the_call_cannot_be_remembered() {
+    let (tx, mut rx) = mpsc::channel(10);
+    let mut app = App::new().with_event_sender(tx);
+    app.process_command(approval_request("req-1", ""));
+    app.handle_key(key(KeyCode::Char('a')));
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.state(), AppState::AwaitingApproval);
+}
+
+#[test]
+fn a_closed_approval_drops_its_prompt() {
+    let mut app = App::new();
+    app.process_command(approval_request("req-1", ""));
+    app.process_command(UiCommand::CloseApproval("other".to_string()));
+    assert!(app.pending_approval().is_some());
+    app.process_command(UiCommand::CloseApproval("req-1".to_string()));
+    assert!(app.pending_approval().is_none());
+    assert_eq!(app.state(), AppState::Processing);
+}
+
+#[test]
+fn cancel_while_awaiting_approval_cancels_the_turn() {
+    let (tx, mut rx) = mpsc::channel(10);
+    let mut app = App::new().with_event_sender(tx);
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    app.process_command(approval_request("req-1", ""));
+    assert!(app.is_busy());
+    app.cancel();
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::Cancel(id)) if id == "aa"));
+    assert!(app.pending_approval().is_none());
+    assert_eq!(app.state(), AppState::Idle);
+}
+
+#[test]
+fn approval_for_an_agent_off_screen_waits_in_its_chat() {
+    let mut app = App::new();
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    app.process_command(for_agent("bb", UiCommand::TurnStarted { prompt: None }));
+    app.process_command(for_agent("bb", approval_request("req-b", "")));
+
+    assert!(
+        app.pending_approval().is_none(),
+        "the shown chat is not asked"
+    );
+    assert_eq!(app.state(), AppState::Idle);
+    let (note, _) = app.notification().unwrap();
+    assert!(note.contains("needs your approval"), "{note}");
+    assert_eq!(app.take_alerts().len(), 1);
+
+    app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
+    assert_eq!(app.state(), AppState::AwaitingApproval);
+    assert_eq!(app.pending_approval().unwrap().id, "req-b");
+
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    assert!(app.pending_approval().is_none());
+    assert!(app.agent_busy("bb"));
+}
+
+#[test]
+fn shift_tab_and_mode_command_ask_the_event_loop() {
+    let (tx, mut rx) = mpsc::channel(10);
+    let mut app = App::new().with_event_sender(tx);
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+
+    app.handle_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::CycleMode(id)) if id == "aa"));
+
+    app.handle_command("/mode accept-edits");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SetMode { agent_id, mode: crate::PermissionMode::AcceptEdits }) if agent_id == "aa"
+    ));
+
+    app.handle_command("/mode chaos");
+    assert!(rx.try_recv().is_err());
+    assert!(app.notification().unwrap().0.contains("unknown mode"));
+}
+
+#[test]
+fn mode_command_without_a_name_lists_the_modes() {
+    let mut app = App::new();
+    app.process_command(UiCommand::SetMode(crate::PermissionMode::Plan));
+    app.handle_command("/mode");
+    let report = app.messages().back().unwrap().content().to_string();
+    assert!(report.starts_with("Mode: plan"), "{report}");
+    assert!(report.contains("unrestricted"), "{report}");
+}
+
+#[test]
+fn new_session_keeps_the_mode() {
+    let mut app = App::new();
+    app.process_command(UiCommand::SetMode(crate::PermissionMode::Unrestricted));
+    app.handle_command("/new");
+    assert_eq!(app.hud().mode, Some(crate::PermissionMode::Unrestricted));
+}
+
+#[test]
+fn a_long_turn_alerts_when_it_finishes_and_a_short_one_does_not() {
+    let mut app = App::new();
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    app.process_command(for_agent("aa", UiCommand::TurnStarted { prompt: None }));
+    app.processing_since = Some(Instant::now());
+    app.process_command(for_agent("aa", UiCommand::Complete));
+    assert!(app.take_alerts().is_empty());
+
+    app.process_command(for_agent("aa", UiCommand::TurnStarted { prompt: None }));
+    app.processing_since = Instant::now().checked_sub(Duration::from_secs(30));
+    app.process_command(for_agent("aa", UiCommand::Complete));
+    let alerts = app.take_alerts();
+    assert_eq!(alerts.len(), 1);
+    assert!(alerts[0].contains("finished after 30s"), "{alerts:?}");
+}
+
+// ========================================================================
+// @ mentions
+// ========================================================================
+
+fn app_with_workspace() -> (tempfile::TempDir, App, mpsc::Receiver<UiEvent>) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::create_dir_all(dir.path().join("target")).unwrap();
+    std::fs::write(dir.path().join("src/main.rs"), "").unwrap();
+    std::fs::write(dir.path().join("src/lib.rs"), "").unwrap();
+    std::fs::write(dir.path().join("README.md"), "").unwrap();
+    let (tx, rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    app.process_command(UiCommand::SetSandboxRoot(dir.path().to_path_buf()));
+    (dir, app, rx)
+}
+
+fn type_keys(app: &mut App, text: &str) {
+    for c in text.chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()));
+    }
+}
+
+fn mention_paths(app: &App) -> Vec<String> {
+    app.mention_matches()
+        .iter()
+        .map(|c| c.path.clone())
+        .collect()
+}
+
+#[test]
+fn test_at_opens_the_file_picker_and_enter_inserts_the_path() {
+    let (_dir, mut app, mut rx) = app_with_workspace();
+    type_keys(&mut app, "explain @");
+    assert_eq!(
+        mention_paths(&app),
+        ["src/", "README.md", "src/lib.rs", "src/main.rs"],
+        "skips target/, shallowest first"
+    );
+
+    type_keys(&mut app, "mai");
+    assert_eq!(mention_paths(&app), ["src/main.rs"]);
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert_eq!(app.input(), "explain @src/main.rs ");
+    assert!(app.mention_matches().is_empty(), "inserting closes it");
+
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::UserMessage { text, .. }) if text == "explain @src/main.rs "
+    ));
+}
+
+#[test]
+fn test_tab_on_a_folder_stays_in_the_picker() {
+    let (_dir, mut app, _rx) = app_with_workspace();
+    type_keys(&mut app, "@sr");
+    assert_eq!(mention_paths(&app)[0], "src/");
+    app.handle_key(KeyEvent::from(KeyCode::Tab));
+    assert_eq!(app.input(), "@src/");
+    assert_eq!(mention_paths(&app), ["src/", "src/lib.rs", "src/main.rs"]);
+
+    app.handle_key(KeyEvent::from(KeyCode::Down));
+    app.handle_key(KeyEvent::from(KeyCode::Down));
+    app.handle_key(KeyEvent::from(KeyCode::Tab));
+    assert_eq!(app.input(), "@src/main.rs ");
+    assert_eq!(app.cursor_pos(), app.input().len());
+}
+
+#[test]
+fn test_esc_closes_the_picker_for_that_word() {
+    let (_dir, mut app, _rx) = app_with_workspace();
+    type_keys(&mut app, "@src");
+    app.handle_key(KeyEvent::from(KeyCode::Esc));
+    assert!(app.mention_matches().is_empty());
+    type_keys(&mut app, "/");
+    assert!(app.mention_matches().is_empty(), "same word stays closed");
+
+    type_keys(&mut app, " @READ");
+    assert_eq!(mention_paths(&app), ["README.md"], "a new word opens it");
+}
+
+#[test]
+fn test_an_approval_hides_the_picker_and_takes_y_a_n() {
+    let (_dir, mut app, mut rx) = app_with_workspace();
+    type_keys(&mut app, "@");
+    assert!(!app.mention_matches().is_empty());
+
+    app.process_command(approval_request("req-1", "`cargo test` commands"));
+    assert!(app.mention_matches().is_empty(), "the modal covers it");
+    app.handle_key(key(KeyCode::Char('a')));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::ApproveAlways(id)) if id == "req-1"));
+    assert_eq!(app.input(), "@", "the answer is not typed");
+    assert!(!app.mention_matches().is_empty(), "the picker comes back");
+}
+
+#[test]
+fn test_email_addresses_do_not_open_the_picker() {
+    let (_dir, mut app, _rx) = app_with_workspace();
+    type_keys(&mut app, "mail me@src");
+    assert!(app.mention_matches().is_empty());
+}
+
+// ========================================================================
+// Pasted images
+// ========================================================================
+
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\nimage";
+
+fn paste_image(app: &mut App) {
+    app.paste_clipboard(Ok(crate::clipboard::Clipboard::Image(PNG.to_vec())));
+}
+
+fn sent_images(rx: &mut mpsc::Receiver<UiEvent>) -> Option<(String, usize)> {
+    match rx.try_recv() {
+        Ok(UiEvent::UserMessage { text, images, .. }) => Some((text, images.len())),
+        _ => None,
+    }
+}
+
+#[test]
+fn test_ctrl_v_asks_the_terminal_for_the_clipboard() {
+    let mut app = App::new();
+    app.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+    assert!(app.take_paste_request());
+    assert!(!app.take_paste_request(), "once");
+    assert!(app.input().is_empty(), "Ctrl+V types nothing");
+}
+
+#[test]
+fn test_pasted_image_shows_a_chip_and_is_sent_with_the_message() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    type_keys(&mut app, "what is");
+    paste_image(&mut app);
+    assert_eq!(app.input(), "what is [image 1] ");
+    assert_eq!(app.attached_images(), 1);
+    type_keys(&mut app, "this?");
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+
+    assert_eq!(
+        sent_images(&mut rx),
+        Some(("what is [image 1] this?".to_string(), 1))
+    );
+    let shown: Vec<&str> = app.messages().iter().map(Message::content).collect();
+    assert_eq!(shown, ["what is [image 1] this?"]);
+    assert_eq!(app.attached_images(), 0, "the next message starts empty");
+}
+
+#[test]
+fn test_deleting_the_chip_drops_the_image() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    paste_image(&mut app);
+    paste_image(&mut app);
+    assert_eq!(app.input(), "[image 1] [image 2] ");
+    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    paste_image(&mut app);
+    assert_eq!(
+        app.input(),
+        "[image 1] ",
+        "numbering restarts once chips are gone"
+    );
+    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    type_keys(&mut app, "no picture");
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert_eq!(sent_images(&mut rx), Some(("no picture".to_string(), 0)));
+}
+
+#[test]
+fn test_images_that_are_too_big_or_too_many_are_refused() {
+    let mut app = App::new();
+    let mut huge = PNG.to_vec();
+    huge.resize(images::MAX_IMAGE_BYTES + 1, 0);
+    app.paste_clipboard(Ok(crate::clipboard::Clipboard::Image(huge)));
+    assert!(app.input().is_empty());
+    let (problem, _) = app.notification().unwrap();
+    assert!(problem.contains("the limit is 3.75 MiB"), "{problem}");
+
+    app.paste_clipboard(Ok(crate::clipboard::Clipboard::Image(b"GIF8".to_vec())));
+    assert!(app
+        .notification()
+        .unwrap()
+        .0
+        .contains("PNG, JPEG, GIF and WebP"));
+
+    for _ in 0..images::MAX_IMAGES {
+        paste_image(&mut app);
+    }
+    paste_image(&mut app);
+    assert_eq!(app.attached_images(), images::MAX_IMAGES);
+    assert!(app.notification().unwrap().0.contains("at most 5 images"));
+}
+
+#[test]
+fn test_images_for_a_busy_agent_are_queued() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    app.state = AppState::Processing;
+    paste_image(&mut app);
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert!(app
+        .notification()
+        .unwrap()
+        .0
+        .starts_with("Queued: the agent gets the images"));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::UserMessage { shown: false, images, .. }) if images.len() == 1
+    ));
+}
+
+#[test]
+fn test_pasting_an_image_path_attaches_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("shot.png");
+    std::fs::write(&path, PNG).unwrap();
+    let mut app = App::new();
+    app.handle_paste(&format!("'{}'", path.display()));
+    assert_eq!(app.input(), "[image 1] ");
+    assert_eq!(app.attached_images(), 1);
+}
+
+#[test]
+fn test_pasted_text_keeps_its_newlines_instead_of_sending() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    app.handle_paste("line one\r\nline two");
+    assert_eq!(app.input(), "line one\nline two");
+    assert!(rx.try_recv().is_err(), "nothing was sent");
+
+    app.state = AppState::LinkCode;
+    app.input.clear();
+    app.cursor_pos = 0;
+    app.handle_paste("  code-123\n");
+    assert_eq!(app.input(), "code-123");
+}
+
+#[test]
+fn test_clipboard_errors_are_reported() {
+    let mut app = App::new();
+    app.paste_clipboard(Err(std::io::Error::other("no tool")));
+    assert_eq!(
+        app.notification().unwrap().0,
+        "Cannot read the clipboard: no tool"
+    );
+    app.paste_clipboard(Ok(crate::clipboard::Clipboard::Text("hi".into())));
+    assert_eq!(app.input(), "hi");
+}
+
+// ========================================================================
+// Ctrl+G editor
+// ========================================================================
+
+fn ctrl_g(app: &mut App) -> std::path::PathBuf {
+    app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
+    app.take_editor_request()
+        .expect("Ctrl+G asks for the editor")
+}
+
+#[test]
+fn test_ctrl_g_edits_the_input_in_the_editor() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    type_keys(&mut app, "draft");
+    let path = ctrl_g(&mut app);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "draft");
+
+    std::fs::write(&path, "line one\nline two\n\n").unwrap();
+    app.editor_closed(path.clone(), &Ok(()));
+
+    assert_eq!(app.input(), "line one\nline two");
+    assert_eq!(app.cursor_pos(), app.input().len());
+    assert!(!path.exists(), "the temp file is removed");
+    assert!(rx.try_recv().is_err(), "not a permanent-agent edit");
+
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::UserMessage { text, .. }) if text == "line one\nline two"
+    ));
+}
+
+#[test]
+fn test_a_failed_editor_keeps_the_input() {
+    let mut app = App::new();
+    type_keys(&mut app, "keep me");
+    let path = ctrl_g(&mut app);
+    std::fs::write(&path, "half-written").unwrap();
+    app.editor_closed(path.clone(), &Err(std::io::Error::other("exit status: 1")));
+
+    assert_eq!(app.input(), "keep me");
+    assert!(app
+        .notification()
+        .unwrap()
+        .0
+        .contains("the editor failed: exit status: 1"));
+    assert!(!path.exists());
+}
+
+#[test]
+fn test_ctrl_g_with_empty_input_starts_an_empty_file() {
+    let mut app = App::new();
+    let path = ctrl_g(&mut app);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+    std::fs::write(&path, "@src/main.rs explain").unwrap();
+    app.editor_closed(path, &Ok(()));
+    assert_eq!(app.input(), "@src/main.rs explain");
 }
 
 fn new_record(app: &mut App, seq: u64) {
@@ -2116,4 +2803,112 @@ fn test_records_cap_drops_oldest_and_keeps_selection() {
     assert_eq!(app.records().front().unwrap().seq, 1);
     assert_eq!(app.records().back().unwrap().seq, cap);
     assert_eq!(selected_seq(&app), 10);
+}
+
+// ========================================================================
+// Session modes and plans
+// ========================================================================
+
+fn app_with_events() -> (App, mpsc::Receiver<UiEvent>) {
+    let (tx, rx) = mpsc::channel(8);
+    (App::new().with_event_sender(tx), rx)
+}
+
+fn sample_plan() -> crate::events::PlanView {
+    use crate::events::{PlanView, TodoState, TodoView};
+    PlanView {
+        path: ".aura/plans/auth_0a1b2c3d.plan.md".to_string(),
+        name: "Auth".to_string(),
+        todos: vec![TodoView {
+            content: "Add login".to_string(),
+            state: TodoState::Pending,
+        }],
+    }
+}
+
+#[test]
+fn test_mode_commands_request_a_switch() {
+    let (mut app, mut rx) = app_with_events();
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+
+    app.handle_command("/plan");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SetMode { agent_id, mode: crate::PermissionMode::Plan }) if agent_id == "aa"
+    ));
+    assert_eq!(app.hud().mode, None, "badge waits for the kernel");
+
+    app.process_command(UiCommand::SetMode(crate::PermissionMode::Plan));
+    assert_eq!(app.hud().mode, Some(crate::PermissionMode::Plan));
+
+    app.handle_command("/mode ask");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SetMode {
+            mode: crate::PermissionMode::Ask,
+            ..
+        })
+    ));
+
+    app.handle_command("/mode nonsense");
+    assert!(rx.try_recv().is_err());
+    assert!(matches!(
+        app.notification(),
+        Some((_, NotificationType::Warning))
+    ));
+}
+
+#[test]
+fn test_switching_to_the_current_mode_sends_nothing() {
+    let (mut app, mut rx) = app_with_events();
+    app.process_command(UiCommand::SetMode(crate::PermissionMode::Default));
+    app.handle_command("/mode agent");
+    assert!(rx.try_recv().is_err());
+    assert!(matches!(
+        app.notification(),
+        Some((text, NotificationType::Warning)) if text.contains("Already in default mode")
+    ));
+}
+
+#[test]
+fn test_plan_works_mid_turn_but_build_waits() {
+    let (mut app, mut rx) = app_with_events();
+    app.process_command(UiCommand::SetPlan(Some(sample_plan())));
+    app.state = AppState::Processing;
+
+    app.handle_command("/build");
+    assert!(rx.try_recv().is_err());
+    app.handle_command("/plan");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SetMode {
+            mode: crate::PermissionMode::Plan,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn test_build_needs_a_plan() {
+    let (mut app, mut rx) = app_with_events();
+    app.handle_command("/build");
+    assert!(rx.try_recv().is_err());
+    assert!(matches!(
+        app.notification(),
+        Some((text, NotificationType::Warning)) if text.contains("No plan")
+    ));
+
+    app.handle_command("/build .aura/plans/x_00000000.plan.md");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::BuildPlan { path: Some(path), .. }) if path == ".aura/plans/x_00000000.plan.md"
+    ));
+
+    app.process_command(UiCommand::SetPlan(Some(sample_plan())));
+    assert_eq!(app.active_plan().map(|p| p.name.as_str()), Some("Auth"));
+    app.handle_command("/build");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::BuildPlan { path: None, .. })
+    ));
 }

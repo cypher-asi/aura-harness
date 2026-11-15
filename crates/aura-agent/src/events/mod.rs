@@ -35,6 +35,13 @@ mod wire;
 #[cfg(test)]
 mod tests;
 
+/// `Progress` stage sent after a `todo_write` call; `message` is the
+/// full list as JSON (`Vec<aura_tools::todo::TodoItem>`).
+pub const PROGRESS_TODOS_UPDATED: &str = "todos_updated";
+/// `Progress` stage sent after the transcript was summarized to free
+/// context; `message` is a short human-readable description.
+pub const PROGRESS_CONTEXT_SUMMARIZED: &str = "context_summarized";
+
 pub use mapper::{map_agent_loop_event, TurnEventSink};
 pub use types::{AgentLoopEvent, TurnEvent};
 pub use wire::DebugEvent;

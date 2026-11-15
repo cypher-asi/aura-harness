@@ -7,22 +7,28 @@
 //! tool result. The instance stays in the agents list so the user can open
 //! it and keep talking to it.
 //!
-//! Spawns run inside the parent's tool call, so the event loop is blocked
-//! for their duration; everything they touch lives in [`AgentHub`] behind
+//! Spawns run inside the parent's tool call, on the parent's turn task, so
+//! the event loop keeps running beside them and the user can open a spawn
+//! to watch it work. Everything they touch lives in [`AgentHub`] behind
 //! short-lived locks that are never held across an `.await`.
 
+use super::agent_events::AgentUi;
 use super::agents::{AgentSession, KernelFactory};
+use super::handlers::{handle_agent_success, run_agent_turn};
 use super::host::{agent_tool_definitions, TerminalAgents};
 use super::notices::{Notice, NoticeSender};
 use super::processes::{now_ms, task_id, ProcessTable};
-use super::record_ui::{create_response_transaction, RecordPanelAgent};
-use super::TURN_TIMEOUT;
+use super::record_ui::RecordPanelAgent;
+use super::steering::Steering;
 use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
+use crate::long_run::LongRunSettings;
 use crate::model_selection::ModelLimits;
+use crate::project_instructions::ProjectInstructions;
 use crate::record_loader::agent_summaries;
 use async_trait::async_trait;
 use aura_agent::{AgentLoop, AgentLoopConfig};
+use aura_agent_kernel::Kernel;
 use aura_context_skills::SkillManager;
 use aura_core_types::{
     AgentId, SpawnMode, SubagentDispatchRequest, SubagentExit, SubagentResult, Transaction,
@@ -31,15 +37,26 @@ use aura_model_reasoner::{Message, ToolDefinition};
 use aura_terminal::events::{
     AgentDefinitionSummary, AgentSummary, ProcessKind, ProcessStatus, ProcessSummary,
 };
-use aura_terminal::UiCommand;
+use aura_terminal::{PermissionMode, UiCommand};
 use aura_tools::agents::task::TASK_TOOL_NAME;
+use aura_tools::jobs::{JOB_KILL_TOOL_NAME, JOB_OUTPUT_TOOL_NAME};
+use aura_tools::todo::TODO_WRITE_TOOL_NAME;
 use aura_tools::SubagentDispatchHook;
-use std::collections::HashSet;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
+
+/// An agent with work in flight.
+struct Running {
+    kernel: Arc<Kernel>,
+    cancel: CancellationToken,
+    /// Input for its turn; `None` while it runs a typed shell command or a
+    /// task for its parent.
+    steering: Option<Steering>,
+}
 
 /// What every turn starts from before a permanent agent's settings apply.
 pub struct TurnBase {
@@ -53,16 +70,31 @@ pub struct TurnBase {
 
 /// Agent state shared by the event loop and the subagent dispatcher.
 pub struct AgentHub {
-    pub(super) registry: Mutex<AgentRegistry>,
+    pub(crate) registry: Mutex<AgentRegistry>,
     pub(super) definitions: Mutex<AgentDefinitions>,
     pub(super) skills: Mutex<SkillManager>,
     pub(super) base: Mutex<TurnBase>,
-    /// Instances working on a task for their parent.
-    running: Mutex<HashSet<AgentId>>,
+    /// Agents with work in flight: turns the user started and spawns
+    /// working on a task for their parent.
+    running: Mutex<HashMap<AgentId, Running>>,
     /// Sessions of finished spawns, waiting for the event loop to park them.
     finished: Mutex<Vec<AgentSession>>,
+    /// Wakes the event loop when a spawn finishes.
+    pub(super) spawn_finished: Notify,
     pub(crate) factory: KernelFactory,
     commands: mpsc::Sender<UiCommand>,
+    /// Per-turn time and cost limits.
+    pub(crate) long_run: LongRunSettings,
+    /// Permission mode of each agent the user or a parent set one for
+    modes: Mutex<HashMap<AgentId, PermissionMode>>,
+    /// Mode each agent in plan mode was in before it, which `/build`
+    /// returns it to
+    before_plan: Mutex<HashMap<AgentId, PermissionMode>>,
+    /// Mode of every other agent
+    default_mode: PermissionMode,
+    /// `AGENTS.md`, `CLAUDE.md` and rules for each working folder.
+    pub(crate) instructions: ProjectInstructions,
+    /// What the Processes tab lists.
     pub(crate) processes: Arc<ProcessTable>,
     /// Messages for agents from work that finishes off the event loop.
     pub(crate) notices: NoticeSender,
@@ -79,7 +111,11 @@ pub struct AgentHubParts {
     pub skills: SkillManager,
     pub base: TurnBase,
     pub commands: mpsc::Sender<UiCommand>,
-    /// Lists spawns in the Processes tab.
+    pub(crate) long_run: LongRunSettings,
+    /// Mode agents start in
+    pub mode: PermissionMode,
+    pub instructions: ProjectInstructions,
+    /// Lists turns, spawns and background work in the Processes tab.
     pub processes: Arc<ProcessTable>,
     /// Runs the agents `spawn_agent` starts; `None` leaves the tool out.
     pub agents: Option<TerminalAgents>,
@@ -87,7 +123,7 @@ pub struct AgentHubParts {
     pub record_panel: RecordPanelAgent,
 }
 
-pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -107,10 +143,16 @@ impl AgentHub {
                 definitions: Mutex::new(parts.definitions),
                 skills: Mutex::new(parts.skills),
                 base: Mutex::new(parts.base),
-                running: Mutex::new(HashSet::new()),
+                running: Mutex::new(HashMap::new()),
                 finished: Mutex::new(Vec::new()),
+                spawn_finished: Notify::new(),
                 factory: factory(dispatcher),
                 commands: parts.commands,
+                long_run: parts.long_run,
+                modes: Mutex::new(HashMap::new()),
+                before_plan: Mutex::new(HashMap::new()),
+                default_mode: parts.mode,
+                instructions: parts.instructions,
                 processes: parts.processes,
                 notices,
                 notice_rx: Mutex::new(Some(notice_rx)),
@@ -120,12 +162,106 @@ impl AgentHub {
         })
     }
 
-    /// Config and tools for a turn of an agent, applying the permanent
-    /// agent `definition` when it names one.
-    pub fn turn(&self, definition: Option<&str>) -> (AgentLoopConfig, Vec<ToolDefinition>) {
+    /// Permission mode of `agent_id`.
+    pub fn mode_of(&self, agent_id: AgentId) -> PermissionMode {
+        lock(&self.modes)
+            .get(&agent_id)
+            .copied()
+            .unwrap_or(self.default_mode)
+    }
+
+    /// Note that `agent_id` is in `mode` from now on.
+    pub(super) fn set_mode(&self, agent_id: AgentId, mode: PermissionMode) {
+        let from = lock(&self.modes).insert(agent_id, mode);
+        let from = from.unwrap_or(self.default_mode);
+        if mode == PermissionMode::Plan && from != PermissionMode::Plan {
+            lock(&self.before_plan).insert(agent_id, from);
+        }
+    }
+
+    /// The mode `/build` puts `agent_id` in: its current one when that
+    /// lets it edit, else the one it had before plan mode, else
+    /// `default`.
+    pub(super) fn build_mode(&self, agent_id: AgentId) -> PermissionMode {
+        let mode = self.mode_of(agent_id);
+        if mode.agent_mode() == aura_core_types::AgentMode::Agent {
+            return mode;
+        }
+        lock(&self.before_plan)
+            .get(&agent_id)
+            .copied()
+            .filter(|before| before.agent_mode() == aura_core_types::AgentMode::Agent)
+            .unwrap_or(PermissionMode::Default)
+    }
+
+    /// Names of every tool a turn may offer, for the mode tables.
+    pub(crate) fn tool_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = lock(&self.base)
+            .tools
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect();
+        names.push(TASK_TOOL_NAME.to_string());
+        if self.agents.is_some() {
+            names.extend(agent_tool_definitions().into_iter().map(|tool| tool.name));
+        }
+        names
+    }
+
+    /// Config and tools for a turn of an agent working in `workspace`,
+    /// applying the permanent agent `definition` when it names one.
+    pub fn turn(
+        &self,
+        definition: Option<&str>,
+        workspace: &Path,
+    ) -> (AgentLoopConfig, Vec<ToolDefinition>) {
+        let instructions = self.instructions.for_workspace(workspace);
+        let (mut config, tools) = self.definition_turn(definition, &instructions.text);
+        self.long_run.apply(&mut config);
+        (config, tools)
+    }
+
+    /// [`Self::turn`] for `agent_id`, with the plan-mode instructions when
+    /// the agent is in plan mode.
+    pub(crate) fn agent_turn(
+        &self,
+        agent_id: AgentId,
+        definition: Option<&str>,
+        workspace: &Path,
+    ) -> (AgentLoopConfig, Vec<ToolDefinition>) {
+        let (mut config, tools) = self.turn(definition, workspace);
+        if self.mode_of(agent_id) == PermissionMode::Plan {
+            config.system_prompt.push_str("\n\n");
+            config
+                .system_prompt
+                .push_str(&aura_context_prompts::system::sections::plan_mode::render());
+        }
+        (config, tools)
+    }
+
+    /// Show `agent_id` the instruction files its turns load from
+    /// `workspace`.
+    pub(super) async fn send_instructions(&self, agent_id: AgentId, workspace: &Path) {
+        let files = self.instructions.for_workspace(workspace).files.clone();
+        AgentUi::new(self.commands.clone(), agent_id)
+            .send(UiCommand::SetInstructions(files))
+            .await;
+    }
+
+    fn definition_turn(
+        &self,
+        definition: Option<&str>,
+        instructions: &str,
+    ) -> (AgentLoopConfig, Vec<ToolDefinition>) {
         let base = lock(&self.base);
         let definitions = lock(&self.definitions);
         let mut config = base.config.clone();
+        // Right after the base prompt, ahead of anything that varies
+        // between agents or turns, so the cached prompt prefix covers it.
+        if !instructions.is_empty() {
+            config.system_prompt.push_str("\n\n");
+            config.system_prompt.push_str(instructions);
+        }
         let mut tools = base.tools.clone();
         if let Some(task) = task_tool_definition(&definitions) {
             tools.push(task);
@@ -143,7 +279,21 @@ impl AgentHub {
             );
             return (config, tools);
         };
-        tools = definition.filter_tools(&tools);
+        let filtered = definition.filter_tools(&tools);
+        // Planning and job tools only touch the agent's own state, so a
+        // permanent agent's tool list never needs to name them.
+        let keep_harness_tool = |tool: &ToolDefinition| {
+            tool.name == TODO_WRITE_TOOL_NAME
+                || ((tool.name == JOB_OUTPUT_TOOL_NAME || tool.name == JOB_KILL_TOOL_NAME)
+                    && filtered.iter().any(|t| t.name == "run_command"))
+        };
+        let harness: Vec<ToolDefinition> = tools
+            .iter()
+            .filter(|tool| keep_harness_tool(tool) && !filtered.iter().any(|t| t.name == tool.name))
+            .cloned()
+            .collect();
+        tools = filtered;
+        tools.extend(harness);
         definition.extend_system_prompt(&mut config.system_prompt, &lock(&self.skills));
         if let Some(model) = &definition.model {
             base.limits.configure(&mut config, model);
@@ -172,7 +322,7 @@ impl AgentHub {
     /// Rows for the Agents panel.
     pub fn agent_summaries(&self) -> Vec<AgentSummary> {
         let registry = lock(&self.registry);
-        let running = lock(&self.running).clone();
+        let running: HashSet<AgentId> = lock(&self.running).keys().copied().collect();
         agent_summaries(
             &registry,
             self.factory.store.as_ref(),
@@ -194,7 +344,8 @@ impl AgentHub {
     }
 
     /// Let `agent`, about to run a turn on `config` in `folder`, spawn
-    /// background agents, and list them in the Processes tab.
+    /// background agents in its own mode, and list them in the Processes
+    /// tab.
     pub(crate) fn register_root(
         &self,
         agent: AgentId,
@@ -203,7 +354,8 @@ impl AgentHub {
         config: &AgentLoopConfig,
     ) {
         if let Some(agents) = &self.agents {
-            agents.register(agent, name, folder, config, self.notices.clone());
+            let mode = self.mode_of(agent).agent_mode();
+            agents.register(agent, name, folder, config, mode, self.notices.clone());
             self.processes.add_root(agent);
         }
     }
@@ -235,6 +387,67 @@ impl AgentHub {
     /// Sessions of spawns that finished since the last call.
     pub fn take_finished(&self) -> Vec<AgentSession> {
         std::mem::take(&mut *lock(&self.finished))
+    }
+
+    /// Note that `agent_id` started work on `kernel` that `cancel` stops.
+    /// `steering` takes messages for it while it runs.
+    pub(super) fn start_running(
+        &self,
+        agent_id: AgentId,
+        kernel: Arc<Kernel>,
+        cancel: CancellationToken,
+        steering: Option<Steering>,
+    ) {
+        lock(&self.running).insert(
+            agent_id,
+            Running {
+                kernel,
+                cancel,
+                steering,
+            },
+        );
+    }
+
+    /// Input for the turn `agent_id` is running, if it is running one.
+    pub(super) fn steering(&self, agent_id: AgentId) -> Option<Steering> {
+        lock(&self.running)
+            .get(&agent_id)
+            .and_then(|running| running.steering.clone())
+    }
+
+    /// Note that `agent_id` has no work in flight any more. Returns
+    /// whether that work was cancelled.
+    pub(super) fn stop_running(&self, agent_id: AgentId) -> bool {
+        lock(&self.running)
+            .remove(&agent_id)
+            .is_some_and(|running| running.cancel.is_cancelled())
+    }
+
+    /// Whether `agent_id` has work in flight.
+    pub(crate) fn is_running(&self, agent_id: AgentId) -> bool {
+        lock(&self.running).contains_key(&agent_id)
+    }
+
+    /// Kernel of `agent_id` while it has work in flight.
+    pub(super) fn running_kernel(&self, agent_id: AgentId) -> Option<Arc<Kernel>> {
+        lock(&self.running)
+            .get(&agent_id)
+            .map(|running| Arc::clone(&running.kernel))
+    }
+
+    /// Stop the work of `agent_id`. Returns whether it had any.
+    pub(super) fn cancel(&self, agent_id: AgentId) -> bool {
+        lock(&self.running)
+            .get(&agent_id)
+            .map(|running| running.cancel.cancel())
+            .is_some()
+    }
+
+    /// Stop the work of every agent.
+    pub(super) fn cancel_all(&self) {
+        for running in lock(&self.running).values() {
+            running.cancel.cancel();
+        }
     }
 
     async fn spawn(
@@ -272,21 +485,22 @@ impl AgentHub {
             .map_err(|e| format!("opening {}: {e:#}", instance.name))?;
         let child_id = session.agent_id();
         info!(child = %instance.name, definition = %definition.name, "Spawning permanent agent");
+        // A spawn asks no less than the agent that started it.
+        let mode = self.mode_of(request.parent_agent_id);
+        self.set_mode(child_id, mode);
+        super::modes::apply(&session.kernel, mode, &self.tool_names());
 
         let detached = request.spawn_mode == Some(SpawnMode::Detached);
-        lock(&self.running).insert(child_id);
+        let cancel = CancellationToken::new();
+        // Messages for a spawn wait for its task to end: steering it
+        // mid-task would change the work its parent is waiting on.
+        self.start_running(child_id, Arc::clone(&session.kernel), cancel.clone(), None);
         self.send_agent_list().await;
-        if !detached {
-            let _ = self
-                .commands
-                .send(UiCommand::SetStatus(format!(
-                    "{} is working...",
-                    instance.name
-                )))
-                .await;
-        }
 
-        let (mut config, tools) = self.turn(Some(&definition.name));
+        let workspace = session.kernel.agent_workspace();
+        self.send_instructions(child_id, &workspace).await;
+        let (mut config, tools) = self.agent_turn(child_id, Some(&definition.name), &workspace);
+        config.initial_todos.clone_from(&session.todos);
         // Observers report on the agent they were installed for, not this one.
         config.observers.clear();
         if let Some(addendum) = request
@@ -297,13 +511,7 @@ impl AgentHub {
             config.system_prompt.push_str("\n\n");
             config.system_prompt.push_str(addendum);
         }
-        self.register_root(
-            child_id,
-            &instance.name,
-            session.kernel.agent_workspace(),
-            &config,
-        );
-        let cancel = CancellationToken::new();
+        self.register_root(child_id, &instance.name, workspace, &config);
         let mut summary = task_summary(
             &request,
             &instance.name,
@@ -362,19 +570,17 @@ impl AgentHub {
     /// event loop to keep.
     async fn finish_task(&self, mut run: TaskRun) -> Result<String, String> {
         let child_id = run.session.agent_id();
+        let ui = AgentUi::new(self.commands.clone(), child_id);
         let outcome = run_task_turn(
             &mut run.session,
             &run.agent_loop,
             run.tools,
             &run.prompt,
-            run.cancel.clone(),
+            &ui,
+            &run.cancel,
+            self.long_run,
         )
         .await;
-        let outcome = if run.cancel.is_cancelled() {
-            Err("stopped from the Processes tab".to_string())
-        } else {
-            outcome
-        };
         self.processes.finish(
             &task_id(child_id),
             if outcome.is_ok() {
@@ -384,15 +590,13 @@ impl AgentHub {
             },
         );
 
-        lock(&self.running).remove(&child_id);
+        // Parked before it stops running, so the event loop never sees the
+        // agent with neither a session nor work in flight.
         lock(&self.finished).push(run.session);
+        self.stop_running(child_id);
+        self.spawn_finished.notify_one();
         self.send_agent_list().await;
         outcome
-    }
-
-    /// Whether `agent` is doing a task, so its session is in use.
-    pub(crate) fn is_running(&self, agent: AgentId) -> bool {
-        lock(&self.running).contains(&agent)
     }
 }
 
@@ -505,14 +709,16 @@ fn task_summary(
     }
 }
 
-/// Record `prompt` on `session` and run one turn of it, returning the
-/// final reply.
+/// Record `prompt` on `session` and run one turn of it, streaming it into
+/// `ui`, and return the final reply.
 async fn run_task_turn(
     session: &mut AgentSession,
     agent_loop: &AgentLoop,
     tools: Vec<ToolDefinition>,
     prompt: &str,
-    cancel: CancellationToken,
+    ui: &AgentUi,
+    cancel: &CancellationToken,
+    limits: LongRunSettings,
 ) -> Result<String, String> {
     let agent_id = session.agent_id();
     let store = session.kernel.store();
@@ -529,38 +735,36 @@ async fn run_task_turn(
         .await
         .map_err(|e| format!("recording prompt: {e}"))?;
     session.messages.push(Message::user(prompt));
+    ui.send(UiCommand::TurnStarted {
+        prompt: Some(prompt.to_string()),
+    })
+    .await;
 
-    let result = match tokio::time::timeout(
-        TURN_TIMEOUT,
-        agent_loop.run_with_events(
-            &session.model_gateway,
-            &session.tool_gateway,
-            session.messages.clone(),
-            tools,
-            None,
-            Some(cancel.clone()),
-        ),
-    )
-    .await
-    {
-        Ok(result) => result.map_err(|e| e.to_string())?,
-        Err(_) => {
-            cancel.cancel();
-            return Err(format!(
-                "timed out after {} minutes",
-                TURN_TIMEOUT.as_secs() / 60
-            ));
+    // Nothing sends to a spawn mid-task, so its steering stays empty.
+    let steering = Steering::new(cancel);
+    let (result, forwarded) =
+        run_agent_turn(session, agent_loop, tools, ui, cancel, &steering, limits).await;
+    steering.finish(&[]);
+    let result = match result {
+        Ok(result) => result,
+        Err(e) => {
+            let reason = if cancel.is_cancelled() {
+                "cancelled by the user".to_string()
+            } else {
+                e.to_string()
+            };
+            ui.send(UiCommand::ShowWarning(reason.clone())).await;
+            ui.send(UiCommand::Complete).await;
+            return Err(reason);
         }
     };
-    session.messages.clone_from(&result.messages);
-
-    let response = create_response_transaction(agent_id, &result.total_text);
-    if let Err(e) = session.kernel.process_direct(response).await {
-        warn!(error = %e, "Failed to record permanent agent reply");
-    }
-    match result.llm_error {
-        Some(err) if result.total_text.trim().is_empty() => Err(err.to_string()),
-        _ => Ok(result.total_text),
+    let text = result.total_text.clone();
+    let llm_error = result.llm_error.as_ref().map(ToString::to_string);
+    handle_agent_success(session, result, &forwarded, ui, &[]).await;
+    match llm_error {
+        _ if cancel.is_cancelled() => Err("cancelled by the user".to_string()),
+        Some(err) if text.trim().is_empty() => Err(err),
+        _ => Ok(text),
     }
 }
 

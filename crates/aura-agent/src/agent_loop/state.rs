@@ -100,12 +100,19 @@ pub(crate) struct LoopState {
     pub(crate) steering: SteeringRegistry,
     /// Identical failed edit attempts, retained across intervening reads.
     pub(crate) failed_edit_attempts: std::collections::HashMap<String, u32>,
+    /// Todo list as of the last open-todo nudge, and how many nudges in
+    /// a row left it unchanged. See `turn::open_todo_nudge`.
+    pub(crate) todos_at_last_nudge: Option<Vec<aura_tools::todo::TodoItem>>,
+    pub(crate) stalled_todo_nudges: u32,
 }
 
 impl LoopState {
     pub(super) fn new(config: &AgentLoopConfig, messages: Vec<Message>) -> Self {
         Self {
-            result: AgentLoopResult::default(),
+            result: AgentLoopResult {
+                todos: config.initial_todos.clone(),
+                ..AgentLoopResult::default()
+            },
             tool_cache: ToolResultCache::default(),
             exploration_state: ExplorationState::default(),
             budget_state: BudgetState::default(),
@@ -140,6 +147,48 @@ impl LoopState {
                 config.early_test_oracle.clone(),
             ),
             failed_edit_attempts: std::collections::HashMap::new(),
+            todos_at_last_nudge: None,
+            stalled_todo_nudges: 0,
+        }
+    }
+
+    /// Apply every `todo_write` call in `response` to the tracked list
+    /// and tell the client about the new list.
+    pub(super) fn observe_todo_writes(
+        &mut self,
+        response: &aura_model_reasoner::ModelResponse,
+        event_tx: Option<&tokio::sync::mpsc::Sender<crate::events::AgentLoopEvent>>,
+    ) {
+        use aura_tools::todo::{apply_todo_write, TODO_WRITE_TOOL_NAME};
+        let mut changed = false;
+        for block in &response.message.content {
+            let aura_model_reasoner::ContentBlock::ToolUse { name, input, .. } = block else {
+                continue;
+            };
+            if name != TODO_WRITE_TOOL_NAME {
+                continue;
+            }
+            match apply_todo_write(&self.result.todos, input) {
+                Ok(next) => {
+                    self.result.todos = next;
+                    changed = true;
+                }
+                Err(err) => tracing::debug!(%err, "ignoring malformed todo_write call"),
+            }
+        }
+        if !changed {
+            return;
+        }
+        if let Ok(json) = serde_json::to_string(&self.result.todos) {
+            super::streaming::emit(
+                event_tx,
+                crate::events::AgentLoopEvent::Progress {
+                    stage: crate::events::PROGRESS_TODOS_UPDATED.to_string(),
+                    tool_name: Some(TODO_WRITE_TOOL_NAME.to_string()),
+                    elapsed_ms: None,
+                    message: Some(json),
+                },
+            );
         }
     }
 

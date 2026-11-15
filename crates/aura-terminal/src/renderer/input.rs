@@ -16,8 +16,6 @@ const MODEL_GAP: u16 = 2;
 const MIN_INPUT_WIDTH: u16 = 20;
 /// Prompt before a chat message.
 const CHAT_PROMPT: &str = "> ";
-/// Shown in place of the input line while typing happens in the terminal.
-const TERMINAL_HINT: &str = "Esc returns to chat";
 
 /// Render input line with the current model and status on the right.
 /// `chat_left` is the Chat panel's left border, relative to `area`; typing
@@ -93,21 +91,14 @@ pub(super) fn render_input(
     let status_line = Line::from(Span::styled(&status_text, status_style));
     frame.render_widget(Paragraph::new(status_line), status_area);
 
-    if app.input_is_command() {
-        let typing_x = area.x + chat_left + EDGE_INSET;
-        let hint_area = Rect {
-            x: typing_x,
-            y: area.y,
-            width: input_right.saturating_sub(typing_x),
-            height: 1,
-        };
-        let hint = Span::styled(TERMINAL_HINT, Style::default().fg(theme.colors.muted));
-        frame.render_widget(Paragraph::new(Line::from(hint)), hint_area);
-        return;
-    }
-
+    let command = app.input_is_command();
     let before_cursor = input.get(..cursor_pos).unwrap_or(input);
     let (prompt_str, display_input, cursor_col) = match app.state() {
+        _ if command => (
+            app.shell_prompt(),
+            input.to_string(),
+            display_width(before_cursor),
+        ),
         AppState::LoginEmail => ("Email: ", input.to_string(), display_width(before_cursor)),
         AppState::ProjectName => ("Project: ", input.to_string(), display_width(before_cursor)),
         AppState::LinkCode => (
@@ -120,7 +111,11 @@ pub(super) fn render_input(
             "•".repeat(input.chars().count()),
             before_cursor.chars().count(),
         ),
-        _ => (CHAT_PROMPT, input.to_string(), display_width(before_cursor)),
+        _ => (
+            CHAT_PROMPT,
+            one_line(input),
+            display_width(&one_line(before_cursor)),
+        ),
     };
     let prompt_width = u16::try_from(display_width(prompt_str)).unwrap_or(u16::MAX);
 
@@ -147,15 +142,68 @@ pub(super) fn render_input(
         Paragraph::new(Line::from(prompt_spans(prompt_str, prompt_color, theme))),
         prompt_area,
     );
-    let input_line = Line::from(Span::styled(
-        display_input.as_str(),
-        Style::default().fg(theme.colors.muted),
-    ));
+    let input_line = if command {
+        Line::from(super::command::command_spans(&display_input, theme))
+    } else {
+        Line::from(prose_spans(&display_input, theme))
+    };
     frame.render_widget(Paragraph::new(input_line), input_area);
 
     if !is_thinking {
         let cursor_x = typing_x.saturating_add(u16::try_from(cursor_col).unwrap_or(u16::MAX));
         frame.set_cursor_position((cursor_x, area.y));
+    }
+}
+
+/// The input on one row: a pasted or edited newline shows as `↵`, which
+/// is one column wide like the cursor math expects.
+fn one_line(text: &str) -> String {
+    text.replace('\n', "↵")
+}
+
+/// Typed text in the muted color, with `@path` mentions and `[image N]`
+/// chips picked out so it is clear what will be attached.
+pub(super) fn prose_spans<'a>(text: &'a str, theme: &Theme) -> Vec<Span<'a>> {
+    let plain = Style::default().fg(theme.colors.muted);
+    let chip = Style::default().fg(theme.colors.primary);
+    let mut spans = Vec::new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < text.len() {
+        let rest = &text[i..];
+        let at_word_start = i == 0 || text[..i].ends_with(char::is_whitespace);
+        let token_len = if at_word_start && rest.starts_with('@') && rest.len() > 1 {
+            rest.find(char::is_whitespace).unwrap_or(rest.len())
+        } else {
+            image_chip_len(rest)
+        };
+        if token_len == 0 {
+            i += rest.chars().next().map_or(1, char::len_utf8);
+            continue;
+        }
+        if start < i {
+            spans.push(Span::styled(&text[start..i], plain));
+        }
+        spans.push(Span::styled(&text[i..i + token_len], chip));
+        i += token_len;
+        start = i;
+    }
+    if start < text.len() {
+        spans.push(Span::styled(&text[start..], plain));
+    }
+    spans
+}
+
+/// Length of an `[image N]` chip at the start of `text`, or 0.
+fn image_chip_len(text: &str) -> usize {
+    let Some(rest) = text.strip_prefix("[image ") else {
+        return 0;
+    };
+    let digits = rest.chars().take_while(char::is_ascii_digit).count();
+    if digits > 0 && rest[digits..].starts_with(']') {
+        "[image ".len() + digits + 1
+    } else {
+        0
     }
 }
 

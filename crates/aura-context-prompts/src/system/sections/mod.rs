@@ -17,8 +17,10 @@ pub mod dev_loop_workflow;
 pub mod editing_etiquette;
 pub mod frontend_design;
 pub mod output_style;
+pub mod plan_mode;
 pub mod planning_guidance;
 pub mod project_context;
+pub mod project_instructions;
 pub mod tool_discipline;
 
 pub use agents_md::{
@@ -26,3 +28,4 @@ pub use agents_md::{
 };
 pub use chat_capabilities::CHAT_SYSTEM_PROMPT_BASE;
 pub use dev_loop_workflow::platform_info_string;
+pub use project_instructions::{InstructionFile, OnRequestRule, ProjectInstructionsView};
