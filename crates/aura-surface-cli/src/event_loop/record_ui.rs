@@ -1,21 +1,9 @@
-use crate::record_loader::{build_record_summary, format_local_time, policy_chat_line};
-use aura_agent_kernel::ToolAuditObserver;
+use crate::record_loader::{build_record_summary, format_local_time, policy_outcome};
+use aura_agent_kernel::RecordObserver;
 use aura_core_types::{AgentId, PolicyDecision, RecordEntry, Transaction, TransactionType};
-use aura_terminal::events::{MessageData, MessageRole};
 use aura_terminal::UiCommand;
-use tokio::sync::mpsc::{self, error::TrySendError};
-
-/// Send a record summary to the UI (matching the stored format).
-pub(crate) async fn send_record_to_ui(
-    commands: &mpsc::Sender<UiCommand>,
-    seq: u64,
-    tx: &Transaction,
-    entry: &RecordEntry,
-) {
-    let timestamp = chrono::Local::now().format("%H:%M:%S").to_string();
-    let record_summary = build_record_summary(seq, tx, entry, timestamp);
-    let _ = commands.send(UiCommand::NewRecord(record_summary)).await;
-}
+use std::sync::{Arc, Mutex, PoisonError};
+use tokio::sync::mpsc;
 
 /// Create a response transaction for the assistant's message.
 pub(crate) fn create_response_transaction(agent_id: AgentId, response_text: &str) -> Transaction {
@@ -27,59 +15,125 @@ pub(crate) fn create_response_transaction(agent_id: AgentId, response_text: &str
     )
 }
 
-/// Streams each tool-call record entry (proposal, policy decision,
-/// execution) to the RECORD panel as the kernel persists it, plus a chat
-/// line naming the policy rule behind every decision.
-#[derive(Debug)]
-pub struct UiToolAuditObserver {
-    commands: mpsc::Sender<UiCommand>,
+/// The agent on screen, whose record the RECORD panel shows. Every agent
+/// kernel shares one [`UiRecordObserver`]; entries from other agents stay
+/// in the store until the panel switches to them.
+#[derive(Debug, Clone, Default)]
+pub struct RecordPanelAgent(Arc<Mutex<Option<AgentId>>>);
+
+impl RecordPanelAgent {
+    pub fn set(&self, agent_id: AgentId) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(agent_id);
+    }
+
+    /// Whether `agent_id` is the agent on screen (any agent before one
+    /// is set).
+    pub(crate) fn shows(&self, agent_id: AgentId) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_none_or(|shown| shown == agent_id)
+    }
 }
 
-impl UiToolAuditObserver {
+/// Streams every record entry the kernel persists to the RECORD panel, in
+/// sequence order, and the policy rule behind every decision to the tool
+/// call it decided, in the chat of the agent that made the call (agents
+/// work in parallel, so that may not be the one on screen).
+#[derive(Debug)]
+pub struct UiRecordObserver {
+    queue: mpsc::UnboundedSender<UiCommand>,
+    panel: RecordPanelAgent,
+}
+
+impl UiRecordObserver {
+    /// Must be called inside a Tokio runtime: rows are forwarded to
+    /// `commands` by a task, so the kernel never blocks on a full channel
+    /// and rows never overtake each other.
     #[must_use]
-    pub const fn new(commands: mpsc::Sender<UiCommand>) -> Self {
-        Self { commands }
+    pub fn new(commands: mpsc::Sender<UiCommand>, panel: RecordPanelAgent) -> Self {
+        let (queue, mut rows) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(command) = rows.recv().await {
+                if commands.send(command).await.is_err() {
+                    break;
+                }
+            }
+        });
+        Self { queue, panel }
     }
 
     fn send(&self, command: UiCommand) {
-        if let Err(TrySendError::Full(command)) = self.commands.try_send(command) {
-            // Runs on the kernel task, so never block; wait for capacity
-            // on a separate task instead.
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                let commands = self.commands.clone();
-                handle.spawn(async move {
-                    let _ = commands.send(command).await;
+        let _ = self.queue.send(command);
+    }
+}
+
+impl RecordObserver for UiRecordObserver {
+    fn on_entry(&self, entry: &RecordEntry) {
+        if self.panel.shows(entry.tx.agent_id) {
+            let timestamp = format_local_time(entry.tx.ts_ms);
+            self.send(UiCommand::NewRecord(build_record_summary(
+                entry.seq, &entry.tx, entry, timestamp,
+            )));
+        }
+        if entry.tx.tx_type == TransactionType::PolicyDecision {
+            let Ok(decision) = serde_json::from_slice::<PolicyDecision>(&entry.tx.payload) else {
+                return;
+            };
+            if let Some(outcome) = policy_outcome(&decision) {
+                self.send(UiCommand::ForAgent {
+                    agent_id: entry.tx.agent_id.to_hex(),
+                    command: Box::new(UiCommand::ToolPolicy {
+                        id: decision.tool_use_id,
+                        tool: decision.tool,
+                        decision: outcome,
+                    }),
                 });
             }
         }
     }
 }
 
-impl ToolAuditObserver for UiToolAuditObserver {
-    fn on_tool_entry(&self, entry: &RecordEntry) {
-        let timestamp = format_local_time(entry.tx.ts_ms);
-        self.send(UiCommand::NewRecord(build_record_summary(
-            entry.seq, &entry.tx, entry, timestamp,
-        )));
-        if entry.tx.tx_type == TransactionType::PolicyDecision {
-            let line = serde_json::from_slice::<PolicyDecision>(&entry.tx.payload)
-                .ok()
-                .and_then(|decision| policy_chat_line(&decision));
-            if let Some(content) = line {
-                self.send(UiCommand::ForAgent {
-                    agent_id: entry.tx.agent_id.to_hex(),
-                    command: Box::new(UiCommand::ShowMessage(MessageData {
-                        role: MessageRole::System,
-                        content,
-                        is_streaming: false,
-                        timestamp_ms: Some(entry.tx.ts_ms),
-                        command: None,
-                        activity: None,
-                        model: None,
-                        usage: None,
-                    })),
-                });
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aura_core_types::RecordEntry;
+
+    fn prompt(agent_id: AgentId, seq: u64) -> RecordEntry {
+        RecordEntry::builder(seq, Transaction::user_prompt(agent_id, "hi")).build()
+    }
+
+    async fn seqs(rx: &mut mpsc::Receiver<UiCommand>, n: usize) -> Vec<u64> {
+        let mut out = Vec::new();
+        while out.len() < n {
+            if let Some(UiCommand::NewRecord(row)) = rx.recv().await {
+                out.push(row.seq);
             }
         }
+        out
+    }
+
+    #[tokio::test]
+    async fn rows_arrive_in_order_even_when_the_channel_is_full() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let observer = UiRecordObserver::new(tx, RecordPanelAgent::default());
+        let agent = AgentId::generate();
+        for seq in 1..=20 {
+            observer.on_entry(&prompt(agent, seq));
+        }
+        assert_eq!(seqs(&mut rx, 20).await, (1..=20).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn rows_from_agents_the_panel_does_not_show_are_dropped() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let panel = RecordPanelAgent::default();
+        let shown = AgentId::generate();
+        panel.set(shown);
+        let observer = UiRecordObserver::new(tx, panel);
+        observer.on_entry(&prompt(AgentId::generate(), 1));
+        observer.on_entry(&prompt(shown, 7));
+        assert_eq!(seqs(&mut rx, 1).await, vec![7]);
+        assert!(rx.try_recv().is_err());
     }
 }

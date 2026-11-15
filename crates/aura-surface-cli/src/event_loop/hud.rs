@@ -1,5 +1,6 @@
 //! What the terminal's status line and its `/context`, `/cost` and
-//! `/todos` commands show, built from what agents report.
+//! `/todos` commands show, built from what agents report. Background jobs
+//! come from the Processes tab's table (see [`super::processes`]).
 
 use super::agent_events::AgentUi;
 use super::agents::AgentSession;
@@ -8,11 +9,9 @@ use crate::session_checkpoint::SessionUsage;
 use aura_agent::AgentLoopResult;
 use aura_core_types::AgentId;
 use aura_model_reasoner::{model_catalog, Usage};
-use aura_terminal::events::{CallStats, ContextView, JobView, SessionTotals, TodoState, TodoView};
+use aura_terminal::events::{CallStats, ContextView, SessionTotals, TodoState, TodoView};
 use aura_terminal::UiCommand;
-use aura_tools::jobs::JobSummary;
 use aura_tools::todo::{TodoItem, TodoStatus};
-use std::collections::HashMap;
 
 /// `todos` as the UI shows them.
 pub(super) fn todo_views(todos: &[TodoItem]) -> Vec<TodoView> {
@@ -53,29 +52,6 @@ pub(super) fn context_view(result: &AgentLoopResult, limit: Option<u64>) -> Cont
         conversation_tokens: breakdown.conversation_tokens,
         total_tokens: result.estimated_context_tokens,
         limit_tokens: limit,
-    }
-}
-
-fn job_view(job: &JobSummary) -> JobView {
-    JobView {
-        id: job.job_id.clone(),
-        command: job.command.clone(),
-        running: job.running,
-    }
-}
-
-/// Show every agent its background jobs.
-pub(super) async fn send_jobs(state: &LoopState<'_>) {
-    let mut by_agent: HashMap<AgentId, Vec<JobView>> = HashMap::new();
-    for job in state.jobs.list(None) {
-        if let Some(agent_id) = job.agent_id {
-            by_agent.entry(agent_id).or_default().push(job_view(&job));
-        }
-    }
-    for (agent_id, jobs) in by_agent {
-        AgentUi::new(state.commands.clone(), agent_id)
-            .send(UiCommand::SetJobs(jobs))
-            .await;
     }
 }
 

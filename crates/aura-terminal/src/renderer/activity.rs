@@ -19,8 +19,9 @@ use std::time::Duration;
 /// Columns before a block's marker.
 const INDENT: &str = "  ";
 
-/// Columns before the marker of a step inside a group.
-const NESTED_INDENT: &str = "    ";
+/// Columns a step inside a group takes before its marker: its number,
+/// right-aligned, and a space.
+const NUMBER_WIDTH: usize = 5;
 
 /// Thinking lines shown under a collapsed block while it streams.
 const LIVE_THINKING_LINES: usize = 3;
@@ -39,52 +40,85 @@ const BRIEF_THOUGHT_MS: u64 = 2000;
 pub(super) enum GroupView {
     /// Only the summary line
     Collapsed,
-    /// The most recent steps, while the group is still running
-    Tail,
     /// Every step
     Full,
 }
 
-/// Steps shown under a group in [`GroupView::Tail`].
-pub(super) const TAIL_STEPS: usize = 4;
-
 /// Lines for an activity block `width` columns wide. `spinner` is drawn
-/// in place of the marker while the step is in progress. A `nested` step
-/// sits inside a group: indented further, with no marker while collapsed.
+/// in place of the marker while the step is in progress. A step with a
+/// `number` sits inside a group, numbered by its place in the turn.
 pub(super) fn activity_lines(
     activity: &Activity,
     expanded: bool,
-    nested: bool,
+    number: Option<usize>,
     spinner: &str,
     width: usize,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
-    let indent = if nested { NESTED_INDENT } else { INDENT };
     let marker = if activity.is_running() {
         spinner
     } else if expanded {
         "▾"
-    } else if nested {
-        " "
     } else {
         "▸"
     };
+    let lead = match number {
+        Some(n) => format!("{n:>w$} ", w = NUMBER_WIDTH - 1),
+        None => INDENT.to_string(),
+    };
     let marker = Span::styled(
-        format!("{indent}{marker} "),
+        format!("{lead}{marker} "),
         Style::default().fg(theme.colors.secondary),
     );
-    let body = Body::new(indent, width);
+    let body = Body::new(body_indent(number), width);
     match activity {
         Activity::Thinking(step) => thinking_lines(step, marker, expanded, &body, theme),
         Activity::Tool(step) => tool_lines(step, marker, expanded, &body, width, theme),
     }
 }
 
+/// Columns before the marker of a step, numbered or not.
+fn body_indent(number: Option<usize>) -> usize {
+    if number.is_some() {
+        NUMBER_WIDTH
+    } else {
+        INDENT.len()
+    }
+}
+
+/// `→ records for this turn`, under an open thinking step: the row that
+/// jumps to the kernel records the turn wrote.
+pub(super) fn records_link(number: Option<usize>, width: usize, theme: &Theme) -> Line<'static> {
+    Body::new(body_indent(number), width).line(
+        "→ records for this turn".to_string(),
+        Style::default()
+            .fg(theme.colors.secondary)
+            .add_modifier(Modifier::ITALIC),
+        theme,
+    )
+}
+
+/// `… 5 steps, click to show` under a collapsed group's summary line.
+pub(super) fn collapsed_hint(steps: usize, theme: &Theme) -> Line<'static> {
+    Line::from(Span::styled(
+        format!(
+            "{}… {}, click to show",
+            " ".repeat(NUMBER_WIDTH + 2),
+            count(steps, "step", "steps")
+        ),
+        Style::default()
+            .fg(theme.colors.muted)
+            .add_modifier(Modifier::ITALIC),
+    ))
+}
+
 /// The summary line of a group of steps: `▸ Explored 4 files, 2 searches`.
+/// `progress` (` · step 7 · 42s`) follows the summary while the group runs.
 pub(super) fn group_header(
     steps: &[&Activity],
     view: GroupView,
     live: bool,
+    progress: &str,
     spinner: &str,
     width: usize,
     theme: &Theme,
@@ -106,10 +140,16 @@ pub(super) fn group_header(
     } else {
         String::new()
     };
-    let room = width.saturating_sub(display_width(&marker.content) + display_width(&failed));
+    let room = width.saturating_sub(
+        display_width(&marker.content) + display_width(progress) + display_width(&failed),
+    );
     let summary = truncate(&tally.summary(live), room);
     let mut spans = vec![marker];
     spans.extend(verb_spans(&summary, theme));
+    spans.push(Span::styled(
+        progress.to_string(),
+        Style::default().fg(theme.colors.muted),
+    ));
     spans.push(Span::styled(
         failed,
         Style::default().fg(theme.colors.error),
@@ -276,8 +316,9 @@ struct Body {
 }
 
 impl Body {
-    fn new(indent: &str, width: usize) -> Self {
-        let prefix = format!("{indent}  │ ");
+    /// The rule under a marker `indent` columns in.
+    fn new(indent: usize, width: usize) -> Self {
+        let prefix = format!("{}  │ ", " ".repeat(indent));
         let width = width.saturating_sub(display_width(&prefix));
         Self { prefix, width }
     }
@@ -356,6 +397,12 @@ fn thinking_lines(
             return lines;
         }
         text = text.split_off(text.len().saturating_sub(LIVE_THINKING_LINES));
+    } else if text.is_empty() && !step.running {
+        lines.push(body.line(
+            "the model shared no reasoning text".to_string(),
+            text_style,
+            theme,
+        ));
     }
     lines.extend(
         text.into_iter()
@@ -379,6 +426,19 @@ fn tool_lines(
     }
 
     let muted = Style::default().fg(theme.colors.muted);
+    if let Some(policy) = &step.policy {
+        let color = if step.status == ToolStatus::Denied {
+            theme.colors.warning
+        } else {
+            theme.colors.muted
+        };
+        body.push_wrapped(
+            &mut lines,
+            &format!("policy: {policy}"),
+            Style::default().fg(color).add_modifier(Modifier::ITALIC),
+            theme,
+        );
+    }
     if let Some(view) = &diff {
         body.push_wrapped(&mut lines, view.path(), muted, theme);
         let diff_lines = view.styled_lines(theme, body.width);
@@ -495,7 +555,8 @@ fn tool_diff(step: &ToolStep) -> Option<DiffView> {
 }
 
 /// ` · retrying (2/3) · 12s` while running, with ` · 14 KB` while a large
-/// input is still streaming in; ` · error: …` once failed.
+/// input is still streaming in; ` · error: …` once failed. A finished call
+/// keeps how long it took once that reaches a second.
 fn tool_meta(step: &ToolStep) -> String {
     let mut parts = Vec::new();
     match step.status {
@@ -520,6 +581,13 @@ fn tool_meta(step: &ToolStep) -> String {
                 parts.push(truncate(first.trim(), 60));
             }
         }
+    }
+    if step.status != ToolStatus::Running {
+        parts.extend(
+            step.duration_ms
+                .filter(|ms| *ms >= 1000)
+                .map(|ms| format_elapsed(Duration::from_millis(ms))),
+        );
     }
     parts.into_iter().map(|p| format!(" · {p}")).collect()
 }
@@ -589,6 +657,7 @@ mod tests {
             started: None,
             duration_ms: Some(300),
             diff: None,
+            policy: None,
         })
     }
 
@@ -610,7 +679,7 @@ mod tests {
         let lines = activity_lines(
             &tool(ToolStatus::Success, Some("a\nb\nc")),
             false,
-            false,
+            None,
             "⠋",
             80,
             &Theme::default(),
@@ -619,14 +688,39 @@ mod tests {
     }
 
     #[test]
-    fn nested_step_has_no_marker_until_expanded() {
+    fn nested_step_is_numbered_with_its_body_under_the_label() {
         let step = tool(ToolStatus::Success, Some("fn main() {}"));
         let theme = Theme::default();
-        let collapsed = activity_lines(&step, false, true, "⠋", 80, &theme);
-        assert_eq!(texts(&collapsed), ["      Read main.rs"]);
-        let expanded = activity_lines(&step, true, true, "⠋", 80, &theme);
-        assert_eq!(texts(&expanded)[0], "    ▾ Read main.rs");
-        assert_eq!(texts(&expanded).last().unwrap(), "      │ fn main() {}");
+        let collapsed = activity_lines(&step, false, Some(3), "⠋", 80, &theme);
+        assert_eq!(texts(&collapsed), ["   3 ▸ Read main.rs"]);
+        let expanded = activity_lines(&step, true, Some(12), "⠋", 80, &theme);
+        assert_eq!(texts(&expanded)[0], "  12 ▾ Read main.rs");
+        assert_eq!(texts(&expanded).last().unwrap(), "       │ fn main() {}");
+    }
+
+    #[test]
+    fn open_thinking_without_text_says_so() {
+        let step = Activity::Thinking(ThinkingStep {
+            text: String::new(),
+            started: None,
+            duration_ms: Some(5000),
+            running: false,
+        });
+        let theme = Theme::default();
+        let closed = activity_lines(&step, false, Some(1), "⠋", 80, &theme);
+        assert_eq!(texts(&closed), ["   1 ▸ Thought 5s"]);
+        let open = activity_lines(&step, true, Some(1), "⠋", 80, &theme);
+        assert_eq!(
+            texts(&open),
+            [
+                "   1 ▾ Thought 5s",
+                "       │ the model shared no reasoning text"
+            ]
+        );
+        assert_eq!(
+            text(&records_link(Some(1), 80, &theme)),
+            "       │ → records for this turn"
+        );
     }
 
     #[test]
@@ -634,7 +728,7 @@ mod tests {
         let lines = activity_lines(
             &tool(ToolStatus::Error, Some("no such file")),
             true,
-            false,
+            None,
             "⠋",
             80,
             &Theme::default(),
@@ -649,12 +743,25 @@ mod tests {
     }
 
     #[test]
+    fn policy_shows_only_when_expanded() {
+        let mut step = tool(ToolStatus::Success, Some("fn main() {}"));
+        if let Activity::Tool(tool) = &mut step {
+            tool.policy = Some("allowed by user.on".to_string());
+        }
+        let theme = Theme::default();
+        let collapsed = activity_lines(&step, false, None, "⠋", 80, &theme);
+        assert_eq!(texts(&collapsed), ["  ▸ Read main.rs"]);
+        let expanded = activity_lines(&step, true, None, "⠋", 80, &theme);
+        assert_eq!(texts(&expanded)[1], "    │ policy: allowed by user.on");
+    }
+
+    #[test]
     fn expanded_result_is_capped() {
         let output: Vec<String> = (0..250).map(|i| format!("line {i}")).collect();
         let lines = activity_lines(
             &tool(ToolStatus::Success, Some(&output.join("\n"))),
             true,
-            false,
+            None,
             "⠋",
             80,
             &Theme::default(),
@@ -673,7 +780,7 @@ mod tests {
         let live = activity_lines(
             &Activity::Thinking(step.clone()),
             false,
-            false,
+            None,
             "⠹",
             80,
             &Theme::default(),
@@ -688,7 +795,7 @@ mod tests {
         let done = activity_lines(
             &Activity::Thinking(step),
             false,
-            false,
+            None,
             "⠹",
             80,
             &Theme::default(),
@@ -698,7 +805,7 @@ mod tests {
 
     #[test]
     fn short_thinking_is_brief() {
-        let lines = activity_lines(&thought(800), false, false, "⠹", 80, &Theme::default());
+        let lines = activity_lines(&thought(800), false, None, "⠹", 80, &Theme::default());
         assert_eq!(texts(&lines), ["  ▸ Thought briefly"]);
     }
 
@@ -714,8 +821,9 @@ mod tests {
             started: None,
             duration_ms: None,
             diff: None,
+            policy: None,
         });
-        let lines = activity_lines(&activity, false, false, "⠋", 40, &Theme::default());
+        let lines = activity_lines(&activity, false, None, "⠋", 40, &Theme::default());
         let header = &texts(&lines)[0];
         assert_eq!(display_width(header), 40, "{header}");
         assert!(header.starts_with("  ⠋ Ran xxx"), "{header}");
@@ -729,7 +837,7 @@ mod tests {
             "x".repeat(3000)
         );
         let step = tool_step("write_file", &args, ToolStatus::Running, None);
-        let lines = activity_lines(&step, false, false, "⠋", 80, &Theme::default());
+        let lines = activity_lines(&step, false, None, "⠋", 80, &Theme::default());
         assert_eq!(texts(&lines), ["  ⠋ Wrote index.html · 2 KB"]);
 
         let done = tool_step(
@@ -738,8 +846,23 @@ mod tests {
             ToolStatus::Running,
             None,
         );
-        let lines = activity_lines(&done, false, false, "⠋", 80, &Theme::default());
+        let lines = activity_lines(&done, false, None, "⠋", 80, &Theme::default());
         assert_eq!(texts(&lines), ["  ⠋ Wrote index.html"]);
+    }
+
+    #[test]
+    fn finished_tool_keeps_how_long_it_took() {
+        let mut step = tool_step(
+            "write_file",
+            r#"{"path":"src/types.ts","content":"x"}"#,
+            ToolStatus::Success,
+            None,
+        );
+        if let Activity::Tool(tool) = &mut step {
+            tool.duration_ms = Some(28_400);
+        }
+        let lines = activity_lines(&step, false, Some(2), "⠋", 80, &Theme::default());
+        assert_eq!(texts(&lines), ["   2 ▸ Wrote types.ts · 28s"]);
     }
 
     #[test]
@@ -776,15 +899,32 @@ mod tests {
         let steps: Vec<&Activity> = steps.iter().collect();
         let theme = Theme::default();
 
-        let done = group_header(&steps, GroupView::Collapsed, false, "⠹", 80, &theme);
+        let done = group_header(&steps, GroupView::Collapsed, false, "", "⠹", 80, &theme);
         assert_eq!(
             text(&done),
             "  ▸ Explored 2 files, 2 searches, ran 1 command · 1 failed"
         );
-        let live = group_header(&steps[..2], GroupView::Tail, true, "⠹", 80, &theme);
-        assert_eq!(text(&live), "  ⠹ Exploring a.rs");
-        let open = group_header(&steps[..2], GroupView::Full, false, "⠹", 80, &theme);
+        let live = group_header(
+            &steps[..2],
+            GroupView::Full,
+            true,
+            " · step 2 · 9s",
+            "⠹",
+            80,
+            &theme,
+        );
+        assert_eq!(text(&live), "  ⠹ Exploring a.rs · step 2 · 9s");
+        let open = group_header(&steps[..2], GroupView::Full, false, "", "⠹", 80, &theme);
         assert_eq!(text(&open), "  ▾ Explored a.rs");
+    }
+
+    #[test]
+    fn collapsed_hint_counts_the_steps() {
+        let theme = Theme::default();
+        assert_eq!(
+            text(&collapsed_hint(5, &theme)),
+            "       … 5 steps, click to show"
+        );
     }
 
     #[test]
@@ -795,6 +935,7 @@ mod tests {
             &steps,
             GroupView::Collapsed,
             false,
+            "",
             "⠹",
             80,
             &Theme::default(),

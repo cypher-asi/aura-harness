@@ -1,9 +1,10 @@
 //! Handler functions for agent turns, auth, and session lifecycle.
 
-use super::agent_events::{AgentUi, CostCap, ForwarderState};
+use super::agent_events::{AgentUi, CostCap, ForwarderState, TurnPlan};
 use super::agents::AgentSession;
 use super::hud::{context_view, send_session, todo_views};
-use super::record_ui::{create_response_transaction, send_record_to_ui};
+use super::processes::{now_ms, warn_kill_failed};
+use super::record_ui::create_response_transaction;
 use super::steering::Steering;
 use super::turns::{record_user_prompt, Prompt, Work};
 use super::{forward_agent_events, LoopState};
@@ -15,7 +16,7 @@ use aura_agent::{AgentLoopEvent, RunOptions, WithPostEditCheck};
 use aura_context_prompts::model_messages::init_project::init_project_prompt;
 use aura_core_types::AgentId;
 use aura_core_types::{RecordEntry, Transaction};
-use aura_terminal::events::{MessageData, MessageRole};
+use aura_terminal::events::{MessageData, MessageRole, ProcessKind, ProcessStatus, ProcessSummary};
 use aura_terminal::UiCommand;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -48,6 +49,13 @@ pub(super) async fn run_agent_turn(
         ui.clone(),
         cost_cap,
         agent_loop.config().max_context_tokens,
+        TurnPlan {
+            workspace: session.kernel.agent_workspace(),
+            building: session
+                .building_plan
+                .then(|| session.active_plan.clone())
+                .flatten(),
+        },
     ));
 
     let process_result = drive_turn(
@@ -145,11 +153,12 @@ pub(super) async fn handle_agent_success(
         .await;
 
     for text in steered {
-        if let Err(problem) = record_user_prompt(session, text.clone(), ui).await {
+        if let Err(problem) = record_user_prompt(session, text.clone()).await {
             warn!(%problem, "Failed to record a mid-turn message");
         }
     }
-    persist_response_via_kernel(session, &result.total_text, ui).await;
+    // The kernels' record observer shows the entry in the Record panel.
+    record_response(session, &result.total_text).await;
     session.save_checkpoint().await;
     emit_response_to_ui(&result, forwarded, ui).await;
 
@@ -165,12 +174,6 @@ pub(super) async fn handle_agent_success(
             .await;
     }
     ui.send(UiCommand::Complete).await;
-}
-
-async fn persist_response_via_kernel(session: &AgentSession, total_text: &str, ui: &AgentUi) {
-    if let Some((tx, entry)) = record_response(session, total_text).await {
-        send_record_to_ui(ui.commands(), entry.seq, &tx, &entry).await;
-    }
 }
 
 /// Record the model's reply `total_text` on `session`. A failure is
@@ -238,32 +241,18 @@ pub(super) async fn handle_new_session(state: &mut LoopState<'_>) -> bool {
         return false;
     };
 
-    record_session_start(session, state.commands).await;
+    mark_session_start(session).await;
     session.reset();
-    let _ = state
-        .commands
-        .send(UiCommand::ForAgent {
-            agent_id: agent_id.to_hex(),
-            command: Box::new(UiCommand::SetTodos(Vec::new())),
-        })
-        .await;
+    let ui =
+        AgentUi::new(state.commands.clone(), agent_id).with_shown(state.hub.record_panel.clone());
+    ui.send(UiCommand::SetTodos(Vec::new())).await;
+    ui.send_if_shown(UiCommand::SetPlan(None)).await;
 
     let _ = state
         .commands
         .send(UiCommand::SetStatus("Ready".to_string()))
         .await;
     true
-}
-
-/// Mark a new session in `session`'s record, so a rebuild from the
-/// record starts after it.
-async fn record_session_start(
-    session: &AgentSession,
-    commands: &tokio::sync::mpsc::Sender<UiCommand>,
-) {
-    if let Some((tx, entry)) = mark_session_start(session).await {
-        send_record_to_ui(commands, entry.seq, &tx, &entry).await;
-    }
 }
 
 /// Mark a new session in `session`'s record, returning the transaction and
@@ -353,9 +342,7 @@ pub(super) async fn handle_resume(
     };
 
     info!(%agent_id, started_ms = listing.started_ms, "Resuming an earlier session");
-    if let Some((tx, entry)) = resume_checkpoint(session, checkpoint).await {
-        send_record_to_ui(state.commands, entry.seq, &tx, &entry).await;
-    }
+    resume_checkpoint(session, checkpoint).await;
     ui.send(UiCommand::LoadConversation(chat_from_messages(
         &session.messages,
     )))
@@ -498,4 +485,46 @@ pub(super) async fn handle_select_model(state: &mut LoopState<'_>, id: &str) {
         }
     }
     let _ = state.commands.send(state.models.ui_command()).await;
+}
+
+/// Processes tab row for a turn of `agent_id` on `model`, answering
+/// `prompt` (or doing `prompt`, for work that isn't a model reply).
+pub(super) fn turn_summary(agent_id: AgentId, prompt: &str, model: &str) -> ProcessSummary {
+    let agent = agent_id.to_hex();
+    ProcessSummary {
+        id: super::processes::turn_id(agent_id),
+        kind: ProcessKind::Turn,
+        label: prompt.lines().next().unwrap_or_default().to_string(),
+        detail: prompt.to_string(),
+        status: ProcessStatus::Running,
+        jump_agent_id: agent.clone(),
+        owner_agent_id: agent,
+        started_ms: now_ms(),
+        model: Some(model.to_string()),
+        killable: true,
+        ..ProcessSummary::default()
+    }
+}
+
+/// Kill what the Processes tab row `id` runs. A turn or task waiting for
+/// an approval is denied, so it sees the cancellation.
+pub(super) async fn handle_kill_process(state: &LoopState<'_>, id: &str) {
+    let command = match state.processes.kill(id) {
+        Ok(killed) => {
+            info!(process = %id, kind = killed.kind.label(), owner = %killed.owner, "Killed from the Processes tab");
+            let agent = id
+                .strip_prefix("turn:")
+                .or_else(|| id.strip_prefix("task:"))
+                .and_then(|hex| AgentId::from_hex(hex).ok());
+            if let Some(agent) = agent {
+                state.approvals.cancel_agent(agent).await;
+            }
+            UiCommand::ShowSuccess(format!("Stopped {}", killed.label))
+        }
+        Err(problem) => {
+            warn_kill_failed(id, &problem);
+            UiCommand::ShowWarning(problem)
+        }
+    };
+    let _ = state.commands.send(command).await;
 }

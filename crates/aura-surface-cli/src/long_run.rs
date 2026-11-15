@@ -4,24 +4,21 @@
 
 use aura_agent::AgentLoopConfig;
 use aura_model_reasoner::ToolDefinition;
-use aura_tools::jobs::{add_background_option, JobKillTool, JobOutputTool};
-use aura_tools::todo::TodoWriteTool;
+use aura_tools::jobs::{JobKillTool, JobOutputTool};
+use aura_tools::todo::{TodoWriteTool, TODO_WRITE_TOOL_NAME};
 use aura_tools::web::{WebFetchSettings, WebFetchTool, WebSearchSettings, WebSearchTool};
 use aura_tools::{Tool, ToolExecutor};
 use std::time::Duration;
 use tracing::{info, warn};
 
 /// Add the planning, background-job and web tools to the terminal's tool
-/// list, and the `background` option to `run_command`.
+/// list. `run_command` offers `background` itself; the job tools read and
+/// stop what it starts.
 pub(crate) fn add_long_run_tools(tools: &mut Vec<ToolDefinition>, web: &WebTools) {
-    let has_run_command = tools.iter_mut().any(|tool| {
-        let is_run = tool.name == "run_command";
-        if is_run {
-            add_background_option(tool);
-        }
-        is_run
-    });
-    tools.push(TodoWriteTool.definition());
+    let has_run_command = tools.iter().any(|tool| tool.name == "run_command");
+    if !tools.iter().any(|tool| tool.name == TODO_WRITE_TOOL_NAME) {
+        tools.push(TodoWriteTool.definition());
+    }
     if has_run_command {
         tools.push(JobOutputTool.definition());
         tools.push(JobKillTool.definition());

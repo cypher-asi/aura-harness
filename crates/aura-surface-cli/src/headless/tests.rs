@@ -6,7 +6,10 @@ use crate::agent_registry::AgentRegistry;
 use crate::cli::OutputFormat;
 use crate::event_loop::TurnBase;
 use crate::long_run::LongRunSettings;
-use crate::runner::{agent_tools, build_hub, mode_policy, policy_tool_names, HubSetup};
+use crate::runner::{
+    agent_tools, background_process_manager, build_hub, mode_policy, policy_tool_names, Harness,
+    HubSetup,
+};
 use crate::session_helpers::default_agent_config_with_auth;
 use async_trait::async_trait;
 use aura_core_types::AgentId;
@@ -15,7 +18,6 @@ use aura_model_reasoner::{
 };
 use aura_store_db::RocksStore;
 use aura_terminal::PermissionMode;
-use aura_tools::jobs::BackgroundJobs;
 use serde_json::{json, Value};
 use std::io::Write;
 use std::path::Path;
@@ -116,9 +118,8 @@ fn headless_in(
     let config = default_agent_config_with_auth("mock-model", None);
     let (commands, mut ui) = mpsc::channel(256);
     tokio::spawn(async move { while ui.recv().await.is_some() {} });
-    let (job_tx, job_finished) = mpsc::channel(64);
-    let jobs = BackgroundJobs::new(job_tx);
-    let hub = build_hub(HubSetup {
+    let (process_manager, completions) = background_process_manager();
+    let Harness { hub, background } = build_hub(HubSetup {
         data_dir: data.to_path_buf(),
         workspace_root: workspace.clone(),
         registry: AgentRegistry::load_or_init(data).unwrap(),
@@ -132,20 +133,24 @@ fn headless_in(
             tools,
         },
         policy: filter.apply(mode_policy(mode, &tool_names), &tool_names),
-        tool_audit_observer: None,
+        record_observer: None,
+        record_panel: crate::event_loop::RecordPanelAgent::default(),
         commands,
         long_run: LongRunSettings::default(),
-        jobs: Arc::clone(&jobs),
+        process_manager,
+        background_agents: true,
         mode,
         instructions: crate::project_instructions::ProjectInstructions::only_in(&workspace),
         approvals: None,
         web_tools,
         post_edit_check: aura_agent::PostEditCheckConfig::from_lookup(|_| None),
     });
+    let notices = hub.take_notices();
     let headless = Headless {
         hub,
-        jobs,
-        job_finished,
+        background,
+        completions,
+        notices,
         model: "mock-model".to_string(),
         mode: mode.agent_mode(),
         workspace_root: workspace,

@@ -30,8 +30,8 @@ pub use verdict::{PolicyEvaluation, PolicyResult, PolicyVerdict};
 use super::config::PolicyConfig;
 use crate::{PendingToolPrompt, ToolApprovalRemember};
 use aura_core_types::{
-    ActionKind, PermissionLayer, PolicyCheck, PolicyCheckOutcome, PolicyRule, PolicySource,
-    Proposal, RuntimeCapabilityInstall, ToolState,
+    ActionKind, AgentMode, PermissionLayer, PolicyCheck, PolicyCheckOutcome, PolicyRule,
+    PolicySource, Proposal, RuntimeCapabilityInstall, ToolState,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
@@ -81,6 +81,18 @@ impl Policy {
             current: RwLock::new(Current::new(config)),
             session_tool_states: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The session mode this policy currently enforces.
+    #[must_use]
+    pub fn mode(&self) -> AgentMode {
+        self.config().mode
+    }
+
+    /// Enforce `mode` from now on. Only the kernel calls this, after it has
+    /// recorded the change.
+    pub(crate) fn set_mode(&self, mode: AgentMode) {
+        self.reconfigure(|config| config.mode = mode);
     }
 
     /// Create a policy with default config.
@@ -401,7 +413,7 @@ impl Policy {
     /// Lower-case label of the session mode this policy enforces.
     #[must_use]
     pub fn mode_label(&self) -> String {
-        delegate_gate::mode_label(self.config().mode)
+        delegate_gate::mode_label(self.mode())
     }
 
     /// Session mode label and snapshot hash of one and the same

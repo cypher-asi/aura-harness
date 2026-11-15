@@ -4,7 +4,7 @@
 //!
 //! | Color       | Hex Code | RGB            | Usage                              |
 //! |-------------|----------|----------------|-------------------------------------|
-//! | Cyan/Green  | #01f4cb  | (1, 244, 203)  | Success states, neon accents        |
+//! | Cyan/Green  | #01f4cb  | (1, 244, 203)  | Success, neon accents, selected row |
 //! | Blue        | #01a4f4  | (1, 164, 244)  | Primary accent, info, provisioning  |
 //! | Purple      | #cb01f4  | (203, 1, 244)  | Code block keywords                 |
 //! | Red         | #f4012a  | (244, 1, 42)   | Errors, danger                      |
@@ -12,9 +12,8 @@
 //! | Light gray  | #d4d4d4  | (212, 212, 212)| Body text of chat replies           |
 //! | Gray        | #888888  | (136, 136, 136)| Muted text, secondary info          |
 //! | Black       | #0d0d0d  | (13, 13, 13)   | Background, text on selection       |
-//! | Sky         | #7cd4ff  | (124, 212, 255)| Selected list row                   |
 //! | Dark gray   | #1e1e1e  | (30, 30, 30)   | List cell                           |
-//! | Graphite    | #2a2a2a  | (42, 42, 42)   | List cell under the cursor          |
+//! | Graphite    | #2a2a2a  | (42, 42, 42)   | List cell under the pointer         |
 
 use super::{BorderStyle, Theme, ThemeColors};
 use ratatui::style::Color;
@@ -47,13 +46,10 @@ pub const GRAY: Color = Color::Rgb(136, 136, 136);
 /// Black - Background (#0d0d0d)
 pub const BLACK: Color = Color::Rgb(13, 13, 13);
 
-/// Sky - Selected list row (#7cd4ff)
-pub const SKY: Color = Color::Rgb(124, 212, 255);
-
 /// Dark gray - List cell (#1e1e1e)
 pub const DARK_GRAY: Color = Color::Rgb(30, 30, 30);
 
-/// Graphite - List cell under the cursor (#2a2a2a)
+/// Graphite - List cell under the pointer (#2a2a2a)
 pub const GRAPHITE: Color = Color::Rgb(42, 42, 42);
 
 // ============================================================================
@@ -63,12 +59,11 @@ pub const GRAPHITE: Color = Color::Rgb(42, 42, 42);
 /// Create the default cyber theme.
 ///
 /// Uses only the approved color palette:
-/// - Cyan (#01f4cb): Success, neon accents
+/// - Cyan (#01f4cb): Success, neon accents, selected list row
 /// - Blue (#01a4f4): Info
 /// - Red (#f4012a): Errors, danger
 /// - White: Text, secondary accent, pending states
 /// - Gray/Black: Muted text and backgrounds
-/// - Sky/Dark gray: List rows (selected, project cells)
 ///
 /// Purple is reserved for syntax-highlighted keywords in code blocks.
 #[must_use]
@@ -97,7 +92,7 @@ pub fn cyber_theme() -> Theme {
             // List cells
             surface: DARK_GRAY,      // #1e1e1e - dark gray
             surface_hover: GRAPHITE, // #2a2a2a - graphite
-            selection: SKY,          // #7cd4ff - sky blue
+            selection: CYAN,         // #01f4cb - cyan, same as the primary accent
             on_selection: BLACK,     // #0d0d0d - black
         },
         border_style: BorderStyle::Rounded,

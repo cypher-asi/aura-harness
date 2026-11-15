@@ -43,7 +43,7 @@ impl App {
                     let _ = tx.try_send(UiEvent::ShowHistory(None));
                 }
             }
-            "record" | "r" => {
+            "kernel" | "record" | "k" | "r" => {
                 self.record_panel_visible = !self.record_panel_visible;
                 if !self.record_panel_visible && self.focus == PanelFocus::Records {
                     self.focus = PanelFocus::Chat;
@@ -77,6 +77,8 @@ impl App {
                 }
             }
             "spawn" => self.handle_spawn_command(arg),
+            "plan" => self.request_mode(PermissionMode::Plan),
+            "build" => self.request_build(arg),
             "login" => self.handle_login_command(arg),
             "model" | "models" | "m" => {
                 if arg.is_empty() {
@@ -347,6 +349,56 @@ impl App {
         }
     }
 
+    /// Whether a turn owns the session, so the mode can't change under it.
+    fn turn_running(&self) -> bool {
+        matches!(
+            self.state,
+            AppState::Processing | AppState::AwaitingApproval
+        )
+    }
+
+    /// Ask the event loop to switch the active agent to `mode`. The badge
+    /// changes once the switch is recorded and [`UiCommand::SetMode`] comes
+    /// back.
+    pub(super) fn request_mode(&mut self, mode: PermissionMode) {
+        if self.hud.mode == Some(mode) {
+            self.notification =
+                Some((format!("Already in {mode} mode"), NotificationType::Warning));
+            return;
+        }
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::SetMode {
+                agent_id: self.active_agent_id.clone(),
+                mode,
+            });
+        }
+    }
+
+    /// Handle `/build [path]`: run the given plan, or the latest one.
+    fn request_build(&mut self, arg: &str) {
+        if self.turn_running() {
+            self.notification = Some((
+                "Wait for the current turn to finish before building".to_string(),
+                NotificationType::Warning,
+            ));
+            return;
+        }
+        let path = (!arg.is_empty()).then(|| arg.to_string());
+        if path.is_none() && self.active_plan.is_none() {
+            self.notification = Some((
+                "No plan to build yet. Switch to plan mode with /plan and ask for one.".to_string(),
+                NotificationType::Warning,
+            ));
+            return;
+        }
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::BuildPlan {
+                agent_id: self.active_agent_id.clone(),
+                path,
+            });
+        }
+    }
+
     /// Handle `/spawn <permanent agent>`.
     fn handle_spawn_command(&mut self, arg: &str) {
         let name = self
@@ -409,14 +461,7 @@ impl App {
             return;
         }
         match SlashModeCommand::parse(arg) {
-            Ok(command) => {
-                if let Some(tx) = &self.event_tx {
-                    let _ = tx.try_send(UiEvent::SetMode {
-                        agent_id: self.active_agent_id.clone(),
-                        mode: command.requested,
-                    });
-                }
-            }
+            Ok(command) => self.request_mode(command.requested),
             Err(e) => {
                 self.notification = Some((e.to_string(), NotificationType::Warning));
             }
@@ -542,11 +587,16 @@ impl App {
             UiCommand::UpdateToolArgs { id, args } => {
                 self.update_tool(&id, |tool| tool.args = args);
             }
+            UiCommand::ToolPolicy { id, tool, decision } => {
+                self.cmd_tool_policy(&id, &tool, decision);
+            }
             UiCommand::ToolRetrying {
                 id,
                 attempt,
                 max_attempts,
-            } => self.update_tool(&id, |tool| tool.retry = Some((attempt, max_attempts))),
+            } => {
+                self.update_tool(&id, |tool| tool.retry = Some((attempt, max_attempts)));
+            }
             UiCommand::CompleteTool {
                 id,
                 result,
@@ -643,6 +693,7 @@ impl App {
             }
             UiCommand::LoadConversation(history) => self.cmd_load_conversation(history),
             UiCommand::SetSandboxRoot(root) => self.sandbox.set_root(root),
+            UiCommand::SetProcesses(processes) => self.set_processes(processes),
             UiCommand::SetApiStatus { url, active } => {
                 self.api_url = url;
                 self.api_active = active;
@@ -655,6 +706,7 @@ impl App {
             } => self.cmd_set_models(options, current, user, plans),
             UiCommand::PromptLinkCode { provider } => self.cmd_prompt_link_code(&provider),
             UiCommand::EndLink => self.cmd_end_link(),
+            UiCommand::SetPlan(plan) => self.active_plan = plan,
         }
     }
 
@@ -755,19 +807,31 @@ impl App {
         }
     }
 
-    /// Apply `update` to the tool call with use id `id`.
-    fn update_tool(&mut self, id: &str, update: impl FnOnce(&mut ToolStep)) {
+    /// Apply `update` to the tool call with use id `id`; `false` when no
+    /// such call is shown.
+    fn update_tool(&mut self, id: &str, update: impl FnOnce(&mut ToolStep)) -> bool {
         let found = self
             .messages
             .iter_mut()
             .rev()
             .find(|m| matches!(m.activity_step(), Some(Activity::Tool(tool)) if tool.id == id));
-        if let Some(message) = found {
-            message.update_activity(|activity| {
-                if let Activity::Tool(tool) = activity {
-                    update(tool);
-                }
-            });
+        let Some(message) = found else {
+            return false;
+        };
+        message.update_activity(|activity| {
+            if let Activity::Tool(tool) = activity {
+                update(tool);
+            }
+        });
+        true
+    }
+
+    /// Keep the policy decision with its tool call, so a run of calls
+    /// stays one block; a call that isn't shown gets a `policy:` line.
+    fn cmd_tool_policy(&mut self, id: &str, tool: &str, decision: String) {
+        let line = format!("policy: {tool} {decision}");
+        if !self.update_tool(id, |step| step.policy = Some(decision)) {
+            self.add_message(Message::new(MessageRole::System, &line));
         }
     }
 
@@ -830,8 +894,12 @@ impl App {
         if let Some(prompt) = prompt {
             self.add_message(Message::new(MessageRole::User, &prompt));
         }
-        self.state = AppState::Processing;
-        self.status = "Thinking...".to_string();
+        // A turn the user did not start (a background completion notice)
+        // must not hide a login prompt or an approval on screen.
+        if self.state == AppState::Idle {
+            self.state = AppState::Processing;
+            self.status = "Thinking...".to_string();
+        }
     }
 
     /// Show a message sent into the running turn. A reply still streaming
@@ -883,6 +951,8 @@ impl App {
         self.scroll_offset = 0;
     }
 
+    /// Append a record, oldest first. A selection on the newest record
+    /// follows new arrivals; one moved up stays on its record.
     fn cmd_new_record(&mut self, record: crate::events::RecordSummary) {
         // Agents running in the background write records too; the panel
         // lists the active agent's.
@@ -892,11 +962,14 @@ impl App {
         {
             return;
         }
-        self.records.push_front(record);
+        let follow = self.detail != Some(DetailView::Record)
+            && self.selected_record + 1 >= self.records.len();
+        self.records.push_back(record);
         while self.records.len() > super::MAX_RECORDS {
-            self.records.pop_back();
+            self.records.pop_front();
+            self.selected_record = self.selected_record.saturating_sub(1);
         }
-        if self.selected_record >= self.records.len() && !self.records.is_empty() {
+        if follow {
             self.selected_record = self.records.len() - 1;
         }
     }
@@ -913,6 +986,7 @@ impl App {
         for agent in &mut self.agents {
             agent.is_active = agent.id == self.active_agent_id;
         }
+        self.agents_scroll_detached = false;
         self.select_visible_active();
     }
 }

@@ -176,12 +176,18 @@ impl AgentRegistry {
     /// Folder of the project that contains `agent_id`, if it has one.
     #[must_use]
     pub fn project_folder(&self, agent_id: AgentId) -> Option<PathBuf> {
+        self.project_root(agent_id)?.folder.clone()
+    }
+
+    /// Root agent heading the project that contains `agent_id`.
+    #[must_use]
+    pub fn project_root(&self, agent_id: AgentId) -> Option<&RegisteredAgent> {
         let index = self
             .file
             .agents
             .iter()
             .position(|agent| agent.agent_id() == agent_id)?;
-        self.file.agents[self.root_of(index)].folder.clone()
+        Some(&self.file.agents[self.root_of(index)])
     }
 
     /// Set the project name on the root agent that contains `agent_id`.
@@ -509,6 +515,7 @@ mod tests {
             registry.project_folder(grandchild.agent_id()),
             Some(canonical)
         );
+        assert_eq!(registry.project_root(grandchild.agent_id()), Some(&root));
         assert!(child.folder.is_none());
         assert_eq!(registry.project_folder(legacy.agent_id()), None);
     }

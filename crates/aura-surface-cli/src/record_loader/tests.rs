@@ -220,6 +220,33 @@ fn model_tool_call_keeps_llm_sender() {
 }
 
 #[test]
+fn json_payload_message_is_pretty_printed_in_full() {
+    let long = "x".repeat(300);
+    let t = json_tx(
+        TransactionType::ToolProposal,
+        &json!({"tool": "run_command", "args": {"command": long}}),
+    );
+    let entry = RecordEntry::builder(1, t.clone()).build();
+
+    let summary = build_record_summary(1, &t, &entry, "12:00:00".into());
+
+    let parsed: Value = serde_json::from_str(&summary.message).unwrap();
+    assert_eq!(parsed["args"]["command"], json!(long));
+    assert!(summary.message.contains("\n  \"tool\": \"run_command\""));
+}
+
+#[test]
+fn text_payload_message_is_truncated() {
+    let t = Transaction::user_prompt(AgentId::generate(), "y".repeat(300));
+    let entry = RecordEntry::builder(1, t.clone()).build();
+
+    let summary = build_record_summary(1, &t, &entry, "12:00:00".into());
+
+    assert_eq!(summary.message.chars().count(), MAX_MESSAGE_CHARS);
+    assert!(summary.message.ends_with("..."));
+}
+
+#[test]
 fn user_commands_appear_in_conversation_history_as_shell_commands() {
     let dir = tempfile::tempdir().unwrap();
     let store = RocksStore::open(dir.path(), false).unwrap();
@@ -247,6 +274,7 @@ fn execution(decision: ToolGateVerdict, result: Option<&str>, is_error: bool) ->
         reason: Some("policy says no".into()),
         result: result.map(str::to_string),
         is_error,
+        duration_ms: None,
         parent_agent_id: AgentId::generate(),
         originating_user_id: "u".into(),
     };
@@ -360,7 +388,7 @@ fn policy_decision_names_the_rule_and_carries_detail() {
 }
 
 #[test]
-fn tool_call_history_shows_tool_block_then_policy_line() {
+fn tool_call_history_keeps_the_policy_with_its_tool_block() {
     let dir = tempfile::tempdir().unwrap();
     let store = RocksStore::open(dir.path(), false).unwrap();
     let agent = AgentId::generate();
@@ -377,6 +405,7 @@ fn tool_call_history_shows_tool_block_then_policy_line() {
         reason: None,
         result: Some("fn main() {}".into()),
         is_error: false,
+        duration_ms: None,
         parent_agent_id: agent,
         originating_user_id: String::new(),
     };
@@ -385,7 +414,7 @@ fn tool_call_history_shows_tool_block_then_policy_line() {
     append(&store, 3, exec_tx);
 
     let history = conversation_history(&store, agent).unwrap();
-    assert_eq!(history.len(), 2);
+    assert_eq!(history.len(), 1);
     assert_eq!(
         history[0].activity,
         Some(ActivityData::Tool {
@@ -395,9 +424,21 @@ fn tool_call_history_shows_tool_block_then_policy_line() {
             result: Some("fn main() {}".into()),
             is_error: false,
             duration_ms: Some(took),
+            policy: Some("allowed by user.on".into()),
         })
     );
-    assert_eq!(history[1].content, "policy: run_command allowed by user.on");
+}
+
+#[test]
+fn policy_without_its_tool_call_is_a_chat_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RocksStore::open(dir.path(), false).unwrap();
+    let agent = AgentId::generate();
+    append(&store, 1, policy_decision_tx(agent).0);
+
+    let history = conversation_history(&store, agent).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].content, "policy: run_command allowed by user.on");
 }
 
 #[test]
@@ -419,6 +460,7 @@ fn denied_tool_call_history_is_an_error_block() {
         reason: Some("blocked by policy".into()),
         result: None,
         is_error: false,
+        duration_ms: None,
         parent_agent_id: agent,
         originating_user_id: String::new(),
     };
@@ -616,4 +658,115 @@ fn unparseable_json_falls_back_to_text() {
     assert_eq!(summarize_record(&t), "not json");
     let binary = tx(TransactionType::ToolProposal, vec![0xff, 0xfe]);
     assert_eq!(summarize_record(&binary), "");
+}
+
+/// The Record panel's (what, group, detail) columns for `t`.
+fn columns(t: &Transaction) -> (String, String, String) {
+    let entry = RecordEntry::builder(1, t.clone()).build();
+    let summary = build_record_summary(1, t, &entry, "12:00:00".into());
+    (summary.what, summary.group, summary.detail)
+}
+
+fn cols(what: &str, group: &str, detail: &str) -> (String, String, String) {
+    (what.into(), group.into(), detail.into())
+}
+
+#[test]
+fn tool_records_split_into_tool_group_and_detail() {
+    let call = proposal_tx(&ToolProposal::new(
+        "t1",
+        "read_file",
+        json!({"path": "src/main.rs"}),
+    ));
+    assert_eq!(columns(&call), cols("read_file", "file", "src/main.rs"));
+
+    let result = execution(ToolGateVerdict::Approved, Some("hello"), false);
+    assert_eq!(columns(&result), cols("read_file", "file", "a.rs · ok 5B"));
+
+    let (policy, _) = policy_decision_tx(AgentId::generate());
+    assert_eq!(
+        columns(&policy),
+        cols("run_command", "shell", "allow · user.on")
+    );
+
+    let unknown = proposal_tx(&ToolProposal::new("t2", "frobnicate", json!({})));
+    assert_eq!(columns(&unknown), cols("frobnicate", "other", ""));
+}
+
+#[test]
+fn tool_call_row_says_why_the_tool_did_not_run() {
+    let cached = proposal_tx(
+        &ToolProposal::new("t1", "read_file", json!({"path": "src/main.rs"})).with_source("cache"),
+    );
+    assert_eq!(
+        columns(&cached),
+        cols("read_file", "file", "src/main.rs · cached result")
+    );
+
+    let engine =
+        proposal_tx(&ToolProposal::new("t2", "task_done", json!({})).with_source("task_executor"));
+    assert_eq!(columns(&engine).2, "handled by task runner",);
+}
+
+#[test]
+fn llm_records_show_stop_reason_and_model_or_error_class() {
+    let ok = json_tx(
+        TransactionType::Reasoning,
+        &json!({"model": "claude-opus-4-6", "stop_reason": "ToolUse",
+                "input_tokens": 1234, "output_tokens": 340,
+                "tool_uses": ["read_file", "grep"]}),
+    );
+    assert_eq!(
+        columns(&ok),
+        cols("ToolUse", "opus", "1.2k/340 tok · tools: read_file, grep")
+    );
+
+    let failed = json_tx(
+        TransactionType::Reasoning,
+        &json!({"status": "failed", "error": "HTTP 429 Too Many Requests"}),
+    );
+    assert_eq!(
+        columns(&failed),
+        cols("error", "rate", "HTTP 429 Too Many Requests")
+    );
+    assert_eq!(
+        llm_error_class("stream dropped before completion"),
+        "stream"
+    );
+    assert_eq!(llm_error_class("Overloaded"), "busy");
+    assert_eq!(llm_error_class("connection reset"), "other");
+}
+
+#[test]
+fn conversation_records_show_sender() {
+    let prompt = Transaction::user_prompt(AgentId::generate(), "hi there");
+    assert_eq!(columns(&prompt), cols("USER", "text", "hi there"));
+}
+
+#[test]
+fn unparseable_records_have_no_columns() {
+    let t = tx(TransactionType::Reasoning, "not json");
+    assert_eq!(columns(&t), cols("", "", ""));
+}
+
+#[test]
+fn group_labels_fit_group_column() {
+    let groups = [
+        "read_file",
+        "run_command",
+        "search_code",
+        "git_commit",
+        "web_fetch",
+        "create_spec",
+        "create_task",
+        "spawn_agent",
+        "frobnicate",
+    ]
+    .map(tool_group);
+    let errors = ["429", "529", "timed out", "401", "stream", "?"].map(llm_error_class);
+    for label in groups.iter().chain(&errors) {
+        assert!(label.len() <= 7, "{label} too long");
+    }
+    assert_eq!(model_family("claude-sonnet-4-5-20250929"), "sonnet");
+    assert_eq!(model_family("openrouter/mistral-large"), "mistral");
 }

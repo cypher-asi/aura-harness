@@ -10,6 +10,10 @@ use std::path::{Path, PathBuf};
 /// Entries listed per directory before the rest collapse into a "more" row.
 const MAX_ENTRIES_PER_DIR: usize = 500;
 
+/// Files counted for the tab bar before the count stops and reads `N+`,
+/// so a huge sandbox doesn't stall a refresh.
+pub const MAX_COUNTED_FILES: usize = 10_000;
+
 /// What a row in the tree points at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SandboxEntryKind {
@@ -45,6 +49,7 @@ pub struct SandboxTree {
     expanded: HashSet<PathBuf>,
     rows: Vec<SandboxRow>,
     selected: usize,
+    file_count: usize,
 }
 
 impl SandboxTree {
@@ -55,6 +60,7 @@ impl SandboxTree {
             self.expanded.clear();
             self.selected = 0;
             self.rows.clear();
+            self.file_count = 0;
             self.root = Some(root);
         }
         self.refresh();
@@ -72,6 +78,13 @@ impl SandboxTree {
         &self.rows
     }
 
+    /// Files under the root, at most [`MAX_COUNTED_FILES`]; `None` before
+    /// the backend has reported a root.
+    #[must_use]
+    pub fn file_count(&self) -> Option<usize> {
+        self.root.as_ref().map(|_| self.file_count)
+    }
+
     /// Index of the highlighted row.
     #[must_use]
     pub const fn selected(&self) -> usize {
@@ -86,6 +99,7 @@ impl SandboxTree {
         if let Some(root) = self.root.clone() {
             self.expanded.retain(|p| p.is_dir());
             push_dir(&root, 0, &self.expanded, &mut self.rows);
+            self.file_count = count_files(&root, MAX_COUNTED_FILES);
         }
         self.selected = selected_path
             .and_then(|path| self.rows.iter().position(|r| r.path == path))
@@ -149,6 +163,35 @@ impl SandboxTree {
             self.selected = parent;
         }
     }
+}
+
+/// Regular files under `root`, up to `cap`. Symlinks aren't followed and
+/// `.git` isn't entered, so the count is the project's own files.
+fn count_files(root: &Path, cap: usize) -> usize {
+    let mut count = 0;
+    let mut dirs = vec![root.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        let Ok(read_dir) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in read_dir.filter_map(Result::ok) {
+            match entry.file_type() {
+                Ok(ft) if ft.is_dir() => {
+                    if entry.file_name() != ".git" {
+                        dirs.push(entry.path());
+                    }
+                }
+                Ok(ft) if ft.is_file() => {
+                    count += 1;
+                    if count >= cap {
+                        return cap;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    count
 }
 
 fn push_dir(dir: &Path, depth: usize, expanded: &HashSet<PathBuf>, rows: &mut Vec<SandboxRow>) {
@@ -309,6 +352,29 @@ mod tests {
         tree.toggle_selected();
         assert!(!tree.rows()[link].expanded);
         assert_eq!(names(&tree).len(), 5);
+    }
+
+    #[test]
+    fn counts_every_file_but_not_git_internals() {
+        let (dir, mut tree) = sample();
+        assert_eq!(tree.file_count(), Some(4));
+
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        fs::write(dir.path().join(".git/HEAD"), "").unwrap();
+        fs::write(dir.path().join("Docs/guide.md"), "").unwrap();
+        tree.refresh();
+        assert_eq!(tree.file_count(), Some(5));
+        assert_eq!(SandboxTree::default().file_count(), None);
+    }
+
+    #[test]
+    fn file_count_stops_at_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..5 {
+            fs::write(dir.path().join(format!("f{i}")), "").unwrap();
+        }
+        assert_eq!(count_files(dir.path(), 3), 3);
+        assert_eq!(count_files(dir.path(), 10), 5);
     }
 
     #[test]

@@ -12,7 +12,7 @@ use super::subagents::lock;
 use super::LoopState;
 use crate::agent_registry::RegisteredAgent;
 use crate::file_checkpoints::FileCheckpoints;
-use crate::record_loader::{conversation_history, recent_record_summaries};
+use crate::record_loader::{conversation_history, latest_plan_path, recent_record_summaries};
 use crate::session_checkpoint::{
     is_resumable, now_ms, Checkpoints, SessionCheckpoint, SessionUsage,
 };
@@ -54,6 +54,12 @@ pub struct AgentSession {
     pub file_checkpoints: Option<FileCheckpoints>,
     /// Runs the project's check after steps that edit files
     pub post_edit_check: Option<PostEditCheck>,
+    /// Workspace-relative path of the plan this agent last wrote, which
+    /// `/build` implements.
+    pub active_plan: Option<String>,
+    /// Whether the agent is building `active_plan` (after `/build`), so its
+    /// todo list is mirrored into the plan file.
+    pub building_plan: bool,
 }
 
 impl AgentSession {
@@ -68,6 +74,7 @@ impl AgentSession {
         self.todos.clear();
         self.usage = SessionUsage::default();
         self.started_ms = now_ms();
+        self.building_plan = false;
     }
 
     /// Continue the session saved in `checkpoint`.
@@ -220,6 +227,7 @@ impl KernelFactory {
             PostEditCheck::new(kernel.agent_workspace(), config.clone())
                 .with_notifier(check_notifier(commands.clone(), identity.agent_id))
         });
+        let active_plan = latest_plan_path(self.store.as_ref(), identity.agent_id);
         let mut session = AgentSession {
             identity,
             model_gateway: KernelModelGateway::new(kernel.clone()),
@@ -233,6 +241,8 @@ impl KernelFactory {
             checkpoints: self.checkpoints.clone(),
             file_checkpoints: self.file_checkpoints.clone(),
             post_edit_check,
+            active_plan,
+            building_plan: false,
         };
         if let Some(checkpoint) = self.restore(session.agent_id()) {
             info!(agent = %session.agent_id(), "Resuming session from checkpoint");
@@ -356,21 +366,57 @@ pub(super) async fn handle_create_agent(state: &mut LoopState<'_>, name: Option<
 
 /// Start an instance of a permanent agent and switch to it.
 pub(super) async fn handle_instantiate_definition(state: &mut LoopState<'_>, name: &str) {
+    if let Some(agent) = start_instance(state, name, None).await {
+        show_success(state, format!("Started {}", agent.name)).await;
+    }
+}
+
+/// Start an instance of a permanent agent inside the project that contains
+/// the active agent, and switch to it.
+pub(super) async fn handle_add_definition_to_project(state: &mut LoopState<'_>, name: &str) {
+    let root = lock(&state.hub.registry)
+        .project_root(state.active)
+        .cloned();
+    let Some(root) = root else {
+        show_error(state, "Unknown agent".to_string()).await;
+        return;
+    };
+    if let Some(agent) = start_instance(state, name, Some(root.zns_id.clone())).await {
+        let project = root
+            .project
+            .as_deref()
+            .map(str::trim)
+            .filter(|project| !project.is_empty())
+            .unwrap_or(&root.name);
+        show_success(state, format!("Added {} to {project}", agent.name)).await;
+    }
+}
+
+/// Register an instance of the permanent agent `name` under `parent` and
+/// switch to it. Reports failures itself and returns `None`.
+async fn start_instance(
+    state: &mut LoopState<'_>,
+    name: &str,
+    parent: Option<String>,
+) -> Option<RegisteredAgent> {
     let definition = lock(&state.hub.definitions)
         .get(name)
         .map(|d| d.name.clone());
     let Some(definition) = definition else {
         show_error(state, format!("No permanent agent named {name}")).await;
-        return;
+        return None;
     };
-    let created = lock(&state.hub.registry).create_instance(&definition, None);
+    let created = lock(&state.hub.registry).create_instance(&definition, parent);
     match created {
         Ok(agent) => {
             info!(name = %agent.name, %definition, "Started permanent agent instance");
             activate_agent(state, agent.agent_id()).await;
-            show_success(state, format!("Started {}", agent.name)).await;
+            Some(agent)
         }
-        Err(e) => show_error(state, format!("Could not start {definition}: {e}")).await,
+        Err(e) => {
+            show_error(state, format!("Could not start {definition}: {e}")).await;
+            None
+        }
     }
 }
 
@@ -499,6 +545,7 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>) {
     let store = state.hub.factory.store.as_ref();
     let agent_id = state.active;
 
+    state.hub.record_panel.set(agent_id);
     let _ = state
         .commands
         .send(UiCommand::SetActiveAgent(agent_id.to_hex()))
@@ -532,6 +579,12 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>) {
     }
     super::modes::send_mode(state, agent_id).await;
     super::hud::send_instructions_of(state, agent_id).await;
+    if state.hub.is_running(agent_id) {
+        // Its turn shows its plan again when it next changes.
+        let _ = state.commands.send(UiCommand::SetPlan(None)).await;
+    } else {
+        super::plan_mode::send_plan_of(state, agent_id).await;
+    }
 
     send_sandbox_root(state).await;
     state.hub.send_agent_list().await;

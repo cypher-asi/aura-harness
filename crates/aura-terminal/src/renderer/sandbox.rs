@@ -1,9 +1,12 @@
-//! Sandbox panel: file tree of the active agent's workspace.
+//! The panel below the Record panel: a SANDBOX | PROCESSES tab bar over the
+//! file tree of the active agent's workspace or the Processes list.
 
-use super::panels::{hover_style, render_scrollbar, truncate_record_info, ScrollView};
+use super::panels::{
+    hover_style, render_scrollbar, tab_bar_split, tab_line, truncate_record_info, ScrollView,
+};
 use super::text::display_width;
 use crate::app::sandbox::{SandboxEntryKind, SandboxRow};
-use crate::app::{HoverTarget, PanelFocus};
+use crate::app::{HoverTarget, PanelFocus, SidePanelTab};
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
@@ -16,7 +19,7 @@ use ratatui::{
 /// Hint shown at the bottom of the panel when it has focus.
 const SANDBOX_HINT: &str = "↑↓ move  ⏎ open  ← up";
 
-/// Render the Sandbox panel.
+/// Render the panel: its tab bar, then the open tab.
 pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Sandbox;
     let border_color = if is_focused {
@@ -26,13 +29,47 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
     };
 
     let block = Block::default()
-        .title(" SANDBOX ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    if inner.height == 0 {
+        return;
+    }
 
+    let (tabs, body) = tab_bar_split(inner);
+    app.set_side_tabs_area(tabs);
+    let hovered = match app.hover() {
+        Some(HoverTarget::SideTab(tab)) => Some(tab),
+        _ => None,
+    };
+    let line = tab_line(
+        SidePanelTab::ALL
+            .map(|tab| (tab, tab.label(), app.side_tab_count(tab)))
+            .into_iter(),
+        app.side_tab(),
+        hovered,
+        is_focused,
+        theme,
+    );
+    frame.render_widget(Paragraph::new(line), tabs);
+    if body.height == 0 {
+        return;
+    }
+
+    match app.side_tab() {
+        SidePanelTab::Sandbox => render_tree(frame, area, body, app, theme),
+        SidePanelTab::Processes => {
+            super::processes::render_processes(frame, area, body, app, theme);
+        }
+    }
+}
+
+/// Draw the sandbox tree into `inner`, the body below the tab bar of the
+/// panel bordered by `area`.
+fn render_tree(frame: &mut Frame, area: Rect, inner: Rect, app: &mut App, theme: &Theme) {
+    let is_focused = app.focus() == PanelFocus::Sandbox;
     if app.sandbox().rows().is_empty() {
         let message = if app.sandbox().root().is_some() {
             [
@@ -43,10 +80,9 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
         } else {
             ["  No sandbox yet.", "", ""]
         };
-        let lines: Vec<Line> = std::iter::once(Line::from(""))
-            .chain(message.into_iter().map(|text| {
-                Line::from(Span::styled(text, Style::default().fg(theme.colors.muted)))
-            }))
+        let lines: Vec<Line> = message
+            .into_iter()
+            .map(|text| Line::from(Span::styled(text, Style::default().fg(theme.colors.muted))))
             .collect();
         frame.render_widget(Paragraph::new(lines), inner);
         return;
@@ -115,7 +151,7 @@ fn sandbox_line<'a>(
     width: usize,
     theme: &Theme,
 ) -> Line<'a> {
-    let prefix = if highlighted { " > " } else { "   " };
+    let prefix = if highlighted { ">" } else { " " };
     let indent = "  ".repeat(row.depth);
     let (marker, label, color) = match row.kind {
         SandboxEntryKind::Dir => (

@@ -14,20 +14,25 @@ use crate::{api_server, auth_commands, event_loop, record_loader, session_helper
 
 use anyhow::Context;
 use aura_agent::{AgentLoop, ProcessManager, ProcessManagerConfig};
-use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig, ToolApprovalPrompter};
+use aura_agent_kernel::{
+    ExecutorRouter, Kernel, KernelConfig, RecordObserver, ToolApprovalPrompter,
+};
 use aura_context_skills::{SkillLoader, SkillManager};
 use aura_core_types::{AgentPermissions, Transaction};
 use aura_model_reasoner::ModelProvider;
 use aura_terminal::{AlertSettings, App, PermissionMode, Terminal, Theme, UiCommand, UiEvent};
-use aura_tools::jobs::{BackgroundJobs, JobFinished};
 use aura_tools::todo::TodoWriteTool;
-use aura_tools::{ToolConfig, ToolExecutor};
+use aura_tools::{BackgroundProcessHook, ToolConfig, ToolExecutor};
 use clap::Parser;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+
+/// How long a background command may run before it is killed. Long
+/// enough for a dev server to outlive a working day.
+const BACKGROUND_COMMAND_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1000;
 
 // ============================================================================
 // Hello World (Spec 01)
@@ -389,8 +394,6 @@ async fn run_terminal(
     api_server::start_api_server(cmd_tx.clone(), workspace_root.clone()).await;
 
     let (tool_config, tools, web_tools) = agent_tools(args.allow_unrestricted_full_access);
-    let (job_tx, job_rx) = mpsc::channel::<JobFinished>(64);
-    let jobs = BackgroundJobs::new(job_tx);
 
     // The terminal harness is the one surface that resolves its model
     // locally (env, persisted `/model` choice, then the local default) —
@@ -404,11 +407,7 @@ async fn run_terminal(
     let base_config = config.clone();
     let agent_loop = AgentLoop::new(config);
 
-    let (process_tx, process_rx) = mpsc::channel::<Transaction>(100);
-    let process_manager = Arc::new(ProcessManager::new(
-        process_tx,
-        ProcessManagerConfig::default(),
-    ));
+    let (process_manager, process_rx) = background_process_manager();
 
     // `mock` for explicit test / offline mode; otherwise the routed
     // provider sends `local/*` models to the local server (Ollama),
@@ -426,7 +425,12 @@ async fn run_terminal(
         cmd_tx.clone(),
         &data_dir,
     ));
-    let hub = build_hub(HubSetup {
+    let record_panel = event_loop::RecordPanelAgent::default();
+    let record_observer: Arc<dyn RecordObserver> = Arc::new(event_loop::UiRecordObserver::new(
+        cmd_tx.clone(),
+        record_panel.clone(),
+    ));
+    let Harness { hub, background } = build_hub(HubSetup {
         data_dir: data_dir.clone(),
         workspace_root: workspace_root.clone(),
         registry,
@@ -440,12 +444,12 @@ async fn run_terminal(
             limits: models.limits(),
         },
         policy: mode_policy(mode, &tool_names),
-        tool_audit_observer: Some(Arc::new(event_loop::UiToolAuditObserver::new(
-            cmd_tx.clone(),
-        ))),
+        record_observer: Some(record_observer),
+        record_panel: record_panel.clone(),
         commands: cmd_tx.clone(),
         long_run: crate::long_run::LongRunSettings::from_env(),
-        jobs: Arc::clone(&jobs),
+        process_manager,
+        background_agents: true,
         mode,
         instructions: project_instructions(),
         approvals: Some(Arc::clone(&approvals)),
@@ -456,10 +460,9 @@ async fn run_terminal(
     let _ = cmd_tx.try_send(UiCommand::SetActiveAgent(identity.agent_id.to_hex()));
     let _ = cmd_tx.try_send(UiCommand::SetAgentDefinitions(hub.definition_summaries()));
     let session = hub.factory.open(&active_agent, Vec::new(), active_folder)?;
+    record_panel.set(session.agent_id());
 
     let cmd_tx_clone = cmd_tx.clone();
-    let process_manager_clone = Arc::clone(&process_manager);
-    let loop_jobs = Arc::clone(&jobs);
 
     let processor_handle = tokio::spawn(async move {
         let mut agent_loop = agent_loop;
@@ -470,21 +473,16 @@ async fn run_terminal(
             agent_loop: &mut agent_loop,
             session,
             hub,
-            _process_manager: process_manager_clone,
             memory_manager: None,
             models,
             auth,
-            job_finished: job_rx,
-            jobs: loop_jobs,
             approvals,
         };
         event_loop::run_event_loop(ctx).await
     });
 
     let ran = terminal.run(&mut app);
-    // Jobs lead their own process groups, so nothing else stops them
-    // when the terminal exits.
-    jobs.kill_all();
+    event_loop::processes::stop_background_commands(background.as_ref());
     ran?;
 
     // Phase 5 (error-handling polish): we used to call
@@ -583,11 +581,18 @@ pub(crate) struct HubSetup {
     pub base: event_loop::TurnBase,
     /// Kernel policy for every agent: mode and tool permissions
     pub policy: aura_agent_kernel::PolicyConfig,
-    pub tool_audit_observer: Option<Arc<dyn aura_agent_kernel::ToolAuditObserver>>,
+    /// Sees every record entry of every agent, including background ones
+    pub record_observer: Option<Arc<dyn RecordObserver>>,
+    /// Which agent is on screen; shared with `record_observer`
+    pub record_panel: event_loop::RecordPanelAgent,
     /// Where agents' chats and panels go
     pub commands: mpsc::Sender<UiCommand>,
     pub long_run: crate::long_run::LongRunSettings,
-    pub jobs: Arc<BackgroundJobs>,
+    /// Runs `run_command`'s background commands and reports their exits;
+    /// from [`background_process_manager`]
+    pub process_manager: Arc<ProcessManager>,
+    /// Offer `spawn_agent` and the tools that talk to background agents
+    pub background_agents: bool,
     /// Permission mode agents start in; spawned agents take their
     /// parent's. Should match the mode `policy` was built for.
     pub mode: PermissionMode,
@@ -599,6 +604,27 @@ pub(crate) struct HubSetup {
     pub web_tools: WebTools,
     /// Run after each step that edits files; results go to `commands`
     pub post_edit_check: aura_agent::PostEditCheckConfig,
+}
+
+/// What [`build_hub`] built.
+pub(crate) struct Harness {
+    pub hub: Arc<event_loop::AgentHub>,
+    /// Every agent's background commands
+    pub background: Arc<dyn BackgroundProcessHook>,
+}
+
+/// The process manager for background commands, with the channel their
+/// completions arrive on.
+pub(crate) fn background_process_manager() -> (Arc<ProcessManager>, mpsc::Receiver<Transaction>) {
+    let (process_tx, process_rx) = mpsc::channel::<Transaction>(100);
+    let manager = Arc::new(ProcessManager::new(
+        process_tx,
+        ProcessManagerConfig {
+            max_async_timeout_ms: BACKGROUND_COMMAND_TIMEOUT_MS,
+            ..ProcessManagerConfig::default()
+        },
+    ));
+    (manager, process_rx)
 }
 
 /// Names of every tool an agent may be offered: `tools` plus `task`,
@@ -631,10 +657,11 @@ pub(crate) fn project_instructions() -> ProjectInstructions {
     ))
 }
 
-/// The agent hub: registry, permanent agents, and a kernel factory whose
-/// kernels run the tools in `setup` under its policy and checkpoint their
-/// sessions under `data_dir`.
-pub(crate) fn build_hub(setup: HubSetup) -> Arc<event_loop::AgentHub> {
+/// The agent hub: registry, permanent agents, the Processes tab's table,
+/// the host for background agents, and a kernel factory whose kernels run
+/// the tools in `setup` under its policy, hand background commands to its
+/// process manager, and checkpoint their sessions under `data_dir`.
+pub(crate) fn build_hub(setup: HubSetup) -> Harness {
     let HubSetup {
         data_dir,
         workspace_root,
@@ -645,10 +672,12 @@ pub(crate) fn build_hub(setup: HubSetup) -> Arc<event_loop::AgentHub> {
         tool_config,
         base,
         policy,
-        tool_audit_observer,
+        record_observer,
+        record_panel,
         commands,
         long_run,
-        jobs,
+        process_manager,
+        background_agents,
         mode,
         instructions,
         approvals,
@@ -662,16 +691,60 @@ pub(crate) fn build_hub(setup: HubSetup) -> Arc<event_loop::AgentHub> {
         tool_approval_prompter: approvals
             .clone()
             .map(|approvals| approvals as Arc<dyn ToolApprovalPrompter>),
-        tool_audit_observer,
+        record_observer: record_observer.clone(),
         ..KernelConfig::default()
     };
     let kernel_store = store.clone() as Arc<dyn aura_store_db::Store>;
+
+    let host = background_agents.then(|| {
+        let mut scheduler = aura_engine::Scheduler::new(
+            Arc::clone(&kernel_store),
+            Arc::clone(&provider),
+            Vec::new(),
+            base.tools.clone(),
+            workspace_root.clone(),
+            None,
+        );
+        if let Some(observer) = &record_observer {
+            scheduler = scheduler.with_record_observer(Arc::clone(observer));
+        }
+        let scheduler = Arc::new(scheduler);
+        let host = aura_engine::AgentHost::new(
+            Arc::clone(&kernel_store),
+            Arc::clone(&scheduler),
+            aura_engine::AgentHostConfig::default(),
+        );
+        (host, scheduler)
+    });
+    let processes = event_loop::ProcessTable::new(
+        host.as_ref().map(|(host, _)| host.clone()),
+        Some(Arc::clone(&process_manager)),
+    );
+    let background: Arc<dyn BackgroundProcessHook> = Arc::new(event_loop::BackgroundCommands::new(
+        process_manager,
+        store.clone() as Arc<dyn aura_store_db::ReadStore>,
+        data_dir.join("processes"),
+        &processes,
+    ));
+    let agents = host.map(|(host, scheduler)| {
+        event_loop::TerminalAgents::new(
+            host,
+            scheduler,
+            Arc::new(event_loop::TerminalChildKernels::new(
+                tool_config.clone(),
+                Arc::clone(&background),
+            )),
+        )
+    });
+    let kernel_agents = agents.clone();
+    let kernel_background = Arc::clone(&background);
+
     let checkpoints = crate::session_checkpoint::Checkpoints::new(&data_dir);
     let file_checkpoints = crate::file_checkpoints::FileCheckpoints::new(&data_dir);
     let factory_files = file_checkpoints.clone();
     let diff_commands = commands.clone();
     let check_commands = commands.clone();
-    event_loop::AgentHub::new(
+    let hub = event_loop::AgentHub::new(
         event_loop::AgentHubParts {
             registry,
             definitions,
@@ -681,6 +754,9 @@ pub(crate) fn build_hub(setup: HubSetup) -> Arc<event_loop::AgentHub> {
             long_run,
             mode,
             instructions,
+            processes,
+            agents,
+            record_panel,
         },
         move |dispatcher| {
             event_loop::KernelFactory::new(
@@ -694,8 +770,15 @@ pub(crate) fn build_hub(setup: HubSetup) -> Arc<event_loop::AgentHub> {
                         .with_caller_permissions(AgentPermissions::full_access())
                         .with_parent_chain(parent_chain)
                         .with_subagent_dispatch_hook(Arc::clone(&dispatcher))
-                        .with_background_jobs(Arc::clone(&jobs))
+                        .with_background_process_hook(Arc::clone(&kernel_background))
                         .with_file_change_hook(file_hook);
+                    if let Some(agents) = &kernel_agents {
+                        let hooks = agents.hooks_for(agent_id);
+                        executor = executor
+                            .with_spawn_hook(hooks.clone())
+                            .with_agent_control_hook(hooks.clone())
+                            .with_agent_read_hook(hooks);
+                    }
                     executor.register(Box::new(TodoWriteTool));
                     web_tools.register(&mut executor);
                     let mut executor_router = ExecutorRouter::new();
@@ -720,7 +803,8 @@ pub(crate) fn build_hub(setup: HubSetup) -> Arc<event_loop::AgentHub> {
             .with_file_checkpoints(file_checkpoints)
             .with_post_edit_check(post_edit_check, check_commands)
         },
-    )
+    );
+    Harness { hub, background }
 }
 
 // ============================================================================

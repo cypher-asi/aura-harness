@@ -3,7 +3,7 @@
 use super::text::display_width;
 use crate::{
     animation::AURA_WIDTH,
-    app::{AgentsTab, HoverTarget, PanelFocus, ProjectListRow, ToggleRow},
+    app::{AgentsTab, HoverTarget, PanelFocus, ProjectListRow, ToggleRow, ToggleTarget},
     App, Theme,
 };
 use ratatui::{
@@ -24,37 +24,56 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     };
 
     let block = Block::default()
-        .title(" CHAT ")
+        .title(if app.terminal_pane() {
+            " TERMINAL "
+        } else {
+            " CHAT "
+        })
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let padded = centered_text_area(inner);
+    let terminal = app.terminal_pane();
+    let padded = if terminal {
+        terminal_text_area(inner)
+    } else {
+        centered_text_area(inner)
+    };
     app.set_chat_width(padded.width);
     app.set_chat_text_area(padded);
 
-    let working_line = working_indicator_line(app, theme);
-    if app.messages().is_empty() && working_line.is_none() {
-        render_welcome(frame, padded, theme);
-        return;
-    }
+    let tail = if terminal {
+        live_prompt(app, padded.width as usize, theme)
+    } else {
+        let working_line = working_indicator_line(app, theme);
+        if app.pane_is_empty() && working_line.is_none() {
+            render_welcome(frame, padded, theme);
+            return;
+        }
+        Tail {
+            lines: working_line.into_iter().collect(),
+            gap: true,
+            cursor: None,
+        }
+    };
 
-    let (total, first) = render_chat_lines(frame, padded, app, theme, working_line.as_ref());
+    let rows = render_chat_lines(frame, padded, app, theme, &tail);
     render_scrollbar(
         frame,
         area,
         padded,
         ScrollView {
-            total,
+            total: rows.total,
             visible: padded.height as usize,
-            first,
+            first: rows.first,
         },
         is_focused,
         theme,
     );
-    render_lines_below_hint(frame, area, app.scroll_offset(), theme);
+    let below = app.scroll_offset().saturating_sub(rows.padding);
+    render_lines_below_hint(frame, area, below, theme);
 }
 
 /// How much of a panel's list is on screen.
@@ -113,16 +132,52 @@ pub(super) fn render_scrollbar(
     frame.render_stateful_widget(scrollbar, column, &mut state);
 }
 
+/// Rows drawn after the pane's messages: the working indicator in the chat,
+/// the prompt being typed at in the terminal.
+struct Tail {
+    lines: Vec<Line<'static>>,
+    /// Whether a blank row separates the lines from the messages above
+    gap: bool,
+    /// Where the typing cursor sits, as (row of `lines`, column)
+    cursor: Option<(usize, u16)>,
+}
+
+/// The terminal's prompt and the command being typed, with the cursor in
+/// it. Empty while a command runs, as a shell shows no prompt until the
+/// command exits.
+fn live_prompt(app: &App, width: usize, theme: &Theme) -> Tail {
+    if !app.shows_live_prompt() {
+        return Tail {
+            lines: Vec::new(),
+            gap: false,
+            cursor: None,
+        };
+    }
+    let input = app.input();
+    let mut lines = super::command::prompt_line(app.shell_prompt(), input, width, theme);
+    let before_cursor = input.get(..app.cursor_pos()).unwrap_or(input);
+    let column = display_width(app.shell_prompt()) + display_width(before_cursor);
+    let (row, col) = (column / width.max(1), column % width.max(1));
+    while lines.len() <= row {
+        lines.push(Line::default());
+    }
+    Tail {
+        lines,
+        gap: false,
+        cursor: u16::try_from(col).ok().map(|col| (row, col)),
+    }
+}
+
 /// Draw the rows of the conversation that fall in `padded` at the current
-/// scroll position, cloning only those rows out of the line cache. Returns
-/// the conversation's length in rows and the first row drawn.
+/// scroll position, cloning only those rows out of the line cache, then
+/// `tail`.
 fn render_chat_lines(
     frame: &mut Frame,
     padded: Rect,
     app: &mut App,
     theme: &Theme,
-    working_line: Option<&Line<'static>>,
-) -> (usize, usize) {
+    tail: &Tail,
+) -> ChatRows {
     let spinner = app.spinner_char();
     let hovered_activity = match app.hover() {
         Some(HoverTarget::Activity(target)) => Some(target),
@@ -130,45 +185,63 @@ fn render_chat_lines(
     };
     let (messages, cache, groups) = app.chat_line_cache();
     let reflowed = cache.update(messages, padded.width as usize, theme, spinner, &groups);
+    let gap = cache.block_gap();
     let mut toggle_rows = Vec::new();
     let mut message_rows = 0;
+    let mut last_prompt_row = None;
     for (i, block) in cache.blocks().enumerate() {
-        message_rows += usize::from(i > 0);
+        if i > 0 {
+            message_rows += gap;
+        }
+        if block.user {
+            last_prompt_row = Some(message_rows);
+        }
         toggle_rows.extend(block.toggles.iter().map(|toggle| ToggleRow {
             line: message_rows + toggle.line,
             ..*toggle
         }));
         message_rows += block.lines.len();
     }
-    let working_rows = match working_line {
-        Some(_) if message_rows > 0 => 2,
-        Some(_) => 1,
-        None => 0,
-    };
-    let total = message_rows + working_rows;
-    let start = app.sync_chat_scroll(total, padded.height as usize, reflowed);
+    let tail_gap = usize::from(tail.gap && message_rows > 0 && !tail.lines.is_empty());
+    let tail_start = message_rows + tail_gap;
+    let tail_toggle = app
+        .turn_started_ms()
+        .filter(|_| !app.terminal_pane() && !tail.lines.is_empty())
+        .map(|started| ToggleRow {
+            line: tail_start,
+            target: ToggleTarget::TurnRecords(started),
+            open: false,
+        });
+    toggle_rows.extend(tail_toggle);
+    let content = tail_start + tail.lines.len();
+    let height = padded.height as usize;
+    // Blank rows after the end, enough that scrolling to the bottom can
+    // bring the latest prompt to the top with the reply filling in below.
+    let padding = last_prompt_row.map_or(0, |row| (row + height).saturating_sub(content));
+    let total = content + padding;
+    let start = app.sync_chat_scroll(total, height, reflowed);
     app.set_chat_layout(toggle_rows, start);
 
     let (_, cache, _) = app.chat_line_cache();
     let blank = Line::default();
-    let height = padded.height as usize;
     let mut visible = Vec::with_capacity(height);
     let mut line_index = 0usize;
     for (i, block) in cache.blocks().enumerate() {
         if i > 0 {
-            push_visible(&mut visible, &mut line_index, start, height, blank.clone());
+            for _ in 0..gap {
+                push_visible(&mut visible, &mut line_index, start, height, blank.clone());
+            }
         }
-        let hover_line = hovered_activity.and_then(|target| {
+        let hovered = |offset: usize| {
             block
                 .toggles
                 .iter()
-                .find(|toggle| toggle.target == target)
-                .map(|toggle| toggle.line)
-        });
+                .any(|toggle| toggle.line == offset && hovered_activity == Some(toggle.target))
+        };
         for (offset, line) in block.lines.iter().enumerate() {
             if line_index >= start && visible.len() < height {
                 let mut line = line.clone();
-                if hover_line == Some(offset) {
+                if hovered(offset) {
                     apply_activity_hover(&mut line, theme);
                 }
                 visible.push(line);
@@ -176,14 +249,40 @@ fn render_chat_lines(
             line_index += 1;
         }
     }
-    if let Some(line) = working_line {
-        if line_index > 0 {
-            push_visible(&mut visible, &mut line_index, start, height, blank);
+    if tail_gap > 0 {
+        push_visible(&mut visible, &mut line_index, start, height, blank);
+    }
+    for (row, line) in tail.lines.iter().enumerate() {
+        let mut line = line.clone();
+        if row == 0 && tail_toggle.is_some_and(|t| hovered_activity == Some(t.target)) {
+            apply_activity_hover(&mut line, theme);
         }
-        push_visible(&mut visible, &mut line_index, start, height, line.clone());
+        push_visible(&mut visible, &mut line_index, start, height, line);
     }
     frame.render_widget(Paragraph::new(visible), padded);
-    (total, start)
+
+    if let Some((row, col)) = tail.cursor {
+        let row = tail_start + row;
+        if (start..start + height).contains(&row) && col < padded.width {
+            let y = padded.y + u16::try_from(row - start).unwrap_or(0);
+            frame.set_cursor_position((padded.x + col, y));
+        }
+    }
+    ChatRows {
+        total,
+        first: start,
+        padding,
+    }
+}
+
+/// How the chat's rows fell in the last frame.
+struct ChatRows {
+    /// Rows in the whole conversation, blank padding included
+    total: usize,
+    /// First row on screen
+    first: usize,
+    /// Blank rows after the end
+    padding: usize,
 }
 
 /// Keep `line` when it falls inside the chat viewport.
@@ -246,6 +345,16 @@ const CHAT_SIDE_MARGIN: u16 = 4;
 /// Widest the chat text runs; wider panels grow the side margins instead.
 const CHAT_MAX_TEXT_WIDTH: u16 = 88;
 
+/// The terminal's text area: all of `area` but a column on each side, so
+/// output starts at the top left like a terminal's.
+fn terminal_text_area(area: Rect) -> Rect {
+    Rect {
+        x: area.x.saturating_add(1),
+        width: area.width.saturating_sub(2),
+        ..area
+    }
+}
+
 /// The chat text column, horizontally centered in `area` below a blank row.
 pub(super) fn centered_text_area(area: Rect) -> Rect {
     let width = area
@@ -261,19 +370,26 @@ pub(super) fn centered_text_area(area: Rect) -> Rect {
 }
 
 /// `AURA  ⠹ thinking… 12s` — shown below the conversation while a turn is
-/// in flight and no reply text is streaming.
+/// in flight and no reply text is streaming. Once the agent has shown
+/// something this turn, `AURA` heads that instead, and the indicator sits
+/// under it in line with the steps: `  ⠹ thinking… 12s`.
 pub(super) fn working_indicator_line<'a>(app: &App, theme: &Theme) -> Option<Line<'a>> {
     if app.has_live_activity() || app.ends_in_live_group() {
         return None;
     }
     let label = app.working_label()?;
-    let mut spans = vec![
+    let lead = if app.turn_has_agent_block() {
+        Span::raw("  ")
+    } else {
         Span::styled(
             "AURA  ",
             Style::default()
                 .fg(theme.colors.muted)
                 .add_modifier(Modifier::BOLD),
-        ),
+        )
+    };
+    let mut spans = vec![
+        lead,
         Span::styled(
             format!("{} ", app.spinner_char()),
             Style::default().fg(theme.colors.secondary),
@@ -310,20 +426,16 @@ fn render_welcome(frame: &mut Frame, area: Rect, theme: &Theme) {
     let welcome = vec![
         Line::from(""),
         Line::from(Span::styled(
-            "Type a message to start chatting, or /help for commands.",
+            "Type a message to start chatting, $ for a terminal, or /help for commands.",
             Style::default().fg(theme.colors.muted),
         )),
     ];
     frame.render_widget(Paragraph::new(welcome), area);
 }
 
-/// Hint shown at the bottom of the roster tab.
-const ROSTER_HINT: &str = "⏎ spawn e edit d del";
-/// Shown at the right of the tab bar when there is room.
-const TABS_HINT: &str = "←→";
-
-/// Render the agents panel: a Projects | Agents tab bar over either the
-/// live agents or the roster of permanent agents.
+/// Render the agents panel: a PROJECTS | AGENTS tab bar over either the
+/// live agents or the roster of permanent agents. The tabs take the first
+/// line, with an empty line below them when the panel has room.
 pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Swarm;
     let border_color = if is_focused {
@@ -342,21 +454,21 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
         return;
     }
 
-    let header_height = if inner.height >= 6 { 2 } else { 1 };
-    app.set_agent_tabs_area(Rect { height: 1, ..inner });
-    frame.render_widget(
-        Paragraph::new(build_tab_lines(app, inner.width as usize, theme)),
-        Rect {
-            height: header_height,
-            ..inner
-        },
-    );
-
-    let body = Rect {
-        y: inner.y + header_height,
-        height: inner.height - header_height,
-        ..inner
+    let (tabs, body) = tab_bar_split(inner);
+    app.set_agent_tabs_area(tabs);
+    let hovered = match app.hover() {
+        Some(HoverTarget::AgentTab(tab)) => Some(tab),
+        _ => None,
     };
+    let line = tab_line(
+        AgentsTab::layout().map(|(tab, _, _)| (tab, tab.label(), None)),
+        app.agents_tab(),
+        hovered,
+        is_focused,
+        theme,
+    );
+    frame.render_widget(Paragraph::new(line), tabs);
+
     if body.height == 0 {
         return;
     }
@@ -388,15 +500,16 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
             render_scrollbar(frame, area, rows_area, view, is_focused, theme);
         }
         AgentsTab::Roster => {
-            let show_hint = body.height >= 3;
             let rows_area = Rect {
-                height: body.height - u16::from(show_hint),
+                height: body.height - 1,
                 ..body
             };
             let visible = rows_area.height as usize;
             app.set_definition_rows_area(rows_area);
+            app.set_new_agent_area(bottom_row);
             app.sync_definitions_scroll(visible);
-            let lines = build_definition_lines(app, inner, theme);
+            let mut lines = build_definition_lines(app, inner, theme);
+            let new_agent = lines.pop().unwrap_or_default();
             let view = ScrollView {
                 total: lines.len(),
                 visible,
@@ -404,87 +517,80 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
             };
             let lines: Vec<Line> = lines.into_iter().skip(view.first).take(visible).collect();
             frame.render_widget(Paragraph::new(lines), rows_area);
+            frame.render_widget(Paragraph::new(new_agent), bottom_row);
             render_scrollbar(frame, area, rows_area, view, is_focused, theme);
-            if show_hint {
-                let hint =
-                    truncate_agent_name(ROSTER_HINT, (inner.width as usize).saturating_sub(1));
-                frame.render_widget(
-                    Paragraph::new(Line::from(Span::styled(
-                        format!(" {hint}"),
-                        Style::default().fg(theme.colors.muted),
-                    ))),
-                    bottom_row,
-                );
-            }
         }
     }
 }
 
-/// The tab labels, and below them a rule that is heavy under the active tab.
-fn build_tab_lines<'a>(app: &App, width: usize, theme: &Theme) -> Vec<Line<'a>> {
-    let active = app.agents_tab();
-    let hovered = match app.hover() {
-        Some(HoverTarget::AgentTab(tab)) => Some(tab),
-        _ => None,
+/// Split a tabbed panel's inner area into its tab bar (the first line) and
+/// the body below, leaving an empty line between them when there is room.
+pub(super) fn tab_bar_split(inner: Rect) -> (Rect, Rect) {
+    let header_height = if inner.height >= 6 { 2 } else { 1 }.min(inner.height);
+    let tabs = Rect {
+        height: inner.height.min(1),
+        ..inner
     };
-    let muted = Style::default().fg(theme.colors.muted);
-    let active_color = if app.focus() == PanelFocus::Swarm {
+    let body = Rect {
+        y: inner.y + header_height,
+        height: inner.height - header_height,
+        ..inner
+    };
+    (tabs, body)
+}
+
+/// A panel's tab labels: the active one bold in the accent color (primary
+/// while the panel has focus), the hovered one highlighted, the rest gray.
+/// A tab's count follows its label in the same color, not bold.
+pub(super) fn tab_line<'a, T: Copy + PartialEq>(
+    tabs: impl Iterator<Item = (T, &'static str, Option<String>)>,
+    active: T,
+    hovered: Option<T>,
+    focused: bool,
+    theme: &Theme,
+) -> Line<'a> {
+    let active_color = if focused {
         theme.colors.primary
     } else {
         theme.colors.secondary
     };
-    let mut labels = vec![Span::raw(" ")];
-    let mut rule = vec![Span::styled("─", muted)];
-    let mut used = 1;
-    for (tab, _, tab_width) in AgentsTab::layout() {
-        let tab_width = usize::from(tab_width);
-        if tab == active {
-            let style = Style::default()
-                .fg(active_color)
-                .add_modifier(Modifier::BOLD);
-            labels.push(Span::styled(format!(" {} ", tab.label()), style));
-            rule.push(Span::styled(
-                "━".repeat(tab_width),
-                Style::default().fg(active_color),
-            ));
-        } else if hovered == Some(tab) {
-            labels.push(Span::styled(
-                format!(" {} ", tab.label()),
-                hover_style(theme),
-            ));
-            rule.push(Span::styled("─".repeat(tab_width), muted));
-        } else {
-            labels.push(Span::styled(format!(" {} ", tab.label()), muted));
-            rule.push(Span::styled("─".repeat(tab_width), muted));
-        }
-        used += tab_width;
-    }
-    let rest = width.saturating_sub(used);
-    if rest > display_width(TABS_HINT) {
-        labels.push(Span::styled(format!("{TABS_HINT:>rest$}"), muted));
-    }
-    rule.push(Span::styled("─".repeat(rest), muted));
-    vec![Line::from(labels), Line::from(rule)]
+    let labels: Vec<Span> = tabs
+        .flat_map(|(tab, label, count)| {
+            let style = if tab == active {
+                Style::default()
+                    .fg(active_color)
+                    .add_modifier(Modifier::BOLD)
+            } else if hovered == Some(tab) {
+                hover_style(theme)
+            } else {
+                Style::default().fg(theme.colors.muted)
+            };
+            let count = count.map(|count| {
+                Span::styled(format!("{count} "), style.remove_modifier(Modifier::BOLD))
+            });
+            std::iter::once(Span::styled(format!(" {label} "), style)).chain(count)
+        })
+        .collect();
+    Line::from(labels)
 }
 
 /// A project is its own row under a folder icon, with its first agent
 /// below it and agents that agent spawned indented further. Each agent
-/// shows its status icon in the folder's column and how long ago it was
-/// last active on the right. A ring spins beside agents that are thinking.
-/// Space folds the project and hides every agent under it. A project is a
-/// gray cell two lines tall, drawn with half blocks. The last line is
-/// "+ New project", which the panel pins to its bottom row:
+/// shows how long ago it was last active on the right. A ring spins in the
+/// folder's column beside agents that are thinking; idle agents leave it
+/// blank.
+/// Space folds the project and hides every agent under it. Every row is one
+/// line, and only the highlighted one has a background: the keyboard cursor
+/// while the panel is focused, otherwise the agent shown in the chat.
+/// Projects are never highlighted. The
+/// last line is "+ New project", which the panel pins to its bottom row:
 ///
 /// ```text
-/// ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ///  ▱  Website
-/// ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ///  ⢎⡱ Agent              1m
-///    · reviewer          2d
+///      reviewer          2d
 ///
-/// ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ///  ▰  Research
-/// ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ///  …
 ///  +  New project
 /// ```
@@ -497,10 +603,19 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
     let is_thinking = |agent: &crate::events::AgentSummary| {
         agent.running || (agent.id == active_id && app.is_processing())
     };
+    let project_name = Style::default()
+        .fg(theme.colors.muted)
+        .add_modifier(Modifier::BOLD);
+    let agent_name = Style::default().fg(theme.colors.foreground);
     let mut lines = Vec::new();
 
     for (row_index, row) in app.project_rows().into_iter().enumerate() {
-        let is_selected = row_index == selected && is_focused;
+        let is_selected = match row {
+            ProjectListRow::Project { .. } | ProjectListRow::Gap => false,
+            _ if is_focused => row_index == selected,
+            ProjectListRow::Agent { index } => app.agents()[index].id == active_id,
+            ProjectListRow::NewProject => false,
+        };
         let is_hovered =
             matches!(app.hover(), Some(HoverTarget::ProjectRow(index)) if index == row_index);
         match row {
@@ -513,9 +628,7 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
                     let folder = if expanded { "▱" } else { "▰" };
                     StatusIcon::new(folder, theme.colors.muted)
                 };
-                let state = CellState::of(is_selected, false, false);
-                let cell = cell_style(theme, state, theme.colors.foreground, true);
-                lines.push(cell_edge(width, "▄", cell));
+                let cell = cell_style(theme, CellState::of(is_selected, is_hovered), project_name);
                 lines.push(list_row(
                     width,
                     0,
@@ -524,35 +637,30 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
                     cell,
                     None,
                 ));
-                lines.push(cell_edge(width, "▀", cell));
             }
             ProjectListRow::Agent { index } => {
                 let agent = &app.agents()[index];
-                let active = agent.id == active_id;
                 let icon = if is_thinking(agent) {
                     aura_icon(app)
-                } else if active {
-                    StatusIcon::new("●", theme.colors.secondary)
                 } else {
-                    StatusIcon::new("·", theme.colors.muted)
+                    StatusIcon::new("", theme.colors.muted)
                 };
                 let ago = agent.last_active_ms.map(|ms| format_ago(ms, now_ms));
-                let state = CellState::of(is_selected, is_hovered, active);
+                let state = CellState::of(is_selected, is_hovered);
                 lines.push(list_row(
                     width,
                     agent.depth,
                     icon,
                     &agent.name,
-                    cell_style(theme, state, theme.colors.muted, false),
+                    cell_style(theme, state, agent_name),
                     ago.as_deref(),
                 ));
             }
             ProjectListRow::NewProject => {
                 let cell = cell_style(
                     theme,
-                    CellState::of(is_selected, is_hovered, false),
-                    theme.colors.muted,
-                    false,
+                    CellState::of(is_selected, is_hovered),
+                    Style::default().fg(theme.colors.muted),
                 );
                 let icon = StatusIcon::new("+", cell.text.fg.unwrap_or(theme.colors.muted));
                 lines.push(list_row(width, 0, icon, "New project", cell, None));
@@ -564,13 +672,13 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
 }
 
 /// What sits in the icon column of a projects-list row.
-struct StatusIcon {
+pub(super) struct StatusIcon {
     glyph: String,
     color: Color,
 }
 
 impl StatusIcon {
-    fn new(glyph: &str, color: Color) -> Self {
+    pub(super) fn new(glyph: &str, color: Color) -> Self {
         Self {
             glyph: glyph.to_string(),
             color,
@@ -578,7 +686,7 @@ impl StatusIcon {
     }
 }
 
-fn aura_icon(app: &App) -> StatusIcon {
+pub(super) fn aura_icon(app: &App) -> StatusIcon {
     let (glyph, color) = app.aura_frame();
     StatusIcon { glyph, color }
 }
@@ -587,7 +695,7 @@ fn aura_icon(app: &App) -> StatusIcon {
 /// one) from one panel border to the other. The icon column is wide enough
 /// for the aura ring, so names line up whatever icon a row shows. `depth`
 /// indents the row two columns per level.
-fn list_row<'a>(
+pub(super) fn list_row<'a>(
     width: usize,
     depth: usize,
     icon: StatusIcon,
@@ -619,36 +727,23 @@ fn list_row<'a>(
     ])
 }
 
-/// A half line of `cell`'s background across the panel: `▄` above the name
-/// line and `▀` below it make the cell two lines tall with half a line of
-/// panel background between neighboring cells.
-fn cell_edge<'a>(width: usize, half: &str, cell: CellStyle) -> Line<'a> {
-    let style = cell
-        .bg
-        .map_or_else(Style::default, |bg| Style::default().fg(bg));
-    Line::from(Span::styled(half.repeat(width), style))
-}
-
 /// How a list cell is drawn, from strongest to weakest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CellState {
-    /// The keyboard cursor, while the panel is focused.
+pub(super) enum CellState {
+    /// The keyboard cursor while the panel is focused, otherwise the agent
+    /// shown in the chat.
     Selected,
     /// Under the pointer.
     Hovered,
-    /// The agent shown in the chat.
-    Active,
     Normal,
 }
 
 impl CellState {
-    const fn of(selected: bool, hovered: bool, active: bool) -> Self {
+    pub(super) const fn of(selected: bool, hovered: bool) -> Self {
         if selected {
             Self::Selected
         } else if hovered {
             Self::Hovered
-        } else if active {
-            Self::Active
         } else {
             Self::Normal
         }
@@ -657,50 +752,39 @@ impl CellState {
 
 /// Colors for one list row. `icon` overrides the icon's own color.
 #[derive(Debug, Clone, Copy)]
-struct CellStyle {
+pub(super) struct CellStyle {
     bg: Option<Color>,
     text: Style,
     icon: Option<Color>,
     time: Color,
 }
 
-/// `filled` rows (projects) sit on a dark gray cell that lightens under the
-/// keyboard cursor; the rest stay on the panel background and turn bright
-/// blue with dark text when selected. `text` is the row's name color when
-/// nothing else applies.
-fn cell_style(theme: &Theme, state: CellState, text: Color, filled: bool) -> CellStyle {
+/// Rows sit on the panel background, turn a subtle gray under the pointer,
+/// and turn the selection color with dark text when selected. `text` is the row's name style when nothing else applies.
+pub(super) fn cell_style(theme: &Theme, state: CellState, text: Style) -> CellStyle {
     let colors = &theme.colors;
-    let plain = |bg: Option<Color>, text: Style| CellStyle {
-        bg,
+    let plain = |text: Style| CellStyle {
+        bg: None,
         text,
         icon: None,
         time: colors.muted,
     };
     match state {
-        CellState::Selected if filled => plain(
-            Some(colors.surface_hover),
-            Style::default()
-                .fg(colors.foreground)
-                .add_modifier(Modifier::BOLD),
-        ),
         CellState::Selected => CellStyle {
             bg: Some(colors.selection),
-            text: Style::default()
-                .fg(colors.on_selection)
-                .add_modifier(Modifier::BOLD),
+            text: text.fg(colors.on_selection),
             icon: Some(colors.on_selection),
             time: colors.on_selection,
         },
-        CellState::Hovered => plain(None, hover_style(theme)),
-        CellState::Active => plain(
-            filled.then_some(colors.surface),
-            Style::default().fg(colors.foreground),
-        ),
-        CellState::Normal => plain(filled.then_some(colors.surface), Style::default().fg(text)),
+        CellState::Hovered => CellStyle {
+            bg: Some(colors.surface_hover),
+            ..plain(text)
+        },
+        CellState::Normal => plain(text),
     }
 }
 
-fn now_ms() -> u64 {
+pub(super) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| {
@@ -748,7 +832,8 @@ pub(super) fn hover_style(theme: &Theme) -> Style {
 }
 
 /// Roster rows: "@  name" for each permanent agent, then "+  New agent",
-/// with the markers and the names in the same columns as the projects list.
+/// which the panel pins to its bottom row, with the markers and the names
+/// in the same columns as the projects list.
 fn build_definition_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>> {
     let is_focused = app.focus() == PanelFocus::Swarm;
     let selected = app.selected_definition();
@@ -765,8 +850,8 @@ fn build_definition_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line
             let is_selected = i == selected && is_focused;
             let is_hovered =
                 matches!(app.hover(), Some(HoverTarget::DefinitionRow(row)) if row == i);
-            let state = CellState::of(is_selected, is_hovered, false);
-            let cell = cell_style(theme, state, text, false);
+            let state = CellState::of(is_selected, is_hovered);
+            let cell = cell_style(theme, state, Style::default().fg(text));
             let icon = StatusIcon::new(marker, cell.text.fg.unwrap_or(text));
             list_row(width, 0, icon, name, cell, None)
         })
@@ -791,7 +876,7 @@ fn truncate_agent_name(name: &str, max_width: usize) -> String {
     format!("{truncated}…")
 }
 
-/// Render the Record panel.
+/// Render the Kernel panel, which lists the kernel's records.
 pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Records;
     let border_color = if is_focused {
@@ -801,7 +886,7 @@ pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, 
     };
 
     let block = Block::default()
-        .title(" RECORD ")
+        .title(" KERNEL ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
@@ -816,6 +901,7 @@ pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, 
 
     let visible = inner.height as usize;
     let scroll = app.sync_records_scroll(visible);
+    app.set_record_rows_area(inner);
     let lines = build_record_lines(app, inner, scroll, visible, theme);
     frame.render_widget(Paragraph::new(lines), inner);
     let view = ScrollView {
@@ -858,6 +944,11 @@ fn build_record_lines<'a>(
 
     let is_focused = app.focus() == PanelFocus::Records;
     let selected = app.selected_record();
+    let hovered = match app.hover() {
+        Some(HoverTarget::RecordRow(index)) => Some(index),
+        _ => None,
+    };
+    let width = inner.width as usize;
     let mut lines: Vec<Line> = Vec::new();
 
     for (i, record) in app.records().iter().enumerate().skip(first).take(rows) {
@@ -898,25 +989,66 @@ fn build_record_lines<'a>(
             Style::default().fg(record_kind_color(&record.tx_kind, theme))
         };
 
-        let fixed_spans = vec![
+        let mut fixed_spans = vec![
             Span::styled(prefix, line_style),
             Span::styled(format!("#{:<3}", record.seq), line_style),
-            Span::styled(format!(" {} ", record.timestamp), line_style),
             Span::styled(status_text, status_style),
-            Span::styled(format!("{:<8}", record.tx_kind), kind_style),
+            Span::styled(fit_column(&record.tx_kind, KIND_WIDTH), kind_style),
         ];
+        // Records without columns show their one-line summary after the kind.
+        let detail = if record.what.is_empty() {
+            &record.info
+        } else {
+            let is_failure = matches!(record.what.as_str(), "error" | "failed");
+            let what_style = if is_selected && is_focused {
+                line_style
+            } else if is_failure {
+                Style::default().fg(theme.colors.error)
+            } else {
+                Style::default().fg(theme.colors.foreground)
+            };
+            fixed_spans.push(Span::styled(
+                format!(" {}", fit_column(&record.what, WHAT_WIDTH)),
+                what_style,
+            ));
+            fixed_spans.push(Span::styled(
+                format!(" {}", fit_column(&record.group, GROUP_WIDTH)),
+                Style::default().fg(theme.colors.muted),
+            ));
+            &record.detail
+        };
         let used: usize = fixed_spans.iter().map(|s| display_width(&s.content)).sum();
-        // One column for the separator space before the info text.
-        let available = (inner.width as usize).saturating_sub(used + 1);
-        let info_display = truncate_record_info(&record.info, available);
+        // One column for the separator space before the detail text.
+        let available = width.saturating_sub(used + 1);
+        let info_display = truncate_record_info(detail, available);
 
         let mut spans = fixed_spans;
         if !info_display.is_empty() {
             spans.push(Span::styled(format!(" {info_display}"), hash_style));
         }
+        if hovered == Some(i) && !(is_selected && is_focused) {
+            let bg = theme.colors.surface_hover;
+            let filled: usize = spans.iter().map(|s| display_width(&s.content)).sum();
+            spans.push(Span::raw(" ".repeat(width.saturating_sub(filled))));
+            for span in &mut spans {
+                span.style = span.style.bg(bg);
+            }
+        }
         lines.push(Line::from(spans));
     }
     lines
+}
+
+/// Widths of the Record panel's kind, what and group columns.
+const KIND_WIDTH: usize = 8;
+const WHAT_WIDTH: usize = 11;
+const GROUP_WIDTH: usize = 7;
+
+/// `text` upper-cased and padded or cut to exactly `width` columns.
+fn fit_column(text: &str, width: usize) -> String {
+    let fitted = truncate_record_info(&text.to_uppercase(), width);
+    let pad = width.saturating_sub(display_width(&fitted));
+    format!("{fitted}{}", " ".repeat(pad))
 }
 
 /// Color for the kind column, grouped so tool activity stands out from

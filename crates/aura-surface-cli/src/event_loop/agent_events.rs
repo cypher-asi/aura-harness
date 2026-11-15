@@ -7,6 +7,8 @@
 //! [`AgentUi`] that feeds the chat of the agent whose turn it is.
 
 use super::hud::{call_stats, todo_views};
+use super::plan_mode::plan_view;
+use super::record_ui::RecordPanelAgent;
 use crate::session_checkpoint::SessionUsage;
 use async_trait::async_trait;
 use aura_agent::{
@@ -16,12 +18,15 @@ use aura_agent::{
 use aura_core_types::AgentId;
 use aura_model_reasoner::{model_catalog, Usage};
 use aura_terminal::{
-    events::{CallUsage, ToolData},
+    events::{CallUsage, MessageData, MessageRole, ToolData},
     UiCommand,
 };
+use aura_tools::plan_tools::{plan_path_from_output, sync_todo_list, CREATE_PLAN_TOOL_NAME};
+use aura_tools::todo::TodoItem;
+use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// The chat of one agent. Agents run in parallel, so everything a turn
 /// shows is addressed to its agent; the UI keeps it with that agent's chat
@@ -29,14 +34,37 @@ use tracing::debug;
 #[derive(Clone)]
 pub(crate) struct AgentUi {
     commands: mpsc::Sender<UiCommand>,
-    agent_id: String,
+    agent_id: AgentId,
+    /// Which agent is on screen, for panels the UI keeps for that agent
+    /// only (the plan strip)
+    shown: Option<RecordPanelAgent>,
 }
 
 impl AgentUi {
-    pub(crate) fn new(commands: mpsc::Sender<UiCommand>, agent_id: AgentId) -> Self {
+    pub(crate) const fn new(commands: mpsc::Sender<UiCommand>, agent_id: AgentId) -> Self {
         Self {
             commands,
-            agent_id: agent_id.to_hex(),
+            agent_id,
+            shown: None,
+        }
+    }
+
+    /// Let [`Self::send_if_shown`] know which agent is on screen.
+    #[must_use]
+    pub(crate) fn with_shown(mut self, shown: RecordPanelAgent) -> Self {
+        self.shown = Some(shown);
+        self
+    }
+
+    /// Send `command` for a panel the UI only keeps for the agent on
+    /// screen, when that is this agent.
+    pub(crate) async fn send_if_shown(&self, command: UiCommand) {
+        if self
+            .shown
+            .as_ref()
+            .is_some_and(|shown| shown.shows(self.agent_id))
+        {
+            let _ = self.commands.send(command).await;
         }
     }
 
@@ -45,15 +73,10 @@ impl AgentUi {
         let _ = self
             .commands
             .send(UiCommand::ForAgent {
-                agent_id: self.agent_id.clone(),
+                agent_id: self.agent_id.to_hex(),
                 command: Box::new(command),
             })
             .await;
-    }
-
-    /// The UI's command channel, for panels that aren't per chat.
-    pub(crate) const fn commands(&self) -> &mpsc::Sender<UiCommand> {
-        &self.commands
     }
 }
 
@@ -73,12 +96,23 @@ pub(crate) struct ForwarderState {
     pub context_limit: Option<u64>,
     /// Model calls and tokens of the turn
     pub usage: SessionUsage,
+    /// Plan the turn last wrote with `create_plan`
+    pub plan_path: Option<String>,
 }
 
 /// Stops a turn once its model calls cost more than `limit_usd`.
 pub(crate) struct CostCap {
     pub limit_usd: f64,
     pub stop: CancellationToken,
+}
+
+/// The plans a turn works with.
+pub(crate) struct TurnPlan {
+    /// Folder the agent's tools resolve paths against
+    pub workspace: PathBuf,
+    /// Workspace-relative plan the agent is building, whose todos follow
+    /// its todo list
+    pub building: Option<String>,
 }
 
 /// Tokens and estimated cost of one model call, for the reply header.
@@ -100,9 +134,50 @@ struct UiCommandSink {
     /// Tool calls shown in the chat that have no result yet
     open_tools: Vec<String>,
     cost_cap: Option<CostCap>,
+    plan: TurnPlan,
 }
 
 impl UiCommandSink {
+    /// Show the plan `create_plan` wrote, as its `output` names it.
+    async fn plan_written(&mut self, output: &str) {
+        let Some(path) = plan_path_from_output(output) else {
+            return;
+        };
+        self.state.plan_path = Some(path.to_string());
+        // A new plan is not the one being built.
+        self.plan.building = None;
+        let Some(view) = plan_view(&self.plan.workspace, path) else {
+            return;
+        };
+        let note = format!(
+            "Plan ready: {} ({path}). Keep chatting to revise it, or run /build to implement it.",
+            view.name
+        );
+        self.ui.send_if_shown(UiCommand::SetPlan(Some(view))).await;
+        self.ui
+            .send(UiCommand::ShowMessage(MessageData::new(
+                MessageRole::System,
+                note,
+            )))
+            .await;
+    }
+
+    /// Mirror `todos` into the plan being built, and show it.
+    async fn sync_plan(&self, todos: &[TodoItem]) {
+        let Some(path) = &self.plan.building else {
+            return;
+        };
+        match sync_todo_list(&self.plan.workspace.join(path), todos) {
+            Ok(false) => {}
+            Ok(true) => {
+                if let Some(view) = plan_view(&self.plan.workspace, path) {
+                    self.ui.send_if_shown(UiCommand::SetPlan(Some(view))).await;
+                }
+            }
+            Err(e) => warn!(%path, error = %e, "Could not update the plan's todos"),
+        }
+    }
+
     async fn finish_thinking_if_active(&mut self) {
         if self.state.thinking_active {
             self.ui.send(UiCommand::FinishThinking).await;
@@ -183,12 +258,14 @@ impl TurnEventSink for UiCommandSink {
     async fn on_tool_result(
         &mut self,
         tool_use_id: String,
-        _tool_name: String,
+        tool_name: String,
         content: String,
         is_error: bool,
         _image: Option<aura_core_types::ToolResultImage>,
     ) {
         self.open_tools.retain(|id| *id != tool_use_id);
+        let plan_output =
+            (!is_error && tool_name == CREATE_PLAN_TOOL_NAME).then(|| content.clone());
         self.ui
             .send(UiCommand::CompleteTool {
                 id: tool_use_id,
@@ -196,6 +273,9 @@ impl TurnEventSink for UiCommandSink {
                 success: !is_error,
             })
             .await;
+        if let Some(output) = plan_output {
+            self.plan_written(&output).await;
+        }
     }
 
     async fn on_tool_call_retrying(
@@ -320,12 +400,13 @@ impl TurnEventSink for UiCommandSink {
             return;
         };
         match stage.as_str() {
-            PROGRESS_TODOS_UPDATED => {
-                match serde_json::from_str::<Vec<aura_tools::todo::TodoItem>>(&message) {
-                    Ok(todos) => self.ui.send(UiCommand::SetTodos(todo_views(&todos))).await,
-                    Err(e) => debug!(error = %e, "Unreadable todo list update"),
+            PROGRESS_TODOS_UPDATED => match serde_json::from_str::<Vec<TodoItem>>(&message) {
+                Ok(todos) => {
+                    self.ui.send(UiCommand::SetTodos(todo_views(&todos))).await;
+                    self.sync_plan(&todos).await;
                 }
-            }
+                Err(e) => debug!(error = %e, "Unreadable todo list update"),
+            },
             PROGRESS_CONTEXT_SUMMARIZED => self.ui.send(UiCommand::Compacted(message)).await,
             _ => {}
         }
@@ -343,6 +424,7 @@ pub(crate) async fn forward_agent_events(
     ui: AgentUi,
     cost_cap: Option<CostCap>,
     context_limit: Option<u64>,
+    plan: TurnPlan,
 ) -> ForwarderState {
     let mut sink = UiCommandSink {
         ui,
@@ -352,6 +434,7 @@ pub(crate) async fn forward_agent_events(
         },
         open_tools: Vec::new(),
         cost_cap,
+        plan,
     };
 
     while let Some(event) = rx.recv().await {

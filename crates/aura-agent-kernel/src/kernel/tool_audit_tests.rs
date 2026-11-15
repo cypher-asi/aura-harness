@@ -48,9 +48,15 @@ struct RecordingObserver {
     entries: StdMutex<Vec<RecordEntry>>,
 }
 
-impl ToolAuditObserver for RecordingObserver {
-    fn on_tool_entry(&self, entry: &RecordEntry) {
+impl RecordObserver for RecordingObserver {
+    fn on_entry(&self, entry: &RecordEntry) {
         self.entries.lock().unwrap().push(entry.clone());
+    }
+}
+
+impl RecordingObserver {
+    fn seqs(&self) -> Vec<u64> {
+        self.entries.lock().unwrap().iter().map(|e| e.seq).collect()
     }
 }
 
@@ -84,7 +90,7 @@ fn harness(configure: impl FnOnce(&mut KernelConfig)) -> Harness {
     let observer = Arc::new(RecordingObserver::default());
     let mut config = KernelConfig {
         workspace_base: ws.path().to_path_buf(),
-        tool_audit_observer: Some(observer.clone()),
+        record_observer: Some(observer.clone()),
         ..KernelConfig::default()
     };
     configure(&mut config);
@@ -170,21 +176,157 @@ async fn allowed_call_records_proposal_then_decision_then_execution() {
     let exec: ToolExecution = serde_json::from_slice(&execution.tx.payload).unwrap();
     assert_eq!(exec.decision, ToolGateVerdict::Approved);
     assert!(!exec.is_error);
+    assert!(exec.duration_ms.is_some());
+    assert!(entries.iter().all(|e| e.tx.ts_ms > 0));
 
     assert_eq!(result.entry.seq, execution.seq);
     let decision_ref = result.policy_decision.unwrap();
     assert_eq!(decision_ref.seq, decision_entry.seq);
     assert_eq!(decision_ref.proposal_tx_hash, proposal.tx.hash);
 
-    let observed: Vec<_> = h
-        .observer
-        .entries
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|e| e.seq)
-        .collect();
-    assert_eq!(observed, vec![1, 2, 3]);
+    assert_eq!(h.observer.seqs(), vec![1, 2, 3]);
+}
+
+fn preset(content: &str) -> PresetToolResult {
+    PresetToolResult {
+        content: content.into(),
+        is_error: false,
+        kind: aura_core_types::ToolResultKind::Ok,
+    }
+}
+
+#[tokio::test]
+async fn preset_call_is_gated_and_recorded_without_running_the_executor() {
+    let h = harness(|_| {});
+    let proposal =
+        ToolProposal::new("tu-1", "read_file", serde_json::json!({})).with_source("cache");
+    let results = h
+        .kernel
+        .process_tool_runs(vec![(proposal, ToolRun::Preset(preset("cached body")))])
+        .await
+        .unwrap();
+
+    let output = results[0].tool_output.as_ref().unwrap();
+    assert_eq!(output.content, "cached body");
+    assert!(!output.is_error);
+
+    let entries = all_entries(&h);
+    let types: Vec<_> = entries.iter().map(|e| e.tx.tx_type).collect();
+    assert_eq!(
+        types,
+        vec![
+            TransactionType::ToolProposal,
+            TransactionType::PolicyDecision,
+            TransactionType::ToolExecution,
+        ]
+    );
+    let recorded: ToolProposal = serde_json::from_slice(&entries[0].tx.payload).unwrap();
+    assert_eq!(recorded.source.as_deref(), Some("cache"));
+    let exec: ToolExecution = serde_json::from_slice(&entries[2].tx.payload).unwrap();
+    assert_eq!(exec.duration_ms, Some(0));
+    assert_eq!(h.observer.seqs(), vec![1, 2, 3]);
+}
+
+#[tokio::test]
+async fn denied_preset_call_returns_the_denial_not_the_preset() {
+    let h = harness(|config| {
+        config.policy = config.policy.clone().with_agent_override(Some(
+            AgentToolPermissions::new().with("read_file", ToolState::Deny),
+        ));
+    });
+    let proposal = ToolProposal::new("tu-1", "read_file", serde_json::json!({}));
+    let results = h
+        .kernel
+        .process_tool_runs(vec![(proposal, ToolRun::Preset(preset("cached body")))])
+        .await
+        .unwrap();
+
+    let output = results[0].tool_output.as_ref().unwrap();
+    assert!(output.is_error);
+    assert_ne!(output.content, "cached body");
+    assert_eq!(all_entries(&h).len(), 2);
+}
+
+#[tokio::test]
+async fn allowed_local_call_runs_its_handler_and_records_the_result() {
+    let h = harness(|_| {});
+    let proposal =
+        ToolProposal::new("tu-1", "task_done", serde_json::json!({})).with_source("task_executor");
+    let handler = Box::pin(async {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        preset("done")
+    });
+    let results = h
+        .kernel
+        .process_tool_runs(vec![(proposal, ToolRun::Local(handler))])
+        .await
+        .unwrap();
+
+    assert_eq!(results[0].tool_output.as_ref().unwrap().content, "done");
+    let entries = all_entries(&h);
+    assert_eq!(entries.len(), 3);
+    let exec: ToolExecution = serde_json::from_slice(&entries[2].tx.payload).unwrap();
+    assert!(exec.duration_ms.is_some_and(|ms| ms >= 5));
+    assert_eq!(h.observer.seqs(), vec![1, 2, 3]);
+}
+
+#[tokio::test]
+async fn denied_local_call_never_polls_its_handler() {
+    let h = harness(|config| {
+        config.policy = config.policy.clone().with_agent_override(Some(
+            AgentToolPermissions::new().with("task_done", ToolState::Deny),
+        ));
+    });
+    let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = ran.clone();
+    let handler = Box::pin(async move {
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        preset("done")
+    });
+    let proposal = ToolProposal::new("tu-1", "task_done", serde_json::json!({}));
+    let results = h
+        .kernel
+        .process_tool_runs(vec![(proposal, ToolRun::Local(handler))])
+        .await
+        .unwrap();
+
+    assert!(results[0].tool_output.as_ref().unwrap().is_error);
+    assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(all_entries(&h).len(), 2);
+}
+
+#[tokio::test]
+async fn observer_sees_every_entry_the_kernel_writes() {
+    let h = harness(|_| {});
+    h.kernel
+        .process_direct(Transaction::user_prompt(h.kernel.agent_id, "go"))
+        .await
+        .unwrap();
+    h.kernel
+        .reason(
+            aura_model_reasoner::ModelRequest::builder("test-model", "system")
+                .message(aura_model_reasoner::Message::user("hello"))
+                .try_build()
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    h.kernel
+        .process_tools(vec![ToolProposal::new(
+            "tu-1",
+            "read_file",
+            serde_json::json!({}),
+        )])
+        .await
+        .unwrap();
+
+    let stored: Vec<_> = all_entries(&h).iter().map(|e| e.seq).collect();
+    assert_eq!(stored, vec![1, 2, 3, 4, 5]);
+    assert_eq!(h.observer.seqs(), stored);
+
+    let reasoning: serde_json::Value =
+        serde_json::from_slice(&all_entries(&h)[1].tx.payload).unwrap();
+    assert!(reasoning["duration_ms"].is_u64());
 }
 
 #[tokio::test]

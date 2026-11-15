@@ -11,7 +11,10 @@
 
 use super::{Kernel, ProcessResult};
 use crate::context::hash_tx_with_window;
-use aura_core_types::{RecordEntry, RuntimeCapabilityInstall, Transaction, TransactionType};
+use aura_core_types::{
+    AgentMode, ModeChangePayload, RecordEntry, RuntimeCapabilityInstall, SystemKind, Transaction,
+    TransactionType, UserToolDefaults,
+};
 use aura_store_db::DequeueToken;
 
 impl Kernel {
@@ -42,6 +45,7 @@ impl Kernel {
                     "append_entry_direct_with_runtime_capabilities: {e}"
                 ))
             })?;
+        self.notify_entry(&result.entry);
         Ok(result)
     }
 
@@ -74,12 +78,89 @@ impl Kernel {
                     "append_entry_dequeued_with_runtime_capabilities: {e}"
                 ))
             })?;
+        self.notify_entry(&result.entry);
+        Ok(result)
+    }
+
+    /// Switch the session mode, recording a `mode_change` System entry
+    /// before the new mode takes effect. Returns `None` when the kernel
+    /// already enforces `mode`.
+    ///
+    /// # Errors
+    /// Returns error if processing or storage fails; the mode is then
+    /// unchanged.
+    pub async fn switch_mode(
+        &self,
+        mode: AgentMode,
+    ) -> Result<Option<ProcessResult>, crate::KernelError> {
+        let from = self.policy.mode();
+        if from == mode {
+            return Ok(None);
+        }
+        let tx = Transaction::mode_change(self.agent_id, from, mode);
+        let result = self.append_mode_change(&tx).await?;
+        self.policy.set_mode(mode);
+        Ok(Some(result))
+    }
+
+    /// Switch the session mode and the per-tool permission defaults
+    /// together, recording one `mode_change` entry that names both
+    /// permission tables before either takes effect. `from_permissions`
+    /// and `to_permissions` are the caller's names for the tables. When
+    /// neither the mode nor the name changes, `user_default` is applied
+    /// without a record (it is the same table, perhaps over a changed
+    /// tool list) and `None` is returned.
+    ///
+    /// # Errors
+    /// Returns error if processing or storage fails; the policy is then
+    /// unchanged.
+    pub async fn switch_permissions(
+        &self,
+        mode: AgentMode,
+        user_default: UserToolDefaults,
+        from_permissions: &str,
+        to_permissions: &str,
+    ) -> Result<Option<ProcessResult>, crate::KernelError> {
+        let from = self.policy.mode();
+        let result = if from == mode && from_permissions == to_permissions {
+            None
+        } else {
+            let tx = Transaction::mode_change_with(
+                self.agent_id,
+                ModeChangePayload {
+                    system_kind: SystemKind::ModeChange,
+                    from,
+                    to: mode,
+                    from_permissions: Some(from_permissions.to_string()),
+                    to_permissions: Some(to_permissions.to_string()),
+                },
+            );
+            Some(self.append_mode_change(&tx).await?)
+        };
+        self.policy.reconfigure(|config| {
+            config.mode = mode;
+            config.user_default = user_default;
+        });
+        Ok(result)
+    }
+
+    async fn append_mode_change(
+        &self,
+        tx: &Transaction,
+    ) -> Result<ProcessResult, crate::KernelError> {
+        let seq = self.next_seq()?;
+        let result = self.process_tx(tx, seq).await?;
+        self.store
+            .append_entry_direct(self.agent_id, seq, &result.entry)
+            .map_err(|e| crate::KernelError::Store(format!("append_entry_direct: {e}")))?;
+        self.notify_entry(&result.entry);
         Ok(result)
     }
 
     /// `PolicyDecision` and `ToolExecution` entries are written only by the
-    /// kernel's tool pipeline; accepting them from callers would let a
-    /// submitter forge the audit trail of what policy allowed a call.
+    /// kernel's tool pipeline, and mode changes only by [`Self::switch_mode`];
+    /// accepting them from callers would let a submitter forge the audit
+    /// trail of what policy allowed a call.
     fn reject_kernel_only(tx: &Transaction) -> Result<(), crate::KernelError> {
         if matches!(
             tx.tx_type,
@@ -89,6 +170,11 @@ impl Kernel {
                 "{:?} transactions are written only by the kernel tool pipeline",
                 tx.tx_type
             )));
+        }
+        if tx.mode_change_payload().is_some() {
+            return Err(crate::KernelError::Internal(
+                "mode_change transactions are written only by Kernel::switch_mode".to_string(),
+            ));
         }
         Ok(())
     }

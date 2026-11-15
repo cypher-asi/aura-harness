@@ -8,6 +8,9 @@ use std::path::Path;
 use tracing::{debug, instrument};
 
 mod pty;
+mod tags;
+
+pub use tags::{ProcessTags, AGENT_ID_VAR, HARNESS_PID_VAR, TOOL_USE_ID_VAR};
 
 /// Result of a threshold-based wait operation.
 ///
@@ -103,7 +106,37 @@ pub fn cmd_spawn(
     args: &[String],
     cwd: Option<&str>,
 ) -> Result<(std::process::Child, String), ToolError> {
-    use std::process::{Command, Stdio};
+    spawn_program(sandbox, program, args, cwd, &ProcessTags::default())
+}
+
+/// [`cmd_spawn`] with `tags` in the environment.
+fn spawn_program(
+    sandbox: &Sandbox,
+    program: &str,
+    args: &[String],
+    cwd: Option<&str>,
+    tags: &ProcessTags,
+) -> Result<(std::process::Child, String), ToolError> {
+    use std::process::Stdio;
+
+    let (mut cmd, display, _working_dir) = program_command(sandbox, program, args, cwd)?;
+    tags.apply(&mut cmd);
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let child = cmd.spawn().map_err(|e| {
+        ToolError::CommandFailed(format!("Failed to spawn command '{program}': {e}"))
+    })?;
+    Ok((child, display))
+}
+
+/// The [`Command`](std::process::Command) [`cmd_spawn`] runs, without its
+/// stdio set, plus its display string and working directory.
+fn program_command(
+    sandbox: &Sandbox,
+    program: &str,
+    args: &[String],
+    cwd: Option<&str>,
+) -> Result<(std::process::Command, String, std::path::PathBuf), ToolError> {
+    use std::process::Command;
 
     validate_program_name(program)?;
 
@@ -166,19 +199,11 @@ pub fn cmd_spawn(
     // it renders cleanly when the harness forwards it to the LLM and
     // then on into the main chat.
     apply_plain_output_env(&mut cmd);
-
     // A child reading the harness's stdin would steal keystrokes from the
     // terminal UI; agent commands are never interactive.
     cmd.current_dir(&working_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let child = cmd.spawn().map_err(|e| {
-        ToolError::CommandFailed(format!("Failed to spawn command '{program}': {e}"))
-    })?;
-
-    Ok((child, display))
+        .stdin(std::process::Stdio::null());
+    Ok((cmd, display, working_dir))
 }
 
 /// Disable colored / progress output for spawned child processes.
@@ -246,8 +271,27 @@ fn cmd_spawn_shell_script(
     sandbox: &Sandbox,
     shell_script: &str,
     cwd: Option<&str>,
+    tags: &ProcessTags,
 ) -> Result<(std::process::Child, String), ToolError> {
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
+
+    let (mut cmd, _working_dir) = shell_script_command(sandbox, shell_script, cwd)?;
+    tags.apply(&mut cmd);
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let child = cmd
+        .spawn()
+        .map_err(|e| ToolError::CommandFailed(format!("Failed to spawn shell script: {e}")))?;
+    Ok((child, shell_script.to_string()))
+}
+
+/// The [`Command`](std::process::Command) [`cmd_spawn_shell_script`] runs,
+/// without its stdio set, plus its working directory.
+fn shell_script_command(
+    sandbox: &Sandbox,
+    shell_script: &str,
+    cwd: Option<&str>,
+) -> Result<(std::process::Command, std::path::PathBuf), ToolError> {
+    use std::process::Command;
 
     let working_dir = match cwd {
         Some(dir) => sandbox.resolve_existing(dir)?,
@@ -282,17 +326,9 @@ fn cmd_spawn_shell_script(
     }
 
     apply_plain_output_env(&mut cmd);
-
     cmd.current_dir(&working_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let child = cmd
-        .spawn()
-        .map_err(|e| ToolError::CommandFailed(format!("Failed to spawn shell script: {e}")))?;
-
-    Ok((child, shell_script.to_string()))
+        .stdin(std::process::Stdio::null());
+    Ok((cmd, working_dir))
 }
 
 /// Run a command with threshold-based execution.
@@ -323,6 +359,7 @@ pub fn cmd_run_with_threshold(
 ///
 /// Spawns directly (no shell). Use `cmd_run_with_threshold` for
 /// async-capable execution.
+#[cfg(test)]
 #[instrument(skip(sandbox), fields(program = %program))]
 pub fn cmd_run(
     sandbox: &Sandbox,
@@ -331,9 +368,28 @@ pub fn cmd_run(
     cwd: Option<&str>,
     timeout_ms: u64,
 ) -> Result<ToolResult, ToolError> {
+    run_program(
+        sandbox,
+        program,
+        args,
+        cwd,
+        timeout_ms,
+        &ProcessTags::default(),
+    )
+}
+
+/// [`cmd_run`] with `tags` in the environment.
+fn run_program(
+    sandbox: &Sandbox,
+    program: &str,
+    args: &[String],
+    cwd: Option<&str>,
+    timeout_ms: u64,
+    tags: &ProcessTags,
+) -> Result<ToolResult, ToolError> {
     use std::time::Duration;
 
-    let (child, _full_command) = cmd_spawn(sandbox, program, args, cwd)?;
+    let (child, _full_command) = spawn_program(sandbox, program, args, cwd, tags)?;
 
     let output = match wait_with_hard_timeout(child, Duration::from_millis(timeout_ms)) {
         Ok(out) => out,
@@ -355,10 +411,11 @@ fn cmd_run_shell_script(
     shell_script: &str,
     cwd: Option<&str>,
     timeout_ms: u64,
+    tags: &ProcessTags,
 ) -> Result<ToolResult, ToolError> {
     use std::time::Duration;
 
-    let (child, _display) = cmd_spawn_shell_script(sandbox, shell_script, cwd)?;
+    let (child, _display) = cmd_spawn_shell_script(sandbox, shell_script, cwd, tags)?;
 
     let output = match wait_with_hard_timeout(child, Duration::from_millis(timeout_ms)) {
         Ok(out) => out,
@@ -973,6 +1030,10 @@ impl Tool for CmdRunTool {
                     "tty_cols": {
                         "type": "integer",
                         "description": "Run in a pseudo-terminal this many columns wide; output keeps terminal layout and ANSI colors, with stderr merged into stdout"
+                    },
+                    "background": {
+                        "type": "boolean",
+                        "description": "Start the command and return right away, for servers, watchers and long builds. Output goes to a log file; you get a message with the exit status when it ends, and can check on it with job_output or stop it with job_kill where those tools are offered. Ignores timeout and tty_cols."
                     }
                 }
             }),
@@ -992,43 +1053,8 @@ impl Tool for CmdRunTool {
     ) -> Result<ToolResult, ToolError> {
         let run_args = parse_run_args(&args, ctx);
         enforce_command_policy(&run_args, ctx)?;
-        if args["background"].as_bool().unwrap_or(false) {
-            return start_background_job(run_args, ctx).await;
-        }
         execute_run_command(run_args, ctx).await
     }
-}
-
-/// Spawn the command as a background job and return its id at once.
-async fn start_background_job(args: RunArgs, ctx: &ToolContext) -> Result<ToolResult, ToolError> {
-    let jobs = ctx.background_jobs.clone().ok_or_else(|| {
-        ToolError::ToolDisabled("background commands are not available here".into())
-    })?;
-    let sandbox = ctx.sandbox.clone();
-    let RunArgs {
-        cwd,
-        shell_script,
-        program,
-        cmd_args,
-        ..
-    } = args;
-    let (child, display) = tokio::task::spawn_blocking(move || match (shell_script, program) {
-        (Some(script), _) => cmd_spawn_shell_script(&sandbox, &script, cwd.as_deref()),
-        (None, Some(program)) => cmd_spawn(&sandbox, &program, &cmd_args, cwd.as_deref()),
-        (None, None) => Err(ToolError::InvalidArguments(
-            "missing 'program' argument; use 'shell_script' for shell commands".into(),
-        )),
-    })
-    .await
-    .map_err(|e| ToolError::CommandFailed(format!("spawn task panicked: {e}")))??;
-    let job_id = jobs.start(child, display.clone(), ctx.caller_agent_id);
-    Ok(ToolResult::success(
-        "run_command",
-        format!(
-            "Started background job {job_id} (`{display}`). You will be told when it exits; \
-             use job_output to check on it and job_kill to stop it."
-        ),
-    ))
 }
 
 /// Parsed `run_command` arguments after pulling them out of the JSON
@@ -1045,6 +1071,7 @@ async fn start_background_job(args: RunArgs, ctx: &ToolContext) -> Result<ToolRe
 /// - `program` + `cmd_args`: direct-spawn form. Mutually exclusive with
 ///   `shell_script` (enforced in policy).
 /// - `tty_cols`: run in a pseudo-terminal of that width instead of pipes.
+/// - `background`: hand the process to the context's background hook.
 struct RunArgs {
     cwd: Option<String>,
     timeout_ms: u64,
@@ -1053,6 +1080,7 @@ struct RunArgs {
     program: Option<String>,
     cmd_args: Vec<String>,
     tty_cols: Option<u16>,
+    background: bool,
 }
 
 /// Pull every `run_command` field out of the JSON envelope without
@@ -1109,6 +1137,7 @@ fn parse_run_args(args: &serde_json::Value, ctx: &ToolContext) -> RunArgs {
         program,
         cmd_args,
         tty_cols,
+        background: args["background"].as_bool().unwrap_or(false),
     }
 }
 
@@ -1227,18 +1256,31 @@ async fn execute_run_command(args: RunArgs, ctx: &ToolContext) -> Result<ToolRes
         program,
         cmd_args,
         tty_cols,
+        background,
         ..
     } = args;
+
+    let tags = ProcessTags::for_context(ctx);
+    if background {
+        return run_in_background(
+            ctx,
+            shell_script.as_deref(),
+            program.as_deref(),
+            &cmd_args,
+            cwd.as_deref(),
+        );
+    }
 
     let sandbox = ctx.sandbox.clone();
 
     if let Some(cols) = tty_cols {
         let sandbox = sandbox.clone();
-        let (cwd, shell_script, program, cmd_args) = (
+        let (cwd, shell_script, program, cmd_args, tags) = (
             cwd.clone(),
             shell_script.clone(),
             program.clone(),
             cmd_args.clone(),
+            tags.clone(),
         );
         let in_pty = tokio::task::spawn_blocking(move || {
             let command = match (&shell_script, &program) {
@@ -1249,7 +1291,7 @@ async fn execute_run_command(args: RunArgs, ctx: &ToolContext) -> Result<ToolRes
                 },
                 (None, None) => return None,
             };
-            pty::cmd_run_in_pty(&sandbox, &command, cwd.as_deref(), cols, timeout_ms)
+            pty::cmd_run_in_pty(&sandbox, &command, cwd.as_deref(), cols, timeout_ms, &tags)
         })
         .await
         .map_err(|e| ToolError::CommandFailed(format!("terminal task failed: {e}")))?;
@@ -1260,7 +1302,7 @@ async fn execute_run_command(args: RunArgs, ctx: &ToolContext) -> Result<ToolRes
 
     if let Some(script) = shell_script {
         return super::spawn_blocking_tool(move || {
-            cmd_run_shell_script(&sandbox, &script, cwd.as_deref(), timeout_ms)
+            cmd_run_shell_script(&sandbox, &script, cwd.as_deref(), timeout_ms, &tags)
         })
         .await;
     }
@@ -1272,9 +1314,98 @@ async fn execute_run_command(args: RunArgs, ctx: &ToolContext) -> Result<ToolRes
     })?;
 
     super::spawn_blocking_tool(move || {
-        cmd_run(&sandbox, &program, &cmd_args, cwd.as_deref(), timeout_ms)
+        run_program(
+            &sandbox,
+            &program,
+            &cmd_args,
+            cwd.as_deref(),
+            timeout_ms,
+            &tags,
+        )
     })
     .await
+}
+
+/// Start the command with its output going to a log file and hand it to
+/// the context's [`BackgroundProcessHook`](crate::BackgroundProcessHook).
+fn run_in_background(
+    ctx: &ToolContext,
+    shell_script: Option<&str>,
+    program: Option<&str>,
+    cmd_args: &[String],
+    cwd: Option<&str>,
+) -> Result<ToolResult, ToolError> {
+    use std::process::Stdio;
+
+    let hook = ctx.background_processes.as_ref().ok_or_else(|| {
+        ToolError::InvalidArguments(
+            "background commands are not available here; run it without 'background'".into(),
+        )
+    })?;
+    let agent_id = ctx.caller_agent_id.ok_or_else(|| {
+        ToolError::InvalidArguments("background commands need a calling agent".into())
+    })?;
+    let (mut cmd, command, working_dir) = match (shell_script, program) {
+        (Some(script), _) => {
+            let (cmd, dir) = shell_script_command(&ctx.sandbox, script, cwd)?;
+            (cmd, script.to_string(), dir)
+        }
+        (None, Some(program)) => program_command(&ctx.sandbox, program, cmd_args, cwd)?,
+        (None, None) => {
+            return Err(ToolError::InvalidArguments(
+                "missing 'program' argument; use 'shell_script' for shell commands".into(),
+            ))
+        }
+    };
+
+    let process_id = aura_core_types::ProcessId::generate();
+    let log_dir = hook.log_dir();
+    let log_path = log_dir.join(format!("{}.log", process_id.to_hex()));
+    let log = std::fs::create_dir_all(&log_dir)
+        .and_then(|()| std::fs::File::create(&log_path))
+        .map_err(|e| {
+            ToolError::CommandFailed(format!("creating log {}: {e}", log_path.display()))
+        })?;
+    let stderr_log = log
+        .try_clone()
+        .map_err(|e| ToolError::CommandFailed(format!("opening log for stderr: {e}")))?;
+    ProcessTags::for_context(ctx).apply(&mut cmd);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(stderr_log));
+    let child = cmd
+        .spawn()
+        .map_err(|e| ToolError::CommandFailed(format!("Failed to spawn '{command}': {e}")))?;
+    let pid = child.id();
+
+    hook.adopt(
+        agent_id,
+        crate::BackgroundProcess {
+            process_id,
+            child,
+            command: command.clone(),
+            cwd: working_dir,
+            log_path: log_path.clone(),
+            action_id: ctx.current_action_id,
+            tool_use_id: ctx.current_tool_use_id.clone(),
+        },
+    )
+    .map_err(|e| ToolError::CommandFailed(format!("tracking background command: {e}")))?;
+
+    let log = log_path.display().to_string();
+    Ok(ToolResult::success(
+        "run_command",
+        format!(
+            "Started in the background (pid {pid}): {command}\nJob id: {}\nOutput: {log}\n\
+             You will get a message with the exit status when it ends. Check on it with \
+             job_output and stop it with job_kill.",
+            process_id.to_hex()
+        ),
+    )
+    .with_metadata("background", "true")
+    .with_metadata("process_id", process_id.to_hex())
+    .with_metadata("pid", pid.to_string())
+    .with_metadata("log_path", log))
 }
 
 #[cfg(test)]

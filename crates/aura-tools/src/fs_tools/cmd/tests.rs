@@ -159,7 +159,7 @@ fn test_cmd_run_shell_script_timeout_kills_child_process_group() {
     let marker = format!("aura-run-command-timeout-marker-{}", std::process::id());
     let script = format!("sh -c 'while :; do sleep 1; done' {marker} & wait");
 
-    let result = cmd_run_shell_script(&sandbox, &script, None, 200);
+    let result = cmd_run_shell_script(&sandbox, &script, None, 200, &ProcessTags::default());
 
     match result {
         Err(ToolError::CommandFailed(msg)) => {
@@ -1149,5 +1149,130 @@ async fn cmd_spawn_resolves_bare_cmd_via_pathext() {
     assert!(
         status.success(),
         "expected `cmd /C exit 0` to succeed, got {status:?}"
+    );
+}
+
+/// Background hook that keeps what it is handed.
+struct KeepProcesses {
+    dir: std::path::PathBuf,
+    adopted: std::sync::Mutex<Vec<crate::BackgroundProcess>>,
+}
+
+impl crate::BackgroundProcessHook for KeepProcesses {
+    fn log_dir(&self) -> std::path::PathBuf {
+        self.dir.clone()
+    }
+
+    fn adopt(
+        &self,
+        _agent_id: aura_core_types::AgentId,
+        process: crate::BackgroundProcess,
+    ) -> Result<(), String> {
+        self.adopted.lock().unwrap().push(process);
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_background_command_returns_at_once_and_logs_output() {
+    let config = command_config(crate::CommandPolicy {
+        enabled: true,
+        allow_shell: true,
+        binary_allowlist: vec!["echo".to_string(), "true".to_string()],
+        ..Default::default()
+    });
+    let (mut ctx, dir) = tool_ctx(config);
+    let hook = std::sync::Arc::new(KeepProcesses {
+        dir: dir.path().join("logs"),
+        adopted: std::sync::Mutex::new(Vec::new()),
+    });
+    ctx.background_processes = Some(hook.clone());
+    ctx.caller_agent_id = Some(aura_core_types::AgentId::generate());
+    ctx.current_tool_use_id = Some("toolu_9".into());
+
+    let started = std::time::Instant::now();
+    let result = CmdRunTool
+        .execute(
+            &ctx,
+            serde_json::json!({
+                "shell_script": "echo out; echo err >&2; sleep 2",
+                "background": true
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    assert!(result.ok);
+    assert_eq!(
+        result.metadata.get("background").map(String::as_str),
+        Some("true")
+    );
+
+    let mut process = hook.adopted.lock().unwrap().pop().unwrap();
+    assert_eq!(process.tool_use_id.as_deref(), Some("toolu_9"));
+    assert_eq!(
+        result.metadata.get("log_path").map(String::as_str),
+        Some(process.log_path.to_str().unwrap())
+    );
+    let mut log = String::new();
+    for _ in 0..100 {
+        log = std::fs::read_to_string(&process.log_path).unwrap();
+        if log.contains("out") && log.contains("err") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    process.child.kill().unwrap();
+    process.child.wait().unwrap();
+    assert!(log.contains("out") && log.contains("err"), "{log}");
+}
+
+#[tokio::test]
+async fn test_background_command_needs_a_hook() {
+    let config = command_config(crate::CommandPolicy {
+        enabled: true,
+        allow_shell: true,
+        binary_allowlist: vec!["echo".to_string(), "true".to_string()],
+        ..Default::default()
+    });
+    let (ctx, _dir) = tool_ctx(config);
+    let err = CmdRunTool
+        .execute(
+            &ctx,
+            serde_json::json!({ "shell_script": "true", "background": true }),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ToolError::InvalidArguments(msg) if msg.contains("background")));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_commands_carry_the_calling_agent_in_their_environment() {
+    let config = command_config(crate::CommandPolicy {
+        enabled: true,
+        allow_shell: true,
+        binary_allowlist: vec!["echo".to_string()],
+        ..Default::default()
+    });
+    let (mut ctx, _dir) = tool_ctx(config);
+    let agent = aura_core_types::AgentId::generate();
+    ctx.caller_agent_id = Some(agent);
+    ctx.current_tool_use_id = Some("toolu_7".into());
+
+    let result = CmdRunTool
+        .execute(
+            &ctx,
+            serde_json::json!({
+                "shell_script": "echo $AURA_AGENT_ID $AURA_TOOL_USE_ID $AURA_HARNESS_PID"
+            }),
+        )
+        .await
+        .unwrap();
+    let out = String::from_utf8_lossy(&result.stdout).to_string();
+    assert_eq!(
+        out.trim(),
+        format!("{} toolu_7 {}", agent.to_hex(), std::process::id())
     );
 }

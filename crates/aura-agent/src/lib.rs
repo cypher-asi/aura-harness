@@ -88,7 +88,8 @@ pub use post_edit_check::{
     PostEditCheckConfig, WithPostEditCheck,
 };
 pub use runtime::{
-    ProcessManager, ProcessManagerConfig, ProcessOutput, RunningProcess, RuntimeError,
+    ProcessInfo, ProcessManager, ProcessManagerConfig, ProcessMeta, ProcessOutput, RunningProcess,
+    RuntimeError,
 };
 pub use session::{AgentRunnerHandle, SessionId, UserInput};
 pub use task_executor::run_project_build_check;

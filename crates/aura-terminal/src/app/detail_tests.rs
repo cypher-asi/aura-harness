@@ -30,6 +30,9 @@ fn record(seq: u64) -> RecordSummary {
         effect_status: String::new(),
         status: RecordStatus::Ok,
         info: String::new(),
+        what: String::new(),
+        group: String::new(),
+        detail: String::new(),
         error_details: String::new(),
         tx_id: String::new(),
         agent_id: String::new(),
@@ -56,12 +59,12 @@ fn enter_on_record_opens_it_and_esc_closes() {
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(app.detail_view(), Some(&DetailView::Record));
 
-    app.set_detail_bounds(10, 4);
+    app.set_detail_bounds(10, 5);
     app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::PageDown));
     assert_eq!(app.detail_scroll(), 5);
     app.handle_key(key(KeyCode::End));
-    app.set_detail_bounds(10, 4);
+    app.set_detail_bounds(10, 5);
     assert_eq!(app.detail_scroll(), 10);
     app.handle_key(key(KeyCode::Home));
     assert_eq!(app.detail_scroll(), 0);
@@ -69,6 +72,29 @@ fn enter_on_record_opens_it_and_esc_closes() {
     app.handle_key(key(KeyCode::Esc));
     assert_eq!(app.detail_view(), None);
     assert_eq!(app.focus(), PanelFocus::Records);
+}
+
+#[test]
+fn hovering_and_clicking_a_record_opens_it() {
+    let mut app = App::new();
+    for seq in 1..=3 {
+        app.process_command(UiCommand::NewRecord(record(seq)));
+    }
+    app.areas.records = Some(Rect::new(80, 0, 30, 10));
+    app.set_record_rows_area(Rect::new(81, 1, 28, 8));
+
+    app.handle_mouse(mouse(MouseEventKind::Moved, 85, 2));
+    assert_eq!(app.hover(), Some(HoverTarget::RecordRow(1)));
+    // Below the last record is empty list space.
+    app.handle_mouse(mouse(MouseEventKind::Moved, 85, 5));
+    assert_eq!(app.hover(), None);
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 85, 5));
+    assert_eq!(app.detail_view(), None);
+
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 85, 2));
+    assert_eq!(app.focus(), PanelFocus::Records);
+    assert_eq!(app.selected_record(), 1);
+    assert_eq!(app.detail_view(), Some(&DetailView::Record));
 }
 
 #[test]

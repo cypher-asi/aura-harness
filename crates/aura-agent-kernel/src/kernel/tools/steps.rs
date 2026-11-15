@@ -62,9 +62,7 @@ impl Kernel {
                 .append_entry_direct(self.agent_id, seq, &entry)
                 .map_err(|e| crate::KernelError::Store(format!("append_entry_direct: {e}")))?,
         }
-        if let Some(observer) = self.config.tool_audit_observer.as_ref() {
-            observer.on_tool_entry(&entry);
-        }
+        self.notify_entry(&entry);
         Ok(entry)
     }
 
@@ -155,11 +153,13 @@ impl Kernel {
     }
 
     /// Step 3: append the `ToolExecution` entry for an approved call.
+    /// `duration_ms` is the time the executor spent producing `effect`.
     pub(super) fn record_tool_execution(
         &self,
         authorized: &Authorized,
         action: Action,
         effect: Effect,
+        duration_ms: u64,
     ) -> Result<Executed, crate::KernelError> {
         let effect = maybe_summarise_effect_payload(effect, self.lite_payload_threshold());
         let decoded = decode_tool_effect(&effect);
@@ -173,6 +173,7 @@ impl Kernel {
             reason: None,
             result: None,
             is_error: had_failures,
+            duration_ms: Some(duration_ms),
             parent_agent_id: self.agent_id,
             originating_user_id: self.config.originating_user_id.clone().unwrap_or_default(),
         };

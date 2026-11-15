@@ -28,7 +28,9 @@
 use crate::catalog::ToolCatalog;
 use crate::catalog::ToolProfile;
 use crate::domain_tools::DomainToolExecutor;
-use crate::tool::{AgentControlHook, AgentReadHook, SubagentDispatchHook, Tool};
+use crate::tool::{
+    AgentControlHook, AgentReadHook, BackgroundProcessHook, SubagentDispatchHook, Tool,
+};
 use crate::ToolConfig;
 use crate::ToolExecutor;
 use async_trait::async_trait;
@@ -154,6 +156,13 @@ impl ToolResolver {
     #[must_use]
     pub fn with_subagent_dispatch_hook(mut self, hook: Arc<dyn SubagentDispatchHook>) -> Self {
         self.inner = self.inner.with_subagent_dispatch_hook(hook);
+        self
+    }
+
+    /// Attach where `run_command` hands its background commands.
+    #[must_use]
+    pub fn with_background_process_hook(mut self, hook: Arc<dyn BackgroundProcessHook>) -> Self {
+        self.inner = self.inner.with_background_process_hook(hook);
         self
     }
 

@@ -1,5 +1,7 @@
 //! Read-only preview of a sandbox file, shown over the chat panel.
 
+use super::vim::{Outcome, Screen, Vim};
+use crossterm::event::KeyEvent;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -27,6 +29,8 @@ pub struct FileView {
     pub title: String,
     /// File content or a note explaining why it is not shown.
     pub body: FileBody,
+    /// Cursor and vim normal-mode state.
+    pub vim: Vim,
 }
 
 impl FileView {
@@ -43,7 +47,14 @@ impl FileView {
             path: path.to_path_buf(),
             title,
             body: read_body(path),
+            vim: Vim::default(),
         }
+    }
+
+    /// Apply a vim key to the cursor and the view's `scroll`.
+    pub fn handle_key(&mut self, key: KeyEvent, scroll: &mut usize, screen: Screen) -> Outcome {
+        let lines = self.body.lines();
+        self.vim.handle_key(key, &lines, scroll, screen)
     }
 
     /// Lowercased file extension, used to pick syntax highlighting.
@@ -53,6 +64,17 @@ impl FileView {
             .extension()
             .map(|ext| ext.to_string_lossy().to_lowercase())
             .unwrap_or_default()
+    }
+}
+
+impl FileBody {
+    /// Lines the cursor moves over; a note has none.
+    #[must_use]
+    pub fn lines(&self) -> Vec<&str> {
+        match self {
+            Self::Text(text) => text.lines().collect(),
+            Self::Note(_) => Vec::new(),
+        }
     }
 }
 

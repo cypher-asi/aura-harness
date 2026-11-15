@@ -5,7 +5,7 @@ use super::markdown::{parse_content_segments, render_markdown, ContentSegment};
 use super::text::{centered_rect, display_width, wrap_words};
 use crate::{
     app::{folder_picker::FolderRow, AppState, NotificationType},
-    components::CodeBlock,
+    components::{highlight_code_line, CodeBlock},
     App, Theme,
 };
 use ratatui::{
@@ -296,7 +296,13 @@ fn truncate_start(text: &str, width: usize) -> String {
 fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
     let modal_width = 50.min(area.width.saturating_sub(4));
-    let modal_height = 49.min(area.height);
+    let help_text = build_help_lines(theme);
+    // Every line plus the two border rows, so nothing is clipped on a
+    // screen tall enough to hold it.
+    let modal_height = u16::try_from(help_text.len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(2)
+        .min(area.height);
 
     let modal_area = centered_rect(modal_width, modal_height, area);
     frame.render_widget(Clear, modal_area);
@@ -305,8 +311,6 @@ fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
         .title(" Help ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.colors.primary));
-
-    let help_text = build_help_lines(theme);
 
     let paragraph = Paragraph::new(help_text)
         .block(block)
@@ -319,7 +323,7 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
     let items = [
         "/help      Show this help",
         "/new       New session (reset context)",
-        "/resume [n]         List or resume earlier sessions",
+        "/resume [n] List or resume earlier sessions",
         "/rewind [n] [code|chat]  Undo to before turn n",
         "/diff [session]     Files changed by last turn",
         "/clear     Clear messages",
@@ -328,14 +332,14 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "/init      Write or improve AGENTS.md",
         "/todos     Toggle the agent's todo list",
         "/cost      Tokens and cost of the session",
+        "/agent [n|name]     Add an agent, or switch",
         "/agent new [name]   Create and switch to agent",
         "/name [name]        Rename the current project",
-        "/agent <n|name>     Switch to agent",
-        "/agents    Toggle Agents panel",
-        "/record    Toggle Record panel",
-        "/files     Toggle Sandbox panel",
+        "/agents /kernel /files  Toggle those panels",
         "/model     Choose model (local or cloud)",
         "/mode [name]        What runs without asking",
+        "/plan      Plan mode: research, write a plan",
+        "/build [path]  Implement the plan",
         "/login     Login for cloud models",
         "/login claude|chatgpt [paste]  Link a plan",
         "/logout [claude|chatgpt]  Sign out / unlink",
@@ -346,11 +350,14 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "@path      Attach a file or folder",
         "Ctrl+V     Paste an image (or text)",
         "Ctrl+G     Edit the input in $EDITOR",
+        "$ / Esc    Open the terminal / back to chat",
         "Tab        Switch panels",
         "Shift+Tab  Next mode (default→edits→plan→all)",
         "↑/↓        Navigate / History",
         "Ctrl+N     New project (pick its folder)",
         "Space      Fold the selected project",
+        "Shift+←/→  Sandbox / Processes tabs",
+        "o / k / l  Process: open agent, kill, log",
         "Alt+↑/↓    Switch agent",
         "Mouse      Wheel/click agents to switch",
         "PgUp/PgDn  Scroll chat history",
@@ -623,6 +630,16 @@ fn build_message_section(
         "Message:",
         Style::default().fg(theme.colors.muted),
     )));
+
+    if record.message.starts_with(['{', '[']) {
+        content.extend(
+            record
+                .message
+                .lines()
+                .map(|line| Line::from(highlight_code_line("json", line, theme))),
+        );
+        return;
+    }
 
     let base_style = Style::default().fg(theme.colors.foreground);
     let width = usize::from(modal_width.saturating_sub(2));

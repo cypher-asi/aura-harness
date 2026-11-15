@@ -40,6 +40,35 @@ pub(super) fn message_header<'a>(
     Line::from(spans)
 }
 
+/// `* 07:48:20  policy: write_file allowed by …` — a one-line notice with
+/// its header, wrapped under the text when it runs past `width`.
+pub(super) fn notice_lines(
+    nick: &str,
+    nick_color: ratatui::style::Color,
+    timestamp: &str,
+    text: &str,
+    text_color: ratatui::style::Color,
+    width: usize,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let mut header = message_header(nick, nick_color, timestamp, &[], width, theme);
+    header.spans.push(Span::raw("  "));
+    let indent = header.width();
+    let style = Style::default().fg(text_color);
+    let mut rows = wrap_words(text, width.saturating_sub(indent).max(1)).into_iter();
+    header
+        .spans
+        .push(Span::styled(rows.next().unwrap_or_default(), style));
+    let mut lines = vec![header];
+    lines.extend(rows.map(|row| {
+        Line::from(vec![
+            Span::raw(" ".repeat(indent)),
+            Span::styled(row, style),
+        ])
+    }));
+    lines
+}
+
 /// The longest leading run of `meta` that fits in `room` columns, joined
 /// with ` · `; failing that, the first part cut short.
 fn fit_meta(meta: &[String], room: usize) -> Option<String> {

@@ -17,6 +17,8 @@ use aura_terminal::{
     },
     UiCommand,
 };
+use aura_tools::plan_tools::{plan_path_from_output, CREATE_PLAN_TOOL_NAME};
+use aura_tools::todo::TODO_WRITE_TOOL_NAME;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc;
@@ -35,6 +37,13 @@ const HISTORY_MESSAGE_LIMIT: usize = 300;
 /// Upper bound on the summary string; the panel truncates to its own
 /// width, this only keeps huge prompts from being copied around.
 const MAX_INFO_CHARS: usize = 240;
+
+/// Upper bound on a plain-text payload shown in the record detail view.
+const MAX_MESSAGE_CHARS: usize = 200;
+
+/// Upper bound on a pretty-printed JSON payload; the detail view scrolls,
+/// so this only guards against huge tool payloads.
+const MAX_JSON_MESSAGE_CHARS: usize = 20_000;
 
 /// Load the most recent record entries for an agent as UI summaries,
 /// oldest first.
@@ -179,6 +188,7 @@ pub fn chat_from_messages(messages: &[Message]) -> Vec<MessageData> {
                             result: None,
                             is_error: false,
                             duration_ms: None,
+                            policy: None,
                         }),
                         ..MessageData::new(MessageRole::Assistant, "")
                     });
@@ -257,6 +267,18 @@ pub fn conversation_history(
                     Err(_) => history.extend(history_message(tx)),
                 }
             }
+            TransactionType::PolicyDecision => {
+                let decision = serde_json::from_slice::<PolicyDecision>(&tx.payload).ok();
+                let call = decision
+                    .as_ref()
+                    .and_then(|decision| tool_calls.get(&decision.tool_use_id));
+                match (call, decision.as_ref().and_then(policy_outcome)) {
+                    (Some(&(index, _)), Some(outcome)) => {
+                        set_tool_policy(&mut history[index], outcome);
+                    }
+                    _ => history.extend(history_message(tx)),
+                }
+            }
             TransactionType::ToolExecution => {
                 let Some(execution) = tool_execution(&entry) else {
                     continue;
@@ -326,8 +348,16 @@ fn tool_call_message(proposal: &ToolProposal, ts_ms: u64) -> MessageData {
             result: None,
             is_error: false,
             duration_ms: None,
+            policy: None,
         }),
         ..MessageData::new(MessageRole::Assistant, "")
+    }
+}
+
+/// Record the policy decision on the tool call `message` shows.
+fn set_tool_policy(message: &mut MessageData, decision: String) {
+    if let Some(ActivityData::Tool { policy, .. }) = &mut message.activity {
+        *policy = Some(decision);
     }
 }
 
@@ -351,7 +381,7 @@ fn finish_tool_call(message: &mut MessageData, execution: &ToolExecution, took_m
         )),
         ToolGateVerdict::PendingApproval => Some("awaiting approval".to_string()),
     };
-    *duration_ms = Some(took_ms);
+    *duration_ms = Some(execution.duration_ms.unwrap_or(took_ms));
 }
 
 /// The tool execution in `entry`, with its output read from the entry's
@@ -366,6 +396,35 @@ fn tool_execution(entry: &RecordEntry) -> Option<ToolExecution> {
         }
     }
     Some(execution)
+}
+
+/// Path of the plan `agent_id` last wrote with `create_plan` or
+/// `todo_write`, from its recent record.
+#[must_use]
+pub fn latest_plan_path(store: &dyn ReadStore, agent_id: AgentId) -> Option<String> {
+    let entries = scan_tail(store, agent_id, HISTORY_SCAN_LIMIT)
+        .inspect_err(|e| warn!(error = %e, "Failed to scan record for plans"))
+        .ok()?;
+    entries
+        .iter()
+        .rev()
+        .filter(|entry| entry.tx.tx_type == TransactionType::ToolExecution)
+        .filter_map(tool_execution)
+        .filter(|execution| {
+            !execution.is_error
+                && execution.decision == ToolGateVerdict::Approved
+                && matches!(
+                    execution.tool.as_str(),
+                    CREATE_PLAN_TOOL_NAME | TODO_WRITE_TOOL_NAME
+                )
+        })
+        .find_map(|execution| {
+            execution
+                .result
+                .as_deref()
+                .and_then(plan_path_from_output)
+                .map(str::to_string)
+        })
 }
 
 /// Build the agents-column rows for every registered agent, each followed
@@ -486,7 +545,7 @@ pub fn build_record_summary(
         sender = "USER";
     }
 
-    let message = truncate_chars(&String::from_utf8_lossy(&tx.payload), 200);
+    let message = record_message(&tx.payload);
 
     let effect_count = entry.effects.len();
     let ok_count = entry
@@ -527,6 +586,7 @@ pub fn build_record_summary(
 
     let full_hash = entry.context_hash.as_hex();
     let hash_suffix = full_hash[full_hash.len().saturating_sub(4)..].to_string();
+    let columns = record_columns(tx, entry, sender).unwrap_or_default();
 
     RecordSummary {
         seq,
@@ -540,11 +600,26 @@ pub fn build_record_summary(
         effect_status,
         status,
         info: summarize_entry(tx, entry),
+        what: columns.what,
+        group: columns.group,
+        detail: truncate_chars(&collapse_whitespace(&columns.detail), MAX_INFO_CHARS),
         error_details,
         tx_id: hex::encode(tx.hash.as_bytes()),
         agent_id: hex::encode(tx.agent_id.as_bytes()),
         ts_ms: tx.ts_ms,
         policy: policy_detail(tx),
+    }
+}
+
+/// The payload as shown in the record detail view: JSON objects and
+/// arrays pretty-printed, anything else truncated.
+fn record_message(payload: &[u8]) -> String {
+    match serde_json::from_slice::<Value>(payload) {
+        Ok(value @ (Value::Object(_) | Value::Array(_))) => truncate_chars(
+            &serde_json::to_string_pretty(&value).unwrap_or_default(),
+            MAX_JSON_MESSAGE_CHARS,
+        ),
+        _ => truncate_chars(&String::from_utf8_lossy(payload), MAX_MESSAGE_CHARS),
     }
 }
 
@@ -555,16 +630,21 @@ pub fn build_record_summary(
 /// shows that it ran.
 #[must_use]
 pub fn policy_chat_line(decision: &PolicyDecision) -> Option<String> {
-    let outcome = match decision.verdict {
+    policy_outcome(decision).map(|outcome| format!("policy: {} {outcome}", decision.tool))
+}
+
+/// The verdict and deciding rule of a policy decision, e.g.
+/// `allowed by user_default.full_access`; `None` as for
+/// [`policy_chat_line`].
+#[must_use]
+pub fn policy_outcome(decision: &PolicyDecision) -> Option<String> {
+    let verdict = match decision.verdict {
         ToolGateVerdict::Approved if is_user_tool_use(&decision.tool_use_id) => return None,
         ToolGateVerdict::Approved => "allowed",
         ToolGateVerdict::Denied => "denied",
         ToolGateVerdict::PendingApproval => "needs approval",
     };
-    Some(format!(
-        "policy: {} {outcome} by {}",
-        decision.tool, decision.decided_by
-    ))
+    Some(format!("{verdict} by {}", decision.decided_by))
 }
 
 /// Policy provenance for the record detail view; `None` for entries that
@@ -637,6 +717,188 @@ fn summarize_entry(tx: &Transaction, entry: &RecordEntry) -> String {
     summarize_record(tx)
 }
 
+/// The Record panel's fixed columns for one entry.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct RecordColumns {
+    /// What the entry is about: tool name, LLM stop reason, sender.
+    what: String,
+    /// Category of `what`: tool group, LLM error class, model family.
+    group: String,
+    /// The rest of the summary, without what the columns already show.
+    detail: String,
+}
+
+impl RecordColumns {
+    fn new(what: impl Into<String>, group: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            what: what.into(),
+            group: group.into(),
+            detail: detail.into(),
+        }
+    }
+}
+
+/// Split an entry into the Record panel's columns; `None` when the
+/// payload doesn't parse, so the panel falls back to the summary.
+fn record_columns(tx: &Transaction, entry: &RecordEntry, sender: &str) -> Option<RecordColumns> {
+    let columns = match tx.tx_type {
+        TransactionType::UserPrompt | TransactionType::AgentMsg | TransactionType::Trigger => {
+            RecordColumns::new(sender, "text", payload_text(tx))
+        }
+        TransactionType::ToolProposal => {
+            let proposal = serde_json::from_slice::<ToolProposal>(&tx.payload).ok()?;
+            let detail: Vec<String> = [
+                Some(tool_target(&proposal.tool, &proposal.args)),
+                proposal.source.as_deref().and_then(proposal_source_label),
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|part| !part.is_empty())
+            .collect();
+            RecordColumns::new(
+                proposal.tool.as_str(),
+                tool_group(&proposal.tool),
+                detail.join(" · "),
+            )
+        }
+        TransactionType::ToolExecution => {
+            let execution = tool_execution(entry)?;
+            let target = tool_target(&execution.tool, &execution.args);
+            let detail: Vec<String> = [
+                Some(target).filter(|target| !target.is_empty()),
+                Some(tool_outcome(&execution)),
+                execution.duration_ms.map(format_duration_ms),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            let detail = detail.join(" · ");
+            RecordColumns::new(execution.tool.as_str(), tool_group(&execution.tool), detail)
+        }
+        TransactionType::PolicyDecision => {
+            let decision = serde_json::from_slice::<PolicyDecision>(&tx.payload).ok()?;
+            RecordColumns::new(
+                decision.tool.as_str(),
+                tool_group(&decision.tool),
+                format!(
+                    "{} · {}",
+                    policy_verdict(decision.verdict),
+                    decision.decided_by
+                ),
+            )
+        }
+        TransactionType::ActionResult | TransactionType::ProcessComplete => {
+            let result = serde_json::from_slice::<ActionResultPayload>(&tx.payload).ok()?;
+            RecordColumns::new(
+                if result.success { "ok" } else { "failed" },
+                result
+                    .exit_code
+                    .map_or_else(String::new, |code| format!("exit {code}")),
+                format_duration_ms(result.duration_ms),
+            )
+        }
+        TransactionType::Reasoning => reasoning_columns(&json_payload(tx)?),
+        TransactionType::System => {
+            let payload = json_payload(tx)?;
+            RecordColumns::new(system_kind(&payload), "", system_detail(&payload).join(" "))
+        }
+        TransactionType::SessionStart => RecordColumns::new("start", "", ""),
+        TransactionType::SubagentSpawn => {
+            let payload = json_payload(tx)?;
+            let mode = payload
+                .get("spawn_mode")
+                .and_then(Value::as_str)
+                .unwrap_or("spawn");
+            RecordColumns::new(mode, "agent", spawn_detail(&payload).join(" · "))
+        }
+    };
+    Some(columns)
+}
+
+/// Columns for a model call: stop reason and model family, or the class
+/// of error when the call failed.
+fn reasoning_columns(payload: &Value) -> RecordColumns {
+    if let Some(error) = reasoning_error(payload) {
+        return RecordColumns::new("error", llm_error_class(error), error);
+    }
+    let stop = payload
+        .get("stop_reason")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let family = payload
+        .get("model")
+        .and_then(Value::as_str)
+        .map_or("", model_family);
+    let took = payload
+        .get("duration_ms")
+        .and_then(Value::as_u64)
+        .map(format_duration_ms);
+    let detail: Vec<String> = [reasoning_tokens(payload), reasoning_tools(payload), took]
+        .into_iter()
+        .flatten()
+        .collect();
+    RecordColumns::new(stop, family, detail.join(" · "))
+}
+
+/// The error of a failed model call; `None` when the call succeeded.
+fn reasoning_error(payload: &Value) -> Option<&str> {
+    (payload.get("status").and_then(Value::as_str) == Some("failed"))
+        .then(|| payload.get("error").and_then(Value::as_str).unwrap_or(""))
+}
+
+/// Short class of a model call error, at most 7 characters.
+fn llm_error_class(error: &str) -> &'static str {
+    let error = error.to_ascii_lowercase();
+    let mentions = |needles: &[&str]| needles.iter().any(|needle| error.contains(needle));
+    if mentions(&["429", "rate limit", "rate_limit"]) {
+        "rate"
+    } else if mentions(&["529", "overloaded"]) {
+        "busy"
+    } else if mentions(&["timeout", "timed out"]) {
+        "timeout"
+    } else if mentions(&[
+        "401",
+        "403",
+        "unauthorized",
+        "forbidden",
+        "api key",
+        "authentication",
+    ]) {
+        "auth"
+    } else if mentions(&["stream"]) {
+        "stream"
+    } else {
+        "other"
+    }
+}
+
+/// Model family shown in the group column, e.g. `claude-sonnet-4-5` -> `sonnet`.
+fn model_family(model: &str) -> &str {
+    const FAMILIES: &[&str] = &["opus", "sonnet", "haiku", "gpt", "gemini", "grok"];
+    let lower = model.to_ascii_lowercase();
+    if let Some(family) = FAMILIES.iter().find(|family| lower.contains(*family)) {
+        return family;
+    }
+    let name = model.rsplit('/').next().unwrap_or(model);
+    name.split(['-', '_', ':', '.']).next().unwrap_or(name)
+}
+
+/// Group a tool belongs to, at most 7 characters.
+fn tool_group(tool: &str) -> &'static str {
+    match tool {
+        "read_file" | "write_file" | "edit_file" | "delete_file" | "list_files" | "find_files"
+        | "stat_file" => "file",
+        "run_command" => "shell",
+        "search_code" => "search",
+        _ if tool.starts_with("git_") => "git",
+        _ if tool.starts_with("web_") || tool.contains("http") || tool.contains("fetch") => "web",
+        _ if tool.contains("spec") => "spec",
+        _ if tool.contains("task") => "task",
+        _ if tool.contains("agent") => "agent",
+        _ => "other",
+    }
+}
+
 pub(crate) fn format_local_time(ts_ms: u64) -> String {
     i64::try_from(ts_ms)
         .ok()
@@ -704,26 +966,40 @@ pub fn summarize_record(tx: &Transaction) -> String {
 }
 
 fn summarize_tool_call(tool: &str, args: &Value) -> String {
-    let detail = if tool == "run_command" {
+    let target = tool_target(tool, args);
+    if target.is_empty() {
+        tool.to_string()
+    } else {
+        format!("{tool} {target}")
+    }
+}
+
+/// What a tool call acts on: the command line for `run_command`, else
+/// its primary argument.
+fn tool_target(tool: &str, args: &Value) -> String {
+    if tool == "run_command" {
         extract_cmd_run_command(args)
     } else {
         primary_arg(args).unwrap_or_default()
-    };
-    if detail.is_empty() {
-        tool.to_string()
-    } else {
-        format!("{tool} {detail}")
     }
 }
 
 fn summarize_tool_execution(execution: &ToolExecution) -> String {
-    let call = summarize_tool_call(&execution.tool, &execution.args);
+    format!(
+        "{} · {}",
+        summarize_tool_call(&execution.tool, &execution.args),
+        tool_outcome(execution)
+    )
+}
+
+/// How a tool call ended, e.g. `ok 5B` or `denied: reason`.
+fn tool_outcome(execution: &ToolExecution) -> String {
     match execution.decision {
         ToolGateVerdict::Denied => match execution.reason.as_deref() {
-            Some(reason) if !reason.is_empty() => format!("{call} · denied: {reason}"),
-            _ => format!("{call} · denied"),
+            Some(reason) if !reason.is_empty() => format!("denied: {reason}"),
+            _ => "denied".to_string(),
         },
-        ToolGateVerdict::PendingApproval => format!("{call} · awaiting approval"),
+        ToolGateVerdict::PendingApproval => "awaiting approval".to_string(),
         ToolGateVerdict::Approved if execution.is_error => {
             let first_line = execution
                 .result
@@ -731,25 +1007,33 @@ fn summarize_tool_execution(execution: &ToolExecution) -> String {
                 .and_then(|r| r.lines().find(|l| !l.trim().is_empty()))
                 .unwrap_or("");
             if first_line.is_empty() {
-                format!("{call} · err")
+                "err".to_string()
             } else {
-                format!("{call} · err: {first_line}")
+                format!("err: {first_line}")
             }
         }
         ToolGateVerdict::Approved => match execution.result.as_deref() {
-            Some(result) => format!("{call} · ok {}", format_bytes(result.len())),
-            None => format!("{call} · ok"),
+            Some(result) => format!("ok {}", format_bytes(result.len())),
+            None => "ok".to_string(),
         },
     }
 }
 
 fn summarize_policy_decision(decision: &PolicyDecision) -> String {
-    let verdict = match decision.verdict {
+    format!(
+        "{} · {} · {}",
+        decision.tool,
+        policy_verdict(decision.verdict),
+        decision.decided_by
+    )
+}
+
+const fn policy_verdict(verdict: ToolGateVerdict) -> &'static str {
+    match verdict {
         ToolGateVerdict::Approved => "allow",
         ToolGateVerdict::Denied => "deny",
         ToolGateVerdict::PendingApproval => "ask",
-    };
-    format!("{} · {verdict} · {}", decision.tool, decision.decided_by)
+    }
 }
 
 fn summarize_action_result(result: &ActionResultPayload) -> String {
@@ -762,8 +1046,7 @@ fn summarize_action_result(result: &ActionResultPayload) -> String {
 }
 
 fn summarize_reasoning(payload: &Value) -> String {
-    if payload.get("status").and_then(Value::as_str) == Some("failed") {
-        let error = payload.get("error").and_then(Value::as_str).unwrap_or("");
+    if let Some(error) = reasoning_error(payload) {
         return format!("failed: {error}");
     }
 
@@ -771,38 +1054,44 @@ fn summarize_reasoning(payload: &Value) -> String {
     if let Some(model) = payload.get("model").and_then(Value::as_str) {
         parts.push(model.to_string());
     }
-    let input = payload.get("input_tokens").and_then(Value::as_u64);
-    let output = payload.get("output_tokens").and_then(Value::as_u64);
-    if input.is_some() || output.is_some() {
-        parts.push(format!(
-            "{}/{} tok",
-            input.map_or_else(|| "?".to_string(), format_tokens),
-            output.map_or_else(|| "?".to_string(), format_tokens),
-        ));
-    }
+    parts.extend(reasoning_tokens(payload));
     if let Some(stop) = payload.get("stop_reason").and_then(Value::as_str) {
         parts.push(stop.to_string());
     }
+    parts.extend(reasoning_tools(payload));
+    parts.join(" · ")
+}
+
+/// Input/output token counts of a model call, e.g. `1.2k/300 tok`.
+fn reasoning_tokens(payload: &Value) -> Option<String> {
+    let input = payload.get("input_tokens").and_then(Value::as_u64);
+    let output = payload.get("output_tokens").and_then(Value::as_u64);
+    (input.is_some() || output.is_some()).then(|| {
+        format!(
+            "{}/{} tok",
+            input.map_or_else(|| "?".to_string(), format_tokens),
+            output.map_or_else(|| "?".to_string(), format_tokens),
+        )
+    })
+}
+
+/// Tools a model call asked for, e.g. `tools: read_file, run_command`.
+fn reasoning_tools(payload: &Value) -> Option<String> {
     let tools: Vec<&str> = payload
         .get("tool_uses")
         .and_then(Value::as_array)
         .map(|arr| arr.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
-    if !tools.is_empty() {
-        parts.push(format!("tools: {}", tools.join(", ")));
-    }
-    parts.join(" · ")
+    (!tools.is_empty()).then(|| format!("tools: {}", tools.join(", ")))
 }
 
 fn summarize_system(payload: &Value) -> String {
-    let kind = payload
-        .get("system_kind")
-        .and_then(Value::as_str)
-        .unwrap_or("system");
-    let detail: Vec<&str> = ["method", "event", "action", "scope", "phase"]
-        .iter()
-        .filter_map(|key| payload.get(*key).and_then(Value::as_str))
-        .collect();
+    let kind = system_kind(payload);
+    let mode = |key: &str| payload.get(key).and_then(Value::as_str);
+    if let (Some(from), Some(to)) = (mode("from"), mode("to")) {
+        return format!("{kind} · {from} → {to}");
+    }
+    let detail = system_detail(payload);
     if detail.is_empty() {
         kind.to_string()
     } else {
@@ -810,11 +1099,32 @@ fn summarize_system(payload: &Value) -> String {
     }
 }
 
+fn system_kind(payload: &Value) -> &str {
+    payload
+        .get("system_kind")
+        .and_then(Value::as_str)
+        .unwrap_or("system")
+}
+
+fn system_detail(payload: &Value) -> Vec<&str> {
+    ["method", "event", "action", "scope", "phase"]
+        .iter()
+        .filter_map(|key| payload.get(*key).and_then(Value::as_str))
+        .collect()
+}
+
 fn summarize_spawn(payload: &Value) -> String {
     let mut parts = Vec::new();
     if let Some(mode) = payload.get("spawn_mode").and_then(Value::as_str) {
         parts.push(mode.to_string());
     }
+    parts.extend(spawn_detail(payload));
+    parts.join(" · ")
+}
+
+/// Child agent and override count of a spawn, without the spawn mode.
+fn spawn_detail(payload: &Value) -> Vec<String> {
+    let mut parts = Vec::new();
     if let Some(child) = payload.get("child_agent_id").and_then(Value::as_str) {
         let short: String = child.chars().take(8).collect();
         parts.push(format!("child {short}"));
@@ -826,7 +1136,7 @@ fn summarize_spawn(payload: &Value) -> String {
     if overrides > 0 {
         parts.push(format!("{overrides} overrides"));
     }
-    parts.join(" · ")
+    parts
 }
 
 /// Pick the argument that best identifies what a tool call targets.
@@ -939,6 +1249,22 @@ fn format_bytes(n: usize) -> String {
     } else {
         format!("{}MB", one_decimal(n, 1024 * 1024))
     }
+}
+
+/// Why a recorded call didn't go to the tool executor, for the TOOLCALL
+/// row. `None` for calls the panel already marks some other way (the
+/// sender column shows user commands).
+fn proposal_source_label(source: &str) -> Option<String> {
+    let label = match source {
+        crate::event_loop::run_command::USER_SOURCE => return None,
+        "cache" => "cached result",
+        "steering_block" => "blocked by steering",
+        "invalid_tool_use" => "invalid call",
+        "task_guard" => "blocked by task guard",
+        "task_executor" => "handled by task runner",
+        other => other,
+    };
+    Some(label.to_string())
 }
 
 fn format_duration_ms(ms: u64) -> String {

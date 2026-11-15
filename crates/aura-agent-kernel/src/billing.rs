@@ -277,6 +277,7 @@ mod tests {
             reason: None,
             result: None,
             is_error: false,
+            duration_ms: None,
             parent_agent_id: parent,
             originating_user_id: "user-root".into(),
         };

@@ -48,6 +48,7 @@ pub(super) fn cmd_run_in_pty(
     cwd: Option<&str>,
     cols: u16,
     timeout_ms: u64,
+    tags: &super::ProcessTags,
 ) -> Option<Result<ToolResult, ToolError>> {
     let working_dir = match cwd {
         Some(dir) => match sandbox.resolve_existing(dir) {
@@ -73,6 +74,9 @@ pub(super) fn cmd_run_in_pty(
     let mut builder = command_builder(command);
     builder.cwd(&working_dir);
     apply_terminal_env(&mut builder, cols);
+    for (key, value) in tags.vars() {
+        builder.env(key, value);
+    }
 
     let child = pair.slave.spawn_command(builder);
     drop(pair.slave);
@@ -282,9 +286,16 @@ mod tests {
 
     #[cfg(unix)]
     fn run(sandbox: &Sandbox, command: &PtyCommand<'_>, cols: u16) -> ToolResult {
-        cmd_run_in_pty(sandbox, command, None, cols, 10_000)
-            .expect("pseudo-terminal available")
-            .expect("command ran")
+        cmd_run_in_pty(
+            sandbox,
+            command,
+            None,
+            cols,
+            10_000,
+            &crate::ProcessTags::default(),
+        )
+        .expect("pseudo-terminal available")
+        .expect("command ran")
     }
 
     #[cfg(unix)]
@@ -360,6 +371,7 @@ mod tests {
             None,
             80,
             200,
+            &crate::ProcessTags::default(),
         )
         .expect("pseudo-terminal available");
         assert!(matches!(result, Err(ToolError::CommandFailed(_))));

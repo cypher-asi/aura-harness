@@ -5,11 +5,13 @@
 //! finalization methods consume `self`, making double-recording impossible
 //! by construction (Invariant §3).
 
+use super::RecordObserver;
 use crate::context::hash_tx_with_window;
 use aura_core_types::{AgentId, RecordEntry, Transaction, TransactionType};
 use aura_model_reasoner::{StopReason, Usage};
 use aura_store_db::Store;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// Handle returned alongside a streaming response so the caller can finalize
 /// the record entry once the stream completes.
@@ -28,6 +30,10 @@ pub struct ReasonStreamHandle {
     pub(super) agent_id: AgentId,
     pub(super) seq_counter: Arc<Mutex<u64>>,
     pub(super) window: Vec<RecordEntry>,
+    pub(super) observer: Option<Arc<dyn RecordObserver>>,
+    /// When the provider call started; the finalized entry records the
+    /// elapsed time as `duration_ms`.
+    pub(super) started: Instant,
 }
 
 impl ReasonStreamHandle {
@@ -61,6 +67,9 @@ impl ReasonStreamHandle {
         self.kernel_store
             .append_entry_direct(self.agent_id, seq, &entry)
             .map_err(|e| crate::KernelError::Store(format!("append_entry_direct: {e}")))?;
+        if let Some(observer) = self.observer.as_ref() {
+            observer.on_entry(&entry);
+        }
 
         Ok(entry)
     }
@@ -91,6 +100,7 @@ impl ReasonStreamHandle {
             "input_tokens": usage.input_tokens,
             "output_tokens": usage.output_tokens,
             "tool_uses": tool_uses,
+            "duration_ms": elapsed_ms(self.started),
         });
         add_cache_usage(&mut reasoning_payload, usage);
         add_thinking(&mut reasoning_payload, thinking, thinking_ms);
@@ -118,6 +128,7 @@ impl ReasonStreamHandle {
         let reasoning_payload = serde_json::json!({
             "error": error,
             "status": "failed",
+            "duration_ms": elapsed_ms(self.started),
         });
         let payload_bytes = serde_json::to_vec(&reasoning_payload)
             .map_err(|e| crate::KernelError::Serialization(e.to_string()))?;
@@ -131,6 +142,10 @@ impl ReasonStreamHandle {
 
         self.append(tx)
     }
+}
+
+pub(crate) fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Add the prompt-cache token counts to a `Reasoning` payload when the

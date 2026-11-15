@@ -3,8 +3,8 @@
 use crate::error::ToolError;
 use crate::sandbox::Sandbox;
 use crate::tool::{
-    builtin_tools, AgentControlHook, AgentReadHook, FileChangeHook, SubagentDispatchHook, Tool,
-    ToolContext,
+    builtin_tools, AgentControlHook, AgentReadHook, BackgroundProcessHook, FileChangeHook,
+    SubagentDispatchHook, Tool, ToolContext,
 };
 use crate::ToolConfig;
 use async_trait::async_trait;
@@ -34,6 +34,7 @@ pub struct ToolExecutor {
     agent_control_hook: Option<Arc<dyn AgentControlHook>>,
     agent_read_hook: Option<Arc<dyn AgentReadHook>>,
     subagent_dispatch: Option<Arc<dyn SubagentDispatchHook>>,
+    background_processes: Option<Arc<dyn BackgroundProcessHook>>,
     caller_permissions: Option<AgentPermissions>,
     caller_tool_permissions: Option<AgentToolPermissions>,
     user_tool_defaults: UserToolDefaults,
@@ -54,7 +55,6 @@ pub struct ToolExecutor {
     /// usually has no server-side configured model). `None` leaves the
     /// downstream null-model behavior unchanged.
     caller_model_id: Option<String>,
-    background_jobs: Option<Arc<crate::jobs::BackgroundJobs>>,
     file_change_hook: Option<Arc<dyn FileChangeHook>>,
 }
 
@@ -76,6 +76,7 @@ impl ToolExecutor {
             agent_control_hook: None,
             agent_read_hook: None,
             subagent_dispatch: None,
+            background_processes: None,
             caller_permissions: None,
             caller_tool_permissions: None,
             user_tool_defaults: UserToolDefaults::default(),
@@ -84,7 +85,6 @@ impl ToolExecutor {
             caller_external_agent_id: None,
             caller_project_id: None,
             caller_model_id: None,
-            background_jobs: None,
             file_change_hook: None,
         }
     }
@@ -93,16 +93,6 @@ impl ToolExecutor {
     #[must_use]
     pub fn with_file_change_hook(mut self, hook: Arc<dyn FileChangeHook>) -> Self {
         self.file_change_hook = Some(hook);
-        self
-    }
-
-    /// Let `run_command` start background jobs in `jobs`, and register the
-    /// `job_output` / `job_kill` tools that manage them.
-    #[must_use]
-    pub fn with_background_jobs(mut self, jobs: Arc<crate::jobs::BackgroundJobs>) -> Self {
-        self.background_jobs = Some(jobs);
-        self.register(Box::new(crate::jobs::JobOutputTool));
-        self.register(Box::new(crate::jobs::JobKillTool));
         self
     }
 
@@ -133,6 +123,16 @@ impl ToolExecutor {
     #[must_use]
     pub fn with_subagent_dispatch_hook(mut self, hook: Arc<dyn SubagentDispatchHook>) -> Self {
         self.subagent_dispatch = Some(hook);
+        self
+    }
+
+    /// Let `run_command` hand `background: true` commands to `hook`, and
+    /// register the `job_output` / `job_kill` tools that look after them.
+    #[must_use]
+    pub fn with_background_process_hook(mut self, hook: Arc<dyn BackgroundProcessHook>) -> Self {
+        self.background_processes = Some(hook);
+        self.register(Box::new(crate::jobs::JobOutputTool));
+        self.register(Box::new(crate::jobs::JobKillTool));
         self
     }
 
@@ -314,7 +314,8 @@ impl ToolExecutor {
         tool_ctx.agent_read_hook = self.agent_read_hook.clone();
         tool_ctx.subagent_dispatch = self.subagent_dispatch.clone();
         tool_ctx.current_tool_use_id = ctx.tool_use_id.clone();
-        tool_ctx.background_jobs = self.background_jobs.clone();
+        tool_ctx.current_action_id = Some(ctx.action_id);
+        tool_ctx.background_processes = self.background_processes.clone();
 
         let Some(tool) = self.tools.get(tool_name.as_str()) else {
             return Err(ToolError::UnknownTool(tool_name.clone()));

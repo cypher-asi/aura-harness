@@ -1,8 +1,10 @@
 //! Terminal permission modes and the `/mode [name]` slash command.
 //!
 //! A [`PermissionMode`] decides which tool calls run without asking. The
-//! event loop maps it onto the kernel policy (session [`AgentMode`]
-//! ceiling plus per-tool `on`/`ask` states) and records a `System` entry
+//! terminal sends it as `UiEvent::SetMode` (`/mode`, `/plan`, `/build`,
+//! Shift+Tab); the event loop maps it onto the kernel policy (session
+//! [`AgentMode`] ceiling plus per-tool `on`/`ask` states) through
+//! `Kernel::switch_permissions`, which records a `mode_change` entry
 //! before the agent's next tool call is evaluated under it.
 
 use aura_core_modes::AgentMode;

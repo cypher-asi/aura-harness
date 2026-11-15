@@ -5,15 +5,16 @@
 //! mode. A mode becomes the kernel policy's session-mode ceiling plus a
 //! per-tool `on`/`ask` table, applied to the agent's kernel before every
 //! piece of work and straight away when the user switches, so the switch
-//! takes effect at the agent's next tool call even mid-turn. A switch is
-//! recorded as a `System` entry before the policy changes.
+//! takes effect at the agent's next tool call even mid-turn. A switch goes
+//! through `Kernel::switch_permissions`, which records one `mode_change`
+//! entry naming both tables before the policy changes. `plan` is the
+//! terminal's plan mode (`/plan`; see [`super::plan_mode`]).
 
 use super::agent_events::AgentUi;
+use super::handlers::system_message;
 use super::LoopState;
 use aura_agent_kernel::{tool_mode_class, Kernel, ToolModeClass};
-use aura_core_types::{
-    AgentId, SystemKind, ToolState, Transaction, TransactionType, UserToolDefaults,
-};
+use aura_core_types::{AgentId, ToolState, UserToolDefaults};
 use aura_terminal::{PermissionMode, UiCommand};
 use aura_tools::jobs::JOB_KILL_TOOL_NAME;
 use std::collections::BTreeMap;
@@ -72,28 +73,48 @@ pub(super) async fn send_mode(state: &LoopState<'_>, agent_id: AgentId) {
         .await;
 }
 
-/// Switch `agent_id` to `mode`: record the switch, then change the policy
-/// its kernel evaluates the next tool call with.
+/// Switch `agent_id` to `mode` (`/mode`, `/plan`, Shift+Tab), whether it
+/// is idle or at work.
 pub(super) async fn set_mode(state: &mut LoopState<'_>, agent_id: AgentId, mode: PermissionMode) {
+    let Some(kernel) = state.kernel_for(agent_id) else {
+        AgentUi::new(state.commands.clone(), agent_id)
+            .send(UiCommand::ShowError(
+                "No open session to change the mode of".to_string(),
+            ))
+            .await;
+        return;
+    };
+    switch_mode(state, agent_id, &kernel, mode).await;
+}
+
+/// Switch `agent_id`, whose kernel is `kernel`, to `mode`: record the
+/// switch, then change the policy its kernel evaluates the next tool call
+/// with. Reports failures itself and returns `false`.
+pub(super) async fn switch_mode(
+    state: &LoopState<'_>,
+    agent_id: AgentId,
+    kernel: &Kernel,
+    mode: PermissionMode,
+) -> bool {
     let ui = AgentUi::new(state.commands.clone(), agent_id);
     let from = state.hub.mode_of(agent_id);
     if from == mode {
         send_mode(state, agent_id).await;
-        return;
+        return true;
     }
-    let Some(kernel) = state.kernel_for(agent_id) else {
-        ui.send(UiCommand::ShowError(
-            "No open session to change the mode of".to_string(),
-        ))
+    let defaults = user_defaults(mode, &state.hub.tool_names());
+    if let Err(e) = kernel
+        .switch_permissions(mode.agent_mode(), defaults, from.name(), mode.name())
+        .await
+    {
+        warn!(%agent_id, error = %e, "Failed to record the mode change via kernel");
+        ui.send(UiCommand::ShowError(format!(
+            "Could not record the mode change, so it was not made: {e}"
+        )))
         .await;
-        return;
-    };
-    if let Err(problem) = record_mode_change(&kernel, agent_id, from, mode).await {
-        ui.send(UiCommand::ShowError(problem)).await;
-        return;
+        return false;
     }
     state.hub.set_mode(agent_id, mode);
-    apply(&kernel, mode, &state.hub.tool_names());
     info!(%agent_id, %from, to = %mode, "Changed permission mode");
     ui.send(UiCommand::SetMode(mode)).await;
     ui.send(UiCommand::ShowSuccess(format!(
@@ -101,32 +122,15 @@ pub(super) async fn set_mode(state: &mut LoopState<'_>, agent_id: AgentId, mode:
         mode.description()
     )))
     .await;
-}
-
-/// Append the `System` entry for a mode switch to the agent's record. The
-/// architecture requires it before any tool call runs under the new mode.
-async fn record_mode_change(
-    kernel: &Kernel,
-    agent_id: AgentId,
-    from: PermissionMode,
-    to: PermissionMode,
-) -> Result<(), String> {
-    let payload = serde_json::json!({
-        "system_kind": SystemKind::Infrastructure,
-        "action": "permission_mode",
-        "from": from.name(),
-        "to": to.name(),
-        "agent_mode": format!("{:?}", to.agent_mode()).to_ascii_lowercase(),
-    });
-    let bytes = serde_json::to_vec(&payload).map_err(|e| {
-        warn!(error = %e, "Failed to serialize the mode change");
-        format!("Could not record the mode change: {e}")
-    })?;
-    let tx = Transaction::new_chained(agent_id, TransactionType::System, bytes, None);
-    kernel.process_direct(tx).await.map(|_| ()).map_err(|e| {
-        warn!(error = %e, "Failed to record the mode change via kernel");
-        format!("Could not record the mode change, so it was not made: {e}")
-    })
+    if mode == PermissionMode::Plan {
+        ui.send(system_message(
+            "Plan mode: the agent researches and writes a plan instead of changing code. \
+             Run /build when the plan looks right."
+                .to_string(),
+        ))
+        .await;
+    }
+    true
 }
 
 #[cfg(test)]

@@ -345,6 +345,7 @@ fn append_tool_call_chain(
         reason: None,
         result: None,
         is_error: false,
+        duration_ms: None,
         parent_agent_id: agent_id,
         originating_user_id: String::new(),
     };

@@ -9,11 +9,12 @@ use crate::sandbox::Sandbox;
 use crate::ToolConfig;
 use async_trait::async_trait;
 use aura_core_types::{
-    AgentId, AgentMode, AgentPermissions, AgentToolPermissions, Capability, KernelMode,
-    SubagentDispatchRequest, SubagentResult, ToolDefinition, ToolResult, UserToolDefaults,
+    ActionId, AgentId, AgentMode, AgentPermissions, AgentToolPermissions, Capability, KernelMode,
+    ProcessId, SubagentDispatchRequest, SubagentResult, ToolDefinition, ToolResult,
+    UserToolDefaults,
 };
 use aura_exec_traits::SpawnHook;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Context provided to tools during execution.
@@ -95,9 +96,11 @@ pub struct ToolContext {
     /// spawned subagent card to (`parent_tool_use_id`). `None` falls
     /// back to any caller-stamped dedupe key on the tool input.
     pub current_tool_use_id: Option<String>,
-    /// Registry for `run_command` with `background: true` and the job
-    /// tools. `None` means background commands are refused.
-    pub background_jobs: Option<Arc<crate::jobs::BackgroundJobs>>,
+    /// Kernel action id of the tool call currently being executed.
+    pub current_action_id: Option<ActionId>,
+    /// Takes over commands `run_command` starts with `background: true`,
+    /// and backs the job tools. `None` makes such calls fail.
+    pub background_processes: Option<Arc<dyn BackgroundProcessHook>>,
 }
 
 /// Hook invoked by the `send_to_agent` / `agent_lifecycle` / `delegate_task`
@@ -189,6 +192,62 @@ pub trait FileChangeHook: Send + Sync {
     async fn after_change(&self, path: &Path, tool_use_id: Option<&str>, succeeded: bool);
 }
 
+/// A command `run_command` started in the background, with its output
+/// going to `log_path`.
+pub struct BackgroundProcess {
+    pub process_id: ProcessId,
+    pub child: std::process::Child,
+    /// The command as shown to the user.
+    pub command: String,
+    pub cwd: PathBuf,
+    pub log_path: PathBuf,
+    pub action_id: Option<ActionId>,
+    pub tool_use_id: Option<String>,
+}
+
+/// Tracks background commands until they exit and reports the result to
+/// the agent that started them.
+pub trait BackgroundProcessHook: Send + Sync {
+    /// Directory background command logs are written to.
+    fn log_dir(&self) -> PathBuf;
+
+    /// Take over `process` for `agent_id`.
+    ///
+    /// # Errors
+    /// When the process can't be tracked, after killing it.
+    fn adopt(&self, agent_id: AgentId, process: BackgroundProcess) -> Result<(), String>;
+
+    /// Background commands still running, of `agent_id` or of every agent.
+    fn running(&self, agent_id: Option<AgentId>) -> Vec<BackgroundJob> {
+        let _ = agent_id;
+        Vec::new()
+    }
+
+    /// Stop the running background command `id` (its process id in hex)
+    /// and every process it started. Its owner hears that it was killed.
+    ///
+    /// # Errors
+    /// When no such command is running or it can't be stopped.
+    fn kill(&self, id: &str) -> Result<(), String> {
+        Err(format!("background command {id} can't be stopped here"))
+    }
+}
+
+/// A running background command, as [`BackgroundProcessHook::running`]
+/// lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackgroundJob {
+    /// Process id in hex, as `run_command` reported it
+    pub id: String,
+    pub agent_id: AgentId,
+    /// The command as shown to the user
+    pub command: String,
+    pub pid: Option<u32>,
+    pub log_path: PathBuf,
+    /// When it started, in Unix milliseconds
+    pub started_ms: u64,
+}
+
 impl ToolContext {
     /// Construct a minimal context with only the fields required pre-phase-5.
     /// All new cross-agent fields default to `None` / empty.
@@ -213,7 +272,8 @@ impl ToolContext {
             caller_kernel_mode: None,
             caller_model_id: None,
             current_tool_use_id: None,
-            background_jobs: None,
+            current_action_id: None,
+            background_processes: None,
         }
     }
 }
@@ -282,5 +342,7 @@ pub fn builtin_tools() -> Vec<Box<dyn Tool>> {
         Box::new(crate::git_tool::GitCommitTool),
         Box::new(crate::git_tool::GitPushTool),
         Box::new(crate::git_tool::GitCommitPushTool),
+        Box::new(crate::plan_tools::CreatePlanTool),
+        Box::new(crate::todo::TodoWriteTool),
     ]
 }

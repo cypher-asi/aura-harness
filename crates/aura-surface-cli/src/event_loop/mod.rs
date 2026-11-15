@@ -4,7 +4,10 @@
 //! [`turns`]), so the loop keeps handling the UI while agents work, and the
 //! user can switch to another agent and give it work too. Each agent does
 //! one thing at a time. A message for an agent in the middle of a turn
-//! goes into that turn (see [`steering`]); other work waits for it.
+//! goes into that turn (see [`steering`]); other work waits for it. So
+//! do notices from work running in the background (see [`notices`]):
+//! commands, `task` spawns and agents the agent started, all listed in
+//! the Processes tab (see [`processes`]).
 
 pub(crate) mod agent_events;
 pub(crate) mod agents;
@@ -12,8 +15,13 @@ pub(crate) mod approvals;
 mod attachments;
 pub(crate) mod auth;
 pub(crate) mod handlers;
+pub(crate) mod host;
 pub(crate) mod hud;
 pub(crate) mod modes;
+pub(crate) mod notices;
+pub(crate) mod os_processes;
+pub(crate) mod plan_mode;
+pub(crate) mod processes;
 pub(crate) mod record_ui;
 mod rewind;
 pub(crate) mod run_command;
@@ -24,29 +32,29 @@ pub(crate) mod turns;
 pub(crate) use agent_events::forward_agent_events;
 pub use agents::{AgentSession, KernelBuilder, KernelFactory};
 pub use approvals::TerminalApprovals;
-pub(crate) use record_ui::send_record_to_ui;
-pub use record_ui::UiToolAuditObserver;
+pub use host::{TerminalAgents, TerminalChildKernels};
+pub use processes::{BackgroundCommands, ProcessTable};
+pub use record_ui::{RecordPanelAgent, UiRecordObserver};
 pub use subagents::{AgentHub, AgentHubParts, TurnBase};
 
 use crate::model_selection::ModelSelection;
 use agent_events::AgentUi;
 use approvals::Answer;
-use aura_agent::{AgentLoop, ProcessManager};
+use aura_agent::AgentLoop;
 use aura_agent_kernel::Kernel;
 use aura_auth::{AuthManager, PendingLink};
 use aura_core_types::{AgentId, Transaction};
 use aura_model_reasoner::model_catalog::local_model_name;
 use aura_model_reasoner::ToolDefinition;
-use aura_terminal::events::ImageAttachment;
+use aura_terminal::events::{ImageAttachment, ProcessStatus};
 use aura_terminal::{UiCommand, UiEvent};
-use aura_tools::jobs::{BackgroundJobs, JobFinished};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 use steering::{SteerSource, Steering};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 use turns::{Prompt, Task, Work, WorkDone};
 
 /// How long quitting waits for cancelled turns to record how they ended.
@@ -60,19 +68,15 @@ pub struct EventLoopContext<'a> {
     pub agent_loop: &'a mut AgentLoop,
     /// Session for the agent shown when the loop starts.
     pub session: AgentSession,
-    /// Agents, permanent agents, and the kernel factory, shared with spawns.
+    /// Agents, permanent agents, the kernel factory and the Processes
+    /// tab's table, shared with spawns.
     pub hub: Arc<AgentHub>,
-    pub _process_manager: Arc<ProcessManager>,
     /// Optional memory manager for prompt injection and result ingestion.
     pub memory_manager: Option<Arc<aura_context_memory::MemoryManager>>,
     /// Model selection already applied to `agent_loop`.
     pub models: ModelSelection,
     /// Sign-in state shared with the model provider.
     pub auth: Arc<AuthManager>,
-    /// Background commands that exited.
-    pub job_finished: mpsc::Receiver<JobFinished>,
-    /// Every background command, for the status line.
-    pub jobs: Arc<BackgroundJobs>,
     /// Tool calls waiting for the user's answer.
     pub approvals: Arc<TerminalApprovals>,
 }
@@ -96,10 +100,10 @@ pub(super) struct LoopState<'a> {
     /// Work started by the loop that hasn't ended yet
     in_flight: usize,
     pub(super) hub: Arc<AgentHub>,
+    pub(super) processes: Arc<ProcessTable>,
     pub(super) auth: Arc<AuthManager>,
     /// Plan sign-in waiting for a pasted code.
     pub(super) pending_link: Option<PendingLink>,
-    pub(super) jobs: Arc<BackgroundJobs>,
     pub(super) approvals: Arc<TerminalApprovals>,
 }
 
@@ -149,15 +153,13 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         agent_loop,
         session,
         hub,
-        _process_manager,
         memory_manager,
         models,
         auth,
-        mut job_finished,
-        jobs,
         approvals,
     } = ctx;
-    let mut job_changes = jobs.subscribe();
+    let processes = Arc::clone(&hub.processes);
+    let publisher = processes::spawn_publisher(Arc::clone(&processes), commands.clone());
     let (link_tx, mut link_rx) = mpsc::channel::<auth::LinkOutcome>(4);
     let (done_tx, mut done_rx) = mpsc::channel::<WorkDone>(64);
 
@@ -174,16 +176,20 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         work_done: done_tx,
         in_flight: 0,
         hub,
+        processes,
         auth,
         pending_link: None,
-        jobs,
         approvals,
     };
+    let mut notice_rx = state.hub.take_notices();
+    state.hub.name_agents();
+    state.hub.record_panel.set(active);
 
     agents::send_sandbox_root(&state).await;
     hud::send_session_of(&state, active).await;
     modes::send_mode(&state, active).await;
     hud::send_instructions_of(&state, active).await;
+    plan_mode::send_plan_of(&state, active).await;
     handlers::announce_models(&mut state).await;
 
     let hub = Arc::clone(&state.hub);
@@ -199,11 +205,8 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
             Some(completion_tx) = process_completions.recv() => {
                 handle_completion(&mut state, completion_tx).await;
             }
-            Some(finished) = job_finished.recv() => {
-                handle_job_finished(&mut state, finished).await;
-            }
-            Ok(()) = job_changes.changed() => {
-                hud::send_jobs(&state).await;
+            Some(notice) = notice_rx.recv() => {
+                notices::handle_notice(&mut state, notice).await;
             }
             Some(outcome) = link_rx.recv() => {
                 auth::handle_link_outcome(&mut state, outcome).await;
@@ -216,31 +219,9 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
             }
         }
     }
-
     shut_down(&mut state, &mut done_rx).await;
+    publisher.abort();
     Ok(())
-}
-
-/// Tell the agent that started a background job that it exited: in its
-/// running turn if it has one, else as the start of a new turn. A job the
-/// agent stopped itself needs no reply.
-async fn handle_job_finished(state: &mut LoopState<'_>, finished: JobFinished) {
-    let Some(agent_id) = finished.agent_id else {
-        debug!(job = %finished.job_id, "Background job with no owner exited");
-        return;
-    };
-    if finished.killed {
-        debug!(job = %finished.job_id, "Stopped background job exited");
-        return;
-    }
-    deliver(
-        state,
-        agent_id,
-        SteerSource::Harness,
-        finished.notice(),
-        false,
-    )
-    .await;
 }
 
 /// Give `text` from `source` to `agent_id`: into its running turn if it
@@ -344,45 +325,37 @@ async fn shut_down(state: &mut LoopState<'_>, done_rx: &mut mpsc::Receiver<WorkD
     }
 }
 
+/// A background command ended: record it for the agent that started it,
+/// and tell the agent.
 async fn handle_completion(state: &mut LoopState<'_>, completion_tx: Transaction) {
     info!(
         hash = %completion_tx.hash,
         tx_type = ?completion_tx.tx_type,
         "Processing async process completion"
     );
+    let notice = notices::completion_notice(&state.processes, &completion_tx);
+    record_completion(state, completion_tx).await;
+    if let Some(notice) = notice {
+        notices::handle_notice(state, notice).await;
+    }
+}
 
+/// Write a process completion to the record of the agent that started it.
+async fn record_completion(state: &mut LoopState<'_>, completion_tx: Transaction) {
     let agent_id = completion_tx.agent_id;
     let Some(kernel) = state.kernel_for(agent_id) else {
         warn!(%agent_id, "Process completion for an agent with no open kernel");
         return;
     };
-    let store = kernel.store();
-
-    if let Err(e) = store.enqueue_tx(&completion_tx) {
-        error!(error = %e, "Failed to enqueue completion transaction");
-        return;
-    }
-
-    if let Ok(Some((token, tx))) = store.dequeue_tx(agent_id) {
-        match kernel.process_dequeued(tx.clone(), token).await {
-            Ok(result) => {
-                debug!(
-                    seq = result.entry.seq,
-                    "Completion record persisted via kernel"
-                );
-                if agent_id == state.active {
-                    send_record_to_ui(state.commands, result.entry.seq, &tx, &result.entry).await;
-                    let _ = state
-                        .commands
-                        .send(UiCommand::SetStatus("Process completed".to_string()))
-                        .await;
-                } else {
-                    agents::send_agent_list(state).await;
-                }
-            }
-            Err(e) => {
-                error!(error = %e, "Failed to persist completion record via kernel");
-            }
+    // The kernels' record observer shows the entry.
+    if notices::record_completion(&kernel, &completion_tx).await {
+        if agent_id == state.active {
+            let _ = state
+                .commands
+                .send(UiCommand::SetStatus("Process completed".to_string()))
+                .await;
+        } else {
+            agents::send_agent_list(state).await;
         }
     }
 }
@@ -458,6 +431,9 @@ async fn handle_ui_event(
         UiEvent::InstantiateDefinition(name) => {
             agents::handle_instantiate_definition(state, &name).await;
         }
+        UiEvent::AddDefinitionToProject(name) => {
+            agents::handle_add_definition_to_project(state, &name).await;
+        }
         UiEvent::EditDefinition(name) => agents::handle_edit_definition(state, name).await,
         UiEvent::DeleteDefinition(name) => agents::handle_delete_definition(state, &name).await,
         UiEvent::DefinitionEdited(path) => agents::handle_definition_edited(state, &path).await,
@@ -495,6 +471,11 @@ async fn handle_ui_event(
         UiEvent::Diff { agent_id, session } => {
             let agent_id = state.agent_or_active(&agent_id);
             rewind::handle_diff(state, agent_id, session).await;
+        }
+        UiEvent::KillProcess(id) => handlers::handle_kill_process(state, &id).await,
+        UiEvent::BuildPlan { agent_id, path } => {
+            let agent_id = state.agent_or_active(&agent_id);
+            submit(state, agent_id, Work::Build { path }).await;
         }
     }
     false
@@ -541,7 +522,7 @@ async fn start_next(state: &mut LoopState<'_>, agent_id: AgentId) {
 /// Run `work` on `agent_id` in the background.
 async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
     let ui = AgentUi::new(state.commands.clone(), agent_id);
-    let session = match state.idle.remove(&agent_id) {
+    let mut session = match state.idle.remove(&agent_id) {
         Some(session) => session,
         None => match agents::open_session(state, agent_id) {
             Ok(session) => session,
@@ -560,8 +541,23 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
         state.hub.mode_of(agent_id),
         &state.hub.tool_names(),
     );
+    let work = match work {
+        Work::Build { path } => match plan_mode::start_build(state, &mut session, path).await {
+            Some(text) => Work::Prompt {
+                prompt: Prompt::plain(text),
+                shown: false,
+            },
+            None => {
+                state.idle.insert(agent_id, session);
+                return;
+            }
+        },
+        other => other,
+    };
+    let ui = ui.with_shown(state.hub.record_panel.clone());
     let cancel = CancellationToken::new();
     let mut steering = None;
+    let mut row = None;
     let task = match work {
         Work::Prompt { prompt, shown } => {
             info!(%agent_id, text = %prompt.text, "Processing user message");
@@ -577,6 +573,11 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
             })
             .await;
             let (agent_loop, tools) = prepare_turn(state, &session).await;
+            row = Some(handlers::turn_summary(
+                agent_id,
+                &prompt.text,
+                &agent_loop.config().model,
+            ));
             let turn_steering = Steering::new(&cancel);
             steering = Some(turn_steering.clone());
             Task::Turn {
@@ -594,13 +595,22 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
                 session.definition.as_deref(),
                 &session.kernel.agent_workspace(),
             );
+            row = Some(handlers::turn_summary(
+                agent_id,
+                "Summarizing older history",
+                &config.model,
+            ));
             Task::Compact {
                 agent_loop: Box::new(AgentLoop::new(config)),
                 focus,
             }
         }
+        Work::Build { .. } => return,
     };
 
+    if let Some(row) = row {
+        state.processes.start(row, Some(cancel.clone()));
+    }
     state.hub.start_running(
         agent_id,
         Arc::clone(&session.kernel),
@@ -623,14 +633,18 @@ async fn prepare_turn(
     state.hub.send_definitions().await;
     state.sync_turn_base();
     let workspace = session.kernel.agent_workspace();
-    let (mut config, tools) = state.hub.turn(session.definition.as_deref(), &workspace);
+    let agent_id = session.agent_id();
+    let (mut config, tools) =
+        state
+            .hub
+            .agent_turn(agent_id, session.definition.as_deref(), &workspace);
+    state.hub.send_instructions(agent_id, &workspace).await;
     state
         .hub
-        .send_instructions(session.agent_id(), &workspace)
-        .await;
+        .register_root(agent_id, &session.identity.name, workspace, &config);
     config.initial_todos.clone_from(&session.todos);
     if let Some(ref mm) = state.memory_manager {
-        mm.prepare_context(session.agent_id(), &mut config.system_prompt)
+        mm.prepare_context(agent_id, &mut config.system_prompt)
             .await;
         config.observers.clear();
         config
@@ -667,7 +681,17 @@ async fn handle_work_done(state: &mut LoopState<'_>, done: WorkDone) {
     if let Some(session) = session {
         state.idle.insert(agent_id, session);
     }
-    state.hub.stop_running(agent_id);
+    let cancelled = state.hub.stop_running(agent_id);
+    let status = if failure.is_some() {
+        ProcessStatus::Failed
+    } else if cancelled {
+        ProcessStatus::Killed
+    } else {
+        ProcessStatus::Exited
+    };
+    state
+        .processes
+        .finish(&processes::turn_id(agent_id), status);
 
     if let Some(problem) = failure {
         let ui = AgentUi::new(state.commands.clone(), agent_id);

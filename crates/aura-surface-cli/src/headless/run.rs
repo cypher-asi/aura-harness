@@ -10,23 +10,26 @@ use super::tools::ToolFilter;
 use crate::event_loop::handlers::{
     drive_turn, mark_session_start, record_response, resume_checkpoint,
 };
+use crate::event_loop::notices::{completion_notice, record_completion, Notice};
+use crate::event_loop::processes::stop_background_commands;
 use crate::event_loop::steering::{SteerSource, Steering};
 use crate::event_loop::subagents::lock;
 use crate::event_loop::turns::{drain_stale_inbox, record_prompt};
 use crate::event_loop::{AgentHub, AgentSession};
 use crate::session_checkpoint::SessionUsage;
 use aura_agent::{AgentLoop, AgentLoopResult};
+use aura_agent_kernel::Kernel;
 use aura_core_modes::AgentMode;
-use aura_core_types::AgentId;
+use aura_core_types::{AgentId, Transaction};
 use aura_model_reasoner::{Message, Role};
-use aura_tools::jobs::{BackgroundJobs, JobFinished};
+use aura_tools::BackgroundProcessHook;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// How long a turn may keep running after `--max-time` cancelled it
 /// before it is dropped, losing the turn's unsaved steps.
@@ -60,15 +63,19 @@ pub(crate) struct Request {
 /// The parts of a headless run that outlive one request.
 pub(crate) struct Headless {
     pub hub: Arc<AgentHub>,
-    pub jobs: Arc<BackgroundJobs>,
-    pub job_finished: mpsc::Receiver<JobFinished>,
+    /// Every agent's background commands
+    pub background: Arc<dyn BackgroundProcessHook>,
+    /// Background commands that ended
+    pub completions: mpsc::Receiver<Transaction>,
+    /// Replies from `task` spawns and background agents
+    pub notices: mpsc::UnboundedReceiver<Notice>,
     /// Model the turns run on, for the report
     pub model: String,
     pub mode: AgentMode,
     pub workspace_root: PathBuf,
     pub tool_filter: ToolFilter,
-    /// Longest wait for the agent's background jobs once it has nothing
-    /// else to do
+    /// Longest wait for the agent's background work (commands, spawns)
+    /// once it has nothing else to do
     pub job_wait: Duration,
 }
 
@@ -178,7 +185,7 @@ impl Headless {
             }
             let next = if outcome.unseen.is_empty() {
                 match self
-                    .next_job_notice(agent_id, deadline, interrupt, output)
+                    .next_notice(&session.kernel, deadline, interrupt, output)
                     .await
                 {
                     Ok(Some(notice)) => notice,
@@ -194,9 +201,7 @@ impl Headless {
             output.event(&StreamEvent::Notice { text: &next });
             prompt = format!("{}{next}", SteerSource::Harness.prefix());
         }
-        // Jobs lead their own process groups, so nothing else stops them
-        // when this process exits.
-        self.jobs.kill_all();
+        stop_background_commands(self.background.as_ref());
 
         let (exit_reason, error) = stop.unwrap_or((ExitReason::Success, None));
         let usage = UsageReport::from(&totals.usage);
@@ -311,7 +316,17 @@ impl Headless {
         session.messages.push(Message::user(text));
 
         let workspace = session.kernel.agent_workspace();
-        let (mut config, tools) = self.hub.turn(session.definition.as_deref(), &workspace);
+        let (mut config, tools) = self.hub.agent_turn(
+            session.agent_id(),
+            session.definition.as_deref(),
+            &workspace,
+        );
+        self.hub.register_root(
+            session.agent_id(),
+            &session.identity.name,
+            workspace,
+            &config,
+        );
         config.initial_todos.clone_from(&session.todos);
         let context_limit = config.max_context_tokens;
         let agent_loop = AgentLoop::new(config);
@@ -346,7 +361,7 @@ impl Headless {
         });
         let backstop = deadline.map(|d| d.saturating_duration_since(Instant::now()) + CANCEL_GRACE);
 
-        let agent_id = session.agent_id();
+        let kernel = Arc::clone(&session.kernel);
         let mut late = Vec::new();
         let result = {
             let turn = drive_turn(
@@ -362,13 +377,14 @@ impl Headless {
             loop {
                 tokio::select! {
                     result = &mut turn => break result,
-                    Some(finished) = self.job_finished.recv() => {
-                        if finished.agent_id == Some(agent_id) && !finished.killed
-                            && !steering
-                                .send(SteerSource::Harness, finished.notice(), finished.notice())
-                                .await
-                        {
-                            late.push(finished.notice());
+                    Some(tx) = self.completions.recv() => {
+                        if let Some(notice) = background_notice(&self.hub, &kernel, tx).await {
+                            steer_or_keep(&steering, notice, &mut late).await;
+                        }
+                    }
+                    Some(notice) = self.notices.recv() => {
+                        if notice.to == kernel.agent_id {
+                            steer_or_keep(&steering, notice, &mut late).await;
                         }
                     }
                 }
@@ -424,24 +440,30 @@ impl Headless {
         outcome
     }
 
-    /// Wait for the next background job of `agent_id` to exit and return
-    /// its notice. `Ok(None)` when it has no running jobs, or they outlast
-    /// `job_wait` (they are stopped); `Err` when the run's deadline passes
-    /// or it is interrupted while waiting.
-    async fn next_job_notice(
+    /// Wait for the next notice for `kernel`'s agent: a background
+    /// command ended, or a spawn replied. `Ok(None)` when it has no
+    /// background work left, or the work outlasts `job_wait` (commands are
+    /// then stopped); `Err` when the run's deadline passes or it is
+    /// interrupted while waiting.
+    async fn next_notice(
         &mut self,
-        agent_id: AgentId,
+        kernel: &Kernel,
         deadline: Option<Instant>,
         interrupt: &CancellationToken,
         output: &Output,
     ) -> Result<Option<String>, ExitReason> {
-        let relevant = |f: &JobFinished| f.agent_id == Some(agent_id) && !f.killed;
-        while let Ok(finished) = self.job_finished.try_recv() {
-            if relevant(&finished) {
-                return Ok(Some(finished.notice()));
+        let agent_id = kernel.agent_id;
+        while let Ok(tx) = self.completions.try_recv() {
+            if let Some(notice) = background_notice(&self.hub, kernel, tx).await {
+                return Ok(Some(notice.prompt));
             }
         }
-        if !self.jobs.list(Some(agent_id)).iter().any(|j| j.running) {
+        while let Ok(notice) = self.notices.try_recv() {
+            if notice.to == agent_id {
+                return Ok(Some(notice.prompt));
+            }
+        }
+        if !self.hub.processes.has_background_work(agent_id) {
             return Ok(None);
         }
         let wait_until = Instant::now() + self.job_wait;
@@ -461,13 +483,49 @@ impl Headless {
                     output.event(&StreamEvent::Warning { message: &message });
                     return Ok(None);
                 }
-                finished = self.job_finished.recv() => match finished {
-                    Some(finished) if relevant(&finished) => return Ok(Some(finished.notice())),
-                    Some(_) => {}
+                tx = self.completions.recv() => match tx {
+                    Some(tx) => {
+                        if let Some(notice) = background_notice(&self.hub, kernel, tx).await {
+                            return Ok(Some(notice.prompt));
+                        }
+                    }
                     None => return Ok(None),
                 },
+                Some(notice) = self.notices.recv() => {
+                    if notice.to == agent_id {
+                        return Ok(Some(notice.prompt));
+                    }
+                }
             }
         }
+    }
+}
+
+/// Record the background command completion `tx` on `kernel` and return
+/// the notice for its agent, when it is `kernel`'s agent and it should be
+/// told.
+async fn background_notice(hub: &AgentHub, kernel: &Kernel, tx: Transaction) -> Option<Notice> {
+    let notice = completion_notice(&hub.processes, &tx);
+    if tx.agent_id != kernel.agent_id {
+        debug!(agent = %tx.agent_id, "Background command of another agent ended");
+        return None;
+    }
+    record_completion(kernel, &tx).await;
+    notice
+}
+
+/// Give `notice` to the running turn, or keep it in `late` for the next
+/// one when the turn no longer takes input.
+async fn steer_or_keep(steering: &Steering, notice: Notice, late: &mut Vec<String>) {
+    if !steering
+        .send(
+            SteerSource::Harness,
+            notice.prompt.clone(),
+            notice.prompt.clone(),
+        )
+        .await
+    {
+        late.push(notice.prompt);
     }
 }
 

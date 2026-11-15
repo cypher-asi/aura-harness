@@ -168,8 +168,6 @@ pub(crate) async fn run_sampling_request(
     // `(ModelResponse, ToolBatch)` pair so the post-sample tail
     // stays uniform.
     let transport_impl = transport::active_transport();
-    let model_name = request.model.clone();
-    let sample_started_at = Instant::now();
     let sampling_ctx = SamplingCtx {
         agent: run.agent,
         provider: run.provider,
@@ -221,15 +219,6 @@ pub(crate) async fn run_sampling_request(
     state.observe_todo_writes(&response, run.event_tx);
     state.result.iterations = iteration + 1;
     streaming::emit_iteration_complete(run.event_tx, iteration, &response, iteration_started_at);
-    // Surfaces read per-call tokens, cache use and cost from this frame;
-    // the pump transport is the only path that reaches the model here.
-    streaming::emit_debug_llm_call(
-        run.event_tx,
-        run.provider.name(),
-        model_name.as_str(),
-        &response,
-        u64::try_from(sample_started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
-    );
 
     // Stop fired during or right after sampling: bail before
     // dispatching a fresh batch UNLESS the pump pre-executed a

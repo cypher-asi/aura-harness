@@ -521,10 +521,10 @@ pub(super) async fn build_kernel_with_config(
             .tool_approval_broker
             .clone()
             .map(|broker| broker as Arc<dyn aura_agent_kernel::ToolApprovalPrompter>),
-        tool_audit_observer: session.tool_approval_broker.as_ref().map(|broker| {
+        record_observer: session.tool_approval_broker.as_ref().map(|broker| {
             Arc::new(super::tool_policy::ToolPolicyNotifier::new(
                 broker.outbound(),
-            )) as Arc<dyn aura_agent_kernel::ToolAuditObserver>
+            )) as Arc<dyn aura_agent_kernel::RecordObserver>
         }),
         originating_user_id: Some(session.user_id.clone()),
         ..KernelConfig::default()

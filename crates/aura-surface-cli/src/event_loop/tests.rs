@@ -97,7 +97,13 @@ fn fixture() -> (Fixture, mpsc::Receiver<UiCommand>) {
         long_run: crate::long_run::LongRunSettings::default(),
         mode: PermissionMode::Default,
         instructions: crate::project_instructions::ProjectInstructions::only_in(workspace.path()),
+        processes: ProcessTable::without_os_scan(None, None),
+        agents: None,
+        record_panel: RecordPanelAgent::default(),
     };
+    let record_observer: Arc<dyn aura_agent_kernel::RecordObserver> = Arc::new(
+        UiRecordObserver::new(commands_tx.clone(), RecordPanelAgent::default()),
+    );
     let gate = Arc::new(Semaphore::new(0));
     let provider_gate = Arc::clone(&gate);
     let workspace_root = workspace.path().to_path_buf();
@@ -126,6 +132,7 @@ fn fixture() -> (Fixture, mpsc::Receiver<UiCommand>) {
                         use_workspace_base_as_root: true,
                         tool_approval_prompter: Some(Arc::clone(&prompter)
                             as Arc<dyn aura_agent_kernel::ToolApprovalPrompter>),
+                        record_observer: Some(Arc::clone(&record_observer)),
                         ..KernelConfig::default()
                     },
                     agent_id,
@@ -198,7 +205,7 @@ fn loop_state<'a>(fixture: &'a Fixture, b: &'a mut Borrowed) -> LoopState<'a> {
         hub: Arc::clone(&fixture.hub),
         auth: Arc::clone(&b.auth),
         pending_link: None,
-        jobs: BackgroundJobs::new(mpsc::channel(1).0),
+        processes: Arc::clone(&fixture.hub.processes),
         approvals: Arc::clone(&fixture.approvals),
     }
 }
@@ -500,27 +507,55 @@ async fn a_harness_notice_never_attaches_files() {
     assert!(!prompts[0].contains("remember the milk"), "{prompts:?}");
 }
 
-fn job_finished(agent_id: AgentId, killed: bool) -> JobFinished {
-    JobFinished {
-        job_id: "job-1".to_string(),
-        agent_id: Some(agent_id),
-        command: "cargo test".to_string(),
-        exit_code: Some(0),
-        killed,
-        elapsed: Duration::from_secs(3),
-        tail: "test result: ok".to_string(),
+/// A table whose process manager runs `true` as a background command of
+/// `agent_id`, and the completion it reported.
+async fn finished_command(
+    agent_id: AgentId,
+    stopped_by_owner: bool,
+) -> (Arc<ProcessTable>, aura_core_types::ProcessId, Transaction) {
+    let (tx, mut completions) = mpsc::channel(4);
+    let manager = Arc::new(aura_agent::ProcessManager::new(
+        tx,
+        aura_agent::ProcessManagerConfig::default(),
+    ));
+    let table = ProcessTable::without_os_scan(None, Some(Arc::clone(&manager)));
+    let process_id = aura_core_types::ProcessId::generate();
+    manager.register_with(
+        agent_id,
+        aura_core_types::Hash::from_content(b"proposal"),
+        aura_core_types::ActionId::generate(),
+        process_id,
+        std::process::Command::new("true").spawn().unwrap(),
+        "true".to_string(),
+        aura_agent::ProcessMeta::default(),
+    );
+    let info = manager
+        .snapshot()
+        .into_iter()
+        .find(|info| info.process_id == process_id)
+        .unwrap();
+    table.command_started(&info);
+    if stopped_by_owner {
+        table.stopped_by_owner(process_id);
     }
+    let completion = tokio::time::timeout(Duration::from_secs(10), completions.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    (table, process_id, completion)
 }
 
 #[tokio::test]
-async fn finished_job_starts_a_turn_for_an_idle_agent() {
+async fn finished_command_starts_a_turn_for_an_idle_agent() {
     let (fixture, _commands) = fixture();
     let mut b = borrowed(&fixture);
     let first = fixture.first;
     let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
     let mut state = loop_state(&fixture, &mut b);
+    let (table, process_id, completion) = finished_command(first, false).await;
+    state.processes = table;
 
-    handle_job_finished(&mut state, job_finished(first, false)).await;
+    handle_completion(&mut state, completion).await;
     assert!(state.hub.is_running(first));
 
     let finished = next_done(&mut done).await;
@@ -528,17 +563,22 @@ async fn finished_job_starts_a_turn_for_an_idle_agent() {
     let prompts = user_texts(&state, first);
     assert_eq!(prompts.len(), 1);
     assert!(prompts[0].starts_with(SteerSource::Harness.prefix()));
-    assert!(prompts[0].contains("job-1") && prompts[0].contains("test result: ok"));
+    assert!(
+        prompts[0].contains("`true`") && prompts[0].contains(&process_id.to_hex()),
+        "{prompts:?}"
+    );
 }
 
 #[tokio::test]
-async fn stopped_job_needs_no_reply() {
+async fn a_command_its_agent_stopped_needs_no_reply() {
     let (fixture, _commands) = fixture();
     let mut b = borrowed(&fixture);
     let first = fixture.first;
     let mut state = loop_state(&fixture, &mut b);
+    let (table, _, completion) = finished_command(first, true).await;
+    state.processes = table;
 
-    handle_job_finished(&mut state, job_finished(first, true)).await;
+    handle_completion(&mut state, completion).await;
 
     assert!(!state.hub.is_running(first));
     assert!(state.queued.is_empty());
@@ -942,14 +982,11 @@ async fn a_mode_switch_is_recorded_before_it_takes_effect() {
     let records = kernel.store().scan_record(first, 0, 100).unwrap();
     let switch = records
         .iter()
-        .find(|e| {
-            e.tx.tx_type == aura_core_types::TransactionType::System
-                && String::from_utf8_lossy(&e.tx.payload).contains("permission_mode")
-        })
-        .expect("a System record for the switch");
-    let payload: serde_json::Value = serde_json::from_slice(&switch.tx.payload).unwrap();
-    assert_eq!(payload["from"], "default");
-    assert_eq!(payload["to"], "plan");
+        .find_map(|e| e.tx.mode_change_payload())
+        .expect("a mode_change record for the switch");
+    assert_eq!(switch.from_permissions.as_deref(), Some("default"));
+    assert_eq!(switch.to_permissions.as_deref(), Some("plan"));
+    assert_eq!(switch.to, aura_core_types::AgentMode::Plan);
 
     handle_ui_event(&mut state, UiEvent::CycleMode(first.to_hex()), &links).await;
     assert_eq!(state.hub.mode_of(first), PermissionMode::Unrestricted);

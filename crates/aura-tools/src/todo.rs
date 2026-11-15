@@ -16,10 +16,11 @@ use crate::tool::{Tool, ToolContext};
 pub const TODO_WRITE_TOOL_NAME: &str = "todo_write";
 
 /// Lifecycle of one todo item.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TodoStatus {
     /// Not started.
+    #[default]
     Pending,
     /// Being worked on now.
     InProgress,
@@ -36,7 +37,19 @@ impl TodoStatus {
         matches!(self, Self::Pending | Self::InProgress)
     }
 
-    fn marker(self) -> &'static str {
+    /// Done or dropped: nothing left to do.
+    #[must_use]
+    pub const fn is_closed(self) -> bool {
+        matches!(self, Self::Completed | Self::Cancelled)
+    }
+
+    /// `[ ]`, `[~]`, `[x]` or `[-]`.
+    #[must_use]
+    pub const fn checkbox(self) -> &'static str {
+        self.marker()
+    }
+
+    const fn marker(self) -> &'static str {
         match self {
             Self::Pending => "[ ]",
             Self::InProgress => "[~]",

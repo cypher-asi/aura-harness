@@ -412,3 +412,75 @@ async fn test_failed_process_sends_failure() {
     let payload: ActionResultPayload = serde_json::from_slice(&completion.payload).unwrap();
     assert!(!payload.success);
 }
+
+#[cfg(not(windows))]
+#[tokio::test]
+async fn test_snapshot_lists_running_processes_with_meta() {
+    let (tx, _rx) = mpsc::channel(10);
+    let manager = Arc::new(ProcessManager::with_defaults(tx));
+    let agent_id = AgentId::generate();
+    let process_id = ProcessId::generate();
+    let child = std::process::Command::new("sh")
+        .args(["-c", "sleep 30"])
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let meta = super::ProcessMeta {
+        cwd: Some("/tmp".into()),
+        log_path: Some("/tmp/build.log".into()),
+        tool_use_id: Some("toolu_1".into()),
+    };
+    manager.register_with(
+        agent_id,
+        Hash::from_content(b"proposal"),
+        ActionId::generate(),
+        process_id,
+        child,
+        "sleep 30".to_string(),
+        meta.clone(),
+    );
+
+    let snapshot = manager.snapshot();
+    assert_eq!(snapshot.len(), 1);
+    assert_eq!(snapshot[0].process_id, process_id);
+    assert_eq!(snapshot[0].agent_id, agent_id);
+    assert_eq!(snapshot[0].pid, pid);
+    assert_eq!(snapshot[0].command, "sleep 30");
+    assert_eq!(snapshot[0].meta, meta);
+    assert!(snapshot[0].started_ms > 0);
+
+    assert!(manager.cancel(&process_id));
+    assert!(manager.snapshot().is_empty());
+}
+
+#[cfg(not(windows))]
+#[tokio::test]
+async fn test_cancel_sends_killed_completion() {
+    let (tx, mut rx) = mpsc::channel(10);
+    let manager = Arc::new(ProcessManager::with_defaults(tx));
+    let agent_id = AgentId::generate();
+    let process_id = ProcessId::generate();
+    let child = std::process::Command::new("sh")
+        .args(["-c", "sleep 30"])
+        .spawn()
+        .unwrap();
+    manager.register(
+        agent_id,
+        Hash::from_content(b"proposal"),
+        ActionId::generate(),
+        process_id,
+        child,
+        "sleep 30".to_string(),
+    );
+
+    assert!(manager.cancel(&process_id));
+    let completion = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(completion.agent_id, agent_id);
+    let payload: ActionResultPayload = serde_json::from_slice(&completion.payload).unwrap();
+    assert!(!payload.success);
+    assert_eq!(payload.process_id, process_id);
+    assert_eq!(&payload.stderr[..], b"Process killed");
+}

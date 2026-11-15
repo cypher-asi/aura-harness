@@ -39,7 +39,7 @@ pub use tool::{
     ToolAuth, ToolCall, ToolCallContext, ToolExecution, ToolGateVerdict, ToolProposal, ToolResult,
     ToolResultImage, ToolResultKind,
 };
-pub use transaction::{SystemKind, Transaction, TransactionType};
+pub use transaction::{ModeChangePayload, SystemKind, Transaction, TransactionType};
 
 #[cfg(test)]
 mod tests {
@@ -287,6 +287,7 @@ mod tests {
             reason: None,
             result: Some("ok".into()),
             is_error: false,
+            duration_ms: None,
             parent_agent_id: agent_id,
             originating_user_id: "user-42".into(),
         };
@@ -308,6 +309,7 @@ mod tests {
             reason: None,
             result: None,
             is_error: false,
+            duration_ms: None,
             parent_agent_id: agent_id,
             originating_user_id: "user-0".into(),
         };

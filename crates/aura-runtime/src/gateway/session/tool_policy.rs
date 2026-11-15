@@ -1,7 +1,7 @@
 //! Streams recorded tool policy decisions to the session's clients.
 
 use crate::protocol::{tool_policy_decision_from_entry, OutboundMessage};
-use aura_agent_kernel::ToolAuditObserver;
+use aura_agent_kernel::RecordObserver;
 use aura_core_types::RecordEntry;
 use tokio::sync::mpsc::{self, error::TrySendError};
 
@@ -18,8 +18,8 @@ impl ToolPolicyNotifier {
     }
 }
 
-impl ToolAuditObserver for ToolPolicyNotifier {
-    fn on_tool_entry(&self, entry: &RecordEntry) {
+impl RecordObserver for ToolPolicyNotifier {
+    fn on_entry(&self, entry: &RecordEntry) {
         let Some(decision) = tool_policy_decision_from_entry(entry) else {
             return;
         };
@@ -46,7 +46,7 @@ impl ToolAuditObserver for ToolPolicyNotifier {
 mod tests {
     use super::ToolPolicyNotifier;
     use crate::protocol::OutboundMessage;
-    use aura_agent_kernel::ToolAuditObserver;
+    use aura_agent_kernel::RecordObserver;
     use aura_core_types::{
         AgentId, Hash, PolicyDecision, PolicyRule, PolicySource, RecordEntry, ToolGateVerdict,
         Transaction,
@@ -77,10 +77,9 @@ mod tests {
         let notifier = ToolPolicyNotifier::new(outbound_tx);
         let agent_id = AgentId::generate();
 
-        notifier.on_tool_entry(
-            &RecordEntry::builder(1, Transaction::user_prompt(agent_id, "hi")).build(),
-        );
-        notifier.on_tool_entry(&decision_entry(agent_id));
+        notifier
+            .on_entry(&RecordEntry::builder(1, Transaction::user_prompt(agent_id, "hi")).build());
+        notifier.on_entry(&decision_entry(agent_id));
 
         match outbound_rx.recv().await.expect("decision frame") {
             OutboundMessage::ToolPolicyDecision(frame) => {

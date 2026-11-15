@@ -7,7 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aura_agent::{AgentLoopConfig, AgentLoopEvent};
-use aura_agent_kernel::{write_system_record, ExecutorRouter, KernelSpawnHook, PolicyConfig};
+use aura_agent_kernel::{
+    write_system_entry, ExecutorRouter, KernelSpawnHook, PolicyConfig, RecordObserver,
+};
 use aura_agent_kernel::{ChildAgentSpec, SpawnHook, SpawnOutcome};
 use aura_agent_subagent::{
     narrow_permissions, overrides_from_request, parent_context_from_request, DefaultDerivation,
@@ -808,8 +810,13 @@ impl HostInner {
                     Bytes::from(record.to_string().into_bytes()),
                     None,
                 );
-                write_system_record(&self.store, plan.parent, tx)
-                    .map_err(|e| format!("spawn record: {e}"))?;
+                write_observed(
+                    &self.store,
+                    self.scheduler.record_observer(),
+                    plan.parent,
+                    tx,
+                )
+                .map_err(|e| format!("spawn record: {e}"))?;
             }
             KernelSpawnHook::new(self.store.clone())
                 .spawn_child(
@@ -1012,6 +1019,7 @@ impl HostInner {
                     text: envelope.text,
                 };
                 let store = self.store.clone();
+                let observer = self.scheduler.record_observer().cloned();
                 tokio::spawn(async move {
                     let delivered = match inbox {
                         Some(inbox) => inbox.deliver(message.clone()).await,
@@ -1019,7 +1027,7 @@ impl HostInner {
                     };
                     if let Err(err) = delivered {
                         info!(root = %to, %err, "root inbox unavailable; recording message");
-                        record_message(&store, &message);
+                        record_message(&store, observer.as_ref(), &message);
                     }
                 });
                 Ok(())
@@ -1377,7 +1385,11 @@ fn reply_text(result: &SubagentResult) -> String {
 }
 
 /// Append a message a root could not receive live to its record.
-fn record_message(store: &Arc<dyn Store>, message: &InboxMessage) {
+fn record_message(
+    store: &Arc<dyn Store>,
+    observer: Option<&Arc<dyn RecordObserver>>,
+    message: &InboxMessage,
+) {
     let payload = serde_json::json!({
         "kind": "agent_message",
         "from_agent_id": message.from,
@@ -1391,9 +1403,24 @@ fn record_message(store: &Arc<dyn Store>, message: &InboxMessage) {
         Bytes::from(payload.to_string().into_bytes()),
         None,
     );
-    if let Err(err) = write_system_record(store, message.to, tx) {
+    if let Err(err) = write_observed(store, observer, message.to, tx) {
         warn!(root = %message.to, %err, "could not record agent message");
     }
+}
+
+/// Append a System-shaped entry and show it to `observer`, the way a
+/// kernel does for its own appends.
+fn write_observed(
+    store: &Arc<dyn Store>,
+    observer: Option<&Arc<dyn RecordObserver>>,
+    agent_id: AgentId,
+    tx: Transaction,
+) -> Result<u64, aura_agent_kernel::KernelError> {
+    let entry = write_system_entry(store, agent_id, tx)?;
+    if let Some(observer) = observer {
+        observer.on_entry(&entry);
+    }
+    Ok(entry.seq)
 }
 
 fn ended(agent_id: AgentId, exit: SubagentExit) -> SubagentResult {

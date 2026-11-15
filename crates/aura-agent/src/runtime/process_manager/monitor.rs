@@ -101,6 +101,19 @@ impl ProcessManager {
 
     /// Build and send a completion transaction for a finished process.
     async fn send_completion(&self, running: RunningProcess, output: ProcessOutput) {
+        let Some(tx) = Self::completion_tx(&running, output) else {
+            return;
+        };
+        if let Err(e) = self.tx_sender.send(tx).await {
+            error!(error = %e, "Failed to send completion transaction");
+        }
+    }
+
+    /// The completion transaction for `running` ending with `output`.
+    pub(super) fn completion_tx(
+        running: &RunningProcess,
+        output: ProcessOutput,
+    ) -> Option<Transaction> {
         let payload = if output.success {
             ActionResultPayload::success(
                 running.action_id,
@@ -121,21 +134,17 @@ impl ProcessManager {
             payload
         };
 
-        let tx = match Transaction::process_complete(
+        match Transaction::process_complete(
             running.agent_id,
             &payload,
             running.reference_tx_hash,
             None,
         ) {
-            Ok(tx) => tx,
+            Ok(tx) => Some(tx),
             Err(e) => {
                 error!(error = %e, "Failed to create completion transaction");
-                return;
+                None
             }
-        };
-
-        if let Err(e) = self.tx_sender.send(tx).await {
-            error!(error = %e, "Failed to send completion transaction");
         }
     }
 }

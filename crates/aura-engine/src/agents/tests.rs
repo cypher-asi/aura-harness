@@ -153,18 +153,29 @@ struct Harness {
 }
 
 fn harness(config: AgentHostConfig) -> Harness {
+    harness_observed(config, None)
+}
+
+fn harness_observed(
+    config: AgentHostConfig,
+    observer: Option<Arc<dyn aura_agent_kernel::RecordObserver>>,
+) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let store: Arc<dyn Store> = Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
     let workspace = dir.path().join("ws");
     std::fs::create_dir_all(&workspace).unwrap();
-    let scheduler = Arc::new(Scheduler::new(
+    let mut scheduler = Scheduler::new(
         store.clone(),
         Arc::new(ScriptedProvider),
         Vec::new(),
         Vec::new(),
         workspace.clone(),
         None,
-    ));
+    );
+    if let Some(observer) = observer {
+        scheduler = scheduler.with_record_observer(observer);
+    }
+    let scheduler = Arc::new(scheduler);
     let host = AgentHost::new(store, scheduler, config);
     let root = AgentId::generate();
     let (tx, inbox) = mpsc::unbounded_channel();
@@ -260,6 +271,41 @@ async fn task_children_spawn_their_own_children() {
         h.host.tree(h.root).len(),
         1,
         "finished task children are removed"
+    );
+}
+
+#[derive(Debug, Default)]
+struct SeenEntries(parking_lot::Mutex<Vec<aura_core_types::RecordEntry>>);
+
+impl aura_agent_kernel::RecordObserver for SeenEntries {
+    fn on_entry(&self, entry: &aura_core_types::RecordEntry) {
+        self.0.lock().push(entry.clone());
+    }
+}
+
+#[tokio::test]
+async fn observer_sees_the_spawn_record_and_the_childs_entries() {
+    let seen = Arc::new(SeenEntries::default());
+    let h = harness_observed(AgentHostConfig::default(), Some(seen.clone()));
+
+    let result = h
+        .hooks
+        .dispatch(task_request(h.root, "level 1"))
+        .await
+        .unwrap();
+    assert_eq!(result.exit, SubagentExit::Completed, "{result:?}");
+
+    let seen = seen.0.lock();
+    let spawn = seen
+        .iter()
+        .find(|e| e.tx.tx_type == aura_core_types::TransactionType::SubagentSpawn)
+        .expect("spawn record should be observed");
+    assert_eq!(spawn.tx.agent_id, h.root);
+    let child = result.child_agent_id.unwrap();
+    assert!(
+        seen.iter().any(|e| e.tx.agent_id == child
+            && e.tx.tx_type == aura_core_types::TransactionType::Reasoning),
+        "the child's turn should be observed"
     );
 }
 

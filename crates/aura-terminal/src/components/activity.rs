@@ -47,6 +47,8 @@ pub struct ToolStep {
     pub duration_ms: Option<u64>,
     /// What the call did to the file it changed, as unified diff hunks
     pub diff: Option<String>,
+    /// Policy verdict and deciding rule, e.g. `allowed by user.on`
+    pub policy: Option<String>,
 }
 
 impl Activity {
@@ -74,6 +76,7 @@ impl Activity {
             started: Some(Instant::now()),
             duration_ms: None,
             diff: None,
+            policy: None,
         })
     }
 
@@ -83,6 +86,15 @@ impl Activity {
         match self {
             Self::Thinking(step) => step.running,
             Self::Tool(step) => step.status == ToolStatus::Running,
+        }
+    }
+
+    /// When the step started; `None` for steps restored from history.
+    #[must_use]
+    pub const fn started(&self) -> Option<Instant> {
+        match self {
+            Self::Thinking(step) => step.started,
+            Self::Tool(step) => step.started,
         }
     }
 
@@ -120,6 +132,7 @@ impl From<&ActivityData> for Activity {
                 result,
                 is_error,
                 duration_ms,
+                policy,
             } => Self::Tool(ToolStep {
                 id: id.clone(),
                 name: name.clone(),
@@ -136,6 +149,7 @@ impl From<&ActivityData> for Activity {
                 started: None,
                 duration_ms: *duration_ms,
                 diff: None,
+                policy: policy.clone(),
             }),
         }
     }
@@ -175,6 +189,7 @@ mod tests {
             result: Some("fn main() {}".to_string()),
             is_error: false,
             duration_ms: Some(12),
+            policy: None,
         });
         assert!(!activity.is_running());
         assert!(matches!(activity, Activity::Tool(ref s) if s.status == ToolStatus::Success));

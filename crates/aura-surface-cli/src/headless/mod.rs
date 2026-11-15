@@ -26,14 +26,13 @@ use crate::event_loop::TurnBase;
 use crate::long_run::LongRunSettings;
 use crate::model_selection::ModelSelection;
 use crate::runner::{
-    agent_tools, build_hub, build_provider, mode_policy, policy_tool_names,
-    post_edit_check_from_env, project_instructions, HubSetup,
+    agent_tools, background_process_manager, build_hub, build_provider, mode_policy,
+    policy_tool_names, post_edit_check_from_env, project_instructions, Harness, HubSetup,
 };
 use crate::session_helpers;
 use anyhow::Context;
 use aura_core_modes::AgentMode;
 use aura_terminal::PermissionMode;
-use aura_tools::jobs::BackgroundJobs;
 use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -259,9 +258,8 @@ async fn build(
     let (commands, mut ui_commands) = mpsc::channel(256);
     // Spawned permanent agents report to a chat; nothing shows it here.
     tokio::spawn(async move { while ui_commands.recv().await.is_some() {} });
-    let (job_tx, job_finished) = mpsc::channel(64);
-    let jobs = BackgroundJobs::new(job_tx);
-    let hub = build_hub(HubSetup {
+    let (process_manager, completions) = background_process_manager();
+    let Harness { hub, background } = build_hub(HubSetup {
         data_dir: data_dir.to_path_buf(),
         workspace_root: workspace_root.clone(),
         registry,
@@ -275,20 +273,24 @@ async fn build(
             limits: models.limits(),
         },
         policy: tool_filter.apply(mode_policy(permission_mode, &tool_names), &tool_names),
-        tool_audit_observer: None,
+        record_observer: None,
+        record_panel: crate::event_loop::RecordPanelAgent::default(),
         commands,
         long_run,
-        jobs: std::sync::Arc::clone(&jobs),
+        process_manager,
+        background_agents: true,
         mode: permission_mode,
         instructions: project_instructions(),
         approvals: None,
         web_tools,
         post_edit_check: post_edit_check_from_env(),
     });
+    let notices = hub.take_notices();
     Ok(Headless {
         hub,
-        jobs,
-        job_finished,
+        background,
+        completions,
+        notices,
         model: models.current().to_string(),
         mode,
         workspace_root,

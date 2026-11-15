@@ -9,7 +9,6 @@ use super::agent_events::AgentUi;
 use super::agents::AgentSession;
 use super::attachments::{expand_mentions_in, mentioned_paths};
 use super::handlers::{handle_agent_success, run_agent_turn, system_message};
-use super::record_ui::send_record_to_ui;
 use super::run_command::run_user_command;
 use super::steering::{SteerSource, Steering};
 use crate::long_run::LongRunSettings;
@@ -62,6 +61,8 @@ pub(super) enum Work {
     Command { command: String, cols: u16 },
     /// Summarize the older history now, keeping `focus` in particular.
     Compact { focus: Option<String> },
+    /// Implement the plan at `path` (`/build`), or the agent's latest plan.
+    Build { path: Option<String> },
 }
 
 /// Work ready to run.
@@ -181,16 +182,10 @@ struct TurnParts<'a> {
     limits: LongRunSettings,
 }
 
-/// Record `text` on `session` as a prompt from the user and show the
-/// record entry.
-pub(super) async fn record_user_prompt(
-    session: &AgentSession,
-    text: String,
-    ui: &AgentUi,
-) -> Result<(), String> {
-    let (tx, entry) = record_prompt(session, text).await?;
-    send_record_to_ui(ui.commands(), entry.seq, &tx, &entry).await;
-    Ok(())
+/// Record `text` on `session` as a prompt from the user. The kernels'
+/// record observer shows the entry in the Record panel.
+pub(super) async fn record_user_prompt(session: &AgentSession, text: String) -> Result<(), String> {
+    record_prompt(session, text).await.map(|_| ())
 }
 
 /// Record `text` on `session` as a prompt from the user, returning the
@@ -223,7 +218,7 @@ async fn run_prompt(
 ) -> Outcome {
     drain_stale_inbox(session).await;
 
-    if let Err(problem) = record_user_prompt(session, prompt.text.clone(), ui).await {
+    if let Err(problem) = record_user_prompt(session, prompt.text.clone()).await {
         ui.send(UiCommand::ShowError(problem)).await;
         ui.send(UiCommand::Complete).await;
         return Outcome::default();
@@ -252,6 +247,10 @@ async fn run_prompt(
         files.end_turn(session.agent_id());
     }
     session.usage.add(&forwarded.usage);
+    if let Some(path) = &forwarded.plan_path {
+        session.active_plan = Some(path.clone());
+        session.building_plan = false;
+    }
     let (seen, unseen) = turn.steering.finish(
         process_result
             .as_ref()
