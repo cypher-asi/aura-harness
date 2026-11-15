@@ -190,7 +190,42 @@ fn message(agent_id: AgentId, text: &str, shown: bool) -> UiEvent {
         agent_id: agent_id.to_hex(),
         text: text.to_string(),
         shown,
+        images: Vec::new(),
     }
+}
+
+fn png(data: &str) -> aura_terminal::events::ImageAttachment {
+    aura_terminal::events::ImageAttachment {
+        media_type: "image/png".to_string(),
+        data: data.to_string(),
+        bytes: 3,
+    }
+}
+
+fn message_with_image(agent_id: AgentId, text: &str, shown: bool) -> UiEvent {
+    UiEvent::UserMessage {
+        agent_id: agent_id.to_hex(),
+        text: text.to_string(),
+        shown,
+        images: vec![png("aGk=")],
+    }
+}
+
+/// Media types of the image blocks in the user messages of `agent_id`'s
+/// idle session.
+fn user_images(state: &LoopState<'_>, agent_id: AgentId) -> Vec<(String, String)> {
+    state.idle[&agent_id]
+        .messages
+        .iter()
+        .filter(|m| m.role == aura_model_reasoner::Role::User)
+        .flat_map(|m| m.content.iter())
+        .filter_map(|block| match block {
+            aura_model_reasoner::ContentBlock::Image { source } => {
+                Some((source.media_type.clone(), source.data.clone()))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 async fn next_done(done: &mut mpsc::Receiver<WorkDone>) -> WorkDone {
@@ -343,6 +378,72 @@ async fn mentioned_files_reach_the_model_but_the_chat_keeps_the_typed_text() {
     assert!(
         !records.iter().any(|m| m.contains("remember the milk")),
         "the record keeps the prompt as typed: {records:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_pasted_image_goes_to_the_model_as_an_image_block() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+
+    let event = message_with_image(first, "[image 1] what is this?", true);
+    handle_ui_event(&mut state, event, &links).await;
+    let finished = next_done(&mut done).await;
+    handle_work_done(&mut state, finished).await;
+
+    let prompt = state.idle[&first]
+        .messages
+        .iter()
+        .find(|m| m.role == aura_model_reasoner::Role::User)
+        .unwrap();
+    assert!(matches!(
+        prompt.content.as_slice(),
+        [
+            aura_model_reasoner::ContentBlock::Image { .. },
+            aura_model_reasoner::ContentBlock::Text { text },
+        ] if text == "[image 1] what is this?"
+    ));
+    assert_eq!(
+        user_images(&state, first),
+        [("image/png".to_string(), "aGk=".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn an_image_for_a_busy_agent_waits_for_the_next_turn() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+
+    handle_ui_event(&mut state, message(first, "slow start", true), &links).await;
+    let event = message_with_image(first, "[image 1] and this", false);
+    handle_ui_event(&mut state, event, &links).await;
+    assert_eq!(state.queued[&first].len(), 1, "a turn can't take images");
+
+    fixture.gate.add_permits(1);
+    let finished = next_done(&mut done).await;
+    handle_work_done(&mut state, finished).await;
+    let finished = next_done(&mut done).await;
+    handle_work_done(&mut state, finished).await;
+
+    assert_eq!(
+        user_texts(&state, first),
+        ["slow start", "[image 1] and this"]
+    );
+    assert_eq!(user_images(&state, first).len(), 1);
+    let shown = drain(&mut commands).into_iter().any(|(_, c)| {
+        matches!(c, UiCommand::TurnStarted { prompt: Some(p) } if p == "[image 1] and this")
+    });
+    assert!(
+        shown,
+        "the chat shows the queued message when its turn starts"
     );
 }
 

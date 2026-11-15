@@ -105,8 +105,8 @@ pub(super) fn render_input(
         ),
         _ => (
             app.shell_prompt(),
-            input.to_string(),
-            display_width(before_cursor),
+            one_line(input),
+            display_width(&one_line(before_cursor)),
         ),
     };
     let prompt_width = u16::try_from(display_width(prompt_str)).unwrap_or(u16::MAX);
@@ -137,16 +137,65 @@ pub(super) fn render_input(
     let input_line = if app.input_is_command() {
         Line::from(super::command::command_spans(&display_input, theme))
     } else {
-        Line::from(Span::styled(
-            display_input.as_str(),
-            Style::default().fg(theme.colors.muted),
-        ))
+        Line::from(prose_spans(&display_input, theme))
     };
     frame.render_widget(Paragraph::new(input_line), input_area);
 
     if !is_thinking {
         let cursor_x = typing_x.saturating_add(u16::try_from(cursor_col).unwrap_or(u16::MAX));
         frame.set_cursor_position((cursor_x, area.y));
+    }
+}
+
+/// The input on one row: a pasted or edited newline shows as `↵`, which
+/// is one column wide like the cursor math expects.
+fn one_line(text: &str) -> String {
+    text.replace('\n', "↵")
+}
+
+/// Typed text in the muted color, with `@path` mentions and `[image N]`
+/// chips picked out so it is clear what will be attached.
+pub(super) fn prose_spans<'a>(text: &'a str, theme: &Theme) -> Vec<Span<'a>> {
+    let plain = Style::default().fg(theme.colors.muted);
+    let chip = Style::default().fg(theme.colors.primary);
+    let mut spans = Vec::new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < text.len() {
+        let rest = &text[i..];
+        let at_word_start = i == 0 || text[..i].ends_with(char::is_whitespace);
+        let token_len = if at_word_start && rest.starts_with('@') && rest.len() > 1 {
+            rest.find(char::is_whitespace).unwrap_or(rest.len())
+        } else {
+            image_chip_len(rest)
+        };
+        if token_len == 0 {
+            i += rest.chars().next().map_or(1, char::len_utf8);
+            continue;
+        }
+        if start < i {
+            spans.push(Span::styled(&text[start..i], plain));
+        }
+        spans.push(Span::styled(&text[i..i + token_len], chip));
+        i += token_len;
+        start = i;
+    }
+    if start < text.len() {
+        spans.push(Span::styled(&text[start..], plain));
+    }
+    spans
+}
+
+/// Length of an `[image N]` chip at the start of `text`, or 0.
+fn image_chip_len(text: &str) -> usize {
+    let Some(rest) = text.strip_prefix("[image ") else {
+        return 0;
+    };
+    let digits = rest.chars().take_while(char::is_ascii_digit).count();
+    if digits > 0 && rest[digits..].starts_with(']') {
+        "[image ".len() + digits + 1
+    } else {
+        0
     }
 }
 

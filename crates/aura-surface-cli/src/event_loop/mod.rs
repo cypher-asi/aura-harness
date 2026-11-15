@@ -32,6 +32,7 @@ use aura_auth::{AuthManager, PendingLink};
 use aura_core_types::{AgentId, Transaction};
 use aura_model_reasoner::model_catalog::local_model_name;
 use aura_model_reasoner::ToolDefinition;
+use aura_terminal::events::ImageAttachment;
 use aura_terminal::{UiCommand, UiEvent};
 use aura_tools::jobs::{BackgroundJobs, JobFinished};
 use std::collections::{HashMap, VecDeque};
@@ -240,6 +241,27 @@ async fn deliver(
     text: String,
     shown: bool,
 ) {
+    deliver_with_images(state, agent_id, source, text, Vec::new(), shown).await;
+}
+
+/// [`deliver`] for a user message with pasted `images`. A running turn
+/// only takes text, so a message with images waits for the next turn.
+async fn deliver_with_images(
+    state: &mut LoopState<'_>,
+    agent_id: AgentId,
+    source: SteerSource,
+    text: String,
+    images: Vec<ImageAttachment>,
+    shown: bool,
+) {
+    if !images.is_empty() {
+        let work = Work::Prompt {
+            prompt: Prompt::typed(text, images),
+            shown,
+        };
+        submit(state, agent_id, work).await;
+        return;
+    }
     if let Some(steering) = state.hub.steering(agent_id) {
         let body = steered_body(state, agent_id, source, &text).await;
         if steering.send(source, text.clone(), body).await {
@@ -280,7 +302,7 @@ async fn steered_body(
 fn prompt_work(source: SteerSource, text: String, shown: bool) -> Work {
     match source {
         SteerSource::User => Work::Prompt {
-            prompt: Prompt::typed(text),
+            prompt: Prompt::typed(text, Vec::new()),
             shown,
         },
         SteerSource::Harness => Work::Prompt {
@@ -363,9 +385,10 @@ async fn handle_ui_event(
             agent_id,
             text,
             shown,
+            images,
         } => {
             let agent_id = state.agent_or_active(&agent_id);
-            deliver(state, agent_id, SteerSource::User, text, shown).await;
+            deliver_with_images(state, agent_id, SteerSource::User, text, images, shown).await;
         }
         UiEvent::RunCommand {
             agent_id,

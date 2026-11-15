@@ -10,6 +10,7 @@ pub mod file_view;
 pub mod folder_picker;
 pub(crate) mod format;
 pub mod hud;
+pub mod images;
 mod keys;
 mod line_edit;
 pub mod mentions;
@@ -254,6 +255,10 @@ pub struct App {
     pub(super) slash_dismissed: bool,
     /// `@` file picker shown while an `@path` word is typed
     pub(super) mentions: mentions::MentionMenu,
+    /// Images pasted into the input, each under an `[image N]` chip
+    pub(super) images: Vec<images::PendingImage>,
+    /// Whether Ctrl+V asked for the clipboard before the next frame
+    pub(super) paste_requested: bool,
     /// Text selected with the mouse, in screen cells
     pub(super) selection: Option<Selection>,
     /// Whether the left button is still held for `selection`
@@ -479,6 +484,8 @@ impl App {
             slash_cursor: 0,
             slash_dismissed: false,
             mentions: mentions::MentionMenu::default(),
+            images: Vec::new(),
+            paste_requested: false,
             selection: None,
             selecting: false,
             copy_requested: false,

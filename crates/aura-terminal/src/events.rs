@@ -19,6 +19,9 @@ pub enum UiEvent {
         /// Whether the chat already shows the message. It doesn't when the
         /// agent was busy and the message waits for its turn.
         shown: bool,
+        /// Images pasted into the message; `text` holds an `[image N]`
+        /// chip for each
+        images: Vec<ImageAttachment>,
     },
 
     /// User typed a shell command to run in the agent's workspace
@@ -333,6 +336,27 @@ pub enum UiCommand {
     /// A plan link attempt finished (successfully or not); drop any model
     /// pick that was waiting on it
     EndLink,
+}
+
+/// An image pasted into a user message.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ImageAttachment {
+    /// `image/png`, `image/jpeg`, `image/gif` or `image/webp`
+    pub media_type: String,
+    /// The image, base64-encoded
+    pub data: String,
+    /// Size of the image before encoding
+    pub bytes: usize,
+}
+
+impl std::fmt::Debug for ImageAttachment {
+    // The data is megabytes of base64; logging it would bury everything else.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImageAttachment")
+            .field("media_type", &self.media_type)
+            .field("bytes", &self.bytes)
+            .finish_non_exhaustive()
+    }
 }
 
 /// One entry in the model selector.
@@ -689,6 +713,7 @@ mod tests {
             agent_id: "aa".to_string(),
             text: "hello".to_string(),
             shown: true,
+            images: Vec::new(),
         };
         assert!(matches!(event, UiEvent::UserMessage { .. }));
 

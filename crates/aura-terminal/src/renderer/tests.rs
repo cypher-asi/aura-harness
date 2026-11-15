@@ -823,6 +823,32 @@ fn test_mention_picker_lists_files_above_the_input() {
 }
 
 #[test]
+fn test_input_shows_image_chips_and_pasted_newlines() {
+    let theme = test_theme();
+    let mut app = app_with_model(None);
+    app.handle_paste("first\nsecond");
+    app.attach_image(b"\x89PNG\r\n\x1a\nimage").unwrap();
+    let rows = render_rows(&mut app, 120);
+    let input_row = &rows[rows.len() - 2];
+    assert!(
+        input_row.contains("first↵second [image 1]"),
+        "{input_row:?}"
+    );
+
+    let spans = super::input::prose_spans("see @src/a.rs and [image 2] me@x", &theme);
+    let picked: Vec<&str> = spans
+        .iter()
+        .filter(|s| s.style.fg == Some(theme.colors.primary))
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert_eq!(picked, ["@src/a.rs", "[image 2]"]);
+
+    submit(&mut app, "");
+    let screen = render_rows(&mut app, 120).join("\n");
+    assert!(screen.contains("[image 1]"), "the chat shows the chip");
+}
+
+#[test]
 fn test_header_shows_local_url_and_model_moves_to_input() {
     let rows = render_with_user(None, 120);
     assert!(rows[1]
