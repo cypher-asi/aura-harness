@@ -365,6 +365,10 @@ impl App {
                     self.handle_processes_key(key);
                     KeyResult::continue_running()
                 }
+                SidePanelTab::Trace => {
+                    self.handle_trace_key(key);
+                    KeyResult::continue_running()
+                }
             },
         }
     }

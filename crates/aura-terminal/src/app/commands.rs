@@ -444,7 +444,10 @@ impl App {
             UiCommand::SetSandboxRoot(root) => self.sandbox.set_root(root),
             UiCommand::SetProcesses(processes) => self.set_processes(processes),
             UiCommand::GraphLoad { run_id, nodes } => self.load_graph(run_id, nodes),
-            UiCommand::GraphUpsert { run_id, nodes } => self.upsert_graph(&run_id, nodes),
+            UiCommand::GraphUpsert { run_id, nodes } => {
+                self.trace_feed.push(&run_id, &nodes);
+                self.upsert_graph(&run_id, nodes);
+            }
             UiCommand::SetApiStatus { url, active } => {
                 self.api_url = url;
                 self.api_active = active;

@@ -125,6 +125,14 @@ pub enum UiEvent {
     /// (`None`) or a recorded run by id or prefix
     OpenGraph(Option<String>),
 
+    /// User labeled a recorded step (`seq`) or the whole run (`None`);
+    /// positive is good
+    LabelStep {
+        run_id: String,
+        seq: Option<u64>,
+        value: f64,
+    },
+
     /// User asked for the list of recorded runs
     ListRuns,
 }

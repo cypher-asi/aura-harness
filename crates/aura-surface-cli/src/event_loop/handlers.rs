@@ -83,6 +83,9 @@ pub(super) async fn run_agent_turn(
                 }
                 UiEvent::OpenGraph(id) => super::trace::open_graph(state, id).await,
                 UiEvent::ListRuns => super::trace::list(state).await,
+                UiEvent::LabelStep { run_id, seq, value } => {
+                    super::trace::label(state, &run_id, seq, value).await;
+                }
                 UiEvent::ShowStatus => super::trace::status_report(state).await,
                 other => state.deferred.push_back(other),
             },

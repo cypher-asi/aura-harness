@@ -16,7 +16,7 @@ use ratatui::{
     Frame,
 };
 
-const HINT: &str = "↑↓ move  ←→ fold  Tab follow link  e issues  Esc close";
+const HINT: &str = "↑↓ move  ←→ fold  Tab link  e issues  +/- label  r record  o file  Esc close";
 
 /// Narrowest chat panel that gets a side-by-side metadata pane.
 const SPLIT_MIN_WIDTH: u16 = 70;

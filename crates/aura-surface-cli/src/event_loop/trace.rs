@@ -12,6 +12,7 @@ use aura_agent::{AgentError, AgentLoopResult};
 use aura_agent_trace::bundle::{list_runs, RunBundle};
 use aura_agent_trace::graph::{GraphNode, NodeStatus};
 use aura_agent_trace::{report, RunGraph, RunMeta, RunRecorder, RunSource, RunTrace};
+use aura_core_types::trace::{Reward, RewardKind, RewardTarget};
 use aura_core_types::AgentId;
 use aura_terminal::events::{TraceNode, TraceNodeStatus};
 use aura_terminal::UiCommand;
@@ -172,14 +173,58 @@ fn aura_home() -> Option<std::path::PathBuf> {
     aura_config::AuraHome::resolve().ok().map(|h| h.path)
 }
 
+/// Store a human label from the graph view on the run or one of its
+/// steps.
+pub(super) async fn label(state: &LoopState<'_>, run_id: &str, seq: Option<u64>, value: f64) {
+    let reward = Reward {
+        target: seq.map_or(RewardTarget::Run, |seq| RewardTarget::Step { seq }),
+        kind: RewardKind::HumanExplicit,
+        name: "human".into(),
+        value,
+        source: "tui".into(),
+        at_ms: aura_agent_trace::bundle::now_ms(),
+        evidence: serde_json::Value::Null,
+    };
+    let live = state
+        .traces
+        .values()
+        .find(|live| live.recorder.run_id() == run_id);
+    let stored = match live {
+        Some(live) => {
+            live.recorder.add_rewards(std::slice::from_ref(&reward));
+            Ok(())
+        }
+        None => aura_home()
+            .ok_or_else(|| "AURA_HOME is not resolvable".to_string())
+            .and_then(|home| RunBundle::find(&home, run_id).map_err(|e| e.to_string()))
+            .and_then(|bundle| {
+                bundle
+                    .append_rewards(std::slice::from_ref(&reward))
+                    .map_err(|e| e.to_string())
+            }),
+    };
+    let target = seq.map_or_else(|| "run".to_string(), |seq| format!("step {seq}"));
+    let command = match stored {
+        Ok(()) => UiCommand::ShowSuccess(format!("Labeled {target} {value:+}")),
+        Err(problem) => UiCommand::ShowWarning(format!("Label not saved: {problem}")),
+    };
+    let _ = state.commands.send(command).await;
+}
+
 /// `/graph [id]`: the active conversation's live graph, or a recorded
 /// run's.
 pub(super) async fn open_graph(state: &LoopState<'_>, id: Option<String>) {
     let load = match id {
         None => match state.traces.get(&state.session.agent_id()) {
             Some(live) => {
-                let g = live.graph.lock().unwrap_or_else(PoisonError::into_inner);
-                Ok((live.recorder.run_id(), full_view(&g)))
+                live.recorder.flush();
+                match RunTrace::load(&RunBundle::at(live.recorder.dir())) {
+                    Ok(trace) => Ok((trace.meta.run_id.clone(), full_view(&trace.graph()))),
+                    Err(_) => {
+                        let g = live.graph.lock().unwrap_or_else(PoisonError::into_inner);
+                        Ok((live.recorder.run_id(), full_view(&g)))
+                    }
+                }
             }
             None => Err(
                 "No run recorded for this conversation yet. Send a message, \

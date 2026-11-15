@@ -5,7 +5,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::{follow_selection, App, DetailView};
+use super::file_view::FileView;
+use super::{follow_selection, App, DetailView, NotificationType, PanelFocus};
 use crate::events::{TraceNode, TraceNodeStatus, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent};
 
@@ -225,6 +226,25 @@ impl GraphState {
         self.select_row(&rows, at.saturating_add_signed(delta));
     }
 
+    /// Select `id`, expanding its ancestors.
+    pub(super) fn select_id(&mut self, id: &str) {
+        if self.node(id).is_some() {
+            self.reveal(id);
+            self.link_cursor = 0;
+        }
+    }
+
+    fn set_meta(&mut self, id: &str, key: &str, value: String) {
+        let Some(&i) = self.index.get(id) else {
+            return;
+        };
+        let meta = &mut self.nodes[i].meta;
+        match meta.iter_mut().find(|(k, _)| k == key) {
+            Some(entry) => entry.1 = value,
+            None => meta.push((key.to_string(), value)),
+        }
+    }
+
     /// Show `id`, expanding its ancestors and selecting it.
     fn reveal(&mut self, id: &str) {
         let mut cursor = self.node(id).and_then(|n| n.parent.clone());
@@ -305,6 +325,9 @@ impl App {
         let rows = self.graph.rows();
         let last = rows.len().saturating_sub(1);
         self.graph.select_row(&rows, last);
+        if let Some(id) = self.pending_graph_node.take() {
+            self.graph.select_id(&id);
+        }
         self.open_detail(DetailView::Graph);
     }
 
@@ -347,10 +370,111 @@ impl App {
             KeyCode::Enter | KeyCode::Char(' ') => g.toggle(),
             KeyCode::Tab => g.follow_link(),
             KeyCode::Char('e') => g.issues_only = !g.issues_only,
+            KeyCode::Char('+' | '=') => self.label_selected(1.0),
+            KeyCode::Char('-') => self.label_selected(-1.0),
+            KeyCode::Char('r') => self.jump_to_record(),
+            KeyCode::Char('o') => self.open_node_file(),
             _ => {}
         }
         false
     }
+
+    /// Label the selected step (or the run, on the run node) good or bad.
+    fn label_selected(&mut self, value: f64) {
+        let Some(node) = self.graph.selected_node() else {
+            return;
+        };
+        let id = node.id.clone();
+        let seq = if node.kind == "run" { None } else { node.seq };
+        if node.kind != "run" && seq.is_none() {
+            self.notification = Some((
+                "This node has no step to label".into(),
+                NotificationType::Warning,
+            ));
+            return;
+        }
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::LabelStep {
+                run_id: self.graph.run_id.clone(),
+                seq,
+                value,
+            });
+        }
+        self.graph.set_meta(&id, "human", format!("{value:+}"));
+    }
+
+    /// Show the selected node's first kernel record row in the Record
+    /// panel.
+    fn jump_to_record(&mut self) {
+        let seqs = self
+            .graph
+            .selected_node()
+            .and_then(|n| meta(n, "record_seqs"))
+            .map(|v| numbers(&v))
+            .unwrap_or_default();
+        let found = seqs
+            .iter()
+            .find_map(|seq| self.records.iter().position(|r| r.seq == *seq));
+        match (seqs.first(), found) {
+            (None, _) => {
+                self.notification = Some((
+                    "No kernel record linked to this node".into(),
+                    NotificationType::Warning,
+                ));
+            }
+            (Some(seq), None) => {
+                self.notification = Some((
+                    format!("Record #{seq} is not in the Record panel (another agent or session)"),
+                    NotificationType::Warning,
+                ));
+            }
+            (Some(_), Some(index)) => {
+                self.selected_record = index;
+                self.focus = PanelFocus::Records;
+                self.open_detail(DetailView::Record);
+            }
+        }
+    }
+
+    /// Open the first file the selected node touched.
+    fn open_node_file(&mut self) {
+        let path = self.graph.selected_node().and_then(|n| {
+            meta(n, "path").filter(|p| !p.is_empty()).or_else(|| {
+                meta(n, "files").and_then(|v| {
+                    serde_json::from_str::<Vec<String>>(&v)
+                        .ok()
+                        .and_then(|f| f.into_iter().next())
+                })
+            })
+        });
+        let Some(path) = path else {
+            self.notification = Some((
+                "No file linked to this node".into(),
+                NotificationType::Warning,
+            ));
+            return;
+        };
+        let root = self.sandbox.root().map(std::path::Path::to_path_buf);
+        let full = match &root {
+            Some(root) if std::path::Path::new(&path).is_relative() => root.join(&path),
+            _ => std::path::PathBuf::from(&path),
+        };
+        let view = FileView::load(&full, root.as_deref());
+        self.open_detail(DetailView::File(Box::new(view)));
+    }
+}
+
+fn meta(node: &TraceNode, key: &str) -> Option<String> {
+    node.meta
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.clone())
+}
+
+fn numbers(text: &str) -> Vec<u64> {
+    text.split(|c: char| !c.is_ascii_digit())
+        .filter_map(|s| s.parse().ok())
+        .collect()
 }
 
 #[cfg(test)]
@@ -427,6 +551,60 @@ mod tests {
         assert_eq!(ids, vec!["run", "t1", "s2"]);
         app.handle_key(key(KeyCode::Esc));
         assert!(app.detail_view().is_none());
+    }
+
+    #[test]
+    fn labels_are_sent_and_shown() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let mut app = App::new().with_event_sender(tx);
+        let mut step = node("s3", Some("run"), TraceNodeStatus::Ok);
+        step.seq = Some(3);
+        app.process_command(UiCommand::GraphLoad {
+            run_id: "r".into(),
+            nodes: vec![node("run", None, TraceNodeStatus::Ok), step],
+        });
+        app.handle_key(key(KeyCode::Char('-')));
+        match rx.try_recv().unwrap() {
+            UiEvent::LabelStep { run_id, seq, value } => {
+                assert_eq!((run_id.as_str(), seq, value), ("r", Some(3), -1.0));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        let shown = meta(app.graph().node("s3").unwrap(), "human");
+        assert_eq!(shown.as_deref(), Some("-1"));
+    }
+
+    #[test]
+    fn r_jumps_to_the_linked_record_row() {
+        let mut app = App::new();
+        app.records.push_back(crate::app::detail_tests::record(4));
+        app.records.push_back(crate::app::detail_tests::record(7));
+        let mut step = node("tc:a", Some("run"), TraceNodeStatus::Ok);
+        step.meta = vec![("record_seqs".into(), "[7,8]".into())];
+        app.process_command(UiCommand::GraphLoad {
+            run_id: "r".into(),
+            nodes: vec![node("run", None, TraceNodeStatus::Ok), step],
+        });
+        app.handle_key(key(KeyCode::Char('r')));
+        assert_eq!(app.detail_view(), Some(&DetailView::Record));
+        assert_eq!(app.selected_record(), 1);
+    }
+
+    #[test]
+    fn feed_entries_open_in_the_graph() {
+        let mut app = loaded();
+        app.process_command(UiCommand::GraphUpsert {
+            run_id: "r".into(),
+            nodes: vec![TraceNode {
+                kind: "decision".into(),
+                ..node("s2", Some("t1"), TraceNodeStatus::Warn)
+            }],
+        });
+        assert_eq!(app.trace_feed().entries().len(), 1);
+        app.close_detail();
+        app.open_selected_trace_entry();
+        assert_eq!(app.detail_view(), Some(&DetailView::Graph));
+        assert_eq!(app.graph().selected_node().unwrap().id, "s2");
     }
 
     #[test]

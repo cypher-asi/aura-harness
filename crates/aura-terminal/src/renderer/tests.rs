@@ -861,6 +861,48 @@ fn test_processes_tab_lists_processes() {
 }
 
 #[test]
+fn test_trace_tab_lists_live_steps() {
+    use crate::app::PanelFocus;
+    use crate::events::{TraceNode, TraceNodeStatus, UiCommand};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::GraphUpsert {
+        run_id: "r".into(),
+        nodes: vec![
+            TraceNode {
+                id: "s2".into(),
+                kind: "iteration".into(),
+                label: "model → edit_file".into(),
+                status: TraceNodeStatus::Ok,
+                seq: Some(2),
+                ..TraceNode::default()
+            },
+            TraceNode {
+                id: "d3".into(),
+                kind: "decision".into(),
+                label: "implement_now".into(),
+                status: TraceNodeStatus::Warn,
+                seq: Some(3),
+                ..TraceNode::default()
+            },
+        ],
+    });
+    while app.focus() != PanelFocus::Sandbox {
+        let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
+    }
+    let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    let screen = render_rows(&mut app, 140).join("\n");
+    assert!(screen.contains("TRACE 1!"), "{screen}");
+    let row = screen
+        .lines()
+        .find(|r| r.contains("implement_now"))
+        .unwrap();
+    assert!(row.contains("#3"), "{row}");
+    assert!(screen.lines().any(|r| r.contains("model → edit_file")));
+}
+
+#[test]
 fn test_files_command_toggles_sandbox_panel() {
     let mut app = crate::App::new();
     submit(&mut app, "/kernel");

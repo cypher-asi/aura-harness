@@ -14,6 +14,7 @@ mod sandbox;
 mod segments;
 mod slash_menu;
 mod text;
+mod trace_feed;
 
 #[cfg(test)]
 mod tests;
