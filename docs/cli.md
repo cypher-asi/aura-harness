@@ -61,6 +61,25 @@ The Claude link uses the OAuth client that Claude Code uses. Anthropic does not 
 - **Modes.** `/mode` lists the modes and `/mode <name>` picks one for the agent on screen; Shift+Tab steps to the next one. `default` asks before file edits and commands, `accept-edits` lets file edits run but still asks before commands, `plan` is read-only, and `unrestricted` never asks. Reading files and searching never ask. The status line starts with the current mode. Each switch is written to the agent's record before the next tool call uses it, and agents it spawns start in the same mode. The starting mode comes from `--mode`, then `AURA_TUI_MODE`, then `AURA_DEFAULT_MODE`; `agent` means `default`.
 - **Notifications.** The terminal rings the bell when a turn that took at least 10 seconds finishes and when an agent needs approval. Desktop notifications are off unless you set `AURA_TUI_DESKTOP_NOTIFY=1`. See [Terminal long runs](configuration.md#terminal-long-runs) for the settings.
 
+## Project instructions
+
+Terminal agents follow the instructions a project keeps for coding agents. Before each turn the terminal looks for these files in the agent's working folder (its project's folder, or the folder the terminal was started in) and in every folder above it, stopping below your home directory:
+
+- `AGENTS.md` (or `agents.md`)
+- `CLAUDE.md`
+- `.cursor/rules.md` and the `.md` / `.mdc` files in `.cursor/rules/`
+
+Your own instructions for every project go in `~/.aura/AGENTS.md` (`$AURA_HOME/AGENTS.md` when `AURA_HOME` is set).
+
+- **Precedence.** The files go into the system prompt from the most general (yours, then the folders furthest up) to the most specific (the working folder). The prompt tells the agent that the later file wins when two disagree, and that what you say in the chat beats them all. A `CLAUDE.md` that is a symlink to `AGENTS.md` is read once.
+- **Cursor rules.** A rule with `alwaysApply: true`, or with no frontmatter, is always included. A rule with `globs` is included with its globs, and the agent applies it only to matching files. A rule with only a `description` is listed by path and description for the agent to read when it is relevant. A rule with none of these is meant to be named by hand and is skipped.
+- **Size limit.** Instructions are capped at 32 KiB in total. The nearest files are kept first; a file that no longer fits is cut at a line end with a note saying so, or left out and listed by path when too little room is left.
+- **Changes.** Files are re-read when their size or modification time changes, so an edit applies from the next turn. Unchanged files produce the same bytes every turn, right after the base system prompt, so they stay in the prompt cache.
+- **`/context`** lists the files the agent loads, with their size and whether each was cut, left out, or only listed.
+- **`/init`** asks the agent, as a normal turn, to study the repository and write an `AGENTS.md` at the project root: what the project is, build, run, lint and test commands, the layout, and conventions and pitfalls. If the project already has an `AGENTS.md`, the agent improves it instead of starting over. A busy agent starts it when its current work ends.
+
+Set `AURA_PROJECT_INSTRUCTIONS=off` to stop loading these files.
+
 ## Global flags
 
 | Flag | Default | Description |

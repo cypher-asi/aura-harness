@@ -1810,3 +1810,57 @@ fn test_help_lists_mode_command_and_shift_tab() {
     assert!(screen.contains("Shift+Tab"), "{screen}");
     assert!(screen.contains("Press any key to close"), "{screen}");
 }
+
+#[test]
+fn test_init_command_asks_the_active_agent_and_shows_it_in_the_menu() {
+    use crate::events::UiEvent;
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    let mut app = crate::App::new().with_event_sender(tx);
+    app.process_command(crate::events::UiCommand::SetActiveAgent("aa".to_string()));
+
+    type_text(&mut app, "/ini");
+    let screen = render_rows(&mut app, 120).join("\n");
+    assert!(
+        screen.contains("/init") && screen.contains("write or improve AGENTS.md"),
+        "{screen}"
+    );
+
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyModifiers::empty(),
+    ));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::InitProject { agent_id }) if agent_id == "aa"
+    ));
+    assert_eq!(app.state(), crate::app::AppState::Processing);
+}
+
+#[test]
+fn test_context_command_lists_project_instructions() {
+    use crate::events::{InstructionFileView, InstructionStatus, UiCommand};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetInstructions(vec![InstructionFileView {
+        path: "~/repo/AGENTS.md".to_string(),
+        bytes: 2_000,
+        globs: None,
+        status: InstructionStatus::Included,
+    }]));
+    run_slash(&mut app, "/context");
+    run_slash(&mut app, "/new");
+    run_slash(&mut app, "/context");
+
+    let texts: Vec<String> = app
+        .messages()
+        .iter()
+        .map(|m| m.content().to_string())
+        .collect();
+    let last = texts.last().map(String::as_str).unwrap_or_default();
+    assert!(
+        last.contains("Project instructions (~500 tokens):"),
+        "{texts:?}"
+    );
+    assert!(last.contains("~/repo/AGENTS.md  500"), "{texts:?}");
+}

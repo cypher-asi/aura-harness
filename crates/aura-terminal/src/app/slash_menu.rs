@@ -51,6 +51,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Summarize older history now",
         needs_args: false,
     },
+    command("init", "Have the agent write or improve AGENTS.md"),
     command("todos", "Toggle the agent's todo list"),
     command("cost", "Show tokens and cost of the session"),
     SlashCommand {

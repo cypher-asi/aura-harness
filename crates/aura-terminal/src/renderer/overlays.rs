@@ -296,7 +296,7 @@ fn truncate_start(text: &str, width: usize) -> String {
 fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
     let modal_width = 50.min(area.width.saturating_sub(4));
-    let modal_height = 43.min(area.height);
+    let modal_height = 44.min(area.height);
 
     let modal_area = centered_rect(modal_width, modal_height, area);
     frame.render_widget(Clear, modal_area);
@@ -323,6 +323,7 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "/clear     Clear messages",
         "/context   What fills the context window",
         "/compact [focus]    Summarize older history now",
+        "/init      Write or improve AGENTS.md",
         "/todos     Toggle the agent's todo list",
         "/cost      Tokens and cost of the session",
         "/agent new [name]   Create and switch to agent",

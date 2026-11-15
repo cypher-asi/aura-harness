@@ -18,6 +18,7 @@
 pub mod auto_build;
 pub mod chunk_guard;
 pub mod implement_now;
+pub mod init_project;
 pub mod max_tokens;
 pub mod task_done;
 pub mod test_warning;

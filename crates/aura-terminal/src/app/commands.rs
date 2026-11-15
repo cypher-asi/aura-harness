@@ -134,15 +134,18 @@ impl App {
             }
             "compact" => self.handle_compact_command(arg),
             "mode" => self.handle_mode_command(arg),
+            "init" => self.handle_init_command(),
             "resume" => self.handle_resume_command(arg),
             "new" | "n" => {
                 self.messages.clear();
                 self.scroll_offset = 0;
                 self.streaming_content.clear();
                 let jobs = std::mem::take(&mut self.hud.jobs);
+                let instructions = self.hud.instructions.take();
                 self.hud = super::hud::Hud {
                     jobs,
                     mode: self.hud.mode,
+                    instructions,
                     ..Default::default()
                 };
                 self.todos_open = false;
@@ -442,6 +445,30 @@ impl App {
         }
     }
 
+    /// `/init`: have the agent study the project and write or improve its
+    /// `AGENTS.md`. The chat shows the request once the turn starts; a busy
+    /// agent starts it when its current work ends.
+    fn handle_init_command(&mut self) {
+        let Some(tx) = &self.event_tx else {
+            return;
+        };
+        let event = UiEvent::InitProject {
+            agent_id: self.active_agent_id.clone(),
+        };
+        if tx.try_send(event).is_err() {
+            return;
+        }
+        if self.agent_busy(&self.active_agent_id) {
+            self.notification = Some((
+                "Queued: AGENTS.md is written when the current work ends".to_string(),
+                NotificationType::Success,
+            ));
+        } else {
+            self.state = AppState::Processing;
+            self.status = "Studying the project...".to_string();
+        }
+    }
+
     /// Process a UI command from the kernel.
     pub fn process_command(&mut self, cmd: UiCommand) {
         debug!(?cmd, "Processing UI command");
@@ -531,6 +558,7 @@ impl App {
             UiCommand::SetJobs(jobs) => self.hud.jobs = jobs,
             UiCommand::SetQueued(queued) => self.hud.queued = queued,
             UiCommand::SetSessionTotals(totals) => self.hud.stats.restore(&totals),
+            UiCommand::SetInstructions(files) => self.hud.instructions = Some(files),
             UiCommand::SetContext(context) => {
                 if context.limit_tokens.is_some() {
                     self.hud.stats.context_limit = context.limit_tokens;

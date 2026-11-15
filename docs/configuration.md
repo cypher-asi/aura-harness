@@ -46,6 +46,14 @@ A terminal turn has no iteration cap and no time limit: it runs until the agent 
 | `AURA_TUI_BELL` | `1` | Set to `0` to stop the terminal bell for finished turns and approval prompts. |
 | `AURA_TUI_DESKTOP_NOTIFY` | `0` | Set to `1` to also send desktop notifications, through `notify-send` on Linux or `osascript` on macOS. A notifier that hangs is killed after 5 seconds. |
 
+## Project instructions
+
+Terminal agents load `AGENTS.md`, `CLAUDE.md` and Cursor rules from their working folder and the folders above it, plus `AGENTS.md` in `AURA_HOME` (default `~/.aura/AGENTS.md`) for instructions that apply to every project. See [Project instructions](cli.md#project-instructions).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AURA_PROJECT_INSTRUCTIONS` | on | Set to `off`, `0`, `false` or `no` to stop loading project instruction files into the terminal's system prompt. |
+
 ## Node runtime
 
 | Variable | Default | Description |

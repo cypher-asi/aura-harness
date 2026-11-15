@@ -3,7 +3,10 @@
 //! `/todos` commands. Each agent has its own, swapped in with its chat.
 
 use super::format::{format_cost, format_tokens};
-use crate::events::{CallStats, ContextView, JobView, SessionTotals, TodoState, TodoView};
+use crate::events::{
+    CallStats, ContextView, InstructionFileView, InstructionStatus, JobView, SessionTotals,
+    TodoState, TodoView,
+};
 use crate::mode_command::PermissionMode;
 
 /// Model usage of an agent's session so far.
@@ -98,6 +101,9 @@ pub struct Hud {
     /// Which tool calls run without asking; `None` until the event loop
     /// says
     pub mode: Option<PermissionMode>,
+    /// Project instruction files the agent's turns load; `None` until
+    /// the agent reports them
+    pub instructions: Option<Vec<InstructionFileView>>,
 }
 
 impl Hud {
@@ -170,6 +176,9 @@ impl Hud {
                 plural(stats.compactions)
             ));
         }
+        if let Some(files) = &self.instructions {
+            out.push_str(&instructions_report(files));
+        }
         out
     }
 
@@ -195,6 +204,32 @@ impl Hud {
             format_tokens(stats.output_tokens),
         )
     }
+}
+
+/// The `/context` lines listing the project instruction files.
+fn instructions_report(files: &[InstructionFileView]) -> String {
+    if files.is_empty() {
+        return "\nProject instructions: none found (/init writes an AGENTS.md)".to_string();
+    }
+    // Rough bytes-to-tokens ratio for English prose and code.
+    let tokens = |bytes: usize| format_tokens(u64::try_from(bytes / 4).unwrap_or(u64::MAX));
+    let total: usize = files.iter().map(|f| f.bytes).sum();
+    let mut out = format!("\nProject instructions (~{} tokens):", tokens(total));
+    for file in files {
+        let detail = match file.status {
+            InstructionStatus::Included => tokens(file.bytes),
+            InstructionStatus::Truncated(whole) => {
+                format!("{} (cut from {})", tokens(file.bytes), tokens(whole))
+            }
+            InstructionStatus::OnRequest => "read when relevant".to_string(),
+            InstructionStatus::Omitted => "left out (size limit)".to_string(),
+        };
+        out.push_str(&format!("\n  {}  {detail}", file.path));
+        if let Some(globs) = &file.globs {
+            out.push_str(&format!(" for {globs}"));
+        }
+    }
+    out
 }
 
 const fn plural(n: u32) -> &'static str {
@@ -239,6 +274,50 @@ mod tests {
         let mut hud = Hud::default();
         hud.stats.add(&call(10, 0, 0, None));
         assert!(hud.cost_report().contains("no priced calls"));
+    }
+
+    #[test]
+    fn context_report_lists_instruction_files() {
+        let file = |path: &str, bytes, globs: Option<&str>, status| InstructionFileView {
+            path: path.to_string(),
+            bytes,
+            globs: globs.map(str::to_string),
+            status,
+        };
+        let mut hud = Hud::default();
+        assert!(!hud.context_report().contains("Project instructions"));
+
+        hud.instructions = Some(Vec::new());
+        assert!(hud.context_report().contains("none found (/init"));
+
+        hud.instructions = Some(vec![
+            file("~/p/AGENTS.md", 4_000, None, InstructionStatus::Included),
+            file(
+                "~/p/.cursor/rules/rust.mdc",
+                400,
+                Some("**/*.rs"),
+                InstructionStatus::Included,
+            ),
+            file(
+                "~/p/.cursor/rules/db.mdc",
+                0,
+                None,
+                InstructionStatus::OnRequest,
+            ),
+            file("/AGENTS.md", 0, None, InstructionStatus::Omitted),
+        ]);
+        let report = hud.context_report();
+        assert!(
+            report.contains("Project instructions (~1.1k tokens):"),
+            "{report}"
+        );
+        assert!(report.contains("~/p/AGENTS.md  1.0k"), "{report}");
+        assert!(report.contains("rust.mdc  100 for **/*.rs"), "{report}");
+        assert!(report.contains("db.mdc  read when relevant"), "{report}");
+        assert!(
+            report.contains("/AGENTS.md  left out (size limit)"),
+            "{report}"
+        );
     }
 
     #[test]

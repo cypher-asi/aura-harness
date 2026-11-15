@@ -107,6 +107,17 @@ pub(super) async fn send_session_of(state: &LoopState<'_>, agent_id: AgentId) {
     }
 }
 
+/// Show `agent_id` the project instruction files its turns load, when
+/// its kernel is open.
+pub(super) async fn send_instructions_of(state: &LoopState<'_>, agent_id: AgentId) {
+    if let Some(kernel) = state.kernel_for(agent_id) {
+        state
+            .hub
+            .send_instructions(agent_id, &kernel.agent_workspace())
+            .await;
+    }
+}
+
 /// Show `agent_id` how much work waits for it.
 pub(super) async fn send_queued(state: &LoopState<'_>, agent_id: AgentId) {
     let queued = state
