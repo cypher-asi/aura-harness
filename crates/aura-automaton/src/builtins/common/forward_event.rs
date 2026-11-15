@@ -247,13 +247,27 @@ pub fn forward_agent_event(
 ///   doesn't observe backpressure from us.
 pub fn spawn_agent_event_forwarder(
     outer_tx: tokio::sync::mpsc::Sender<AutomatonEvent>,
+    inner_rx: tokio::sync::mpsc::Receiver<aura_agent::AgentLoopEvent>,
+    task_id: Option<String>,
+) -> tokio::task::JoinHandle<()> {
+    spawn_recording_forwarder(outer_tx, inner_rx, task_id, None)
+}
+
+/// [`spawn_agent_event_forwarder`], also recording every event to
+/// `recorder` (including those dropped on the outer channel).
+pub fn spawn_recording_forwarder(
+    outer_tx: tokio::sync::mpsc::Sender<AutomatonEvent>,
     mut inner_rx: tokio::sync::mpsc::Receiver<aura_agent::AgentLoopEvent>,
     task_id: Option<String>,
+    recorder: Option<std::sync::Arc<aura_agent_trace::RunRecorder>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut dropped_full: u64 = 0;
         let mut outer_closed = false;
         while let Some(evt) = inner_rx.recv().await {
+            if let Some(rec) = &recorder {
+                rec.on_event(&evt);
+            }
             if outer_closed {
                 // Receiver is permanently gone; keep draining the
                 // inner channel so the agent loop's `try_send` never

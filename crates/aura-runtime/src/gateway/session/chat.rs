@@ -462,6 +462,7 @@ struct PreparedTurn {
     config: aura_agent::AgentLoopConfig,
     messages: Vec<Message>,
     tools: Vec<aura_model_reasoner::ToolDefinition>,
+    recorder: Option<Arc<aura_agent_trace::RunRecorder>>,
 }
 
 /// Prepare and spawn an agent-loop turn as a background task.
@@ -782,12 +783,19 @@ async fn prepare_turn_context(
     let tools = session.tool_definitions.clone();
     let messages = session.messages.clone();
 
+    let recorder = helpers::trace_recorder(session, &config.model);
+    if let Some(rec) = &recorder {
+        rec.begin_turn(&msg.content);
+        config.trace_blobs = rec.blob_store();
+    }
+
     Ok(PreparedTurn {
         model_gateway,
         tool_gateway,
         config,
         messages,
         tools,
+        recorder,
     })
 }
 
@@ -811,6 +819,7 @@ fn dispatch_turn_to_agent(
         config,
         messages,
         tools,
+        recorder,
     } = prepared;
     let agent_loop = AgentLoop::new(config);
 
@@ -841,8 +850,11 @@ fn dispatch_turn_to_agent(
     });
 
     let outbound_for_stream = outbound_tx.clone();
-    let stream_forward_handle =
-        tokio::spawn(helpers::forward_events_to_ws(event_rx, outbound_for_stream));
+    let stream_forward_handle = tokio::spawn(helpers::forward_and_record(
+        event_rx,
+        outbound_for_stream,
+        recorder,
+    ));
 
     AgentTurn {
         cancel_token,

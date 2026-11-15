@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 aura-agent = { path = "../aura-agent" }
+aura-agent-trace = { path = "../aura-agent-trace" }
 aura-config = { path = "../aura-config" }
 aura-context-prompts = { path = "../aura-context-prompts" }
 aura-core-types = { path = "../aura-core-types" }

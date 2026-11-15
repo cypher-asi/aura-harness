@@ -22,6 +22,7 @@ aura-tools = { path = "../aura-tools" }
 aura-model-reasoner = { path = "../aura-model-reasoner" }
 aura-agent-kernel = { path = "../aura-agent-kernel" }
 aura-agent = { path = "../aura-agent" }
+aura-agent-trace = { path = "../aura-agent-trace" }
 aura-agent-subagent = { path = "../aura-agent-subagent" }
 aura-context-memory = { path = "../aura-context-memory" }
 aura-automaton = { path = "../aura-automaton" }

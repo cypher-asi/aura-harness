@@ -51,6 +51,10 @@ pub struct TraceConfig {
     ///
     /// Capture level for run bundles under `AURA_HOME/runs/`.
     pub level: TraceLevel,
+    /// Whether `AURA_TRACE` was set. The interactive terminal records
+    /// by default; the gateway, which serves many users, records only
+    /// when the operator set it.
+    pub explicit: bool,
 }
 
 impl TraceConfig {
@@ -59,6 +63,7 @@ impl TraceConfig {
     pub const fn defaults() -> Self {
         Self {
             level: TraceLevel::Decisions,
+            explicit: false,
         }
     }
 
@@ -72,6 +77,7 @@ impl TraceConfig {
             .and_then(TraceLevel::parse)
         {
             cfg.level = level;
+            cfg.explicit = true;
         }
         cfg
     }
