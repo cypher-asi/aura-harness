@@ -201,6 +201,12 @@ pub enum EvalSubcommand {
         /// Exit with an error when any arm regresses against the baseline.
         #[arg(long)]
         fail_on_regression: bool,
+        /// Compare against this baseline file instead of the first arm.
+        #[arg(long, conflicts_with = "write_baseline")]
+        baseline: Option<PathBuf>,
+        /// Write the first arm's numbers to this baseline file.
+        #[arg(long)]
+        write_baseline: Option<PathBuf>,
     },
 }
 

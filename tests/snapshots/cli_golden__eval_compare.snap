@@ -30,5 +30,11 @@ Options:
       --fail-on-regression
           Exit with an error when any arm regresses against the baseline
 
+      --baseline <BASELINE>
+          Compare against this baseline file instead of the first arm
+
+      --write-baseline <WRITE_BASELINE>
+          Write the first arm's numbers to this baseline file
+
   -h, --help
           Print help (see a summary with '-h')

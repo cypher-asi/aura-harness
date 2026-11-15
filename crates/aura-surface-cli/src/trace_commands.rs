@@ -264,9 +264,28 @@ pub async fn cmd_eval(args: EvalCommand) -> anyhow::Result<()> {
             arms,
             tolerance,
             fail_on_regression,
+            baseline,
+            write_baseline,
         } => {
             let runs = evals::runs_by_arm(&home, suite.as_deref());
-            let (report, regressions) = evals::compare(&runs, &arms, tolerance)?;
+            if let Some(path) = write_baseline {
+                let arm = arms
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| evals::DEFAULT_ARM.to_string());
+                let baseline = evals::Baseline::from_runs(&runs, &arm, suite.as_deref())?;
+                baseline.save(&path)?;
+                println!(
+                    "wrote baseline for arm {arm} ({} runs) to {}",
+                    baseline.runs,
+                    path.display()
+                );
+                return Ok(());
+            }
+            let (report, regressions) = match baseline {
+                Some(path) => evals::Baseline::load(&path)?.compare(&runs, &arms, tolerance)?,
+                None => evals::compare(&runs, &arms, tolerance)?,
+            };
             print!("{report}");
             if fail_on_regression && regressions > 0 {
                 bail!(

@@ -25,7 +25,7 @@ use aura_config::trace::TraceLevel;
 use aura_core_types::trace::{Reward, RewardKind, RewardTarget};
 use aura_model_reasoner::ModelProvider;
 use aura_tools::ToolConfig;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::headless::{self, HeadlessRun};
@@ -395,4 +395,141 @@ pub fn compare(
         }
     }
     Ok((out, regressions))
+}
+
+/// Checked-in reference numbers for one arm of a suite.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Baseline {
+    /// Suite the runs came from.
+    pub suite: Option<String>,
+    /// Arm the numbers describe.
+    pub arm: String,
+    /// Harness version that produced them.
+    pub harness_version: String,
+    /// When the baseline was written.
+    pub created_at_ms: u64,
+    /// Runs averaged.
+    pub runs: usize,
+    /// Mean headline metrics ([`scorecard::mean`]).
+    pub means: BTreeMap<String, f64>,
+    /// `task → [passed, total]`.
+    pub tasks: BTreeMap<String, [usize; 2]>,
+}
+
+impl Baseline {
+    /// Baseline from `arm`'s recorded runs.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the arm has no runs.
+    pub fn from_runs(
+        runs: &BTreeMap<String, Vec<(String, RunScorecard)>>,
+        arm: &str,
+        suite: Option<&str>,
+    ) -> anyhow::Result<Self> {
+        let Some(rows) = runs.get(arm).filter(|r| !r.is_empty()) else {
+            bail!("no eval runs for arm `{arm}`");
+        };
+        let cards: Vec<RunScorecard> = rows.iter().map(|(_, c)| c.clone()).collect();
+        let mut tasks: BTreeMap<String, [usize; 2]> = BTreeMap::new();
+        for (task, card) in rows {
+            let entry = tasks.entry(task.clone()).or_default();
+            entry[1] += 1;
+            if card.outcome.unwrap_or_default() > 0.0 {
+                entry[0] += 1;
+            }
+        }
+        Ok(Self {
+            suite: suite.map(str::to_string),
+            arm: arm.to_string(),
+            harness_version: aura_agent_trace::bundle::harness_version(),
+            created_at_ms: now_ms(),
+            runs: rows.len(),
+            means: scorecard::mean(&cards),
+            tasks,
+        })
+    }
+
+    /// Read a baseline file.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the file can't be read or parsed.
+    pub fn load(path: &Path) -> anyhow::Result<Self> {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("reading baseline {}", path.display()))?;
+        serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+    }
+
+    /// Write the baseline as pretty JSON.
+    ///
+    /// # Errors
+    ///
+    /// Fails on an I/O error.
+    pub fn save(&self, path: &Path) -> anyhow::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(path, serde_json::to_string_pretty(self)? + "\n")?;
+        Ok(())
+    }
+
+    /// Compare each of `arms` (default: all) against this baseline.
+    /// Returns the report and the number of regressions.
+    ///
+    /// # Errors
+    ///
+    /// Fails when a requested arm has no runs.
+    pub fn compare(
+        &self,
+        runs: &BTreeMap<String, Vec<(String, RunScorecard)>>,
+        arms: &[String],
+        tolerance: f64,
+    ) -> anyhow::Result<(String, usize)> {
+        let arms: Vec<String> = if arms.is_empty() {
+            runs.keys().cloned().collect()
+        } else {
+            arms.to_vec()
+        };
+        let mut out = format!(
+            "baseline: arm {} · {} runs · harness {}\n",
+            self.arm, self.runs, self.harness_version
+        );
+        let mut regressions = 0;
+        for arm in &arms {
+            let current = Self::from_runs(runs, arm, self.suite.as_deref())?;
+            let deltas = scorecard::diff_means(&self.means, &current.means, tolerance);
+            let _ = writeln!(out, "\n{arm} ({} runs)", current.runs);
+            out.push_str(&aura_agent_trace::report::diff_table(&deltas));
+            for (task, [passed, total]) in &current.tasks {
+                if let Some([base_passed, base_total]) = self.tasks.get(task) {
+                    let now = rate(*passed, *total);
+                    let before = rate(*base_passed, *base_total);
+                    if now + tolerance < before {
+                        regressions += 1;
+                        let _ =
+                            writeln!(out, "regression: {task} pass rate {before:.2} → {now:.2}");
+                    }
+                }
+            }
+            for delta in deltas.iter().filter(|d| d.regression) {
+                regressions += 1;
+                let _ = writeln!(
+                    out,
+                    "regression: {} {:.2} → {:.2}",
+                    delta.metric, delta.baseline, delta.candidate
+                );
+            }
+        }
+        Ok((out, regressions))
+    }
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn rate(passed: usize, total: usize) -> f64 {
+    if total == 0 {
+        0.0
+    } else {
+        passed as f64 / total as f64
+    }
 }

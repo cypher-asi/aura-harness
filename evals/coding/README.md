@@ -17,6 +17,20 @@ aura eval run evals/coding --model <model> --set implement_now_threshold=4 --rep
 aura eval compare --suite coding --arm default --arm implement_now_threshold=4
 ```
 
+## Live baseline
+
+`baseline.json` holds the reference numbers for a live model: mean metrics
+and per-task pass counts. `scripts/eval-live.sh` runs the suite against
+`AURA_EVAL_MODEL` and fails when anything regresses beyond
+`AURA_EVAL_TOLERANCE` (default 0.1); `--write` refreshes the baseline. The
+`Live coding evals` workflow runs the same script on demand. Commit a
+refreshed baseline only together with the change that explains it.
+
+```sh
+aura eval compare --suite coding --arm live --write-baseline evals/coding/baseline.json
+aura eval compare --suite coding --arm live --baseline evals/coding/baseline.json --fail-on-regression
+```
+
 `--provider mock` runs the suite against the offline mock model. That
 checks the mechanics (workspace setup, recording, verification, scoring)
 but not task success.

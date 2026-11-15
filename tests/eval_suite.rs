@@ -94,6 +94,22 @@ async fn eval_runs_are_verified_scored_and_compared() {
     assert!(report.contains("regression: lazy outcome"), "{report}");
     assert!(report.contains("coding/write-file"), "{report}");
     assert!(evals::compare(&runs, &["missing".into()], 0.1).is_err());
+
+    let path = home.path().join("baseline.json");
+    evals::Baseline::from_runs(&runs, "good", Some("coding"))
+        .unwrap()
+        .save(&path)
+        .unwrap();
+    let baseline = evals::Baseline::load(&path).unwrap();
+    assert_eq!(baseline.tasks["coding/write-file"], [1, 1]);
+    let (report, regressions) = baseline.compare(&runs, &["good".into()], 0.1).unwrap();
+    assert_eq!(regressions, 0, "{report}");
+    let (report, regressions) = baseline.compare(&runs, &["lazy".into()], 0.1).unwrap();
+    assert!(
+        report.contains("regression: coding/write-file pass rate 1.00 → 0.00"),
+        "{report}"
+    );
+    assert!(regressions >= 2, "{report}");
 }
 
 #[tokio::test]
