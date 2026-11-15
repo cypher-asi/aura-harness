@@ -413,7 +413,9 @@ impl AdapterState {
             }
             StreamEvent::InputJsonDelta { partial_json } => {
                 self.pending
-                    .push_back(Ok(ResponseEvent::OutputToolInputDelta(partial_json.clone())));
+                    .push_back(Ok(ResponseEvent::OutputToolInputDelta(
+                        partial_json.clone(),
+                    )));
             }
         }
     }

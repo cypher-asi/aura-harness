@@ -412,7 +412,7 @@ impl DekProvider for LocalKeyFileDekProvider {
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 let key = SealCipher::generate_key();
-                let encoded = Zeroizing::new(to_hex(&*key));
+                let encoded = Zeroizing::new(to_hex(&key));
                 if let Some(parent) = self.path.parent() {
                     if !parent.as_os_str().is_empty() {
                         std::fs::create_dir_all(parent).with_context(|| {

@@ -69,11 +69,9 @@ impl App {
     /// Each tab with the first column and width of its ` label count `
     /// cell in the tab bar, as drawn and as clicks are mapped back.
     pub fn side_tab_layout(&self) -> impl Iterator<Item = (SidePanelTab, u16, u16)> + '_ {
-        super::tab_layout(SidePanelTab::ALL, |tab| {
-            match self.side_tab_count(tab) {
-                Some(count) => format!("{} {count}", tab.label()),
-                None => tab.label().to_string(),
-            }
+        super::tab_layout(SidePanelTab::ALL, |tab| match self.side_tab_count(tab) {
+            Some(count) => format!("{} {count}", tab.label()),
+            None => tab.label().to_string(),
         })
     }
 

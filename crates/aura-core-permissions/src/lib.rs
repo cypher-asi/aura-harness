@@ -306,7 +306,7 @@ pub fn is_effectively_full_access(
     agent_override: Option<&AgentToolPermissions>,
 ) -> bool {
     matches!(user_default.mode, UserDefaultMode::FullAccess)
-        && agent_override.map_or(true, |override_permissions| {
+        && agent_override.is_none_or(|override_permissions| {
             override_permissions
                 .per_tool
                 .values()

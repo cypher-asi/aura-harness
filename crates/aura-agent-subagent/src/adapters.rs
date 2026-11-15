@@ -181,17 +181,11 @@ mod tests {
 
         assert_eq!(narrowed.scope, parent.scope);
         assert!(
-            narrowed
-                .capabilities
-                .iter()
-                .any(|capability| *capability == Capability::InvokeProcess),
+            narrowed.capabilities.contains(&Capability::InvokeProcess),
             "explore subagents need InvokeProcess to run verification commands"
         );
         assert!(
-            !narrowed
-                .capabilities
-                .iter()
-                .any(|capability| *capability == Capability::SpawnAgent),
+            !narrowed.capabilities.contains(&Capability::SpawnAgent),
             "subagents must not inherit spawn unless the kind explicitly allows it"
         );
     }

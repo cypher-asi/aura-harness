@@ -45,7 +45,9 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
         _ => None,
     };
     let line = tab_line(
-        SidePanelTab::ALL.map(|tab| (tab, tab.label(), app.side_tab_count(tab))).into_iter(),
+        SidePanelTab::ALL
+            .map(|tab| (tab, tab.label(), app.side_tab_count(tab)))
+            .into_iter(),
         app.side_tab(),
         hovered,
         is_focused,

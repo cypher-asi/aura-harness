@@ -174,7 +174,10 @@ mod tests {
         assert_eq!(seen.model.as_str(), "claude-sonnet-4-6");
         assert_eq!(seen.auth_token.as_deref(), Some("sub-token"));
         assert_eq!(seen.system, "be helpful");
-        assert_eq!(seen.system_preamble.as_deref(), Some("You are Claude Code."));
+        assert_eq!(
+            seen.system_preamble.as_deref(),
+            Some("You are Claude Code.")
+        );
         assert_eq!(seen.extra_headers.len(), 1);
         assert!(seen.aura_project_id.is_none());
         assert!(seen.upstream_provider_family.is_none());

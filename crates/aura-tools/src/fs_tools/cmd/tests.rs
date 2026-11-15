@@ -1204,7 +1204,10 @@ async fn test_background_command_returns_at_once_and_logs_output() {
         .unwrap();
     assert!(started.elapsed() < std::time::Duration::from_secs(1));
     assert!(result.ok);
-    assert_eq!(result.metadata.get("background").map(String::as_str), Some("true"));
+    assert_eq!(
+        result.metadata.get("background").map(String::as_str),
+        Some("true")
+    );
 
     let mut process = hook.adopted.lock().unwrap().pop().unwrap();
     assert_eq!(process.tool_use_id.as_deref(), Some("toolu_9"));

@@ -132,7 +132,7 @@ impl HookEngine {
             .by_event
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        guard.get(&event).map_or(true, Vec::is_empty)
+        guard.get(&event).is_none_or(Vec::is_empty)
     }
 
     /// Count of registered hooks for an event.

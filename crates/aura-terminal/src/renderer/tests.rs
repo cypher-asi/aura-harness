@@ -1872,7 +1872,10 @@ fn test_policy_decisions_fold_into_their_tool_calls() {
         decision: "denied by user.off".to_string(),
     });
     let rows = render_rows(&mut app, 120).join("\n");
-    assert!(rows.contains("policy: write_file denied by user.off"), "{rows}");
+    assert!(
+        rows.contains("policy: write_file denied by user.off"),
+        "{rows}"
+    );
 }
 
 #[test]

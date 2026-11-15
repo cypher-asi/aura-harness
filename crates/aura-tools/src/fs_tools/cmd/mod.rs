@@ -364,7 +364,14 @@ pub fn cmd_run(
     cwd: Option<&str>,
     timeout_ms: u64,
 ) -> Result<ToolResult, ToolError> {
-    run_program(sandbox, program, args, cwd, timeout_ms, &ProcessTags::default())
+    run_program(
+        sandbox,
+        program,
+        args,
+        cwd,
+        timeout_ms,
+        &ProcessTags::default(),
+    )
 }
 
 /// [`cmd_run`] with `tags` in the environment.
@@ -1303,7 +1310,14 @@ async fn execute_run_command(args: RunArgs, ctx: &ToolContext) -> Result<ToolRes
     })?;
 
     super::spawn_blocking_tool(move || {
-        run_program(&sandbox, &program, &cmd_args, cwd.as_deref(), timeout_ms, &tags)
+        run_program(
+            &sandbox,
+            &program,
+            &cmd_args,
+            cwd.as_deref(),
+            timeout_ms,
+            &tags,
+        )
     })
     .await
 }

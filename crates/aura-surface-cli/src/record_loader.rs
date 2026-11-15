@@ -747,7 +747,7 @@ fn model_family(model: &str) -> &str {
     const FAMILIES: &[&str] = &["opus", "sonnet", "haiku", "gpt", "gemini", "grok"];
     let lower = model.to_ascii_lowercase();
     if let Some(family) = FAMILIES.iter().find(|family| lower.contains(*family)) {
-        return *family;
+        return family;
     }
     let name = model.rsplit('/').next().unwrap_or(model);
     name.split(['-', '_', ':', '.']).next().unwrap_or(name)

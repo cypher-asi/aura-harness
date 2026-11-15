@@ -85,7 +85,10 @@ fn tool_label_waits_for_complete_args() {
 #[test]
 fn tool_label_uses_fields_that_finished_streaming() {
     let streaming = r#"{"path":"web/index.html","content":"<html>\n<script>const a = \"x"#;
-    assert_eq!(format_tool_label("write_file", streaming), "Wrote index.html");
+    assert_eq!(
+        format_tool_label("write_file", streaming),
+        "Wrote index.html"
+    );
     assert_eq!(
         format_tool_label("run_command", r#"{"command":"npm i","cwd":"we"#),
         "Ran npm i"
