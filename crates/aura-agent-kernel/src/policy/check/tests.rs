@@ -295,3 +295,44 @@ fn mode_gate_runs_before_tool_state() {
     ));
     assert!(!result.allowed);
 }
+
+#[test]
+fn reconfigure_applies_to_the_next_call_and_changes_the_hash() {
+    let policy = Policy::with_defaults();
+    let write = || {
+        delegate_proposal(
+            "write_file",
+            serde_json::json!({"path":"src/lib.rs","content":"x"}),
+        )
+    };
+    let before = policy.snapshot_hash();
+    assert!(policy.check(&write()).allowed);
+
+    policy.reconfigure(|config| config.mode = aura_core_modes::AgentMode::Plan);
+
+    assert!(!policy.check(&write()).allowed);
+    assert_eq!(policy.mode_label(), "plan");
+    let (mode, hash) = policy.mode_and_hash();
+    assert_eq!(mode, "plan");
+    assert_eq!(hash, policy.snapshot_hash());
+    assert_ne!(
+        hash, before,
+        "the recorded hash names the new configuration"
+    );
+}
+
+#[test]
+fn reconfigure_swaps_user_defaults_without_dropping_session_grants() {
+    let policy = Policy::with_defaults();
+    policy.remember_tool_state_for_session("delete_file", ToolState::Deny);
+    policy.reconfigure(|config| {
+        config.user_default = aura_core_types::UserToolDefaults::auto_review();
+    });
+    assert_eq!(policy.resolve_tool_state("run_command"), ToolState::Ask);
+    let verdict = policy.check_tool_with_runtime_capabilities_verdict(
+        "delete_file",
+        &serde_json::json!({}),
+        None,
+    );
+    assert!(matches!(verdict, PolicyVerdict::Deny { .. }));
+}

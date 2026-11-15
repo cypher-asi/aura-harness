@@ -133,7 +133,7 @@ impl Policy {
     /// Run the session mode gate for `tool_call`. `None` means the
     /// mode permits the call and later stages decide.
     pub(super) fn check_mode(&self, tool_call: &ToolCall) -> Option<PolicyVerdict> {
-        let mode = self.config.mode;
+        let mode = self.config().mode;
         if mode == AgentMode::Agent {
             return None;
         }

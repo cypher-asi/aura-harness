@@ -34,7 +34,7 @@ use aura_core_types::{
     Proposal, RuntimeCapabilityInstall, ToolState,
 };
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use tracing::{debug, warn};
 use verdict::outcome_of;
 
@@ -44,27 +44,42 @@ use verdict::outcome_of;
 
 /// Policy engine for authorizing proposals and tool usage.
 ///
-/// Uses `std::sync::Mutex` for `session_approvals` intentionally: all
-/// accesses are brief `insert`/`contains`/`remove`/`clear` with no
-/// `.await` held across the lock, so a sync mutex avoids the overhead
-/// of `tokio::sync::Mutex` and the `Send` bound it would impose on
-/// callers.
+/// Uses `std::sync` locks intentionally: all accesses are brief reads,
+/// swaps, `insert`s or `clear`s with no `.await` held across the lock,
+/// so a sync lock avoids the overhead of the tokio locks and the `Send`
+/// bound they would impose on callers.
 #[derive(Debug)]
 pub struct Policy {
-    pub(super) config: PolicyConfig,
+    /// The configuration in force, swapped whole by [`Self::reconfigure`]
+    /// so a call is never evaluated against half of a change.
+    current: RwLock<Current>,
     session_tool_states: Mutex<HashMap<String, ToolState>>,
-    snapshot_hash: String,
+}
+
+/// A configuration and its snapshot hash, which always change together.
+#[derive(Debug, Clone)]
+struct Current {
+    config: Arc<PolicyConfig>,
+    hash: String,
+}
+
+impl Current {
+    fn new(config: PolicyConfig) -> Self {
+        let hash = config.snapshot_hash();
+        Self {
+            config: Arc::new(config),
+            hash,
+        }
+    }
 }
 
 impl Policy {
     /// Create a new policy with the given config.
     #[must_use]
     pub fn new(config: PolicyConfig) -> Self {
-        let snapshot_hash = config.snapshot_hash();
         Self {
-            config,
+            current: RwLock::new(Current::new(config)),
             session_tool_states: Mutex::new(HashMap::new()),
-            snapshot_hash,
         }
     }
 
@@ -72,6 +87,30 @@ impl Policy {
     #[must_use]
     pub fn with_defaults() -> Self {
         Self::new(PolicyConfig::default())
+    }
+
+    fn current(&self) -> Current {
+        self.current
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The configuration calls are evaluated against now.
+    #[must_use]
+    pub fn config(&self) -> Arc<PolicyConfig> {
+        self.current().config
+    }
+
+    /// Change the configuration for every call evaluated from now on, e.g.
+    /// when the user switches the session mode mid-session. Each decision
+    /// records the mode and snapshot hash it was made under, so the switch
+    /// shows in the audit trail.
+    pub fn reconfigure(&self, update: impl FnOnce(&mut PolicyConfig)) {
+        let mut current = self.current.write().unwrap_or_else(PoisonError::into_inner);
+        let mut config = PolicyConfig::clone(&current.config);
+        update(&mut config);
+        *current = Current::new(config);
     }
 
     /// Cache a live approval decision for this policy's current session.
@@ -195,7 +234,7 @@ impl Policy {
             format!("{:?}", proposal.action_kind).to_ascii_lowercase(),
         );
         if !self
-            .config
+            .config()
             .allowed_action_kinds
             .contains(&proposal.action_kind)
         {
@@ -355,20 +394,28 @@ impl Policy {
     /// Hash of the policy configuration snapshot, recorded on every
     /// `PolicyDecision` so auditors can tell which configuration decided.
     #[must_use]
-    pub fn snapshot_hash(&self) -> &str {
-        &self.snapshot_hash
+    pub fn snapshot_hash(&self) -> String {
+        self.current().hash
     }
 
     /// Lower-case label of the session mode this policy enforces.
     #[must_use]
     pub fn mode_label(&self) -> String {
-        delegate_gate::mode_label(self.config.mode)
+        delegate_gate::mode_label(self.config().mode)
+    }
+
+    /// Session mode label and snapshot hash of one and the same
+    /// configuration, for recording the decision it makes.
+    #[must_use]
+    pub fn mode_and_hash(&self) -> (String, String) {
+        let current = self.current();
+        (delegate_gate::mode_label(current.config.mode), current.hash)
     }
 
     /// Get maximum allowed proposals.
     #[must_use]
-    pub const fn max_proposals(&self) -> usize {
-        self.config.max_proposals
+    pub fn max_proposals(&self) -> usize {
+        self.config().max_proposals
     }
 }
 
