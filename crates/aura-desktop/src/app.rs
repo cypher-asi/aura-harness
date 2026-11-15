@@ -1,18 +1,23 @@
 //! The window: hosts the terminal UI (`aura_terminal::App`) and draws it
-//! on a GPU cell grid instead of a terminal.
+//! on a GPU cell grid instead of a terminal, one copy per tab under a
+//! tab bar. A tab is a workspace holding some of the session's projects.
 //!
 //! The loop mirrors `aura_terminal::Terminal`: tick every 50 ms (the UI's
 //! animations count ticks), apply agent commands, render the frame, then
-//! copy selections and hand files to an editor when the UI asks.
+//! copy selections and hand files to an editor when the UI asks. Every
+//! tab is kept up to date; only the one in front is rendered.
 
-use crate::grid::{Grid, GridBackend, Metrics, Palette, Screen};
+use crate::grid::{Grid, Metrics, Palette, Screen};
 use crate::perf::Perf;
+use crate::router::{self, Arrangement, Tabs};
+use crate::tab::{Settings, Watch};
+use crate::tab_bar::{self, Bar, Hit};
 use crate::{input, theme};
 use aura_ui_core::events::{UiCommand, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use futures::Stream;
 use iced::keyboard::{self, key::Named, Key, Modifiers};
-use iced::widget::canvas;
+use iced::widget::{canvas, column};
 use iced::{event, mouse, window, Element, Length, Point, Size, Subscription, Task, Theme};
 use ratatui::layout::Position;
 use std::path::PathBuf;
@@ -40,6 +45,8 @@ pub struct Handles {
 pub struct Options {
     pub theme: String,
     pub verbose: bool,
+    /// Where the split of projects over tabs is kept between runs.
+    pub tabs_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -52,34 +59,33 @@ pub enum Message {
     Resized(Size),
     Focused(bool),
     Copied(usize),
-    EditorClosed(PathBuf, Result<(), String>),
-}
-
-/// A file the user is editing in an app that doesn't report closing; it
-/// counts as done once it's saved.
-struct Watch {
-    path: PathBuf,
-    modified: Option<SystemTime>,
-    checked: Instant,
+    /// The editor a tab (by id) opened on a file exited.
+    EditorClosed(u64, PathBuf, Result<(), String>),
 }
 
 pub struct App {
-    tui: aura_terminal::App,
+    tabs: Tabs,
+    tabs_file: Option<PathBuf>,
+    /// The split of projects over tabs as last written to `tabs_file`.
+    saved: Arrangement,
     tui_theme: aura_terminal::Theme,
-    terminal: ratatui::Terminal<GridBackend>,
+    /// The grid of the tab in front.
     screen: Screen,
+    bar: Bar,
     metrics: Metrics,
     palette: Palette,
     window: Size,
     modifiers: Modifiers,
+    /// The grid cell under the pointer.
     pointer: Option<Position>,
+    /// Where the pointer is while it is over the tab bar.
+    bar_pointer: Option<Point>,
     left_down: bool,
     /// Scroll distance not yet turned into whole lines.
     scroll: f32,
     focused: bool,
     blink_from: Instant,
     now: Instant,
-    watch: Option<Watch>,
     perf: Perf,
 }
 
@@ -115,31 +121,35 @@ impl App {
         options: &Options,
         launched: Instant,
     ) -> (Self, Task<Message>) {
-        let mut tui = aura_terminal::App::new()
-            .with_event_sender(handles.events)
-            .with_alert_settings(aura_terminal::AlertSettings::from_env());
-        if options.verbose {
-            tui.set_verbose(true);
-        }
+        let settings = Settings {
+            verbose: options.verbose,
+            alerts: aura_terminal::AlertSettings::from_env(),
+        };
         let tui_theme = aura_terminal::Theme::by_name(&options.theme);
         let now = Instant::now();
+        let saved = options
+            .tabs_file
+            .as_deref()
+            .map(router::load_arrangement)
+            .unwrap_or_default();
         let mut app = Self {
+            tabs: Tabs::new(handles.events, settings, saved.clone()),
+            tabs_file: options.tabs_file.clone(),
+            saved,
             palette: Palette::from_theme(&tui_theme),
-            tui,
             tui_theme,
-            terminal: ratatui::Terminal::new(GridBackend::new(1, 1))
-                .expect("the grid backend never fails"),
             screen: Screen::default(),
+            bar: Bar::default(),
             metrics: Metrics::new(theme::initial_font_size()),
             window: WINDOW,
             modifiers: Modifiers::empty(),
             pointer: None,
+            bar_pointer: None,
             left_down: false,
             scroll: 0.0,
             focused: true,
             blink_from: now,
             now,
-            watch: None,
             perf: Perf::new(launched),
         };
         let first = app.refresh();
@@ -168,15 +178,18 @@ impl App {
 
     pub(crate) fn view(&self) -> Element<'_, Message> {
         let started = Instant::now();
-        let element = canvas(Grid {
+        let bar = canvas(&self.bar)
+            .width(Length::Fill)
+            .height(Length::Fixed(tab_bar::height(&self.metrics)));
+        let grid = canvas(Grid {
             screen: &self.screen,
             metrics: self.metrics,
             palette: self.palette,
             cursor_on: self.cursor_on(),
         })
         .width(Length::Fill)
-        .height(Length::Fill)
-        .into();
+        .height(Length::Fill);
+        let element = column![bar, grid].into();
         self.perf.view(started.elapsed());
         element
     }
@@ -184,9 +197,16 @@ impl App {
     pub(crate) fn update(&mut self, message: Message) -> Task<Message> {
         let started = Instant::now();
         let task = self.handle(message);
+        self.tabs.forward_events();
         let task = Task::batch([task, self.refresh()]);
         self.perf.update(started.elapsed());
         task
+    }
+
+    /// The part of the window below the tab bar, which the grid fills.
+    fn grid_area(&self) -> Size {
+        let bar = tab_bar::height(&self.metrics);
+        Size::new(self.window.width, (self.window.height - bar).max(0.0))
     }
 
     /// The cursor shows while typing and then blinks; it stays solid when
@@ -207,7 +227,7 @@ impl App {
         match message {
             Message::Commands(batch) => {
                 for cmd in batch {
-                    self.tui.process_command(cmd);
+                    self.tabs.apply(cmd);
                 }
             }
             Message::SessionEnded => {
@@ -216,24 +236,28 @@ impl App {
             Message::Tick(now) => {
                 self.now = now;
                 self.perf.frame(now);
-                self.tui.tick();
-                self.poll_watch(now);
+                for tab in self.tabs.iter_mut() {
+                    tab.tui.tick();
+                    poll_watch(tab, now);
+                }
                 return self.raise_alerts();
             }
             Message::Key(event) => return self.key(event),
             Message::Mouse(event) => self.mouse(event),
             Message::Resized(size) => {
                 self.window = size;
-                self.tui.clear_selection();
+                self.clear_selections();
             }
             Message::Focused(focused) => {
                 self.focused = focused;
                 self.restart_blink();
             }
-            Message::Copied(chars) => self.tui.notify_copied(chars, &Ok(())),
-            Message::EditorClosed(path, result) => {
-                self.tui
-                    .editor_closed(path, &result.map_err(std::io::Error::other));
+            Message::Copied(chars) => self.tabs.front_mut().tui.notify_copied(chars, &Ok(())),
+            Message::EditorClosed(tab, path, result) => {
+                if let Some(tab) = self.tabs.by_id_mut(tab) {
+                    tab.tui
+                        .editor_closed(path, &result.map_err(std::io::Error::other));
+                }
             }
         }
         Task::none()
@@ -242,6 +266,13 @@ impl App {
     fn restart_blink(&mut self) {
         self.now = Instant::now();
         self.blink_from = self.now;
+    }
+
+    /// Selections are in cells, which move when the grid changes size.
+    fn clear_selections(&mut self) {
+        for tab in self.tabs.iter_mut() {
+            tab.tui.clear_selection();
+        }
     }
 
     fn key(&mut self, event: keyboard::Event) -> Task<Message> {
@@ -259,7 +290,7 @@ impl App {
             } => {
                 self.modifiers = modifiers;
                 self.restart_blink();
-                if let Some(task) = self.shortcut(&modified_key, modifiers) {
+                if let Some(task) = self.shortcut(&key, &modified_key, modifiers) {
                     return task;
                 }
                 for event in input::key_events(&key, text.as_deref(), modifiers) {
@@ -273,35 +304,60 @@ impl App {
         }
     }
 
-    /// Window shortcuts a terminal emulator would handle itself: zoom,
-    /// copy and paste.
-    fn shortcut(&mut self, key: &Key, m: Modifiers) -> Option<Task<Message>> {
+    /// Window shortcuts a terminal emulator would handle itself: tabs,
+    /// zoom, copy and paste.
+    fn shortcut(&mut self, plain: &Key, key: &Key, m: Modifiers) -> Option<Task<Message>> {
+        if m.control() && matches!(key.as_ref(), Key::Named(Named::Tab)) {
+            if m.shift() {
+                self.tabs.previous();
+            } else {
+                self.tabs.next();
+            }
+            return Some(Task::none());
+        }
         let chord = if cfg!(target_os = "macos") {
             m.logo()
         } else {
             m.control()
         };
+        // Tabs by number, as window managers switch workspaces. Option
+        // types symbols on macOS, so Alt is for the other systems.
+        if chord || (m.alt() && !cfg!(target_os = "macos")) {
+            if let Some(number) = tab_number(plain) {
+                self.tabs.focus(number - 1);
+                return Some(Task::none());
+            }
+        }
         if !chord {
             if m.shift() && matches!(key.as_ref(), Key::Named(Named::Insert)) {
-                self.tui.paste_from_clipboard();
+                self.tabs.front_mut().tui.paste_from_clipboard();
                 return Some(Task::none());
             }
             return None;
         }
+        // Ctrl+C, Ctrl+V, Ctrl+T and Ctrl+W on their own belong to the
+        // UI, as in a terminal; the window takes them with Shift.
+        let shifted = m.shift() || cfg!(target_os = "macos");
         let size = self.metrics.font_size;
         let zoom = |size: f32| Some(size.clamp(theme::MIN_FONT_SIZE, theme::MAX_FONT_SIZE));
         let new_size = match key.as_ref() {
             Key::Character("=" | "+") => zoom(size + 1.0),
             Key::Character("-" | "_") => zoom(size - 1.0),
             Key::Character("0" | ")") => Some(theme::DEFAULT_FONT_SIZE),
-            // Plain Ctrl+V reaches the UI, which pastes (images too) itself.
-            Key::Character("v" | "V") if m.shift() || cfg!(target_os = "macos") => {
-                self.tui.paste_from_clipboard();
+            Key::Character("v" | "V") if shifted => {
+                self.tabs.front_mut().tui.paste_from_clipboard();
                 return Some(Task::none());
             }
-            // Ctrl+C on its own interrupts the agent, as in a terminal.
-            Key::Character("c" | "C") if m.shift() || cfg!(target_os = "macos") => {
-                self.tui.request_copy();
+            Key::Character("c" | "C") if shifted => {
+                self.tabs.front_mut().tui.request_copy();
+                return Some(Task::none());
+            }
+            Key::Character("t" | "T") if shifted => {
+                self.tabs.new_tab();
+                return Some(Task::none());
+            }
+            Key::Character("w" | "W") if shifted => {
+                self.tabs.close(self.tabs.front_index());
                 return Some(Task::none());
             }
             _ => None,
@@ -309,39 +365,47 @@ impl App {
         if (new_size - size).abs() > f32::EPSILON {
             self.metrics = Metrics::new(new_size);
             self.screen.invalidate();
-            self.tui.clear_selection();
+            self.clear_selections();
         }
         Some(Task::none())
     }
 
     /// One key, with the terminal's Ctrl+C and Ctrl+D rules. `true` quits.
     fn key_press(&mut self, key: KeyEvent) -> bool {
+        let tui = &mut self.tabs.front_mut().tui;
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('c') => {
-                    if self.tui.request_copy() {
+                    if tui.request_copy() {
                         return false;
                     }
-                    if !self.tui.is_busy() {
+                    if !tui.is_busy() {
                         return true;
                     }
-                    self.tui.cancel();
+                    tui.cancel();
                     return false;
                 }
                 KeyCode::Char('d') => return true,
                 _ => {}
             }
         }
-        self.tui.handle_key(key).should_quit()
+        tui.handle_key(key).should_quit()
     }
 
     fn mouse(&mut self, event: mouse::Event) {
-        let (cols, rows) = self.screen.size();
-        let cell_at =
-            |metrics: &Metrics, window: Size, at: Point| metrics.cell_at(window, cols, rows, at);
         let kind = match event {
             mouse::Event::CursorMoved { position } => {
-                let at = cell_at(&self.metrics, self.window, position);
+                let bar = tab_bar::height(&self.metrics);
+                // A drag that began in the grid keeps selecting there.
+                if position.y < bar && !self.left_down {
+                    self.bar_pointer = Some(position);
+                    self.pointer = None;
+                    return;
+                }
+                self.bar_pointer = None;
+                let (cols, rows) = self.screen.size();
+                let in_grid = Point::new(position.x, position.y - bar);
+                let at = self.metrics.cell_at(self.grid_area(), cols, rows, in_grid);
                 if self.pointer == Some(at) {
                     return;
                 }
@@ -354,9 +418,14 @@ impl App {
             }
             mouse::Event::CursorLeft => {
                 self.pointer = None;
+                self.bar_pointer = None;
                 return;
             }
             mouse::Event::ButtonPressed(button) => {
+                if self.bar_pointer.is_some() {
+                    self.bar_press(button);
+                    return;
+                }
                 let Some(button) = mouse_button(button) else {
                     return;
                 };
@@ -373,6 +442,9 @@ impl App {
                 MouseEventKind::Up(button)
             }
             mouse::Event::WheelScrolled { delta } => {
+                if self.bar_pointer.is_some() {
+                    return;
+                }
                 let lines = match delta {
                     mouse::ScrollDelta::Lines { y, .. } => y,
                     mouse::ScrollDelta::Pixels { y, .. } => y / self.metrics.cell.height,
@@ -395,15 +467,29 @@ impl App {
         self.send_mouse(kind);
     }
 
+    /// A button went down on the tab bar: left picks or opens a tab,
+    /// middle closes the tab under the pointer.
+    fn bar_press(&mut self, button: mouse::Button) {
+        match (self.bar.hover(), button) {
+            (Some(Hit::Tab(index)), mouse::Button::Left) => self.tabs.focus(index),
+            (Some(Hit::Tab(index)), mouse::Button::Middle) => {
+                self.tabs.close(index);
+            }
+            (Some(Hit::New), mouse::Button::Left) => self.tabs.new_tab(),
+            _ => {}
+        }
+    }
+
     fn send_mouse(&mut self, kind: MouseEventKind) {
         let Some(at) = self.pointer else {
             return;
         };
-        self.tui.handle_mouse(MouseEvent {
+        let modifiers = input::modifiers(self.modifiers);
+        self.tabs.front_mut().tui.handle_mouse(MouseEvent {
             kind,
             column: at.x,
             row: at.y,
-            modifiers: input::modifiers(self.modifiers),
+            modifiers,
         });
     }
 
@@ -411,11 +497,15 @@ impl App {
     /// those are on, and the window asks for attention in place of the
     /// terminal bell.
     fn raise_alerts(&mut self) -> Task<Message> {
-        let alerts = self.tui.take_alerts();
+        // An agent is in one tab, so each tab rings for its own.
+        let mut alerts = Vec::new();
+        for tab in self.tabs.iter_mut() {
+            alerts.extend(tab.tui.take_alerts());
+        }
         if alerts.is_empty() {
             return Task::none();
         }
-        let settings = *self.tui.alert_settings();
+        let settings = self.tabs.settings().alerts;
         if settings.desktop {
             for alert in &alerts {
                 aura_terminal::alerts::desktop_notify(alert);
@@ -429,23 +519,25 @@ impl App {
         })
     }
 
-    /// Render the UI into the grid, then act on what the frame asked for.
+    /// Render the UI of the tab in front into the grid, then act on what
+    /// the tabs asked for.
     fn refresh(&mut self) -> Task<Message> {
-        if self.tui.take_paste_request() {
-            self.tui.paste_from_clipboard();
-        }
-        let (cols, rows) = self.metrics.grid(self.window);
-        let area = self.terminal.backend().buffer().area;
-        if (area.width, area.height) != (cols, rows) {
-            let pixels = Size::new(
-                f32::from(cols) * self.metrics.cell.width,
-                f32::from(rows) * self.metrics.cell.height,
-            );
-            self.terminal.backend_mut().resize(cols, rows, pixels);
-        }
-        let (tui, tui_theme) = (&mut self.tui, &self.tui_theme);
+        let area = self.grid_area();
+        let (cols, rows) = self.metrics.grid(area);
+        let cell = self.metrics.cell;
         let mut tasks = Vec::new();
-        match self
+
+        let tab = self.tabs.front_mut();
+        if tab.tui.take_paste_request() {
+            tab.tui.paste_from_clipboard();
+        }
+        let drawn = tab.terminal.backend().buffer().area;
+        if (drawn.width, drawn.height) != (cols, rows) {
+            let pixels = Size::new(f32::from(cols) * cell.width, f32::from(rows) * cell.height);
+            tab.terminal.backend_mut().resize(cols, rows, pixels);
+        }
+        let (tui, tui_theme) = (&mut tab.tui, &self.tui_theme);
+        match tab
             .terminal
             .draw(|frame| aura_terminal::render(frame, tui, tui_theme))
         {
@@ -459,69 +551,131 @@ impl App {
             }
             Err(e) => tracing::warn!(error = %e, "render failed"),
         }
-        self.screen.update(self.terminal.backend());
-        if let Some(path) = self.tui.take_editor_request() {
-            tasks.push(self.open_editor(path));
+        self.screen.update(tab.terminal.backend());
+
+        let now = self.now;
+        for tab in self.tabs.iter_mut() {
+            if let Some(path) = tab.tui.take_editor_request() {
+                tasks.push(open_editor(tab, path, now));
+            }
         }
+
+        let origin = self.metrics.origin(area, cols, rows);
+        let model = tab_bar::Model {
+            items: self
+                .tabs
+                .iter()
+                .enumerate()
+                .map(|(index, tab)| tab_bar::Item {
+                    label: (index + 1).to_string(),
+                    busy: tab.busy(),
+                })
+                .collect(),
+            front: self.tabs.front_index(),
+            title: self.tabs.front().title(),
+            // Panel borders run through the middle of the outermost cells.
+            x: (origin.x + cell.width / 2.0).round(),
+            width: f32::from(cols.saturating_sub(1)) * cell.width,
+            metrics: self.metrics,
+            palette: self.palette,
+        };
+        self.bar.update(model, self.bar_pointer);
+        self.save_tabs();
         Task::batch(tasks)
     }
 
-    /// Hand a file to the user's editor. Editors that need a terminal can't
-    /// run in a window, so those (and no editor at all) fall back to the
-    /// system's default app, and saving the file counts as closing it.
-    fn open_editor(&mut self, path: PathBuf) -> Task<Message> {
-        let editor = std::env::var("VISUAL")
-            .or_else(|_| std::env::var("EDITOR"))
-            .ok()
-            .filter(|e| !e.trim().is_empty() && !is_terminal_editor(e));
-        let Some(editor) = editor else {
-            open_external(&path.display().to_string());
-            self.watch = Some(Watch {
-                modified: modified(&path),
-                path,
-                checked: self.now,
-            });
-            return Task::none();
-        };
-        let target = path.clone();
-        Task::perform(
-            async move {
-                let mut words = editor.split_whitespace();
-                let program = words.next().unwrap_or_default().to_string();
-                let status = tokio::process::Command::new(program)
-                    .args(words)
-                    .arg(&target)
-                    .status()
-                    .await
-                    .map_err(|e| e.to_string())?;
-                if status.success() {
-                    Ok(())
-                } else {
-                    Err(format!("editor exited with {status}"))
-                }
-            },
-            move |result| Message::EditorClosed(path.clone(), result),
-        )
-    }
-
-    fn poll_watch(&mut self, now: Instant) {
-        let Some(watch) = self.watch.as_mut() else {
+    /// Write the split of projects over tabs when it changed, once the
+    /// session has listed its projects.
+    fn save_tabs(&mut self) {
+        let Some(path) = &self.tabs_file else {
             return;
         };
-        if now.saturating_duration_since(watch.checked) < EDIT_POLL {
+        let arrangement = self.tabs.arrangement();
+        if arrangement == self.saved || arrangement.iter().any(Vec::is_empty) {
             return;
         }
-        watch.checked = now;
-        if modified(&watch.path) != watch.modified {
-            if let Some(watch) = self.watch.take() {
-                self.tui.editor_closed(watch.path, &Ok(()));
-            }
+        if let Err(e) = router::save_arrangement(path, &arrangement) {
+            tracing::warn!(error = %e, path = %path.display(), "could not save the tabs");
         }
+        self.saved = arrangement;
     }
 
     #[cfg(test)]
     pub fn screen(&self) -> &Screen {
         &self.screen
+    }
+
+    #[cfg(test)]
+    pub fn tabs(&self) -> &Tabs {
+        &self.tabs
+    }
+
+    #[cfg(test)]
+    pub fn bar(&self) -> &Bar {
+        &self.bar
+    }
+}
+
+/// The tab a number key picks, counting from 1.
+fn tab_number(key: &Key) -> Option<usize> {
+    match key.as_ref() {
+        Key::Character(digit) => digit.parse().ok().filter(|number| (1..=9).contains(number)),
+        _ => None,
+    }
+}
+
+/// Hand a file to the user's editor for `tab`. Editors that need a
+/// terminal can't run in a window, so those (and no editor at all) fall
+/// back to the system's default app, and saving the file counts as
+/// closing it.
+fn open_editor(tab: &mut crate::tab::Tab, path: PathBuf, now: Instant) -> Task<Message> {
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .ok()
+        .filter(|e| !e.trim().is_empty() && !is_terminal_editor(e));
+    let Some(editor) = editor else {
+        open_external(&path.display().to_string());
+        tab.watch = Some(Watch {
+            modified: modified(&path),
+            path,
+            checked: now,
+        });
+        return Task::none();
+    };
+    let (id, target) = (tab.id, path.clone());
+    Task::perform(
+        async move {
+            let mut words = editor.split_whitespace();
+            let program = words.next().unwrap_or_default().to_string();
+            let status = tokio::process::Command::new(program)
+                .args(words)
+                .arg(&target)
+                .status()
+                .await
+                .map_err(|e| e.to_string())?;
+            if status.success() {
+                Ok(())
+            } else {
+                Err(format!("editor exited with {status}"))
+            }
+        },
+        move |result| Message::EditorClosed(id, path.clone(), result),
+    )
+}
+
+/// Tell `tab`'s UI the file it is waiting on was saved, once it was.
+fn poll_watch(tab: &mut crate::tab::Tab, now: Instant) {
+    let Some(watch) = tab.watch.as_mut() else {
+        return;
+    };
+    if now.saturating_duration_since(watch.checked) < EDIT_POLL {
+        return;
+    }
+    watch.checked = now;
+    if modified(&watch.path) != watch.modified {
+        if let Some(watch) = tab.watch.take() {
+            tab.tui.editor_closed(watch.path, &Ok(()));
+        }
     }
 }
 

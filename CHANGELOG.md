@@ -26,6 +26,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ##### Added
 
+- Tabs in the desktop window, which work as workspaces. A strip above
+  the grid has a numbered box per tab, a `+` box, and a wide box naming
+  what the tab in front shows. Each tab holds its own projects and
+  agents and shows only those, in its own `aura_terminal::App` with its
+  own draft, panels, overlays, scroll and selection, all on the one
+  session. The window starts with every project in one tab; `+` starts
+  an agent in a new tab, and a project created in a tab stays in it.
+  Ctrl+Shift+T / Ctrl+Shift+W open and close tabs (Cmd+T / Cmd+W on
+  macOS), Ctrl+1…9 or Alt+1…9 (Cmd+1…9) go to a tab by number, and
+  Ctrl+Tab / Ctrl+Shift+Tab move between them. Closing a tab moves its
+  projects to the tab before it. The split is kept in `desktop_tabs` in
+  the data directory. `UiEvent::FocusAgent` makes an agent the
+  session's active one without reloading its chat.
 - `aura-desktop`, the terminal UI in a native window built on iced and
   drawn on the GPU (wgpu, with a tiny-skia CPU fallback). It runs the
   same in-process session as the terminal (`session::start`) and the

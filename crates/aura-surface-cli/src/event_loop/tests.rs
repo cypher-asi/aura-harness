@@ -1297,3 +1297,41 @@ async fn diff_shows_the_latest_turn_or_the_whole_session() {
     assert_eq!(paths, ["a.txt", "b.txt"]);
     assert!(files[0].diff.contains("-a\n+A\n"), "{}", files[0].diff);
 }
+
+#[tokio::test]
+async fn focusing_an_agent_makes_it_active_without_reloading_its_chat() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let (first, second) = (fixture.first, fixture.second);
+    let mut state = loop_state(&fixture, &mut b);
+
+    handle_ui_event(&mut state, UiEvent::SelectAgent(second.to_hex()), &links).await;
+    let selected = drain(&mut commands);
+    assert!(
+        selected
+            .iter()
+            .any(|(_, c)| matches!(c, UiCommand::LoadConversation(_))),
+        "selecting an idle agent loads its chat"
+    );
+
+    handle_ui_event(&mut state, UiEvent::FocusAgent(first.to_hex()), &links).await;
+    assert_eq!(state.active, first);
+    let focused = drain(&mut commands);
+    assert!(matches!(
+        focused.first(),
+        Some((None, UiCommand::SetActiveAgent(id))) if *id == first.to_hex()
+    ));
+    assert!(
+        focused
+            .iter()
+            .any(|(_, c)| matches!(c, UiCommand::ClearRecords)),
+        "the Record panel follows the focused agent"
+    );
+    assert!(
+        !focused
+            .iter()
+            .any(|(_, c)| matches!(c, UiCommand::LoadConversation(_))),
+        "the view that asked already has the chat"
+    );
+}

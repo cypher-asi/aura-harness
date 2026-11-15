@@ -48,6 +48,12 @@ It takes the terminal's `--dir`, `--provider`, `--mode`, `--theme`, `--verbose` 
 | Ctrl+Shift+C | Copy the selection |
 | Ctrl+V, Ctrl+Shift+V, Shift+Insert | Paste into the input, as in the terminal: an image, or a path to one, is attached |
 | Ctrl+= / Ctrl+- / Ctrl+0 | Larger / smaller / default text |
+| Ctrl+Shift+T (Cmd+T) | New tab |
+| Ctrl+Shift+W (Cmd+W) | Close the tab; its projects move to the tab before it |
+| Ctrl+1 … Ctrl+9, Alt+1 … Alt+9 (Cmd+1 … Cmd+9) | Go to the tab with that number |
+| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab (Ctrl on macOS too) |
+
+The strip along the top holds the tabs, numbered from 1, a `+` box, and a wide box naming the project and agent the tab in front shows. A tab is a workspace: it holds some of the projects and shows only those, in its own copy of the UI with its own draft, panels, overlays, scroll position and selection. The window starts with every project in one tab. `+` starts a new agent in a tab of its own, and a project created in a tab (`+ New project`, Ctrl+N) stays in that tab. All tabs share the one session, so agents keep working in tabs that aren't in front; a bar under a tab's number marks one with an agent at work. Closing a tab (middle click, or Ctrl+Shift+W) moves its projects to the tab before it and stops nothing. Which projects are in which tab is kept in `desktop_tabs` in the data directory and comes back on the next start.
 
 Turn alerts follow the terminal's settings; where the terminal rings the bell, the window asks for attention instead.
 

@@ -189,18 +189,26 @@ impl Metrics {
     }
 }
 
-/// Colors that ratatui's `Reset` stands for.
+/// Colors that ratatui's `Reset` stands for, and the theme colors the
+/// window draws with outside the grid.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Palette {
     pub fg: Color,
     pub bg: Color,
+    /// The theme's primary accent.
+    pub accent: Color,
+    /// Text that stays in the background.
+    pub muted: Color,
 }
 
 impl Palette {
     pub fn from_theme(theme: &aura_terminal::Theme) -> Self {
+        let fg = color(theme.colors.foreground, Color::from_rgb8(0xe6, 0xe6, 0xe6));
         Self {
-            fg: color(theme.colors.foreground, Color::from_rgb8(0xe6, 0xe6, 0xe6)),
+            fg,
             bg: color(theme.colors.background, Color::from_rgb8(0x0d, 0x0d, 0x0d)),
+            accent: color(theme.colors.primary, fg),
+            muted: color(theme.colors.muted, Color::from_rgb8(0x88, 0x88, 0x88)),
         }
     }
 }
@@ -642,6 +650,8 @@ mod tests {
         let palette = Palette {
             fg: Color::WHITE,
             bg: Color::BLACK,
+            accent: Color::WHITE,
+            muted: Color::WHITE,
         };
         let mut cell = Cell::default();
         cell.modifier = Modifier::REVERSED;

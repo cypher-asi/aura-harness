@@ -29,6 +29,12 @@ struct Demo {
     seq: u64,
     processes: Vec<ProcessSummary>,
     model: String,
+    /// Agents as `(id, name, nesting depth, permanent agent)`.
+    agents: Vec<(String, String, usize, Option<String>)>,
+    /// The agent the window shows.
+    active: String,
+    /// The agent whose turn or command is running.
+    turn_agent: String,
 }
 
 async fn serve(mut events: mpsc::Receiver<UiEvent>, out: mpsc::Sender<UiCommand>) {
@@ -37,12 +43,29 @@ async fn serve(mut events: mpsc::Receiver<UiEvent>, out: mpsc::Sender<UiCommand>
         seq: 0,
         processes: Vec::new(),
         model: "local/qwen3-coder".to_string(),
+        agents: vec![
+            (AGENT_ID.into(), "Agent01".into(), 0, None),
+            ("a2".into(), "Reviewer".into(), 1, Some("reviewer".into())),
+        ],
+        active: AGENT_ID.into(),
+        turn_agent: AGENT_ID.into(),
     };
     demo.seed().await;
     while let Some(event) = events.recv().await {
         match event {
-            UiEvent::UserMessage { text, .. } => demo.turn(&text).await,
-            UiEvent::RunCommand { command, .. } => demo.command(&command).await,
+            UiEvent::UserMessage { agent_id, text, .. } => {
+                demo.work_for(agent_id);
+                demo.turn(&text).await;
+            }
+            UiEvent::RunCommand {
+                agent_id, command, ..
+            } => {
+                demo.work_for(agent_id);
+                demo.command(&command).await;
+            }
+            UiEvent::CreateAgent(name) => demo.create_agent(name).await,
+            UiEvent::SelectAgent(id) => demo.show_agent(id, true).await,
+            UiEvent::FocusAgent(id) => demo.show_agent(id, false).await,
             UiEvent::SelectModel(id) => {
                 demo.model = id;
                 demo.send(demo.models()).await;
@@ -67,6 +90,88 @@ async fn serve(mut events: mpsc::Receiver<UiEvent>, out: mpsc::Sender<UiCommand>
 impl Demo {
     async fn send(&self, cmd: UiCommand) {
         let _ = self.out.send(cmd).await;
+    }
+
+    /// Send `cmd` to the chat of the agent at work, whichever tab shows it.
+    async fn chat(&self, cmd: UiCommand) {
+        self.send(UiCommand::ForAgent {
+            agent_id: self.turn_agent.clone(),
+            command: Box::new(cmd),
+        })
+        .await;
+    }
+
+    /// The next turn or command is for `agent_id` (the active agent when
+    /// the UI named none).
+    fn work_for(&mut self, agent_id: String) {
+        self.turn_agent = if agent_id.is_empty() {
+            self.active.clone()
+        } else {
+            agent_id
+        };
+    }
+
+    fn name_of(&self, agent_id: &str) -> String {
+        self.agents
+            .iter()
+            .find(|(id, ..)| id == agent_id)
+            .map_or_else(|| "Agent".to_string(), |(_, name, ..)| name.clone())
+    }
+
+    fn agent_list(&self) -> UiCommand {
+        let running = self.processes.iter().any(|p| p.status.is_live());
+        UiCommand::SetAgents(
+            self.agents
+                .iter()
+                .map(|(id, name, depth, definition)| AgentSummary {
+                    id: id.clone(),
+                    name: name.clone(),
+                    zns_id: format!("0://{name}"),
+                    is_active: *id == self.active,
+                    record_count: 42,
+                    last_active: "12:04:31".into(),
+                    definition: definition.clone(),
+                    depth: *depth,
+                    running: running && *id == self.turn_agent,
+                    project: (id == AGENT_ID).then(|| "aura-harness".to_string()),
+                    ..AgentSummary::default()
+                })
+                .collect(),
+        )
+    }
+
+    async fn create_agent(&mut self, name: Option<String>) {
+        let number = self.agents.len() + 1;
+        let name = name
+            .map(|n| n.trim().to_string())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| format!("Agent{number:02}"));
+        let id = format!("a{number}");
+        self.agents.push((id.clone(), name.clone(), 0, None));
+        self.show_agent(id, true).await;
+        self.send(UiCommand::ShowSuccess(format!("Created agent {name}")))
+            .await;
+    }
+
+    /// Make `id` the active agent; `reload` sends its (empty) chat too.
+    async fn show_agent(&mut self, id: String, reload: bool) {
+        if !self.agents.iter().any(|(known, ..)| *known == id) {
+            self.send(UiCommand::ShowError("Unknown agent".into()))
+                .await;
+            return;
+        }
+        self.active.clone_from(&id);
+        self.send(UiCommand::SetActiveAgent(id.clone())).await;
+        self.send(UiCommand::ClearRecords).await;
+        if reload && id != AGENT_ID {
+            self.send(UiCommand::ForAgent {
+                agent_id: id.clone(),
+                command: Box::new(UiCommand::LoadConversation(Vec::new())),
+            })
+            .await;
+        }
+        self.send(self.agent_list()).await;
+        self.send(UiCommand::SetActiveAgent(id)).await;
     }
 
     fn models(&self) -> UiCommand {
@@ -108,23 +213,7 @@ impl Demo {
 
     async fn seed(&mut self) {
         self.send(self.models()).await;
-        let agent = |id: &str, name: &str, depth, definition: Option<&str>| AgentSummary {
-            id: id.into(),
-            name: name.into(),
-            zns_id: format!("0://{name}"),
-            is_active: id == AGENT_ID,
-            record_count: 42,
-            last_active: "12:04:31".into(),
-            definition: definition.map(Into::into),
-            depth,
-            project: (depth == 0).then(|| "aura-harness".to_string()),
-            ..AgentSummary::default()
-        };
-        self.send(UiCommand::SetAgents(vec![
-            agent(AGENT_ID, "Agent01", 0, None),
-            agent("a2", "Reviewer", 1, Some("reviewer")),
-        ]))
-        .await;
+        self.send(self.agent_list()).await;
         self.send(UiCommand::SetActiveAgent(AGENT_ID.into())).await;
         self.send(UiCommand::SetAgentDefinitions(vec![
             AgentDefinitionSummary {
@@ -188,11 +277,11 @@ impl Demo {
             kind,
             label: label.into(),
             status,
-            owner_agent_id: AGENT_ID.into(),
-            owner_name: "Agent01".into(),
+            owner_agent_id: self.turn_agent.clone(),
+            owner_name: self.name_of(&self.turn_agent),
             started_ms: now - ago_ms,
             ended_ms: ended_ago_ms.map(|a| now - a),
-            jump_agent_id: AGENT_ID.into(),
+            jump_agent_id: self.turn_agent.clone(),
             killable: status.is_live(),
             ..ProcessSummary::default()
         });
@@ -231,7 +320,7 @@ impl Demo {
             detail: String::new(),
             error_details: String::new(),
             tx_id: String::new(),
-            agent_id: AGENT_ID.into(),
+            agent_id: self.turn_agent.clone(),
             ts_ms: now_ms(),
             policy: None,
         }))
@@ -239,27 +328,22 @@ impl Demo {
     }
 
     async fn turn(&mut self, prompt: &str) {
+        let label = format!("{} turn", self.name_of(&self.turn_agent));
         let process = self
-            .track(
-                "Agent01 turn",
-                ProcessKind::Turn,
-                ProcessStatus::Running,
-                0,
-                None,
-            )
+            .track(&label, ProcessKind::Turn, ProcessStatus::Running, 0, None)
             .await;
-        self.send(UiCommand::TurnStarted { prompt: None }).await;
+        self.chat(UiCommand::TurnStarted { prompt: None }).await;
         self.record("UserPrompt", "", prompt).await;
 
-        self.send(UiCommand::StartThinking).await;
+        self.chat(UiCommand::StartThinking).await;
         for word in "The user wants an overview. I'll list the crates, read the \
                      manifest, then summarise."
             .split_inclusive(' ')
         {
-            self.send(UiCommand::AppendThinking(word.into())).await;
+            self.chat(UiCommand::AppendThinking(word.into())).await;
             sleep(Duration::from_millis(25)).await;
         }
-        self.send(UiCommand::FinishThinking).await;
+        self.chat(UiCommand::FinishThinking).await;
 
         self.tool("t1", "list_files", r#"{"path":"crates"}"#, LISTING, 300)
             .await;
@@ -280,15 +364,15 @@ impl Demo {
         )
         .await;
 
-        self.send(UiCommand::SetStatus("Writing...".into())).await;
-        self.send(UiCommand::StartStreaming).await;
+        self.chat(UiCommand::SetStatus("Writing...".into())).await;
+        self.chat(UiCommand::StartStreaming).await;
         let reply = REPLY.replace("{prompt}", prompt.trim());
         for chunk in reply.split_inclusive(' ') {
-            self.send(UiCommand::AppendText(chunk.into())).await;
+            self.chat(UiCommand::AppendText(chunk.into())).await;
             sleep(Duration::from_millis(12)).await;
         }
-        self.send(UiCommand::FinishStreaming).await;
-        self.send(UiCommand::SetReplyModel {
+        self.chat(UiCommand::FinishStreaming).await;
+        self.chat(UiCommand::SetReplyModel {
             model: self.model.clone(),
             usage: Some(CallUsage {
                 tokens: 4_812,
@@ -297,19 +381,19 @@ impl Demo {
         })
         .await;
         self.finish(process, ProcessStatus::Exited).await;
-        self.send(UiCommand::Complete).await;
+        self.chat(UiCommand::Complete).await;
     }
 
     async fn tool(&mut self, id: &str, name: &str, args: &str, result: &str, ms: u64) {
-        self.send(UiCommand::SetStatus(format!("Running {name}...")))
+        self.chat(UiCommand::SetStatus(format!("Running {name}...")))
             .await;
-        self.send(UiCommand::ShowTool(ToolData {
+        self.chat(UiCommand::ShowTool(ToolData {
             id: id.into(),
             name: name.into(),
             args: args.into(),
         }))
         .await;
-        self.send(UiCommand::ToolPolicy {
+        self.chat(UiCommand::ToolPolicy {
             id: id.into(),
             tool: name.into(),
             decision: "allowed by mode.agent".into(),
@@ -318,7 +402,7 @@ impl Demo {
         sleep(Duration::from_millis(ms)).await;
         self.record("ActionResult", name, result.lines().next().unwrap_or(""))
             .await;
-        self.send(UiCommand::CompleteTool {
+        self.chat(UiCommand::CompleteTool {
             id: id.into(),
             result: result.into(),
             success: true,
@@ -344,10 +428,10 @@ impl Demo {
                 ProcessStatus::Exited,
             )
         };
-        self.send(UiCommand::CommandFinished { output, exit_code })
+        self.chat(UiCommand::CommandFinished { output, exit_code })
             .await;
         self.finish(process, status).await;
-        self.send(UiCommand::Complete).await;
+        self.chat(UiCommand::Complete).await;
     }
 }
 

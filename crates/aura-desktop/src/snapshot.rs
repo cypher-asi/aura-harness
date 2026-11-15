@@ -6,6 +6,7 @@
 use crate::app::{App, Handles, Message, Options};
 use crate::demo::{DIFF, LISTING, REPLY, TEST_OUTPUT};
 use crate::grid::Palette;
+use crate::tab_bar::Hit;
 use crate::theme;
 use aura_ui_core::events::{
     AgentDefinitionSummary, AgentSummary, CallUsage, MessageData, MessageRole, ModelOptionView,
@@ -23,10 +24,10 @@ use tokio::sync::mpsc;
 const WIDTH: u16 = 1320;
 const HEIGHT: u16 = 860;
 
-/// The app, plus the end of its event channel so sends succeed.
+/// The app, plus the session's end of its event channel.
 struct Harness {
     app: App,
-    _events: mpsc::Receiver<UiEvent>,
+    events: mpsc::Receiver<UiEvent>,
 }
 
 fn harness() -> Harness {
@@ -35,6 +36,7 @@ fn harness() -> Harness {
     let options = Options {
         theme: "cyber".into(),
         verbose: false,
+        tabs_file: None,
     };
     let mut app = App::boot(Handles { events, commands }, &options, Instant::now()).0;
     let _ = app.update(Message::Resized(Size::new(
@@ -43,7 +45,30 @@ fn harness() -> Harness {
     )));
     Harness {
         app,
-        _events: events_rx,
+        events: events_rx,
+    }
+}
+
+/// The keys held for the window's own shortcuts.
+fn window_chord() -> Modifiers {
+    if cfg!(target_os = "macos") {
+        Modifiers::LOGO
+    } else {
+        Modifiers::CTRL | Modifiers::SHIFT
+    }
+}
+
+fn agent(id: &str, name: &str, depth: usize, project: Option<&str>) -> AgentSummary {
+    AgentSummary {
+        id: id.into(),
+        name: name.into(),
+        zns_id: format!("0://{name}"),
+        record_count: 42,
+        last_active: "12:04:31".into(),
+        depth,
+        running: depth > 0,
+        project: project.map(Into::into),
+        ..AgentSummary::default()
     }
 }
 
@@ -66,15 +91,62 @@ impl Harness {
     }
 
     fn key(&mut self, key: Key, text: Option<&str>) {
+        self.chord(key, text, Modifiers::empty());
+    }
+
+    fn chord(&mut self, key: Key, text: Option<&str>, modifiers: Modifiers) {
         let _ = self.app.update(Message::Key(keyboard::Event::KeyPressed {
             modified_key: key.clone(),
             key,
             physical_key: key::Physical::Unidentified(key::NativeCode::Unidentified),
             location: Location::Standard,
-            modifiers: Modifiers::empty(),
+            modifiers,
             text: text.map(Into::into),
             repeat: false,
         }));
+    }
+
+    /// Left-click a box of the tab bar.
+    fn click(&mut self, hit: Hit) {
+        let position = self.app.bar().spot(hit).expect("the box is drawn");
+        for event in [
+            mouse::Event::CursorMoved { position },
+            mouse::Event::ButtonPressed(mouse::Button::Left),
+            mouse::Event::ButtonReleased(mouse::Button::Left),
+        ] {
+            let _ = self.app.update(Message::Mouse(event));
+        }
+    }
+
+    /// What the window asked of the session since the last call.
+    fn asked(&mut self) -> Vec<String> {
+        let mut out = Vec::new();
+        while let Ok(event) = self.events.try_recv() {
+            out.push(format!("{event:?}"));
+        }
+        out
+    }
+
+    /// The session's answer to creating the agent `id`.
+    fn created(&mut self, id: &str, name: &str) {
+        self.apply([
+            UiCommand::SetActiveAgent(id.into()),
+            UiCommand::ClearRecords,
+            UiCommand::ForAgent {
+                agent_id: id.into(),
+                command: Box::new(UiCommand::LoadConversation(Vec::new())),
+            },
+            UiCommand::SetAgents(vec![
+                agent("a1", "Agent01", 0, Some("aura-harness")),
+                agent("a2", "Reviewer", 1, None),
+                agent(id, name, 0, None),
+            ]),
+            UiCommand::SetActiveAgent(id.into()),
+        ]);
+    }
+
+    fn text(&self) -> String {
+        self.app.screen().text()
     }
 
     fn submit(&mut self, text: &str) {
@@ -95,17 +167,6 @@ fn seed(h: &mut Harness) {
             provider: provider.map(Into::into),
             available,
         };
-    let agent = |id: &str, name: &str, depth: usize| AgentSummary {
-        id: id.into(),
-        name: name.into(),
-        zns_id: format!("0://{name}"),
-        record_count: 42,
-        last_active: "12:04:31".into(),
-        depth,
-        running: depth > 0,
-        project: (depth == 0).then(|| "aura-harness".to_string()),
-        ..AgentSummary::default()
-    };
     let process = |id: &str, label: &str, status, kind, started_ms, ended_ms| ProcessSummary {
         id: id.into(),
         kind,
@@ -141,7 +202,10 @@ fn seed(h: &mut Harness) {
             user: Some("demo@aura.dev".into()),
             plans: vec![],
         },
-        UiCommand::SetAgents(vec![agent("a1", "Agent01", 0), agent("a2", "Reviewer", 1)]),
+        UiCommand::SetAgents(vec![
+            agent("a1", "Agent01", 0, Some("aura-harness")),
+            agent("a2", "Reviewer", 1, None),
+        ]),
         UiCommand::SetActiveAgent("a1".into()),
         UiCommand::SetAgentDefinitions(vec![AgentDefinitionSummary {
             name: "reviewer".into(),
@@ -307,7 +371,77 @@ fn snapshot(name: &str, h: &Harness) {
 fn the_grid_fills_the_window() {
     let h = harness();
     let (cols, rows) = h.app.screen().size();
-    assert_eq!((cols, rows), (155, 47));
+    // Two rows fewer than the window alone holds: the tab bar is above.
+    assert_eq!((cols, rows), (155, 45));
+}
+
+#[test]
+fn the_window_opens_with_one_tab() {
+    let mut h = harness();
+    seed(&mut h);
+    assert_eq!(h.app.tabs().len(), 1);
+    assert_eq!(h.app.bar().title(), Some("AURA-HARNESS / AGENT01"));
+    assert!(h.app.bar().spot(Hit::Tab(1)).is_none());
+    assert!(h.asked().is_empty());
+}
+
+#[test]
+fn tabs_are_workspaces_with_their_own_projects() {
+    let mut h = harness();
+    session(&mut h);
+    let _ = h.asked();
+
+    h.click(Hit::New);
+    assert_eq!(h.asked(), ["CreateAgent(None)"]);
+    assert_eq!(h.app.tabs().len(), 1, "the tab opens with its agent");
+    h.created("a3", "Agent03");
+    assert_eq!(h.app.tabs().len(), 2);
+    assert_eq!(h.app.bar().title(), Some("AGENT03"));
+    assert!(!h.text().contains("Summarise the crates"));
+    assert!(!h.text().contains("Reviewer"), "a project of the first tab");
+
+    h.type_text("a draft for the new agent");
+    assert!(h.text().contains("a draft for the new agent"));
+    snapshot("tabs", &h);
+
+    h.chord(Key::Named(key::Named::Tab), None, Modifiers::CTRL);
+    assert_eq!(h.asked(), [r#"FocusAgent("a1")"#]);
+    assert_eq!(h.app.tabs().front_index(), 0);
+    assert!(h.text().contains("Summarise the crates"));
+    assert!(h.text().contains("Reviewer"));
+    assert!(!h.text().contains("Agent03"), "a project of the second tab");
+    assert!(!h.text().contains("a draft for the new agent"));
+
+    h.click(Hit::Tab(1));
+    assert_eq!(h.asked(), [r#"FocusAgent("a3")"#]);
+    assert!(h.text().contains("a draft for the new agent"));
+
+    h.chord(Key::Character("1".into()), None, Modifiers::ALT);
+    assert_eq!(h.asked(), [r#"FocusAgent("a1")"#]);
+    assert_eq!(h.app.tabs().front_index(), 0);
+    assert!(h.text().contains("Summarise the crates"));
+}
+
+#[test]
+fn shortcuts_open_and_close_tabs() {
+    let mut h = harness();
+    seed(&mut h);
+    let _ = h.asked();
+    h.chord(Key::Character("T".into()), None, window_chord());
+    assert_eq!(h.asked(), ["CreateAgent(None)"]);
+    h.created("a3", "Agent03");
+    assert_eq!(h.app.tabs().len(), 2);
+
+    // Closing a tab hands its projects to the one before it.
+    h.chord(Key::Character("W".into()), None, window_chord());
+    assert_eq!(h.app.tabs().len(), 1);
+    assert_eq!(h.app.tabs().front().agent(), "a1");
+    assert_eq!(h.asked(), [r#"FocusAgent("a1")"#]);
+    assert!(h.text().contains("Agent03"));
+    assert!(h.text().contains("Reviewer"));
+
+    h.chord(Key::Character("W".into()), None, window_chord());
+    assert_eq!(h.app.tabs().len(), 1, "the last tab stays");
 }
 
 #[test]

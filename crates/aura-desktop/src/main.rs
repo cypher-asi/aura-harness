@@ -11,8 +11,11 @@ mod glyphs;
 mod grid;
 mod input;
 mod perf;
+mod router;
 #[cfg(test)]
 mod snapshot;
+mod tab;
+mod tab_bar;
 mod theme;
 
 use anyhow::Context;
@@ -78,6 +81,7 @@ fn main() -> anyhow::Result<()> {
     // Widgets that spawn futures (e.g. file reads) run on this runtime too.
     let _guard = runtime.enter();
 
+    let tabs_file = (!args.demo).then(|| router::arrangement_file(args.dir.as_deref()));
     let (handles, task) = if args.demo {
         (demo::start(&runtime), None)
     } else {
@@ -102,6 +106,7 @@ fn main() -> anyhow::Result<()> {
     let options = app::Options {
         theme: args.theme,
         verbose: args.verbose,
+        tabs_file,
     };
     let result = app::run(handles, options, launched);
     if let Some(task) = task {

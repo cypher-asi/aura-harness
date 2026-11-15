@@ -2912,3 +2912,16 @@ fn test_build_needs_a_plan() {
         Ok(UiEvent::BuildPlan { path: None, .. })
     ));
 }
+
+#[test]
+fn a_plan_for_an_agent_off_screen_leaves_the_plan_strip_alone() {
+    let mut app = App::new();
+    app.process_command(UiCommand::SetActiveAgent("a1".to_string()));
+    app.process_command(UiCommand::SetPlan(Some(sample_plan())));
+
+    app.process_command(for_agent("a2", UiCommand::SetPlan(None)));
+    assert_eq!(app.active_plan().map(|p| p.name.as_str()), Some("Auth"));
+
+    app.process_command(for_agent("a1", UiCommand::SetPlan(None)));
+    assert!(app.active_plan().is_none());
+}

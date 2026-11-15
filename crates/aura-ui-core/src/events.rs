@@ -81,6 +81,12 @@ pub enum UiEvent {
     /// User selected a different agent
     SelectAgent(String),
 
+    /// A view that already holds the chat of the agent with this hex id
+    /// came to the front (a tab of the desktop window). The agent becomes
+    /// the active one, as with [`Self::SelectAgent`], but its chat is not
+    /// sent again.
+    FocusAgent(String),
+
     /// User requested the agent list
     RefreshAgents,
 

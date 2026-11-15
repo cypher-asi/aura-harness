@@ -439,6 +439,7 @@ async fn handle_ui_event(
             handlers::handle_new_session(state).await;
         }
         UiEvent::SelectAgent(agent_hex) => agents::handle_select_agent(state, &agent_hex).await,
+        UiEvent::FocusAgent(agent_hex) => agents::handle_focus_agent(state, &agent_hex).await,
         UiEvent::CreateAgent(name) => agents::handle_create_agent(state, name).await,
         UiEvent::CreateProject { name, folder } => {
             agents::handle_create_project(state, &name, &folder).await;

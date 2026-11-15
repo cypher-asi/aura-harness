@@ -310,12 +310,32 @@ pub(super) fn check_notice(report: &CheckReport, first: bool) -> Option<UiComman
 
 pub(super) async fn handle_select_agent(state: &mut LoopState<'_>, agent_hex: &str) {
     match AgentId::from_hex(agent_hex) {
-        Ok(agent_id) => activate_agent(state, agent_id).await,
+        Ok(agent_id) => activate_agent(state, agent_id, Chat::Reload).await,
         Err(e) => {
             warn!(agent = agent_hex, error = %e, "Invalid agent id from UI");
             show_error(state, format!("Invalid agent id: {e}")).await;
         }
     }
+}
+
+/// Make the agent with hex id `agent_hex` the active one for a view that
+/// already shows its chat.
+pub(super) async fn handle_focus_agent(state: &mut LoopState<'_>, agent_hex: &str) {
+    match AgentId::from_hex(agent_hex) {
+        Ok(agent_id) => activate_agent(state, agent_id, Chat::Keep).await,
+        Err(e) => warn!(agent = agent_hex, error = %e, "Invalid agent id from UI"),
+    }
+}
+
+/// What the UI needs of an agent's chat when the agent becomes active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Chat {
+    /// Rebuild it from the record, unless the agent is at work and the
+    /// chat is live.
+    Reload,
+    /// The view asking already has it; rebuilding would lose its scroll
+    /// position and what it has expanded.
+    Keep,
 }
 
 pub(super) async fn handle_create_project(state: &mut LoopState<'_>, name: &str, folder: &Path) {
@@ -333,7 +353,7 @@ pub(super) async fn handle_create_project(state: &mut LoopState<'_>, name: &str,
                 .display()
                 .to_string();
             info!(zns_id = %agent.zns_id, %project, %folder, "Created project");
-            activate_agent(state, agent.agent_id()).await;
+            activate_agent(state, agent.agent_id(), Chat::Reload).await;
             show_success(state, format!("Created project {project} in {folder}")).await;
         }
         Err(e) => show_error(state, format!("Could not create project: {e}")).await,
@@ -357,7 +377,7 @@ pub(super) async fn handle_create_agent(state: &mut LoopState<'_>, name: Option<
     match created {
         Ok(agent) => {
             info!(zns_id = %agent.zns_id, name = %agent.name, "Created terminal agent");
-            activate_agent(state, agent.agent_id()).await;
+            activate_agent(state, agent.agent_id(), Chat::Reload).await;
             show_success(state, format!("Created agent {}", agent.name)).await;
         }
         Err(e) => show_error(state, format!("Could not create agent: {e}")).await,
@@ -410,7 +430,7 @@ async fn start_instance(
     match created {
         Ok(agent) => {
             info!(name = %agent.name, %definition, "Started permanent agent instance");
-            activate_agent(state, agent.agent_id()).await;
+            activate_agent(state, agent.agent_id(), Chat::Reload).await;
             Some(agent)
         }
         Err(e) => {
@@ -513,7 +533,7 @@ pub(super) fn open_session(
 }
 
 /// Show `agent_id`. Agents keep working while another one is shown.
-async fn activate_agent(state: &mut LoopState<'_>, agent_id: AgentId) {
+async fn activate_agent(state: &mut LoopState<'_>, agent_id: AgentId, chat: Chat) {
     state.park_finished_spawns().await;
     if agent_id == state.active {
         state.hub.send_agent_list().await;
@@ -536,12 +556,13 @@ async fn activate_agent(state: &mut LoopState<'_>, agent_id: AgentId) {
         warn!(error = %e, "Failed to persist active agent");
     }
 
-    show_active_agent(state).await;
+    show_active_agent(state, chat).await;
 }
 
-/// Switch the UI to the active agent and fill the Record panel and chat
-/// with its history. A busy agent's chat is already live in the UI.
-pub(super) async fn show_active_agent(state: &LoopState<'_>) {
+/// Switch the UI to the active agent and fill the Record panel and, with
+/// [`Chat::Reload`], the chat with its history. A busy agent's chat is
+/// already live in the UI.
+pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
     let store = state.hub.factory.store.as_ref();
     let agent_id = state.active;
 
@@ -567,7 +588,7 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>) {
         }
     }
 
-    if !state.hub.is_running(agent_id) {
+    if chat == Chat::Reload && !state.hub.is_running(agent_id) {
         let history = conversation_history(store, agent_id).unwrap_or_else(|e| {
             warn!(error = %e, "Failed to rebuild conversation from record");
             Vec::new()

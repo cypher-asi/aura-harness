@@ -156,9 +156,13 @@ impl App {
         let asks = matches!(command, UiCommand::RequestApproval { .. });
         if matches!(
             command,
-            UiCommand::NewRecord(_) | UiCommand::ClearRecords | UiCommand::SetSandboxRoot(_)
+            UiCommand::NewRecord(_)
+                | UiCommand::ClearRecords
+                | UiCommand::SetSandboxRoot(_)
+                | UiCommand::SetPlan(_)
         ) {
-            // The Record and Sandbox panels show the active agent only.
+            // The Record and Sandbox panels and the plan strip show the
+            // active agent only.
             return;
         }
 
