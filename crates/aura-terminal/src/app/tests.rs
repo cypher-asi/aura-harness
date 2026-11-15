@@ -184,11 +184,11 @@ fn submit(app: &mut App, text: &str) {
 }
 
 #[test]
-fn test_prefixed_input_runs_as_command() {
+fn test_terminal_prompt_runs_input_as_command() {
     let (tx, mut rx) = mpsc::channel(1);
     let mut app = App::new().with_event_sender(tx);
 
-    submit(&mut app, "!echo hi");
+    submit(&mut app, "$echo hi");
 
     assert!(matches!(
         rx.try_recv(),
@@ -204,7 +204,7 @@ fn test_prefixed_input_runs_as_command() {
 #[test]
 fn test_command_output_fills_the_shell_message() {
     let mut app = App::new();
-    submit(&mut app, "!false");
+    submit(&mut app, "$false");
 
     app.process_command(UiCommand::CommandFinished {
         output: "nope\n".to_string(),
@@ -224,7 +224,7 @@ fn test_command_width_follows_the_chat() {
     let mut app = App::new().with_event_sender(tx);
     app.set_chat_width(118);
 
-    submit(&mut app, "!ls");
+    submit(&mut app, "$ls");
 
     assert!(matches!(
         rx.try_recv(),
@@ -232,72 +232,14 @@ fn test_command_width_follows_the_chat() {
     ));
 }
 
-#[cfg(unix)]
 #[test]
-fn test_executable_on_path_runs_as_command() {
+fn test_commands_without_hash_go_to_the_agent() {
     let (tx, mut rx) = mpsc::channel(1);
     let mut app = App::new().with_event_sender(tx);
 
     submit(&mut app, "ls -la");
 
-    assert!(matches!(
-        rx.try_recv(),
-        Ok(UiEvent::RunCommand { command, .. }) if command == "ls -la"
-    ));
-}
-
-/// Sync the input kind as if the input had sat unchanged past the
-/// highlight delay.
-fn settle_input_kind(app: &mut App) {
-    app.sync_input_kind();
-    if let Some(earlier) = app.input_edited_at.checked_sub(COMMAND_HIGHLIGHT_DELAY) {
-        app.input_edited_at = earlier;
-    }
-    app.sync_input_kind();
-}
-
-#[cfg(unix)]
-#[test]
-fn test_input_kind_tracks_what_enter_would_do() {
-    let mut app = App::new();
-    for (text, is_command) in [
-        ("l", false),
-        ("ls", true),
-        ("ls -la", true),
-        ("ls what is here?", false),
-        ("!anything", true),
-        ("hello there", false),
-    ] {
-        app.input = text.to_string();
-        settle_input_kind(&mut app);
-        assert_eq!(app.input_is_command(), is_command, "{text:?}");
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn test_command_highlight_waits_for_typing_to_pause() {
-    let mut app = App::new();
-    app.input = "ls".to_string();
-    app.sync_input_kind();
-    assert!(!app.input_is_command(), "not until the input settles");
-    settle_input_kind(&mut app);
-    assert!(app.input_is_command());
-
-    app.input = "ls -la".to_string();
-    app.sync_input_kind();
-    assert!(
-        app.input_is_command(),
-        "stays highlighted while typing args"
-    );
-
-    app.input = "ls what is here?".to_string();
-    app.sync_input_kind();
-    assert!(!app.input_is_command(), "turns off immediately");
-
-    app.input = "!echo".to_string();
-    app.sync_input_kind();
-    assert!(app.input_is_command(), "`!` highlights immediately");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::UserMessage(text)) if text == "ls -la"));
 }
 
 #[test]
@@ -308,6 +250,107 @@ fn test_prose_is_sent_as_user_message() {
     submit(&mut app, "what is in here?");
 
     assert!(matches!(rx.try_recv(), Ok(UiEvent::UserMessage(text)) if text == "what is in here?"));
+}
+
+#[test]
+fn test_dollar_on_empty_line_opens_terminal() {
+    let mut app = App::new();
+    app.handle_key(key(KeyCode::Char('$')));
+    assert!(app.input_is_command());
+    assert!(app.terminal_pane());
+    assert_eq!(app.input(), "", "the `$` is not typed");
+
+    app.handle_key(key(KeyCode::Char('$')));
+    assert_eq!(app.input(), "$", "a second `$` is typed");
+}
+
+#[test]
+fn test_dollar_mid_line_is_typed() {
+    let mut app = App::new();
+    for c in "costs $5".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    assert_eq!(app.input(), "costs $5");
+    assert!(!app.input_is_command());
+}
+
+#[test]
+fn test_hash_no_longer_opens_terminal() {
+    let mut app = App::new();
+    app.handle_key(key(KeyCode::Char('#')));
+    assert_eq!(app.input(), "#");
+    assert!(!app.input_is_command());
+}
+
+#[test]
+fn test_terminal_prompt_stays_open_after_a_command() {
+    let mut app = App::new();
+    submit(&mut app, "$true");
+    app.process_command(UiCommand::CommandFinished {
+        output: String::new(),
+        exit_code: None,
+    });
+    app.process_command(UiCommand::Complete);
+    assert!(app.input_is_command());
+}
+
+#[test]
+fn test_backspace_on_empty_line_or_esc_leaves_terminal_prompt() {
+    let mut app = App::new();
+    app.handle_key(key(KeyCode::Char('$')));
+    app.handle_key(key(KeyCode::Char('l')));
+    app.handle_key(key(KeyCode::Backspace));
+    assert!(app.input_is_command(), "deleting text stays at the prompt");
+    app.handle_key(key(KeyCode::Backspace));
+    assert!(!app.input_is_command());
+
+    app.handle_key(key(KeyCode::Char('$')));
+    app.handle_key(key(KeyCode::Char('l')));
+    app.handle_key(key(KeyCode::Esc));
+    assert!(!app.input_is_command());
+    assert!(!app.terminal_pane(), "back to the chat pane");
+    assert_eq!(app.input(), "l");
+}
+
+#[test]
+fn test_slash_at_terminal_prompt_is_a_path_not_a_command() {
+    let (tx, mut rx) = mpsc::channel(1);
+    let mut app = App::new().with_event_sender(tx);
+    app.handle_key(key(KeyCode::Char('$')));
+    for c in "/bin/ls".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    assert!(app.slash_matches().is_empty());
+    app.handle_key(key(KeyCode::Enter));
+
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::RunCommand { command, .. }) if command == "/bin/ls"
+    ));
+}
+
+#[test]
+fn test_terminal_prompt_recalls_only_commands() {
+    let mut app = App::new();
+    submit(&mut app, "hello agent");
+    app.state = AppState::Idle;
+    submit(&mut app, "$ls");
+    app.state = AppState::Idle;
+    submit(&mut app, "pwd");
+    app.state = AppState::Idle;
+
+    app.handle_key(key(KeyCode::Up));
+    assert_eq!(app.input(), "pwd");
+    app.handle_key(key(KeyCode::Up));
+    assert_eq!(app.input(), "ls");
+    app.handle_key(key(KeyCode::Up));
+    assert_eq!(app.input(), "ls", "stays at the oldest command");
+
+    app.handle_key(key(KeyCode::Esc));
+    app.input.clear();
+    app.cursor_pos = 0;
+    app.handle_key(key(KeyCode::Up));
+    assert_eq!(app.input(), "hello agent");
 }
 
 // ========================================================================
@@ -364,9 +407,9 @@ fn test_enter_in_agents_column_selects_agent() {
     let (mut app, mut rx) = app_with_agents();
     app.focus = PanelFocus::Swarm;
 
-    // Down off the first agent lands on the next project, then its agent.
+    // Down off the first agent skips the next project's header to its agent.
     app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::empty()));
-    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::empty()));
+    assert_eq!(app.selected_agent(), 4);
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
 
     assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
@@ -675,15 +718,12 @@ fn test_mouse_move_hovers_clickable_items() {
     let (mut app, _rx) = app_with_agent_areas();
     app.set_agent_tabs_area(Rect::new(1, 1, 22, 1));
 
-    // A project cell spans three lines and never shows a hover.
-    for y in 4..7 {
-        app.handle_mouse(mouse(MouseEventKind::Moved, 5, y));
-        assert_eq!(app.hover(), None, "line {y}");
-    }
-    app.handle_mouse(mouse(MouseEventKind::Moved, 5, 7));
+    app.handle_mouse(mouse(MouseEventKind::Moved, 5, 4));
+    assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(0)));
+    app.handle_mouse(mouse(MouseEventKind::Moved, 5, 5));
     assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(1)));
 
-    app.handle_mouse(mouse(MouseEventKind::Moved, 5, 8));
+    app.handle_mouse(mouse(MouseEventKind::Moved, 5, 6));
     assert_eq!(app.project_rows()[2], ProjectListRow::Gap);
     assert_eq!(app.hover(), None);
 
@@ -696,13 +736,13 @@ fn test_mouse_move_hovers_clickable_items() {
     app.handle_mouse(mouse(MouseEventKind::Moved, 0, 0));
     assert_eq!(app.hover(), None);
 
-    app.handle_mouse(mouse(MouseEventKind::Moved, 5, 7));
-    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 7));
-    app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 8, 7));
+    app.handle_mouse(mouse(MouseEventKind::Moved, 5, 5));
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 5));
+    app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 8, 5));
     assert_eq!(app.hover(), None);
 
     app.state = AppState::AwaitingApproval;
-    app.handle_mouse(mouse(MouseEventKind::Moved, 5, 7));
+    app.handle_mouse(mouse(MouseEventKind::Moved, 5, 5));
     assert_eq!(app.hover(), None);
 
     let dir = tempfile::tempdir().unwrap();
@@ -742,11 +782,55 @@ fn test_hidden_tab_ignores_clicks_on_its_old_rows() {
 }
 
 #[test]
+fn test_pinned_new_agent_row_creates_agent() {
+    let (mut app, mut rx) = app_with_definitions();
+    app.areas.swarm = Some(Rect::new(0, 0, 24, 20));
+    app.set_definition_rows_area(Rect::new(1, 3, 22, 10));
+    app.set_new_agent_area(Rect::new(1, 13, 22, 1));
+
+    // Below the two listed agents is empty list space, not "+ New agent".
+    app.handle_mouse(mouse(MouseEventKind::Moved, 3, 5));
+    assert_eq!(app.hover(), None);
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 3, 5));
+    assert!(rx.try_recv().is_err());
+
+    app.handle_mouse(mouse(MouseEventKind::Moved, 3, 13));
+    assert_eq!(app.hover(), Some(HoverTarget::DefinitionRow(2)));
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 3, 13));
+    assert_eq!(app.selected_definition(), 2);
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::EditDefinition(None))));
+}
+
+#[test]
+fn test_refolding_project_keeps_active_agent_selected() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let (mut app, mut rx) = app_with_agent_areas();
+    let active = app.selected_agent();
+    assert_eq!(
+        app.project_rows()[active],
+        ProjectListRow::Agent { index: 0 }
+    );
+
+    // The active agent's project is on line 4: close it, then open it.
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 4));
+    assert!(matches!(
+        app.project_rows()[0],
+        ProjectListRow::Project {
+            expanded: false,
+            ..
+        }
+    ));
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 4));
+
+    assert_eq!(app.selected_agent(), active);
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
 fn test_arrow_in_agents_column_switches_immediately() {
     let (mut app, mut rx) = app_with_agents();
     app.focus = PanelFocus::Swarm;
 
-    app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Down));
 
     assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
@@ -757,7 +841,6 @@ fn test_enter_on_new_agent_row_creates_agent() {
     let (mut app, mut rx) = app_with_agents();
     app.focus = PanelFocus::Swarm;
 
-    app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Down));
     let _ = rx.try_recv();
     app.handle_key(key(KeyCode::Down));
@@ -932,17 +1015,17 @@ fn test_click_agent_row_switches_and_new_row_creates() {
     use crossterm::event::{MouseButton, MouseEventKind};
     let (mut app, mut rx) = app_with_agent_areas();
 
-    // Projects take lines 4-6 and 9-11, agents 7 and 12, the gap 8.
-    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 12));
+    // Projects take lines 4 and 7, agents 5 and 8, the gap 6.
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 8));
     assert_eq!(app.focus(), PanelFocus::Swarm);
     assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
 
-    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 8));
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 6));
     assert_eq!(app.selected_agent(), 4);
 
     // Clicking a project folds it and leaves the highlighted agent alone.
     let bb = ProjectListRow::Agent { index: 1 };
-    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 5));
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 4));
     assert!(matches!(
         app.project_rows()[0],
         ProjectListRow::Project {
@@ -951,8 +1034,8 @@ fn test_click_agent_row_switches_and_new_row_creates() {
         }
     ));
     assert_eq!(app.project_rows()[app.selected_agent()], bb);
-    assert_eq!(app.hover(), None);
-    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 6));
+    assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(0)));
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 4));
     assert_eq!(app.selected_agent(), 4);
     assert_eq!(app.project_rows()[4], bb);
     assert!(rx.try_recv().is_err());
@@ -1036,36 +1119,51 @@ fn test_click_without_drag_selects_nothing() {
 }
 
 #[test]
-fn test_wheel_over_agents_switches_without_focus() {
+fn test_wheel_over_agents_scrolls_without_switching() {
     use crossterm::event::MouseEventKind;
     let (mut app, mut rx) = app_with_agent_areas();
+    // Two lines of a five-line list: project, agent, gap, project, agent.
+    app.set_agent_rows_area(Rect::new(1, 4, 18, 2));
+    let selected = app.selected_agent();
 
-    // The first tick lands on the next project header; the next reaches its agent.
-    app.handle_mouse(mouse(MouseEventKind::ScrollDown, 5, 5));
+    for _ in 0..5 {
+        app.handle_mouse(mouse(MouseEventKind::ScrollDown, 5, 5));
+    }
+    assert_eq!(app.agents_scroll(), 3);
+    app.sync_agents_scroll(2);
+    assert_eq!(app.agents_scroll(), 3);
+    assert_eq!(app.selected_agent(), selected);
     assert!(rx.try_recv().is_err());
-    app.handle_mouse(mouse(MouseEventKind::ScrollDown, 5, 5));
-
     assert_eq!(app.focus(), PanelFocus::Chat);
-    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
     assert_eq!(app.scroll_offset(), 0);
+
+    app.handle_mouse(mouse(MouseEventKind::ScrollUp, 5, 5));
+    assert_eq!(app.agents_scroll(), 2);
+
+    // A key brings the highlight back into view. Up from the first agent
+    // has no agent to reach, so the highlight stays where it is.
+    app.focus = PanelFocus::Swarm;
+    app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::empty()));
+    assert_eq!(app.selected_agent(), selected);
+    app.sync_agents_scroll(2);
+    assert_eq!(app.agents_scroll(), 1);
 }
 
 #[test]
 fn test_agents_scroll_keeps_selection_visible() {
-    // Lines: project 0-2, agent 3, gap 4, project 5-7, agent 8.
+    // Rows: project 0, agent 1, gap 2, project 3, agent 4.
     let (mut app, _rx) = app_with_agents();
     app.selected_agent = 1;
     app.sync_agents_scroll(2);
-    assert_eq!(app.agents_scroll(), 2);
+    assert_eq!(app.agents_scroll(), 0);
 
     app.selected_agent = 4;
     app.sync_agents_scroll(2);
-    assert_eq!(app.agents_scroll(), 7);
+    assert_eq!(app.agents_scroll(), 3);
 
-    // A project taller than the list keeps its top line in view.
     app.selected_agent = 3;
     app.sync_agents_scroll(2);
-    assert_eq!(app.agents_scroll(), 5);
+    assert_eq!(app.agents_scroll(), 3);
 
     app.selected_agent = 0;
     app.sync_agents_scroll(2);
@@ -1157,6 +1255,7 @@ fn test_load_conversation_replaces_messages() {
                 result: Some("fn main() {}".to_string()),
                 is_error: false,
                 duration_ms: Some(5),
+                policy: None,
             }),
             ..MessageData::new(MessageRole::Assistant, "")
         },
@@ -1607,7 +1706,7 @@ fn test_panel_commands_toggle_visibility() {
     assert!(app.sandbox_panel_visible());
     assert!(app.swarm_panel_visible());
 
-    app.handle_command("/record");
+    app.handle_command("/kernel");
     app.handle_command("/files");
     app.handle_command("/agents");
     assert!(!app.record_panel_visible());
@@ -1814,10 +1913,10 @@ fn test_slash_menu_arrows_move_and_wrap() {
 #[test]
 fn test_slash_menu_tab_completes_without_switching_panel() {
     let mut app = App::new();
-    type_chars(&mut app, "/rec");
+    type_chars(&mut app, "/ker");
     app.handle_key(key(KeyCode::Tab));
-    assert_eq!(app.input(), "/record");
-    assert_eq!(app.cursor_pos(), "/record".len());
+    assert_eq!(app.input(), "/kernel");
+    assert_eq!(app.cursor_pos(), "/kernel".len());
     assert_eq!(app.focus(), PanelFocus::Chat);
     assert!(app.record_panel_visible());
 }
@@ -1825,7 +1924,7 @@ fn test_slash_menu_tab_completes_without_switching_panel() {
 #[test]
 fn test_slash_menu_enter_runs_selected_command() {
     let mut app = App::new();
-    type_chars(&mut app, "/rec");
+    type_chars(&mut app, "/ker");
     app.handle_key(key(KeyCode::Enter));
     assert!(!app.record_panel_visible());
     assert_eq!(app.input(), "");
@@ -1861,6 +1960,75 @@ fn test_slash_menu_esc_dismisses_until_next_edit() {
     assert_eq!(slash_names(&app), ["model"]);
 }
 
+fn agent_pick_names(app: &App) -> Vec<&str> {
+    app.agent_picks().iter().map(|d| d.name.as_str()).collect()
+}
+
+#[test]
+fn test_agent_space_lists_permanent_agents_and_enter_adds_one() {
+    let (mut app, mut rx) = app_with_definitions();
+    app.focus = PanelFocus::Chat;
+    type_chars(&mut app, "/ag");
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.input(), "/agent ");
+    assert_eq!(agent_pick_names(&app), ["explorer", "reviewer"]);
+    assert!(app.slash_matches().is_empty());
+
+    app.handle_key(key(KeyCode::Down));
+    assert_eq!(app.slash_cursor(), 1);
+    app.handle_key(key(KeyCode::Enter));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::AddDefinitionToProject(name)) if name == "reviewer"
+    ));
+    assert_eq!(app.input(), "");
+    assert!(app.agent_picks().is_empty());
+    assert_eq!(app.agents_tab(), crate::app::AgentsTab::Projects);
+}
+
+#[test]
+fn test_agent_picker_filters_and_tab_completes() {
+    let (mut app, _rx) = app_with_definitions();
+    app.focus = PanelFocus::Chat;
+    type_chars(&mut app, "/agent E");
+    assert_eq!(agent_pick_names(&app), ["explorer", "reviewer"]);
+    type_chars(&mut app, "x");
+    assert_eq!(agent_pick_names(&app), ["explorer"]);
+
+    app.handle_key(key(KeyCode::Tab));
+    assert_eq!(app.input(), "/agent explorer");
+    assert_eq!(app.focus(), PanelFocus::Chat);
+    assert_eq!(agent_pick_names(&app), ["explorer"]);
+}
+
+#[test]
+fn test_agent_picker_stays_out_of_agent_new_and_esc() {
+    let (mut app, mut rx) = app_with_definitions();
+    app.focus = PanelFocus::Chat;
+    type_chars(&mut app, "/agent new");
+    assert!(app.agent_picks().is_empty());
+    app.handle_key(key(KeyCode::Enter));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::CreateAgent(None))));
+
+    type_chars(&mut app, "/agent rev");
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.agent_picks().is_empty());
+    app.handle_key(key(KeyCode::Enter));
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.input(), "");
+}
+
+#[test]
+fn test_agent_picker_keeps_input_while_busy() {
+    let (mut app, mut rx) = app_with_definitions();
+    app.focus = PanelFocus::Chat;
+    app.state = AppState::Processing;
+    type_chars(&mut app, "/agent ");
+    app.handle_key(key(KeyCode::Enter));
+    assert!(rx.try_recv().is_err());
+    assert_eq!(app.input(), "/agent ");
+}
+
 #[test]
 fn test_recalled_slash_command_keeps_history_navigation() {
     let mut app = App::new();
@@ -1874,4 +2042,78 @@ fn test_recalled_slash_command_keeps_history_navigation() {
     app.handle_key(key(KeyCode::Up));
     assert_eq!(app.input(), "/clear");
     assert!(app.slash_matches().is_empty());
+}
+
+fn new_record(app: &mut App, seq: u64) {
+    app.process_command(UiCommand::NewRecord(crate::events::RecordSummary {
+        seq,
+        timestamp: "12:00:00".to_string(),
+        full_hash: String::new(),
+        hash_suffix: String::new(),
+        tx_kind: "Prompt".to_string(),
+        sender: String::new(),
+        message: String::new(),
+        action_count: 0,
+        effect_status: String::new(),
+        status: crate::events::RecordStatus::Ok,
+        info: String::new(),
+        what: String::new(),
+        group: String::new(),
+        detail: String::new(),
+        error_details: String::new(),
+        tx_id: String::new(),
+        agent_id: String::new(),
+        ts_ms: 0,
+        policy: None,
+    }));
+}
+
+fn selected_seq(app: &App) -> u64 {
+    app.selected_record_data().unwrap().seq
+}
+
+#[test]
+fn test_records_list_oldest_first_and_follow_newest() {
+    let mut app = App::new();
+    for seq in 0..3 {
+        new_record(&mut app, seq);
+    }
+    let order: Vec<u64> = app.records().iter().map(|r| r.seq).collect();
+    assert_eq!(order, [0, 1, 2]);
+    assert_eq!(selected_seq(&app), 2);
+
+    new_record(&mut app, 3);
+    assert_eq!(selected_seq(&app), 3);
+}
+
+#[test]
+fn test_records_selection_moved_up_stays_put() {
+    let mut app = App::new();
+    for seq in 0..3 {
+        new_record(&mut app, seq);
+    }
+    app.focus = PanelFocus::Records;
+    app.handle_key(key(KeyCode::Up));
+    new_record(&mut app, 3);
+    assert_eq!(selected_seq(&app), 1);
+
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Down));
+    new_record(&mut app, 4);
+    assert_eq!(selected_seq(&app), 4);
+}
+
+#[test]
+fn test_records_cap_drops_oldest_and_keeps_selection() {
+    let mut app = App::new();
+    let cap = u64::try_from(MAX_RECORDS).unwrap();
+    for seq in 0..cap {
+        new_record(&mut app, seq);
+    }
+    app.selected_record = 10;
+    new_record(&mut app, cap);
+    assert_eq!(app.records().len(), MAX_RECORDS);
+    assert_eq!(app.records().front().unwrap().seq, 1);
+    assert_eq!(app.records().back().unwrap().seq, cap);
+    assert_eq!(selected_seq(&app), 10);
 }

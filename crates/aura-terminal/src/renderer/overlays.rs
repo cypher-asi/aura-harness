@@ -5,7 +5,7 @@ use super::markdown::{parse_content_segments, render_markdown, ContentSegment};
 use super::text::{centered_rect, display_width, wrap_words};
 use crate::{
     app::{folder_picker::FolderRow, AppState, NotificationType},
-    components::CodeBlock,
+    components::{highlight_code_line, CodeBlock},
     App, Theme,
 };
 use ratatui::{
@@ -276,7 +276,7 @@ fn truncate_start(text: &str, width: usize) -> String {
 fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
     let modal_width = 50.min(area.width.saturating_sub(4));
-    let modal_height = 36;
+    let modal_height = 38;
 
     let modal_area = centered_rect(modal_width, modal_height, area);
     frame.render_widget(Clear, modal_area);
@@ -300,11 +300,12 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "/help      Show this help",
         "/new       New session (reset context)",
         "/clear     Clear messages",
+        "/agent              Pick an agent to add to the project",
         "/agent new [name]   Create and switch to agent",
         "/name [name]        Rename the current project",
         "/agent <n|name>     Switch to agent",
         "/agents    Toggle Agents panel",
-        "/record    Toggle Record panel",
+        "/kernel    Toggle Kernel panel",
         "/files     Toggle Sandbox panel",
         "/model     Choose model (local or cloud)",
         "/login     Login for cloud models",
@@ -314,10 +315,14 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "/quit      Exit",
         "",
         "Enter      Send message",
+        "$          Terminal (run commands, see past ones)",
+        "Esc        Back to chat from the terminal",
         "Tab        Switch panels",
         "↑/↓        Navigate / History",
         "Ctrl+N     New project (pick its folder)",
         "Space      Fold the selected project",
+        "Shift+←/→  Sandbox / Processes tabs",
+        "o / k / l  Process: open agent, kill, log",
         "Alt+↑/↓    Switch agent",
         "Mouse      Wheel/click agents to switch",
         "PgUp/PgDn  Scroll chat history",
@@ -590,6 +595,16 @@ fn build_message_section(
         "Message:",
         Style::default().fg(theme.colors.muted),
     )));
+
+    if record.message.starts_with(['{', '[']) {
+        content.extend(
+            record
+                .message
+                .lines()
+                .map(|line| Line::from(highlight_code_line("json", line, theme))),
+        );
+        return;
+    }
 
     let base_style = Style::default().fg(theme.colors.foreground);
     let width = usize::from(modal_width.saturating_sub(2));

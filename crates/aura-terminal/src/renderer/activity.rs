@@ -369,6 +369,19 @@ fn tool_lines(
         return lines;
     }
 
+    if let Some(policy) = &step.policy {
+        let color = if step.status == ToolStatus::Denied {
+            theme.colors.warning
+        } else {
+            theme.colors.muted
+        };
+        body.push_wrapped(
+            &mut lines,
+            &format!("policy: {policy}"),
+            Style::default().fg(color).add_modifier(Modifier::ITALIC),
+            theme,
+        );
+    }
     let args = pretty_args(&step.args);
     if !args.is_empty() {
         let style = Style::default().fg(theme.colors.muted);
@@ -443,7 +456,8 @@ fn tool_header(
 }
 
 /// ` · retrying (2/3) · 12s` while running, with ` · 14 KB` while a large
-/// input is still streaming in; ` · error: …` once failed.
+/// input is still streaming in; ` · error: …` once failed. A finished call
+/// keeps how long it took once that reaches a second.
 fn tool_meta(step: &ToolStep) -> String {
     let mut parts = Vec::new();
     match step.status {
@@ -468,6 +482,13 @@ fn tool_meta(step: &ToolStep) -> String {
                 parts.push(truncate(first.trim(), 60));
             }
         }
+    }
+    if step.status != ToolStatus::Running {
+        parts.extend(
+            step.duration_ms
+                .filter(|ms| *ms >= 1000)
+                .map(|ms| format_elapsed(Duration::from_millis(ms))),
+        );
     }
     parts.into_iter().map(|p| format!(" · {p}")).collect()
 }
@@ -536,6 +557,7 @@ mod tests {
             retry: None,
             started: None,
             duration_ms: Some(300),
+            policy: None,
         })
     }
 
@@ -593,6 +615,19 @@ mod tests {
         );
         assert!(text.contains("│   \"path\": \"src/main.rs\""), "{text}");
         assert!(text.ends_with("│ no such file"), "{text}");
+    }
+
+    #[test]
+    fn policy_shows_only_when_expanded() {
+        let mut step = tool(ToolStatus::Success, Some("fn main() {}"));
+        if let Activity::Tool(tool) = &mut step {
+            tool.policy = Some("allowed by user.on".to_string());
+        }
+        let theme = Theme::default();
+        let collapsed = activity_lines(&step, false, false, "⠋", 80, &theme);
+        assert_eq!(texts(&collapsed), ["  ▸ Read main.rs"]);
+        let expanded = activity_lines(&step, true, false, "⠋", 80, &theme);
+        assert_eq!(texts(&expanded)[1], "    │ policy: allowed by user.on");
     }
 
     #[test]
@@ -660,6 +695,7 @@ mod tests {
             retry: Some((2, 3)),
             started: None,
             duration_ms: None,
+            policy: None,
         });
         let lines = activity_lines(&activity, false, false, "⠋", 40, &Theme::default());
         let header = &texts(&lines)[0];
@@ -686,6 +722,21 @@ mod tests {
         );
         let lines = activity_lines(&done, false, false, "⠋", 80, &Theme::default());
         assert_eq!(texts(&lines), ["  ⠋ Wrote index.html"]);
+    }
+
+    #[test]
+    fn finished_tool_keeps_how_long_it_took() {
+        let mut step = tool_step(
+            "write_file",
+            r#"{"path":"src/types.ts","content":"x"}"#,
+            ToolStatus::Success,
+            None,
+        );
+        if let Activity::Tool(tool) = &mut step {
+            tool.duration_ms = Some(28_400);
+        }
+        let lines = activity_lines(&step, false, true, "⠋", 80, &Theme::default());
+        assert_eq!(texts(&lines), ["      Wrote types.ts · 28s"]);
     }
 
     #[test]

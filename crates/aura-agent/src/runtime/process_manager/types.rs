@@ -1,6 +1,7 @@
 //! Types for the process manager.
 
 use aura_core_types::{ActionId, AgentId, Hash, ProcessId};
+use std::path::PathBuf;
 use std::process::Child;
 use std::time::Instant;
 
@@ -22,6 +23,17 @@ impl Default for ProcessManagerConfig {
     }
 }
 
+/// Where a process runs and where its output goes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProcessMeta {
+    /// Working directory.
+    pub cwd: Option<PathBuf>,
+    /// File the process writes its stdout and stderr to, when it isn't piped.
+    pub log_path: Option<PathBuf>,
+    /// Model `tool_use` id of the call that started it.
+    pub tool_use_id: Option<String>,
+}
+
 /// Information about a running process.
 pub struct RunningProcess {
     /// The action ID this process belongs to.
@@ -36,8 +48,25 @@ pub struct RunningProcess {
     pub command: String,
     /// When the process started.
     pub started_at: Instant,
+    /// When the process started, in milliseconds since the epoch.
+    pub started_ms: u64,
+    pub meta: ProcessMeta,
     /// The child process handle.
     pub child: Child,
+}
+
+/// Read-only view of a running process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessInfo {
+    pub process_id: ProcessId,
+    pub agent_id: AgentId,
+    pub action_id: ActionId,
+    pub reference_tx_hash: Hash,
+    pub command: String,
+    pub pid: u32,
+    /// Milliseconds since the epoch.
+    pub started_ms: u64,
+    pub meta: ProcessMeta,
 }
 
 /// Output from a completed process.

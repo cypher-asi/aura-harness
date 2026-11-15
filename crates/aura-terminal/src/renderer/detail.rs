@@ -1,18 +1,21 @@
 //! A record or sandbox file shown in place of the chat panel.
 //!
 //! The view covers exactly the chat panel's rectangle, scrolls by source
-//! line, and hard-wraps long lines so code keeps its indentation.
+//! line, and hard-wraps long lines so code keeps its indentation. A file
+//! has a vim cursor the view follows.
 
 use super::overlays::{record_detail_lines, record_status};
-use super::panels::{render_scrollbar, ScrollView};
+use super::panels::{render_scrollbar, truncate_record_info, ScrollView};
+use super::processes::{process_detail_lines, status_glyph};
 use super::text::display_width;
 use crate::app::file_view::{FileBody, FileView};
+use crate::app::vim::{Align, Vim};
 use crate::app::DetailView;
 use crate::components::highlight_code_line;
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
@@ -29,48 +32,53 @@ pub(super) fn render_detail_view(frame: &mut Frame, area: Rect, app: &mut App, t
         width: area.width.saturating_sub(4),
         height: area.height.saturating_sub(2),
     };
-    let Some((max_scroll, shown)) = draw_detail(frame, area, rows, app, theme) else {
-        return;
+    let bounds = match app.file_view_mut() {
+        Some((file, scroll)) => Some(draw_file(frame, area, rows, file, scroll, theme)),
+        None => draw_record(frame, area, rows, app, theme),
     };
-    app.set_detail_bounds(max_scroll, shown.saturating_sub(1));
+    if let Some((max_scroll, shown)) = bounds {
+        app.set_detail_bounds(max_scroll, shown);
+    }
 }
 
-/// Draw the view into `area` with its text in `rows`, returning the
-/// largest useful scroll and how many source lines are on screen.
-fn draw_detail(
+/// Draw the highlighted record, returning the largest useful scroll and
+/// how many source lines are on screen.
+fn draw_record(
     frame: &mut Frame,
     area: Rect,
     rows: Rect,
     app: &App,
     theme: &Theme,
 ) -> Option<(usize, usize)> {
-    let body = match app.detail_view()? {
+    let (source, title, color) = match app.detail_view()? {
         DetailView::Record => {
             let record = app.selected_record_data()?;
             let (icon, color) = record_status(record, theme);
-            Body {
-                title: format!(" Record #{} {icon} ", record.seq),
+            let lines = record_detail_lines(record, rows.width.saturating_add(2), theme);
+            (
+                Source::Styled(lines),
+                format!(" Record #{} {icon} ", record.seq),
                 color,
-                lines: Source::Styled(record_detail_lines(
-                    record,
-                    rows.width.saturating_add(2),
-                    theme,
-                )),
-            }
+            )
         }
-        DetailView::File(file) => Body {
-            title: format!(" {} ", file.title),
-            color: theme.colors.primary,
-            lines: file_source(file, theme),
-        },
+        DetailView::Process(process) => {
+            let (icon, color) = status_glyph(process.status, theme);
+            let lines = process_detail_lines(process, rows.width.saturating_add(2), theme);
+            let label = truncate_record_info(&process.label, 40);
+            (
+                Source::Styled(lines),
+                format!(" {} {label} {icon} ", process.kind.label()),
+                color,
+            )
+        }
+        DetailView::File(_) => return None,
     };
-
     let width = usize::from(rows.width).max(1);
     let visible = usize::from(rows.height);
-    let total = body.lines.len();
-    let max_scroll = last_page_start(&body.lines, width, visible);
+    let total = source.len();
+    let max_scroll = last_page_start(&source, width, visible);
     let first = app.detail_scroll().min(max_scroll);
-    let (lines, shown) = body.lines.visible(first, width, visible, theme);
+    let (lines, shown) = source.visible(first, width, visible, theme, None);
 
     let muted = Style::default().fg(theme.colors.muted);
     let footer = Line::from(vec![
@@ -80,33 +88,179 @@ fn draw_detail(
         ),
         Span::styled("Esc close  ↑↓ PgUp/PgDn scroll ", muted),
     ]);
-    let block = Block::default()
-        .title(body.title.as_str())
-        .title_bottom(footer)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(body.color));
-    frame.render_widget(Clear, area);
-    frame.render_widget(block, area);
-    frame.render_widget(Paragraph::new(lines), rows);
-    render_scrollbar(
+    let view = ScrollView {
+        total,
+        visible: shown,
+        first,
+    };
+    draw_frame(
         frame,
         area,
         rows,
-        ScrollView {
-            total,
-            visible: shown,
-            first,
-        },
-        true,
+        (&title, color),
+        footer,
+        lines,
+        view,
         theme,
     );
     Some((max_scroll, shown))
 }
 
-struct Body<'a> {
-    title: String,
-    color: Color,
-    lines: Source<'a>,
+/// Draw `file` with its cursor in view, moving `scroll` to follow it.
+/// Returns the largest useful scroll and how many lines are on screen.
+fn draw_file(
+    frame: &mut Frame,
+    area: Rect,
+    rows: Rect,
+    file: &mut FileView,
+    scroll: &mut usize,
+    theme: &Theme,
+) -> (usize, usize) {
+    let source = file_source(&file.body, file.extension(), theme);
+    let vim = &mut file.vim;
+    let width = usize::from(rows.width).max(1);
+    let visible = usize::from(rows.height);
+    let total = source.len();
+    let max_scroll = last_page_start(&source, width, visible);
+    let align = vim.take_align();
+    let first = fit(&source, align, vim.line(), *scroll, width, visible).min(max_scroll);
+    *scroll = first;
+    if let Source::Code { lines, .. } = &source {
+        let last = first + fully_shown(&source, first, width, visible) - 1;
+        vim.keep_within(first, last, lines);
+    }
+    let vim = &*vim;
+    let (lines, shown) = source.visible(first, width, visible, theme, Some(vim));
+
+    let muted = Style::default().fg(theme.colors.muted);
+    let mut footer = Vec::new();
+    if let Some(prompt) = vim.prompt() {
+        footer.push(Span::styled(
+            format!(" {}", prompt.display()),
+            Style::default().fg(theme.colors.text),
+        ));
+        footer.push(Span::styled(
+            "█ ",
+            Style::default().fg(theme.colors.primary),
+        ));
+    } else if let Some(message) = vim.message() {
+        footer.push(Span::styled(
+            format!(" {message} "),
+            Style::default().fg(theme.colors.warning),
+        ));
+    } else {
+        if matches!(source, Source::Code { .. }) {
+            footer.push(Span::styled(
+                format!(" Ln {}/{total}, Col {} ", vim.line() + 1, vim.col() + 1),
+                muted,
+            ));
+        }
+        let keys = vim.pending_keys();
+        if !keys.is_empty() {
+            footer.push(Span::styled(
+                format!("{keys} "),
+                Style::default().fg(theme.colors.text),
+            ));
+        }
+        footer.push(Span::styled(" q close  / search  :N line ", muted));
+    }
+    let title = format!(" {} ", file.title);
+    let view = ScrollView {
+        total,
+        visible: shown,
+        first,
+    };
+    let border = (title.as_str(), theme.colors.primary);
+    draw_frame(
+        frame,
+        area,
+        rows,
+        border,
+        Line::from(footer),
+        lines,
+        view,
+        theme,
+    );
+    (max_scroll, shown)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_frame(
+    frame: &mut Frame,
+    area: Rect,
+    rows: Rect,
+    (title, color): (&str, Color),
+    footer: Line<'_>,
+    lines: Vec<Line<'_>>,
+    view: ScrollView,
+    theme: &Theme,
+) {
+    let block = Block::default()
+        .title(title)
+        .title_bottom(footer)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(color));
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(lines), rows);
+    render_scrollbar(frame, area, rows, view, true, theme);
+}
+
+/// First line to show so the cursor line sits where `align` asks,
+/// starting from the current `scroll`.
+fn fit(
+    source: &Source<'_>,
+    align: Align,
+    cursor: usize,
+    scroll: usize,
+    width: usize,
+    visible: usize,
+) -> usize {
+    let cursor = cursor.min(source.len().saturating_sub(1));
+    let text_width = source.text_width(width);
+    let center = || {
+        let own = source.rows(cursor, text_width);
+        start_ending_at(source, cursor, width, own + visible.saturating_sub(own) / 2)
+    };
+    let half = visible / 2;
+    match align {
+        Align::View => scroll,
+        Align::Top => cursor,
+        Align::Center => center(),
+        Align::Bottom => start_ending_at(source, cursor, width, visible),
+        Align::Cursor if cursor < scroll => {
+            if scroll - cursor > half {
+                center()
+            } else {
+                cursor
+            }
+        }
+        Align::Cursor => {
+            let needed = start_ending_at(source, cursor, width, visible);
+            if needed <= scroll {
+                scroll
+            } else if needed - scroll > half {
+                center()
+            } else {
+                needed
+            }
+        }
+    }
+}
+
+/// How many lines from `first` fit whole in `visible` rows, at least 1.
+fn fully_shown(source: &Source<'_>, first: usize, width: usize, visible: usize) -> usize {
+    let text_width = source.text_width(width);
+    let mut used = 0;
+    let mut count = 0;
+    for index in first..source.len() {
+        used += source.rows(index, text_width);
+        if used > visible {
+            break;
+        }
+        count += 1;
+    }
+    count.max(1)
 }
 
 /// The lines of a detail view, before wrapping.
@@ -121,16 +275,16 @@ enum Source<'a> {
     },
 }
 
-fn file_source<'a>(file: &'a FileView, theme: &Theme) -> Source<'a> {
-    match &file.body {
+fn file_source<'a>(body: &'a FileBody, language: String, theme: &Theme) -> Source<'a> {
+    match body {
         FileBody::Text(text) if text.is_empty() => Source::Styled(vec![Line::from(Span::styled(
             "Empty file",
             Style::default().fg(theme.colors.muted),
         ))]),
-        FileBody::Text(text) => {
-            let lines: Vec<&str> = text.lines().collect();
+        FileBody::Text(_) => {
+            let lines = body.lines();
             Source::Code {
-                language: file.extension(),
+                language,
                 gutter: lines.len().max(1).to_string().len(),
                 lines,
             }
@@ -158,6 +312,11 @@ impl<'a> Source<'a> {
         }
     }
 
+    /// Columns left for text in each row of a view `width` wide.
+    fn text_width(&self, width: usize) -> usize {
+        width.saturating_sub(self.gutter_width()).max(1)
+    }
+
     /// Display width of line `index`, not counting the gutter.
     fn line_width(&self, index: usize) -> usize {
         match self {
@@ -166,14 +325,21 @@ impl<'a> Source<'a> {
         }
     }
 
+    /// Rows line `index` wraps to with `text_width` columns per row.
+    fn rows(&self, index: usize, text_width: usize) -> usize {
+        self.line_width(index).div_ceil(text_width).max(1)
+    }
+
     /// Wrapped rows for lines `first..` that fit in `visible` rows, and how
-    /// many source lines they came from.
+    /// many source lines they came from. With `vim`, code shows its cursor
+    /// and search matches.
     fn visible(
         &self,
         first: usize,
         width: usize,
         visible: usize,
         theme: &Theme,
+        vim: Option<&Vim>,
     ) -> (Vec<Line<'a>>, usize) {
         let indent = " ".repeat(self.gutter_width());
         let mut out: Vec<Line<'a>> = Vec::new();
@@ -189,15 +355,21 @@ impl<'a> Source<'a> {
                     lines,
                     gutter,
                 } => {
-                    let mut spans = vec![Span::styled(
-                        format!("{:>gutter$} │ ", index + 1),
-                        Style::default().fg(theme.colors.muted),
-                    )];
-                    spans.extend(highlight_code_line(
-                        language,
-                        &sanitize(lines[index]),
-                        theme,
-                    ));
+                    let on_cursor = vim.is_some_and(|vim| vim.line() == index);
+                    let number = if on_cursor {
+                        Style::default()
+                            .fg(theme.colors.primary)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(theme.colors.muted)
+                    };
+                    let mut spans =
+                        vec![Span::styled(format!("{:>gutter$} │ ", index + 1), number)];
+                    let code = highlight_code_line(language, &sanitize(lines[index]), theme);
+                    match vim {
+                        Some(vim) => spans.extend(mark(code, lines[index], vim, on_cursor, theme)),
+                        None => spans.extend(code),
+                    }
                     Line::from(spans)
                 }
             };
@@ -209,22 +381,91 @@ impl<'a> Source<'a> {
     }
 }
 
+/// Restyle the highlighted `spans` of `raw` to show search matches and,
+/// on the cursor line, the cursor cell.
+fn mark<'a>(
+    mut spans: Vec<Span<'a>>,
+    raw: &str,
+    vim: &Vim,
+    on_cursor: bool,
+    theme: &Theme,
+) -> Vec<Span<'a>> {
+    let found = Style::default()
+        .bg(theme.colors.selection)
+        .fg(theme.colors.on_selection);
+    let mut ranges: Vec<(usize, usize, Style)> = vim
+        .matches(raw)
+        .into_iter()
+        .map(|(start, end)| (shown_index(raw, start), shown_index(raw, end), found))
+        .collect();
+    if on_cursor {
+        let cursor = Style::default().add_modifier(Modifier::REVERSED);
+        let start = shown_index(raw, vim.col());
+        let end = shown_index(raw, vim.col() + 1);
+        if end == start {
+            spans.push(Span::raw(" "));
+        }
+        ranges.push((start, end.max(start + 1), cursor));
+    }
+    if ranges.is_empty() {
+        return spans;
+    }
+    let mut out = Vec::new();
+    let mut index = 0;
+    for span in spans {
+        let mut piece = String::new();
+        let mut piece_style = span.style;
+        for c in span.content.chars() {
+            let style = ranges
+                .iter()
+                .rev()
+                .find(|(start, end, _)| (*start..*end).contains(&index))
+                .map_or(span.style, |(_, _, extra)| span.style.patch(*extra));
+            if style != piece_style && !piece.is_empty() {
+                out.push(Span::styled(std::mem::take(&mut piece), piece_style));
+            }
+            piece_style = style;
+            piece.push(c);
+            index += 1;
+        }
+        if !piece.is_empty() {
+            out.push(Span::styled(piece, piece_style));
+        }
+    }
+    out
+}
+
+/// Index in the sanitized line of character `col` of `raw`.
+fn shown_index(raw: &str, col: usize) -> usize {
+    raw.chars()
+        .take(col)
+        .map(|c| if c == '\t' { TAB.len() } else { 1 })
+        .sum()
+}
+
 /// First line to show so the last line sits at the bottom of `visible`
 /// rows, measuring backwards from the end.
 fn last_page_start(source: &Source<'_>, width: usize, visible: usize) -> usize {
-    let gutter = source.gutter_width();
-    let text_width = width.saturating_sub(gutter).max(1);
-    let mut rows = 0;
-    let mut start = source.len();
+    match source.len() {
+        0 => 0,
+        len => start_ending_at(source, len - 1, width, visible),
+    }
+}
+
+/// First line to show so line `last` ends at the bottom of `rows` rows.
+fn start_ending_at(source: &Source<'_>, last: usize, width: usize, rows: usize) -> usize {
+    let text_width = source.text_width(width);
+    let mut used = 0;
+    let mut start = last + 1;
     while start > 0 {
-        let needed = source.line_width(start - 1).div_ceil(text_width).max(1);
-        if rows + needed > visible {
+        let needed = source.rows(start - 1, text_width);
+        if used + needed > rows {
             break;
         }
-        rows += needed;
+        used += needed;
         start -= 1;
     }
-    start.min(source.len().saturating_sub(1))
+    start.min(last)
 }
 
 /// Tabs as spaces and other control characters as `�`, so the terminal
@@ -420,11 +661,77 @@ mod tests {
         assert!(first.contains(" main.rs "), "{first}");
         assert!(first.contains("  1 │ let x1 = 1;"), "{first}");
 
-        app.handle_key(KeyEvent::from(KeyCode::End));
+        app.handle_key(KeyEvent::from(KeyCode::Char('G')));
         let last = text(&mut app);
         assert!(last.contains("100 │ let x100 = 100;"), "{last}");
-        assert!(last.contains("/100 "), "{last}");
+        assert!(last.contains("Ln 100/100, Col 1"), "{last}");
         assert!(!last.contains("  1 │ "), "{last}");
+
+        for key in ":50\n".chars() {
+            let code = if key == '\n' {
+                KeyCode::Enter
+            } else {
+                KeyCode::Char(key)
+            };
+            app.handle_key(KeyEvent::from(code));
+        }
+        let middle = text(&mut app);
+        assert!(middle.contains("Ln 50/100"), "{middle}");
+        assert!(middle.contains(" 50 │ let x50 = 50;"), "{middle}");
+    }
+
+    #[test]
+    fn cursor_and_matches_restyle_cells() {
+        let mut vim = Vim::default();
+        let mut scroll = 0;
+        let screen = crate::app::vim::Screen { first: 0, shown: 5 };
+        let lines = ["\tab ab"];
+        for c in "/ab\n".chars() {
+            let code = match c {
+                '\n' => crossterm::event::KeyCode::Enter,
+                c => crossterm::event::KeyCode::Char(c),
+            };
+            vim.handle_key(code.into(), &lines, &mut scroll, screen);
+        }
+        assert_eq!((vim.line(), vim.col()), (0, 1));
+        let theme = Theme::cyber();
+        let spans = mark(vec![Span::raw("    ab ab")], lines[0], &vim, true, &theme);
+        let pieces: Vec<(&str, bool)> = spans
+            .iter()
+            .map(|s| {
+                let reversed = s.style.add_modifier.contains(Modifier::REVERSED);
+                (s.content.as_ref(), reversed)
+            })
+            .collect();
+        assert_eq!(
+            pieces,
+            [
+                ("    ", false),
+                ("a", true),
+                ("b", false),
+                (" ", false),
+                ("ab", false)
+            ]
+        );
+        assert_eq!(spans[2].style.bg, Some(theme.colors.selection));
+        assert_eq!(spans[3].style.bg, None);
+    }
+
+    #[test]
+    fn fit_follows_the_cursor_and_centers_long_jumps() {
+        let lines: Vec<String> = (0..100).map(|n| n.to_string()).collect();
+        let source = Source::Code {
+            language: String::new(),
+            lines: lines.iter().map(String::as_str).collect(),
+            gutter: 3,
+        };
+        assert_eq!(fit(&source, Align::Cursor, 5, 0, 40, 10), 0);
+        assert_eq!(fit(&source, Align::Cursor, 10, 0, 40, 10), 1);
+        assert_eq!(fit(&source, Align::Cursor, 50, 0, 40, 10), 46);
+        assert_eq!(fit(&source, Align::Cursor, 49, 50, 40, 10), 49);
+        assert_eq!(fit(&source, Align::Top, 30, 0, 40, 10), 30);
+        assert_eq!(fit(&source, Align::Bottom, 30, 0, 40, 10), 21);
+        assert_eq!(fit(&source, Align::View, 30, 7, 40, 10), 7);
     }
 
     #[test]

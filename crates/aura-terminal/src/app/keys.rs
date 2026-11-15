@@ -1,7 +1,9 @@
 //! Key event handling for the App.
 
-use super::{line_edit::LineEdit, AgentsTab, App, AppState, NotificationType, PanelFocus};
-use crate::{events::UiEvent, terminal::KeyResult};
+use super::{
+    line_edit::LineEdit, AgentsTab, App, AppState, NotificationType, PanelFocus, SidePanelTab,
+};
+use crate::{events::UiEvent, input::InputHistory, terminal::KeyResult};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 impl App {
@@ -32,9 +34,17 @@ impl App {
         }
     }
 
-    /// Handle key while a record or file covers the chat panel: Esc, `q` or
-    /// Enter closes it, and the rest scroll it.
+    /// Handle key while a record or file covers the chat panel. A file
+    /// takes vim keys; on a record, Esc, `q` or Enter closes it and the
+    /// rest scroll it.
     fn handle_detail_key(&mut self, key: KeyEvent) {
+        let screen = self.detail_screen();
+        if let Some((file, scroll)) = self.file_view_mut() {
+            if file.handle_key(key, scroll, screen) == super::vim::Outcome::Close {
+                self.close_detail();
+            }
+            return;
+        }
         let page = self.detail_page_rows();
         match key.code {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.close_detail(),
@@ -213,7 +223,7 @@ impl App {
                             let _ = tx.try_send(UiEvent::LinkCode(value.trim().to_string()));
                         }
                     }
-                    AppState::ProjectName => self.submit_project_name(value),
+                    AppState::ProjectName => self.submit_project_name(&value),
                     _ => {}
                 }
             }
@@ -251,11 +261,14 @@ impl App {
 
     /// Handle key in normal mode.
     fn handle_normal_key(&mut self, key: KeyEvent) -> KeyResult {
-        if self.handle_pending_delete(key) {
+        if self.handle_pending_delete(key) || self.handle_pending_kill(key) {
             return KeyResult::continue_running();
         }
         if let Some(result) = self.handle_slash_menu_key(key) {
             return result;
+        }
+        if self.toggle_terminal_mode(key) {
+            return KeyResult::continue_running();
         }
         if key.code == KeyCode::Tab {
             self.focus = self.next_panel_focus();
@@ -303,6 +316,14 @@ impl App {
             self.toggle_selected_project();
             return KeyResult::continue_running();
         }
+        if self.focus == PanelFocus::Sandbox && self.input.is_empty() && !word_motion {
+            if self.handle_side_tab_key(key) {
+                return KeyResult::continue_running();
+            }
+            if self.side_tab == SidePanelTab::Processes && self.handle_processes_shortcut(key) {
+                return KeyResult::continue_running();
+            }
+        }
         match key.code {
             KeyCode::Char(_)
             | KeyCode::Backspace
@@ -332,7 +353,45 @@ impl App {
                     KeyResult::continue_running()
                 }
             },
-            PanelFocus::Sandbox => self.handle_sandbox_key(key),
+            PanelFocus::Sandbox => match self.side_tab {
+                SidePanelTab::Sandbox => self.handle_sandbox_key(key),
+                SidePanelTab::Processes => {
+                    self.handle_processes_key(key);
+                    KeyResult::continue_running()
+                }
+            },
+        }
+    }
+
+    /// `$` on an empty line switches to the terminal; Esc, or Backspace on
+    /// an empty line, switches back to chat. Each pane opens at its bottom.
+    /// Returns whether the key was used.
+    fn toggle_terminal_mode(&mut self, key: KeyEvent) -> bool {
+        let entering = !self.terminal_mode
+            && key.code == KeyCode::Char('$')
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            && self.input.is_empty();
+        let leaving = self.terminal_mode
+            && (key.code == KeyCode::Esc
+                || (key.code == KeyCode::Backspace && self.input.is_empty()));
+        if !(entering || leaving) {
+            return false;
+        }
+        self.terminal_mode = entering;
+        self.history().reset();
+        self.scroll_chat_to_bottom();
+        true
+    }
+
+    /// History for the current prompt: commands at the terminal prompt,
+    /// messages otherwise.
+    fn history(&mut self) -> &mut InputHistory {
+        if self.terminal_mode {
+            &mut self.command_history
+        } else {
+            &mut self.input_history
         }
     }
 
@@ -390,15 +449,15 @@ impl App {
             // A recalled `/command` keeps the slash menu closed so Up/Down
             // stay on history.
             KeyCode::Up => {
-                if let Some(prev) = self.input_history.previous() {
-                    self.input = prev.to_string();
+                if let Some(prev) = self.history().previous().map(str::to_string) {
+                    self.input = prev;
                     self.cursor_pos = self.input.len();
                     self.slash_dismissed = true;
                 }
             }
             KeyCode::Down => {
-                if let Some(newer) = self.input_history.next_newer() {
-                    self.input = newer.to_string();
+                if let Some(newer) = self.history().next_newer().map(str::to_string) {
+                    self.input = newer;
                     self.cursor_pos = self.input.len();
                     self.slash_dismissed = true;
                 } else {
@@ -487,8 +546,9 @@ impl App {
     }
 
     /// Handle key when the agents panel shows Projects. Moving the
-    /// highlight onto an agent switches to it. Enter folds the highlighted
-    /// project, or creates one from "+ New project".
+    /// highlight onto an agent switches to it; project headers are skipped.
+    /// Space folds the highlighted agent's project, and Enter on "+ New
+    /// project" creates one.
     fn handle_swarm_key(&mut self, key: KeyEvent) -> KeyResult {
         match key.code {
             KeyCode::Left | KeyCode::Right => self.toggle_agents_tab(),
@@ -518,14 +578,14 @@ impl App {
     pub(super) fn submit_input(&mut self) -> KeyResult {
         let text = std::mem::take(&mut self.input);
         self.cursor_pos = 0;
-        self.input_history.add(&text);
+        self.history().add(&text);
         self.scroll_chat_to_bottom();
 
-        if text.starts_with('/') {
-            return self.handle_command(&text);
-        }
-
-        if let Some(command) = super::shell_input::parse(&text) {
+        if self.terminal_mode {
+            let command = text.trim().to_string();
+            if command.is_empty() {
+                return KeyResult::continue_running();
+            }
             self.add_message(crate::components::Message::shell(&command));
             self.state = AppState::Processing;
             self.status = "Running...".to_string();
@@ -534,6 +594,10 @@ impl App {
                 let _ = tx.try_send(UiEvent::RunCommand { command, cols });
             }
             return KeyResult::continue_running();
+        }
+
+        if text.starts_with('/') {
+            return self.handle_command(&text);
         }
 
         self.add_message(crate::components::Message::new(

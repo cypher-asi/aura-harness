@@ -158,6 +158,19 @@ Subagents are ordinary agents started by other agents, and they can start agents
 
 The gateway holds one node-wide `AgentHost` on `RouterState`. Each chat session registers itself as a root agent in [`gateway/session/helpers.rs`](../crates/aura-runtime/src/gateway/session/helpers.rs) and attaches the returned `AgentHooks` to its kernel; `session/child_kernel.rs` builds the tool surface for each child. A spawn derives the child spec with `derive_subagent` (mode, permissions and model may only narrow; tools are filtered by the child's permissions), appends a `SubagentSpawn` audit row to the parent, and runs the child through the engine's `Scheduler`, so the child gets the same per-agent claim and record pipeline as ordinary work. Depth is capped by `AURA_SUBAGENT_MAX_DEPTH` (default 8) and concurrent children by `AURA_SUBAGENT_MAX_RUNNING` (default 32). Messages for a root (for example a detached task's result) land in the session's mailbox and start a new turn once the session is idle.
 
+The interactive terminal holds its own `AgentHost` ([`event_loop/host.rs`](../crates/aura-surface-cli/src/event_loop/host.rs)). Each terminal agent, and each permanent-agent instance it starts with `task`, registers as a root before its turn, and every terminal kernel gets that agent's `AgentHooks`, so `spawn_agent`, `send_to_agent`, `agent_lifecycle`, `get_agent_state` and `list_agents` work there too (`task` still goes to the terminal's permanent agents). A message for a terminal agent becomes a notice: the active agent runs a turn on it right away, and other agents get it when you switch to them. Background `task` spawns (`spawn_mode: "detached"`) and background `run_command` calls report back the same way.
+
+### Processes
+
+The terminal's PROCESSES tab lists the work running for its agents. `ProcessTable` ([`event_loop/processes.rs`](../crates/aura-surface-cli/src/event_loop/processes.rs)) merges four sources into one tree:
+
+- agent turns and `task` spawns, which the event loop registers with their cancel tokens;
+- the host's spawned agents;
+- background commands in the `ProcessManager`;
+- a `/proc` scan for processes tagged with `AURA_AGENT_ID`, `AURA_TOOL_USE_ID` and `AURA_HARNESS_PID`. Every command the tools spawn carries these tags, so a daemon that detaches and is reparented to init is still listed under the agent that started it.
+
+Each row links to the agent that started it and to the record entry of its tool call. Killing a row cancels the turn or task, stops the agent, cancels the background command, or sends `SIGTERM` to the process group. Finished rows stay listed (the last 50). A publisher sends the table to the UI every 500 ms, and only when it changed.
+
 ### External contract
 
 External consumers (`aura-os`, any future client) talk to [`aura-runtime`](../crates/aura-runtime) over the wire — `POST /v1/run` for submission, `WS /stream/:run_id` for events, the management endpoints (skills, memory, tool defaults, files, tx) for everything else. Workspace crates are internal packaging; no external `Cargo.toml` depends on them. `aura-os` keeps its own mirror of the `aura-protocol` wire types, so a wire change (such as `RuntimeRequest.mode`) has to land in both repositories. `tests/layer_boundary.rs::aura_runtime_reexports_canonical_wire_types` pins that the `POST /v1/run` + `WS /stream/:run_id` wire types stay reachable through `aura-runtime`.

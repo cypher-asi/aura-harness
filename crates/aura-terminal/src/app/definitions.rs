@@ -23,8 +23,8 @@ impl AgentsTab {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Projects => "Projects",
-            Self::Roster => "Agents",
+            Self::Projects => "PROJECTS",
+            Self::Roster => "AGENTS",
         }
     }
 
@@ -35,17 +35,11 @@ impl AgentsTab {
         }
     }
 
-    /// Each tab with the first column and width of its ` label ` cell in a
-    /// tab bar that starts with one column of margin. The renderer draws
-    /// the bar with this layout and clicks are mapped back through it.
+    /// Each tab with the first column and width of its ` label ` cell in
+    /// the tab bar. The renderer draws the bar with this layout and clicks
+    /// are mapped back through it.
     pub fn layout() -> impl Iterator<Item = (Self, u16, u16)> {
-        let mut x = 1u16;
-        Self::ALL.into_iter().map(move |tab| {
-            let width = u16::try_from(tab.label().len() + 2).unwrap_or(u16::MAX);
-            let start = x;
-            x = x.saturating_add(width);
-            (tab, start, width)
-        })
+        super::tab_layout(Self::ALL, |tab| tab.label().to_string())
     }
 }
 
@@ -110,18 +104,38 @@ impl App {
     }
 
     /// Keep the highlighted row inside a list `visible_rows` tall.
+    /// "+ New agent" is pinned below the list, so it never scrolls.
     pub fn sync_definitions_scroll(&mut self, visible_rows: usize) {
         self.definitions_scroll = follow_selection(
             self.definitions_scroll,
             self.selected_definition,
             visible_rows,
-            self.definitions.len() + 1,
+            self.definitions.len(),
         );
     }
 
     /// Record where the permanent agents rows were drawn this frame.
     pub fn set_definition_rows_area(&mut self, area: Rect) {
         self.areas.definition_rows = Some(area);
+    }
+
+    /// Record where "+ New agent" was drawn this frame.
+    pub fn set_new_agent_area(&mut self, area: Rect) {
+        self.areas.new_agent_row = Some(area);
+    }
+
+    /// Roster row drawn at a screen cell: a permanent agent, or the pinned
+    /// "+ New agent" (index `definitions.len()`).
+    pub(super) fn definition_row_at(&self, column: u16, row: u16) -> Option<usize> {
+        if contains(self.areas.new_agent_row, column, row) {
+            return Some(self.definitions.len());
+        }
+        let rows = self
+            .areas
+            .definition_rows
+            .filter(|&rows| contains(Some(rows), column, row))?;
+        let index = self.definitions_scroll + usize::from(row - rows.y);
+        (index < self.definitions.len()).then_some(index)
     }
 
     /// File the user asked to edit, once. The terminal opens it in the
@@ -173,6 +187,17 @@ impl App {
         self.send(UiEvent::InstantiateDefinition(name.to_string()));
         // The new instance becomes the active agent, listed under Projects.
         self.show_agents_tab(AgentsTab::Projects);
+    }
+
+    /// Add an instance of the permanent agent `name` to the active agent's
+    /// project and switch to it. Returns `false` when refused mid-turn.
+    pub(super) fn add_definition_to_project(&mut self, name: &str) -> bool {
+        if self.refuse_while_busy("adding an agent") {
+            return false;
+        }
+        self.send(UiEvent::AddDefinitionToProject(name.to_string()));
+        self.show_agents_tab(AgentsTab::Projects);
+        true
     }
 
     /// Open the permanent agent `name` in the editor, or a new one for `None`.
@@ -245,16 +270,9 @@ impl App {
     /// Clicking a row highlights it; clicking "+ New agent"
     /// creates one.
     pub(super) fn click_definition_row(&mut self, column: u16, row: u16) {
-        let Some(rows) = self.areas.definition_rows else {
+        let Some(index) = self.definition_row_at(column, row) else {
             return;
         };
-        if !contains(Some(rows), column, row) {
-            return;
-        }
-        let index = self.definitions_scroll + usize::from(row - rows.y);
-        if index > self.definitions.len() {
-            return;
-        }
         self.selected_definition = index;
         if index == self.definitions.len() {
             self.edit_definition(None);

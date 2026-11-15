@@ -45,6 +45,8 @@ pub struct ToolStep {
     pub started: Option<Instant>,
     /// How long the call took, once finished
     pub duration_ms: Option<u64>,
+    /// Policy verdict and deciding rule, e.g. `allowed by user.on`
+    pub policy: Option<String>,
 }
 
 impl Activity {
@@ -71,6 +73,7 @@ impl Activity {
             retry: None,
             started: Some(Instant::now()),
             duration_ms: None,
+            policy: None,
         })
     }
 
@@ -117,6 +120,7 @@ impl From<&ActivityData> for Activity {
                 result,
                 is_error,
                 duration_ms,
+                policy,
             } => Self::Tool(ToolStep {
                 id: id.clone(),
                 name: name.clone(),
@@ -132,6 +136,7 @@ impl From<&ActivityData> for Activity {
                 retry: None,
                 started: None,
                 duration_ms: *duration_ms,
+                policy: policy.clone(),
             }),
         }
     }
@@ -171,6 +176,7 @@ mod tests {
             result: Some("fn main() {}".to_string()),
             is_error: false,
             duration_ms: Some(12),
+            policy: None,
         });
         assert!(!activity.is_running());
         assert!(matches!(activity, Activity::Tool(ref s) if s.status == ToolStatus::Success));

@@ -79,12 +79,11 @@ impl KernelFactory {
             parent_chain,
             folder,
         )?);
-        let messages =
-            crate::record_loader::model_history(self.store.as_ref(), identity.agent_id)
-                .unwrap_or_else(|e| {
-                    warn!(error = %e, "Failed to rebuild model history from record");
-                    Vec::new()
-                });
+        let messages = crate::record_loader::model_history(self.store.as_ref(), identity.agent_id)
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "Failed to rebuild model history from record");
+                Vec::new()
+            });
         Ok(AgentSession {
             identity,
             model_gateway: KernelModelGateway::new(kernel.clone()),
@@ -154,21 +153,57 @@ pub(super) async fn handle_create_agent(state: &mut LoopState<'_>, name: Option<
 
 /// Start an instance of a permanent agent and switch to it.
 pub(super) async fn handle_instantiate_definition(state: &mut LoopState<'_>, name: &str) {
+    if let Some(agent) = start_instance(state, name, None).await {
+        show_success(state, format!("Started {}", agent.name)).await;
+    }
+}
+
+/// Start an instance of a permanent agent inside the project that contains
+/// the active agent, and switch to it.
+pub(super) async fn handle_add_definition_to_project(state: &mut LoopState<'_>, name: &str) {
+    let root = lock(&state.hub.registry)
+        .project_root(state.session.agent_id())
+        .cloned();
+    let Some(root) = root else {
+        show_error(state, "Unknown agent".to_string()).await;
+        return;
+    };
+    if let Some(agent) = start_instance(state, name, Some(root.zns_id.clone())).await {
+        let project = root
+            .project
+            .as_deref()
+            .map(str::trim)
+            .filter(|project| !project.is_empty())
+            .unwrap_or(&root.name);
+        show_success(state, format!("Added {} to {project}", agent.name)).await;
+    }
+}
+
+/// Register an instance of the permanent agent `name` under `parent` and
+/// switch to it. Reports failures itself and returns `None`.
+async fn start_instance(
+    state: &mut LoopState<'_>,
+    name: &str,
+    parent: Option<String>,
+) -> Option<RegisteredAgent> {
     let definition = lock(&state.hub.definitions)
         .get(name)
         .map(|d| d.name.clone());
     let Some(definition) = definition else {
         show_error(state, format!("No permanent agent named {name}")).await;
-        return;
+        return None;
     };
-    let created = lock(&state.hub.registry).create_instance(&definition, None);
+    let created = lock(&state.hub.registry).create_instance(&definition, parent);
     match created {
         Ok(agent) => {
             info!(name = %agent.name, %definition, "Started permanent agent instance");
             activate_agent(state, agent.agent_id()).await;
-            show_success(state, format!("Started {}", agent.name)).await;
+            Some(agent)
         }
-        Err(e) => show_error(state, format!("Could not start {definition}: {e}")).await,
+        Err(e) => {
+            show_error(state, format!("Could not start {definition}: {e}")).await;
+            None
+        }
     }
 }
 
@@ -240,6 +275,17 @@ pub(super) async fn handle_refresh_agents(state: &LoopState<'_>) {
 }
 
 async fn activate_agent(state: &mut LoopState<'_>, agent_id: AgentId) {
+    state.park_finished_spawns();
+    if state.hub.is_running(agent_id) {
+        let _ = state
+            .commands
+            .send(UiCommand::ShowWarning(
+                "That agent is still working in the background; open it when it finishes"
+                    .to_string(),
+            ))
+            .await;
+        return;
+    }
     if agent_id == state.session.agent_id() {
         state.hub.send_agent_list().await;
         return;
@@ -284,6 +330,7 @@ async fn activate_agent(state: &mut LoopState<'_>, agent_id: AgentId) {
         .commands
         .send(UiCommand::SetStatus("Ready".to_string()))
         .await;
+    super::notices::deliver_queued(state).await;
 }
 
 /// Replace the Record panel and chat with the active agent's history.

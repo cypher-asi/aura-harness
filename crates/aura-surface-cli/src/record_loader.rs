@@ -36,6 +36,13 @@ const HISTORY_MESSAGE_LIMIT: usize = 300;
 /// width, this only keeps huge prompts from being copied around.
 const MAX_INFO_CHARS: usize = 240;
 
+/// Upper bound on a plain-text payload shown in the record detail view.
+const MAX_MESSAGE_CHARS: usize = 200;
+
+/// Upper bound on a pretty-printed JSON payload; the detail view scrolls,
+/// so this only guards against huge tool payloads.
+const MAX_JSON_MESSAGE_CHARS: usize = 20_000;
+
 /// Load the most recent record entries for an agent as UI summaries,
 /// oldest first.
 ///
@@ -159,6 +166,18 @@ pub fn conversation_history(
                     Err(_) => history.extend(history_message(tx)),
                 }
             }
+            TransactionType::PolicyDecision => {
+                let decision = serde_json::from_slice::<PolicyDecision>(&tx.payload).ok();
+                let call = decision
+                    .as_ref()
+                    .and_then(|decision| tool_calls.get(&decision.tool_use_id));
+                match (call, decision.as_ref().and_then(policy_outcome)) {
+                    (Some(&(index, _)), Some(outcome)) => {
+                        set_tool_policy(&mut history[index], outcome);
+                    }
+                    _ => history.extend(history_message(tx)),
+                }
+            }
             TransactionType::ToolExecution => {
                 let Some(execution) = tool_execution(&entry) else {
                     continue;
@@ -228,8 +247,16 @@ fn tool_call_message(proposal: &ToolProposal, ts_ms: u64) -> MessageData {
             result: None,
             is_error: false,
             duration_ms: None,
+            policy: None,
         }),
         ..MessageData::new(MessageRole::Assistant, "")
+    }
+}
+
+/// Record the policy decision on the tool call `message` shows.
+fn set_tool_policy(message: &mut MessageData, decision: String) {
+    if let Some(ActivityData::Tool { policy, .. }) = &mut message.activity {
+        *policy = Some(decision);
     }
 }
 
@@ -388,7 +415,7 @@ pub fn build_record_summary(
         sender = "USER";
     }
 
-    let message = truncate_chars(&String::from_utf8_lossy(&tx.payload), 200);
+    let message = record_message(&tx.payload);
 
     let effect_count = entry.effects.len();
     let ok_count = entry
@@ -454,6 +481,18 @@ pub fn build_record_summary(
     }
 }
 
+/// The payload as shown in the record detail view: JSON objects and
+/// arrays pretty-printed, anything else truncated.
+fn record_message(payload: &[u8]) -> String {
+    match serde_json::from_slice::<Value>(payload) {
+        Ok(value @ (Value::Object(_) | Value::Array(_))) => truncate_chars(
+            &serde_json::to_string_pretty(&value).unwrap_or_default(),
+            MAX_JSON_MESSAGE_CHARS,
+        ),
+        _ => truncate_chars(&String::from_utf8_lossy(payload), MAX_MESSAGE_CHARS),
+    }
+}
+
 /// One-line chat rendering of a policy decision, e.g.
 /// `policy: read_file allowed by user_default.full_access`.
 ///
@@ -461,16 +500,21 @@ pub fn build_record_summary(
 /// shows that it ran.
 #[must_use]
 pub fn policy_chat_line(decision: &PolicyDecision) -> Option<String> {
-    let outcome = match decision.verdict {
+    policy_outcome(decision).map(|outcome| format!("policy: {} {outcome}", decision.tool))
+}
+
+/// The verdict and deciding rule of a policy decision, e.g.
+/// `allowed by user_default.full_access`; `None` as for
+/// [`policy_chat_line`].
+#[must_use]
+pub fn policy_outcome(decision: &PolicyDecision) -> Option<String> {
+    let verdict = match decision.verdict {
         ToolGateVerdict::Approved if is_user_tool_use(&decision.tool_use_id) => return None,
         ToolGateVerdict::Approved => "allowed",
         ToolGateVerdict::Denied => "denied",
         ToolGateVerdict::PendingApproval => "needs approval",
     };
-    Some(format!(
-        "policy: {} {outcome} by {}",
-        decision.tool, decision.decided_by
-    ))
+    Some(format!("{verdict} by {}", decision.decided_by))
 }
 
 /// Policy provenance for the record detail view; `None` for entries that
@@ -615,11 +659,7 @@ fn record_columns(tx: &Transaction, entry: &RecordEntry, sender: &str) -> Option
         TransactionType::Reasoning => reasoning_columns(&json_payload(tx)?),
         TransactionType::System => {
             let payload = json_payload(tx)?;
-            RecordColumns::new(
-                system_kind(&payload),
-                "",
-                system_detail(&payload).join(" "),
-            )
+            RecordColumns::new(system_kind(&payload), "", system_detail(&payload).join(" "))
         }
         TransactionType::SessionStart => RecordColumns::new("start", "", ""),
         TransactionType::SubagentSpawn => {

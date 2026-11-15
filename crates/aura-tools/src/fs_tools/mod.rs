@@ -14,7 +14,8 @@ mod stat;
 mod write;
 
 pub use cmd::{
-    cmd_run_with_threshold, cmd_spawn, output_to_tool_result, CmdRunTool, ThresholdResult,
+    cmd_run_with_threshold, cmd_spawn, output_to_tool_result, CmdRunTool, ProcessTags,
+    ThresholdResult, AGENT_ID_VAR, HARNESS_PID_VAR, TOOL_USE_ID_VAR,
 };
 pub use delete::FsDeleteTool;
 pub use edit::FsEditTool;

@@ -3,7 +3,8 @@
 use crate::error::ToolError;
 use crate::sandbox::Sandbox;
 use crate::tool::{
-    builtin_tools, AgentControlHook, AgentReadHook, SubagentDispatchHook, Tool, ToolContext,
+    builtin_tools, AgentControlHook, AgentReadHook, BackgroundProcessHook, SubagentDispatchHook,
+    Tool, ToolContext,
 };
 use crate::ToolConfig;
 use async_trait::async_trait;
@@ -33,6 +34,7 @@ pub struct ToolExecutor {
     agent_control_hook: Option<Arc<dyn AgentControlHook>>,
     agent_read_hook: Option<Arc<dyn AgentReadHook>>,
     subagent_dispatch: Option<Arc<dyn SubagentDispatchHook>>,
+    background_processes: Option<Arc<dyn BackgroundProcessHook>>,
     caller_permissions: Option<AgentPermissions>,
     caller_tool_permissions: Option<AgentToolPermissions>,
     user_tool_defaults: UserToolDefaults,
@@ -73,6 +75,7 @@ impl ToolExecutor {
             agent_control_hook: None,
             agent_read_hook: None,
             subagent_dispatch: None,
+            background_processes: None,
             caller_permissions: None,
             caller_tool_permissions: None,
             user_tool_defaults: UserToolDefaults::default(),
@@ -111,6 +114,13 @@ impl ToolExecutor {
     #[must_use]
     pub fn with_subagent_dispatch_hook(mut self, hook: Arc<dyn SubagentDispatchHook>) -> Self {
         self.subagent_dispatch = Some(hook);
+        self
+    }
+
+    /// Let `run_command` hand `background: true` commands to `hook`.
+    #[must_use]
+    pub fn with_background_process_hook(mut self, hook: Arc<dyn BackgroundProcessHook>) -> Self {
+        self.background_processes = Some(hook);
         self
     }
 
@@ -292,6 +302,8 @@ impl ToolExecutor {
         tool_ctx.agent_read_hook = self.agent_read_hook.clone();
         tool_ctx.subagent_dispatch = self.subagent_dispatch.clone();
         tool_ctx.current_tool_use_id = ctx.tool_use_id.clone();
+        tool_ctx.current_action_id = Some(ctx.action_id);
+        tool_ctx.background_processes = self.background_processes.clone();
 
         match self.tools.get(tool_name.as_str()) {
             Some(tool) => tool.execute(&tool_ctx, tool_call.args.clone()).await,

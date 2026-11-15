@@ -275,6 +275,7 @@ pub(super) async fn run_stream_pump(
             );
         }
 
+        let attempt_started = std::time::Instant::now();
         let opened = if let Some(token) = cancellation_token {
             tokio::select! {
                 biased;
@@ -331,6 +332,24 @@ pub(super) async fn run_stream_pump(
                 reset_bytes = (text_bytes, thinking_bytes);
                 retry_state = None;
                 transport_error = Some(err);
+            }
+            StreamPumpOutcome::Completed {
+                response,
+                tool_results,
+            } => {
+                let duration_ms =
+                    u64::try_from(attempt_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                super::streaming::emit_debug_llm_call(
+                    event_tx,
+                    provider.name(),
+                    &model_name,
+                    &response,
+                    duration_ms,
+                );
+                return StreamPumpOutcome::Completed {
+                    response,
+                    tool_results,
+                };
             }
             other => return other,
         }

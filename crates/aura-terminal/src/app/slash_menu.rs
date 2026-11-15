@@ -1,7 +1,8 @@
 //! Slash-command menu shown above the input while a `/command` is typed.
+//! After `/agent ` it lists permanent agents to add to the project instead.
 
 use super::{App, AppState};
-use crate::terminal::KeyResult;
+use crate::{events::AgentDefinitionSummary, terminal::KeyResult};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// A command offered by the slash menu.
@@ -41,7 +42,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         name: "agent",
         args: "new [name] | <n|name>",
-        description: "Create or switch agent",
+        description: "Add an agent to the project, create or switch",
         needs_args: true,
     },
     SlashCommand {
@@ -51,7 +52,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         needs_args: true,
     },
     command("agents", "Toggle Agents panel"),
-    command("record", "Toggle Record panel"),
+    command("kernel", "Toggle Kernel panel"),
     command("files", "Toggle Sandbox panel"),
     SlashCommand {
         name: "model",
@@ -65,30 +66,80 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     command("quit", "Exit"),
 ];
 
-/// Commands whose name contains `query`: prefix matches first, then the
-/// rest, each in table order.
-fn matching_commands(query: &str) -> Vec<&'static SlashCommand> {
+/// Items whose name contains `query`, ignoring case: prefix matches first,
+/// then the rest, each in their original order.
+fn prefix_first<'a, T>(
+    items: impl IntoIterator<Item = &'a T>,
+    query: &str,
+    name: impl Fn(&T) -> &str,
+) -> Vec<&'a T> {
     let query = query.to_lowercase();
-    let (mut prefix, rest): (Vec<_>, Vec<_>) = SLASH_COMMANDS
-        .iter()
-        .filter(|c| c.name.contains(&query))
-        .partition(|c| c.name.starts_with(&query));
+    let (mut prefix, rest): (Vec<_>, Vec<_>) = items
+        .into_iter()
+        .filter(|item| name(item).to_lowercase().contains(&query))
+        .partition(|item| name(item).to_lowercase().starts_with(&query));
     prefix.extend(rest);
     prefix
 }
 
 impl App {
+    /// The menu was not dismissed with Esc, the line is not at the terminal
+    /// prompt (where `/` starts a path), and no modal state owns the
+    /// keyboard.
+    fn slash_menu_allowed(&self) -> bool {
+        !self.slash_dismissed
+            && !self.terminal_mode
+            && matches!(self.state, AppState::Idle | AppState::Processing)
+    }
+
     /// Commands matching the `/word` being typed. Empty while the menu is
     /// closed: the input is not a lone `/word`, the menu was dismissed with
     /// Esc, or a modal state owns the keyboard.
     #[must_use]
     pub fn slash_matches(&self) -> Vec<&'static SlashCommand> {
-        if self.slash_dismissed || !matches!(self.state, AppState::Idle | AppState::Processing) {
+        if !self.slash_menu_allowed() {
             return Vec::new();
         }
         match self.input.strip_prefix('/') {
-            Some(query) if !query.contains(char::is_whitespace) => matching_commands(query),
+            Some(query) if !query.contains(char::is_whitespace) => {
+                prefix_first(SLASH_COMMANDS, query, |c| c.name)
+            }
             _ => Vec::new(),
+        }
+    }
+
+    /// Permanent agents matching the name typed after `/agent `, offered
+    /// for adding to the active agent's project. Empty while the menu is
+    /// closed, and for `/agent new`, which creates a blank agent instead.
+    #[must_use]
+    pub fn agent_picks(&self) -> Vec<&AgentDefinitionSummary> {
+        if !self.slash_menu_allowed() {
+            return Vec::new();
+        }
+        let Some((command, query)) = self
+            .input
+            .strip_prefix('/')
+            .and_then(|rest| rest.split_once(' '))
+        else {
+            return Vec::new();
+        };
+        let query = query.trim();
+        let creating = query
+            .split_whitespace()
+            .next()
+            .is_some_and(|word| word.eq_ignore_ascii_case("new"));
+        if !(command.eq_ignore_ascii_case("agent") || command.eq_ignore_ascii_case("a")) || creating
+        {
+            return Vec::new();
+        }
+        prefix_first(&self.definitions, query, |d| d.name.as_str())
+    }
+
+    /// Rows in the open menu: matching commands, or else agents to add.
+    fn slash_menu_len(&self) -> usize {
+        match self.slash_matches().len() {
+            0 => self.agent_picks().len(),
+            commands => commands,
         }
     }
 
@@ -96,7 +147,7 @@ impl App {
     #[must_use]
     pub fn slash_cursor(&self) -> usize {
         self.slash_cursor
-            .min(self.slash_matches().len().saturating_sub(1))
+            .min(self.slash_menu_len().saturating_sub(1))
     }
 
     /// Reopen the menu at its first row after the input was edited.
@@ -114,25 +165,23 @@ impl App {
         {
             return None;
         }
-        let matches = self.slash_matches();
-        let last = matches.len().checked_sub(1)?;
-        let selected = matches[self.slash_cursor()];
+        let last = self.slash_menu_len().checked_sub(1)?;
+        let cursor = self.slash_cursor();
         match key.code {
-            KeyCode::Up => {
-                self.slash_cursor = self.slash_cursor().checked_sub(1).unwrap_or(last);
-            }
-            KeyCode::Down => {
-                self.slash_cursor = if self.slash_cursor() >= last {
-                    0
-                } else {
-                    self.slash_cursor() + 1
-                };
-            }
-            KeyCode::Tab => self.complete_slash_command(selected),
-            KeyCode::Enter => {
-                self.complete_slash_command(selected);
-                if !selected.needs_args {
-                    return Some(self.handle_chat_key(key));
+            KeyCode::Up => self.slash_cursor = cursor.checked_sub(1).unwrap_or(last),
+            KeyCode::Down => self.slash_cursor = if cursor >= last { 0 } else { cursor + 1 },
+            KeyCode::Tab | KeyCode::Enter => {
+                if let Some(&command) = self.slash_matches().get(cursor) {
+                    self.complete_slash_command(command);
+                    if key.code == KeyCode::Enter && !command.needs_args {
+                        return Some(self.handle_chat_key(key));
+                    }
+                } else if let Some(name) = self.agent_picks().get(cursor).map(|d| d.name.clone()) {
+                    if key.code == KeyCode::Tab {
+                        self.set_slash_input(format!("/agent {name}"));
+                    } else if self.add_definition_to_project(&name) {
+                        self.set_slash_input(String::new());
+                    }
                 }
             }
             KeyCode::Esc => self.slash_dismissed = true,
@@ -143,10 +192,13 @@ impl App {
 
     /// Replace the input with `/name`, plus a space when arguments follow.
     fn complete_slash_command(&mut self, command: &SlashCommand) {
-        self.input = format!("/{}", command.name);
-        if command.needs_args {
-            self.input.push(' ');
-        }
+        let space = if command.needs_args { " " } else { "" };
+        self.set_slash_input(format!("/{}{space}", command.name));
+    }
+
+    /// Replace the input with `text`, cursor at its end, menu at its top.
+    fn set_slash_input(&mut self, text: String) {
+        self.input = text;
         self.cursor_pos = self.input.len();
         self.slash_cursor = 0;
     }

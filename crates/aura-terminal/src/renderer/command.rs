@@ -1,8 +1,8 @@
 //! Shell command rendering: highlighted command lines and terminal output.
 
-use super::segments::{message_header, message_style};
+use super::input::prompt_spans;
 use crate::app::shell_input::{tokens, TokenKind};
-use crate::components::{MessageRole, ShellRun};
+use crate::components::ShellRun;
 use crate::Theme;
 use ratatui::{
     style::{Modifier, Style},
@@ -22,7 +22,6 @@ fn token_style(kind: TokenKind, theme: &Theme) -> Style {
     let style = Style::default();
     match kind {
         TokenKind::Space => style,
-        TokenKind::ForcePrefix => style.fg(theme.colors.warning).add_modifier(Modifier::BOLD),
         TokenKind::Program => style.fg(theme.colors.success).add_modifier(Modifier::BOLD),
         TokenKind::Flag => style.fg(theme.colors.warning),
         TokenKind::Operator => style
@@ -35,26 +34,31 @@ fn token_style(kind: TokenKind, theme: &Theme) -> Style {
     }
 }
 
-/// Chat lines for a shell command: the `YOU` header, the command, then the
-/// output below the command as a terminal would show it.
-pub(super) fn shell_lines(
-    run: &ShellRun,
-    timestamp: &str,
+/// `prompt` followed by the command line `text`, wrapped at `width` the way
+/// a terminal wraps what you type: mid-word, at the last column.
+pub(super) fn prompt_line(
+    prompt: &str,
+    text: &str,
     width: usize,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
-    let (nick, nick_color, _) = message_style(MessageRole::User, theme);
-    let mut lines = vec![message_header(
-        nick,
-        nick_color,
-        timestamp,
-        &[],
-        width,
-        theme,
-    )];
+    let mut spans = owned(prompt_spans(prompt, theme.colors.primary, theme));
+    spans.extend(owned(command_spans(text, theme)));
+    hard_wrap_spans(spans, width)
+        .into_iter()
+        .map(Line::from)
+        .collect()
+}
 
-    let echo = owned(command_spans(&run.command, theme));
-    lines.extend(wrap_spans(echo, width).into_iter().map(Line::from));
+/// Terminal lines for a command that was run: the prompt and command as
+/// they were typed, then the output, then the exit code if it failed.
+pub(super) fn shell_lines(
+    run: &ShellRun,
+    prompt: &str,
+    width: usize,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let mut lines = prompt_line(prompt, &run.command, width, theme);
 
     let output = run.output.as_deref().unwrap_or_default();
     let output = output.trim_end_matches('\n');
@@ -85,6 +89,27 @@ fn owned(spans: Vec<Span<'_>>) -> Vec<Span<'static>> {
         .into_iter()
         .map(|span| Span::styled(span.content.into_owned(), span.style))
         .collect()
+}
+
+/// Break spans into rows exactly `width` columns wide, ignoring word
+/// boundaries, so a column count maps straight to a row and column.
+fn hard_wrap_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Vec<Span<'static>>> {
+    if width == 0 {
+        return vec![spans];
+    }
+    let mut rows = Rows {
+        rows: vec![Vec::new()],
+        used: 0,
+        width,
+    };
+    for span in spans {
+        rows.push(Token {
+            width: span.width(),
+            pieces: vec![(span.content.into_owned(), span.style)],
+            is_space: false,
+        });
+    }
+    rows.rows
 }
 
 /// Break spans into rows at most `width` columns wide, keeping whitespace so

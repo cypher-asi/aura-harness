@@ -10,11 +10,13 @@ pub mod folder_picker;
 pub(crate) mod format;
 mod keys;
 mod line_edit;
+mod processes;
 pub mod sandbox;
 mod selection;
 pub(crate) mod shell_input;
 mod shell_prompt;
 mod slash_menu;
+pub mod vim;
 
 #[cfg(test)]
 mod detail_tests;
@@ -24,7 +26,8 @@ mod tests;
 use crate::{
     components::{Activity, Message},
     events::{
-        AgentDefinitionSummary, AgentSummary, ModelOptionView, RecordSummary, UiCommand, UiEvent,
+        AgentDefinitionSummary, AgentSummary, ModelOptionView, ProcessSummary, RecordSummary,
+        UiCommand, UiEvent,
     },
     input::InputHistory,
     renderer::{ChatLineCache, GroupState},
@@ -33,6 +36,7 @@ use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 pub use definitions::AgentsTab;
 use file_view::FileView;
 use folder_picker::FolderPicker;
+pub use processes::SidePanelTab;
 use ratatui::{
     buffer::Buffer,
     layout::{Position, Rect},
@@ -44,8 +48,9 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
-/// Maximum number of messages to keep in history (activity blocks included).
-const MAX_MESSAGES: usize = 300;
+/// Maximum number of messages to keep in history. Every tool call, thinking
+/// block and policy line counts as one.
+const MAX_MESSAGES: usize = 2000;
 
 /// Terminal width given to commands run before the chat is first drawn.
 const DEFAULT_COMMAND_COLUMNS: u16 = 80;
@@ -55,11 +60,6 @@ const MIN_COMMAND_COLUMNS: u16 = 20;
 
 /// How long "Copied…" stays centered on the AURA CLI line.
 const COPY_NOTICE_TTL: Duration = Duration::from_secs(2);
-
-/// How long typed input must sit unchanged before it is shown as a shell
-/// command, so a half-typed word doesn't flash green while passing through a
-/// program name (`w` on the way to `what`).
-const COMMAND_HIGHLIGHT_DELAY: Duration = Duration::from_millis(300);
 
 /// Maximum number of records to keep in the list.
 const MAX_RECORDS: usize = 100;
@@ -146,6 +146,8 @@ pub struct App {
     pub(super) scroll_offset: usize,
     /// Rendered lines of each message, reused between frames
     pub(super) chat_lines: ChatLineCache,
+    /// Rendered lines of each shell command, for the terminal pane
+    pub(super) terminal_lines: ChatLineCache,
     /// Total chat lines in the last frame
     pub(super) chat_line_count: usize,
     /// Chat rows of the last frame that expand or collapse a group of
@@ -192,8 +194,8 @@ pub struct App {
     pub(super) detail: Option<DetailView>,
     /// First line of the detail view shown
     pub(super) detail_scroll: usize,
-    /// Lines that fit in the detail view in the last frame
-    pub(super) detail_page_rows: usize,
+    /// Source lines on screen in the detail view in the last frame
+    pub(super) detail_shown: usize,
     /// List of agents in the swarm
     pub(super) agents: Vec<AgentSummary>,
     /// Highlighted row of the projects list (headers, agents, "+ New project")
@@ -222,6 +224,9 @@ pub struct App {
     pub(super) pending_model: Option<String>,
     /// First visible row of the agents list
     pub(super) agents_scroll: usize,
+    /// The wheel moved the agents list away from the highlight; it stays
+    /// there until a key or click moves the highlight again
+    pub(super) agents_scroll_detached: bool,
     /// First visible row of the sandbox tree
     pub(super) sandbox_scroll: usize,
     /// Screen areas from the last frame, for mouse hit-testing
@@ -230,18 +235,16 @@ pub struct App {
     hover: Option<HoverTarget>,
     /// When the in-flight turn started (`None` unless processing)
     pub(super) processing_since: Option<Instant>,
-    /// `[user@host dir]$ ` shown before the input line
+    /// `[user@host dir]$ ` shown before the input line at the terminal prompt
     pub(super) shell_prompt: String,
     /// Width of the chat text area in the last frame (0 before the first)
     pub(super) chat_width: u16,
-    /// Whether each program name typed so far is on `PATH`
-    pub(super) path_lookups: HashMap<String, bool>,
-    /// Whether the input is shown as a shell command
-    pub(super) input_is_command: bool,
-    /// Input as of the last [`Self::sync_input_kind`]
-    pub(super) input_kind_text: String,
-    /// When `input_kind_text` last changed
-    pub(super) input_edited_at: Instant,
+    /// Whether `$` switched to the terminal: the chat panel shows the
+    /// session's shell commands, and Enter runs the line as one
+    pub(super) terminal_mode: bool,
+    /// Commands run at the terminal prompt, recalled there instead of chat
+    /// history
+    pub(super) command_history: InputHistory,
     /// Highlighted row in the slash menu
     pub(super) slash_cursor: usize,
     /// Whether Esc closed the slash menu (until the input is edited)
@@ -266,6 +269,16 @@ pub struct App {
     pub(super) pending_delete: Option<String>,
     /// Folder browser for a new project, while it is open
     pub(super) folder_picker: Option<FolderPicker>,
+    /// Which view the panel below the Record panel shows
+    pub(super) side_tab: SidePanelTab,
+    /// Rows of the Processes tab
+    pub(super) processes: Vec<ProcessSummary>,
+    /// Highlighted row of the Processes tab
+    pub(super) selected_process: usize,
+    /// First visible row of the Processes tab
+    pub(super) processes_scroll: usize,
+    /// Process waiting for `y` to confirm killing it
+    pub(super) pending_kill: Option<String>,
 }
 
 /// Screen areas of the content panels from the last rendered frame.
@@ -281,18 +294,28 @@ pub struct PanelAreas {
     pub agent_tabs: Option<Rect>,
     /// Rows of the roster inside the agents panel
     pub definition_rows: Option<Rect>,
+    /// "+ New agent", pinned to the bottom of the agents panel
+    pub new_agent_row: Option<Rect>,
     /// Chat panel (including border)
     pub chat: Option<Rect>,
     /// Message text area inside the chat panel
     pub chat_text: Option<Rect>,
     /// Record panel (including border)
     pub records: Option<Rect>,
+    /// Rows of the record list inside the panel
+    pub record_rows: Option<Rect>,
     /// Sandbox panel (including border)
     pub sandbox: Option<Rect>,
     /// Rows of the sandbox tree inside the panel
     pub sandbox_rows: Option<Rect>,
     /// Tree row shown at the top of `sandbox_rows`
     pub sandbox_scroll: usize,
+    /// Tab bar row of the panel below the Record panel
+    pub side_tabs: Option<Rect>,
+    /// Rows of the Processes tab inside the panel
+    pub process_rows: Option<Rect>,
+    /// Process row shown at the top of `process_rows`
+    pub processes_scroll: usize,
 }
 
 /// What is shown over the chat panel.
@@ -301,7 +324,9 @@ pub enum DetailView {
     /// The record highlighted in the Record panel.
     Record,
     /// A file from the sandbox.
-    File(FileView),
+    File(Box<FileView>),
+    /// A process from the Processes tab, refreshed while it stays listed.
+    Process(Box<ProcessSummary>),
 }
 
 /// Clickable item under the pointer.
@@ -315,6 +340,12 @@ pub(crate) enum HoverTarget {
     DefinitionRow(usize),
     /// A row in the sandbox tree.
     SandboxRow(usize),
+    /// A row in the Record panel.
+    RecordRow(usize),
+    /// A label in the side panel's tab bar.
+    SideTab(SidePanelTab),
+    /// A row in the Processes tab.
+    ProcessRow(usize),
     /// A chat row that expands or collapses agent activity.
     Activity(ToggleTarget),
 }
@@ -337,6 +368,21 @@ pub(crate) struct ToggleRow {
     pub target: ToggleTarget,
     /// Whether `target` is shown open
     pub open: bool,
+}
+
+/// Each of `tabs` with the first column and width of its ` text ` cell
+/// in a tab bar.
+fn tab_layout<T: Copy, const N: usize>(
+    tabs: [T; N],
+    text: impl Fn(T) -> String,
+) -> impl Iterator<Item = (T, u16, u16)> {
+    let mut x = 0u16;
+    tabs.into_iter().map(move |tab| {
+        let width = u16::try_from(text(tab).len() + 2).unwrap_or(u16::MAX);
+        let start = x;
+        x = x.saturating_add(width);
+        (tab, start, width)
+    })
 }
 
 fn contains(area: Option<Rect>, column: u16, row: u16) -> bool {
@@ -379,17 +425,6 @@ pub(crate) enum ProjectListRow {
     Gap,
 }
 
-impl ProjectListRow {
-    /// Lines the row takes in the panel. A project is a cell two lines
-    /// tall: its name line between a lower and an upper half-block line.
-    pub(crate) const fn height(self) -> usize {
-        match self {
-            Self::Project { .. } => 3,
-            Self::Agent { .. } | Self::NewProject | Self::Gap => 1,
-        }
-    }
-}
-
 /// Type of notification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationType {
@@ -416,6 +451,7 @@ impl App {
             pending_approval: None,
             scroll_offset: 0,
             chat_lines: ChatLineCache::default(),
+            terminal_lines: ChatLineCache::terminal(),
             chat_line_count: 0,
             toggle_rows: Vec::new(),
             chat_first_line: 0,
@@ -438,7 +474,7 @@ impl App {
             records_scroll: 0,
             detail: None,
             detail_scroll: 0,
-            detail_page_rows: 1,
+            detail_shown: 1,
             agents: Vec::new(),
             selected_agent: 0,
             collapsed_projects: HashSet::new(),
@@ -453,16 +489,15 @@ impl App {
             model_cursor: 0,
             pending_model: None,
             agents_scroll: 0,
+            agents_scroll_detached: false,
             sandbox_scroll: 0,
             areas: PanelAreas::default(),
             hover: None,
             processing_since: None,
             shell_prompt: shell_prompt::detect(),
             chat_width: 0,
-            path_lookups: HashMap::new(),
-            input_is_command: false,
-            input_kind_text: String::new(),
-            input_edited_at: Instant::now(),
+            terminal_mode: false,
+            command_history: InputHistory::new(),
             slash_cursor: 0,
             slash_dismissed: false,
             selection: None,
@@ -475,6 +510,11 @@ impl App {
             editor_request: None,
             pending_delete: None,
             folder_picker: None,
+            side_tab: SidePanelTab::default(),
+            processes: Vec::new(),
+            selected_process: 0,
+            processes_scroll: 0,
+            pending_kill: None,
         }
     }
 
@@ -672,7 +712,8 @@ impl App {
         self.scroll_offset = self.scroll_offset.min(max);
     }
 
-    /// Messages along with the cache of the lines they are drawn as.
+    /// Messages along with the cache of the lines the open pane draws them
+    /// as.
     pub(crate) fn chat_line_cache(
         &mut self,
     ) -> (&VecDeque<Message>, &mut ChatLineCache, GroupState<'_>) {
@@ -681,7 +722,36 @@ impl App {
             expand_all: self.activity_expanded,
             turn_live: self.state == AppState::Processing,
         };
-        (&self.messages, &mut self.chat_lines, groups)
+        let cache = if self.terminal_mode {
+            self.terminal_lines.set_prompt(&self.shell_prompt);
+            &mut self.terminal_lines
+        } else {
+            &mut self.chat_lines
+        };
+        (&self.messages, cache, groups)
+    }
+
+    /// Whether the terminal pane ends in a prompt to type at, as a shell's
+    /// does once the last command has finished.
+    #[must_use]
+    pub fn shows_live_prompt(&self) -> bool {
+        self.input_is_command() && !self.messages.back().is_some_and(Message::is_running_shell)
+    }
+
+    /// Whether the chat panel shows the terminal pane: the shell commands
+    /// run this session, in place of the conversation.
+    #[must_use]
+    pub const fn terminal_pane(&self) -> bool {
+        self.terminal_mode
+    }
+
+    /// Whether the open pane has nothing to show.
+    #[must_use]
+    pub fn pane_is_empty(&self) -> bool {
+        !self
+            .messages
+            .iter()
+            .any(|m| m.shell_run().is_some() == self.terminal_mode)
     }
 
     /// Fit the chat scroll position to a conversation `total_lines` long shown
@@ -747,15 +817,19 @@ impl App {
             }
             PanelFocus::Swarm => match self.agents_tab {
                 AgentsTab::Projects => {
-                    self.select_agent_row(self.selected_agent.saturating_sub(lines));
+                    self.agents_scroll = self.agents_scroll.saturating_sub(lines);
+                    self.agents_scroll_detached = true;
                 }
                 AgentsTab::Roster => {
                     self.select_definition_row(self.selected_definition.saturating_sub(lines));
                 }
             },
             PanelFocus::Sandbox => {
-                self.sandbox
-                    .move_by(-isize::try_from(lines).unwrap_or(isize::MAX));
+                let delta = -isize::try_from(lines).unwrap_or(isize::MAX);
+                match self.side_tab {
+                    SidePanelTab::Sandbox => self.sandbox.move_by(delta),
+                    SidePanelTab::Processes => self.scroll_processes(delta),
+                }
             }
         }
     }
@@ -773,36 +847,59 @@ impl App {
             }
             PanelFocus::Swarm => match self.agents_tab {
                 AgentsTab::Projects => {
-                    self.select_agent_row(self.selected_agent.saturating_add(lines));
+                    let visible = self
+                        .areas
+                        .agent_rows
+                        .map_or(1, |area| usize::from(area.height));
+                    let max = self.listed_project_rows().saturating_sub(visible);
+                    self.agents_scroll = (self.agents_scroll + lines).min(max);
+                    self.agents_scroll_detached = true;
                 }
                 AgentsTab::Roster => {
                     self.select_definition_row(self.selected_definition.saturating_add(lines));
                 }
             },
             PanelFocus::Sandbox => {
-                self.sandbox
-                    .move_by(isize::try_from(lines).unwrap_or(isize::MAX));
+                let delta = isize::try_from(lines).unwrap_or(isize::MAX);
+                match self.side_tab {
+                    SidePanelTab::Sandbox => self.sandbox.move_by(delta),
+                    SidePanelTab::Processes => self.scroll_processes(delta),
+                }
             }
         }
     }
 
     /// Highlight projects-list row `row`. Landing on an agent switches to it.
-    /// Project headers and "+ New project" only move the highlight. A gap
-    /// between projects is stepped over in the direction of travel.
+    /// Only agents and "+ New project" take the highlight: project headers
+    /// and gaps are stepped over in the direction of travel, or the other
+    /// way at the end of the list.
     pub(super) fn select_agent_row(&mut self, row: usize) {
+        self.agents_scroll_detached = false;
         let rows = self.project_rows();
         if rows.is_empty() {
             self.selected_agent = 0;
             return;
         }
-        let mut row = row.min(rows.len() - 1);
-        while rows[row] == ProjectListRow::Gap {
-            row = if row < self.selected_agent || row + 1 == rows.len() {
-                row.saturating_sub(1)
-            } else {
-                row + 1
-            };
-        }
+        let target = row.min(rows.len() - 1);
+        let takes_highlight = |&row: &usize| {
+            matches!(
+                rows[row],
+                ProjectListRow::Agent { .. } | ProjectListRow::NewProject
+            )
+        };
+        let found = if target < self.selected_agent {
+            (0..=target)
+                .rev()
+                .find(takes_highlight)
+                .or_else(|| (target..rows.len()).find(takes_highlight))
+        } else {
+            (target..rows.len())
+                .find(takes_highlight)
+                .or_else(|| (0..=target).rev().find(takes_highlight))
+        };
+        let Some(row) = found else {
+            return;
+        };
         self.selected_agent = row;
         if let Some(ProjectListRow::Agent { index }) = rows.get(self.selected_agent) {
             let agent_id = self.agents[*index].id.clone();
@@ -813,6 +910,7 @@ impl App {
     /// Act on the highlighted projects-list row: fold a project, switch to
     /// an agent, or create one from "+ New project".
     pub(super) fn activate_agent_row(&mut self) {
+        self.agents_scroll_detached = false;
         match self.project_rows().get(self.selected_agent).copied() {
             Some(ProjectListRow::Project { root, .. }) => self.toggle_project(root),
             Some(ProjectListRow::Agent { index }) => {
@@ -907,7 +1005,7 @@ impl App {
     }
 
     /// Finish the project-name prompt. An empty name leaves the prompt open.
-    pub(super) fn submit_project_name(&mut self, name: String) {
+    pub(super) fn submit_project_name(&mut self, name: &str) {
         let name = name.trim().to_string();
         if name.is_empty() {
             self.notification = Some((
@@ -931,6 +1029,7 @@ impl App {
     /// Fold or open the project under the highlight. An agent row folds the
     /// project that contains it.
     pub(super) fn toggle_selected_project(&mut self) {
+        self.agents_scroll_detached = false;
         let root = match self.project_rows().get(self.selected_agent).copied() {
             Some(ProjectListRow::Project { root, .. }) => Some(root),
             Some(ProjectListRow::Agent { index }) => self.project_root(index),
@@ -964,29 +1063,23 @@ impl App {
         self.agents_scroll
     }
 
-    /// Keep the highlighted projects-list row inside a list `visible_lines`
+    /// Keep the highlighted projects-list row inside a list `visible_rows`
     /// tall. "+ New project" is pinned below the list, so it never scrolls.
-    /// When the row is taller than the list, its top stays in view.
-    pub fn sync_agents_scroll(&mut self, visible_lines: usize) {
-        let rows = self.project_rows();
-        let listed = &rows[..rows.len().saturating_sub(1)];
-        let total: usize = listed.iter().map(|row| row.height()).sum();
-        let selected = self.selected_agent.min(listed.len().saturating_sub(1));
-        let top: usize = listed
-            .iter()
-            .take(selected)
-            .map(|row| row.height())
-            .sum();
-        let bottom = top + listed.get(selected).map_or(1, |row| row.height());
-        let visible = visible_lines.max(1);
-        let scroll = if top < self.agents_scroll {
-            top
-        } else if bottom > self.agents_scroll + visible {
-            (bottom - visible).min(top)
+    /// After the wheel scrolled the list, it stays put until the highlight
+    /// moves again.
+    pub fn sync_agents_scroll(&mut self, visible_rows: usize) {
+        let total = self.listed_project_rows();
+        let visible = visible_rows.max(1);
+        self.agents_scroll = if self.agents_scroll_detached {
+            self.agents_scroll.min(total.saturating_sub(visible))
         } else {
-            self.agents_scroll
+            follow_selection(self.agents_scroll, self.selected_agent, visible, total)
         };
-        self.agents_scroll = scroll.min(total.saturating_sub(visible));
+    }
+
+    /// Projects-list rows that scroll: all but the pinned "+ New project".
+    fn listed_project_rows(&self) -> usize {
+        self.project_rows().len().saturating_sub(1)
     }
 
     /// Keep the selected record inside a list `visible_rows` tall, returning
@@ -1028,6 +1121,11 @@ impl App {
         self.areas.agent_rows = Some(area);
     }
 
+    /// Record where the record list rows were drawn this frame.
+    pub fn set_record_rows_area(&mut self, area: Rect) {
+        self.areas.record_rows = Some(area);
+    }
+
     /// Record where "+ New project" was drawn this frame.
     pub fn set_new_project_area(&mut self, area: Rect) {
         self.areas.new_project_row = Some(area);
@@ -1061,9 +1159,10 @@ impl App {
     }
 
     /// Handle a mouse event: the wheel scrolls the panel under the pointer,
-    /// a left click focuses it, clicking an agent row switches to it, and
-    /// clicking a sandbox row selects it and opens or closes a directory, or
-    /// shows a file over the chat panel.
+    /// a left click focuses it, clicking an agent row switches to it,
+    /// clicking a record shows it over the chat panel, and clicking a
+    /// sandbox row selects it and opens or closes a directory, or shows a
+    /// file over the chat panel.
     /// Dragging with the left button selects text inside the panel the
     /// drag started in and copies it when the button is released.
     /// Moving over a clickable item highlights it until the pointer leaves.
@@ -1131,8 +1230,9 @@ impl App {
                 self.selecting = self.selection.is_some();
                 match panel {
                     PanelFocus::Swarm => self.click_agents_panel(mouse.column, mouse.row),
-                    PanelFocus::Sandbox => self.click_sandbox_row(mouse.column, mouse.row),
-                    PanelFocus::Chat | PanelFocus::Records => {}
+                    PanelFocus::Sandbox => self.click_side_panel(mouse.column, mouse.row),
+                    PanelFocus::Records => self.click_record_row(mouse.column, mouse.row),
+                    PanelFocus::Chat => {}
                 }
             }
             _ => {}
@@ -1147,18 +1247,22 @@ impl App {
         }
         if self.agents_tab == AgentsTab::Projects {
             if let Some(index) = self.project_row_at(column, row) {
-                let is_project = matches!(
-                    self.project_rows().get(index),
-                    Some(ProjectListRow::Project { .. })
-                );
-                return (!is_project).then_some(HoverTarget::ProjectRow(index));
+                return Some(HoverTarget::ProjectRow(index));
             }
         }
-        if self.agents_tab == AgentsTab::Roster && contains(self.areas.definition_rows, column, row)
-        {
-            return self.hovered_definition_row(row);
+        if self.agents_tab == AgentsTab::Roster {
+            if let Some(index) = self.definition_row_at(column, row) {
+                return Some(HoverTarget::DefinitionRow(index));
+            }
         }
-        if contains(self.areas.sandbox_rows, column, row) {
+        if let Some(index) = self.record_row_at(column, row) {
+            return Some(HoverTarget::RecordRow(index));
+        }
+        if let Some(target) = self.hovered_side_panel(column, row) {
+            return Some(target);
+        }
+        if self.side_tab == SidePanelTab::Sandbox && contains(self.areas.sandbox_rows, column, row)
+        {
             return self.hovered_sandbox_row(row);
         }
         self.hovered_activity(column, row)
@@ -1184,23 +1288,29 @@ impl App {
         if !contains(Some(list), column, row) {
             return None;
         }
-        let mut line = self.agents_scroll + usize::from(row - list.y);
-        let index = rows[..new_project].iter().position(|listed| {
-            let inside = line < listed.height();
-            line = line.saturating_sub(listed.height());
-            inside
-        })?;
+        let index = self.agents_scroll + usize::from(row - list.y);
         matches!(
-            rows[index],
+            rows[..new_project].get(index)?,
             ProjectListRow::Project { .. } | ProjectListRow::Agent { .. }
         )
         .then_some(index)
     }
 
-    fn hovered_definition_row(&self, row: u16) -> Option<HoverTarget> {
-        let rows = self.areas.definition_rows?;
-        let index = self.definitions_scroll + usize::from(row.saturating_sub(rows.y));
-        (index <= self.definitions.len()).then_some(HoverTarget::DefinitionRow(index))
+    fn record_row_at(&self, column: u16, row: u16) -> Option<usize> {
+        let rows = self
+            .areas
+            .record_rows
+            .filter(|&rows| contains(Some(rows), column, row))?;
+        let index = self.records_scroll + usize::from(row - rows.y);
+        (index < self.records.len()).then_some(index)
+    }
+
+    /// Clicking a record highlights it and shows it over the chat panel.
+    fn click_record_row(&mut self, column: u16, row: u16) {
+        if let Some(index) = self.record_row_at(column, row) {
+            self.selected_record = index;
+            self.open_detail(DetailView::Record);
+        }
     }
 
     fn hovered_sandbox_row(&self, row: u16) -> Option<HoverTarget> {
@@ -1296,7 +1406,7 @@ impl App {
             .map(|(message, kind, _)| (message.as_str(), *kind))
     }
 
-    fn click_sandbox_row(&mut self, column: u16, row: u16) {
+    pub(super) fn click_sandbox_row(&mut self, column: u16, row: u16) {
         let Some(rows) = self.areas.sandbox_rows else {
             return;
         };
@@ -1434,9 +1544,10 @@ impl App {
     }
 
     /// Fold or open the project rooted at `root`. Folding it parks the
-    /// highlight on the header when the highlight was inside that project;
-    /// otherwise the highlight stays on the same row as rows above it come
-    /// and go.
+    /// highlight on the header, where it is not drawn, when the highlight
+    /// was inside that project; opening it again brings the highlight back
+    /// to the agent shown in the chat if it is in there. Otherwise the
+    /// highlight stays on the same row as rows above it come and go.
     fn toggle_project(&mut self, root: usize) {
         let Some(id) = self.agents.get(root).map(|agent| agent.id.clone()) else {
             return;
@@ -1448,14 +1559,22 @@ impl App {
             ProjectListRow::Agent { index } => span.contains(&index),
             ProjectListRow::NewProject | ProjectListRow::Gap => false,
         });
-        if !self.collapsed_projects.remove(&id) {
+        let opened = self.collapsed_projects.remove(&id);
+        if !opened {
             self.collapsed_projects.insert(id);
         }
         let rows = self.project_rows();
+        let active_row = || {
+            span.clone()
+                .find(|&index| self.agents[index].id == self.active_agent_id)
+                .and_then(|index| self.row_of_agent(index))
+        };
         let kept = if selected_inside {
-            rows.iter().position(
-                |row| matches!(row, ProjectListRow::Project { root: found, .. } if *found == root),
-            )
+            (opened.then(active_row).flatten()).or_else(|| {
+                rows.iter().position(
+                    |row| matches!(row, ProjectListRow::Project { root: found, .. } if *found == root),
+                )
+            })
         } else {
             before.and_then(|before| rows.iter().position(|row| *row == before))
         };
@@ -1544,7 +1663,8 @@ impl App {
         &self.plans
     }
 
-    /// Bash-style `[user@host dir]$ ` prompt shown before the input line.
+    /// Bash-style `[user@host dir]$ ` prompt shown before the input line at
+    /// the terminal prompt.
     #[must_use]
     pub fn shell_prompt(&self) -> &str {
         &self.shell_prompt
@@ -1555,45 +1675,20 @@ impl App {
         self.shell_prompt = prompt.to_string();
     }
 
-    /// Whether the input should be highlighted as a shell command, as of the
-    /// last [`Self::sync_input_kind`].
+    /// Whether the input line shows the terminal prompt and Enter runs it
+    /// as a shell command. Prompts that ask for a value (login, project
+    /// name, folder) take the line over while they are open.
     #[must_use]
     pub const fn input_is_command(&self) -> bool {
-        self.input_is_command
-    }
-
-    /// Re-check whether the current input is a shell command. Looking a
-    /// program up on `PATH` is cached, so this is cheap to call per frame.
-    ///
-    /// Input only becomes a command once it has sat unchanged for
-    /// [`COMMAND_HIGHLIGHT_DELAY`] (or starts with `!`), and stops being one
-    /// as soon as it no longer parses as one.
-    pub fn sync_input_kind(&mut self) {
-        if matches!(
-            self.state,
-            AppState::LoginEmail
-                | AppState::LoginPassword
-                | AppState::LinkCode
-                | AppState::ProjectName
-                | AppState::SelectingFolder
-        ) {
-            self.input_is_command = false;
-            return;
-        }
-        if self.input != self.input_kind_text {
-            self.input_kind_text.clone_from(&self.input);
-            self.input_edited_at = Instant::now();
-        }
-        let lookups = &mut self.path_lookups;
-        let is_command = shell_input::parse_with(&self.input, |program| {
-            *lookups
-                .entry(program.to_string())
-                .or_insert_with(|| shell_input::on_path(program))
-        })
-        .is_some();
-        let forced = self.input.trim_start().starts_with('!');
-        let settled = self.input_edited_at.elapsed() >= COMMAND_HIGHLIGHT_DELAY;
-        self.input_is_command = is_command && (self.input_is_command || forced || settled);
+        self.terminal_mode
+            && !matches!(
+                self.state,
+                AppState::LoginEmail
+                    | AppState::LoginPassword
+                    | AppState::LinkCode
+                    | AppState::ProjectName
+                    | AppState::SelectingFolder
+            )
     }
 
     /// Record the width of the chat text area drawn this frame.
@@ -1671,21 +1766,46 @@ impl App {
         };
         if matches!(row.kind, SandboxEntryKind::File | SandboxEntryKind::Symlink) {
             let view = FileView::load(&row.path, self.sandbox.root());
-            self.open_detail(DetailView::File(view));
+            self.open_detail(DetailView::File(Box::new(view)));
         }
     }
 
     pub(super) fn scroll_detail_up(&mut self, lines: usize) {
         self.detail_scroll = self.detail_scroll.saturating_sub(lines);
+        self.detail_scrolled();
     }
 
     pub(super) fn scroll_detail_down(&mut self, lines: usize) {
         self.detail_scroll = self.detail_scroll.saturating_add(lines);
+        self.detail_scrolled();
+    }
+
+    /// An open file's cursor follows a scroll instead of pulling it back.
+    fn detail_scrolled(&mut self) {
+        if let Some(DetailView::File(file)) = self.detail.as_mut() {
+            file.vim.scrolled();
+        }
     }
 
     /// Lines a page key moves the detail view.
-    pub(super) const fn detail_page_rows(&self) -> usize {
-        self.detail_page_rows
+    pub(super) fn detail_page_rows(&self) -> usize {
+        self.detail_shown.saturating_sub(1).max(1)
+    }
+
+    /// The open file and its scroll, for keys and drawing.
+    pub(crate) fn file_view_mut(&mut self) -> Option<(&mut FileView, &mut usize)> {
+        match self.detail.as_mut() {
+            Some(DetailView::File(file)) => Some((file.as_mut(), &mut self.detail_scroll)),
+            _ => None,
+        }
+    }
+
+    /// What the detail view showed in the last frame.
+    pub(super) const fn detail_screen(&self) -> vim::Screen {
+        vim::Screen {
+            first: self.detail_scroll,
+            shown: self.detail_shown,
+        }
     }
 
     /// First line of the detail view to show.
@@ -1694,11 +1814,11 @@ impl App {
         self.detail_scroll
     }
 
-    /// Clamp the detail view's scroll to `max_scroll` and let page keys
-    /// move `page_rows` lines, as measured by the last frame.
-    pub fn set_detail_bounds(&mut self, max_scroll: usize, page_rows: usize) {
+    /// Clamp the detail view's scroll to `max_scroll` and record that
+    /// `shown` source lines fit, as measured by the last frame.
+    pub fn set_detail_bounds(&mut self, max_scroll: usize, shown: usize) {
         self.detail_scroll = self.detail_scroll.min(max_scroll);
-        self.detail_page_rows = page_rows.max(1);
+        self.detail_shown = shown.max(1);
     }
 
     /// Get the currently selected record (if any).

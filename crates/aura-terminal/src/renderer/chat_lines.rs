@@ -4,10 +4,11 @@ use super::activity::{activity_lines, group_header, GroupView, TAIL_STEPS};
 use super::command::shell_lines;
 use super::markdown::{parse_content_segments, ContentSegment};
 use super::segments::{
-    message_header, message_style, render_code_segment, render_text_segment, reply_meta,
+    message_header, message_style, notice_lines, render_code_segment, render_text_segment,
+    reply_meta,
 };
 use crate::app::{ToggleRow, ToggleTarget};
-use crate::components::{Activity, Message};
+use crate::components::{Activity, Message, MessageRole};
 use crate::Theme;
 use ratatui::text::Line;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -30,6 +31,11 @@ pub(crate) struct GroupState<'a> {
 /// message, or a run of agent steps drawn as a group.
 #[derive(Debug, Default)]
 pub struct ChatLineCache {
+    /// Whether this draws the terminal pane (only shell commands) rather
+    /// than the chat (everything else)
+    terminal: bool,
+    /// Shell prompt the terminal pane's commands are drawn after
+    prompt: String,
     /// Text width the cached lines were wrapped to
     width: usize,
     /// Theme the cached lines were styled with
@@ -45,6 +51,8 @@ pub struct ChatLineCache {
 pub(crate) struct BlockLines {
     /// What the block was drawn from
     revision: u64,
+    /// Whether the block is a message the user sent
+    pub user: bool,
     /// The block's lines
     pub lines: Vec<Line<'static>>,
     /// Rows that expand or collapse something, `line` counted from the
@@ -53,8 +61,35 @@ pub(crate) struct BlockLines {
 }
 
 impl ChatLineCache {
-    /// Bring the cache up to date with `messages` drawn `width` columns wide.
-    /// Activity still in progress is redrawn every frame, with `spinner`.
+    /// A cache for the terminal pane, which draws only shell commands.
+    pub(crate) fn terminal() -> Self {
+        Self {
+            terminal: true,
+            ..Self::default()
+        }
+    }
+
+    /// Draw commands after `prompt`, redrawing them all if it changed.
+    pub(crate) fn set_prompt(&mut self, prompt: &str) {
+        if self.prompt != prompt {
+            prompt.clone_into(&mut self.prompt);
+            self.entries.clear();
+        }
+    }
+
+    /// Blank rows between two blocks: chat messages are spaced apart, the
+    /// terminal's commands follow each other like a shell's.
+    pub(crate) const fn block_gap(&self) -> usize {
+        if self.terminal {
+            0
+        } else {
+            1
+        }
+    }
+
+    /// Bring the cache up to date with the messages of its pane drawn
+    /// `width` columns wide. Activity still in progress is redrawn every
+    /// frame, with `spinner`.
     ///
     /// Returns `true` when every block was reflowed because the width or
     /// theme changed, so line positions from the last frame no longer apply.
@@ -72,19 +107,23 @@ impl ChatLineCache {
             self.theme = Some(theme.clone());
             self.entries.clear();
         }
-        let runs = block_runs(messages);
+        let shown: Vec<&Message> = messages
+            .iter()
+            .filter(|m| m.shell_run().is_some() == self.terminal)
+            .collect();
+        let runs = block_runs(&shown);
         self.order.clear();
         for (i, run) in runs.iter().enumerate() {
-            let members: Vec<&Message> = messages.range(run.clone()).collect();
+            let members = &shown[run.clone()];
             let key = members[0].version().0;
-            let is_group = members.len() > 1;
+            let is_group = members.len() > 1 && members[0].activity_step().is_some();
             let live = members.iter().any(|m| m.is_live_activity())
                 || (is_group && groups.turn_live && i + 1 == runs.len());
             let view = is_group
                 .then(|| group_view(groups.open.get(&key).copied(), groups.expand_all, live));
 
             let mut hasher = std::hash::DefaultHasher::new();
-            for member in &members {
+            for member in members {
                 member.version().hash(&mut hasher);
             }
             (view, live).hash(&mut hasher);
@@ -96,14 +135,26 @@ impl ChatLineCache {
                     .get(&key)
                     .is_none_or(|block| block.revision != revision)
             {
-                let (lines, toggles) = match view {
-                    Some(view) => group_lines(&members, view, live, width, theme, spinner),
-                    None => single_lines(members[0], width, theme, spinner),
+                let shell = members[0].shell_run().filter(|_| self.terminal);
+                let (lines, toggles) = match (shell, view) {
+                    (Some(run), _) => (shell_lines(run, &self.prompt, width, theme), Vec::new()),
+                    (None, Some(view)) => group_lines(members, view, live, width, theme, spinner),
+                    (None, None) if members.len() > 1 => (
+                        members
+                            .iter()
+                            .flat_map(|m| message_lines(m, width, theme, spinner))
+                            .collect(),
+                        Vec::new(),
+                    ),
+                    (None, None) => single_lines(members[0], width, theme, spinner),
                 };
                 self.entries.insert(
                     key,
                     BlockLines {
                         revision,
+                        user: !self.terminal
+                            && members.len() == 1
+                            && members[0].role() == MessageRole::User,
                         lines,
                         toggles,
                     },
@@ -125,17 +176,34 @@ impl ChatLineCache {
     }
 }
 
-/// Messages grouped into blocks: consecutive agent steps share one.
-fn block_runs(messages: &VecDeque<Message>) -> Vec<Range<usize>> {
+/// Messages grouped into blocks: consecutive agent steps share one, and so
+/// do consecutive notices.
+fn block_runs(messages: &[&Message]) -> Vec<Range<usize>> {
     let mut runs: Vec<Range<usize>> = Vec::new();
     let is_activity = |i: usize| messages[i].activity_step().is_some();
+    let is_notice = |i: usize| is_notice(messages[i]);
     for i in 0..messages.len() {
         match runs.last_mut() {
-            Some(run) if is_activity(i) && is_activity(run.end - 1) => run.end = i + 1,
+            Some(run)
+                if (is_activity(i) && is_activity(run.end - 1))
+                    || (is_notice(i) && is_notice(run.end - 1)) =>
+            {
+                run.end = i + 1;
+            }
             _ => runs.push(i..i + 1),
         }
     }
     runs
+}
+
+/// A one-line system message such as `policy: read_file allowed by …`,
+/// drawn on the same line as its time.
+fn is_notice(message: &Message) -> bool {
+    message.role() == MessageRole::System
+        && message.activity_step().is_none()
+        && message.shell_run().is_none()
+        && !message.content().trim().is_empty()
+        && !message.content().contains('\n')
 }
 
 /// How much of a group to show: what the user chose, else everything under
@@ -229,10 +297,18 @@ pub(super) fn message_lines(
         );
     }
     let timestamp = message.timestamp_local();
-    if let Some(run) = message.shell_run() {
-        return shell_lines(run, &timestamp, width, theme);
-    }
     let (nick, nick_color, msg_color) = message_style(message.role(), theme);
+    if is_notice(message) {
+        return notice_lines(
+            nick,
+            nick_color,
+            &timestamp,
+            message.content(),
+            msg_color,
+            width,
+            theme,
+        );
+    }
     let meta = reply_meta(message.model(), message.usage());
     let mut lines = vec![message_header(
         nick, nick_color, &timestamp, &meta, width, theme,

@@ -42,7 +42,7 @@ impl App {
                     let _ = tx.try_send(UiEvent::ShowHistory(None));
                 }
             }
-            "record" | "r" => {
+            "kernel" | "record" | "k" | "r" => {
                 self.record_panel_visible = !self.record_panel_visible;
                 if !self.record_panel_visible && self.focus == PanelFocus::Records {
                     self.focus = PanelFocus::Chat;
@@ -361,11 +361,16 @@ impl App {
             UiCommand::UpdateToolArgs { id, args } => {
                 self.update_tool(&id, |tool| tool.args = args);
             }
+            UiCommand::ToolPolicy { id, tool, decision } => {
+                self.cmd_tool_policy(&id, &tool, decision);
+            }
             UiCommand::ToolRetrying {
                 id,
                 attempt,
                 max_attempts,
-            } => self.update_tool(&id, |tool| tool.retry = Some((attempt, max_attempts))),
+            } => {
+                self.update_tool(&id, |tool| tool.retry = Some((attempt, max_attempts)));
+            }
             UiCommand::CompleteTool {
                 id,
                 result,
@@ -406,6 +411,12 @@ impl App {
             UiCommand::ShowWarning(msg) => {
                 self.cmd_notification(&msg, "warning: ", NotificationType::Warning);
             }
+            UiCommand::TurnStarted => {
+                if self.state == AppState::Idle {
+                    self.state = AppState::Processing;
+                    self.status = "Thinking...".to_string();
+                }
+            }
             UiCommand::Complete => {
                 self.cmd_complete();
                 self.refresh_sandbox();
@@ -425,6 +436,7 @@ impl App {
             }
             UiCommand::LoadConversation(history) => self.cmd_load_conversation(history),
             UiCommand::SetSandboxRoot(root) => self.sandbox.set_root(root),
+            UiCommand::SetProcesses(processes) => self.set_processes(processes),
             UiCommand::SetApiStatus { url, active } => {
                 self.api_url = url;
                 self.api_active = active;
@@ -530,19 +542,31 @@ impl App {
         }
     }
 
-    /// Apply `update` to the tool call with use id `id`.
-    fn update_tool(&mut self, id: &str, update: impl FnOnce(&mut ToolStep)) {
+    /// Apply `update` to the tool call with use id `id`; `false` when no
+    /// such call is shown.
+    fn update_tool(&mut self, id: &str, update: impl FnOnce(&mut ToolStep)) -> bool {
         let found = self
             .messages
             .iter_mut()
             .rev()
             .find(|m| matches!(m.activity_step(), Some(Activity::Tool(tool)) if tool.id == id));
-        if let Some(message) = found {
-            message.update_activity(|activity| {
-                if let Activity::Tool(tool) = activity {
-                    update(tool);
-                }
-            });
+        let Some(message) = found else {
+            return false;
+        };
+        message.update_activity(|activity| {
+            if let Activity::Tool(tool) = activity {
+                update(tool);
+            }
+        });
+        true
+    }
+
+    /// Keep the policy decision with its tool call, so a run of calls
+    /// stays one block; a call that isn't shown gets a `policy:` line.
+    fn cmd_tool_policy(&mut self, id: &str, tool: &str, decision: String) {
+        let line = format!("policy: {tool} {decision}");
+        if !self.update_tool(id, |step| step.policy = Some(decision)) {
+            self.add_message(Message::new(MessageRole::System, &line));
         }
     }
 
@@ -626,12 +650,17 @@ impl App {
         self.scroll_offset = 0;
     }
 
+    /// Append a record, oldest first. A selection on the newest record
+    /// follows new arrivals; one moved up stays on its record.
     fn cmd_new_record(&mut self, record: crate::events::RecordSummary) {
-        self.records.push_front(record);
+        let follow = self.detail != Some(DetailView::Record)
+            && self.selected_record + 1 >= self.records.len();
+        self.records.push_back(record);
         while self.records.len() > super::MAX_RECORDS {
-            self.records.pop_back();
+            self.records.pop_front();
+            self.selected_record = self.selected_record.saturating_sub(1);
         }
-        if self.selected_record >= self.records.len() && !self.records.is_empty() {
+        if follow {
             self.selected_record = self.records.len() - 1;
         }
     }
@@ -648,6 +677,7 @@ impl App {
         for agent in &mut self.agents {
             agent.is_active = agent.id == self.active_agent_id;
         }
+        self.agents_scroll_detached = false;
         self.select_visible_active();
     }
 }

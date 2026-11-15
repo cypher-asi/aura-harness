@@ -151,7 +151,7 @@ impl Default for Theme {
 ///
 /// | Color       | Hex Code | Usage                              |
 /// |-------------|----------|------------------------------------|
-/// | Cyan/Green  | #01f4cb  | Success states, neon accents       |
+/// | Cyan/Green  | #01f4cb  | Success, neon accents, selected row|
 /// | Blue        | #01a4f4  | Primary accent, info, provisioning |
 /// | Purple      | #cb01f4  | Pending states, secondary accent   |
 /// | Red         | #f4012a  | Errors, danger                     |
@@ -159,9 +159,8 @@ impl Default for Theme {
 /// | Light gray  | #d4d4d4  | Body text of chat replies          |
 /// | Gray        | #888888  | Muted text, secondary info         |
 /// | Black       | #0d0d0d  | Background, text on selection      |
-/// | Sky         | #7cd4ff  | Selected list row                  |
 /// | Dark gray   | #1e1e1e  | List cell                          |
-/// | Graphite    | #2a2a2a  | List cell under the cursor         |
+/// | Graphite    | #2a2a2a  | List cell under the pointer        |
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemeColors {
     /// Background color (#0d0d0d black)
@@ -187,9 +186,9 @@ pub struct ThemeColors {
     pub muted: Color,
     /// Background of a list cell - dark gray (#1e1e1e)
     pub surface: Color,
-    /// Background of a list cell under the keyboard cursor - gray (#2a2a2a)
+    /// Background of a list cell under the pointer - gray (#2a2a2a)
     pub surface_hover: Color,
-    /// Background of the selected list row - sky blue (#7cd4ff)
+    /// Background of the selected list row - cyan (#01f4cb)
     pub selection: Color,
     /// Text on the selected list row - black (#0d0d0d)
     pub on_selection: Color,

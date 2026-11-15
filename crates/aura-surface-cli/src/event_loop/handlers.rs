@@ -1,10 +1,12 @@
 //! Handler functions for agent turns, auth, and session lifecycle.
 
 use super::agent_events::ForwarderState;
+use super::processes::{now_ms, turn_id, warn_kill_failed};
 use super::record_ui::{create_response_transaction, send_record_to_ui};
 use super::{forward_agent_events, LoopState, TURN_TIMEOUT};
 use aura_agent::AgentLoopEvent;
 use aura_core_types::Transaction;
+use aura_terminal::events::{ProcessKind, ProcessStatus, ProcessSummary};
 use aura_terminal::{UiCommand, UiEvent};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -19,6 +21,7 @@ pub(super) async fn run_agent_turn(
     state: &mut LoopState<'_>,
     agent_loop: &aura_agent::AgentLoop,
     tools: Vec<aura_model_reasoner::ToolDefinition>,
+    model: &str,
 ) -> (
     Result<aura_agent::AgentLoopResult, aura_agent::AgentError>,
     ForwarderState,
@@ -32,6 +35,10 @@ pub(super) async fn run_agent_turn(
     let cancel_token = CancellationToken::new();
     let cancel_for_turn = cancel_token.clone();
     let mut cancelled = false;
+    let row = turn_id(state.session.agent_id());
+    state
+        .processes
+        .start(turn_summary(state, model), Some(cancel_token.clone()));
 
     let turn = tokio::time::timeout(
         TURN_TIMEOUT,
@@ -69,10 +76,20 @@ pub(super) async fn run_agent_turn(
                     cancelled = true;
                     state.quit_requested = true;
                 }
+                UiEvent::KillProcess(id) => {
+                    handle_kill_process(state, &id).await;
+                    cancelled |= cancel_for_turn.is_cancelled();
+                }
                 other => state.deferred.push_back(other),
             },
         }
     };
+    let status = match &process_result {
+        _ if cancelled => ProcessStatus::Killed,
+        Ok(result) if result.llm_error.is_none() => ProcessStatus::Exited,
+        _ => ProcessStatus::Failed,
+    };
+    state.processes.finish(&row, status);
 
     let forwarded = match forwarder.await {
         Ok(fwd_state) => {
@@ -272,4 +289,46 @@ pub(super) async fn handle_select_model(state: &mut LoopState<'_>, id: &str) {
         }
     }
     let _ = state.commands.send(state.models.ui_command()).await;
+}
+
+/// Processes tab row for the active agent's turn on `model`.
+fn turn_summary(state: &LoopState<'_>, model: &str) -> ProcessSummary {
+    let prompt = state
+        .session
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == aura_model_reasoner::Role::User)
+        .map(aura_model_reasoner::Message::text_content)
+        .unwrap_or_default();
+    let agent = state.session.agent_id().to_hex();
+    ProcessSummary {
+        id: turn_id(state.session.agent_id()),
+        kind: ProcessKind::Turn,
+        label: prompt.lines().next().unwrap_or_default().to_string(),
+        detail: prompt,
+        status: ProcessStatus::Running,
+        owner_name: state.session.identity.name.clone(),
+        jump_agent_id: agent.clone(),
+        owner_agent_id: agent,
+        started_ms: now_ms(),
+        model: Some(model.to_string()),
+        killable: true,
+        ..ProcessSummary::default()
+    }
+}
+
+/// Kill what the Processes tab row `id` runs.
+pub(super) async fn handle_kill_process(state: &LoopState<'_>, id: &str) {
+    let command = match state.processes.kill(id) {
+        Ok(killed) => {
+            info!(process = %id, kind = killed.kind.label(), owner = %killed.owner, "Killed from the Processes tab");
+            UiCommand::ShowSuccess(format!("Stopped {}", killed.label))
+        }
+        Err(problem) => {
+            warn_kill_failed(id, &problem);
+            UiCommand::ShowWarning(problem)
+        }
+    };
+    let _ = state.commands.send(command).await;
 }

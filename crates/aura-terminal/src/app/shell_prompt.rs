@@ -1,4 +1,5 @@
-//! Bash-style `[user@host dir]$ ` prompt shown before the input line.
+//! Bash-style `[user@host dir]$ ` prompt shown before the input line at the
+//! terminal prompt.
 
 use std::path::Path;
 

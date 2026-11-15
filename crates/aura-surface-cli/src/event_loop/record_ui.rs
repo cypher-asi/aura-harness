@@ -1,7 +1,6 @@
-use crate::record_loader::{build_record_summary, format_local_time, policy_chat_line};
+use crate::record_loader::{build_record_summary, format_local_time, policy_outcome};
 use aura_agent_kernel::ToolAuditObserver;
 use aura_core_types::{AgentId, PolicyDecision, RecordEntry, Transaction, TransactionType};
-use aura_terminal::events::{MessageData, MessageRole};
 use aura_terminal::UiCommand;
 use tokio::sync::mpsc::{self, error::TrySendError};
 
@@ -28,8 +27,8 @@ pub(crate) fn create_response_transaction(agent_id: AgentId, response_text: &str
 }
 
 /// Streams each tool-call record entry (proposal, policy decision,
-/// execution) to the RECORD panel as the kernel persists it, plus a chat
-/// line naming the policy rule behind every decision.
+/// execution) to the RECORD panel as the kernel persists it, and the
+/// policy rule behind every decision to the tool call it decided.
 #[derive(Debug)]
 pub struct UiToolAuditObserver {
     commands: mpsc::Sender<UiCommand>,
@@ -62,20 +61,15 @@ impl ToolAuditObserver for UiToolAuditObserver {
             entry.seq, &entry.tx, entry, timestamp,
         )));
         if entry.tx.tx_type == TransactionType::PolicyDecision {
-            let line = serde_json::from_slice::<PolicyDecision>(&entry.tx.payload)
-                .ok()
-                .and_then(|decision| policy_chat_line(&decision));
-            if let Some(content) = line {
-                self.send(UiCommand::ShowMessage(MessageData {
-                    role: MessageRole::System,
-                    content,
-                    is_streaming: false,
-                    timestamp_ms: Some(entry.tx.ts_ms),
-                    command: None,
-                    activity: None,
-                    model: None,
-                    usage: None,
-                }));
+            let Ok(decision) = serde_json::from_slice::<PolicyDecision>(&entry.tx.payload) else {
+                return;
+            };
+            if let Some(outcome) = policy_outcome(&decision) {
+                self.send(UiCommand::ToolPolicy {
+                    id: decision.tool_use_id,
+                    tool: decision.tool,
+                    decision: outcome,
+                });
             }
         }
     }

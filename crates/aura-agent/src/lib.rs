@@ -77,7 +77,8 @@ pub use events::{map_agent_loop_event, AgentLoopEvent, DebugEvent, TurnEvent, Tu
 pub use kernel_domain_gateway::{KernelDomainGateway, KernelDomainGatewayError};
 pub use kernel_gateway::{KernelModelGateway, KernelToolGateway, RecordingModelProvider};
 pub use runtime::{
-    ProcessManager, ProcessManagerConfig, ProcessOutput, RunningProcess, RuntimeError,
+    ProcessInfo, ProcessManager, ProcessManagerConfig, ProcessMeta, ProcessOutput, RunningProcess,
+    RuntimeError,
 };
 pub use session::{AgentRunnerHandle, SessionId, UserInput};
 pub use task_executor::run_project_build_check;

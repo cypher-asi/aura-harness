@@ -25,6 +25,10 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
+/// How long a background command may run before it is killed. Long
+/// enough for a dev server to outlive a working day.
+const BACKGROUND_COMMAND_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1000;
+
 // ============================================================================
 // Hello World (Spec 01)
 // ============================================================================
@@ -405,8 +409,17 @@ async fn run_terminal(
     let (process_tx, process_rx) = mpsc::channel::<Transaction>(100);
     let process_manager = Arc::new(ProcessManager::new(
         process_tx,
-        ProcessManagerConfig::default(),
+        ProcessManagerConfig {
+            max_async_timeout_ms: BACKGROUND_COMMAND_TIMEOUT_MS,
+            ..ProcessManagerConfig::default()
+        },
     ));
+    let background_commands: Arc<dyn aura_tools::BackgroundProcessHook> =
+        Arc::new(event_loop::BackgroundCommands::new(
+            Arc::clone(&process_manager),
+            store.clone() as Arc<dyn aura_store_db::ReadStore>,
+            data_dir.join("processes"),
+        ));
 
     // `mock` for explicit test / offline mode; otherwise the routed
     // provider sends `local/*` models to the local server (Ollama),
@@ -434,6 +447,30 @@ async fn run_terminal(
         ..KernelConfig::default()
     };
     let kernel_store = store.clone() as Arc<dyn aura_store_db::Store>;
+    let scheduler = Arc::new(aura_engine::Scheduler::new(
+        Arc::clone(&kernel_store),
+        Arc::clone(&provider),
+        Vec::new(),
+        tools.clone(),
+        workspace_root.clone(),
+        None,
+    ));
+    let host = aura_engine::AgentHost::new(
+        Arc::clone(&kernel_store),
+        scheduler.clone(),
+        aura_engine::AgentHostConfig::default(),
+    );
+    let agents = event_loop::TerminalAgents::new(
+        host.clone(),
+        scheduler,
+        Arc::new(event_loop::TerminalChildKernels::new(
+            tool_config.clone(),
+            Arc::clone(&background_commands),
+        )),
+        aura_config::session_mode(requested_mode),
+    );
+    let processes = event_loop::ProcessTable::new(Some(host), Some(Arc::clone(&process_manager)));
+    let kernel_agents = agents.clone();
     let hub = event_loop::AgentHub::new(
         event_loop::AgentHubParts {
             registry,
@@ -448,15 +485,22 @@ async fn run_terminal(
                 limits: models.limits(),
             },
             commands: cmd_tx.clone(),
+            processes: Arc::clone(&processes),
+            agents: Some(agents),
         },
         move |dispatcher| {
             event_loop::KernelFactory::new(
                 store,
                 Box::new(move |agent_id, parent_chain, folder| {
+                    let hooks = kernel_agents.hooks_for(agent_id);
                     let executor = ToolExecutor::new(tool_config.clone())
+                        .with_spawn_hook(hooks.clone())
+                        .with_agent_control_hook(hooks.clone())
+                        .with_agent_read_hook(hooks)
                         .with_caller_permissions(AgentPermissions::full_access())
                         .with_parent_chain(parent_chain)
-                        .with_subagent_dispatch_hook(Arc::clone(&dispatcher));
+                        .with_subagent_dispatch_hook(Arc::clone(&dispatcher))
+                        .with_background_process_hook(Arc::clone(&background_commands));
                     let mut executor_router = ExecutorRouter::new();
                     executor_router.add_executor(Arc::new(executor));
                     let mut config = kernel_config.clone();
@@ -480,7 +524,6 @@ async fn run_terminal(
     let session = hub.factory.open(&active_agent, Vec::new(), active_folder)?;
 
     let cmd_tx_clone = cmd_tx.clone();
-    let process_manager_clone = Arc::clone(&process_manager);
 
     let processor_handle = tokio::spawn(async move {
         let mut agent_loop = agent_loop;
@@ -491,7 +534,7 @@ async fn run_terminal(
             agent_loop: &mut agent_loop,
             session,
             hub,
-            _process_manager: process_manager_clone,
+            processes,
             memory_manager: None,
             models,
             auth,

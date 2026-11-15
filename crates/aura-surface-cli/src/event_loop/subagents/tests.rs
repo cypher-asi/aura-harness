@@ -42,6 +42,8 @@ fn fixture(reply: &str) -> Fixture {
                 .collect(),
         },
         commands: tx,
+        processes: ProcessTable::without_os_scan(None, None),
+        agents: None,
     };
     let reply = reply.to_string();
     let workspace_root = workspace.path().to_path_buf();
@@ -206,6 +208,70 @@ async fn spawn_runs_an_instance_under_its_parent() {
         }
     }
     assert!(saw_running);
+}
+
+#[tokio::test]
+async fn waiting_spawn_is_listed_as_a_finished_task() {
+    let fixture = fixture("Looks good.");
+    let parent = lock(&fixture.hub.registry).active().agent_id();
+
+    let result = fixture
+        .dispatcher
+        .dispatch(request(parent, "reviewer", "Review the diff"))
+        .await
+        .unwrap();
+
+    let rows = fixture.hub.processes.snapshot();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, task_id(result.child_agent_id.unwrap()));
+    assert_eq!(rows[0].kind, ProcessKind::Task);
+    assert_eq!(rows[0].status, ProcessStatus::Exited);
+    assert_eq!(rows[0].owner_agent_id, parent.to_hex());
+    assert_eq!(rows[0].detail, "Review the diff");
+    assert_eq!(
+        rows[0].jump_agent_id,
+        result.child_agent_id.unwrap().to_hex()
+    );
+}
+
+#[tokio::test]
+async fn detached_spawn_returns_at_once_and_replies_with_a_notice() {
+    let fixture = fixture("Looks good.");
+    let parent = lock(&fixture.hub.registry).active().agent_id();
+    let mut notices = fixture.hub.take_notices();
+    let mut detached = request(parent, "reviewer", "Review the diff");
+    detached.spawn_mode = Some(SpawnMode::Detached);
+
+    let result = fixture.dispatcher.dispatch(detached).await.unwrap();
+    assert!(matches!(result.exit, SubagentExit::Completed));
+    assert!(result.final_message.contains("in the background"));
+    let child = result.child_agent_id.unwrap();
+
+    let notice = tokio::time::timeout(std::time::Duration::from_secs(10), notices.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(notice.to, parent);
+    assert_eq!(notice.shown, "reviewer #1 finished its background task");
+    assert!(notice.prompt.ends_with("Its reply:\n\nLooks good."));
+
+    assert!(!fixture.hub.is_running(child));
+    let finished = fixture.hub.take_finished();
+    assert_eq!(finished.len(), 1);
+    assert_eq!(finished[0].agent_id(), child);
+    let rows = fixture.hub.processes.snapshot();
+    assert_eq!(rows[0].kind, ProcessKind::Agent);
+    assert_eq!(rows[0].status, ProcessStatus::Exited);
+}
+
+#[test]
+fn task_tool_offers_detached_spawns() {
+    let fixture = fixture("unused");
+    let tool = task_tool_definition(&lock(&fixture.hub.definitions)).unwrap();
+    assert_eq!(
+        tool.input_schema["properties"]["spawn_mode"]["enum"],
+        serde_json::json!(["wait", "detached"])
+    );
 }
 
 #[tokio::test]

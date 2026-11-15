@@ -7,7 +7,9 @@
 
 pub mod process_manager;
 
-pub use process_manager::{ProcessManager, ProcessManagerConfig, ProcessOutput, RunningProcess};
+pub use process_manager::{
+    ProcessInfo, ProcessManager, ProcessManagerConfig, ProcessMeta, ProcessOutput, RunningProcess,
+};
 
 /// Errors from the process manager runtime layer.
 #[derive(Debug, thiserror::Error)]

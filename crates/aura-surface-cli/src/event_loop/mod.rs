@@ -4,18 +4,24 @@ pub(crate) mod agent_events;
 pub(crate) mod agents;
 pub(crate) mod auth;
 pub(crate) mod handlers;
+pub(crate) mod host;
+pub(crate) mod notices;
+pub(crate) mod os_processes;
+pub(crate) mod processes;
 pub(crate) mod record_ui;
 pub(crate) mod run_command;
 pub(crate) mod subagents;
 
 pub(crate) use agent_events::forward_agent_events;
 pub use agents::{AgentSession, KernelBuilder, KernelFactory};
+pub use host::{TerminalAgents, TerminalChildKernels};
+pub use processes::{BackgroundCommands, ProcessTable};
 pub(crate) use record_ui::send_record_to_ui;
 pub use record_ui::UiToolAuditObserver;
 pub use subagents::{AgentHub, AgentHubParts, TurnBase};
 
 use crate::model_selection::ModelSelection;
-use aura_agent::{AgentLoop, ProcessManager};
+use aura_agent::AgentLoop;
 use aura_agent_kernel::Kernel;
 use aura_auth::{AuthManager, PendingLink};
 use aura_core_types::{AgentId, Transaction};
@@ -39,7 +45,8 @@ pub struct EventLoopContext<'a> {
     pub session: AgentSession,
     /// Agents, permanent agents, and the kernel factory, shared with spawns.
     pub hub: Arc<AgentHub>,
-    pub _process_manager: Arc<ProcessManager>,
+    /// What the Processes tab lists.
+    pub processes: Arc<ProcessTable>,
     /// Optional memory manager for prompt injection and result ingestion.
     pub memory_manager: Option<Arc<aura_context_memory::MemoryManager>>,
     /// Model selection already applied to `agent_loop`.
@@ -66,9 +73,12 @@ pub(super) struct LoopState<'a> {
     /// Previously opened agents, kept so their conversations survive switching.
     pub(super) parked: HashMap<AgentId, AgentSession>,
     pub(super) hub: Arc<AgentHub>,
+    pub(super) processes: Arc<ProcessTable>,
     pub(super) auth: Arc<AuthManager>,
     /// Plan sign-in waiting for a pasted code.
     pub(super) pending_link: Option<PendingLink>,
+    /// Notices for agents that aren't on screen.
+    pub(super) queued_notices: Vec<notices::Notice>,
 }
 
 impl LoopState<'_> {
@@ -124,11 +134,12 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         agent_loop,
         session,
         hub,
-        _process_manager,
+        processes,
         memory_manager,
         models,
         auth,
     } = ctx;
+    let publisher = processes::spawn_publisher(Arc::clone(&processes), commands.clone());
     let (link_tx, mut link_rx) = mpsc::channel::<auth::LinkOutcome>(4);
 
     let mut state = LoopState {
@@ -142,9 +153,13 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         session,
         parked: HashMap::new(),
         hub,
+        processes,
         auth,
         pending_link: None,
+        queued_notices: Vec::new(),
     };
+    let mut notice_rx = state.hub.take_notices();
+    state.hub.name_agents();
     install_memory_observer(&mut state);
 
     agents::send_sandbox_root(&state).await;
@@ -167,6 +182,10 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
             Some(outcome) = link_rx.recv() => {
                 auth::handle_link_outcome(&mut state, outcome).await;
             }
+            Some(notice) = notice_rx.recv() => {
+                notices::handle_notice(&mut state, notice).await;
+                agents::send_agent_list(&state).await;
+            }
             Some(event) = state.events.recv() => {
                 if handle_ui_event(&mut state, event, &link_tx).await {
                     break;
@@ -174,6 +193,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
             }
         }
     }
+    publisher.abort();
 
     #[allow(unreachable_code)]
     Ok(())
@@ -186,6 +206,25 @@ async fn handle_completion(state: &mut LoopState<'_>, completion_tx: Transaction
         "Processing async process completion"
     );
 
+    let finished =
+        serde_json::from_slice::<aura_core_types::ActionResultPayload>(&completion_tx.payload)
+            .ok()
+            .and_then(|result| {
+                state.processes.command_finished(
+                    result.process_id,
+                    result.exit_code,
+                    result.success,
+                )
+            });
+    let agent_id = completion_tx.agent_id;
+    record_completion(state, completion_tx).await;
+    if let Some(row) = finished {
+        notices::handle_notice(state, notices::command_notice(agent_id, &row)).await;
+    }
+}
+
+/// Write a process completion to the record of the agent that started it.
+async fn record_completion(state: &mut LoopState<'_>, completion_tx: Transaction) {
     let agent_id = completion_tx.agent_id;
     let Some(kernel) = state.kernel_for(agent_id).cloned() else {
         warn!(%agent_id, "Process completion for an agent with no open kernel");
@@ -266,6 +305,9 @@ async fn handle_ui_event(
         UiEvent::InstantiateDefinition(name) => {
             agents::handle_instantiate_definition(state, &name).await;
         }
+        UiEvent::AddDefinitionToProject(name) => {
+            agents::handle_add_definition_to_project(state, &name).await;
+        }
         UiEvent::EditDefinition(name) => agents::handle_edit_definition(state, name).await,
         UiEvent::DeleteDefinition(name) => agents::handle_delete_definition(state, &name).await,
         UiEvent::DefinitionEdited(path) => agents::handle_definition_edited(state, &path).await,
@@ -280,6 +322,7 @@ async fn handle_ui_event(
         UiEvent::LinkCode(code) => auth::handle_link_code(state, &code).await,
         UiEvent::Unlink(provider) => auth::handle_unlink(state, &provider).await,
         UiEvent::SelectModel(id) => handlers::handle_select_model(state, &id).await,
+        UiEvent::KillProcess(id) => handlers::handle_kill_process(state, &id).await,
     }
     false
 }
@@ -299,12 +342,21 @@ async fn handle_user_message(state: &mut LoopState<'_>, text: String) {
         .send(UiCommand::SetStatus("Thinking...".to_string()))
         .await;
 
+    let prompt_tx = Transaction::user_prompt(state.session.agent_id(), text.clone());
+    if record_prompt(state, prompt_tx).await {
+        state.session.messages.push(Message::user(text));
+        run_turn(state).await;
+    }
+}
+
+/// Record `prompt_tx` through the active agent's kernel and show it in the
+/// Record panel. Reports failures itself and returns `false`.
+async fn record_prompt(state: &mut LoopState<'_>, prompt_tx: Transaction) -> bool {
     drain_stale_inbox(state).await;
 
-    let prompt_tx = Transaction::user_prompt(state.session.agent_id(), text.clone());
     let (tx, token) = match enqueue_and_dequeue(state, prompt_tx).await {
         Some(v) => v,
-        None => return,
+        None => return false,
     };
 
     let prompt_result = match state
@@ -321,7 +373,7 @@ async fn handle_user_message(state: &mut LoopState<'_>, text: String) {
                 .send(UiCommand::ShowError(format!("Kernel error: {e}")))
                 .await;
             let _ = state.commands.send(UiCommand::Complete).await;
-            return;
+            return false;
         }
     };
     send_record_to_ui(
@@ -331,9 +383,12 @@ async fn handle_user_message(state: &mut LoopState<'_>, text: String) {
         &prompt_result.entry,
     )
     .await;
+    true
+}
 
-    state.session.messages.push(Message::user(text));
-
+/// Run a turn of the active agent on its conversation and report how it
+/// went.
+async fn run_turn(state: &mut LoopState<'_>) {
     if let Some(ref mm) = state.memory_manager {
         mm.prepare_context(
             state.session.agent_id(),
@@ -348,9 +403,16 @@ async fn handle_user_message(state: &mut LoopState<'_>, text: String) {
     state.hub.send_definitions().await;
     state.sync_turn_base();
     let (config, tools) = state.hub.turn(state.session.definition.as_deref());
+    state.hub.register_root(
+        state.session.agent_id(),
+        &state.session.identity.name,
+        state.session.kernel.agent_workspace(),
+        &config,
+    );
+    let model = config.model.clone();
     let turn_loop = AgentLoop::new(config);
     let (process_result, forwarded, cancelled) =
-        handlers::run_agent_turn(state, &turn_loop, tools).await;
+        handlers::run_agent_turn(state, &turn_loop, tools, &model).await;
     state.park_finished_spawns();
     if cancelled {
         let _ = state

@@ -7,6 +7,51 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Terminal — policy decisions stay with their tool calls
+
+##### Changed
+
+- A tool call's policy decision no longer adds its own `policy:` chat
+  line, which split a run of agent steps into separate blocks. The
+  decision is kept with the call (live and when restored from the
+  record) and shown as `policy: allowed by <rule>` when the step is
+  expanded. A decision for a call the chat doesn't show still gets
+  a `policy: <tool> …` line.
+- New `UiCommand::ToolPolicy` and `ActivityData::Tool.policy`.
+
+### Terminal — PROCESSES tab and background work
+
+##### Added
+
+- The right panel has SANDBOX and PROCESSES tabs. PROCESSES lists
+  what is running for your agents: agent turns, `task` spawns, agents
+  started with `spawn_agent`, background commands, and the processes
+  those commands started, including daemons that detached. Each row
+  links to the agent that started it.
+- The tab labels show counts: SANDBOX the files in the sandbox (not
+  inside `.git`; past 10,000 it reads `10000+`), PROCESSES the rows
+  still running.
+- Opening a row shows its details, like a record entry: owner, parent
+  chain, start and end times, the tool call that started it, pid, cwd
+  and command or prompt. From there you can jump to the owning agent,
+  open a command's log, or kill the row after confirming.
+- `run_command` takes `background: true`. The command keeps running
+  after the call returns, its output goes to a log file, and the agent
+  gets a message with the exit code and the end of the log when it
+  exits.
+- `task` takes `spawn_mode: "detached"`. The permanent agent works in
+  the background, and its reply arrives as a message when it is done.
+- Terminal agents can use `spawn_agent`, `send_to_agent`,
+  `agent_lifecycle`, `get_agent_state` and `list_agents`. Replies from
+  spawned agents arrive as messages.
+- Every command the tools run carries `AURA_AGENT_ID`,
+  `AURA_TOOL_USE_ID` and `AURA_HARNESS_PID` in its environment.
+
+##### Changed
+
+- The PROJECTS and AGENTS tabs are written in capitals and drawn like
+  SANDBOX and PROCESSES.
+
 ### Terminal — model, tokens and cost on each reply
 
 ##### Added

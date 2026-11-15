@@ -14,6 +14,10 @@ use ratatui::{
 const MODEL_GAP: u16 = 2;
 /// Below this many typing columns the model indicator is hidden.
 const MIN_INPUT_WIDTH: u16 = 20;
+/// Prompt before a chat message.
+const CHAT_PROMPT: &str = "> ";
+/// Shown in place of the input line while typing happens in the terminal.
+const TERMINAL_HINT: &str = "Esc returns to chat";
 
 /// Render input line with the current model and status on the right.
 /// `chat_left` is the Chat panel's left border, relative to `area`; typing
@@ -89,6 +93,19 @@ pub(super) fn render_input(
     let status_line = Line::from(Span::styled(&status_text, status_style));
     frame.render_widget(Paragraph::new(status_line), status_area);
 
+    if app.input_is_command() {
+        let typing_x = area.x + chat_left + EDGE_INSET;
+        let hint_area = Rect {
+            x: typing_x,
+            y: area.y,
+            width: input_right.saturating_sub(typing_x),
+            height: 1,
+        };
+        let hint = Span::styled(TERMINAL_HINT, Style::default().fg(theme.colors.muted));
+        frame.render_widget(Paragraph::new(Line::from(hint)), hint_area);
+        return;
+    }
+
     let before_cursor = input.get(..cursor_pos).unwrap_or(input);
     let (prompt_str, display_input, cursor_col) = match app.state() {
         AppState::LoginEmail => ("Email: ", input.to_string(), display_width(before_cursor)),
@@ -103,11 +120,7 @@ pub(super) fn render_input(
             "•".repeat(input.chars().count()),
             before_cursor.chars().count(),
         ),
-        _ => (
-            app.shell_prompt(),
-            input.to_string(),
-            display_width(before_cursor),
-        ),
+        _ => (CHAT_PROMPT, input.to_string(), display_width(before_cursor)),
     };
     let prompt_width = u16::try_from(display_width(prompt_str)).unwrap_or(u16::MAX);
 
@@ -134,14 +147,10 @@ pub(super) fn render_input(
         Paragraph::new(Line::from(prompt_spans(prompt_str, prompt_color, theme))),
         prompt_area,
     );
-    let input_line = if app.input_is_command() {
-        Line::from(super::command::command_spans(&display_input, theme))
-    } else {
-        Line::from(Span::styled(
-            display_input.as_str(),
-            Style::default().fg(theme.colors.muted),
-        ))
-    };
+    let input_line = Line::from(Span::styled(
+        display_input.as_str(),
+        Style::default().fg(theme.colors.muted),
+    ));
     frame.render_widget(Paragraph::new(input_line), input_area);
 
     if !is_thinking {

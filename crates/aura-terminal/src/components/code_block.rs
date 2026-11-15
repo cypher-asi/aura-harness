@@ -147,9 +147,12 @@ const SHELL_KEYWORDS: &[&str] = &[
     "mkdir", "chmod", "chown", "grep", "sed", "awk", "cat",
 ];
 
+const JSON_KEYWORDS: &[&str] = &["true", "false", "null"];
+
 /// Get keywords for a language.
 fn get_keywords(lang: &str) -> &'static [&'static str] {
     match lang.to_lowercase().as_str() {
+        "json" => JSON_KEYWORDS,
         "rust" | "rs" => RUST_KEYWORDS,
         "python" | "py" => PYTHON_KEYWORDS,
         "javascript" | "js" | "typescript" | "ts" | "jsx" | "tsx" => JS_KEYWORDS,
@@ -311,7 +314,7 @@ fn highlight_line(
         let c = chars[i];
 
         if c == '"' || c == '\'' || c == '`' {
-            i = highlight_string(&chars, i, config, &mut spans);
+            i = highlight_string(&chars, i, config, theme, &mut spans);
         } else if (c == '/' && i + 1 < chars.len() && chars[i + 1] == '/') || c == '#' {
             highlight_line_comment(&chars, i, config, &mut spans);
             break;
@@ -336,10 +339,14 @@ fn highlight_line(
     spans
 }
 
+/// A string literal in the string color, or in plain text when it is an
+/// object key (followed by `:`), so JSON reads as keys and values instead
+/// of a wall of string color.
 fn highlight_string(
     chars: &[char],
     start: usize,
     config: &LanguageConfig,
+    theme: &Theme,
     spans: &mut Vec<Span<'static>>,
 ) -> usize {
     let quote = chars[start];
@@ -356,10 +363,16 @@ fn highlight_string(
             break;
         }
     }
-    spans.push(Span::styled(
-        string_content,
-        Style::default().fg(config.string),
-    ));
+    let is_key = chars[i..]
+        .iter()
+        .find(|c| !c.is_whitespace())
+        .is_some_and(|c| *c == ':');
+    let color = if is_key {
+        theme.colors.foreground
+    } else {
+        config.string
+    };
+    spans.push(Span::styled(string_content, Style::default().fg(color)));
     i
 }
 
@@ -455,6 +468,20 @@ mod tests {
         let block = CodeBlock::new("rust", "fn main() {\n    println!(\"Hello\");\n}");
         assert_eq!(block.language, "rust");
         assert_eq!(block.lines.len(), 3);
+    }
+
+    #[test]
+    fn json_keys_are_plain_and_values_are_strings() {
+        let theme = Theme::cyber();
+        let spans = highlight_code_line("json", r#"  "tool": "run_command","#, &theme);
+        let color_of = |text: &str| {
+            spans
+                .iter()
+                .find(|s| s.content == text)
+                .and_then(|s| s.style.fg)
+        };
+        assert_eq!(color_of(r#""tool""#), Some(theme.colors.foreground));
+        assert_eq!(color_of(r#""run_command""#), Some(CYAN));
     }
 
     #[test]

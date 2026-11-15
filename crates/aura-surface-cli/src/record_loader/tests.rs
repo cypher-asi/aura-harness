@@ -100,7 +100,9 @@ fn model_history_resumes_the_conversation_since_the_last_session_start() {
             (User, "a visualization"),
         ]
     );
-    assert!(model_history(&store, AgentId::generate()).unwrap().is_empty());
+    assert!(model_history(&store, AgentId::generate())
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -215,6 +217,33 @@ fn model_tool_call_keeps_llm_sender() {
 
     assert_eq!(summary.tx_kind, "ToolCall");
     assert_eq!(summary.sender, "LLM");
+}
+
+#[test]
+fn json_payload_message_is_pretty_printed_in_full() {
+    let long = "x".repeat(300);
+    let t = json_tx(
+        TransactionType::ToolProposal,
+        &json!({"tool": "run_command", "args": {"command": long}}),
+    );
+    let entry = RecordEntry::builder(1, t.clone()).build();
+
+    let summary = build_record_summary(1, &t, &entry, "12:00:00".into());
+
+    let parsed: Value = serde_json::from_str(&summary.message).unwrap();
+    assert_eq!(parsed["args"]["command"], json!(long));
+    assert!(summary.message.contains("\n  \"tool\": \"run_command\""));
+}
+
+#[test]
+fn text_payload_message_is_truncated() {
+    let t = Transaction::user_prompt(AgentId::generate(), "y".repeat(300));
+    let entry = RecordEntry::builder(1, t.clone()).build();
+
+    let summary = build_record_summary(1, &t, &entry, "12:00:00".into());
+
+    assert_eq!(summary.message.chars().count(), MAX_MESSAGE_CHARS);
+    assert!(summary.message.ends_with("..."));
 }
 
 #[test]
@@ -358,7 +387,7 @@ fn policy_decision_names_the_rule_and_carries_detail() {
 }
 
 #[test]
-fn tool_call_history_shows_tool_block_then_policy_line() {
+fn tool_call_history_keeps_the_policy_with_its_tool_block() {
     let dir = tempfile::tempdir().unwrap();
     let store = RocksStore::open(dir.path(), false).unwrap();
     let agent = AgentId::generate();
@@ -383,7 +412,7 @@ fn tool_call_history_shows_tool_block_then_policy_line() {
     append(&store, 3, exec_tx);
 
     let history = conversation_history(&store, agent).unwrap();
-    assert_eq!(history.len(), 2);
+    assert_eq!(history.len(), 1);
     assert_eq!(
         history[0].activity,
         Some(ActivityData::Tool {
@@ -393,9 +422,21 @@ fn tool_call_history_shows_tool_block_then_policy_line() {
             result: Some("fn main() {}".into()),
             is_error: false,
             duration_ms: Some(took),
+            policy: Some("allowed by user.on".into()),
         })
     );
-    assert_eq!(history[1].content, "policy: run_command allowed by user.on");
+}
+
+#[test]
+fn policy_without_its_tool_call_is_a_chat_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RocksStore::open(dir.path(), false).unwrap();
+    let agent = AgentId::generate();
+    append(&store, 1, policy_decision_tx(agent).0);
+
+    let history = conversation_history(&store, agent).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].content, "policy: run_command allowed by user.on");
 }
 
 #[test]
@@ -670,7 +711,10 @@ fn llm_records_show_stop_reason_and_model_or_error_class() {
         columns(&failed),
         cols("error", "rate", "HTTP 429 Too Many Requests")
     );
-    assert_eq!(llm_error_class("stream dropped before completion"), "stream");
+    assert_eq!(
+        llm_error_class("stream dropped before completion"),
+        "stream"
+    );
     assert_eq!(llm_error_class("Overloaded"), "busy");
     assert_eq!(llm_error_class("connection reset"), "other");
 }
