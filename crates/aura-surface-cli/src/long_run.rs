@@ -6,13 +6,14 @@ use aura_agent::AgentLoopConfig;
 use aura_model_reasoner::ToolDefinition;
 use aura_tools::jobs::{add_background_option, JobKillTool, JobOutputTool};
 use aura_tools::todo::TodoWriteTool;
-use aura_tools::Tool;
+use aura_tools::web::{WebFetchSettings, WebFetchTool, WebSearchSettings, WebSearchTool};
+use aura_tools::{Tool, ToolExecutor};
 use std::time::Duration;
-use tracing::warn;
+use tracing::{info, warn};
 
-/// Add the planning and background-job tools to the terminal's tool list,
-/// and the `background` option to `run_command`.
-pub(crate) fn add_long_run_tools(tools: &mut Vec<ToolDefinition>) {
+/// Add the planning, background-job and web tools to the terminal's tool
+/// list, and the `background` option to `run_command`.
+pub(crate) fn add_long_run_tools(tools: &mut Vec<ToolDefinition>, web: &WebTools) {
     let has_run_command = tools.iter_mut().any(|tool| {
         let is_run = tool.name == "run_command";
         if is_run {
@@ -24,6 +25,54 @@ pub(crate) fn add_long_run_tools(tools: &mut Vec<ToolDefinition>) {
     if has_run_command {
         tools.push(JobOutputTool.definition());
         tools.push(JobKillTool.definition());
+    }
+    tools.extend(web.definitions());
+}
+
+/// `web_fetch` and `web_search`, built once and registered on every
+/// agent's executor (clones share one HTTP client).
+#[derive(Clone)]
+pub(crate) struct WebTools {
+    /// `None` when the HTTP client could not be created.
+    fetch: Option<WebFetchTool>,
+    search: WebSearchTool,
+}
+
+impl WebTools {
+    pub(crate) fn from_env() -> Self {
+        Self::from_lookup(|name| std::env::var(name).ok())
+    }
+
+    fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Self {
+        let fetch = WebFetchTool::new(WebFetchSettings::from_lookup(&get))
+            .inspect_err(|e| warn!(error = %e, "web_fetch is unavailable"))
+            .ok();
+        let search_settings = WebSearchSettings::from_lookup(&get);
+        match search_settings.provider_name() {
+            Some(provider) => info!(provider, "web_search enabled"),
+            None => info!("web_search has no provider configured"),
+        }
+        Self {
+            fetch,
+            search: WebSearchTool::new(&search_settings),
+        }
+    }
+
+    /// Register the tools on `executor`.
+    pub(crate) fn register(&self, executor: &mut ToolExecutor) {
+        if let Some(fetch) = &self.fetch {
+            executor.register(Box::new(fetch.clone()));
+        }
+        executor.register(Box::new(self.search.clone()));
+    }
+
+    fn definitions(&self) -> Vec<ToolDefinition> {
+        let mut definitions = Vec::new();
+        if let Some(fetch) = &self.fetch {
+            definitions.push(fetch.definition());
+        }
+        definitions.push(self.search.definition());
+        definitions
     }
 }
 
@@ -161,6 +210,15 @@ mod tests {
         );
         let s = settings(&[("AURA_COMPACTION_TRIGGER", "7")]);
         assert!((s.compaction_trigger - DEFAULT_COMPACTION_TRIGGER).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn web_tools_are_listed_even_without_a_search_provider() {
+        let web = WebTools::from_lookup(|_| None);
+        let mut tools = Vec::new();
+        add_long_run_tools(&mut tools, &web);
+        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["todo_write", "web_fetch", "web_search"]);
     }
 
     #[test]

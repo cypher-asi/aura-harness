@@ -393,7 +393,8 @@ async fn run_terminal(
         );
     }
     let (_, mut tools) = session_helpers::build_executor_router_with_config(&tool_config);
-    add_long_run_tools(&mut tools);
+    let web_tools = crate::long_run::WebTools::from_env();
+    add_long_run_tools(&mut tools, &web_tools);
     let (job_tx, job_rx) = mpsc::channel::<JobFinished>(64);
     let jobs = BackgroundJobs::new(job_tx);
 
@@ -469,6 +470,7 @@ async fn run_terminal(
                         .with_subagent_dispatch_hook(Arc::clone(&dispatcher))
                         .with_background_jobs(Arc::clone(&factory_jobs));
                     executor.register(Box::new(TodoWriteTool));
+                    web_tools.register(&mut executor);
                     let mut executor_router = ExecutorRouter::new();
                     executor_router.add_executor(Arc::new(executor));
                     let mut config = kernel_config.clone();

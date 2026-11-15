@@ -45,6 +45,7 @@ mod sandbox;
 pub mod schema;
 pub mod todo;
 pub(crate) mod tool;
+pub mod web;
 
 pub use catalog::ToolCatalog;
 pub use computer_tool::{computer_tool_definition, ComputerTool, COMPUTER_TOOL_NAME};
