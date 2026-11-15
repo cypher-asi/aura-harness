@@ -191,6 +191,10 @@ pub struct SubagentResult {
     #[serde(default)]
     pub files_changed: Vec<String>,
     pub exit: SubagentExit,
+    /// What the child's model calls cost at list prices, in millionths
+    /// of a USD, when the dispatcher knows the prices of its models.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_micros: Option<u64>,
 }
 
 impl SubagentResult {
@@ -205,6 +209,7 @@ impl SubagentResult {
             exit: SubagentExit::Rejected {
                 reason: reason.into(),
             },
+            cost_micros: None,
         }
     }
 
@@ -217,6 +222,7 @@ impl SubagentResult {
             total_output_tokens: 0,
             files_changed: Vec::new(),
             exit: SubagentExit::Completed,
+            cost_micros: None,
         }
     }
 }

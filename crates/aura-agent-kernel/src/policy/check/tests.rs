@@ -253,6 +253,7 @@ fn mode_matrix_matches_the_gate_table() {
         ("create_task", none(), [true, false, false, false]),
         ("spawn_agent", none(), [true, false, false, false]),
         ("task", none(), [true, false, false, false]),
+        ("run_blocks", none(), [true, false, false, false]),
         ("list_specs", none(), [true, true, true, false]),
         (
             "web_fetch",

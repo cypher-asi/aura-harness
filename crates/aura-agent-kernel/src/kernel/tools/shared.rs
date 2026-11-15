@@ -27,10 +27,11 @@ use std::time::Duration;
 /// `task` dispatches a subagent and blocks (`SpawnMode::Wait`) while the child
 /// agent loop runs under the agent host's own (longer) timeout +
 /// parent cancellation token. The kernel's 120s default would otherwise abort
-/// a legitimately long child run prematurely. The name is hardcoded rather than
-/// imported from `aura-tools` to keep the kernel free of an upward dependency
-/// on the tool crate.
-const TIMEOUT_EXEMPT_TOOLS: &[&str] = &["run_command", "task"];
+/// a legitimately long child run prematurely. `run_blocks` runs a sequence
+/// of such children, each under its own budget. The names are hardcoded
+/// rather than imported to keep the kernel free of an upward dependency on
+/// the tool crates.
+const TIMEOUT_EXEMPT_TOOLS: &[&str] = &["run_command", "task", "run_blocks"];
 
 fn tool_manages_own_timeout(tool_name: &str) -> bool {
     TIMEOUT_EXEMPT_TOOLS.contains(&tool_name)
@@ -330,6 +331,7 @@ mod summarisation_tests {
     fn run_command_owns_its_timeout_budget() {
         assert!(tool_manages_own_timeout("run_command"));
         assert!(tool_manages_own_timeout("task"));
+        assert!(tool_manages_own_timeout("run_blocks"));
         assert!(!tool_manages_own_timeout("read_file"));
     }
 

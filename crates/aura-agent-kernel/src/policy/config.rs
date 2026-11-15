@@ -66,6 +66,7 @@ impl Default for PolicyConfig {
         let mut tool_capability_requirements = HashMap::new();
         tool_capability_requirements.insert("spawn_agent".to_string(), Capability::SpawnAgent);
         tool_capability_requirements.insert("task".to_string(), Capability::SpawnAgent);
+        tool_capability_requirements.insert("run_blocks".to_string(), Capability::SpawnAgent);
         tool_capability_requirements.insert("send_to_agent".to_string(), Capability::ControlAgent);
         tool_capability_requirements
             .insert("agent_lifecycle".to_string(), Capability::ControlAgent);

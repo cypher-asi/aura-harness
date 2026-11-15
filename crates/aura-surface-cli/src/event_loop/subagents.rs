@@ -561,6 +561,7 @@ impl AgentHub {
                     total_output_tokens: 0,
                     files_changed: Vec::new(),
                     exit: SubagentExit::Failed { reason },
+                    cost_micros: None,
                 }
             }
         })

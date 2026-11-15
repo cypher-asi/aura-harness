@@ -882,6 +882,7 @@ mod tests {
                 total_output_tokens: 0,
                 files_changed: Vec::new(),
                 exit: SubagentExit::Completed,
+                cost_micros: None,
             }),
         }
     }

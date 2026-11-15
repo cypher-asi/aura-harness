@@ -60,6 +60,7 @@ members = [
     "crates/aura-agent",
     "crates/aura-agent-steering",
     "crates/aura-agent-trace",
+    "crates/aura-agent-gate",
     "crates/aura-auth",
     # One crate per auth method; aura-auth composes them.
     "crates/aura-auth-kit",
