@@ -1,6 +1,6 @@
 //! Chat lines for each message, kept between frames.
 
-use super::activity::{activity_lines, group_header, GroupView, TAIL_STEPS};
+use super::activity::{activity_lines, collapsed_hint, group_header, records_link, GroupView};
 use super::command::shell_lines;
 use super::markdown::{parse_content_segments, ContentSegment};
 use super::segments::{
@@ -24,6 +24,32 @@ pub(crate) struct GroupState<'a> {
     pub expand_all: bool,
     /// Whether a turn is in flight, so the last group may still grow
     pub turn_live: bool,
+}
+
+/// Where a block falls in its turn: everything from one prompt to the next.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct TurnPlace {
+    /// Whether the block is the turn's first from the agent, drawn under
+    /// the turn's `AURA` header
+    header: bool,
+    /// Model, tokens and cost of the turn's latest reply, for that header
+    meta: Vec<String>,
+    /// Number of the block's first step, counted from 1 across the turn
+    first_step: usize,
+    /// When the turn's prompt was sent, in Unix milliseconds
+    started_ms: u64,
+}
+
+impl TurnPlace {
+    /// A block outside any turn, drawn with its own header.
+    const fn alone() -> Self {
+        Self {
+            header: true,
+            meta: Vec::new(),
+            first_step: 1,
+            started_ms: 0,
+        }
+    }
 }
 
 /// The lines each chat block is drawn as, so a frame only formats the
@@ -109,11 +135,16 @@ impl ChatLineCache {
         }
         let shown: Vec<&Message> = messages
             .iter()
-            .filter(|m| m.shell_run().is_some() == self.terminal)
+            .filter(|m| m.shell_run().is_some() == self.terminal && !m.is_empty_reply())
             .collect();
         let runs = block_runs(&shown);
+        let places = if self.terminal {
+            vec![TurnPlace::alone(); runs.len()]
+        } else {
+            turn_places(&shown, &runs)
+        };
         self.order.clear();
-        for (i, run) in runs.iter().enumerate() {
+        for (i, (run, place)) in runs.iter().zip(&places).enumerate() {
             let members = &shown[run.clone()];
             let key = members[0].version().0;
             let is_group = members.len() > 1 && members[0].activity_step().is_some();
@@ -126,7 +157,7 @@ impl ChatLineCache {
             for member in members {
                 member.version().hash(&mut hasher);
             }
-            (view, live).hash(&mut hasher);
+            (view, live, place).hash(&mut hasher);
             let revision = hasher.finish();
 
             if live
@@ -138,15 +169,17 @@ impl ChatLineCache {
                 let shell = members[0].shell_run().filter(|_| self.terminal);
                 let (lines, toggles) = match (shell, view) {
                     (Some(run), _) => (shell_lines(run, &self.prompt, width, theme), Vec::new()),
-                    (None, Some(view)) => group_lines(members, view, live, width, theme, spinner),
+                    (None, Some(view)) => {
+                        group_lines(members, view, live, place, width, theme, spinner)
+                    }
                     (None, None) if members.len() > 1 => (
                         members
                             .iter()
-                            .flat_map(|m| message_lines(m, width, theme, spinner))
+                            .flat_map(|m| message_lines(m, place, width, theme, spinner))
                             .collect(),
                         Vec::new(),
                     ),
-                    (None, None) => single_lines(members[0], width, theme, spinner),
+                    (None, None) => single_lines(members[0], place, width, theme, spinner),
                 };
                 self.entries.insert(
                     key,
@@ -206,40 +239,140 @@ fn is_notice(message: &Message) -> bool {
         && !message.content().contains('\n')
 }
 
+/// Each block's place in its turn. A prompt starts a turn; the agent's
+/// first block after it carries the turn's header, and steps are numbered
+/// in order across the turn.
+fn turn_places(shown: &[&Message], runs: &[Range<usize>]) -> Vec<TurnPlace> {
+    let mut places: Vec<TurnPlace> = Vec::with_capacity(runs.len());
+    let mut header_at: Option<usize> = None;
+    let mut steps = 0;
+    let mut started_ms = shown.first().map_or(0, |m| m.timestamp_ms());
+    for run in runs {
+        let first = shown[run.start];
+        if first.role() == MessageRole::User {
+            header_at = None;
+            steps = 0;
+            started_ms = first.timestamp_ms();
+        }
+        let agent = first.role() == MessageRole::Assistant;
+        let header = agent && header_at.is_none();
+        if header {
+            header_at = Some(places.len());
+        }
+        places.push(TurnPlace {
+            header,
+            meta: Vec::new(),
+            first_step: steps + 1,
+            started_ms,
+        });
+        steps += shown[run.clone()]
+            .iter()
+            .filter(|m| m.activity_step().is_some())
+            .count();
+        if agent && first.activity_step().is_none() && first.model().is_some() {
+            if let Some(at) = header_at {
+                places[at].meta = reply_meta(first.model(), first.usage());
+            }
+        }
+    }
+    places
+}
+
+/// The `AURA` line over the agent's first block of a turn.
+fn turn_header(
+    message: &Message,
+    place: &TurnPlace,
+    width: usize,
+    theme: &Theme,
+) -> Option<Line<'static>> {
+    if message.role() != MessageRole::Assistant || !place.header {
+        return None;
+    }
+    let (nick, nick_color, _) = message_style(message.role(), theme);
+    let own;
+    let meta = if place.meta.is_empty() {
+        own = reply_meta(message.model(), message.usage());
+        &own
+    } else {
+        &place.meta
+    };
+    Some(message_header(
+        nick,
+        nick_color,
+        &message.timestamp_local(),
+        meta,
+        width,
+        theme,
+    ))
+}
+
 /// How much of a group to show: what the user chose, else everything under
-/// `Ctrl+O`, else the latest steps while it runs.
+/// `Ctrl+O` or while it runs.
 fn group_view(open: Option<bool>, expand_all: bool, live: bool) -> GroupView {
     match open {
         Some(true) => GroupView::Full,
         Some(false) => GroupView::Collapsed,
-        None if expand_all => GroupView::Full,
-        None if live => GroupView::Tail,
+        None if expand_all || live => GroupView::Full,
         None => GroupView::Collapsed,
     }
 }
 
-/// A group's summary line, then the steps `view` shows.
+/// ` · step 7 · 42s` after a running group's summary: the number of its
+/// latest step in the turn, and how long the group has been going.
+fn group_progress(steps: &[&Activity], place: &TurnPlace) -> String {
+    let mut progress = format!(" · step {}", place.first_step + steps.len() - 1);
+    if let Some(elapsed) = steps
+        .first()
+        .and_then(|step| step.started())
+        .map(|started| started.elapsed())
+        .filter(|elapsed| elapsed.as_secs() > 0)
+    {
+        progress.push_str(" · ");
+        progress.push_str(&super::panels::format_elapsed(elapsed));
+    }
+    progress
+}
+
+/// A group's summary line, then every step, numbered, or a row to show
+/// them while the group is collapsed.
 fn group_lines(
     members: &[&Message],
     view: GroupView,
     live: bool,
+    place: &TurnPlace,
     width: usize,
     theme: &Theme,
     spinner: &str,
 ) -> (Vec<Line<'static>>, Vec<ToggleRow>) {
     let steps: Vec<&Activity> = members.iter().filter_map(|m| m.activity_step()).collect();
-    let mut lines = vec![group_header(&steps, view, live, spinner, width, theme)];
+    let progress = if live {
+        group_progress(&steps, place)
+    } else {
+        String::new()
+    };
+    let mut lines: Vec<Line<'static>> = turn_header(members[0], place, width, theme)
+        .into_iter()
+        .collect();
+    let group = ToggleTarget::Group(members[0].version().0);
     let mut toggles = vec![ToggleRow {
-        line: 0,
-        target: ToggleTarget::Group(members[0].version().0),
+        line: lines.len(),
+        target: group,
         open: view != GroupView::Collapsed,
     }];
-    let shown = match view {
-        GroupView::Collapsed => 0,
-        GroupView::Tail => TAIL_STEPS.min(members.len()),
-        GroupView::Full => members.len(),
-    };
-    for member in &members[members.len() - shown..] {
+    lines.push(group_header(
+        &steps, view, live, &progress, spinner, width, theme,
+    ));
+    if view == GroupView::Collapsed {
+        toggles.push(ToggleRow {
+            line: lines.len(),
+            target: group,
+            open: false,
+        });
+        lines.push(collapsed_hint(steps.len(), theme));
+        return (lines, toggles);
+    }
+    let mut number = place.first_step;
+    for member in members {
         let Some(step) = member.activity_step() else {
             continue;
         };
@@ -251,50 +384,97 @@ fn group_lines(
         lines.extend(activity_lines(
             step,
             member.is_expanded(),
-            true,
+            Some(number),
             spinner,
             width,
             theme,
         ));
+        push_records_link(
+            &mut lines,
+            &mut toggles,
+            (step, member.is_expanded()),
+            Some(number),
+            place,
+            (width, theme),
+        );
+        number += 1;
     }
     (lines, toggles)
+}
+
+/// After an open thinking step, the row that jumps to the records its
+/// turn wrote.
+fn push_records_link(
+    lines: &mut Vec<Line<'static>>,
+    toggles: &mut Vec<ToggleRow>,
+    (step, expanded): (&Activity, bool),
+    number: Option<usize>,
+    place: &TurnPlace,
+    (width, theme): (usize, &Theme),
+) {
+    if !expanded || !matches!(step, Activity::Thinking(_)) {
+        return;
+    }
+    toggles.push(ToggleRow {
+        line: lines.len(),
+        target: ToggleTarget::TurnRecords(place.started_ms),
+        open: false,
+    });
+    lines.push(records_link(number, width, theme));
 }
 
 /// A block of one message; a lone agent step toggles on its header.
 fn single_lines(
     message: &Message,
+    place: &TurnPlace,
     width: usize,
     theme: &Theme,
     spinner: &str,
 ) -> (Vec<Line<'static>>, Vec<ToggleRow>) {
-    let toggles = message
-        .activity_step()
-        .map(|_| ToggleRow {
-            line: 0,
-            target: ToggleTarget::Step(message.version().0),
-            open: message.is_expanded(),
-        })
+    let Some(step) = message.activity_step() else {
+        return (
+            message_lines(message, place, width, theme, spinner),
+            Vec::new(),
+        );
+    };
+    let mut lines: Vec<Line<'static>> = turn_header(message, place, width, theme)
         .into_iter()
         .collect();
-    (message_lines(message, width, theme, spinner), toggles)
+    let mut toggles = vec![ToggleRow {
+        line: lines.len(),
+        target: ToggleTarget::Step(message.version().0),
+        open: message.is_expanded(),
+    }];
+    lines.extend(activity_lines(
+        step,
+        message.is_expanded(),
+        None,
+        spinner,
+        width,
+        theme,
+    ));
+    push_records_link(
+        &mut lines,
+        &mut toggles,
+        (step, message.is_expanded()),
+        None,
+        place,
+        (width, theme),
+    );
+    (lines, toggles)
 }
 
-/// The header and body lines of one chat message.
-pub(super) fn message_lines(
+/// The header and body lines of one chat message. The agent's replies
+/// after the first block of a turn go without a header, under the turn's.
+fn message_lines(
     message: &Message,
+    place: &TurnPlace,
     width: usize,
     theme: &Theme,
     spinner: &str,
 ) -> Vec<Line<'static>> {
     if let Some(activity) = message.activity_step() {
-        return activity_lines(
-            activity,
-            message.is_expanded(),
-            false,
-            spinner,
-            width,
-            theme,
-        );
+        return activity_lines(activity, message.is_expanded(), None, spinner, width, theme);
     }
     let timestamp = message.timestamp_local();
     let (nick, nick_color, msg_color) = message_style(message.role(), theme);
@@ -309,10 +489,16 @@ pub(super) fn message_lines(
             theme,
         );
     }
-    let meta = reply_meta(message.model(), message.usage());
-    let mut lines = vec![message_header(
-        nick, nick_color, &timestamp, &meta, width, theme,
-    )];
+    let mut lines: Vec<Line<'static>> = if message.role() == MessageRole::Assistant {
+        turn_header(message, place, width, theme)
+            .into_iter()
+            .collect()
+    } else {
+        let meta = reply_meta(message.model(), message.usage());
+        vec![message_header(
+            nick, nick_color, &timestamp, &meta, width, theme,
+        )]
+    };
     for segment in parse_content_segments(message.content()) {
         match segment {
             ContentSegment::Text(text) => {

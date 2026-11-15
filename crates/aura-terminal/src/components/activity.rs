@@ -86,6 +86,15 @@ impl Activity {
         }
     }
 
+    /// When the step started; `None` for steps restored from history.
+    #[must_use]
+    pub const fn started(&self) -> Option<Instant> {
+        match self {
+            Self::Thinking(step) => step.started,
+            Self::Tool(step) => step.started,
+        }
+    }
+
     /// Mark the step finished. A tool still running is marked failed with
     /// `reason` as its output.
     pub fn finish(&mut self, reason: &str) {

@@ -238,6 +238,21 @@ impl Message {
         local_time.format("%H:%M:%S").to_string()
     }
 
+    /// When the message was written, in Unix milliseconds.
+    #[must_use]
+    pub fn timestamp_ms(&self) -> u64 {
+        u64::try_from(self.timestamp.timestamp_millis()).unwrap_or(0)
+    }
+
+    /// Whether this is a reply that started streaming but has no text yet.
+    #[must_use]
+    pub fn is_empty_reply(&self) -> bool {
+        self.is_streaming
+            && self.content.is_empty()
+            && self.activity.is_none()
+            && self.shell.is_none()
+    }
+
     /// Set whether the message is streaming.
     pub fn set_streaming(&mut self, streaming: bool) {
         self.is_streaming = streaming;

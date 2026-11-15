@@ -16,6 +16,7 @@ mod selection;
 pub(crate) mod shell_input;
 mod shell_prompt;
 mod slash_menu;
+mod turn;
 pub mod vim;
 
 #[cfg(test)]
@@ -357,6 +358,8 @@ pub(crate) enum ToggleTarget {
     Group(u64),
     /// One step, by message id
     Step(u64),
+    /// The kernel records of a turn, by when its prompt was sent (Unix ms)
+    TurnRecords(u64),
 }
 
 /// A chat row that expands or collapses `target` when clicked.
@@ -685,6 +688,7 @@ impl App {
                 let expanded = !message.is_expanded();
                 message.set_expanded(expanded);
             }
+            ToggleTarget::TurnRecords(started_ms) => self.show_turn_records(started_ms),
         }
         true
     }

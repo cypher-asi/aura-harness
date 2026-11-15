@@ -3,7 +3,7 @@
 use super::text::display_width;
 use crate::{
     animation::AURA_WIDTH,
-    app::{AgentsTab, HoverTarget, PanelFocus, ProjectListRow, ToggleRow},
+    app::{AgentsTab, HoverTarget, PanelFocus, ProjectListRow, ToggleRow, ToggleTarget},
     App, Theme,
 };
 use ratatui::{
@@ -204,6 +204,15 @@ fn render_chat_lines(
     }
     let tail_gap = usize::from(tail.gap && message_rows > 0 && !tail.lines.is_empty());
     let tail_start = message_rows + tail_gap;
+    let tail_toggle = app
+        .turn_started_ms()
+        .filter(|_| !app.terminal_pane() && !tail.lines.is_empty())
+        .map(|started| ToggleRow {
+            line: tail_start,
+            target: ToggleTarget::TurnRecords(started),
+            open: false,
+        });
+    toggle_rows.extend(tail_toggle);
     let content = tail_start + tail.lines.len();
     let height = padded.height as usize;
     // Blank rows after the end, enough that scrolling to the bottom can
@@ -223,17 +232,16 @@ fn render_chat_lines(
                 push_visible(&mut visible, &mut line_index, start, height, blank.clone());
             }
         }
-        let hover_line = hovered_activity.and_then(|target| {
+        let hovered = |offset: usize| {
             block
                 .toggles
                 .iter()
-                .find(|toggle| toggle.target == target)
-                .map(|toggle| toggle.line)
-        });
+                .any(|toggle| toggle.line == offset && hovered_activity == Some(toggle.target))
+        };
         for (offset, line) in block.lines.iter().enumerate() {
             if line_index >= start && visible.len() < height {
                 let mut line = line.clone();
-                if hover_line == Some(offset) {
+                if hovered(offset) {
                     apply_activity_hover(&mut line, theme);
                 }
                 visible.push(line);
@@ -244,8 +252,12 @@ fn render_chat_lines(
     if tail_gap > 0 {
         push_visible(&mut visible, &mut line_index, start, height, blank);
     }
-    for line in &tail.lines {
-        push_visible(&mut visible, &mut line_index, start, height, line.clone());
+    for (row, line) in tail.lines.iter().enumerate() {
+        let mut line = line.clone();
+        if row == 0 && tail_toggle.is_some_and(|t| hovered_activity == Some(t.target)) {
+            apply_activity_hover(&mut line, theme);
+        }
+        push_visible(&mut visible, &mut line_index, start, height, line);
     }
     frame.render_widget(Paragraph::new(visible), padded);
 
@@ -358,19 +370,26 @@ pub(super) fn centered_text_area(area: Rect) -> Rect {
 }
 
 /// `AURA  ⠹ thinking… 12s` — shown below the conversation while a turn is
-/// in flight and no reply text is streaming.
+/// in flight and no reply text is streaming. Once the agent has shown
+/// something this turn, `AURA` heads that instead, and the indicator sits
+/// under it in line with the steps: `  ⠹ thinking… 12s`.
 pub(super) fn working_indicator_line<'a>(app: &App, theme: &Theme) -> Option<Line<'a>> {
     if app.has_live_activity() || app.ends_in_live_group() {
         return None;
     }
     let label = app.working_label()?;
-    let mut spans = vec![
+    let lead = if app.turn_has_agent_block() {
+        Span::raw("  ")
+    } else {
         Span::styled(
             "AURA  ",
             Style::default()
                 .fg(theme.colors.muted)
                 .add_modifier(Modifier::BOLD),
-        ),
+        )
+    };
+    let mut spans = vec![
+        lead,
         Span::styled(
             format!("{} ", app.spinner_char()),
             Style::default().fg(theme.colors.secondary),

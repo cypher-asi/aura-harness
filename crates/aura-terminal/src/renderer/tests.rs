@@ -1657,6 +1657,177 @@ fn test_step_group_runs_open_then_collapses_and_clicks_open() {
     assert!(step.contains("│ fn main() {}"), "{step}");
 }
 
+/// Click the first chat text on screen that reads `needle`.
+fn click_text(app: &mut crate::App, needle: &str) {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    let buffer = render_buffer(app, 120);
+    let row = row_of(&buffer, needle);
+    let (column, _) = find_cell(&buffer, row, needle).unwrap();
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        app.handle_mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        });
+    }
+}
+
+fn read_tool(app: &mut crate::App, id: &str, path: &str) {
+    use crate::events::{ToolData, UiCommand};
+
+    app.process_command(UiCommand::ShowTool(ToolData {
+        id: id.to_string(),
+        name: "read_file".to_string(),
+        args: format!(r#"{{"path":"{path}"}}"#),
+    }));
+    app.process_command(UiCommand::CompleteTool {
+        id: id.to_string(),
+        result: "fn main() {}".to_string(),
+        success: true,
+    });
+}
+
+#[test]
+fn test_turn_header_stays_put_while_steps_arrive() {
+    use crate::events::UiCommand;
+
+    let mut app = crate::App::new();
+    submit_message(&mut app, "fix it");
+    let aura_row = |app: &mut crate::App| {
+        let rows = render_rows(app, 120);
+        let found: Vec<usize> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.contains("AURA  "))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(found.len(), 1, "{}", rows.join("\n"));
+        found[0]
+    };
+    let waiting = aura_row(&mut app);
+
+    app.process_command(UiCommand::StartThinking);
+    app.process_command(UiCommand::AppendThinking("Look at main.".to_string()));
+    assert_eq!(aura_row(&mut app), waiting);
+    app.process_command(UiCommand::FinishThinking);
+    assert_eq!(aura_row(&mut app), waiting);
+    let between = render_rows(&mut app, 120).join("\n");
+    assert!(between.contains("thinking…"), "{between}");
+
+    read_tool(&mut app, "t1", "src/main.rs");
+    assert_eq!(aura_row(&mut app), waiting);
+    app.process_command(UiCommand::StartStreaming);
+    assert_eq!(aura_row(&mut app), waiting);
+    app.process_command(UiCommand::AppendText("Fixed.".to_string()));
+    app.process_command(UiCommand::Complete);
+    assert_eq!(aura_row(&mut app), waiting);
+    let done = render_rows(&mut app, 120).join("\n");
+    assert!(done.contains("Fixed."), "{done}");
+}
+
+#[test]
+fn test_live_steps_are_numbered_in_order_then_condense() {
+    use crate::events::UiCommand;
+
+    let mut app = crate::App::new();
+    submit_message(&mut app, "look around");
+    for i in 1..=6 {
+        read_tool(&mut app, &format!("t{i}"), &format!("src/f{i}.rs"));
+    }
+    let live = render_rows(&mut app, 120).join("\n");
+    assert!(live.contains("Exploring 6 files · step 6"), "{live}");
+    for i in 1..=6 {
+        assert!(live.contains(&format!("{i} ▸ Read f{i}.rs")), "{live}");
+    }
+
+    app.process_command(UiCommand::Complete);
+    let done = render_rows(&mut app, 120).join("\n");
+    assert!(done.contains("▸ Explored 6 files"), "{done}");
+    assert!(done.contains("… 6 steps, click to show"), "{done}");
+    assert!(!done.contains("Read f1.rs"), "{done}");
+
+    click_text(&mut app, "6 steps, click to show");
+    let open = render_rows(&mut app, 120).join("\n");
+    assert!(open.contains("▾ Explored 6 files"), "{open}");
+    assert!(open.contains("1 ▸ Read f1.rs"), "{open}");
+    assert!(!open.contains("click to show"), "{open}");
+}
+
+fn record_at(seq: u64, ts_ms: u64) -> crate::events::RecordSummary {
+    crate::events::RecordSummary {
+        seq,
+        timestamp: "12:00:00".to_string(),
+        full_hash: String::new(),
+        hash_suffix: String::new(),
+        tx_kind: "UserPrompt".to_string(),
+        sender: String::new(),
+        message: String::new(),
+        action_count: 0,
+        effect_status: String::new(),
+        status: crate::events::RecordStatus::Ok,
+        info: String::new(),
+        what: String::new(),
+        group: String::new(),
+        detail: String::new(),
+        error_details: String::new(),
+        tx_id: String::new(),
+        agent_id: String::new(),
+        ts_ms,
+        policy: None,
+    }
+}
+
+#[test]
+fn test_open_thinking_shows_its_reasoning_and_jumps_to_turn_records() {
+    use crate::app::PanelFocus;
+    use crate::events::UiCommand;
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::NewRecord(record_at(1, 1_000)));
+    submit_message(&mut app, "fix it");
+    let now = u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap();
+    app.process_command(UiCommand::NewRecord(record_at(2, now)));
+    app.process_command(UiCommand::NewRecord(record_at(3, now + 5)));
+    app.process_command(UiCommand::StartThinking);
+    app.process_command(UiCommand::FinishThinking);
+    read_tool(&mut app, "t1", "src/main.rs");
+    app.process_command(UiCommand::Complete);
+
+    click_text(&mut app, "click to show");
+    click_text(&mut app, "Thought");
+    let open = render_rows(&mut app, 120).join("\n");
+    assert!(
+        open.contains("the model shared no reasoning text"),
+        "{open}"
+    );
+    assert!(open.contains("→ records for this turn"), "{open}");
+
+    click_text(&mut app, "records for this turn");
+    assert_eq!(app.focus(), PanelFocus::Records);
+    assert_eq!(app.selected_record(), 1);
+}
+
+#[test]
+fn test_clicking_the_working_indicator_jumps_to_turn_records() {
+    use crate::app::PanelFocus;
+    use crate::events::UiCommand;
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::NewRecord(record_at(1, 1_000)));
+    submit_message(&mut app, "hi");
+    let now = u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap();
+    app.process_command(UiCommand::NewRecord(record_at(2, now)));
+
+    click_text(&mut app, "thinking…");
+    assert_eq!(app.focus(), PanelFocus::Records);
+    assert_eq!(app.selected_record(), 1);
+}
+
 #[test]
 fn test_policy_decisions_fold_into_their_tool_calls() {
     use crate::events::{ToolData, UiCommand};
@@ -1789,9 +1960,10 @@ fn test_scrolled_chat_stays_put_while_reply_streams() {
     }
     render_rows(&mut app, 100);
     app.scroll_up(12);
-    let notes = |rows: Vec<String>| -> Vec<String> {
+    let notes = |rows: Vec<String>| -> Vec<(usize, String)> {
         rows.into_iter()
-            .filter(|row| row.contains("note "))
+            .enumerate()
+            .filter_map(|(y, row)| row.find("note ").map(|i| (y, row[i..i + 7].to_string())))
             .collect()
     };
     let before = render_rows(&mut app, 100);
