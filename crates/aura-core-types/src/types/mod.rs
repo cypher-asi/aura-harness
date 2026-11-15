@@ -13,6 +13,7 @@ mod record;
 mod status;
 mod subagent;
 mod tool;
+pub mod trace;
 mod transaction;
 
 pub use action::{Action, ActionKind};

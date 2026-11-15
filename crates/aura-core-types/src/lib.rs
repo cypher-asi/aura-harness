@@ -49,6 +49,7 @@ pub use error::{AuraError, Result};
 #[allow(deprecated)]
 pub use ids::{ActionId, AgentEventId, AgentId, FactId, Hash, ProcedureId, ProcessId, TxId};
 pub use registry::{Registry, RegistryError};
+pub use types::trace;
 #[allow(deprecated)]
 pub use types::ToolDecision;
 pub use types::{

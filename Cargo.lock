@@ -164,6 +164,7 @@ dependencies = [
  "aura-agent",
  "aura-agent-kernel",
  "aura-agent-subagent",
+ "aura-agent-trace",
  "aura-auth",
  "aura-automaton",
  "aura-config",
@@ -213,6 +214,7 @@ dependencies = [
  "aura-model-reasoner",
  "aura-plugin-hooks",
  "aura-store-db",
+ "aura-store-snapshot",
  "aura-tools",
  "chrono",
  "colored",
@@ -281,6 +283,28 @@ dependencies = [
  "proptest",
  "serde",
  "thiserror 1.0.69",
+ "uuid",
+]
+
+[[package]]
+name = "aura-agent-trace"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "aura-agent",
+ "aura-config",
+ "aura-core-types",
+ "aura-model-reasoner",
+ "aura-store-snapshot",
+ "blake3",
+ "chrono",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
  "uuid",
 ]
 
@@ -794,7 +818,9 @@ dependencies = [
 name = "aura-store-snapshot"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "bytes",
+ "tempfile",
  "thiserror 1.0.69",
 ]
 
@@ -806,6 +832,7 @@ dependencies = [
  "async-trait",
  "aura-agent",
  "aura-agent-kernel",
+ "aura-agent-trace",
  "aura-auth",
  "aura-config",
  "aura-context-memory",
