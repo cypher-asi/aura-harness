@@ -1,5 +1,3 @@
 //! Input handling for the terminal.
 
-mod history;
-
-pub use history::InputHistory;
+pub use aura_ui_core::history::InputHistory;

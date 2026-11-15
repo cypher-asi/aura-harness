@@ -91,6 +91,9 @@ members = [
     # (aura-terminal), automaton host (aura-automaton) and zOS auth
     # client (aura-auth) are listed above.
     "crates/aura-surface-cli",
+    # Renderer-agnostic UI protocol and state shared by the TUI and the
+    # native desktop app (`aura-desktop`, iced).
+    "crates/aura-ui-core",
 ]
 
 [profile.dev]

@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 aura-core-modes = { path = "../aura-core-modes" }
+aura-ui-core = { path = "../aura-ui-core" }
 
 # TUI Framework
 ratatui = { workspace = true }

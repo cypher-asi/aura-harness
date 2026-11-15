@@ -845,6 +845,7 @@ name = "aura-terminal"
 version = "0.1.0"
 dependencies = [
  "aura-core-modes",
+ "aura-ui-core",
  "axum",
  "base64 0.22.1",
  "chrono",
@@ -890,6 +891,17 @@ dependencies = [
  "uuid",
  "walkdir",
  "which",
+]
+
+[[package]]
+name = "aura-ui-core"
+version = "0.1.0"
+dependencies = [
+ "aura-core-modes",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

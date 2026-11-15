@@ -7,6 +7,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Surface — UI protocol and agent session shared by every frontend
+
+##### Added
+
+- `aura-ui-core`: the `UiEvent` / `UiCommand` protocol, input history,
+  tool-call formatting, the sandbox file tree and the `/mode` parser,
+  with no ratatui dependency. `aura-terminal` re-exports them under the
+  same paths (`aura_terminal::events`, `aura_terminal::mode_command`,
+  `aura_terminal::input::InputHistory`).
+- `aura_surface_cli::session::start`, which opens the agent registry,
+  record store, model provider and kernel factory and spawns the event
+  loop, returning a `UiSession` (event sender, command receiver and
+  `SessionTask`). `SessionTask::finish` surfaces an event loop that
+  stopped on an error and aborts one still running.
+
+##### Changed
+
+- `aura` (terminal mode) runs on `session::start`. The terminal now
+  enters the alternate screen after the session is ready, so a startup
+  error prints to the normal screen.
+
 ### Kernel — task-runner tools and agent-host records go through the kernel
 
 ##### Changed

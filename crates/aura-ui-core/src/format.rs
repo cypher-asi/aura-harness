@@ -4,7 +4,7 @@
 /// `Grepped TODO in src`, `Ran cargo test`. While the args are still
 /// streaming in, the label is built from the fields that have arrived;
 /// it is empty until one has.
-pub(crate) fn format_tool_label(tool_name: &str, args_json: &str) -> String {
+pub fn format_tool_label(tool_name: &str, args_json: &str) -> String {
     let args = parse_tool_args(args_json);
     if args.as_object().is_some_and(serde_json::Map::is_empty) && !is_complete_json(args_json) {
         return String::new();
@@ -59,13 +59,13 @@ pub(crate) fn format_tool_label(tool_name: &str, args_json: &str) -> String {
 
 /// Tool arguments as JSON. Arguments that are still streaming give an
 /// object of the top-level string fields that have fully arrived.
-pub(crate) fn parse_tool_args(args_json: &str) -> serde_json::Value {
+pub fn parse_tool_args(args_json: &str) -> serde_json::Value {
     serde_json::from_str(args_json)
         .unwrap_or_else(|_| serde_json::Value::Object(complete_string_fields(args_json)))
 }
 
 /// Whether `args_json` is a whole JSON value rather than a streaming prefix.
-pub(crate) fn is_complete_json(args_json: &str) -> bool {
+pub fn is_complete_json(args_json: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(args_json).is_ok()
 }
 
@@ -127,7 +127,7 @@ fn string_end(bytes: &[u8], start: usize) -> Option<usize> {
 }
 
 /// Last component of `path`.
-pub(crate) fn file_name(path: &str) -> &str {
+pub fn file_name(path: &str) -> &str {
     path.trim_end_matches(['/', '\\'])
         .rsplit(['/', '\\'])
         .next()
@@ -140,7 +140,7 @@ pub(crate) fn file_name(path: &str) -> &str {
 /// `run_command` results arrive as the `{ ok, exit_code, stdout, stderr }`
 /// envelope; they are shown as the command's output text. Anything else
 /// (or an envelope that fails to parse) is returned unchanged.
-pub(crate) fn format_tool_result(tool_name: &str, result: &str) -> String {
+pub fn format_tool_result(tool_name: &str, result: &str) -> String {
     if tool_name != "run_command" {
         return result.to_string();
     }
