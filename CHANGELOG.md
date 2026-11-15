@@ -39,6 +39,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `AURA_HEADLESS_JOB_WAIT`, default 10 minutes) and gives it each exit
   notice as a new turn, then stops any still running.
 - stdout carries only the chosen output; logs go to stderr.
+- `evals/long_horizon/`: four multi-file feature tasks (three Python,
+  one Rust) with hidden tests, and `run.py`, which runs `aura -p
+  --output-format json` on each task in a scratch copy, grades it with
+  the hidden tests, and writes a JSON and Markdown report with pass/fail,
+  cost, cache hit rate, compactions, model calls and wall time. Real
+  models run only with `--live` or `AURA_EVALS_LIVE=1`; `--self-check`
+  verifies the fixtures against reference solutions without a model.
 
 ##### Fixed
 

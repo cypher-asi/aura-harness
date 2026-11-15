@@ -50,6 +50,7 @@ A terminal turn has no iteration cap and no time limit: it runs until the agent 
 | `AURA_DATA_DIR` | `./aura_data` in the working directory | Data directory: agent list, record store and session checkpoints. A running terminal holds the store's lock, so give `aura -p` its own directory to run both at once. |
 | `AURA_HEADLESS_JOB_WAIT` | `10m` | Longest wait for the agent's background jobs after it ends its turn (`90s`, `45m`, `2h`, or a bare number of minutes). Jobs still running then are stopped. |
 | `RUST_LOG` | warnings only | Log filter. Logs go to stderr so stdout stays machine-readable. |
+| `AURA_EVALS_LIVE` | unset | Set to `1` to let [`evals/long_horizon/run.py`](../evals/long_horizon/README.md) call real models (same as its `--live` flag). |
 
 ## Node runtime
 
