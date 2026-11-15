@@ -948,6 +948,26 @@ fn render_rows(app: &mut crate::App, width: u16) -> Vec<String> {
         .collect()
 }
 
+/// The chat panel's top border row and its left and right border columns,
+/// found from its CHAT | TERMINAL tab bar.
+fn chat_panel(rows: &[String]) -> (usize, usize, usize) {
+    const TABS: &str = "│ CHAT  TERMINAL ";
+    let tabs = rows
+        .iter()
+        .position(|r| r.contains(TABS))
+        .unwrap_or_else(|| panic!("no chat tab bar in:\n{}", rows.join("\n")));
+    let row = &rows[tabs];
+    let left = row[..row.find(TABS).unwrap()].chars().count();
+    let right = left
+        + 1
+        + rows[tabs - 1]
+            .chars()
+            .skip(left + 1)
+            .position(|c| c == '┐')
+            .unwrap();
+    (tabs - 1, left, right)
+}
+
 #[test]
 fn test_slash_menu_spans_chat_width_above_input() {
     let mut app = app_with_model(None);
@@ -955,15 +975,7 @@ fn test_slash_menu_spans_chat_width_above_input() {
     let rows = render_rows(&mut app, 120);
     let n = rows.len();
 
-    let title = rows.iter().find(|r| r.contains("┌ CHAT ")).unwrap();
-    let chat_left = title[..title.find("┌ CHAT ").unwrap()].chars().count();
-    let chat_right = chat_left
-        + 1
-        + title
-            .chars()
-            .skip(chat_left + 1)
-            .position(|c| c == '┐')
-            .unwrap();
+    let (_, chat_left, chat_right) = chat_panel(&rows);
 
     let menu_bottom = &rows[n - 3];
     let chars: Vec<char> = menu_bottom.chars().collect();
@@ -1084,14 +1096,7 @@ fn test_typing_starts_at_chat_left_border_with_prompt_under_agents() {
     let rows = render_rows(&mut app, 120);
     let input_row = &rows[rows.len() - 2];
 
-    let chat_border = rows
-        .iter()
-        .find_map(|r| {
-            r.find("┌ CHAT")
-                .or_else(|| r.find("╭ CHAT"))
-                .map(|i| r[..i].chars().count())
-        })
-        .expect("chat title row");
+    let (_, chat_border, _) = chat_panel(&rows);
     let chars: Vec<char> = input_row.chars().collect();
     let typing = chat_border + 1;
     let typed: String = chars[typing..typing + 5].iter().collect();
@@ -1135,30 +1140,27 @@ fn render_with_cursor(app: &mut crate::App, width: u16) -> (Vec<String>, (u16, u
 }
 
 #[test]
-fn test_terminal_types_at_a_prompt_inside_the_pane() {
+fn test_terminal_types_at_the_input_line_after_the_shell_prompt() {
     use crossterm::event::{KeyCode, KeyEvent};
 
     let mut app = app_with_model(None);
     type_text(&mut app, "$ls");
     let (rows, (x, y)) = render_with_cursor(&mut app, 120);
 
-    let title = rows.iter().position(|r| r.contains(" TERMINAL ")).unwrap();
-    let first = &rows[title + 1];
-    let prompt_at = first
-        .find("│ [n3o@arch-aura aura-harness]$ ls")
-        .map_or_else(
-            || panic!("prompt on the pane's first row: {first:?}"),
-            |i| first[..i].chars().count(),
-        );
-    let typed = prompt_at + 2 + "[n3o@arch-aura aura-harness]$ ls".len();
-    assert_eq!((usize::from(x), usize::from(y)), (typed, title + 1));
-
-    let input_row = &rows[rows.len() - 2];
-    assert!(input_row.contains("Esc returns to chat"), "{input_row:?}");
+    let input_y = rows.len() - 2;
+    let input_row = &rows[input_y];
+    let prompt = "[n3o@arch-aura aura-harness]$ ";
     assert!(
-        !input_row.contains("> ") && !input_row.contains("]$"),
+        input_row.starts_with(&format!(" {prompt}ls")),
         "{input_row:?}"
     );
+    assert_eq!(
+        (usize::from(x), usize::from(y)),
+        (1 + prompt.len() + 2, input_y)
+    );
+    let pane = rows[..input_y].join("\n");
+    assert!(!pane.contains("]$ "), "{pane}");
+    assert!(pane.contains("Esc returns to chat"), "{pane}");
 
     app.handle_key(KeyEvent::from(KeyCode::Backspace));
     app.handle_key(KeyEvent::from(KeyCode::Backspace));
@@ -1170,13 +1172,76 @@ fn test_terminal_types_at_a_prompt_inside_the_pane() {
 }
 
 #[test]
+fn test_terminal_input_is_highlighted_as_a_command() {
+    let theme = test_theme();
+    let mut app = app_with_model(None);
+    type_text(&mut app, "$ls -la");
+    let buffer = render_buffer(&mut app, 120);
+    let y = buffer.area.height - 2;
+
+    let (_, program) = find_cell(&buffer, y, "ls -la").unwrap();
+    assert_eq!(program.fg, Some(theme.colors.success));
+    let (_, flag) = find_cell(&buffer, y, "-la").unwrap();
+    assert_eq!(flag.fg, Some(theme.colors.warning));
+}
+
+#[test]
+fn test_chat_panel_tabs_switch_between_chat_and_terminal() {
+    use crate::app::ChatTab;
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
+
+    let mut app = app_with_model(None);
+    let rows = render_rows(&mut app, 120);
+    let (top, left, _) = chat_panel(&rows);
+    let tabs = top + 1;
+    let labels: String = rows[tabs].chars().skip(left + 1).take(16).collect();
+    assert_eq!(labels, " CHAT  TERMINAL ");
+
+    let active = |app: &mut crate::App, label: &str| {
+        let buffer = render_buffer(app, 120);
+        let y = u16::try_from(tabs).unwrap();
+        let (_, style) = find_cell(&buffer, y, label).unwrap();
+        style.add_modifier.contains(Modifier::BOLD)
+    };
+    assert!(active(&mut app, "CHAT  T"));
+    assert!(!active(&mut app, "TERMINAL"));
+
+    type_text(&mut app, "$");
+    assert_eq!(app.chat_tab(), ChatTab::Terminal);
+    assert!(active(&mut app, "TERMINAL"));
+    assert!(!active(&mut app, "CHAT  T"));
+
+    app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    assert_eq!(app.chat_tab(), ChatTab::Chat);
+    app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+    assert_eq!(app.chat_tab(), ChatTab::Terminal);
+
+    let chat_label = u16::try_from(left + 2).unwrap();
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        app.handle_mouse(MouseEvent {
+            kind,
+            column: chat_label,
+            row: u16::try_from(tabs).unwrap(),
+            modifiers: KeyModifiers::empty(),
+        });
+    }
+    assert_eq!(app.chat_tab(), ChatTab::Chat);
+    assert!(app.selection().is_none());
+}
+
+#[test]
 fn test_long_command_wraps_at_the_last_column() {
     let mut app = app_with_model(None);
     app.set_shell_prompt("$ ");
     submit_message(&mut app, "/swarm");
     let command = format!("echo {}", "x".repeat(200));
-    type_text(&mut app, &format!("${command}"));
-    let (rows, (x, y)) = render_with_cursor(&mut app, 120);
+    submit_message(&mut app, &format!("${command}"));
+    let rows = render_rows(&mut app, 120);
 
     let start = rows.iter().position(|r| r.contains("│ $ echo x")).unwrap();
     let chars: Vec<char> = rows[start].chars().collect();
@@ -1192,22 +1257,24 @@ fn test_long_command_wraps_at_the_last_column() {
         .map(|r| r.chars().skip(text_x).take(text_width).collect::<String>())
         .collect();
     assert_eq!(shown.trim_end(), format!("$ {command}"), "wrapped mid-word");
-    let typed = 2 + command.len();
-    assert_eq!(
-        (usize::from(x), usize::from(y)),
-        (text_x + typed % text_width, start + typed / text_width)
-    );
 }
 
 #[test]
-fn test_no_prompt_while_a_command_runs() {
+fn test_pane_shows_only_the_running_command_and_input_keeps_the_prompt() {
     let mut app = app_with_model(None);
     app.set_shell_prompt("[u@h d]$ ");
     submit_message(&mut app, "$sleep 5");
-    let screen = render_rows(&mut app, 120).join("\n");
-    assert_eq!(screen.matches("[u@h d]$ ").count(), 1, "{screen}");
-    assert!(screen.contains("[u@h d]$ sleep 5"), "{screen}");
-    assert!(!screen.contains("running sleep"), "{screen}");
+    let rows = render_rows(&mut app, 120);
+    let input_y = rows.len() - 2;
+    let pane = rows[..input_y].join("\n");
+    assert_eq!(pane.matches("[u@h d]$ ").count(), 1, "{pane}");
+    assert!(pane.contains("[u@h d]$ sleep 5"), "{pane}");
+    assert!(!pane.contains("running sleep"), "{pane}");
+    assert!(
+        rows[input_y].trim_start().starts_with("[u@h d]$ "),
+        "{:?}",
+        rows[input_y]
+    );
 }
 
 #[test]
@@ -1226,14 +1293,13 @@ fn test_terminal_pane_shows_only_commands_and_chat_hides_them() {
     app.process_command(UiCommand::Complete);
 
     let screen = render_rows(&mut app, 120).join("\n");
-    assert!(screen.contains(" TERMINAL "), "{screen}");
-    assert!(!screen.contains(" CHAT "), "{screen}");
+    assert_eq!(app.chat_tab(), crate::app::ChatTab::Terminal);
     assert!(screen.contains("echo hi"), "{screen}");
     assert!(!screen.contains("hello agent"), "{screen}");
 
     app.handle_key(KeyEvent::from(KeyCode::Esc));
     let screen = render_rows(&mut app, 120).join("\n");
-    assert!(screen.contains(" CHAT "), "{screen}");
+    assert_eq!(app.chat_tab(), crate::app::ChatTab::Chat);
     assert!(screen.contains("hello agent"), "{screen}");
     assert!(!screen.contains("echo hi"), "{screen}");
 
@@ -2085,7 +2151,13 @@ fn test_command_output_renders_like_a_terminal() {
     let listing = &rows[echo + 2];
     assert!(total.contains("total 0"), "{total:?}");
     assert!(listing.contains("drwxr-xr-x  2 u u  40 src"), "{listing:?}");
-    assert!(rows[echo + 3].contains("[u@h d]$ "), "{:?}", rows[echo + 3]);
+    assert!(
+        !rows[echo + 3].contains("[u@h d]$ "),
+        "{:?}",
+        rows[echo + 3]
+    );
+    let input_row = &rows[rows.len() - 2];
+    assert!(input_row.contains("[u@h d]$ "), "{input_row:?}");
     assert!(!screen.contains('\x1b'));
     let column = |row: &str, needle: &str| row.find(needle).map(|i| row[..i].chars().count());
     assert_eq!(
@@ -2167,8 +2239,15 @@ fn right_border(rows: &[String], title: &str) -> String {
         .collect()
 }
 
+/// The chat panel's right border beside its text, below the tab bar and
+/// the blank row under it.
 fn chat_track(rows: &[String]) -> String {
-    right_border(rows, "┌ CHAT").chars().skip(1).collect()
+    let (top, _, right) = chat_panel(rows);
+    rows[top + 3..]
+        .iter()
+        .map(|r| r.chars().nth(right).unwrap())
+        .take_while(|&c| c != '┘')
+        .collect()
 }
 
 #[test]

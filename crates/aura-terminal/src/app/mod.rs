@@ -3,6 +3,7 @@
 //! Manages the overall application state, conversation history,
 //! panels (Chat, Record and Sandbox), and coordinates between input handling and rendering.
 
+mod chat_tabs;
 mod commands;
 mod definitions;
 pub mod file_view;
@@ -33,6 +34,7 @@ use crate::{
     input::InputHistory,
     renderer::{ChatLineCache, GroupState},
 };
+pub use chat_tabs::ChatTab;
 use aura_core_modes::AgentMode;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 pub use definitions::AgentsTab;
@@ -245,8 +247,9 @@ pub struct App {
     pub(super) shell_prompt: String,
     /// Width of the chat text area in the last frame (0 before the first)
     pub(super) chat_width: u16,
-    /// Whether `$` switched to the terminal: the chat panel shows the
-    /// session's shell commands, and Enter runs the line as one
+    /// Whether the chat panel's TERMINAL tab is open (`$` opens it): the
+    /// panel shows the session's shell commands, and Enter runs the line
+    /// as one
     pub(super) terminal_mode: bool,
     /// Commands run at the terminal prompt, recalled there instead of chat
     /// history
@@ -304,6 +307,8 @@ pub struct PanelAreas {
     pub new_agent_row: Option<Rect>,
     /// Chat panel (including border)
     pub chat: Option<Rect>,
+    /// Tab bar row of the chat panel
+    pub chat_tabs: Option<Rect>,
     /// Message text area inside the chat panel
     pub chat_text: Option<Rect>,
     /// Record panel (including border)
@@ -340,6 +345,8 @@ pub enum DetailView {
 pub(crate) enum HoverTarget {
     /// A label in the agents tab bar.
     AgentTab(AgentsTab),
+    /// A label in the chat panel's tab bar.
+    ChatTab(ChatTab),
     /// A row in the projects list, including "+ New project".
     ProjectRow(usize),
     /// A row in the roster, including "+ New agent".
@@ -740,13 +747,6 @@ impl App {
             &mut self.chat_lines
         };
         (&self.messages, cache, groups)
-    }
-
-    /// Whether the terminal pane ends in a prompt to type at, as a shell's
-    /// does once the last command has finished.
-    #[must_use]
-    pub fn shows_live_prompt(&self) -> bool {
-        self.input_is_command() && !self.messages.back().is_some_and(Message::is_running_shell)
     }
 
     /// Whether the chat panel shows the terminal pane: the shell commands
@@ -1243,7 +1243,11 @@ impl App {
                     PanelFocus::Swarm => self.click_agents_panel(mouse.column, mouse.row),
                     PanelFocus::Sandbox => self.click_side_panel(mouse.column, mouse.row),
                     PanelFocus::Records => self.click_record_row(mouse.column, mouse.row),
-                    PanelFocus::Chat => {}
+                    PanelFocus::Chat => {
+                        if self.click_chat_tabs(mouse.column, mouse.row) {
+                            self.clear_selection();
+                        }
+                    }
                 }
             }
             _ => {}
@@ -1255,6 +1259,9 @@ impl App {
     fn hover_target(&self, column: u16, row: u16) -> Option<HoverTarget> {
         if contains(self.areas.agent_tabs, column, row) {
             return self.hovered_tab(column);
+        }
+        if let Some(target) = self.hovered_chat_tab(column, row) {
+            return Some(target);
         }
         if self.agents_tab == AgentsTab::Projects {
             if let Some(index) = self.project_row_at(column, row) {
