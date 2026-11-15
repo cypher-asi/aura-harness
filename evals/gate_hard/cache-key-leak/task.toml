@@ -1,0 +1,6 @@
+title = "Prices leak across currencies"
+category = "investigation"
+tags = ["hard", "python"]
+prompt = "Support ticket: after one customer views a widget's price in EUR, other customers asking for USD see the EUR amount. Find the cause and fix it."
+verify = "PYTHONPATH=. python3 .gate_checks/check.py"
+max_iterations = 25

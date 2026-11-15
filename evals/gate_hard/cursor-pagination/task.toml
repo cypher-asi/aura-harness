@@ -1,0 +1,6 @@
+title = "Paging skips items"
+category = "bugfix"
+tags = ["hard", "python"]
+prompt = "Some items never show up when a client pages through them with page() in store.py. Fix it so that paging visits every item exactly once, oldest first, with ties in `created` broken by `id`. Clients treat cursors as opaque, so you may change what a cursor holds."
+verify = "PYTHONPATH=. python3 .gate_checks/check.py"
+max_iterations = 25

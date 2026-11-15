@@ -1,0 +1,6 @@
+title = "Copy files whatever their names"
+category = "bugfix"
+tags = ["hard", "shell"]
+prompt = "`sh backup.sh SRC DEST` loses or mangles some files. Make it copy every regular .txt file directly inside SRC into DEST whatever the file names are, including when SRC or DEST contain spaces. Keep it POSIX sh."
+verify = "sh .gate_checks/check.sh"
+max_iterations = 25

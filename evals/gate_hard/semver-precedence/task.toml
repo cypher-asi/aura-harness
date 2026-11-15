@@ -1,0 +1,6 @@
+title = "Follow SemVer precedence"
+category = "reasoning"
+tags = ["hard", "python"]
+prompt = "sort_versions() in semver.py orders some versions wrongly and crashes on others. Make compare() follow Semantic Versioning 2.0.0 precedence exactly."
+verify = "PYTHONPATH=. python3 .gate_checks/check.py"
+max_iterations = 25

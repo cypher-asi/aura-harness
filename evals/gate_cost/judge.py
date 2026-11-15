@@ -127,7 +127,7 @@ def conversation(run_dir: Path) -> tuple[list[str], list[str]]:
     return prompts, [replies[t] for t in sorted(replies)]
 
 
-def runs_by_task(arm: str) -> dict[str, list[dict]]:
+def runs_by_task(suite: str, arm: str) -> dict[str, list[dict]]:
     out = collections.defaultdict(list)
     for run_dir in (aura_home() / "runs").iterdir():
         try:
@@ -136,7 +136,7 @@ def runs_by_task(arm: str) -> dict[str, list[dict]]:
         except (OSError, json.JSONDecodeError):
             continue
         task = meta.get("task_id", "")
-        if meta.get("arm") != arm or not task.startswith("gate_cost/"):
+        if meta.get("arm") != arm or not task.startswith(f"{suite}/"):
             continue
         out[task.split("/", 1)[1]].append(
             {"run": run_dir, "meta": meta, "outcome": summary.get("scorecard", summary).get("outcome")}
@@ -198,10 +198,11 @@ def main() -> int:
     args = ap.parse_args()
 
     suite = Path(args.suite)
-    ref_runs, arm_runs = runs_by_task(args.reference), runs_by_task(args.arm)
+    ref_runs, arm_runs = runs_by_task(suite.name, args.reference), runs_by_task(suite.name, args.arm)
     out_dir = aura_home() / "gate" / "judgments"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{args.reference}-vs-{args.arm}.jsonl"
+    prefix = "" if suite.name == "gate_cost" else f"{suite.name}-"
+    out_path = out_dir / f"{prefix}{args.reference}-vs-{args.arm}.jsonl"
     done = set()
     if out_path.exists():
         for line in out_path.read_text().splitlines():

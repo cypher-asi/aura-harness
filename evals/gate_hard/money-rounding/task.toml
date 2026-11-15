@@ -1,0 +1,6 @@
+title = "Fix invoice rounding"
+category = "bugfix"
+tags = ["hard", "python"]
+prompt = "Customers report invoice totals that are off by a cent. The rules: each line is price x quantity plus tax at the line's rate, rounded to the cent with halves rounded away from zero; the invoice total is the sum of the rounded lines. Prices and tax rates arrive as strings (\"19.99\", \"0.0825\"). Return amounts as strings with exactly two decimals, like \"10.50\". Fix invoice.py."
+verify = "PYTHONPATH=. python3 .gate_checks/check.py"
+max_iterations = 25

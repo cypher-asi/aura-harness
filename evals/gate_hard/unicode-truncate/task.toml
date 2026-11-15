@@ -1,0 +1,6 @@
+title = "Truncate text by display width"
+category = "feature"
+tags = ["hard", "python"]
+prompt = "truncate() in textwidth.py breaks table layout for some text. Count columns as a terminal shows them: East Asian wide and fullwidth characters take 2, combining marks take 0, everything else 1, and \"…\" takes 1. The result must fit in `width` columns, must never split a character from the combining marks after it, and must only add \"…\" when the text was cut. Use only the standard library."
+verify = "PYTHONPATH=. python3 .gate_checks/check.py"
+max_iterations = 25
