@@ -234,6 +234,7 @@ pub async fn cmd_eval(args: EvalCommand) -> anyhow::Result<()> {
             task,
             repeat,
             work_dir,
+            budget_usd,
             harness,
         } => {
             let mut tasks = evals::load_suite(&suite)?;
@@ -255,6 +256,7 @@ pub async fn cmd_eval(args: EvalCommand) -> anyhow::Result<()> {
                 tool_config: ToolConfig::for_autonomous_dev_loop(),
                 work_root: work_dir.unwrap_or_else(|| home.join("evals").join("work")),
                 provider: Box::new(move |_| Arc::clone(&provider)),
+                budget_usd,
             };
             let results = evals::run_suite(&tasks, &opts).await?;
             print!("{}", evals::results_table(&results));

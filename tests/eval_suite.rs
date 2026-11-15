@@ -16,6 +16,7 @@ use aura_tools::ToolConfig;
 use serde_json::json;
 
 const SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/evals/coding");
+const GATE_SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/evals/gate_cost");
 
 fn write_greeting() -> MockProvider {
     MockProvider::new().with_responses(vec![
@@ -39,6 +40,7 @@ fn options(home: &Path, arm: &str, provider: fn() -> MockProvider) -> EvalOption
         tool_config: ToolConfig::for_autonomous_dev_loop(),
         work_root: home.join("work"),
         provider: Box::new(move |_| Arc::new(provider())),
+        budget_usd: None,
     }
 }
 
@@ -180,4 +182,51 @@ async fn branch_replays_the_prefix_then_runs_live() {
         })
         .unwrap();
     assert!(last_text.contains("different ending"), "{last_text}");
+}
+
+/// Every gate-cost task must fail as shipped and pass once its reference
+/// `solution/` is applied, with the hidden checks in place both times.
+#[test]
+fn gate_cost_tasks_fail_as_shipped_and_pass_when_solved() {
+    let tasks = evals::load_suite(Path::new(GATE_SUITE)).unwrap();
+    assert!(tasks.len() >= 20, "suite has {} tasks", tasks.len());
+    let categories: std::collections::BTreeSet<&str> =
+        tasks.iter().map(|t| t.category.as_str()).collect();
+    for protected in [
+        "reasoning",
+        "unfamiliar",
+        "long-session",
+        "ambiguous",
+        "recovery",
+    ] {
+        assert!(categories.contains(protected), "no {protected} task");
+    }
+    let mut wrong = Vec::new();
+    for task in &tasks {
+        for (solved, layers) in [
+            (false, &["workspace", "checks"][..]),
+            (true, &["workspace", "solution", "checks"][..]),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            for layer in layers {
+                let from = task.dir.join(layer);
+                if from.is_dir() {
+                    evals::copy_dir(&from, dir.path()).unwrap();
+                }
+            }
+            let (passed, _) = evals::verify(&task.verify, dir.path(), "test").unwrap();
+            if passed != solved {
+                wrong.push(format!(
+                    "{} {}",
+                    task.id,
+                    if solved {
+                        "solved fails"
+                    } else {
+                        "passes as shipped"
+                    }
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }

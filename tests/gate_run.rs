@@ -67,7 +67,10 @@ fn ledger(home: &Path) -> Vec<Value> {
 fn run_blocks_result(home: &Path, run_id: &str) -> Value {
     let trace = RunTrace::load(&RunBundle::find(home, run_id).unwrap()).unwrap();
     let text = serde_json::to_string(&trace.steps).unwrap();
-    assert!(text.contains("run_blocks"), "the coordinator called run_blocks");
+    assert!(
+        text.contains("run_blocks"),
+        "the coordinator called run_blocks"
+    );
     serde_json::to_value(&trace.steps).unwrap()
 }
 
@@ -129,13 +132,19 @@ async fn failed_checks_fix_once_then_escalate_from_a_restored_workspace() {
         "keep me\n"
     );
     let entries = ledger(home.path());
-    let tiers: Vec<&str> = entries.iter().map(|e| e["tier"].as_str().unwrap()).collect();
+    let tiers: Vec<&str> = entries
+        .iter()
+        .map(|e| e["tier"].as_str().unwrap())
+        .collect();
     let reasons: Vec<&str> = entries
         .iter()
         .map(|e| e["reason"].as_str().unwrap())
         .collect();
     assert_eq!(tiers, ["fast", "fast", "standard"], "{reasons:?}");
-    let passed: Vec<bool> = entries.iter().map(|e| e["passed"].as_bool().unwrap()).collect();
+    let passed: Vec<bool> = entries
+        .iter()
+        .map(|e| e["passed"].as_bool().unwrap())
+        .collect();
     assert_eq!(passed, [false, false, true]);
     assert!(entries.iter().all(|e| e["block_passed"] == true));
     assert_eq!(entries[2]["model"], "claude/claude-sonnet-5-5");

@@ -542,13 +542,25 @@ pub fn is_installed(installed: &[String], name: &str) -> bool {
 mod tests {
     #[test]
     fn gate_ids_bill_like_their_frontier() {
-        assert_eq!(super::backend_for("gate/claude/claude-opus-5-5"), super::ModelBackend::Claude);
-        assert_eq!(super::backend_for("gate/aura-claude-opus-4-7"), super::ModelBackend::Router);
-        assert_eq!(super::upstream_model_name("gate/claude/claude-opus-5-5"), "claude-opus-5-5");
+        assert_eq!(
+            super::backend_for("gate/claude/claude-opus-5-5"),
+            super::ModelBackend::Claude
+        );
+        assert_eq!(
+            super::backend_for("gate/aura-claude-opus-4-7"),
+            super::ModelBackend::Router
+        );
+        assert_eq!(
+            super::upstream_model_name("gate/claude/claude-opus-5-5"),
+            "claude-opus-5-5"
+        );
         assert_eq!(super::gate_frontier("gate/"), None);
         let gates = super::gate_options(&super::catalog("qwen3:4b", &[]));
         let ids: Vec<&str> = gates.iter().map(|o| o.id.as_str()).collect();
-        assert_eq!(ids, ["gate/aura-claude-opus-4-7", "gate/claude/claude-opus-4-7"]);
+        assert_eq!(
+            ids,
+            ["gate/aura-claude-opus-4-7", "gate/claude/claude-opus-4-7"]
+        );
     }
 
     use super::*;

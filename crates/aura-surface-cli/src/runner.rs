@@ -93,6 +93,7 @@ pub async fn run() -> anyhow::Result<std::process::ExitCode> {
         Some(Commands::Runs(args)) => crate::trace_commands::cmd_runs(args).await,
         Some(Commands::Dataset(args)) => crate::trace_commands::cmd_dataset(args),
         Some(Commands::Eval(args)) => crate::trace_commands::cmd_eval(args).await,
+        Some(Commands::Gate(args)) => crate::gate_commands::cmd_gate(args),
         Some(Commands::Run(args)) => run_with_args(args, requested_mode).await,
         None => run_with_args(RunArgs::default(), requested_mode).await,
     }

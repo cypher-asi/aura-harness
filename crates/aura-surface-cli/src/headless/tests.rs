@@ -654,7 +654,8 @@ async fn gate_model_hands_blocks_to_cheaper_workers() {
     );
 
     let requests = requests.lock().unwrap();
-    let tools = |r: &ModelRequest| -> Vec<String> { r.tools.iter().map(|t| t.name.clone()).collect() };
+    let tools =
+        |r: &ModelRequest| -> Vec<String> { r.tools.iter().map(|t| t.name.clone()).collect() };
     let coordinator = &requests[0];
     assert_eq!(coordinator.model.as_str(), "claude/claude-opus-5-5");
     assert!(tools(coordinator).contains(&"run_blocks".to_string()));
@@ -667,7 +668,10 @@ async fn gate_model_hands_blocks_to_cheaper_workers() {
     assert_eq!(requests[3].model.as_str(), "claude/claude-opus-5-5");
 
     let ledger = std::fs::read_to_string(dirs.data.path().join("gate/ledger.jsonl")).unwrap();
-    let entries: Vec<Value> = ledger.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let entries: Vec<Value> = ledger
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0]["tier"], "fast");
     assert_eq!(entries[0]["block_passed"], true);

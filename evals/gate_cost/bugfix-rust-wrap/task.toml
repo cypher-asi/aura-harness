@@ -1,0 +1,6 @@
+title = "Fix greedy word wrap"
+category = "bugfix"
+tags = ["rust"]
+prompt = "`cargo test` fails in this crate. Fix `wrap` in src/lib.rs so it does what its doc comment says (change the code, not the tests), then run the tests."
+verify = "cargo test --offline --quiet"
+max_iterations = 25

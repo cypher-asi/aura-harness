@@ -1,0 +1,6 @@
+title = "Top words of a file in shell"
+category = "feature"
+tags = ["shell"]
+prompt = "Implement wordfreq.sh as the comment at its top describes. sample.txt is there to try it on."
+verify = "sh .gate_checks/check.sh"
+max_iterations = 20

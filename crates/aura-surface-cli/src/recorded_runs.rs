@@ -13,8 +13,8 @@ use aura_agent::{
 use aura_agent_gate::{RunBlocksTool, GATE_BLOCK_AGENT};
 use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
 use aura_agent_trace::{
-    child_cost_reward, RecordRouter, ReplayProvider, RunMeta, RunRecorder, RunScorecard,
-    RunSource, RunTrace,
+    child_cost_reward, RecordRouter, ReplayProvider, RunMeta, RunRecorder, RunScorecard, RunSource,
+    RunTrace,
 };
 use aura_config::trace::TraceLevel;
 use aura_core_types::trace::StepAction;

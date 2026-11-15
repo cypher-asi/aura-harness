@@ -1,0 +1,6 @@
+title = "Fix an off-by-one in a shell script"
+category = "bugfix"
+tags = ["shell"]
+prompt = "`sh sum.sh 10` should print 55 (the sum of 1..10) but prints the wrong number. Fix sum.sh. Do not hard-code answers."
+verify = "sh .gate_checks/check.sh"
+max_iterations = 15

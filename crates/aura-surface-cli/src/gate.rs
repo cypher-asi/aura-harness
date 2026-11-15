@@ -12,7 +12,9 @@ use aura_agent::{AgentLoop, AgentLoopConfig, KernelModelGateway, KernelToolGatew
 use aura_agent_gate::{prompts, BlockRunner, GatePolicy, GateSettings};
 use aura_agent_kernel::Kernel;
 use aura_config::gate::GateConfig;
-use aura_core_types::{AgentId, SubagentDispatchRequest, SubagentExit, SubagentResult, Transaction};
+use aura_core_types::{
+    AgentId, SubagentDispatchRequest, SubagentExit, SubagentResult, Transaction,
+};
 use aura_model_reasoner::{model_catalog, Message, ThinkingEffort, ToolDefinition, Usage};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -43,7 +45,9 @@ pub fn settings(home: Option<&Path>, run_id: Option<String>) -> GateSettings {
         tier_overrides: cfg.tiers,
         ledger: cfg.ledger,
         run_id,
-        explore_budget_usd: cfg.explore_budget_usd.unwrap_or(defaults.explore_budget_usd),
+        explore_budget_usd: cfg
+            .explore_budget_usd
+            .unwrap_or(defaults.explore_budget_usd),
         ..defaults
     }
 }
@@ -118,7 +122,10 @@ pub async fn run_worker(
     }
     config.observers.clear();
     let tools: Vec<ToolDefinition> = match &request.override_tool_subset {
-        Some(names) => tools.into_iter().filter(|t| names.contains(&t.name)).collect(),
+        Some(names) => tools
+            .into_iter()
+            .filter(|t| names.contains(&t.name))
+            .collect(),
         None => tools,
     };
     let model = config.model.clone();

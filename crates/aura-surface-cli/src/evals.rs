@@ -2,11 +2,15 @@
 //! and recorded as `eval` runs so harness arms can be compared.
 //!
 //! A suite is a directory of tasks. Each task directory holds a
-//! `task.toml` and an optional `workspace/` fixture that is copied into a
-//! fresh directory before the run:
+//! `task.toml`, an optional `workspace/` fixture that is copied into a
+//! fresh directory before the run, and an optional `checks/` directory
+//! copied in after the run, before `verify`, so the agent never sees the
+//! hidden checks:
 //!
 //! ```toml
 //! title = "Fix the off-by-one"
+//! category = "bugfix"
+//! tags = ["rust"]
 //! prompt = "The tests in src/lib.rs fail. Fix the bug."
 //! verify = "cargo test --offline"
 //! max_iterations = 30
@@ -34,6 +38,10 @@ use crate::recorded_runs::{self, HeadlessRun};
 pub const TASK_FILE: &str = "task.toml";
 /// Fixture directory copied into the run workspace.
 pub const FIXTURE_DIR: &str = "workspace";
+/// Hidden checks copied into the run workspace after the run.
+pub const CHECKS_DIR: &str = "checks";
+/// Category of tasks that name none.
+pub const DEFAULT_CATEGORY: &str = "general";
 /// Arm name used when a run has none.
 pub const DEFAULT_ARM: &str = "default";
 
@@ -49,6 +57,12 @@ pub struct EvalTask {
     /// Short title.
     #[serde(default)]
     pub title: String,
+    /// Category reports group by (default [`DEFAULT_CATEGORY`]).
+    #[serde(default)]
+    pub category: String,
+    /// Free-form labels.
+    #[serde(default)]
+    pub tags: Vec<String>,
     /// First user prompt.
     pub prompt: String,
     /// Follow-up prompts, one per extra turn.
@@ -85,6 +99,9 @@ pub fn load_suite(suite: &Path) -> anyhow::Result<Vec<EvalTask>> {
             .unwrap_or_default();
         if task.title.is_empty() {
             task.title.clone_from(&task.id);
+        }
+        if task.category.is_empty() {
+            task.category = DEFAULT_CATEGORY.to_string();
         }
         task.dir = dir;
         tasks.push(task);
@@ -128,6 +145,8 @@ pub struct EvalOptions {
     pub work_root: PathBuf,
     /// Provider for one run of a task.
     pub provider: ProviderFactory,
+    /// Stop starting runs once the suite's runs cost this much.
+    pub budget_usd: Option<f64>,
 }
 
 /// Result of one task run.
@@ -152,12 +171,28 @@ pub struct EvalResult {
 /// Fails when a workspace can't be prepared or a run can't be recorded.
 pub async fn run_suite(tasks: &[EvalTask], opts: &EvalOptions) -> anyhow::Result<Vec<EvalResult>> {
     let mut results = Vec::new();
+    let mut spent = 0.0;
     for task in tasks {
         for _ in 0..opts.repeat.max(1) {
-            results.push(run_task(task, opts).await?);
+            if opts.budget_usd.is_some_and(|budget| spent >= budget) {
+                tracing::warn!(spent, "Eval budget reached; skipping the remaining runs");
+                return Ok(results);
+            }
+            let result = run_task(task, opts).await?;
+            spent += result.scorecard.total_cost_usd();
+            results.push(result);
         }
     }
     Ok(results)
+}
+
+/// Category of each task id (`<suite>/<task>`) in `tasks`.
+#[must_use]
+pub fn categories(suite: &str, tasks: &[EvalTask]) -> BTreeMap<String, String> {
+    tasks
+        .iter()
+        .map(|t| (format!("{suite}/{}", t.id), t.category.clone()))
+        .collect()
 }
 
 async fn run_task(task: &EvalTask, opts: &EvalOptions) -> anyhow::Result<EvalResult> {
@@ -191,6 +226,10 @@ async fn run_task(task: &EvalTask, opts: &EvalOptions) -> anyhow::Result<EvalRes
     })
     .await?;
 
+    let checks = task.dir.join(CHECKS_DIR);
+    if checks.is_dir() {
+        copy_dir(&checks, &workspace)?;
+    }
     let (passed, reward) = verify(&task.verify, &workspace, "eval")?;
     let bundle = RunBundle::at(&outcome.bundle_dir);
     bundle.append_rewards(&[reward])?;
@@ -207,6 +246,8 @@ async fn run_task(task: &EvalTask, opts: &EvalOptions) -> anyhow::Result<EvalRes
 
 /// Run `cmd` with `sh -c` in `dir` and turn its exit status into an
 /// outcome reward (1 passed, 0 failed) with the output tails as evidence.
+/// Cargo builds into `dir/target`, so workspaces of crates with the same
+/// name never share build results.
 ///
 /// # Errors
 ///
@@ -217,6 +258,7 @@ pub fn verify(cmd: &str, dir: &Path, source: &str) -> anyhow::Result<(bool, Rewa
         .arg("-c")
         .arg(cmd)
         .current_dir(dir)
+        .env("CARGO_TARGET_DIR", dir.join("target"))
         .output()
         .with_context(|| format!("running `{cmd}` in {}", dir.display()))?;
     let passed = output.status.success();
@@ -243,7 +285,11 @@ pub fn verify(cmd: &str, dir: &Path, source: &str) -> anyhow::Result<(bool, Rewa
     Ok((passed, reward))
 }
 
-fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+/// Copy the files under `from` into `to`, keeping relative paths.
+///
+/// # Errors
+/// Fails on an I/O error.
+pub fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
         let target = to.join(entry.file_name());
@@ -262,17 +308,18 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
 #[allow(clippy::cast_precision_loss)]
 pub fn results_table(results: &[EvalResult]) -> String {
     let mut out = format!(
-        "{:<24} {:<6} {:>9} {:>6} {:>8}  {}\n",
-        "task", "result", "tokens", "calls", "secs", "run"
+        "{:<24} {:<6} {:>9} {:>6} {:>9} {:>8}  {}\n",
+        "task", "result", "tokens", "calls", "usd", "secs", "run"
     );
     for r in results {
         let _ = writeln!(
             out,
-            "{:<24} {:<6} {:>9} {:>6} {:>8.1}  {}{}",
+            "{:<24} {:<6} {:>9} {:>6} {:>9.4} {:>8.1}  {}{}",
             r.task,
             if r.passed { "pass" } else { "FAIL" },
             r.scorecard.total_tokens(),
             r.scorecard.model_calls,
+            r.scorecard.total_cost_usd(),
             r.scorecard.wall_ms as f64 / 1000.0,
             r.run_id,
             r.error
@@ -282,7 +329,8 @@ pub fn results_table(results: &[EvalResult]) -> String {
         );
     }
     let passed = results.iter().filter(|r| r.passed).count();
-    let _ = writeln!(out, "{passed}/{} passed", results.len());
+    let cost: f64 = results.iter().map(|r| r.scorecard.total_cost_usd()).sum();
+    let _ = writeln!(out, "{passed}/{} passed, ${cost:.4}", results.len());
     out
 }
 

@@ -1,0 +1,6 @@
+title = "Add docstrings without changing behavior"
+category = "docs"
+tags = ["python"]
+prompt = "Add a docstring to every public function in geometry.py describing its parameters and return value. Do not change behavior."
+verify = "PYTHONPATH=. python3 .gate_checks/check.py"
+max_iterations = 15

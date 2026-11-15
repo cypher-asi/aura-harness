@@ -39,11 +39,13 @@ impl GateConfig {
     #[must_use]
     pub fn from_env(home: Option<&Path>) -> Self {
         let dir = home.map(|h| h.join(GATE_DIR));
-        let policy = lookup_string(AURA_GATE_POLICY).map(PathBuf::from).or_else(|| {
-            dir.as_ref()
-                .map(|d| d.join(POLICY_FILE))
-                .filter(|p| p.is_file())
-        });
+        let policy = lookup_string(AURA_GATE_POLICY)
+            .map(PathBuf::from)
+            .or_else(|| {
+                dir.as_ref()
+                    .map(|d| d.join(POLICY_FILE))
+                    .filter(|p| p.is_file())
+            });
         let rate = |name| {
             lookup_string(name)
                 .and_then(|raw| raw.parse::<f64>().ok())

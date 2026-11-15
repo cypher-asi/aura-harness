@@ -1,0 +1,6 @@
+title = "Implement an LRU cache"
+category = "feature"
+tags = ["python"]
+prompt = "Implement the LRUCache class in cache.py as its docstrings describe."
+verify = "PYTHONPATH=. python3 .gate_checks/check.py"
+max_iterations = 20

@@ -178,6 +178,72 @@ pub enum Commands {
     Dataset(DatasetCommand),
     /// Run coding eval suites and compare harness arms.
     Eval(EvalCommand),
+    /// Inspect, refit and promote the cost gate's routing policy.
+    Gate(GateCommand),
+}
+
+/// `aura gate` parent command.
+#[derive(Args, Debug)]
+pub struct GateCommand {
+    /// Gate subcommand to run.
+    #[command(subcommand)]
+    pub action: GateSubcommand,
+}
+
+/// Subcommands under `aura gate`.
+#[derive(Subcommand, Debug)]
+pub enum GateSubcommand {
+    /// Show the active policy and what the attempt ledger records.
+    Report,
+    /// Refit the policy from the ledger and eval outcomes into
+    /// `AURA_HOME/gate/policies/<version>.json`.
+    Fit {
+        /// Version name (default: the next `vN`).
+        #[arg(long)]
+        version: Option<String>,
+    },
+    /// Paired cost and pass-rate report of recorded eval arms.
+    Bench {
+        /// Suite directory, for task categories.
+        #[arg(default_value = "evals/gate_cost")]
+        suite: PathBuf,
+        /// Arm every other arm is compared with (the frontier model alone).
+        #[arg(long)]
+        reference: String,
+        /// Arms to judge against the reference; repeatable.
+        #[arg(long = "arm", required = true)]
+        arms: Vec<String>,
+        /// Single cheap-model arm to price the cost-matched mixture from.
+        #[arg(long)]
+        cheap: Option<String>,
+        /// Largest pass-rate drop still counted as non-inferior.
+        #[arg(long, default_value_t = 0.1)]
+        margin: f64,
+    },
+    /// Make a fitted policy the active one, once an eval arm run on it
+    /// costs less than the reference and passes as many tasks.
+    Promote {
+        /// Policy file written by `aura gate fit`.
+        policy: PathBuf,
+        /// Suite directory, for task categories.
+        #[arg(long, default_value = "evals/gate_cost")]
+        suite: PathBuf,
+        /// Arm run with the policy.
+        #[arg(long)]
+        arm: String,
+        /// Arm to beat (the frontier model alone).
+        #[arg(long)]
+        reference: String,
+        /// Single cheap-model arm to price the cost-matched mixture from.
+        #[arg(long)]
+        cheap: Option<String>,
+        /// Largest pass-rate drop still counted as non-inferior.
+        #[arg(long, default_value_t = 0.1)]
+        margin: f64,
+        /// Promote without the benchmark check.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 /// `aura runs` parent command.
@@ -307,6 +373,9 @@ pub enum EvalSubcommand {
         /// Where task workspaces are created (default `AURA_HOME/evals/work`).
         #[arg(long)]
         work_dir: Option<PathBuf>,
+        /// Stop starting runs once the suite's runs cost this many USD.
+        #[arg(long)]
+        budget_usd: Option<f64>,
         #[command(flatten)]
         harness: HarnessArgs,
     },

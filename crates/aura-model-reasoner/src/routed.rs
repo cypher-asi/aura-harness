@@ -154,7 +154,9 @@ mod tests {
     #[test]
     fn gate_requests_run_as_their_frontier() {
         let provider = routed();
-        let (target, rewritten) = provider.route(request("gate/aura-claude-opus-4-7")).unwrap();
+        let (target, rewritten) = provider
+            .route(request("gate/aura-claude-opus-4-7"))
+            .unwrap();
         assert!(std::ptr::eq(
             std::ptr::from_ref(target).cast::<u8>(),
             Arc::as_ptr(&provider.router).cast::<u8>()

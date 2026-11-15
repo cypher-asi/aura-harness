@@ -1,0 +1,6 @@
+title = "Fix median for even-length input"
+category = "bugfix"
+tags = ["python"]
+prompt = "median() in stats.py returns the wrong value for some inputs. Fix it."
+verify = "PYTHONPATH=. python3 .gate_checks/check.py"
+max_iterations = 15

@@ -1,0 +1,6 @@
+title = "Write tests that catch real bugs"
+category = "tests"
+tags = ["python"]
+prompt = "Write unit tests (unittest) for inventory.py in test_inventory.py. Cover add, remove, count, and the error when removing more than is in stock. Run them with `python3 -m unittest`."
+verify = "sh .gate_checks/check.sh"
+max_iterations = 20

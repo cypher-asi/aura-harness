@@ -1,0 +1,10 @@
+title = "Build a small feature over three turns"
+category = "long-session"
+tags = ["shell", "protected"]
+prompt = "Write a POSIX shell script todo.sh that stores items in todo.txt, one per line. `sh todo.sh add <text>` appends an item; `sh todo.sh list` prints the items numbered from 1 as `1. <text>`."
+follow_ups = [
+  "Add `sh todo.sh done <n>` that removes item n; the remaining items are renumbered in `list`.",
+  "Make `sh todo.sh list` print `(empty)` when there are no items, and make an unknown command print usage to stderr and exit 2.",
+]
+verify = "sh .gate_checks/check.sh"
+max_iterations = 20

@@ -66,6 +66,8 @@ pub mod evals;
 pub mod event_loop;
 pub mod file_checkpoints;
 pub mod gate;
+pub mod gate_bench;
+mod gate_commands;
 mod headless;
 mod long_run;
 pub mod model_selection;
