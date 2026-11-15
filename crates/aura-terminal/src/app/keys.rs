@@ -16,6 +16,12 @@ impl App {
             return KeyResult::continue_running();
         }
 
+        let result = self.dispatch_key(key);
+        self.sync_mentions();
+        result
+    }
+
+    fn dispatch_key(&mut self, key: KeyEvent) -> KeyResult {
         match self.state {
             AppState::AwaitingApproval => self.handle_approval_key(key),
             AppState::ShowingHelp => {
@@ -253,6 +259,9 @@ impl App {
     fn handle_normal_key(&mut self, key: KeyEvent) -> KeyResult {
         if self.handle_pending_delete(key) {
             return KeyResult::continue_running();
+        }
+        if let Some(result) = self.handle_mention_menu_key(key) {
+            return result;
         }
         if let Some(result) = self.handle_slash_menu_key(key) {
             return result;

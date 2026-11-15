@@ -309,6 +309,68 @@ async fn message_to_a_busy_agent_goes_into_its_turn() {
     assert!(echoed, "the chat shows the message when the turn takes it");
 }
 
+#[tokio::test]
+async fn mentioned_files_reach_the_model_but_the_chat_keeps_the_typed_text() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    let workspace = state.kernel_for(first).unwrap().agent_workspace();
+    std::fs::write(workspace.join("notes.md"), "remember the milk\n").unwrap();
+
+    let typed = "explain @notes.md and @missing.md";
+    handle_ui_event(&mut state, message(first, typed, true), &links).await;
+    let finished = next_done(&mut done).await;
+    handle_work_done(&mut state, finished).await;
+
+    let prompts = user_texts(&state, first);
+    assert_eq!(
+        prompts[0],
+        format!(
+            "{typed}\n\n<attached_file path=\"notes.md\">\nremember the milk\n</attached_file>"
+        )
+    );
+    let records: Vec<String> = drain(&mut commands)
+        .into_iter()
+        .filter_map(|(_, c)| match c {
+            UiCommand::NewRecord(record) => Some(record.message),
+            _ => None,
+        })
+        .collect();
+    assert!(records.iter().any(|m| m.contains(typed)), "{records:?}");
+    assert!(
+        !records.iter().any(|m| m.contains("remember the milk")),
+        "the record keeps the prompt as typed: {records:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_harness_notice_never_attaches_files() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    let workspace = state.kernel_for(first).unwrap().agent_workspace();
+    std::fs::write(workspace.join("notes.md"), "remember the milk\n").unwrap();
+
+    deliver(
+        &mut state,
+        first,
+        SteerSource::Harness,
+        "job log mentions @notes.md".to_string(),
+        false,
+    )
+    .await;
+    let finished = next_done(&mut done).await;
+    handle_work_done(&mut state, finished).await;
+
+    let prompts = user_texts(&state, first);
+    assert!(!prompts[0].contains("remember the milk"), "{prompts:?}");
+}
+
 fn job_finished(agent_id: AgentId, killed: bool) -> JobFinished {
     JobFinished {
         job_id: "job-1".to_string(),

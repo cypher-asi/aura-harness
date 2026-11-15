@@ -7,6 +7,7 @@
 
 use super::agent_events::AgentUi;
 use super::agents::AgentSession;
+use super::attachments::{expand_mentions_in, mentioned_paths};
 use super::handlers::{handle_agent_success, run_agent_turn, system_message};
 use super::record_ui::send_record_to_ui;
 use super::run_command::run_user_command;
@@ -20,11 +21,38 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
+/// A message for the model, with what the user attached to it.
+pub(super) struct Prompt {
+    /// The message as typed; the chat and the record keep this
+    pub text: String,
+    /// Whether `@path` words in `text` attach files. Only text the user
+    /// typed has mentions; a harness notice may quote `@` words verbatim.
+    pub mentions: bool,
+}
+
+impl Prompt {
+    /// A message typed by the user.
+    pub(super) const fn typed(text: String) -> Self {
+        Self {
+            text,
+            mentions: true,
+        }
+    }
+
+    /// A message written by the harness, given to the model as is.
+    pub(super) const fn plain(text: String) -> Self {
+        Self {
+            text,
+            mentions: false,
+        }
+    }
+}
+
 /// Something the user asked an agent to do.
 pub(super) enum Work {
     /// A message for the model. `shown` is whether the chat already shows
     /// it.
-    Prompt { text: String, shown: bool },
+    Prompt { prompt: Prompt, shown: bool },
     /// A shell command typed in the chat, run in a terminal `cols` wide.
     Command { command: String, cols: u16 },
     /// Summarize the older history now, keeping `focus` in particular.
@@ -33,10 +61,10 @@ pub(super) enum Work {
 
 /// Work ready to run.
 pub(super) enum Task {
-    /// A model turn answering `text`, taking further messages through
+    /// A model turn answering `prompt`, taking further messages through
     /// `steering` while it runs.
     Turn {
-        text: String,
+        prompt: Prompt,
         agent_loop: Box<AgentLoop>,
         tools: Vec<ToolDefinition>,
         steering: Steering,
@@ -114,7 +142,7 @@ async fn run(
 ) -> (AgentSession, Outcome) {
     let outcome = match task {
         Task::Turn {
-            text,
+            prompt,
             agent_loop,
             tools,
             steering,
@@ -126,7 +154,7 @@ async fn run(
                 steering: &steering,
                 limits,
             };
-            run_prompt(&mut session, text, turn, &ui, &cancel).await
+            run_prompt(&mut session, prompt, turn, &ui, &cancel).await
         }
         Task::Command { command, cols } => {
             run_user_command(&mut session, &command, cols, &ui).await;
@@ -169,22 +197,23 @@ pub(super) async fn record_user_prompt(
     Ok(())
 }
 
-/// Record `text` as the user's prompt and run a turn answering it.
+/// Record `prompt` as typed and run a turn answering it. The model gets
+/// the files it mentions as well.
 async fn run_prompt(
     session: &mut AgentSession,
-    text: String,
+    prompt: Prompt,
     turn: TurnParts<'_>,
     ui: &AgentUi,
     cancel: &CancellationToken,
 ) -> Outcome {
     drain_stale_inbox(session).await;
 
-    if let Err(problem) = record_user_prompt(session, text.clone(), ui).await {
+    if let Err(problem) = record_user_prompt(session, prompt.text.clone(), ui).await {
         ui.send(UiCommand::ShowError(problem)).await;
         ui.send(UiCommand::Complete).await;
         return Outcome::default();
     }
-    session.messages.push(Message::user(text));
+    session.messages.push(model_message(session, prompt).await);
 
     let (process_result, forwarded) = run_agent_turn(
         session,
@@ -224,6 +253,21 @@ async fn run_prompt(
         }
     };
     Outcome { failure, unseen }
+}
+
+/// The user message the model gets for `prompt`: its text with the
+/// mentioned files from the agent's workspace appended.
+async fn model_message(session: &AgentSession, prompt: Prompt) -> Message {
+    let text = if prompt.mentions && !mentioned_paths(&prompt.text).is_empty() {
+        let expanded = expand_mentions_in(session.kernel.agent_workspace(), prompt.text).await;
+        if !expanded.attached.is_empty() {
+            info!(files = ?expanded.attached, "Attached mentioned files");
+        }
+        expanded.text
+    } else {
+        prompt.text
+    };
+    Message::user(text)
 }
 
 /// Replace the older history of `session` with a summary. Only the

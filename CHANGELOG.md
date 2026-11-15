@@ -38,6 +38,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the session's tokens and cost, `/todos` opens the agent's todo list,
   and `/compact [focus]` summarizes the older history now, keeping
   `focus` in particular.
+- Typing `@` in the input opens a fuzzy picker of the agent's files and
+  folders. Each `@path` in a sent message is attached for the model:
+  up to 64 KiB of a file, or a listing of a folder. The chat and the
+  record keep the message as typed.
 - The terminal checkpoints each agent's session after every turn under
   `<data_dir>/sessions/`: the conversation as the model saw it (tool
   calls included), the todo list and usage totals. A restart continues

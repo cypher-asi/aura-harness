@@ -58,6 +58,10 @@ The Claude link uses the OAuth client that Claude Code uses. Anthropic does not 
 - **`/resume`** lists the agent's earlier sessions, newest first; **`/resume <n>`** continues number `n` (the agent must be idle). The chat shows the resumed conversation and the status line its usage.
 - **`/compact [focus]`** summarizes the older history now instead of waiting for context pressure, keeping the first message and the recent steps as they are. Text after the command tells the summary what to keep. A busy agent does it when its current work ends. The summary replaces history only in the running session; the record keeps every message.
 
+## Input in the terminal
+
+- **`@` mentions.** Typing `@` opens a file picker over the agent's workspace, ranked by name and path prefix, then substring, then letters in order. `↑`/`↓` move, Enter inserts `@path`, Tab completes (on a folder it stays open to go into it), and Esc closes it for that word. The picker skips `target/`, `.git/`, `node_modules/` and plain names or `*.ext` patterns from the workspace's root `.gitignore`, and it leaves out paths that contain spaces. When you send the message, each `@path` that names a file or folder inside the workspace is attached: the model gets up to 64 KiB of each file (with a note when it is cut), at most 256 KiB per message, and a listing of up to 200 entries for a folder. Binary files are described, not shown. The chat and the record keep the message as you typed it. Mentions that don't resolve stay plain text.
+
 ## Global flags
 
 | Flag | Default | Description |

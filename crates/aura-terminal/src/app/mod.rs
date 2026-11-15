@@ -12,6 +12,7 @@ pub(crate) mod format;
 pub mod hud;
 mod keys;
 mod line_edit;
+pub mod mentions;
 pub mod sandbox;
 mod selection;
 pub(crate) mod shell_input;
@@ -251,6 +252,8 @@ pub struct App {
     pub(super) slash_cursor: usize,
     /// Whether Esc closed the slash menu (until the input is edited)
     pub(super) slash_dismissed: bool,
+    /// `@` file picker shown while an `@path` word is typed
+    pub(super) mentions: mentions::MentionMenu,
     /// Text selected with the mouse, in screen cells
     pub(super) selection: Option<Selection>,
     /// Whether the left button is still held for `selection`
@@ -475,6 +478,7 @@ impl App {
             input_edited_at: Instant::now(),
             slash_cursor: 0,
             slash_dismissed: false,
+            mentions: mentions::MentionMenu::default(),
             selection: None,
             selecting: false,
             copy_requested: false,

@@ -7,6 +7,7 @@ mod detail;
 mod hud;
 mod input;
 mod markdown;
+mod mention_menu;
 mod overlays;
 mod panels;
 mod sandbox;
@@ -81,6 +82,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
 
     hud::render_todo_panel(frame, chat, app, theme);
     slash_menu::render_slash_menu(frame, chat, app, theme);
+    mention_menu::render_mention_menu(frame, chat, app, theme);
     overlays::render_folder_picker(frame, app, theme);
     overlays::render_overlays(frame, app, theme);
 }

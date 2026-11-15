@@ -2016,3 +2016,92 @@ fn test_recalled_slash_command_keeps_history_navigation() {
     assert_eq!(app.input(), "/clear");
     assert!(app.slash_matches().is_empty());
 }
+
+// ========================================================================
+// @ mentions
+// ========================================================================
+
+fn app_with_workspace() -> (tempfile::TempDir, App, mpsc::Receiver<UiEvent>) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::create_dir_all(dir.path().join("target")).unwrap();
+    std::fs::write(dir.path().join("src/main.rs"), "").unwrap();
+    std::fs::write(dir.path().join("src/lib.rs"), "").unwrap();
+    std::fs::write(dir.path().join("README.md"), "").unwrap();
+    let (tx, rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    app.process_command(UiCommand::SetSandboxRoot(dir.path().to_path_buf()));
+    (dir, app, rx)
+}
+
+fn type_keys(app: &mut App, text: &str) {
+    for c in text.chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()));
+    }
+}
+
+fn mention_paths(app: &App) -> Vec<String> {
+    app.mention_matches()
+        .iter()
+        .map(|c| c.path.clone())
+        .collect()
+}
+
+#[test]
+fn test_at_opens_the_file_picker_and_enter_inserts_the_path() {
+    let (_dir, mut app, mut rx) = app_with_workspace();
+    type_keys(&mut app, "explain @");
+    assert_eq!(
+        mention_paths(&app),
+        ["src/", "README.md", "src/lib.rs", "src/main.rs"],
+        "skips target/, shallowest first"
+    );
+
+    type_keys(&mut app, "mai");
+    assert_eq!(mention_paths(&app), ["src/main.rs"]);
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert_eq!(app.input(), "explain @src/main.rs ");
+    assert!(app.mention_matches().is_empty(), "inserting closes it");
+
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::UserMessage { text, .. }) if text == "explain @src/main.rs "
+    ));
+}
+
+#[test]
+fn test_tab_on_a_folder_stays_in_the_picker() {
+    let (_dir, mut app, _rx) = app_with_workspace();
+    type_keys(&mut app, "@sr");
+    assert_eq!(mention_paths(&app)[0], "src/");
+    app.handle_key(KeyEvent::from(KeyCode::Tab));
+    assert_eq!(app.input(), "@src/");
+    assert_eq!(mention_paths(&app), ["src/", "src/lib.rs", "src/main.rs"]);
+
+    app.handle_key(KeyEvent::from(KeyCode::Down));
+    app.handle_key(KeyEvent::from(KeyCode::Down));
+    app.handle_key(KeyEvent::from(KeyCode::Tab));
+    assert_eq!(app.input(), "@src/main.rs ");
+    assert_eq!(app.cursor_pos(), app.input().len());
+}
+
+#[test]
+fn test_esc_closes_the_picker_for_that_word() {
+    let (_dir, mut app, _rx) = app_with_workspace();
+    type_keys(&mut app, "@src");
+    app.handle_key(KeyEvent::from(KeyCode::Esc));
+    assert!(app.mention_matches().is_empty());
+    type_keys(&mut app, "/");
+    assert!(app.mention_matches().is_empty(), "same word stays closed");
+
+    type_keys(&mut app, " @READ");
+    assert_eq!(mention_paths(&app), ["README.md"], "a new word opens it");
+}
+
+#[test]
+fn test_email_addresses_do_not_open_the_picker() {
+    let (_dir, mut app, _rx) = app_with_workspace();
+    type_keys(&mut app, "mail me@src");
+    assert!(app.mention_matches().is_empty());
+}

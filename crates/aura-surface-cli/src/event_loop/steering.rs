@@ -56,10 +56,13 @@ impl Steering {
         &self.handle
     }
 
-    /// Send `text` into the running turn. Returns `false` when the turn
-    /// already stopped taking input.
-    pub(crate) async fn send(&self, source: SteerSource, text: String) -> bool {
-        let wrapped = format!("{}{text}", source.prefix());
+    /// Send `text` into the running turn, with the model getting `body`:
+    /// the text itself, or the text with mentioned files appended. A
+    /// message the model never got runs next as `text`, so it is expanded
+    /// again then. Returns `false` when the turn already stopped taking
+    /// input.
+    pub(crate) async fn send(&self, source: SteerSource, text: String, body: String) -> bool {
+        let wrapped = format!("{}{body}", source.prefix());
         let delivered = self
             .handle
             .send_user_input(UserInput::Message(wrapped.clone()))
@@ -106,20 +109,27 @@ mod tests {
     #[tokio::test]
     async fn finish_separates_seen_from_unseen_messages() {
         let steering = Steering::new(&CancellationToken::new());
-        assert!(steering.send(SteerSource::User, "first".into()).await);
-        assert!(steering.send(SteerSource::Harness, "second".into()).await);
+        let send = |source, text: &str, body: &str| {
+            steering.send(source, text.to_string(), body.to_string())
+        };
+        assert!(send(SteerSource::User, "first @a.rs", "first @a.rs\n\nfile").await);
+        assert!(send(SteerSource::Harness, "second @b.rs", "second @b.rs\n\nfile").await);
         let messages = vec![
             Message::user("task"),
             Message::assistant("working"),
-            Message::user(format!("{}first", SteerSource::User.prefix())),
+            Message::user(format!("{}first @a.rs\n\nfile", SteerSource::User.prefix())),
         ];
 
         let (seen, unseen) = steering.finish(&messages);
 
-        assert_eq!(seen, vec!["first".to_string()]);
-        assert_eq!(unseen, vec![(SteerSource::Harness, "second".to_string())]);
+        assert_eq!(seen, vec!["first @a.rs".to_string()]);
+        assert_eq!(
+            unseen,
+            vec![(SteerSource::Harness, "second @b.rs".to_string())],
+            "a message the model never got runs again as typed"
+        );
         assert!(
-            !steering.send(SteerSource::User, "late".into()).await,
+            !send(SteerSource::User, "late", "late").await,
             "closed after finish"
         );
     }

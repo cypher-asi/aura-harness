@@ -802,6 +802,27 @@ fn test_slash_menu_spans_chat_width_above_input() {
 }
 
 #[test]
+fn test_mention_picker_lists_files_above_the_input() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("src/main.rs"), "").unwrap();
+    let mut app = app_with_model(None);
+    app.process_command(crate::events::UiCommand::SetSandboxRoot(
+        dir.path().to_path_buf(),
+    ));
+    type_text(&mut app, "look at @ma");
+    let rows = render_rows(&mut app, 120);
+    let n = rows.len();
+    assert!(rows[n - 5].contains(" FILES "), "{:?}", rows[n - 5]);
+    assert!(rows[n - 4].contains("› @src/main.rs"), "{:?}", rows[n - 4]);
+    assert!(rows[n - 3].contains("Enter insert"), "{:?}", rows[n - 3]);
+
+    type_text(&mut app, " ");
+    let screen = render_rows(&mut app, 120).join("\n");
+    assert!(!screen.contains(" FILES "));
+}
+
+#[test]
 fn test_header_shows_local_url_and_model_moves_to_input() {
     let rows = render_with_user(None, 120);
     assert!(rows[1]
