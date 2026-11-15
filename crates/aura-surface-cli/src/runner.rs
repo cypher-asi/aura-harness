@@ -443,6 +443,9 @@ async fn run_terminal(
     };
     let kernel_store = store.clone() as Arc<dyn aura_store_db::Store>;
     let factory_jobs = Arc::clone(&jobs);
+    let check_config =
+        aura_agent::PostEditCheckConfig::from_lookup(|name| std::env::var(name).ok());
+    let check_commands = cmd_tx.clone();
     let checkpoints = crate::session_checkpoint::Checkpoints::new(&data_dir);
     let hub = event_loop::AgentHub::new(
         event_loop::AgentHubParts {
@@ -487,6 +490,7 @@ async fn run_terminal(
                 }),
             )
             .with_checkpoints(checkpoints)
+            .with_post_edit_check(check_config, check_commands)
         },
     );
     let _ = cmd_tx.try_send(UiCommand::SetAgents(hub.agent_summaries()));

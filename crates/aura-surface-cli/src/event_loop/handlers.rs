@@ -10,7 +10,7 @@ use super::{forward_agent_events, LoopState};
 use crate::long_run::LongRunSettings;
 use crate::record_loader::chat_from_messages;
 use crate::session_checkpoint::SessionListing;
-use aura_agent::{AgentLoopEvent, RunOptions};
+use aura_agent::{AgentLoopEvent, RunOptions, WithPostEditCheck};
 use aura_core_types::AgentId;
 use aura_core_types::Transaction;
 use aura_terminal::events::{MessageData, MessageRole};
@@ -48,9 +48,10 @@ pub(super) async fn run_agent_turn(
         agent_loop.config().max_context_tokens,
     ));
 
+    let executor = WithPostEditCheck::new(&session.tool_gateway, session.post_edit_check.as_ref());
     let run = agent_loop.run_with_session(
         &session.model_gateway,
-        &session.tool_gateway,
+        &executor,
         session.messages.clone(),
         tools,
         RunOptions {

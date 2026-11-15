@@ -13,7 +13,8 @@
 //! - Context compaction — tiered message truncation to stay within token limits
 //! - Message sanitization — repairs message history for API validity
 //! - Budget tracking — exploration, token, and credit budget management
-//! - Build integration — auto-build checks after write operations
+//! - Build integration — auto-build checks after write operations, and the
+//!   per-project post-edit check ([`post_edit_check`])
 //!
 //! ## Architecture
 //!
@@ -56,6 +57,7 @@ pub mod helpers;
 mod kernel_domain_gateway;
 mod kernel_gateway;
 pub(crate) mod planning;
+pub mod post_edit_check;
 pub(crate) mod prompt_resolve;
 mod recording_stream;
 mod sanitize;
@@ -81,6 +83,10 @@ pub use events::{
 };
 pub use kernel_domain_gateway::{KernelDomainGateway, KernelDomainGatewayError};
 pub use kernel_gateway::{KernelModelGateway, KernelToolGateway, RecordingModelProvider};
+pub use post_edit_check::{
+    CheckCommand, CheckNotifier, CheckOutcome, CheckReport, CheckSource, PostEditCheck,
+    PostEditCheckConfig, WithPostEditCheck,
+};
 pub use runtime::{
     ProcessManager, ProcessManagerConfig, ProcessOutput, RunningProcess, RuntimeError,
 };

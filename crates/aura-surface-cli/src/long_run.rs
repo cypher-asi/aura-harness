@@ -147,6 +147,10 @@ impl LongRunSettings {
         config.per_tool_timeout = config.per_tool_timeout.max(MAX_TOOL_RUN);
         config.compaction_trigger = Some(self.compaction_trigger);
         config.continue_open_todos = true;
+        // Check after every step that edits files (still once per step): with
+        // a cooldown, a fix made in the step after a failed check could end
+        // the turn unchecked.
+        config.auto_build_cooldown = 0;
     }
 }
 
@@ -228,6 +232,7 @@ mod tests {
         assert_eq!(config.max_iterations, usize::MAX);
         assert_eq!(config.max_iterations_per_task, u32::MAX);
         assert!(config.continue_open_todos);
+        assert_eq!(config.auto_build_cooldown, 0);
         assert!(config.per_tool_timeout >= MAX_TOOL_RUN);
         assert_eq!(config.compaction_trigger, Some(DEFAULT_COMPACTION_TRIGGER));
     }

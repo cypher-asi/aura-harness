@@ -35,7 +35,7 @@ pub mod test;
 pub mod utils;
 
 pub use error_types::{parse_error_references, BuildFixAttemptRecord};
-pub use runner::run_build_command;
+pub use runner::{run_build_command, run_build_command_with_timeout};
 pub use signatures::normalize_error_signature;
 pub use test::{run_full_test_suite, TestSuiteOutcome};
 pub use utils::{

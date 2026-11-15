@@ -15,7 +15,10 @@ use crate::record_loader::{conversation_history, recent_record_summaries};
 use crate::session_checkpoint::{
     is_resumable, now_ms, Checkpoints, SessionCheckpoint, SessionUsage,
 };
-use aura_agent::{KernelModelGateway, KernelToolGateway};
+use aura_agent::{
+    CheckNotifier, CheckOutcome, CheckReport, CheckSource, KernelModelGateway, KernelToolGateway,
+    PostEditCheck, PostEditCheckConfig,
+};
 use aura_agent_kernel::Kernel;
 use aura_core_types::{AgentId, Identity};
 use aura_model_reasoner::{ContentBlock, Message};
@@ -23,7 +26,9 @@ use aura_store_db::ReadStore;
 use aura_terminal::UiCommand;
 use aura_tools::todo::{apply_todo_write, TodoItem, TODO_WRITE_TOOL_NAME};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 /// Live state for one agent.
@@ -44,6 +49,8 @@ pub struct AgentSession {
     pub usage: SessionUsage,
     /// Where the session is checkpointed after each turn, if anywhere
     pub checkpoints: Option<Checkpoints>,
+    /// Runs the project's check after steps that edit files
+    pub post_edit_check: Option<PostEditCheck>,
 }
 
 impl AgentSession {
@@ -124,6 +131,7 @@ pub struct KernelFactory {
     pub(super) store: Arc<dyn ReadStore>,
     build_kernel: KernelBuilder,
     pub(super) checkpoints: Option<Checkpoints>,
+    post_edit_check: Option<(PostEditCheckConfig, mpsc::Sender<UiCommand>)>,
 }
 
 impl KernelFactory {
@@ -133,7 +141,20 @@ impl KernelFactory {
             store,
             build_kernel,
             checkpoints: None,
+            post_edit_check: None,
         }
+    }
+
+    /// Give every session a post-edit check with `config`, reporting its
+    /// results to the agent's chat through `commands`.
+    #[must_use]
+    pub fn with_post_edit_check(
+        mut self,
+        config: PostEditCheckConfig,
+        commands: mpsc::Sender<UiCommand>,
+    ) -> Self {
+        self.post_edit_check = Some((config, commands));
+        self
     }
 
     /// Checkpoint sessions in `checkpoints` and resume them from there.
@@ -182,6 +203,10 @@ impl KernelFactory {
             parent_chain,
             folder,
         )?);
+        let post_edit_check = self.post_edit_check.as_ref().map(|(config, commands)| {
+            PostEditCheck::new(kernel.agent_workspace(), config.clone())
+                .with_notifier(check_notifier(commands.clone(), identity.agent_id))
+        });
         let mut session = AgentSession {
             identity,
             model_gateway: KernelModelGateway::new(kernel.clone()),
@@ -193,6 +218,7 @@ impl KernelFactory {
             started_ms: now_ms(),
             usage: SessionUsage::default(),
             checkpoints: self.checkpoints.clone(),
+            post_edit_check,
         };
         if let Some(checkpoint) = self.restore(session.agent_id()) {
             info!(agent = %session.agent_id(), "Resuming session from checkpoint");
@@ -208,6 +234,53 @@ impl KernelFactory {
             session.messages = messages;
         }
         Ok(session)
+    }
+}
+
+/// Shows post-edit check results in the agent's chat. The model gets the
+/// failure output itself; the chat only says what happened.
+fn check_notifier(commands: mpsc::Sender<UiCommand>, agent_id: AgentId) -> CheckNotifier {
+    let agent_id = agent_id.to_hex();
+    let announced = AtomicBool::new(false);
+    Arc::new(move |report: &CheckReport| {
+        let first = !announced.swap(true, Ordering::Relaxed);
+        if let Some(command) = check_notice(report, first) {
+            let _ = commands.try_send(UiCommand::ForAgent {
+                agent_id: agent_id.clone(),
+                command: Box::new(command),
+            });
+        }
+    })
+}
+
+/// What the chat shows for a check run; `first` is the session's first run,
+/// which names where the command comes from.
+pub(super) fn check_notice(report: &CheckReport, first: bool) -> Option<UiCommand> {
+    let command = &report.command.command;
+    let origin = match report.command.source {
+        CheckSource::Env => "AURA_CHECK_COMMAND",
+        CheckSource::AgentsMd => "AGENTS.md",
+    };
+    match &report.outcome {
+        CheckOutcome::Passed { recovered: true } => Some(UiCommand::ShowSuccess(format!(
+            "Check `{command}` passes again"
+        ))),
+        CheckOutcome::Passed { recovered: false } if first => Some(UiCommand::ShowSuccess(
+            format!("Check `{command}` (from {origin}) passed; it runs after each step that edits files"),
+        )),
+        CheckOutcome::Passed { .. } | CheckOutcome::StillFailing => None,
+        CheckOutcome::Failed { timed_out: true, .. } => Some(UiCommand::ShowWarning(format!(
+            "Check `{command}` (from {origin}) timed out; the agent was told"
+        ))),
+        CheckOutcome::Failed { exit_code, .. } => {
+            let code = exit_code.map_or_else(String::new, |c| format!(" with exit code {c}"));
+            Some(UiCommand::ShowWarning(format!(
+                "Check `{command}` (from {origin}) failed{code}; the agent was given the output"
+            )))
+        }
+        CheckOutcome::CouldNotRun(problem) => Some(UiCommand::ShowWarning(format!(
+            "Check `{command}` (from {origin}) could not run: {problem}"
+        ))),
     }
 }
 
@@ -474,4 +547,57 @@ async fn show_error(state: &LoopState<'_>, message: String) {
 
 async fn show_success(state: &LoopState<'_>, message: String) {
     let _ = state.commands.send(UiCommand::ShowSuccess(message)).await;
+}
+
+#[cfg(test)]
+mod check_notice_tests {
+    use super::*;
+    use aura_agent::CheckCommand;
+
+    fn report(source: CheckSource, outcome: CheckOutcome) -> CheckReport {
+        CheckReport {
+            command: CheckCommand {
+                command: "cargo check".into(),
+                source,
+            },
+            outcome,
+        }
+    }
+
+    fn text(command: Option<UiCommand>) -> Option<String> {
+        match command? {
+            UiCommand::ShowWarning(t) | UiCommand::ShowSuccess(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn failures_name_the_command_and_its_origin() {
+        let failed = CheckOutcome::Failed {
+            exit_code: Some(101),
+            timed_out: false,
+        };
+        assert_eq!(
+            text(check_notice(&report(CheckSource::AgentsMd, failed), false)).as_deref(),
+            Some(
+                "Check `cargo check` (from AGENTS.md) failed with exit code 101; the agent was \
+                 given the output"
+            )
+        );
+    }
+
+    #[test]
+    fn quiet_while_nothing_changes() {
+        let pass = CheckOutcome::Passed { recovered: false };
+        assert!(check_notice(&report(CheckSource::Env, pass.clone()), true).is_some());
+        assert!(check_notice(&report(CheckSource::Env, pass), false).is_none());
+        assert!(
+            check_notice(&report(CheckSource::Env, CheckOutcome::StillFailing), false).is_none()
+        );
+        let recovered = CheckOutcome::Passed { recovered: true };
+        assert_eq!(
+            text(check_notice(&report(CheckSource::Env, recovered), false)).as_deref(),
+            Some("Check `cargo check` passes again")
+        );
+    }
 }
