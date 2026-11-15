@@ -21,6 +21,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Gate turns start with a draft: the request goes unchanged to the fast
   tier, and the coordinator reviews the draft's diff, answering or fixing
   it with blocks. Block results carry the diff of what they changed.
+- A block that fails only the coordinator's acceptance checks goes back
+  to the coordinator instead of being retried on the frontier tier.
 - Every attempt is appended to `AURA_HOME/gate/ledger.jsonl`.
   `aura gate report`, `fit`, `bench` and `promote` turn it into a
   versioned policy and make a policy active only when a paired benchmark
@@ -31,6 +33,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reference solutions. Eval tasks can set `category`, `tags` and a
   `checks/` folder copied in after the run; `aura eval run` reports each
   run's cost (gate workers included) and takes `--budget-usd`.
+  `evals/gate_hard` adds eight tasks with traps a careless fix falls into.
 
 ### Run traces (`aura-agent-trace`)
 

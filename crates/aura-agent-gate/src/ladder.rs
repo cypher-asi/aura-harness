@@ -6,6 +6,12 @@
 //! saved) with the evidence of what went wrong. When the frontier tier
 //! has failed, or the attempt budget is spent, the block goes back to
 //! the coordinator to re-plan.
+//!
+//! A failure only the coordinator's acceptance checks caught never gets
+//! a frontier attempt: the frontier worker is the coordinator's own
+//! model, and once cheaper workers have passed every check they could
+//! see, a wrong acceptance check is as likely as a wrong change. The
+//! coordinator, which wrote the check, decides.
 
 use crate::block::Attempt;
 use crate::tier::{Tier, Tiers};
@@ -32,10 +38,27 @@ pub fn next(attempts: &[Attempt], tiers: &Tiers, max_attempts: u32) -> Next {
     }
     let tries_here = attempts.iter().filter(|a| a.tier == last.tier).count();
     let has_evidence = last.checks.iter().any(|c| !c.passed);
-    if tries_here == 1 && has_evidence {
-        return Next::Fix(last.tier);
+    let step = if tries_here == 1 && has_evidence {
+        Next::Fix(last.tier)
+    } else {
+        tiers.stronger(last.tier).map_or(Next::Stop, Next::Escalate)
+    };
+    match step {
+        Next::Fix(Tier::Frontier) | Next::Escalate(Tier::Frontier) if failed_acceptance(last) => {
+            Next::Stop
+        }
+        step => step,
     }
-    tiers.stronger(last.tier).map_or(Next::Stop, Next::Escalate)
+}
+
+/// Whether `attempt` passed the checks its worker saw and failed only
+/// an acceptance check.
+#[must_use]
+pub fn failed_acceptance(attempt: &Attempt) -> bool {
+    attempt
+        .checks
+        .iter()
+        .any(|c| !c.passed && c.stage == "acceptance")
 }
 
 #[cfg(test)]
@@ -89,6 +112,43 @@ mod tests {
         assert_eq!(next(&a, &t, 6), Next::Fix(Tier::Frontier));
         a.push(attempt(Tier::Frontier, false, true));
         assert_eq!(next(&a, &t, 6), Next::Stop);
+    }
+
+    fn failed_acceptance_on(tier: Tier) -> Attempt {
+        let mut a = attempt(tier, false, false);
+        a.checks.push(CheckOutcome {
+            stage: "acceptance".into(),
+            command: "sh accept.sh".into(),
+            passed: false,
+            exit_code: Some(1),
+            output: String::new(),
+        });
+        a
+    }
+
+    #[test]
+    fn acceptance_only_failures_never_reach_the_frontier() {
+        let t = tiers();
+        let mut a = vec![failed_acceptance_on(Tier::Fast)];
+        assert_eq!(next(&a, &t, 6), Next::Fix(Tier::Fast));
+        a.push(failed_acceptance_on(Tier::Fast));
+        assert_eq!(next(&a, &t, 6), Next::Escalate(Tier::Standard));
+        a.push(failed_acceptance_on(Tier::Standard));
+        assert_eq!(next(&a, &t, 6), Next::Fix(Tier::Standard));
+        a.push(failed_acceptance_on(Tier::Standard));
+        assert_eq!(next(&a, &t, 6), Next::Stop);
+
+        let started_there = [failed_acceptance_on(Tier::Frontier)];
+        assert_eq!(next(&started_there, &t, 6), Next::Stop);
+
+        let visible_failure = [
+            attempt(Tier::Standard, false, true),
+            attempt(Tier::Standard, false, true),
+        ];
+        assert_eq!(
+            next(&visible_failure, &t, 6),
+            Next::Escalate(Tier::Frontier)
+        );
     }
 
     #[test]

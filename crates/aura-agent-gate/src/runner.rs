@@ -360,7 +360,8 @@ impl BlockRunner {
             failure: if passed {
                 None
             } else {
-                last.and_then(|a| a.failure.clone())
+                last.and_then(acceptance_failure)
+                    .or_else(|| last.and_then(|a| a.failure.clone()))
             },
             restored,
             cost_usd: attempts.iter().map(|a| a.cost_usd).sum(),
@@ -590,6 +591,23 @@ struct Pick<'a> {
     reason: &'a str,
     explored: bool,
     propensity: f64,
+}
+
+/// The coordinator's view of a failed acceptance check, which workers
+/// never see.
+fn acceptance_failure(attempt: &Attempt) -> Option<String> {
+    if !ladder::failed_acceptance(attempt) {
+        return None;
+    }
+    let check = attempt.checks.last()?;
+    Some(format!(
+        "passed the worker's checks but failed your acceptance check `{}` (exit {}); its \
+         output is in the attempts. Fix the check if it is wrong, otherwise re-plan the block",
+        check.command,
+        check
+            .exit_code
+            .map_or_else(|| "without a status".to_string(), |c| c.to_string()),
+    ))
 }
 
 /// Why a worker's run doesn't count, `None` when it completed.
