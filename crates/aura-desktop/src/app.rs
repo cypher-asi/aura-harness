@@ -1,30 +1,34 @@
-//! The iced application: messages, update logic and subscriptions.
+//! The window: hosts the terminal UI (`aura_terminal::App`) and draws it
+//! on a GPU cell grid instead of a terminal.
+//!
+//! The loop mirrors `aura_terminal::Terminal`: tick every 50 ms (the UI's
+//! animations count ticks), apply agent commands, render the frame, then
+//! copy selections and hand files to an editor when the UI asks.
 
-use crate::model::{Effect, Level, Model, Phase};
+use crate::grid::{Grid, GridBackend, Metrics, Palette, Screen};
 use crate::perf::Perf;
-use crate::{slash, theme, view};
+use crate::{input, theme};
 use aura_ui_core::events::{UiCommand, UiEvent};
-use aura_ui_core::history::InputHistory;
-use aura_ui_core::sandbox::SandboxEntryKind;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use futures::Stream;
-use iced::keyboard::{self, key::Named, Key};
-use iced::widget::{operation, text_editor};
-use iced::{event, window, Element, Size, Subscription, Task, Theme};
+use iced::keyboard::{self, key::Named, Key, Modifiers};
+use iced::widget::canvas;
+use iced::{event, mouse, window, Element, Length, Point, Size, Subscription, Task, Theme};
+use ratatui::layout::Position;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::mpsc;
 
-pub const TRANSCRIPT_ID: &str = "transcript";
-pub const INPUT_ID: &str = "input";
-/// Entries shown at first and added by each "Show earlier".
-pub const PAGE: usize = 200;
-/// Width of the side panel.
-pub const SIDE_WIDTH: f32 = 380.0;
-/// Largest file the Files panel opens.
-const MAX_FILE_BYTES: u64 = 512 * 1024;
 /// Most commands applied in one update.
 const MAX_BATCH: usize = 1024;
+/// The terminal UI's tick; its spinners advance one frame per tick.
+const TICK: Duration = Duration::from_millis(50);
+/// Half a cursor blink.
+const BLINK: Duration = Duration::from_millis(530);
+/// How often a file opened in an external editor is checked for a save.
+const EDIT_POLL: Duration = Duration::from_secs(1);
+const WINDOW: Size = Size::new(1320.0, 860.0);
 
 /// The channel pair connecting the UI to an agent session.
 pub struct Handles {
@@ -32,177 +36,74 @@ pub struct Handles {
     pub commands: mpsc::Receiver<UiCommand>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InputMode {
-    Chat,
-    Shell,
-}
-
-impl InputMode {
-    #[must_use]
-    pub const fn other(self) -> Self {
-        match self {
-            Self::Chat => Self::Shell,
-            Self::Shell => Self::Chat,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SideTab {
-    Agents,
-    Records,
-    Processes,
-    Files,
-}
-
-impl SideTab {
-    pub const ALL: [Self; 4] = [Self::Agents, Self::Records, Self::Processes, Self::Files];
-
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Agents => "Agents",
-            Self::Records => "Records",
-            Self::Processes => "Processes",
-            Self::Files => "Files",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProjectPurpose {
-    Create,
-    Rename,
-}
-
-pub enum Overlay {
-    Help,
-    Models,
-    Login {
-        email: String,
-        password: String,
-    },
-    LinkCode {
-        code: String,
-    },
-    Record(u64),
-    File {
-        path: PathBuf,
-        text: Result<String, String>,
-    },
-    Project {
-        purpose: ProjectPurpose,
-        name: String,
-        folder: String,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Confirm {
-    DeleteDefinition(String),
-    Kill(String),
+/// Startup choices from the command line.
+pub struct Options {
+    pub theme: String,
+    pub verbose: bool,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
     Commands(Vec<UiCommand>),
     SessionEnded,
-    Input(text_editor::Action),
-    Submit,
-    HistoryPrev,
-    HistoryNext,
-    CompleteSlash,
-    PickSlash(&'static str),
-    Escape,
-    Cancel,
-    SetMode(InputMode),
-    Side(SideTab),
-    ToggleEntry(u64),
-    ToggleExpandAll,
-    ShowEarlier,
-    Copy(String),
-    LinkClicked(String),
-    Approve,
-    Deny,
-    OpenModels,
-    ChooseModel(String),
-    OpenHelp,
-    CloseOverlay,
-    LoginEmail(String),
-    LoginPassword(String),
-    LoginSubmit,
-    LinkCodeChanged(String),
-    LinkCodeSubmit,
-    OpenProject(ProjectPurpose),
-    ProjectName(String),
-    ProjectFolder(String),
-    ProjectSubmit,
-    SelectAgent(String),
-    NewAgent,
-    Spawn(String),
-    AddToProject(String),
-    EditDefinition(Option<String>),
-    Ask(Confirm),
-    ConfirmYes,
-    ConfirmNo,
-    OpenRecord(u64),
-    SandboxRow(usize),
-    RefreshFiles,
-    FileLoaded(PathBuf, Result<String, String>),
-    EditorClosed(PathBuf),
-    DoneEditing,
-    Key(keyboard::Event),
     Tick(Instant),
-    Toasts(Instant),
+    Key(keyboard::Event),
+    Mouse(mouse::Event),
     Resized(Size),
+    Focused(bool),
+    Paste(Option<String>),
+    Copied(usize),
+    EditorClosed(PathBuf, Result<(), String>),
+}
+
+/// A file the user is editing in an app that doesn't report closing; it
+/// counts as done once it's saved.
+struct Watch {
+    path: PathBuf,
+    modified: Option<SystemTime>,
+    checked: Instant,
 }
 
 pub struct App {
-    pub model: Model,
-    events: mpsc::Sender<UiEvent>,
-    pub input: text_editor::Content,
-    history: InputHistory,
-    pub mode: InputMode,
-    pub side: Option<SideTab>,
-    pub overlay: Option<Overlay>,
-    pub confirm: Option<Confirm>,
-    /// Entries shown from the end of the conversation
-    pub visible: usize,
-    pub started: Instant,
-    pub now: Instant,
-    pub width: f32,
-    /// File opened in an external editor that returned at once
-    pub editing: Option<PathBuf>,
-    pub session_ended: bool,
-    pub perf: Perf,
+    tui: aura_terminal::App,
+    tui_theme: aura_terminal::Theme,
+    terminal: ratatui::Terminal<GridBackend>,
+    screen: Screen,
+    metrics: Metrics,
+    palette: Palette,
+    window: Size,
+    modifiers: Modifiers,
+    pointer: Option<Position>,
+    left_down: bool,
+    /// Scroll distance not yet turned into whole lines.
+    scroll: f32,
+    focused: bool,
+    blink_from: Instant,
+    now: Instant,
+    watch: Option<Watch>,
+    perf: Perf,
 }
 
-/// Run the desktop app on `handles` until the window closes.
-///
-/// # Errors
-///
-/// When the window or GPU context can't be created.
-pub fn run(handles: Handles, launched: Instant) -> iced::Result {
-    let slot = Mutex::new(Some(handles));
+pub fn run(handles: Handles, options: Options, launched: Instant) -> iced::Result {
+    let slot = Mutex::new(Some((handles, options)));
     let mut app = iced::application(
         move || {
-            let handles = slot
+            let (handles, options) = slot
                 .lock()
                 .ok()
                 .and_then(|mut slot| slot.take())
                 .expect("the application boots once");
-            App::boot(handles, launched)
+            App::boot(handles, &options, launched)
         },
         App::update,
         App::view,
     )
-    .title(App::title)
+    .title("AURA")
     .subscription(App::subscription)
     .theme(App::theme)
-    .default_font(theme::ui())
+    .default_font(theme::mono())
     .antialiasing(true)
-    .window_size(Size::new(1320.0, 860.0));
+    .window_size(WINDOW);
     for font in theme::font_files() {
         app = app.font(font);
     }
@@ -210,690 +111,336 @@ pub fn run(handles: Handles, launched: Instant) -> iced::Result {
 }
 
 impl App {
-    pub(crate) fn boot(handles: Handles, launched: Instant) -> (Self, Task<Message>) {
+    pub(crate) fn boot(
+        handles: Handles,
+        options: &Options,
+        launched: Instant,
+    ) -> (Self, Task<Message>) {
+        let mut tui = aura_terminal::App::new().with_event_sender(handles.events);
+        if options.verbose {
+            tui.set_verbose(true);
+        }
+        let tui_theme = aura_terminal::Theme::by_name(&options.theme);
         let now = Instant::now();
-        let app = Self {
-            model: Model::default(),
-            events: handles.events,
-            input: text_editor::Content::new(),
-            history: InputHistory::new(),
-            mode: InputMode::Chat,
-            side: Some(SideTab::Agents),
-            overlay: None,
-            confirm: None,
-            visible: PAGE,
-            started: now,
+        let mut app = Self {
+            palette: Palette::from_theme(&tui_theme),
+            tui,
+            tui_theme,
+            terminal: ratatui::Terminal::new(GridBackend::new(1, 1))
+                .expect("the grid backend never fails"),
+            screen: Screen::default(),
+            metrics: Metrics::new(theme::initial_font_size()),
+            window: WINDOW,
+            modifiers: Modifiers::empty(),
+            pointer: None,
+            left_down: false,
+            scroll: 0.0,
+            focused: true,
+            blink_from: now,
             now,
-            width: 1320.0,
-            editing: None,
-            session_ended: false,
+            watch: None,
             perf: Perf::new(launched),
         };
+        let first = app.refresh();
         let commands = Task::run(command_batches(handles.commands), |m| m);
-        (app, Task::batch([commands, operation::focus(INPUT_ID)]))
-    }
-
-    fn title(&self) -> String {
-        match self.model.active_agent() {
-            Some(agent) => match &agent.project {
-                Some(project) if !project.is_empty() => format!("AURA — {project}"),
-                _ => format!("AURA — {}", agent.name),
-            },
-            None => "AURA".to_string(),
-        }
+        (app, Task::batch([commands, first]))
     }
 
     fn theme(&self) -> Theme {
-        theme::theme()
+        Theme::custom(
+            "AURA".to_string(),
+            iced::theme::Palette {
+                background: self.palette.bg,
+                text: self.palette.fg,
+                ..Theme::Dark.palette()
+            },
+        )
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        let mut subs = vec![
+        Subscription::batch([
             keyboard::listen().map(Message::Key),
             event::listen_with(window_event),
-        ];
-        if self.model.is_animating() {
-            subs.push(window::frames().map(Message::Tick));
-        }
-        if self.model.toast.is_some() {
-            subs.push(iced::time::every(Duration::from_millis(500)).map(Message::Toasts));
-        }
-        Subscription::batch(subs)
+            iced::time::every(TICK).map(Message::Tick),
+        ])
     }
 
-    fn view(&self) -> Element<'_, Message> {
+    pub(crate) fn view(&self) -> Element<'_, Message> {
         let started = Instant::now();
-        let element = view::view(self);
+        let element = canvas(Grid {
+            screen: &self.screen,
+            metrics: self.metrics,
+            palette: self.palette,
+            cursor_on: self.cursor_on(),
+        })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into();
         self.perf.view(started.elapsed());
         element
     }
 
-    fn update(&mut self, message: Message) -> Task<Message> {
+    pub(crate) fn update(&mut self, message: Message) -> Task<Message> {
         let started = Instant::now();
         let task = self.handle(message);
+        let task = Task::batch([task, self.refresh()]);
         self.perf.update(started.elapsed());
         task
     }
 
-    /// Seconds since boot, for animations.
-    #[must_use]
-    pub fn clock(&self) -> f32 {
-        self.now.duration_since(self.started).as_secs_f32()
-    }
-
-    #[must_use]
-    pub fn busy(&self) -> bool {
-        self.model.phase != Phase::Idle
-    }
-
-    fn send(&self, event: UiEvent) {
-        if let Err(e) = self.events.try_send(event) {
-            tracing::warn!(error = %e, "agent event loop did not take a UI event");
+    /// The cursor shows while typing and then blinks; it stays solid when
+    /// the window isn't focused so it's easy to find.
+    fn cursor_on(&self) -> bool {
+        if !self.focused {
+            return true;
         }
+        let phase = self
+            .now
+            .saturating_duration_since(self.blink_from)
+            .as_millis()
+            / BLINK.as_millis();
+        phase.is_multiple_of(2)
     }
 
-    #[allow(clippy::too_many_lines)]
     fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Commands(batch) => {
-                let was_empty = self.model.entries.is_empty();
-                let effects: Vec<_> = batch
-                    .into_iter()
-                    .filter_map(|cmd| self.model.apply(cmd))
-                    .collect();
-                let mut tasks: Vec<_> = effects.into_iter().map(|e| self.effect(e)).collect();
-                if self.model.link_prompt.is_some()
-                    && !matches!(self.overlay, Some(Overlay::LinkCode { .. }))
-                {
-                    self.overlay = Some(Overlay::LinkCode {
-                        code: String::new(),
-                    });
+                for cmd in batch {
+                    self.tui.process_command(cmd);
                 }
-                if was_empty && !self.model.entries.is_empty() {
-                    tasks.push(operation::snap_to_end(TRANSCRIPT_ID));
-                }
-                return Task::batch(tasks);
             }
             Message::SessionEnded => {
-                self.session_ended = true;
-                self.model.push_system(
-                    "The agent session ended. Restart AURA to continue.",
-                    Level::Error,
-                );
+                tracing::warn!("the agent session closed its command channel");
             }
-            Message::Input(action) => {
-                if action.is_edit() {
-                    self.history.reset();
-                }
-                self.input.perform(action);
-            }
-            Message::Submit => return self.submit(),
-            Message::HistoryPrev => {
-                if let Some(entry) = self.history.previous().map(str::to_string) {
-                    self.set_input(&entry);
-                }
-            }
-            Message::HistoryNext => {
-                let entry = self.history.next_newer().unwrap_or_default().to_string();
-                self.set_input(&entry);
-            }
-            Message::CompleteSlash => {
-                if let Some(first) = slash::matching(self.input.text().trim_end()).first() {
-                    return self.handle(Message::PickSlash(first.name));
-                }
-            }
-            Message::PickSlash(name) => {
-                self.set_input(&format!("/{name} "));
-                return operation::focus(INPUT_ID);
-            }
-            Message::Escape => {
-                if self.confirm.take().is_some() || self.overlay.take().is_some() {
-                    return operation::focus(INPUT_ID);
-                }
-                if self.busy() {
-                    return self.handle(Message::Cancel);
-                }
-            }
-            Message::Cancel => {
-                if self.busy() {
-                    self.send(UiEvent::Cancel);
-                    self.model.status = "Cancelling...".to_string();
-                }
-            }
-            Message::SetMode(mode) => {
-                self.mode = mode;
-                return operation::focus(INPUT_ID);
-            }
-            Message::Side(tab) => {
-                if self.side == Some(tab) {
-                    self.side = None;
-                } else {
-                    self.side = Some(tab);
-                    match tab {
-                        SideTab::Agents => self.send(UiEvent::RefreshAgents),
-                        SideTab::Files => self.model.sandbox.refresh(),
-                        SideTab::Records | SideTab::Processes => {}
-                    }
-                }
-            }
-            Message::ToggleEntry(id) => self.model.toggle(id),
-            Message::ToggleExpandAll => {
-                let expand = !self.model.expand_activity;
-                self.model.expand_activity = expand;
-                for entry in &mut self.model.entries {
-                    if entry.is_activity() {
-                        entry.expanded = expand;
-                    }
-                }
-            }
-            Message::ShowEarlier => self.visible += PAGE,
-            Message::Copy(text) => {
-                self.model.toast("Copied to clipboard", Level::Success);
-                return iced::clipboard::write(text);
-            }
-            Message::LinkClicked(url) => open_external(&url),
-            Message::Approve | Message::Deny => {
-                let approved = matches!(message, Message::Approve);
-                if let Some(approval) = self.model.resolve_approval(approved) {
-                    self.send(if approved {
-                        UiEvent::Approve(approval.id)
-                    } else {
-                        UiEvent::Deny(approval.id)
-                    });
-                }
-                return operation::focus(INPUT_ID);
-            }
-            Message::OpenModels => {
-                if self.model.models.is_empty() {
-                    self.model
-                        .toast("Model list not loaded yet", Level::Warning);
-                } else {
-                    self.overlay = Some(Overlay::Models);
-                }
-            }
-            Message::ChooseModel(id) => return self.choose_model(&id),
-            Message::OpenHelp => self.overlay = Some(Overlay::Help),
-            Message::CloseOverlay => {
-                self.overlay = None;
-                return operation::focus(INPUT_ID);
-            }
-            Message::LoginEmail(value) => {
-                if let Some(Overlay::Login { email, .. }) = &mut self.overlay {
-                    *email = value;
-                }
-            }
-            Message::LoginPassword(value) => {
-                if let Some(Overlay::Login { password, .. }) = &mut self.overlay {
-                    *password = value;
-                }
-            }
-            Message::LoginSubmit => {
-                if let Some(Overlay::Login { email, password }) = &self.overlay {
-                    if !email.trim().is_empty() && !password.is_empty() {
-                        self.send(UiEvent::LoginCredentials {
-                            email: email.trim().to_string(),
-                            password: password.clone(),
-                        });
-                        self.model.status = "Signing in...".to_string();
-                        self.overlay = None;
-                    }
-                }
-            }
-            Message::LinkCodeChanged(value) => {
-                if let Some(Overlay::LinkCode { code }) = &mut self.overlay {
-                    *code = value;
-                }
-            }
-            Message::LinkCodeSubmit => {
-                if let Some(Overlay::LinkCode { code }) = &self.overlay {
-                    if !code.trim().is_empty() {
-                        self.send(UiEvent::LinkCode(code.trim().to_string()));
-                        self.model.link_prompt = None;
-                        self.overlay = None;
-                    }
-                }
-            }
-            Message::OpenProject(purpose) => {
-                let name = match purpose {
-                    ProjectPurpose::Rename => self
-                        .model
-                        .active_agent()
-                        .and_then(|a| a.project.clone())
-                        .unwrap_or_default(),
-                    ProjectPurpose::Create => String::new(),
-                };
-                let folder = std::env::current_dir()
-                    .map(|d| d.display().to_string())
-                    .unwrap_or_default();
-                self.overlay = Some(Overlay::Project {
-                    purpose,
-                    name,
-                    folder,
-                });
-            }
-            Message::ProjectName(value) => {
-                if let Some(Overlay::Project { name, .. }) = &mut self.overlay {
-                    *name = value;
-                }
-            }
-            Message::ProjectFolder(value) => {
-                if let Some(Overlay::Project { folder, .. }) = &mut self.overlay {
-                    *folder = value;
-                }
-            }
-            Message::ProjectSubmit => return self.submit_project(),
-            Message::SelectAgent(id) => {
-                if self.busy() {
-                    self.model.toast(
-                        "Wait for the current turn to finish before switching agents",
-                        Level::Warning,
-                    );
-                } else if id != self.model.active_agent {
-                    self.send(UiEvent::SelectAgent(id));
-                }
-            }
-            Message::NewAgent => {
-                if self.busy() {
-                    self.model.toast(
-                        "Wait for the current turn to finish before creating an agent",
-                        Level::Warning,
-                    );
-                } else {
-                    self.send(UiEvent::CreateAgent(None));
-                }
-            }
-            Message::Spawn(name) => self.send(UiEvent::InstantiateDefinition(name)),
-            Message::AddToProject(name) => self.send(UiEvent::AddDefinitionToProject(name)),
-            Message::EditDefinition(name) => self.send(UiEvent::EditDefinition(name)),
-            Message::Ask(confirm) => self.confirm = Some(confirm),
-            Message::ConfirmYes => match self.confirm.take() {
-                Some(Confirm::DeleteDefinition(name)) => {
-                    self.send(UiEvent::DeleteDefinition(name));
-                }
-                Some(Confirm::Kill(id)) => self.send(UiEvent::KillProcess(id)),
-                None => {}
-            },
-            Message::ConfirmNo => self.confirm = None,
-            Message::OpenRecord(seq) => self.overlay = Some(Overlay::Record(seq)),
-            Message::SandboxRow(index) => {
-                self.model.sandbox.select(index);
-                let Some(row) = self.model.sandbox.rows().get(index).cloned() else {
-                    return Task::none();
-                };
-                match row.kind {
-                    SandboxEntryKind::Dir | SandboxEntryKind::More(_) => {
-                        self.model.sandbox.toggle_selected();
-                    }
-                    SandboxEntryKind::File | SandboxEntryKind::Symlink => {
-                        let path = row.path;
-                        return Task::perform(read_file(path.clone()), move |text| {
-                            Message::FileLoaded(path.clone(), text)
-                        });
-                    }
-                }
-            }
-            Message::RefreshFiles => self.model.sandbox.refresh(),
-            Message::FileLoaded(path, text) => self.overlay = Some(Overlay::File { path, text }),
-            Message::EditorClosed(path) => self.send(UiEvent::DefinitionEdited(path)),
-            Message::DoneEditing => {
-                if let Some(path) = self.editing.take() {
-                    self.send(UiEvent::DefinitionEdited(path));
-                }
-            }
-            Message::Key(event) => return self.key(event),
             Message::Tick(now) => {
                 self.now = now;
                 self.perf.frame(now);
+                self.tui.tick();
+                self.poll_watch(now);
             }
-            Message::Toasts(now) => self.model.expire_toast(now),
-            Message::Resized(size) => self.width = size.width,
+            Message::Key(event) => return self.key(event),
+            Message::Mouse(event) => self.mouse(event),
+            Message::Resized(size) => {
+                self.window = size;
+                self.tui.clear_selection();
+            }
+            Message::Focused(focused) => {
+                self.focused = focused;
+                self.restart_blink();
+            }
+            Message::Paste(Some(text)) => {
+                for key in input::paste_events(&text) {
+                    let _ = self.tui.handle_key(key);
+                }
+            }
+            Message::Paste(None) => {}
+            Message::Copied(chars) => self.tui.notify_copied(chars, &Ok(())),
+            Message::EditorClosed(path, result) => {
+                self.tui
+                    .editor_closed(path, &result.map_err(std::io::Error::other));
+            }
         }
         Task::none()
     }
 
-    fn set_input(&mut self, text: &str) {
-        self.input = text_editor::Content::with_text(text);
-        self.input
-            .perform(text_editor::Action::Move(text_editor::Motion::DocumentEnd));
+    fn restart_blink(&mut self) {
+        self.now = Instant::now();
+        self.blink_from = self.now;
     }
 
-    fn effect(&mut self, effect: Effect) -> Task<Message> {
-        match effect {
-            Effect::OpenEditor(path) => self.open_editor(path),
-            Effect::ChooseModel(id) => self.choose_model(&id),
-            Effect::RefreshSandbox => {
-                if self.side == Some(SideTab::Files) {
-                    self.model.sandbox.refresh();
+    fn key(&mut self, event: keyboard::Event) -> Task<Message> {
+        match event {
+            keyboard::Event::ModifiersChanged(modifiers) => {
+                self.modifiers = modifiers;
+                Task::none()
+            }
+            keyboard::Event::KeyPressed {
+                key,
+                modified_key,
+                modifiers,
+                text,
+                ..
+            } => {
+                self.modifiers = modifiers;
+                self.restart_blink();
+                if let Some(task) = self.shortcut(&modified_key, modifiers) {
+                    return task;
+                }
+                for event in input::key_events(&key, text.as_deref(), modifiers) {
+                    if self.key_press(event) {
+                        return iced::exit();
+                    }
                 }
                 Task::none()
             }
+            keyboard::Event::KeyReleased { .. } => Task::none(),
         }
     }
 
-    fn submit(&mut self) -> Task<Message> {
-        let text = self.input.text();
-        let text = text.trim_end_matches(['\n', '\r']).to_string();
-        if text.trim().is_empty() {
-            return Task::none();
-        }
-        self.input = text_editor::Content::new();
-        self.history.add(&text);
-
-        let shell = match self.mode {
-            InputMode::Shell => Some(text.trim()),
-            InputMode::Chat => text.strip_prefix('!').map(str::trim),
-        };
-        if let Some(command) = shell {
-            if command.is_empty() {
-                return Task::none();
-            }
-            let command = command.to_string();
-            self.model.send_command(&command);
-            self.send(UiEvent::RunCommand {
-                command,
-                cols: self.command_columns(),
-            });
-        } else if text.starts_with('/') {
-            return self.slash(&text);
+    /// Window shortcuts a terminal emulator would handle itself: zoom,
+    /// copy and paste.
+    fn shortcut(&mut self, key: &Key, m: Modifiers) -> Option<Task<Message>> {
+        let chord = if cfg!(target_os = "macos") {
+            m.logo()
         } else {
-            self.model.send_user(&text);
-            self.send(UiEvent::UserMessage(text));
-        }
-        operation::snap_to_end(TRANSCRIPT_ID)
-    }
-
-    /// Columns of mono text that fit in the transcript, for command output.
-    #[must_use]
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    pub fn command_columns(&self) -> u16 {
-        let side = if self.side.is_some() { SIDE_WIDTH } else { 0.0 };
-        let usable = (self.width - side - 120.0).max(0.0);
-        let cell = theme::MONO_SIZE * theme::MONO_ADVANCE_EM;
-        (usable / cell).floor().clamp(20.0, 500.0) as u16
-    }
-
-    fn submit_project(&mut self) -> Task<Message> {
-        let Some(Overlay::Project {
-            purpose,
-            name,
-            folder,
-        }) = &self.overlay
-        else {
-            return Task::none();
+            m.control()
         };
-        let name = name.trim().to_string();
-        if name.is_empty() {
-            return Task::none();
+        if !chord {
+            return (m.shift() && matches!(key.as_ref(), Key::Named(Named::Insert)))
+                .then(|| iced::clipboard::read().map(Message::Paste));
         }
-        match purpose {
-            ProjectPurpose::Rename => self.send(UiEvent::RenameProject(name)),
-            ProjectPurpose::Create => {
-                let folder = PathBuf::from(folder.trim());
-                if !folder.is_dir() {
-                    self.model.toast(
-                        format!("Not a folder: {}", folder.display()),
-                        Level::Warning,
-                    );
-                    return Task::none();
-                }
-                self.send(UiEvent::CreateProject { name, folder });
+        let size = self.metrics.font_size;
+        let zoom = |size: f32| Some(size.clamp(theme::MIN_FONT_SIZE, theme::MAX_FONT_SIZE));
+        let new_size = match key.as_ref() {
+            Key::Character("=" | "+") => zoom(size + 1.0),
+            Key::Character("-" | "_") => zoom(size - 1.0),
+            Key::Character("0" | ")") => Some(theme::DEFAULT_FONT_SIZE),
+            Key::Character("v" | "V") => return Some(iced::clipboard::read().map(Message::Paste)),
+            // Ctrl+C on its own interrupts the agent, as in a terminal.
+            Key::Character("c" | "C") if m.shift() || cfg!(target_os = "macos") => {
+                self.tui.request_copy();
+                return Some(Task::none());
             }
+            _ => None,
+        }?;
+        if (new_size - size).abs() > f32::EPSILON {
+            self.metrics = Metrics::new(new_size);
+            self.screen.invalidate();
+            self.tui.clear_selection();
         }
-        self.overlay = None;
-        operation::focus(INPUT_ID)
+        Some(Task::none())
     }
 
-    /// Select `id` for the next turn; models whose sign-in is missing
-    /// start that sign-in first and are selected once it succeeds.
-    fn choose_model(&mut self, id: &str) -> Task<Message> {
-        let missing = self
-            .model
-            .models
-            .iter()
-            .find(|m| m.id == id && !m.available)
-            .map(|m| m.provider.clone().unwrap_or_default());
-        if let Some(provider) = missing {
-            self.model.pending_model = Some(id.to_string());
-            match slash::plan_provider(&provider) {
-                Some(plan) => self.start_link(plan, false),
-                None => {
-                    self.overlay = Some(Overlay::Login {
-                        email: String::new(),
-                        password: String::new(),
-                    });
-                    self.model
-                        .toast("Cloud models need a zOS login", Level::Warning);
+    /// One key, with the terminal's Ctrl+C and Ctrl+D rules. `true` quits.
+    fn key_press(&mut self, key: KeyEvent) -> bool {
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('c') => {
+                    if self.tui.request_copy() {
+                        return false;
+                    }
+                    if !self.tui.is_processing() {
+                        return true;
+                    }
+                    self.tui.cancel();
+                    return false;
                 }
+                KeyCode::Char('d') => return true,
+                _ => {}
             }
-            return Task::none();
         }
-        self.overlay = None;
-        if id != self.model.current_model {
-            self.send(UiEvent::SelectModel(id.to_string()));
-        }
-        operation::focus(INPUT_ID)
+        self.tui.handle_key(key).should_quit()
     }
 
-    fn start_link(&mut self, provider: &str, paste: bool) {
-        self.overlay = None;
-        self.model.status = format!("Linking {provider}...");
-        self.send(UiEvent::LinkSubscription {
-            provider: provider.to_string(),
-            paste,
+    fn mouse(&mut self, event: mouse::Event) {
+        let (cols, rows) = self.screen.size();
+        let cell_at =
+            |metrics: &Metrics, window: Size, at: Point| metrics.cell_at(window, cols, rows, at);
+        let kind = match event {
+            mouse::Event::CursorMoved { position } => {
+                let at = cell_at(&self.metrics, self.window, position);
+                if self.pointer == Some(at) {
+                    return;
+                }
+                self.pointer = Some(at);
+                if self.left_down {
+                    MouseEventKind::Drag(MouseButton::Left)
+                } else {
+                    MouseEventKind::Moved
+                }
+            }
+            mouse::Event::CursorLeft => {
+                self.pointer = None;
+                return;
+            }
+            mouse::Event::ButtonPressed(button) => {
+                let Some(button) = mouse_button(button) else {
+                    return;
+                };
+                self.left_down |= button == MouseButton::Left;
+                MouseEventKind::Down(button)
+            }
+            mouse::Event::ButtonReleased(button) => {
+                let Some(button) = mouse_button(button) else {
+                    return;
+                };
+                if button == MouseButton::Left {
+                    self.left_down = false;
+                }
+                MouseEventKind::Up(button)
+            }
+            mouse::Event::WheelScrolled { delta } => {
+                let lines = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } => y,
+                    mouse::ScrollDelta::Pixels { y, .. } => y / self.metrics.cell.height,
+                };
+                self.scroll += lines;
+                while self.scroll.abs() >= 1.0 {
+                    let kind = if self.scroll > 0.0 {
+                        self.scroll -= 1.0;
+                        MouseEventKind::ScrollUp
+                    } else {
+                        self.scroll += 1.0;
+                        MouseEventKind::ScrollDown
+                    };
+                    self.send_mouse(kind);
+                }
+                return;
+            }
+            mouse::Event::CursorEntered => return,
+        };
+        self.send_mouse(kind);
+    }
+
+    fn send_mouse(&mut self, kind: MouseEventKind) {
+        let Some(at) = self.pointer else {
+            return;
+        };
+        self.tui.handle_mouse(MouseEvent {
+            kind,
+            column: at.x,
+            row: at.y,
+            modifiers: input::modifiers(self.modifiers),
         });
     }
 
-    #[allow(clippy::too_many_lines)]
-    fn slash(&mut self, text: &str) -> Task<Message> {
-        let mut parts = text[1..].splitn(2, ' ');
-        let cmd = parts.next().unwrap_or("").to_ascii_lowercase();
-        let arg = parts.next().unwrap_or("").trim().to_string();
-        match cmd.as_str() {
-            "quit" | "exit" | "q" => {
-                self.send(UiEvent::Quit);
-                return iced::exit();
-            }
-            "help" | "?" => self.overlay = Some(Overlay::Help),
-            "clear" => {
-                self.model.entries.clear();
-                self.send(UiEvent::Clear);
-            }
-            "status" | "s" => self.send(UiEvent::ShowStatus),
-            "history" | "h" => self.send(UiEvent::ShowHistory(None)),
-            "records" | "record" | "kernel" | "r" | "k" => self.side = Some(SideTab::Records),
-            "processes" | "ps" => self.side = Some(SideTab::Processes),
-            "files" | "sandbox" | "f" => {
-                self.side = Some(SideTab::Files);
-                self.model.sandbox.refresh();
-            }
-            "agents" | "swarm" | "sw" => {
-                self.side = Some(SideTab::Agents);
-                self.send(UiEvent::RefreshAgents);
-            }
-            "agent" | "a" => self.agent_command(&arg),
-            "project" => return self.handle(Message::OpenProject(ProjectPurpose::Create)),
-            "name" => {
-                if arg.is_empty() {
-                    return self.handle(Message::OpenProject(ProjectPurpose::Rename));
-                }
-                self.send(UiEvent::RenameProject(arg));
-            }
-            "spawn" => {
-                let name = self
-                    .model
-                    .definitions
-                    .iter()
-                    .find(|d| d.name.eq_ignore_ascii_case(&arg))
-                    .map(|d| d.name.clone());
-                match name {
-                    Some(name) => self.send(UiEvent::InstantiateDefinition(name)),
-                    None => {
-                        let names: Vec<_> = self
-                            .model
-                            .definitions
-                            .iter()
-                            .map(|d| d.name.as_str())
-                            .collect();
-                        let usage =
-                            format!("Usage: /spawn <permanent agent> ({})", names.join(", "));
-                        self.model.toast(usage, Level::Warning);
-                    }
-                }
-            }
-            "login" => {
-                let mut words = arg.split_whitespace();
-                let target = words.next().unwrap_or("");
-                let paste = words
-                    .next()
-                    .is_some_and(|w| w.eq_ignore_ascii_case("paste"));
-                if target.is_empty() || target.eq_ignore_ascii_case("zos") {
-                    self.overlay = Some(Overlay::Login {
-                        email: String::new(),
-                        password: String::new(),
-                    });
-                } else if let Some(provider) = slash::plan_provider(target) {
-                    self.start_link(provider, paste);
-                } else {
-                    self.model.toast(
-                        format!("Unknown provider: {target}. Use zos, claude or chatgpt."),
-                        Level::Warning,
+    /// Render the UI into the grid, then act on what the frame asked for.
+    fn refresh(&mut self) -> Task<Message> {
+        let (cols, rows) = self.metrics.grid(self.window);
+        let area = self.terminal.backend().buffer().area;
+        if (area.width, area.height) != (cols, rows) {
+            let pixels = Size::new(
+                f32::from(cols) * self.metrics.cell.width,
+                f32::from(rows) * self.metrics.cell.height,
+            );
+            self.terminal.backend_mut().resize(cols, rows, pixels);
+        }
+        let (tui, tui_theme) = (&mut self.tui, &self.tui_theme);
+        let mut tasks = Vec::new();
+        match self
+            .terminal
+            .draw(|frame| aura_terminal::render(frame, tui, tui_theme))
+        {
+            Ok(frame) => {
+                if let Some(text) = tui.take_copy_text(frame.buffer) {
+                    let chars = text.chars().count();
+                    tasks.push(
+                        iced::clipboard::write(text).chain(Task::done(Message::Copied(chars))),
                     );
                 }
             }
-            "logout" => match slash::plan_provider(&arg) {
-                Some(provider) => self.send(UiEvent::Unlink(provider.to_string())),
-                None if arg.is_empty() || arg.eq_ignore_ascii_case("zos") => {
-                    self.send(UiEvent::Logout);
-                }
-                None => self.model.toast(
-                    format!("Unknown provider: {arg}. Use zos, claude or chatgpt."),
-                    Level::Warning,
-                ),
-            },
-            "whoami" | "me" => self.send(UiEvent::Whoami),
-            "model" | "models" | "m" => {
-                if arg.is_empty() {
-                    return self.handle(Message::OpenModels);
-                }
-                let id = self
-                    .model
-                    .models
-                    .iter()
-                    .find(|m| m.id.eq_ignore_ascii_case(&arg) || m.label.eq_ignore_ascii_case(&arg))
-                    .map_or_else(|| arg.clone(), |m| m.id.clone());
-                return self.choose_model(&id);
-            }
-            "new" | "n" => {
-                self.model.entries.clear();
-                self.send(UiEvent::NewSession);
-                self.model.toast("New session started", Level::Success);
-            }
-            "terminal" | "shell" | "t" => self.mode = self.mode.other(),
-            "expand" => return self.handle(Message::ToggleExpandAll),
-            _ => self.model.toast(
-                format!("Unknown command: /{cmd}. Type /help for available commands."),
-                Level::Warning,
-            ),
+            Err(e) => tracing::warn!(error = %e, "render failed"),
         }
-        Task::none()
+        self.screen.update(self.terminal.backend());
+        if let Some(path) = self.tui.take_editor_request() {
+            tasks.push(self.open_editor(path));
+        }
+        Task::batch(tasks)
     }
 
-    fn agent_command(&mut self, arg: &str) {
-        let mut parts = arg.splitn(2, ' ');
-        let first = parts.next().unwrap_or("");
-        if first.eq_ignore_ascii_case("new") {
-            if self.busy() {
-                self.model.toast(
-                    "Wait for the current turn to finish before creating an agent",
-                    Level::Warning,
-                );
-                return;
-            }
-            let name = parts
-                .next()
-                .map(str::trim)
-                .filter(|n| !n.is_empty())
-                .map(str::to_string);
-            self.send(UiEvent::CreateAgent(name));
-            return;
-        }
-        if arg.is_empty() {
-            self.model.toast(
-                "Usage: /agent new [name] | /agent <number|name>",
-                Level::Warning,
-            );
-            return;
-        }
-        let target = arg
-            .parse::<usize>()
-            .ok()
-            .and_then(|n| n.checked_sub(1))
-            .and_then(|i| self.model.agents.get(i))
-            .or_else(|| {
-                self.model
-                    .agents
-                    .iter()
-                    .find(|a| a.name.eq_ignore_ascii_case(arg))
-            })
-            .map(|a| a.id.clone());
-        match target {
-            Some(id) => {
-                let _ = self.handle(Message::SelectAgent(id));
-            }
-            None => self
-                .model
-                .toast(format!("No agent matching '{arg}'"), Level::Warning),
-        }
-    }
-
-    /// Shortcuts that work wherever the focus is. Keys the chat input
-    /// handled itself never get here.
-    fn key(&mut self, event: keyboard::Event) -> Task<Message> {
-        let keyboard::Event::KeyPressed {
-            key,
-            modifiers,
-            text,
-            ..
-        } = event
-        else {
-            return Task::none();
-        };
-        if modifiers.command() {
-            let message = match key.as_ref() {
-                Key::Character("k") => Some(Message::OpenModels),
-                Key::Character("b") => Some(Message::Side(self.side.unwrap_or(SideTab::Agents))),
-                Key::Character("1") => Some(Message::Side(SideTab::Agents)),
-                Key::Character("2") => Some(Message::Side(SideTab::Records)),
-                Key::Character("3") => Some(Message::Side(SideTab::Processes)),
-                Key::Character("4") => Some(Message::Side(SideTab::Files)),
-                Key::Character("o") => Some(Message::ToggleExpandAll),
-                Key::Character("/") => Some(Message::OpenHelp),
-                Key::Character("j" | "`") => Some(Message::SetMode(self.mode.other())),
-                Key::Character("c") if self.busy() => Some(Message::Cancel),
-                _ => None,
-            };
-            return message.map_or_else(Task::none, |m| self.handle(m));
-        }
-        match key.as_ref() {
-            Key::Named(Named::Escape) => self.handle(Message::Escape),
-            Key::Character("y") if self.model.approval.is_some() => self.handle(Message::Approve),
-            Key::Character("n") if self.model.approval.is_some() => self.handle(Message::Deny),
-            _ if self.overlay.is_none()
-                && text
-                    .as_deref()
-                    .is_some_and(|t| !t.is_empty() && !t.chars().any(char::is_control)) =>
-            {
-                // Typing while nothing has focus goes to the chat input.
-                for c in text.as_deref().unwrap_or_default().chars() {
-                    self.input
-                        .perform(text_editor::Action::Edit(text_editor::Edit::Insert(c)));
-                }
-                operation::focus(INPUT_ID)
-            }
-            _ => Task::none(),
-        }
-    }
-
+    /// Hand a file to the user's editor. Editors that need a terminal can't
+    /// run in a window, so those (and no editor at all) fall back to the
+    /// system's default app, and saving the file counts as closing it.
     fn open_editor(&mut self, path: PathBuf) -> Task<Message> {
         let editor = std::env::var("VISUAL")
             .or_else(|_| std::env::var("EDITOR"))
@@ -901,14 +448,13 @@ impl App {
             .filter(|e| !e.trim().is_empty() && !is_terminal_editor(e));
         let Some(editor) = editor else {
             open_external(&path.display().to_string());
-            self.model.toast(
-                "Opened in your editor. Save it, then press Done editing.",
-                Level::Info,
-            );
-            self.editing = Some(path);
+            self.watch = Some(Watch {
+                modified: modified(&path),
+                path,
+                checked: self.now,
+            });
             return Task::none();
         };
-        self.model.status = format!("Editing {}", path.display());
         let target = path.clone();
         Task::perform(
             async move {
@@ -918,14 +464,50 @@ impl App {
                     .args(words)
                     .arg(&target)
                     .status()
-                    .await;
-                if let Err(e) = status {
-                    tracing::warn!(error = %e, "editor did not start");
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if status.success() {
+                    Ok(())
+                } else {
+                    Err(format!("editor exited with {status}"))
                 }
             },
-            move |()| Message::EditorClosed(path.clone()),
+            move |result| Message::EditorClosed(path.clone(), result),
         )
     }
+
+    fn poll_watch(&mut self, now: Instant) {
+        let Some(watch) = self.watch.as_mut() else {
+            return;
+        };
+        if now.saturating_duration_since(watch.checked) < EDIT_POLL {
+            return;
+        }
+        watch.checked = now;
+        if modified(&watch.path) != watch.modified {
+            if let Some(watch) = self.watch.take() {
+                self.tui.editor_closed(watch.path, &Ok(()));
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub fn screen(&self) -> &Screen {
+        &self.screen
+    }
+}
+
+fn mouse_button(button: mouse::Button) -> Option<MouseButton> {
+    match button {
+        mouse::Button::Left => Some(MouseButton::Left),
+        mouse::Button::Right => Some(MouseButton::Right),
+        mouse::Button::Middle => Some(MouseButton::Middle),
+        _ => None,
+    }
+}
+
+fn modified(path: &std::path::Path) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 /// Commands from the event loop, grouped so a burst is applied in one update.
@@ -951,25 +533,14 @@ fn command_batches(commands: mpsc::Receiver<UiCommand>) -> impl Stream<Item = Me
 #[allow(clippy::needless_pass_by_value)] // the signature `event::listen_with` takes
 fn window_event(event: iced::Event, _status: event::Status, _id: window::Id) -> Option<Message> {
     match event {
-        iced::Event::Window(window::Event::Resized(size)) => Some(Message::Resized(size)),
-        iced::Event::Window(window::Event::Opened { size, .. }) => Some(Message::Resized(size)),
+        iced::Event::Window(window::Event::Resized(size) | window::Event::Opened { size, .. }) => {
+            Some(Message::Resized(size))
+        }
+        iced::Event::Window(window::Event::Focused) => Some(Message::Focused(true)),
+        iced::Event::Window(window::Event::Unfocused) => Some(Message::Focused(false)),
+        iced::Event::Mouse(event) => Some(Message::Mouse(event)),
         _ => None,
     }
-}
-
-async fn read_file(path: PathBuf) -> Result<String, String> {
-    let meta = tokio::fs::metadata(&path)
-        .await
-        .map_err(|e| e.to_string())?;
-    if meta.len() > MAX_FILE_BYTES {
-        return Err(format!(
-            "{} KB is too large to show here (limit {} KB)",
-            meta.len() / 1024,
-            MAX_FILE_BYTES / 1024
-        ));
-    }
-    let bytes = tokio::fs::read(&path).await.map_err(|e| e.to_string())?;
-    String::from_utf8(bytes).map_err(|_| "Binary file".to_string())
 }
 
 /// Editors that need a terminal of their own, which a desktop window

@@ -1,8 +1,8 @@
 //! Frame and update timings, logged when `AURA_DESKTOP_PERF` is set.
 //!
-//! Every 240 frames this reports the mean and worst time spent applying
-//! messages (`update`), building the widget tree (`view`) and between
-//! frames. The first view also reports how long after launch it was
+//! Every 240 ticks this reports the mean and worst time spent applying
+//! messages and rendering the terminal UI into the grid (`update`),
+//! building the view (`view`) and between ticks. The first view also reports how long after launch it was
 //! built, which is the cold-start number to watch.
 
 use std::cell::Cell;

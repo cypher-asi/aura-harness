@@ -53,6 +53,9 @@ mod terminal;
 pub use app::{App, AppState};
 pub use events::{UiCommand, UiEvent};
 pub use mode_command::{ModeCommandError, SlashModeCommand};
+/// Draws the whole UI into a ratatui frame; frontends other than
+/// [`Terminal`] (the desktop app) call it with their own backend.
+pub use renderer::render;
 pub use terminal::Terminal;
 pub use themes::Theme;
 

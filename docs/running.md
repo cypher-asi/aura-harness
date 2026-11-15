@@ -32,7 +32,7 @@ cargo run -p aura-runtime --bin aura-node
 
 ## Desktop app
 
-`aura-desktop` runs the same agent session as the terminal UI in a native window drawn on the GPU (wgpu, through [iced](https://iced.rs)), with a CPU fallback (tiny-skia) when no GPU is available. It needs Rust 1.88 or later.
+`aura-desktop` is the terminal UI in a native window: the same agent session, the same screen and the same keys, drawn on the GPU (wgpu, through [iced](https://iced.rs)) on a cell grid instead of through a terminal emulator, with a CPU fallback (tiny-skia) when no GPU is available. Box-drawing lines, block characters, braille spinners and status symbols are drawn as shapes, so borders join without gaps and symbols missing from the font still render. It needs Rust 1.88 or later.
 
 ```sh
 cargo run --release -p aura-desktop                        # agent in the current directory
@@ -41,18 +41,24 @@ cargo run --release -p aura-desktop -- --mode plan
 cargo run --release -p aura-desktop -- --demo              # scripted session, no model needed
 ```
 
-It takes the terminal's `--dir`, `--provider`, `--mode`, `--verbose` and `--allow-unrestricted-full-access`. Keys: Enter sends, Shift+Enter adds a line, Ctrl+K picks a model, Ctrl+B toggles the side panel, Ctrl+1…4 opens Agents / Records / Processes / Files, Ctrl+J switches between chat and shell, and Ctrl+/ lists the rest. Text in the transcript can't be selected; use the Copy buttons on replies, command output and files.
+It takes the terminal's `--dir`, `--provider`, `--mode`, `--theme`, `--verbose` and `--allow-unrestricted-full-access`. Every terminal key works the same way, including Ctrl+C (copy a selection, interrupt the agent, or quit when idle) and Ctrl+D. Drag to select text in a panel; it's copied when you let go. On top of that, the window handles what a terminal emulator would:
 
-Text is set in Geist and code in Geist Mono, both bundled (SIL Open Font License, [`assets/fonts/OFL.txt`](../crates/aura-desktop/assets/fonts/OFL.txt)). To use other fonts:
+| Keys (Cmd on macOS) | Action |
+|---|---|
+| Ctrl+Shift+C | Copy the selection |
+| Ctrl+V, Ctrl+Shift+V, Shift+Insert | Paste into the input (line breaks become spaces) |
+| Ctrl+= / Ctrl+- / Ctrl+0 | Larger / smaller / default text |
+
+Text is set in Geist Mono, bundled (SIL Open Font License, [`assets/fonts/OFL.txt`](../crates/aura-desktop/assets/fonts/OFL.txt)).
 
 | Variable | Effect |
 |---|---|
-| `AURA_DESKTOP_FONT` | Family for UI text, e.g. `Inter` |
-| `AURA_DESKTOP_MONO_FONT` | Family for code and command output, e.g. `JetBrains Mono` |
+| `AURA_DESKTOP_MONO_FONT` | Another installed monospace family, e.g. `JetBrains Mono` |
 | `AURA_DESKTOP_FONT_FILES` | Extra font files to load, separated like `PATH` |
+| `AURA_DESKTOP_FONT_SIZE` | Starting text size in pixels (default 14) |
 | `AURA_DESKTOP_PERF` | Log startup time and frame / update / view timings to stderr |
 
-On Linux the window opens on Wayland, or on X11 when `WAYLAND_DISPLAY` is unset; nothing beyond the packages above is needed to build it. `WGPU_BACKEND=gl` forces OpenGL when Vulkan drivers misbehave, and `ICED_BACKEND=tiny-skia` forces the CPU renderer. Editing a permanent agent opens `$VISUAL` / `$EDITOR`; editors that need a terminal (vim, nano, helix…) can't run in a window, so the file opens in the system's default app instead, and **Done editing** in the status bar reloads it once you've saved.
+On Linux the window opens on Wayland, or on X11 when `WAYLAND_DISPLAY` is unset; nothing beyond the packages above is needed to build it. `WGPU_BACKEND=gl` forces OpenGL when Vulkan drivers misbehave, and `ICED_BACKEND=tiny-skia` forces the CPU renderer. Editing a permanent agent opens `$VISUAL` / `$EDITOR`; editors that need a terminal (vim, nano, helix…) can't run in a window, so the file opens in the system's default app instead and is reloaded the first time you save it.
 
 The node listens on `127.0.0.1:8080` by default. Start work with `POST /v1/run` and follow it on `WS /stream/:run_id`; see [api.md](api.md). Environment variables are listed in [configuration.md](configuration.md); copy [`.env.example`](../.env.example) as a starting point.
 

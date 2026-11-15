@@ -1,19 +1,19 @@
-//! `aura-desktop`: the AURA agent in a native, GPU-drawn window.
+//! `aura-desktop`: the AURA terminal UI in a native, GPU-drawn window.
 //!
 //! The agent session runs in this process on the same event loop as the
-//! terminal UI (`aura_surface_cli::session`); only the frontend differs.
+//! terminal UI (`aura_surface_cli::session`), and the UI itself is the
+//! terminal one (`aura_terminal::App`), drawn on a cell grid with Geist
+//! Mono instead of through a terminal emulator.
 
-mod ansi;
 mod app;
 mod demo;
-mod draw;
-mod model;
+mod glyphs;
+mod grid;
+mod input;
 mod perf;
-mod slash;
 #[cfg(test)]
 mod snapshot;
 mod theme;
-mod view;
 
 use anyhow::Context;
 use aura_surface_cli::cli::RunArgs;
@@ -41,6 +41,10 @@ struct Args {
     /// Session mode; overrides `AURA_DEFAULT_MODE`
     #[arg(long, value_enum)]
     mode: Option<ModeFlag>,
+
+    /// Theme (cyber, matrix, synthwave, minimal)
+    #[arg(long, default_value = "cyber")]
+    theme: String,
 
     /// Log debug output to stderr
     #[arg(short, long)]
@@ -95,7 +99,11 @@ fn main() -> anyhow::Result<()> {
         (handles, Some(session.task))
     };
 
-    let result = app::run(handles, launched);
+    let options = app::Options {
+        theme: args.theme,
+        verbose: args.verbose,
+    };
+    let result = app::run(handles, options, launched);
     if let Some(task) = task {
         runtime.block_on(task.finish())?;
     }

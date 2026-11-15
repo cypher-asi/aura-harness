@@ -11,21 +11,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ##### Added
 
-- `aura-desktop`, a native window for the agent built on iced and drawn
-  on the GPU (wgpu, with a tiny-skia CPU fallback). It runs the same
-  in-process session as the terminal (`session::start`) and has the
-  conversation with streamed markdown, collapsible thinking and tool
-  steps, colored diffs and ANSI command output, a chat / shell input
-  with slash-command completion and history, the Agents, Records,
-  Processes (with a timeline) and Files panels, and dialogs for models,
-  sign-in, approvals and projects. Frames are drawn only while
-  something animates.
-- Geist and Geist Mono are bundled; `AURA_DESKTOP_FONT`,
-  `AURA_DESKTOP_MONO_FONT` and `AURA_DESKTOP_FONT_FILES` pick other
-  fonts. `--demo` runs a scripted session and `AURA_DESKTOP_PERF` logs
+- `aura-desktop`, the terminal UI in a native window built on iced and
+  drawn on the GPU (wgpu, with a tiny-skia CPU fallback). It runs the
+  same in-process session as the terminal (`session::start`) and the
+  same `aura_terminal::App`, rendered through a ratatui backend into a
+  cell grid, so the screen, keys, mouse selection and copy behave as
+  they do in a terminal.
+- The grid is painted in Geist Mono (bundled) with one text draw per
+  styled run; box drawing, block elements, braille and the status
+  symbols are drawn as shapes, so borders join and glyphs missing from
+  the font still render. The painted grid is cached until a cell
+  changes, and the cursor blinks on its own layer.
+- Window shortcuts: Ctrl+Shift+C copies, Ctrl+V / Ctrl+Shift+V /
+  Shift+Insert paste, Ctrl+= / Ctrl+- / Ctrl+0 zoom (Cmd on macOS).
+  `--theme` picks the terminal theme; `AURA_DESKTOP_MONO_FONT`,
+  `AURA_DESKTOP_FONT_FILES` and `AURA_DESKTOP_FONT_SIZE` change the
+  font. `--demo` runs a scripted session and `AURA_DESKTOP_PERF` logs
   frame timings.
 - Offscreen snapshot tests render whole screens with the CPU renderer;
-  `AURA_DESKTOP_SNAPSHOTS=<dir>` saves them as PNGs.
+  `AURA_DESKTOP_SNAPSHOTS=<dir>` saves them as PNGs. An ignored
+  `replay` test reports boot, streaming, keystroke and repaint timings.
+- `aura_terminal::render` is public so other frontends can draw the UI.
 
 ##### Changed
 
