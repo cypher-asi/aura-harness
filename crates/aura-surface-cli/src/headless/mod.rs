@@ -26,8 +26,8 @@ use crate::event_loop::TurnBase;
 use crate::long_run::LongRunSettings;
 use crate::model_selection::ModelSelection;
 use crate::runner::{
-    agent_tools, build_hub, build_provider, mode_policy, policy_tool_names, project_instructions,
-    HubSetup,
+    agent_tools, build_hub, build_provider, mode_policy, policy_tool_names,
+    post_edit_check_from_env, project_instructions, HubSetup,
 };
 use crate::session_helpers;
 use anyhow::Context;
@@ -203,7 +203,7 @@ async fn build(
         )
     })?;
 
-    let (tool_config, tools) = agent_tools(false);
+    let (tool_config, tools, web_tools) = agent_tools(false);
     let tool_filter = ToolFilter::new(&args.allowed_tools, &args.disallowed_tools);
     let unknown = tool_filter.unknown(&tools);
     if !unknown.is_empty() {
@@ -282,6 +282,8 @@ async fn build(
         mode: permission_mode,
         instructions: project_instructions(),
         approvals: None,
+        web_tools,
+        post_edit_check: post_edit_check_from_env(),
     });
     Ok(Headless {
         hub,

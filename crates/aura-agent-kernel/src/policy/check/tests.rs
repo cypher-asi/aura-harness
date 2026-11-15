@@ -254,6 +254,12 @@ fn mode_matrix_matches_the_gate_table() {
         ("spawn_agent", none(), [true, false, false, false]),
         ("task", none(), [true, false, false, false]),
         ("list_specs", none(), [true, true, true, false]),
+        (
+            "web_fetch",
+            serde_json::json!({"url":"https://example.com"}),
+            [true, true, true, false],
+        ),
+        ("web_search", none(), [true, true, true, false]),
         ("unclassified_mcp_tool", none(), [true, false, false, false]),
     ];
 

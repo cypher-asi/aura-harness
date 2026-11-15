@@ -91,7 +91,11 @@ pub fn tool_mode_class(tool: &str) -> Option<ToolModeClass> {
         | "orbit_list_prs"
         | "get_task_context"
         | "task_done"
-        | "submit_plan" => C::Invoke,
+        | "submit_plan"
+        // Read-only lookups on the public web: Plan and Ask may research,
+        // Debug stays offline.
+        | "web_search"
+        | "web_fetch" => C::Invoke,
 
         _ => return None,
     };

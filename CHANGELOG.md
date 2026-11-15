@@ -158,6 +158,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tell a surface before and after each file a tool changes; tools name
   that file through `Tool::changed_path`. `aura-store-snapshot` gains
   `DirSnapshotStore`, a directory-backed snapshot store.
+- `web_fetch` tool: terminal and `aura -p` agents can read a public web
+  page as markdown. Scripts, styles and navigation are dropped, and
+  headings, links, lists and code blocks are kept. Requests time out
+  after 20 seconds, follow at most 5 redirects, read at most 2 MiB, and
+  refuse binary content, non-HTTP URLs and local or private addresses
+  (`AURA_WEB_FETCH_ALLOW_PRIVATE=1` allows those).
+- `web_search` tool: terminal and `aura -p` agents can search the web
+  through Brave Search (`BRAVE_API_KEY`), Tavily (`TAVILY_API_KEY`) or a
+  SearXNG instance (`AURA_SEARXNG_URL`). `AURA_WEB_SEARCH_PROVIDER`
+  picks one when several are set. Without a provider, the tool tells
+  the agent and the user what to set. Plan and Ask modes allow both web
+  tools; Debug mode does not. `aura -p --disallowed-tools` can turn
+  either off.
+- Post-edit check: after a step in which the agent edited files, the
+  terminal (and `aura -p`) runs the project's check command and gives
+  the agent the end of the output if it fails. The command comes from
+  `AURA_CHECK_COMMAND` or from a `check:` line or a fenced `check` block
+  in the project's `AGENTS.md`. Several edits in one step run the check
+  once, and a failure that repeats word for word is reported in one
+  line. `AURA_CHECK_TIMEOUT` bounds a run (2 minutes by default).
 
 ##### Changed
 
@@ -178,6 +198,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Foreground `run_command` in the terminal defaults to a 2-minute
   timeout (was 5 seconds), and agent commands get no stdin, so they
   can't read keystrokes meant for the terminal UI.
+- Build and check commands started by the agent loop are killed when
+  the turn that started them is cancelled. After a timeout, their
+  output is waited for at most 5 seconds.
 
 ### Terminal — model, tokens and cost on each reply
 

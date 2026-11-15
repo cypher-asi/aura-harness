@@ -7,7 +7,7 @@
 use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
 use crate::cli::{Cli, Commands, MigrateArgs, PluginsCommand, PluginsSubcommand, RunArgs, UiMode};
-use crate::long_run::add_long_run_tools;
+use crate::long_run::{add_long_run_tools, WebTools};
 use crate::model_selection::ModelSelection;
 use crate::project_instructions::{InstructionSettings, ProjectInstructions};
 use crate::{api_server, auth_commands, event_loop, record_loader, session_helpers};
@@ -388,7 +388,7 @@ async fn run_terminal(
     }
     api_server::start_api_server(cmd_tx.clone(), workspace_root.clone()).await;
 
-    let (tool_config, tools) = agent_tools(args.allow_unrestricted_full_access);
+    let (tool_config, tools, web_tools) = agent_tools(args.allow_unrestricted_full_access);
     let (job_tx, job_rx) = mpsc::channel::<JobFinished>(64);
     let jobs = BackgroundJobs::new(job_tx);
 
@@ -449,6 +449,8 @@ async fn run_terminal(
         mode,
         instructions: project_instructions(),
         approvals: Some(Arc::clone(&approvals)),
+        web_tools,
+        post_edit_check: post_edit_check_from_env(),
     });
     let _ = cmd_tx.try_send(UiCommand::SetAgents(hub.agent_summaries()));
     let _ = cmd_tx.try_send(UiCommand::SetActiveAgent(identity.agent_id.to_hex()));
@@ -514,11 +516,18 @@ async fn run_terminal(
 // Agent harness shared by the terminal and `aura -p`
 // ============================================================================
 
-/// Tool settings and the model-facing tool list for terminal-style agents:
-/// the autonomous dev-loop tools plus planning and background jobs.
+/// Tool settings, the model-facing tool list and the web tools for
+/// terminal-style agents: the autonomous dev-loop tools plus planning,
+/// background jobs, `web_fetch` and `web_search`. The web tools must be
+/// registered on each agent's executor (see [`build_hub`]) to match the
+/// list.
 pub(crate) fn agent_tools(
     allow_unrestricted_full_access: bool,
-) -> (ToolConfig, Vec<aura_model_reasoner::ToolDefinition>) {
+) -> (
+    ToolConfig,
+    Vec<aura_model_reasoner::ToolDefinition>,
+    WebTools,
+) {
     let mut tool_config = ToolConfig::for_autonomous_dev_loop();
     tool_config.sync_threshold_ms = crate::long_run::COMMAND_TIMEOUT_MS;
     if allow_unrestricted_full_access || unrestricted_full_access_from_env() {
@@ -534,8 +543,15 @@ pub(crate) fn agent_tools(
         );
     }
     let (_, mut tools) = session_helpers::build_executor_router_with_config(&tool_config);
-    add_long_run_tools(&mut tools);
-    (tool_config, tools)
+    let web_tools = WebTools::from_env();
+    add_long_run_tools(&mut tools, &web_tools);
+    (tool_config, tools, web_tools)
+}
+
+/// The post-edit check settings from `AURA_CHECK_COMMAND` and
+/// `AURA_CHECK_TIMEOUT` (the command may also come from `AGENTS.md`).
+pub(crate) fn post_edit_check_from_env() -> aura_agent::PostEditCheckConfig {
+    aura_agent::PostEditCheckConfig::from_lookup(|name| std::env::var(name).ok())
 }
 
 /// The model provider named by `--provider`: `mock` for tests and offline
@@ -579,6 +595,10 @@ pub(crate) struct HubSetup {
     /// Asks the user about tool calls the policy wants approved. Without
     /// it the kernel denies those calls, which `aura -p` relies on.
     pub approvals: Option<Arc<event_loop::TerminalApprovals>>,
+    /// Registered on every agent's executor; from [`agent_tools`]
+    pub web_tools: WebTools,
+    /// Run after each step that edits files; results go to `commands`
+    pub post_edit_check: aura_agent::PostEditCheckConfig,
 }
 
 /// Names of every tool an agent may be offered: `tools` plus `task`,
@@ -632,6 +652,8 @@ pub(crate) fn build_hub(setup: HubSetup) -> Arc<event_loop::AgentHub> {
         mode,
         instructions,
         approvals,
+        web_tools,
+        post_edit_check,
     } = setup;
     let kernel_config = KernelConfig {
         workspace_base: workspace_root.clone(),
@@ -648,6 +670,7 @@ pub(crate) fn build_hub(setup: HubSetup) -> Arc<event_loop::AgentHub> {
     let file_checkpoints = crate::file_checkpoints::FileCheckpoints::new(&data_dir);
     let factory_files = file_checkpoints.clone();
     let diff_commands = commands.clone();
+    let check_commands = commands.clone();
     event_loop::AgentHub::new(
         event_loop::AgentHubParts {
             registry,
@@ -674,6 +697,7 @@ pub(crate) fn build_hub(setup: HubSetup) -> Arc<event_loop::AgentHub> {
                         .with_background_jobs(Arc::clone(&jobs))
                         .with_file_change_hook(file_hook);
                     executor.register(Box::new(TodoWriteTool));
+                    web_tools.register(&mut executor);
                     let mut executor_router = ExecutorRouter::new();
                     executor_router.add_executor(Arc::new(executor));
                     let mut config = kernel_config.clone();
@@ -694,6 +718,7 @@ pub(crate) fn build_hub(setup: HubSetup) -> Arc<event_loop::AgentHub> {
             )
             .with_checkpoints(checkpoints)
             .with_file_checkpoints(file_checkpoints)
+            .with_post_edit_check(post_edit_check, check_commands)
         },
     )
 }

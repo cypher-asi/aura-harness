@@ -111,7 +111,7 @@ fn headless_in(
         inner: provider,
         requests: Arc::clone(&requests),
     });
-    let (tool_config, tools) = agent_tools(false);
+    let (tool_config, tools, web_tools) = agent_tools(false);
     let tool_names = policy_tool_names(&tools);
     let config = default_agent_config_with_auth("mock-model", None);
     let (commands, mut ui) = mpsc::channel(256);
@@ -139,6 +139,8 @@ fn headless_in(
         mode,
         instructions: crate::project_instructions::ProjectInstructions::only_in(&workspace),
         approvals: None,
+        web_tools,
+        post_edit_check: aura_agent::PostEditCheckConfig::from_lookup(|_| None),
     });
     let headless = Headless {
         hub,
@@ -476,6 +478,37 @@ async fn a_tool_outside_the_allow_list_is_denied() {
         !sent_tools.iter().any(|t| t == "write_file"),
         "{sent_tools:?}"
     );
+}
+
+#[tokio::test]
+async fn web_tools_can_be_disallowed() {
+    let dirs = dirs();
+    let provider = MockProvider::new()
+        .with_response(MockResponse::tool_use(
+            "f1",
+            "web_fetch",
+            json!({"url": "https://example.com"}),
+        ))
+        .with_response(MockResponse::text("Tried."));
+    let filter = ToolFilter::new(&[], &["web_fetch,web_search".to_string()]);
+    let (mut h, _) = headless(&dirs, provider, filter);
+
+    let (report, out) = execute(
+        &mut h,
+        request("fetch", SessionChoice::New),
+        OutputFormat::StreamJson,
+    )
+    .await;
+
+    assert_eq!(report.exit_reason, ExitReason::Success);
+    let lines = out.json_lines();
+    let offered = lines[0]["tools"].as_array().unwrap();
+    assert!(offered.iter().any(|t| t == "read_file"), "{offered:?}");
+    assert!(!offered
+        .iter()
+        .any(|t| t == "web_fetch" || t == "web_search"));
+    let result = lines.iter().find(|l| l["type"] == "tool_result").unwrap();
+    assert_eq!(result["is_error"], true, "{result}");
 }
 
 fn write_out_txt() -> MockProvider {
