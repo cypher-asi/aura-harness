@@ -182,6 +182,7 @@ pub async fn start(
         web_tools,
         post_edit_check: post_edit_check_from_env(),
         trace_snapshots: true,
+        gate: crate::runner::gate_runner(),
     });
     let _ = cmd_tx.try_send(UiCommand::SetAgents(hub.agent_summaries()));
     let _ = cmd_tx.try_send(UiCommand::SetActiveAgent(identity.agent_id.to_hex()));

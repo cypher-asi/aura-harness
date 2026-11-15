@@ -53,6 +53,7 @@ fn slow_fixture(reply: &str, latency_ms: u64) -> Fixture {
         processes: ProcessTable::without_os_scan(None, None),
         agents: None,
         record_panel: Default::default(),
+        gate: None,
     };
     let reply = reply.to_string();
     let workspace_root = workspace.path().to_path_buf();

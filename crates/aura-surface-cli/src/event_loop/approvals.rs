@@ -233,6 +233,9 @@ pub struct TerminalApprovals {
     rules: Mutex<ProjectRules>,
     /// Project folder of each agent with a kernel
     folders: Mutex<HashMap<AgentId, PathBuf>>,
+    /// Agents without a chat of their own (gate workers), and the agent
+    /// whose chat asks for them
+    shown_in: Mutex<HashMap<AgentId, AgentId>>,
     timeout: Duration,
 }
 
@@ -271,6 +274,7 @@ impl TerminalApprovals {
             pending: Mutex::new(HashMap::new()),
             rules: Mutex::new(ProjectRules::load(data_dir)),
             folders: Mutex::new(HashMap::new()),
+            shown_in: Mutex::new(HashMap::new()),
             timeout,
         }
     }
@@ -285,6 +289,17 @@ impl TerminalApprovals {
     /// allow" rules belong to.
     pub fn set_folder(&self, agent_id: AgentId, folder: PathBuf) {
         lock(&self.folders).insert(agent_id, folder);
+    }
+
+    /// Ask for `agent_id`'s calls in `owner`'s chat until
+    /// [`Self::stop_showing_in`].
+    pub fn show_in(&self, agent_id: AgentId, owner: AgentId) {
+        lock(&self.shown_in).insert(agent_id, owner);
+    }
+
+    /// Undo [`Self::show_in`] for `agent_id`.
+    pub fn stop_showing_in(&self, agent_id: AgentId) {
+        lock(&self.shown_in).remove(&agent_id);
     }
 
     fn folder_of(&self, agent_id: AgentId) -> Option<PathBuf> {
@@ -430,8 +445,11 @@ const fn once(decision: ToolState) -> ToolApprovalResponse {
 impl ToolApprovalPrompter for TerminalApprovals {
     async fn prompt(
         &self,
-        prompt: PendingToolPrompt,
+        mut prompt: PendingToolPrompt,
     ) -> Result<ToolApprovalResponse, ToolApprovalError> {
+        if let Some(owner) = lock(&self.shown_in).get(&prompt.agent_id).copied() {
+            prompt.agent_id = owner;
+        }
         // Commands the user typed in the chat are already their decision.
         // The kernel's request id is `<agent hex>:<tool use id>`.
         let typed = prompt

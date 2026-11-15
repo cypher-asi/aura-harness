@@ -463,6 +463,20 @@ pub(crate) struct HubSetup {
     /// Keep kernel snapshots where run traces can replay them, instead of
     /// the kernel's default store
     pub trace_snapshots: bool,
+    /// Runs the blocks of agents on a gate model; from [`gate_runner`]
+    pub gate: Arc<aura_agent_gate::BlockRunner>,
+}
+
+/// The gate runner for a terminal or `aura -p` process, with its policy
+/// and ledger under the Aura home.
+pub(crate) fn gate_runner() -> Arc<aura_agent_gate::BlockRunner> {
+    crate::gate::runner(
+        aura_config::AuraHome::resolve()
+            .ok()
+            .map(|home| home.path)
+            .as_deref(),
+        None,
+    )
 }
 
 /// What [`build_hub`] built.
@@ -491,6 +505,7 @@ pub(crate) fn background_process_manager() -> (Arc<ProcessManager>, mpsc::Receiv
 pub(crate) fn policy_tool_names(tools: &[aura_model_reasoner::ToolDefinition]) -> Vec<String> {
     let mut names: Vec<String> = tools.iter().map(|tool| tool.name.clone()).collect();
     names.push(aura_tools::agents::task::TASK_TOOL_NAME.to_string());
+    names.push(crate::gate::RUN_BLOCKS_TOOL.to_string());
     names
 }
 
@@ -543,6 +558,7 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
         web_tools,
         post_edit_check,
         trace_snapshots,
+        gate,
     } = setup;
     let mut kernel_config = KernelConfig {
         workspace_base: workspace_root.clone(),
@@ -606,6 +622,7 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
     });
     let kernel_agents = agents.clone();
     let kernel_background = Arc::clone(&background);
+    let kernel_gate = Arc::clone(&gate);
 
     let checkpoints = crate::session_checkpoint::Checkpoints::new(&data_dir);
     let file_checkpoints = crate::file_checkpoints::FileCheckpoints::new(&data_dir);
@@ -625,6 +642,10 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
             processes,
             agents,
             record_panel,
+            gate: Some(event_loop::GateHost {
+                runner: gate,
+                approvals: approvals.clone(),
+            }),
         },
         move |dispatcher| {
             event_loop::KernelFactory::new(
@@ -648,6 +669,9 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
                             .with_agent_read_hook(hooks);
                     }
                     executor.register(Box::new(TodoWriteTool));
+                    executor.register(Box::new(aura_agent_gate::RunBlocksTool::new(Arc::clone(
+                        &kernel_gate,
+                    ))));
                     web_tools.register(&mut executor);
                     let mut executor_router = ExecutorRouter::new();
                     executor_router.add_executor(Arc::new(executor));

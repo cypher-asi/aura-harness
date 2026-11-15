@@ -106,6 +106,17 @@ fn headless_in(
     filter: ToolFilter,
     mode: PermissionMode,
 ) -> (Headless, Arc<Mutex<Vec<ModelRequest>>>) {
+    headless_on(dirs, provider, filter, mode, "mock-model")
+}
+
+/// [`headless_in`] with `model` selected.
+fn headless_on(
+    dirs: &Dirs,
+    provider: MockProvider,
+    filter: ToolFilter,
+    mode: PermissionMode,
+    model: &str,
+) -> (Headless, Arc<Mutex<Vec<ModelRequest>>>) {
     let data = dirs.data.path();
     let workspace = dirs.workspace.path().to_path_buf();
     let requests = Arc::new(Mutex::new(Vec::new()));
@@ -115,7 +126,7 @@ fn headless_in(
     });
     let (tool_config, tools, web_tools) = agent_tools(false);
     let tool_names = policy_tool_names(&tools);
-    let config = default_agent_config_with_auth("mock-model", None);
+    let config = default_agent_config_with_auth(model, None);
     let (commands, mut ui) = mpsc::channel(256);
     tokio::spawn(async move { while ui.recv().await.is_some() {} });
     let (process_manager, completions) = background_process_manager();
@@ -145,6 +156,7 @@ fn headless_in(
         web_tools,
         post_edit_check: aura_agent::PostEditCheckConfig::from_lookup(|_| None),
         trace_snapshots: false,
+        gate: crate::gate::runner(Some(data), None),
     });
     let notices = hub.take_notices();
     let headless = Headless {
@@ -152,7 +164,7 @@ fn headless_in(
         background,
         completions,
         notices,
-        model: "mock-model".to_string(),
+        model: model.to_string(),
         mode: mode.agent_mode(),
         workspace_root: workspace,
         tool_filter: filter,
@@ -595,4 +607,68 @@ fn session_ids_round_trip() {
     assert_eq!(parse_session_id(" 12 ", other), Ok((other, 12)));
     assert!(parse_session_id("nope", other).is_err());
     assert!(parse_session_id("zz:12", other).is_err());
+}
+
+#[tokio::test]
+async fn gate_model_hands_blocks_to_cheaper_workers() {
+    let dirs = dirs();
+    let provider = MockProvider::new().with_responses(vec![
+        MockResponse::tool_use(
+            "rb1",
+            "run_blocks",
+            json!({ "blocks": [{
+                "title": "write greeting",
+                "kind": "edit",
+                "risk": "low",
+                "instructions": "Create greeting.txt containing exactly `hello, aura`.",
+                "files": ["greeting.txt"],
+                "checks": ["bash -c \"grep -qx 'hello, aura' greeting.txt\""]
+            }]}),
+        ),
+        MockResponse::tool_use(
+            "w1",
+            "write_file",
+            json!({ "path": "greeting.txt", "content": "hello, aura\n" }),
+        ),
+        MockResponse::text("Wrote greeting.txt."),
+        MockResponse::text("Done."),
+    ]);
+    let mode = super::permission_mode(aura_core_modes::AgentMode::Agent);
+    let (mut h, requests) = headless_on(
+        &dirs,
+        provider,
+        ToolFilter::default(),
+        mode,
+        "gate/claude/claude-opus-5-5",
+    );
+    let (_, out) = execute(
+        &mut h,
+        request("Add a greeting file.", SessionChoice::New),
+        OutputFormat::Text,
+    )
+    .await;
+    assert_eq!(out.text().trim(), "Done.");
+    assert_eq!(
+        std::fs::read_to_string(dirs.workspace.path().join("greeting.txt")).unwrap(),
+        "hello, aura\n"
+    );
+
+    let requests = requests.lock().unwrap();
+    let tools = |r: &ModelRequest| -> Vec<String> { r.tools.iter().map(|t| t.name.clone()).collect() };
+    let coordinator = &requests[0];
+    assert_eq!(coordinator.model.as_str(), "claude/claude-opus-5-5");
+    assert!(tools(coordinator).contains(&"run_blocks".to_string()));
+    assert!(!tools(coordinator).contains(&"write_file".to_string()));
+    assert!(coordinator.system.contains("Working through the gate"));
+    let worker = &requests[1];
+    assert_eq!(worker.model.as_str(), "claude/claude-haiku-5-5");
+    assert!(tools(worker).contains(&"write_file".to_string()));
+    assert!(!tools(worker).contains(&"run_blocks".to_string()));
+    assert_eq!(requests[3].model.as_str(), "claude/claude-opus-5-5");
+
+    let ledger = std::fs::read_to_string(dirs.data.path().join("gate/ledger.jsonl")).unwrap();
+    let entries: Vec<Value> = ledger.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["tier"], "fast");
+    assert_eq!(entries[0]["block_passed"], true);
 }
