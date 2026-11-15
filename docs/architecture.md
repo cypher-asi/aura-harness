@@ -28,7 +28,7 @@ plugin  <  exec  <  agent   <  surface
 | context  | Read-only context assembly (memory, skills, compaction, prompts).                | `aura-context-prompts`, `aura-context-memory`, `aura-context-compaction`, `aura-context-skills`. |
 | plugin   | Plugin manifest schema, in-process API, hooks, MCP, connectors.                  | `aura-plugin-api`, `aura-plugin-core`, `aura-plugin-hooks`, `aura-plugin-mcp`, `aura-plugin-connectors`. |
 | exec     | Tool catalog + executor, executor traits, sandbox, isolation.                    | `aura-tools`, `aura-exec-traits`, `aura-exec-sandbox`, `aura-exec-isolation`. |
-| agent    | Single-agent kernel + turn loop + steering + subagent derivation.                | `aura-agent-kernel`, `aura-agent`, `aura-agent-steering`, `aura-agent-subagent`. |
+| agent    | Single-agent kernel + turn loop + steering + subagent derivation + cost gate.    | `aura-agent-kernel`, `aura-agent`, `aura-agent-steering`, `aura-agent-subagent`, `aura-agent-gate`. |
 | surface  | Composition roots: HTTP/WS gateway, orchestration engine, CLI, TUI, automaton host, domain HTTP, auth. | `aura-runtime`, `aura-engine`, `aura-surface-cli`, `aura-domain-http`, `aura-terminal`, `aura-automaton`, `aura-auth`, `aura-auth-kit`, `aura-auth-zos`, `aura-auth-chatgpt`, `aura-auth-claude`. |
 
 ### Dependency rules
@@ -159,6 +159,16 @@ Subagents are ordinary agents started by other agents, and they can start agents
 The gateway holds one node-wide `AgentHost` on `RouterState`. Each chat session registers itself as a root agent in [`gateway/session/helpers.rs`](../crates/aura-runtime/src/gateway/session/helpers.rs) and attaches the returned `AgentHooks` to its kernel; `session/child_kernel.rs` builds the tool surface for each child. A spawn derives the child spec with `derive_subagent` (mode, permissions and model may only narrow; tools are filtered by the child's permissions), appends a `SubagentSpawn` audit row to the parent, and runs the child through the engine's `Scheduler`, so the child gets the same per-agent claim and record pipeline as ordinary work. Depth is capped by `AURA_SUBAGENT_MAX_DEPTH` (default 8) and concurrent children by `AURA_SUBAGENT_MAX_RUNNING` (default 32). Messages for a root (for example a detached task's result) land in the session's mailbox and start a new turn once the session is idle.
 
 The interactive terminal holds its own `AgentHost` ([`event_loop/host.rs`](../crates/aura-surface-cli/src/event_loop/host.rs)). Each terminal agent, and each permanent-agent instance it starts with `task`, registers as a root before its turn, and every terminal kernel gets that agent's `AgentHooks`, so `spawn_agent`, `send_to_agent`, `agent_lifecycle`, `get_agent_state` and `list_agents` work there too (`task` still goes to the terminal's permanent agents). A message for a terminal agent becomes a notice ([`event_loop/notices.rs`](../crates/aura-surface-cli/src/event_loop/notices.rs)). Terminal agents work in parallel, each turn on its own task, so a notice is delivered like any other message: into the agent's running turn through its steering handle if it has one, else as the start of a new turn, whether or not the agent is on screen. Background `task` spawns (`spawn_mode: "detached"`) and background `run_command` calls report back the same way. `aura -p` builds the same hub (`runner::build_hub`) and feeds the notices for its agent into its turns, waiting for outstanding background work before it ends.
+
+### Cost gate
+
+A model id of the form `gate/<frontier>` (for example `gate/claude/claude-opus-5-5`) runs the frontier model as a coordinator and hands blocks of work to cheaper models on the same route ([`aura-agent-gate`](../crates/aura-agent-gate)). Billing, sign-in and context size follow the frontier; `RoutedProvider` sends the coordinator's own calls as the frontier id.
+
+- **Coordinator.** Its turn gets the `run_blocks` tool, loses the write tools (`write_file`, `edit_file`, `delete_file`, unless the policy sets `coordinator_edits`) and gets a "Working through the gate" system-prompt section listing the tiers. Each block names a goal, files, visible checks, hidden acceptance checks and a verification level (`ran`, `built`, `tested`, `accepted`, `reviewed`).
+- **Workers.** `BlockRunner` picks a tier (fast, standard, frontier) from the policy, snapshots the workspace, and starts a `gate_block` child through the caller's `SubagentDispatchHook`. The child is a fresh kernel with the tier's model, a reasoning effort, a tool subset and a budget, so its model calls are recorded on its own log (Invariants §1 and §3). The gate never calls a model.
+- **Ladder.** Checks run through `run_command`. A failed block is fixed once on the same tier with the failure output, then restored from the snapshot and retried a tier up; a block that fails at the top goes back to the coordinator to re-plan. Acceptance checks are never shown to workers.
+- **Ledger and policy.** Each attempt (policy version, block bucket, tier and model, why it was chosen and with what propensity, verification level reached, cost, pass or fail) is appended to `AURA_HOME/gate/ledger.jsonl`. `aura gate fit` turns the ledger and run outcomes into a versioned policy; `aura gate promote` makes one active only when `aura gate bench` shows it cheaper than the reference arm without a significant pass-rate loss overall or in any category.
+- **Surfaces.** `aura -p` and `aura eval run` (`recorded_runs.rs`) and the terminal (`event_loop/gate_workers.rs`) wire the same runner. In the terminal a worker's approval prompts show in the coordinator's chat and each worker is a PROCESSES row. `run_blocks` is a spawn-class tool, so it asks in `default` mode and is denied by `aura -p` unless the mode is `agent`. Each attempt's cost is in the ledger; eval runs also add worker cost to the coordinator's run as the `child_cost_usd` reward.
 
 ### Processes
 
@@ -374,6 +384,10 @@ Subagent derivation, inheritance, registry, and the pure-data adapter layer that
 - `adapters.rs` — `parent_context_from_request`, `overrides_from_request`, `narrow_permissions`, `legacy_permissions_to_modes`, `core_to_modes_kernel`. These are the dispatcher's pure-data helpers, lifted out of the old `aura-runtime/src/subagent_dispatch.rs` so the agent layer owns every piece of subagent state assembly without taking any runtime deps.
 
 The `SubagentDispatchHook` trait stays at the **exec layer** in `aura-tools` (unchanged — see below); the concrete impl is `AgentHooks` in `aura-engine`. Phase 7a routed the `task` tool through this crate; Phase B widened it to also own the dispatcher's data layer.
+
+#### [`aura-agent-gate`](../crates/aura-agent-gate)
+
+The cost gate: `Tiers` and `gate/<frontier>` ids (`tier.rs`), `BlockSpec` / `BlockResult` (`block.rs`), the rule table with earned tiers and expected-cost choice (`policy.rs`), retry and escalation (`ladder.rs`), checks through `run_command` (`verify.rs`), pre-block snapshots (`undo.rs`), `BlockRunner` (`runner.rs`), the `run_blocks` tool (`tool.rs`), coordinator prompts (`prompts.rs`), and the ledger and policy fitting (`ledger.rs`, `fit.rs`). It depends only on the core, model and exec layers; surfaces supply the worker dispatcher.
 
 #### [`aura-agent`](../crates/aura-agent)
 

@@ -27,7 +27,8 @@ Defined in [`crates/aura-surface-cli/src/cli.rs`](../crates/aura-surface-cli/src
 | `aura plugins list` | List installed plugins and their active versions. |
 | `aura plugins enable <id> [--yes\|--no]` / `disable <id>` | Toggle a plugin in `AURA_HOME/config.toml`, answering the trust prompt if required. |
 | `aura runs list\|show\|diff\|label\|verify\|branch` | Inspect, compare, label and branch recorded runs in `AURA_HOME/runs/`. See [run-traces.md](run-traces.md). |
-| `aura eval run [SUITE]` / `aura eval compare` | Run a task suite (default `evals/coding`) with optional `--set key=value` harness arms, and compare arms or a baseline. |
+| `aura eval run [SUITE]` / `aura eval compare` | Run a task suite (default `evals/coding`) with optional `--set key=value` harness arms and a `--budget-usd` cap, and compare arms or a baseline. |
+| `aura gate report\|fit\|bench\|promote` | Inspect, refit, benchmark and promote the cost gate's routing policy. See [Gate models](#gate-models). |
 | `aura dataset build --format sft\|preference\|rl\|harness-bandit` | Export recorded runs as training data. |
 
 ## Sign-in and model routes
@@ -40,12 +41,32 @@ Each model id names the route that serves it, and the user picks it in `/model`:
 | `aura-*` and other aliases | aura-router, billed to the zOS account | `aura login` |
 | `claude/<model>` | `api.anthropic.com`, billed to your Claude plan | `aura login claude` |
 | `chatgpt/<model>` | OpenAI Responses API, billed to your ChatGPT plan | `aura login chatgpt` |
+| `gate/<model>` | The route of `<model>`, which coordinates cheaper models on that route. See [Gate models](#gate-models). | what `<model>` needs |
 
 Routes never fall back to one another, so who pays never changes silently. If a model loses its sign-in (logout, unlink, revoked token), the terminal switches to the local default model.
 
 Plan links belong to the identity that made them: this machine's local profile while signed out, otherwise the zOS user. Tokens are stored in the OS keyring, or in `~/.aura/auth/secrets/` (mode 0600) when no keyring is available. Link metadata is in `~/.aura/auth/index.json`.
 
 The Claude link uses the OAuth client that Claude Code uses. Anthropic does not publish it for other apps, and its terms may not allow plan use outside Claude Code. `aura login claude` prints this warning before you sign in.
+
+## Gate models
+
+`/model` lists a "Gate · <label>" entry for each Opus-class model, with the id `gate/<model>`, such as `gate/claude/claude-opus-5-5`. `--model gate/claude/claude-opus-5-5` does the same for `aura -p` and `aura eval run`. A gate model is billed, signed in and sized like `<model>`, but its turn runs as a coordinator: `<model>` plans, reads and decides, and hands work to the `run_blocks` tool instead of editing files itself.
+
+- **Blocks.** Each block has a goal, the files it touches, checks the worker can see, acceptance checks it can't, and the verification it needs. The gate runs it on the cheapest tier likely to pass (for Claude: Haiku, then Sonnet, then Opus), runs the checks, and on failure lets the same tier fix it once, then puts the files back and tries the next tier up with the failure output. A block that fails at the top tier goes back to the coordinator.
+- **In the terminal.** Each worker shows in PROCESSES as `gate: <block> (<model>)`, and a worker's approval prompts appear in the coordinator's chat. `run_blocks` itself asks for approval in `default` mode, like `task`.
+- **In `aura -p`.** `run_blocks` starts agents, so it is denied unless the mode is `agent` (the default).
+- **Cost.** The status line and `/cost` count the coordinator's own calls. Each worker attempt's cost is in the ledger (`aura gate report`), and `aura eval run` adds the workers' cost to the run as `child_cost_usd` and reports both together.
+- **Learning.** Every attempt is appended to `AURA_HOME/gate/ledger.jsonl`. Settings are in [Cost gate](configuration.md#cost-gate).
+
+```sh
+aura gate report                                  # active policy and ledger summary
+aura gate fit [--version v3]                      # writes AURA_HOME/gate/policies/vN.json
+aura gate bench [SUITE] --reference opus --arm gate [--arm gate-v3] [--cheap haiku] [--margin 0.1]
+aura gate promote <POLICY> --arm gate-v3 --reference opus [--cheap haiku] [--margin 0.1] [--force]
+```
+
+`bench` reads recorded eval runs of each arm (run `aura eval run --arm <name>` first; the suite defaults to [`evals/gate_cost`](../evals/gate_cost/README.md)) and pairs them by task. It prints each arm's pass rate, cost per run, worker share and cost relative to the reference, then the pass-rate difference to the reference with a 95% interval from resampling tasks, overall and per category. With `--cheap`, it also prints the mix of reference and cheap runs that costs the same as each arm, and whether the arm beats it. `promote` copies the policy to `AURA_HOME/gate/policy.json` only if every gate attempt in the arm's runs used that policy, the arm costs less than the reference, the interval's lower end stays above `-margin` overall and in every category, and the arm beats the mix when `--cheap` is given. `--force` skips these checks.
 
 ## Long tasks in the terminal
 

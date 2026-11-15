@@ -7,6 +7,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Cost gate (`aura-agent-gate`)
+
+##### Added
+
+- `gate/<model>` model ids (for example `gate/claude/claude-opus-5-5`,
+  "Gate · …" in `/model`). The frontier model coordinates and hands
+  blocks of work to `run_blocks`, which runs each block on the cheapest
+  tier likely to pass (Haiku, Sonnet, Opus for Claude), verifies it with
+  visible and hidden checks, fixes once in place, then escalates from
+  the pre-block files. Works in the terminal, `aura -p` and
+  `aura eval run`. See [Gate models](docs/cli.md#gate-models).
+- Every attempt is appended to `AURA_HOME/gate/ledger.jsonl`.
+  `aura gate report`, `fit`, `bench` and `promote` turn it into a
+  versioned policy and make a policy active only when a paired benchmark
+  shows lower cost without a significant pass-rate loss, overall and per
+  category. Settings: `AURA_GATE_POLICY`, `AURA_GATE_EXPLORE`,
+  `AURA_GATE_EXPLORE_BUDGET_USD`, `AURA_GATE_TIERS`, `AURA_GATE_LEDGER`.
+- `evals/gate_cost`: 20 tasks with hidden checks, categories and
+  reference solutions. Eval tasks can set `category`, `tags` and a
+  `checks/` folder copied in after the run; `aura eval run` reports each
+  run's cost (gate workers included) and takes `--budget-usd`.
+
 ### Run traces (`aura-agent-trace`)
 
 ##### Added
