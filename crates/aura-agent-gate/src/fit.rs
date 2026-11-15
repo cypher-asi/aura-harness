@@ -213,7 +213,7 @@ mod tests {
             .collect();
         let base = GatePolicy::default();
         let fitted = fit(&base, &entries, &HashMap::new(), "v1");
-        assert_eq!(fitted.parent.as_deref(), Some("v0-rules"));
+        assert_eq!(fitted.parent.as_deref(), Some(crate::RULES_VERSION));
         assert_eq!(earned_tiers(&fitted)["docs"], vec![Tier::Fast]);
         let text = report(&fitted, &entries);
         assert!(text.contains("earned"), "{text}");

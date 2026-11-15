@@ -9,13 +9,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aura_agent::{AgentLoop, AgentLoopConfig, KernelModelGateway, KernelToolGateway};
-use aura_agent_gate::{prompts, BlockRunner, GatePolicy, GateSettings};
+use aura_agent_gate::{prompts, BlockRunner, BlockSpec, GatePolicy, GateSettings, RunBlocksOutput};
 use aura_agent_kernel::Kernel;
 use aura_config::gate::GateConfig;
 use aura_core_types::{
-    AgentId, SubagentDispatchRequest, SubagentExit, SubagentResult, Transaction,
+    AgentId, SubagentDispatchRequest, SubagentExit, SubagentResult, ToolProposal, Transaction,
 };
-use aura_model_reasoner::{model_catalog, Message, ThinkingEffort, ToolDefinition, Usage};
+use aura_model_reasoner::{
+    model_catalog, ContentBlock, Message, Role, ThinkingEffort, ToolDefinition, ToolResultContent,
+    Usage,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -81,12 +84,57 @@ pub fn coordinate(
         warn!(error = %e, "Gate tier overrides ignored");
         aura_agent_gate::Tiers::for_frontier(&frontier)
     });
-    let edits = runner.settings().policy.coordinator_edits;
+    let policy = &runner.settings().policy;
+    let edits = policy.coordinator_edits;
     config.system_prompt.push_str("\n\n");
-    config
-        .system_prompt
-        .push_str(&prompts::coordinator_section(&tiers, edits));
+    config.system_prompt.push_str(&prompts::coordinator_section(
+        &tiers,
+        edits,
+        policy.draft_first,
+    ));
     aura_agent_gate::coordinator_tools(tools, edits)
+}
+
+/// `ToolProposal::source` of the gate's drafts.
+pub const DRAFT_SOURCE: &str = "gate";
+
+/// When the policy drafts first, hand `request` to the fast tier as a
+/// `run_blocks` call through `kernel` (policy-checked and recorded like
+/// a model's call) and return the call and its result as messages for
+/// the coordinator. `None` when drafts are off or the call was refused.
+pub async fn draft(runner: &BlockRunner, kernel: &Kernel, request: &str) -> Option<[Message; 2]> {
+    if !runner.settings().policy.draft_first {
+        return None;
+    }
+    let proposal = ToolProposal::new(
+        format!("gate_{}", uuid::Uuid::new_v4().simple()),
+        RUN_BLOCKS_TOOL,
+        serde_json::json!({ "blocks": [BlockSpec::draft_of(request)] }),
+    )
+    .with_source(DRAFT_SOURCE);
+    let (_, result) = crate::event_loop::run_command::process_user_proposal(kernel, &proposal)
+        .await
+        .map_err(|e| warn!(error = %e, "Gate draft failed in the kernel"))
+        .ok()?;
+    let output = result.tool_output?;
+    // A refusal (policy, approval) is not a block result; the coordinator
+    // then starts without a draft.
+    serde_json::from_str::<RunBlocksOutput>(&output.content).ok()?;
+    Some([
+        Message::new(
+            Role::Assistant,
+            vec![ContentBlock::tool_use(
+                proposal.tool_use_id.clone(),
+                proposal.tool,
+                proposal.args,
+            )],
+        ),
+        Message::tool_results(vec![(
+            proposal.tool_use_id,
+            ToolResultContent::text(output.content),
+            output.is_error,
+        )]),
+    ])
 }
 
 /// Run one gate worker on `kernel` (a fresh child agent) with the

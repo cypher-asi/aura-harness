@@ -610,21 +610,9 @@ fn session_ids_round_trip() {
 }
 
 #[tokio::test]
-async fn gate_model_hands_blocks_to_cheaper_workers() {
+async fn gate_model_drafts_on_the_fast_tier_then_the_coordinator_reviews() {
     let dirs = dirs();
     let provider = MockProvider::new().with_responses(vec![
-        MockResponse::tool_use(
-            "rb1",
-            "run_blocks",
-            json!({ "blocks": [{
-                "title": "write greeting",
-                "kind": "edit",
-                "risk": "low",
-                "instructions": "Create greeting.txt containing exactly `hello, aura`.",
-                "files": ["greeting.txt"],
-                "checks": ["bash -c \"grep -qx 'hello, aura' greeting.txt\""]
-            }]}),
-        ),
         MockResponse::tool_use(
             "w1",
             "write_file",
@@ -654,18 +642,24 @@ async fn gate_model_hands_blocks_to_cheaper_workers() {
     );
 
     let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
     let tools =
         |r: &ModelRequest| -> Vec<String> { r.tools.iter().map(|t| t.name.clone()).collect() };
-    let coordinator = &requests[0];
+    let worker = &requests[0];
+    assert_eq!(worker.model.as_str(), "claude/claude-haiku-5-5");
+    assert!(tools(worker).contains(&"write_file".to_string()));
+    assert!(!tools(worker).contains(&"run_blocks".to_string()));
+    let coordinator = &requests[2];
     assert_eq!(coordinator.model.as_str(), "claude/claude-opus-5-5");
     assert!(tools(coordinator).contains(&"run_blocks".to_string()));
     assert!(!tools(coordinator).contains(&"write_file".to_string()));
     assert!(coordinator.system.contains("Working through the gate"));
-    let worker = &requests[1];
-    assert_eq!(worker.model.as_str(), "claude/claude-haiku-5-5");
-    assert!(tools(worker).contains(&"write_file".to_string()));
-    assert!(!tools(worker).contains(&"run_blocks".to_string()));
-    assert_eq!(requests[3].model.as_str(), "claude/claude-opus-5-5");
+    let seen = serde_json::to_string(&coordinator.messages).unwrap();
+    assert!(seen.contains("run_blocks"), "{seen}");
+    assert!(
+        seen.contains("greeting.txt"),
+        "the draft's diff reaches the coordinator"
+    );
 
     let ledger = std::fs::read_to_string(dirs.data.path().join("gate/ledger.jsonl")).unwrap();
     let entries: Vec<Value> = ledger
@@ -674,5 +668,7 @@ async fn gate_model_hands_blocks_to_cheaper_workers() {
         .collect();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0]["tier"], "fast");
-    assert_eq!(entries[0]["block_passed"], true);
+    assert_eq!(entries[0]["bucket"], "draft");
+    assert_eq!(entries[0]["reason"], "draft");
+    assert_eq!(entries[0]["policy"], "v1-draft");
 }

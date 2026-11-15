@@ -129,7 +129,7 @@ pub async fn run(spec: HeadlessRun) -> anyhow::Result<HeadlessOutcome> {
         agent_id,
     )?);
     let model_gateway = KernelModelGateway::new(Arc::clone(&kernel));
-    let tool_gateway = KernelToolGateway::new(kernel);
+    let tool_gateway = KernelToolGateway::new(Arc::clone(&kernel));
 
     config.trace_blobs = rec.blob_store();
     let agent_loop = AgentLoop::new(config);
@@ -140,6 +140,14 @@ pub async fn run(spec: HeadlessRun) -> anyhow::Result<HeadlessOutcome> {
     for prompt in &spec.prompts {
         rec.begin_turn(prompt);
         messages.push(Message::user(prompt.clone()));
+        if let Some(runner) = &gate_runner {
+            messages.extend(
+                gate::draft(runner, &kernel, prompt)
+                    .await
+                    .into_iter()
+                    .flatten(),
+            );
+        }
         let (tx, mut rx) = mpsc::channel(256);
         let sink = Arc::clone(&rec);
         let forwarder = tokio::spawn(async move {

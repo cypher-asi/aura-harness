@@ -39,6 +39,12 @@ fn write(id: &str, content: &str) -> MockResponse {
     )
 }
 
+/// Turn the gate's drafts off, so the coordinator plans the blocks.
+fn without_drafts(home: &Path) {
+    std::fs::create_dir_all(home.join("gate")).unwrap();
+    std::fs::write(home.join("gate/policy.json"), r#"{"draft_first": false}"#).unwrap();
+}
+
 async fn gate_run(home: &Path, workspace: &Path, provider: MockProvider) -> HeadlessOutcome {
     let outcome = recorded_runs::run(HeadlessRun {
         home: home.to_path_buf(),
@@ -78,6 +84,7 @@ fn run_blocks_result(home: &Path, run_id: &str) -> Value {
 async fn coordinator_hands_a_checked_block_to_the_fast_tier() {
     let home = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
+    without_drafts(home.path());
     let provider = MockProvider::new().with_responses(vec![
         greeting_block(),
         write("w1", "hello, aura\n"),
@@ -111,6 +118,7 @@ async fn failed_checks_fix_once_then_escalate_from_a_restored_workspace() {
     let home = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
     std::fs::write(ws.path().join("notes.txt"), "keep me\n").unwrap();
+    without_drafts(home.path());
     let provider = MockProvider::new().with_responses(vec![
         greeting_block(),
         write("w1", "hi\n"),
@@ -149,4 +157,32 @@ async fn failed_checks_fix_once_then_escalate_from_a_restored_workspace() {
     assert!(entries.iter().all(|e| e["block_passed"] == true));
     assert_eq!(entries[2]["model"], "claude/claude-sonnet-5-5");
     assert!(outcome.scorecard.unwrap().child_cost_usd > 0.0);
+}
+
+#[tokio::test]
+async fn requests_are_drafted_on_the_fast_tier_first() {
+    let home = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let provider = MockProvider::new().with_responses(vec![
+        write("d1", "hello, aura\n"),
+        MockResponse::text("Created greeting.txt."),
+        MockResponse::text("The greeting file is in place."),
+    ]);
+    let outcome = gate_run(home.path(), ws.path(), provider).await;
+
+    assert_eq!(
+        std::fs::read_to_string(ws.path().join("greeting.txt")).unwrap(),
+        "hello, aura\n"
+    );
+    let entries = ledger(home.path());
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0]["bucket"], "draft");
+    assert_eq!(entries[0]["tier"], "fast");
+    assert_eq!(entries[0]["level"], "ran");
+    let scorecard = outcome.scorecard.unwrap();
+    assert!(scorecard.child_cost_usd > 0.0, "{scorecard:?}");
+    assert_eq!(
+        scorecard.model_calls, 1,
+        "one coordinator call reviews the draft"
+    );
 }

@@ -42,6 +42,15 @@ impl AgentHub {
         crate::gate::coordinate(&gate.runner, agent, config, tools, Some(limits))
     }
 
+    /// The runner to draft a turn with, when `tools` are a coordinator's.
+    pub(crate) fn gate_drafter(&self, tools: &[ToolDefinition]) -> Option<Arc<BlockRunner>> {
+        let gate = self.gate.as_ref()?;
+        tools
+            .iter()
+            .any(|t| t.name == crate::gate::RUN_BLOCKS_TOOL)
+            .then(|| Arc::clone(&gate.runner))
+    }
+
     /// Run one block of a coordinator's `run_blocks` call.
     pub(super) async fn run_gate_block(
         &self,

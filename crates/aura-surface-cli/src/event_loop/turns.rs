@@ -13,6 +13,7 @@ use super::run_command::run_user_command;
 use super::steering::{SteerSource, Steering};
 use crate::long_run::LongRunSettings;
 use aura_agent::{AgentLoop, CompactHistoryError};
+use aura_agent_gate::BlockRunner;
 use aura_agent_trace::RunRecorder;
 use aura_core_types::{AgentId, RecordEntry, Transaction};
 use aura_model_reasoner::{ContentBlock, ImageSource, Message, Role, ToolDefinition};
@@ -78,6 +79,8 @@ pub(super) enum Task {
         steering: Steering,
         limits: LongRunSettings,
         recorder: Option<Arc<RunRecorder>>,
+        /// Runner that drafts the turn first, on gate turns.
+        drafter: Option<Arc<BlockRunner>>,
     },
     /// A typed shell command.
     Command { command: String, cols: u16 },
@@ -157,6 +160,7 @@ async fn run(
             steering,
             limits,
             recorder,
+            drafter,
         } => {
             let turn = TurnParts {
                 agent_loop: &agent_loop,
@@ -164,6 +168,7 @@ async fn run(
                 steering: &steering,
                 limits,
                 recorder,
+                drafter,
             };
             run_prompt(&mut session, prompt, turn, &ui, &cancel).await
         }
@@ -186,6 +191,7 @@ struct TurnParts<'a> {
     steering: &'a Steering,
     limits: LongRunSettings,
     recorder: Option<Arc<RunRecorder>>,
+    drafter: Option<Arc<BlockRunner>>,
 }
 
 /// Record `text` on `session` as a prompt from the user. The kernels'
@@ -237,7 +243,17 @@ async fn run_prompt(
             &prompt.text,
         );
     }
+    let request = prompt.text.clone();
     session.messages.push(model_message(session, prompt).await);
+    if let Some(runner) = &turn.drafter {
+        ui.send(system_message(
+            "gate: a fast worker drafts this request; the coordinator reviews it next".into(),
+        ))
+        .await;
+        if let Some(draft) = crate::gate::draft(runner, &session.kernel, &request).await {
+            session.messages.extend(draft);
+        }
+    }
 
     let (process_result, forwarded) = run_agent_turn(
         session,

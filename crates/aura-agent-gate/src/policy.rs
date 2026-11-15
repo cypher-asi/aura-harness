@@ -17,7 +17,7 @@ use crate::block::{BlockKind, BlockSpec, Risk};
 use crate::tier::{Tier, Tiers};
 
 /// Version string of the built-in rule table.
-pub const RULES_VERSION: &str = "v0-rules";
+pub const RULES_VERSION: &str = "v1-draft";
 
 /// Attempts and passes of one tier in one bucket.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -92,6 +92,9 @@ pub struct GatePolicy {
     /// Let the coordinator edit files itself instead of only through
     /// `run_blocks`.
     pub coordinator_edits: bool,
+    /// Hand each request to the fast tier as a draft before the
+    /// coordinator's first call.
+    pub draft_first: bool,
     /// Learned statistics by bucket.
     pub buckets: BTreeMap<String, BucketStats>,
 }
@@ -108,6 +111,7 @@ impl Default for GatePolicy {
             max_attempts: 4,
             restart_on_escalate: true,
             coordinator_edits: false,
+            draft_first: true,
             buckets: BTreeMap::new(),
         }
     }
@@ -199,6 +203,15 @@ impl GatePolicy {
     /// or the block can't be undone.
     #[must_use]
     pub fn choose(&self, spec: &BlockSpec, tiers: &Tiers, roll: f64, can_explore: bool) -> Choice {
+        if spec.draft {
+            return Choice {
+                tier: Tier::Fast,
+                reason: "draft".into(),
+                propensity: 1.0,
+                explored: false,
+                candidates: Vec::new(),
+            };
+        }
         let rule = Self::rule_tier(spec);
         let floor = spec.min_tier.unwrap_or(Tier::Fast);
         let bucket = self.buckets.get(&spec.bucket());

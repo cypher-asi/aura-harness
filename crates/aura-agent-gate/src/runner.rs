@@ -298,6 +298,9 @@ impl BlockRunner {
             }
             attempts.push(attempt);
             let last = attempts.last().cloned();
+            if spec.draft {
+                break;
+            }
             match ladder::next(&attempts, tiers, self.settings.policy.max_attempts) {
                 Next::Stop => break,
                 Next::Fix(t) => {

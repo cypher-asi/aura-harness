@@ -18,6 +18,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   visible and hidden checks, fixes once in place, then escalates from
   the pre-block files. Works in the terminal, `aura -p` and
   `aura eval run`. See [Gate models](docs/cli.md#gate-models).
+- Gate turns start with a draft: the request goes unchanged to the fast
+  tier, and the coordinator reviews the draft's diff, answering or fixing
+  it with blocks. Block results carry the diff of what they changed.
 - Every attempt is appended to `AURA_HOME/gate/ledger.jsonl`.
   `aura gate report`, `fit`, `bench` and `promote` turn it into a
   versioned policy and make a policy active only when a paired benchmark

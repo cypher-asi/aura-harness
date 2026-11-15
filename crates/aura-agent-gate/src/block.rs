@@ -90,6 +90,9 @@ pub enum VerifyLevel {
     Reviewed,
 }
 
+/// Statistics bucket of drafts.
+pub const DRAFT_BUCKET: &str = "draft";
+
 /// One unit of work for the gate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlockSpec {
@@ -131,9 +134,41 @@ pub struct BlockSpec {
     /// Cheapest tier allowed to do the block.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_tier: Option<Tier>,
+    /// The gate's draft of a whole request: one attempt on the fast
+    /// tier, which the coordinator reviews instead of the gate escalating.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub draft: bool,
 }
 
 impl BlockSpec {
+    /// The draft of `request`: the user's words unchanged, done by a fast
+    /// worker on its own before the coordinator looks at it.
+    #[must_use]
+    pub fn draft_of(request: &str) -> Self {
+        Self {
+            title: "Draft".into(),
+            kind: BlockKind::Edit,
+            instructions: format!(
+                "{}\n\n---\nThis is the user's request, unchanged. Handle all of it on your own: \
+                 find the relevant files, make the change, and run whatever check shows it \
+                 works. If it asks a question, answer it in your final reply. A stronger model \
+                 reviews your work, so say plainly what you were unsure of or left undone.",
+                request.trim()
+            ),
+            command: None,
+            files: Vec::new(),
+            context: String::new(),
+            build: None,
+            checks: Vec::new(),
+            acceptance: Vec::new(),
+            criteria: Vec::new(),
+            review: false,
+            risk: Risk::Medium,
+            min_tier: None,
+            draft: true,
+        }
+    }
+
     /// The level a passing result must reach.
     #[must_use]
     pub fn required_level(&self) -> VerifyLevel {
@@ -160,6 +195,9 @@ impl BlockSpec {
     /// result is checked, and how many files the block starts from.
     #[must_use]
     pub fn bucket(&self) -> String {
+        if self.draft {
+            return DRAFT_BUCKET.to_string();
+        }
         let checked = if self.verifiable() {
             "checked"
         } else {
@@ -400,6 +438,7 @@ pub(crate) mod tests {
             review: false,
             risk: Risk::Medium,
             min_tier: None,
+            draft: false,
         }
     }
 

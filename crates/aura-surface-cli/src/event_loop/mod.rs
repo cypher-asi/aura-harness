@@ -592,6 +592,7 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
             })
             .await;
             let (agent_loop, tools, recorder) = prepare_turn(state, &session).await;
+            let drafter = state.hub.gate_drafter(&tools);
             if let Some(rec) = &recorder {
                 rec.begin_turn(&prompt.text);
             }
@@ -609,6 +610,7 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
                 steering: turn_steering,
                 limits: state.hub.long_run,
                 recorder,
+                drafter,
             }
         }
         Work::Command { command, cols } => Task::Command { command, cols },

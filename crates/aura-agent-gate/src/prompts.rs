@@ -7,7 +7,19 @@ use crate::tier::{Tier, Tiers};
 
 /// System prompt section for the coordinator of a gate turn.
 #[must_use]
-pub fn coordinator_section(tiers: &Tiers, coordinator_edits: bool) -> String {
+pub fn coordinator_section(tiers: &Tiers, coordinator_edits: bool, drafts: bool) -> String {
+    let drafts = if drafts {
+        "Drafts: before your first step the gate hands the user's request, unchanged, to a \
+         fast worker. You see that `run_blocks` call and its result, and the worker's changes \
+         are in the workspace. Nothing but the worker's own word checked a draft, so review \
+         it: compare its diff and summary with the request, looking for missed requirements, \
+         wrong edge cases and changes nobody asked for. If it is right and complete, answer \
+         the user from it in a few sentences, with no more tool calls. If not, fix it with \
+         checked blocks on top of the draft, saying what to change and why; if it went the \
+         wrong way entirely, have the first block undo it.\n\n"
+    } else {
+        ""
+    };
     let edits = if coordinator_edits {
         "You may still make a small edit yourself when writing the block would cost more than \
          the edit."
@@ -35,7 +47,7 @@ pub fn coordinator_section(tiers: &Tiers, coordinator_edits: bool) -> String {
          the changed files or re-run its checks; when every block passed, answer from the \
          results.\n\
          \n\
-         {edits}\n\
+         {drafts}{edits}\n\
          \n\
          How to write blocks:\n\
          - Workers see only the block, not this conversation. Give self-contained \
