@@ -1,6 +1,7 @@
-//! The strip above the grid: a small box per tab holding its number, the
-//! one in front filled, a `+` box after the last, and a wide box with the
-//! name of what the tab in front shows.
+//! The strip above the grid, which is also the window's title bar: a small
+//! box per tab holding its number, the one in front filled, a `+` box
+//! after the last, a wide box with the name of what the tab in front
+//! shows, and the minimize, maximize and close boxes at the right end.
 //!
 //! One [`Layout`] places the boxes for both the painter and the pointer,
 //! so a click lands on what is drawn.
@@ -11,7 +12,7 @@
 use crate::grid::{Metrics, Palette};
 use crate::theme;
 use iced::alignment::Vertical;
-use iced::widget::canvas::{self, Cache, Frame, Geometry};
+use iced::widget::canvas::{self, Cache, Frame, Geometry, Path, Stroke};
 use iced::widget::text::{Alignment, Shaping};
 use iced::{mouse, Color, Pixels, Point, Rectangle, Renderer, Size, Theme};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -29,7 +30,13 @@ pub enum Hit {
     Tab(usize),
     /// The `+` box.
     New,
+    Minimize,
+    Maximize,
+    Close,
 }
+
+/// The window boxes, left to right.
+const CONTROLS: [Hit; 3] = [Hit::Minimize, Hit::Maximize, Hit::Close];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Item {
@@ -77,6 +84,8 @@ pub struct Layout {
     plus: Rectangle,
     /// The wide box, when there is room for it.
     title: Option<Title>,
+    /// The window boxes, in the order of [`CONTROLS`].
+    controls: [Rectangle; 3],
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -90,8 +99,8 @@ struct Title {
 }
 
 impl Layout {
-    /// Boxes for `model`, left to right: the tabs, `+`, and the title box
-    /// taking what is left of the width.
+    /// Boxes for `model`, left to right: the tabs, `+`, the title box
+    /// taking what is left of the width, and the window boxes.
     pub fn of(model: &Model) -> Self {
         let unit = unit(&model.metrics);
         let height = box_height(&model.metrics);
@@ -111,7 +120,14 @@ impl Layout {
         let plus = boxed(x, height);
         x = plus.x + plus.width + gap;
 
-        let room = model.x + model.width - x;
+        let mut controls = [Rectangle::default(); 3];
+        let mut right = model.x + model.width;
+        for control in controls.iter_mut().rev() {
+            *control = boxed(right - height, height);
+            right = control.x - gap;
+        }
+
+        let room = right - x;
         let title = (room >= MIN_TITLE * unit).then(|| {
             let rect = boxed(x, room);
             let text = fit(&model.title, cells_in(room - 2.0 * SIDE * unit, unit));
@@ -121,13 +137,33 @@ impl Layout {
             let center = (model.x + model.width / 2.0).clamp(lowest, highest).round();
             Title { rect, text, center }
         });
-        Self { tabs, plus, title }
+        Self {
+            tabs,
+            plus,
+            title,
+            controls,
+        }
     }
 
+    /// The window boxes win over tabs that run under them.
     pub fn hit(&self, at: Point) -> Option<Hit> {
-        let tab = self.tabs.iter().position(|tab| tab.contains(at));
-        tab.map(Hit::Tab)
+        let control = self.controls.iter().position(|rect| rect.contains(at));
+        let tab = || self.tabs.iter().position(|tab| tab.contains(at));
+        control
+            .map(|index| CONTROLS[index])
+            .or_else(|| tab().map(Hit::Tab))
             .or_else(|| self.plus.contains(at).then_some(Hit::New))
+    }
+
+    #[cfg(test)]
+    fn rect(&self, hit: Hit) -> Option<Rectangle> {
+        match hit {
+            Hit::Tab(index) => self.tabs.get(index).copied(),
+            Hit::New => Some(self.plus),
+            Hit::Minimize => Some(self.controls[0]),
+            Hit::Maximize => Some(self.controls[1]),
+            Hit::Close => Some(self.controls[2]),
+        }
     }
 }
 
@@ -191,10 +227,7 @@ impl Bar {
     /// The middle of the box `hit` names, if it is drawn.
     #[cfg(test)]
     pub fn spot(&self, hit: Hit) -> Option<Point> {
-        let rect = match hit {
-            Hit::Tab(index) => *self.layout.tabs.get(index)?,
-            Hit::New => self.layout.plus,
-        };
+        let rect = self.layout.rect(hit)?;
         Some(Point::new(rect.center_x(), rect.center_y()))
     }
 
@@ -322,6 +355,41 @@ fn paint(frame: &mut Frame, model: &Model, layout: &Layout, hover: Option<Hit>) 
             });
         }
     }
+
+    for (rect, control) in layout.controls.iter().zip(CONTROLS) {
+        let (edge, ink) = if hover == Some(control) {
+            (palette.accent, palette.fg)
+        } else {
+            (idle, palette.muted)
+        };
+        outline(frame, *rect, edge, line);
+        let (cx, cy) = (rect.center_x().round(), rect.center_y().round());
+        match control {
+            Hit::Minimize => frame.fill_rectangle(
+                Point::new(cx - arm, cy + arm - line),
+                Size::new(2.0 * arm + line, line),
+                ink,
+            ),
+            Hit::Maximize => {
+                let side = 2.0 * arm + line;
+                let square = Rectangle::new(Point::new(cx - arm, cy - arm), Size::new(side, side));
+                outline(frame, square, ink, line);
+            }
+            _ => {
+                let stroke = Stroke::default().with_color(ink).with_width(line * 1.25);
+                let (a, b) = (cx - arm + half, cx + arm + half);
+                let (top, bottom) = (cy - arm + half, cy + arm + half);
+                frame.stroke(
+                    &Path::line(Point::new(a, top), Point::new(b, bottom)),
+                    stroke,
+                );
+                frame.stroke(
+                    &Path::line(Point::new(a, bottom), Point::new(b, top)),
+                    stroke,
+                );
+            }
+        }
+    }
 }
 
 /// A box outline `line` pixels thick, on whole pixels inside `rect`.
@@ -381,7 +449,12 @@ mod tests {
         assert!(layout.plus.x > last.x + last.width);
         let title = layout.title.clone().expect("room for a title");
         assert!(title.rect.x > layout.plus.x + layout.plus.width);
-        assert!((title.rect.x + title.rect.width - (model.x + model.width)).abs() <= 1.0);
+        assert!(title.rect.x + title.rect.width < layout.controls[0].x);
+        for pair in layout.controls.windows(2) {
+            assert!(pair[1].x > pair[0].x + pair[0].width);
+        }
+        let close = layout.controls[2];
+        assert!((close.x + close.width - (model.x + model.width)).abs() <= 1.0);
         assert_eq!(title.text, "AURA-HARNESS");
         let bottom = layout.plus.y + layout.plus.height;
         assert!((bottom - height(&model.metrics)).abs() < f32::EPSILON);
@@ -401,11 +474,21 @@ mod tests {
         assert_eq!(layout.hit(Point::new(10.0, 2.0)), None, "above the boxes");
         let title = layout.title.clone().expect("room for a title").rect;
         assert_eq!(layout.hit(middle(title)), None, "the title is no button");
+        assert_eq!(layout.hit(middle(layout.controls[0])), Some(Hit::Minimize));
+        assert_eq!(layout.hit(middle(layout.controls[1])), Some(Hit::Maximize));
+        assert_eq!(layout.hit(middle(layout.controls[2])), Some(Hit::Close));
+    }
+
+    #[test]
+    fn the_window_boxes_stay_reachable_when_tabs_crowd_the_bar() {
+        let layout = Layout::of(&model(20, "AURA-HARNESS", 300.0));
+        assert_eq!(layout.title, None);
+        assert_eq!(layout.hit(middle(layout.controls[2])), Some(Hit::Close));
     }
 
     #[test]
     fn the_title_is_cut_to_its_box_and_left_out_when_there_is_no_room() {
-        let layout = Layout::of(&model(2, "A RATHER LONG PROJECT NAME / AGENT", 220.0));
+        let layout = Layout::of(&model(2, "A RATHER LONG PROJECT NAME / AGENT", 300.0));
         let text = layout.title.expect("room for a short title").text;
         assert!(text.ends_with(".."), "{text:?}");
         assert!(text.starts_with("A RATHER"), "{text:?}");

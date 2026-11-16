@@ -6,6 +6,9 @@
 //! animations count ticks), apply agent commands, render the frame, then
 //! copy selections and hand files to an editor when the UI asks. Every
 //! tab is kept up to date; only the one in front is rendered.
+//!
+//! The window has no frame from the system: the tab bar is its title bar,
+//! and its edges resize it.
 
 use crate::grid::{Grid, Metrics, Palette, Screen};
 use crate::perf::Perf;
@@ -17,7 +20,7 @@ use aura_ui::events::{UiCommand, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use futures::Stream;
 use iced::keyboard::{self, key::Named, Key, Modifiers};
-use iced::widget::{canvas, column};
+use iced::widget::{canvas, column, mouse_area};
 use iced::{event, mouse, window, Element, Length, Point, Size, Subscription, Task, Theme};
 use ratatui::layout::Position;
 use std::path::PathBuf;
@@ -34,6 +37,12 @@ const BLINK: Duration = Duration::from_millis(530);
 /// How often a file opened in an external editor is checked for a save.
 const EDIT_POLL: Duration = Duration::from_secs(1);
 const WINDOW: Size = Size::new(1320.0, 860.0);
+/// Width of the band along the window's sides that resizes it.
+const EDGE: f32 = 6.0;
+/// How far along a side from a corner the band resizes both ways.
+const CORNER: f32 = 16.0;
+/// Two presses on empty tab bar space this close together maximize.
+const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
 /// The channel pair connecting the UI to an agent session.
 pub struct Handles {
@@ -80,6 +89,10 @@ pub struct App {
     pointer: Option<Position>,
     /// Where the pointer is while it is over the tab bar.
     bar_pointer: Option<Point>,
+    /// The window side or corner under the pointer.
+    edge: Option<window::Direction>,
+    /// When empty tab bar space was last pressed, for a double click.
+    last_bar_press: Option<Instant>,
     left_down: bool,
     /// Scroll distance not yet turned into whole lines.
     scroll: f32,
@@ -108,6 +121,7 @@ pub fn run(handles: Handles, options: Options, launched: Instant) -> iced::Resul
     .theme(App::theme)
     .default_font(theme::mono())
     .antialiasing(true)
+    .decorations(false)
     .window_size(WINDOW);
     for font in theme::font_files() {
         app = app.font(font);
@@ -145,6 +159,8 @@ impl App {
             modifiers: Modifiers::empty(),
             pointer: None,
             bar_pointer: None,
+            edge: None,
+            last_bar_press: None,
             left_down: false,
             scroll: 0.0,
             focused: true,
@@ -189,7 +205,11 @@ impl App {
         })
         .width(Length::Fill)
         .height(Length::Fill);
-        let element = column![bar, grid].into();
+        let mut area = mouse_area(column![bar, grid]);
+        if let Some(edge) = self.edge {
+            area = area.interaction(resize_cursor(edge));
+        }
+        let element = area.into();
         self.perf.view(started.elapsed());
         element
     }
@@ -243,7 +263,7 @@ impl App {
                 return self.raise_alerts();
             }
             Message::Key(event) => return self.key(event),
-            Message::Mouse(event) => self.mouse(event),
+            Message::Mouse(event) => return self.mouse(event),
             Message::Resized(size) => {
                 self.window = size;
                 self.clear_selections();
@@ -392,22 +412,25 @@ impl App {
         tui.handle_key(key).should_quit()
     }
 
-    fn mouse(&mut self, event: mouse::Event) {
+    fn mouse(&mut self, event: mouse::Event) -> Task<Message> {
         let kind = match event {
             mouse::Event::CursorMoved { position } => {
+                self.edge = (!self.left_down)
+                    .then(|| edge(self.window, position))
+                    .flatten();
                 let bar = tab_bar::height(&self.metrics);
                 // A drag that began in the grid keeps selecting there.
                 if position.y < bar && !self.left_down {
                     self.bar_pointer = Some(position);
                     self.pointer = None;
-                    return;
+                    return Task::none();
                 }
                 self.bar_pointer = None;
                 let (cols, rows) = self.screen.size();
                 let in_grid = Point::new(position.x, position.y - bar);
                 let at = self.metrics.cell_at(self.grid_area(), cols, rows, in_grid);
                 if self.pointer == Some(at) {
-                    return;
+                    return Task::none();
                 }
                 self.pointer = Some(at);
                 if self.left_down {
@@ -419,22 +442,25 @@ impl App {
             mouse::Event::CursorLeft => {
                 self.pointer = None;
                 self.bar_pointer = None;
-                return;
+                self.edge = None;
+                return Task::none();
             }
             mouse::Event::ButtonPressed(button) => {
+                if let (Some(edge), mouse::Button::Left) = (self.edge, button) {
+                    return window::latest().and_then(move |id| window::drag_resize(id, edge));
+                }
                 if self.bar_pointer.is_some() {
-                    self.bar_press(button);
-                    return;
+                    return self.bar_press(button);
                 }
                 let Some(button) = mouse_button(button) else {
-                    return;
+                    return Task::none();
                 };
                 self.left_down |= button == MouseButton::Left;
                 MouseEventKind::Down(button)
             }
             mouse::Event::ButtonReleased(button) => {
                 let Some(button) = mouse_button(button) else {
-                    return;
+                    return Task::none();
                 };
                 if button == MouseButton::Left {
                     self.left_down = false;
@@ -443,7 +469,7 @@ impl App {
             }
             mouse::Event::WheelScrolled { delta } => {
                 if self.bar_pointer.is_some() {
-                    return;
+                    return Task::none();
                 }
                 let lines = match delta {
                     mouse::ScrollDelta::Lines { y, .. } => y,
@@ -460,24 +486,47 @@ impl App {
                     };
                     self.send_mouse(kind);
                 }
-                return;
+                return Task::none();
             }
-            mouse::Event::CursorEntered => return,
+            mouse::Event::CursorEntered => return Task::none(),
         };
         self.send_mouse(kind);
+        Task::none()
     }
 
-    /// A button went down on the tab bar: left picks or opens a tab,
-    /// middle closes the tab under the pointer.
-    fn bar_press(&mut self, button: mouse::Button) {
+    /// A button went down on the tab bar: left picks or opens a tab or
+    /// works a window box, middle closes the tab under the pointer, and
+    /// left on empty space moves the window, or maximizes it when pressed
+    /// twice.
+    fn bar_press(&mut self, button: mouse::Button) -> Task<Message> {
         match (self.bar.hover(), button) {
             (Some(Hit::Tab(index)), mouse::Button::Left) => self.tabs.focus(index),
             (Some(Hit::Tab(index)), mouse::Button::Middle) => {
                 self.tabs.close(index);
             }
             (Some(Hit::New), mouse::Button::Left) => self.tabs.new_tab(),
+            (Some(Hit::Minimize), mouse::Button::Left) => {
+                return window::latest().and_then(|id| window::minimize(id, true));
+            }
+            (Some(Hit::Maximize), mouse::Button::Left) => {
+                return window::latest().and_then(window::toggle_maximize);
+            }
+            (Some(Hit::Close), mouse::Button::Left) => return iced::exit(),
+            (None, mouse::Button::Left) => {
+                let now = Instant::now();
+                let double = self
+                    .last_bar_press
+                    .is_some_and(|at| now.saturating_duration_since(at) < DOUBLE_CLICK);
+                self.last_bar_press = (!double).then_some(now);
+                return if double {
+                    window::latest().and_then(window::toggle_maximize)
+                } else {
+                    window::latest().and_then(window::drag)
+                };
+            }
             _ => {}
         }
+        Task::none()
     }
 
     fn send_mouse(&mut self, kind: MouseEventKind) {
@@ -680,6 +729,43 @@ fn poll_watch(tab: &mut crate::tab::Tab, now: Instant) {
     }
 }
 
+/// The side or corner of a `window`-sized window that `at` resizes.
+fn edge(window: Size, at: Point) -> Option<window::Direction> {
+    use window::Direction::{East, North, NorthEast, NorthWest, South, SouthEast, SouthWest, West};
+    let within = |band: f32| {
+        (
+            at.x < band,
+            at.x >= window.width - band,
+            at.y < band,
+            at.y >= window.height - band,
+        )
+    };
+    let (west, east, north, south) = within(EDGE);
+    let (near_west, near_east, near_north, near_south) = within(CORNER);
+    let direction = match () {
+        () if (north && near_west) || (west && near_north) => NorthWest,
+        () if (north && near_east) || (east && near_north) => NorthEast,
+        () if (south && near_west) || (west && near_south) => SouthWest,
+        () if (south && near_east) || (east && near_south) => SouthEast,
+        () if north => North,
+        () if south => South,
+        () if west => West,
+        () if east => East,
+        () => return None,
+    };
+    Some(direction)
+}
+
+fn resize_cursor(edge: window::Direction) -> mouse::Interaction {
+    use window::Direction::{East, North, NorthEast, NorthWest, South, SouthEast, SouthWest, West};
+    match edge {
+        North | South => mouse::Interaction::ResizingVertically,
+        East | West => mouse::Interaction::ResizingHorizontally,
+        NorthEast | SouthWest => mouse::Interaction::ResizingDiagonallyUp,
+        NorthWest | SouthEast => mouse::Interaction::ResizingDiagonallyDown,
+    }
+}
+
 fn mouse_button(button: mouse::Button) -> Option<MouseButton> {
     match button {
         mouse::Button::Left => Some(MouseButton::Left),
@@ -777,5 +863,20 @@ mod tests {
         assert!(is_terminal_editor("emacs -nw"));
         assert!(!is_terminal_editor("code --wait"));
         assert!(!is_terminal_editor("emacs"));
+    }
+
+    #[test]
+    fn the_window_edges_resize_it() {
+        use window::Direction::{East, North, NorthWest, SouthEast, SouthWest};
+        let size = Size::new(800.0, 600.0);
+        let at = |x, y| edge(size, Point::new(x, y));
+        assert!(matches!(at(400.0, 2.0), Some(North)));
+        assert!(matches!(at(798.0, 300.0), Some(East)));
+        assert!(matches!(at(2.0, 2.0), Some(NorthWest)));
+        assert!(matches!(at(10.0, 2.0), Some(NorthWest)), "near the corner");
+        assert!(matches!(at(2.0, 590.0), Some(SouthWest)));
+        assert!(matches!(at(799.0, 599.0), Some(SouthEast)));
+        assert!(at(400.0, 300.0).is_none());
+        assert!(at(400.0, 10.0).is_none(), "the tab bar below the band");
     }
 }
