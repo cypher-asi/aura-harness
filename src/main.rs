@@ -13,7 +13,11 @@ fn main() -> anyhow::Result<ExitCode> {
 
     #[cfg(feature = "desktop")]
     if let Some(desktop) = aura_cli::desktop_launch(&cli) {
-        aura_desktop::run(desktop_options(desktop), cli.mode.map(Into::into))?;
+        let options = aura_desktop::DesktopOptions {
+            approval: cli.approval.map(Into::into),
+            ..desktop_options(desktop)
+        };
+        aura_desktop::run(options, cli.mode.map(Into::into))?;
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -33,5 +37,6 @@ fn desktop_options(args: aura_cli::cli::DesktopArgs) -> aura_desktop::DesktopOpt
         verbose: args.verbose,
         allow_unrestricted_full_access: args.allow_unrestricted_full_access,
         demo: args.demo,
+        approval: None,
     }
 }

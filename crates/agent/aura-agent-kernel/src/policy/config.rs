@@ -3,7 +3,7 @@
 //! All behavior-free, data-shape pieces of the policy engine live here so
 //! [`super::check`] can focus on the authorization pipeline itself.
 
-use aura_core_modes::AgentMode;
+use aura_core_modes::{AgentMode, ApprovalLevel};
 use aura_core_types::{
     ActionKind, AgentPermissions, AgentToolPermissions, Capability, InstalledIntegrationDefinition,
     InstalledToolIntegrationRequirement, UserToolDefaults,
@@ -53,6 +53,11 @@ pub struct PolicyConfig {
     /// proposals and can only deny. Defaults to [`AgentMode::Agent`],
     /// which permits every action class.
     pub mode: AgentMode,
+    /// Which allowed calls ask the user first. The per-tool states in
+    /// [`Self::user_default`] carry the asking; this level adds what they
+    /// cannot: under [`ApprovalLevel::Yolo`] commands run confined to
+    /// writes inside the workspace.
+    pub approval: ApprovalLevel,
 }
 
 impl Default for PolicyConfig {
@@ -88,6 +93,7 @@ impl Default for PolicyConfig {
             user_default: UserToolDefaults::full_access(),
             agent_override: None,
             mode: AgentMode::Agent,
+            approval: ApprovalLevel::default(),
         }
     }
 }
@@ -176,7 +182,7 @@ impl PolicyConfig {
             .map(|i| serde_json::to_value(i).unwrap_or_default())
             .collect();
         integrations.sort_by_key(ToString::to_string);
-        let snapshot = serde_json::json!({
+        let mut snapshot = serde_json::json!({
             "allowed_action_kinds": action_kinds,
             "max_proposals": self.max_proposals,
             "installed_integrations": integrations,
@@ -187,6 +193,11 @@ impl PolicyConfig {
             "agent_override": self.agent_override,
             "mode": format!("{:?}", self.mode),
         });
+        // Left out at the default so configurations from before approval
+        // levels keep their hash.
+        if self.approval != ApprovalLevel::default() {
+            snapshot["approval"] = serde_json::json!(self.approval.name());
+        }
         blake3::hash(snapshot.to_string().as_bytes())
             .to_hex()
             .to_string()

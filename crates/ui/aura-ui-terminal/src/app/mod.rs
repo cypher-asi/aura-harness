@@ -1790,10 +1790,17 @@ impl App {
         &self.plans
     }
 
-    /// Permission mode of the agent on screen.
+    /// Work mode of the agent on screen.
     #[must_use]
     pub fn mode(&self) -> crate::mode_command::PermissionMode {
         self.hud.mode.unwrap_or_default()
+    }
+
+    /// Approval level of the agent on screen; `None` until the event loop
+    /// reports it.
+    #[must_use]
+    pub const fn approval(&self) -> Option<crate::mode_command::ApprovalLevel> {
+        self.hud.approval
     }
 
     /// The active agent's current plan.

@@ -8,7 +8,11 @@
 //! two deny the call once, so a turn never hangs.
 //!
 //! "Always allow" answers become [`ApprovalRule`]s for the agent's project
-//! folder, kept in `<data_dir>/approvals.json`.
+//! folder, kept in `<data_dir>/approvals.json`. They let calls through
+//! without a prompt at the `ask` approval level; `strict` ignores them and
+//! offers no "always allow". At `yolo` the kernel asks only about commands
+//! it cannot confine to the agent's folder, and those that plainly stay
+//! in it run without a prompt too.
 
 use super::run_command::{is_user_tool_use, RUN_COMMAND_TOOL, SHELL_SYNTAX};
 use async_trait::async_trait;
@@ -17,7 +21,7 @@ use aura_agent_kernel::{
     ToolApprovalResponse,
 };
 use aura_core_types::{AgentId, ToolState};
-use aura_ui_terminal::UiCommand;
+use aura_ui_terminal::{ApprovalLevel, UiCommand};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -134,6 +138,35 @@ fn command_words(args: &Value) -> Option<Vec<String>> {
     (!words.is_empty()).then_some(words)
 }
 
+/// Whether the `run_command` call `args` plainly stays inside `folder`: no
+/// shell syntax, and no argument naming a path above it or outside it.
+/// Best effort, for systems that cannot confine commands: a program can
+/// still write anywhere it likes.
+fn stays_in_folder(args: &Value, folder: &Path) -> bool {
+    let Some(words) = command_words(args) else {
+        return false;
+    };
+    if args
+        .get("cwd")
+        .or_else(|| args.get("working_dir"))
+        .is_some()
+    {
+        return false;
+    }
+    let outside = |path: &str| {
+        let path = Path::new(path);
+        path.components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+            || (path.is_absolute() && !path.starts_with(folder) && path != Path::new("/dev/null"))
+    };
+    words.iter().skip(1).all(|word| {
+        let value = word
+            .split_once('=')
+            .map_or(word.as_str(), |(_, value)| value);
+        !word.starts_with('~') && !outside(word) && !outside(value)
+    })
+}
+
 /// The program, plus its first argument when that reads as a subcommand
 /// (`cargo test`, `git status`), so allowing `cargo test` doesn't allow
 /// `cargo publish`.
@@ -233,6 +266,10 @@ pub struct TerminalApprovals {
     rules: Mutex<ProjectRules>,
     /// Project folder of each agent with a kernel
     folders: Mutex<HashMap<AgentId, PathBuf>>,
+    /// Approval level of each agent the hub set one for
+    levels: Mutex<HashMap<AgentId, ApprovalLevel>>,
+    /// Approval level of every other agent
+    default_level: Mutex<ApprovalLevel>,
     timeout: Duration,
 }
 
@@ -271,8 +308,28 @@ impl TerminalApprovals {
             pending: Mutex::new(HashMap::new()),
             rules: Mutex::new(ProjectRules::load(data_dir)),
             folders: Mutex::new(HashMap::new()),
+            levels: Mutex::new(HashMap::new()),
+            default_level: Mutex::new(ApprovalLevel::default()),
             timeout,
         }
+    }
+
+    /// Note that `agent_id` is at approval `level` from now on.
+    pub fn set_level(&self, agent_id: AgentId, level: ApprovalLevel) {
+        lock(&self.levels).insert(agent_id, level);
+    }
+
+    /// The approval level of agents [`Self::set_level`] was not called
+    /// for.
+    pub fn set_default_level(&self, level: ApprovalLevel) {
+        *lock(&self.default_level) = level;
+    }
+
+    fn level_of(&self, agent_id: AgentId) -> ApprovalLevel {
+        lock(&self.levels)
+            .get(&agent_id)
+            .copied()
+            .unwrap_or_else(|| *lock(&self.default_level))
     }
 
     /// How long a prompt waits before its call is denied.
@@ -474,9 +531,20 @@ impl ToolApprovalPrompter for TerminalApprovals {
             return Ok(once(ToolState::Allow));
         }
         let folder = self.folder_of(prompt.agent_id);
-        let ruled = folder.as_deref().is_some_and(|folder| {
-            lock(&self.rules).allows(folder, &prompt.tool_name, &prompt.args)
-        });
+        let level = self.level_of(prompt.agent_id);
+        if level == ApprovalLevel::Yolo
+            && prompt.tool_name == RUN_COMMAND_TOOL
+            && folder
+                .as_deref()
+                .is_some_and(|folder| stays_in_folder(&prompt.args, folder))
+        {
+            info!("Allowed a command that stays in the project folder (yolo)");
+            return Ok(once(ToolState::Allow));
+        }
+        let ruled = level != ApprovalLevel::Strict
+            && folder.as_deref().is_some_and(|folder| {
+                lock(&self.rules).allows(folder, &prompt.tool_name, &prompt.args)
+            });
         if ruled {
             info!(tool = %prompt.tool_name, "Allowed by a project approval rule");
             return Ok(once(ToolState::Allow));
@@ -496,7 +564,9 @@ impl ToolApprovalPrompter for TerminalApprovals {
             ApprovalRule::for_call(&prompt.tool_name, &prompt.args),
             folder,
         ) {
-            (Some(rule), Some(_)) => format!("{} in this project", rule.label()),
+            (Some(rule), Some(_)) if level != ApprovalLevel::Strict => {
+                format!("{} in this project", rule.label())
+            }
             _ => String::new(),
         };
         let request = UiCommand::ForAgent {

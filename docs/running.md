@@ -45,7 +45,7 @@ cargo run --release -- desktop --demo                        # scripted session,
 cargo run --release -p aura-desktop                          # the window on its own binary
 ```
 
-`aura desktop` takes the terminal's `--dir`, `--provider`, `--mode`, `--theme`, `--verbose` and `--allow-unrestricted-full-access`. Every terminal key works the same way, including Ctrl+C (copy a selection, interrupt the agent, or quit when idle) and Ctrl+D. Drag to select text in a panel; it's copied when you let go. On top of that, the window handles what a terminal emulator would:
+`aura desktop` takes the terminal's `--dir`, `--provider`, `--mode`, `--approval`, `--theme`, `--verbose` and `--allow-unrestricted-full-access`. Every terminal key works the same way, including Ctrl+C (copy a selection, interrupt the agent, or quit when idle) and Ctrl+D. Drag to select text in a panel; it's copied when you let go. On top of that, the window handles what a terminal emulator would:
 
 | Keys (Cmd on macOS) | Action |
 |---|---|

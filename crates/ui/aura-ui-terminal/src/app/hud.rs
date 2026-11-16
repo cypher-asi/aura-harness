@@ -7,7 +7,7 @@ use crate::events::{
     CallStats, ContextView, InstructionFileView, InstructionStatus, JobView, SessionTotals,
     TodoState, TodoView,
 };
-use crate::mode_command::PermissionMode;
+use crate::mode_command::{ApprovalLevel, PermissionMode};
 
 /// Model usage of an agent's session so far.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -98,9 +98,11 @@ pub struct Hud {
     pub queued: usize,
     /// Make-up of the context as of the last turn
     pub context: Option<ContextView>,
-    /// Which tool calls run without asking; `None` until the event loop
+    /// The kind of work the agent may do; `None` until the event loop
     /// says
     pub mode: Option<PermissionMode>,
+    /// Which tool calls ask first; `None` until the event loop says
+    pub approval: Option<ApprovalLevel>,
     /// Project instruction files the agent's turns load; `None` until
     /// the agent reports them
     pub instructions: Option<Vec<InstructionFileView>>,

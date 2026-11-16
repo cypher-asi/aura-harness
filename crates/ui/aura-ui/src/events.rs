@@ -4,7 +4,7 @@
 //! - `UiEvent`: Events from the UI to the kernel (user actions)
 //! - `UiCommand`: Commands from the kernel to the UI (state updates)
 
-use crate::mode_command::PermissionMode;
+use crate::mode_command::{ApprovalLevel, PermissionMode};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -45,7 +45,7 @@ pub enum UiEvent {
     /// User denied a pending tool request
     Deny(String),
 
-    /// User picked the permission mode of an agent (`/mode <name>`)
+    /// User picked the work mode of an agent (`/mode <name>`)
     SetMode {
         /// Agent the chat showed (hex id)
         agent_id: String,
@@ -53,9 +53,17 @@ pub enum UiEvent {
         mode: PermissionMode,
     },
 
+    /// User picked the approval level of an agent (`/approval <level>`)
+    SetApproval {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        /// Level for the agent's next tool calls
+        level: ApprovalLevel,
+    },
+
     /// User pressed Shift+Tab to move the agent with this hex id to the
-    /// next permission mode
-    CycleMode(String),
+    /// next approval level
+    CycleApproval(String),
 
     /// User ran `/plan` for the agent with this hex id. Enters plan mode,
     /// or leaves it and returns to the mode from before when already there.
@@ -411,8 +419,11 @@ pub enum UiCommand {
     /// was cancelled)
     CloseApproval(String),
 
-    /// The agent's permission mode
+    /// The agent's work mode
     SetMode(PermissionMode),
+
+    /// The agent's approval level
+    SetApproval(ApprovalLevel),
 
     /// Show an error notification
     ShowError(String),

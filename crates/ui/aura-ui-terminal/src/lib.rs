@@ -53,7 +53,7 @@ mod terminal;
 pub use alerts::AlertSettings;
 pub use app::{App, AppState, ProseMeasure, ProseRow};
 pub use events::{UiCommand, UiEvent};
-pub use mode_command::{ModeCommandError, PermissionMode, SlashModeCommand};
+pub use mode_command::{ApprovalLevel, ModeCommandError, PermissionMode, SlashModeCommand};
 /// Draws the whole UI into a ratatui frame; frontends other than
 /// [`Terminal`] (the desktop app) call it with their own backend.
 pub use renderer::render;

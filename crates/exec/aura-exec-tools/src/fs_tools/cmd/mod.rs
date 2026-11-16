@@ -1278,6 +1278,7 @@ async fn execute_run_command(args: RunArgs, ctx: &ToolContext) -> Result<ToolRes
     }
 
     let sandbox = ctx.sandbox.clone();
+    let confine = ctx.confine_writes;
 
     if let Some(cols) = tty_cols {
         let sandbox = sandbox.clone();
@@ -1297,7 +1298,16 @@ async fn execute_run_command(args: RunArgs, ctx: &ToolContext) -> Result<ToolRes
                 },
                 (None, None) => return None,
             };
-            pty::cmd_run_in_pty(&sandbox, &command, cwd.as_deref(), cols, timeout_ms, &tags)
+            let run =
+                || pty::cmd_run_in_pty(&sandbox, &command, cwd.as_deref(), cols, timeout_ms, &tags);
+            if confine {
+                match crate::confine::run_confined(sandbox.root(), || Ok(run())) {
+                    Ok(result) => result,
+                    Err(e) => Some(Err(e)),
+                }
+            } else {
+                run()
+            }
         })
         .await
         .map_err(|e| ToolError::CommandFailed(format!("terminal task failed: {e}")))?;
@@ -1308,7 +1318,9 @@ async fn execute_run_command(args: RunArgs, ctx: &ToolContext) -> Result<ToolRes
 
     if let Some(script) = shell_script {
         return super::spawn_blocking_tool(move || {
-            cmd_run_shell_script(&sandbox, &script, cwd.as_deref(), timeout_ms, &tags)
+            confined_if(confine, &sandbox, || {
+                cmd_run_shell_script(&sandbox, &script, cwd.as_deref(), timeout_ms, &tags)
+            })
         })
         .await;
     }
@@ -1320,16 +1332,32 @@ async fn execute_run_command(args: RunArgs, ctx: &ToolContext) -> Result<ToolRes
     })?;
 
     super::spawn_blocking_tool(move || {
-        run_program(
-            &sandbox,
-            &program,
-            &cmd_args,
-            cwd.as_deref(),
-            timeout_ms,
-            &tags,
-        )
+        confined_if(confine, &sandbox, || {
+            run_program(
+                &sandbox,
+                &program,
+                &cmd_args,
+                cwd.as_deref(),
+                timeout_ms,
+                &tags,
+            )
+        })
     })
     .await
+}
+
+/// Run `f`, on a thread confined to writing in the sandbox when `confine`
+/// is set (see [`crate::confine`]).
+fn confined_if<T: Send>(
+    confine: bool,
+    sandbox: &Sandbox,
+    f: impl FnOnce() -> Result<T, ToolError> + Send,
+) -> Result<T, ToolError> {
+    if confine {
+        crate::confine::run_confined(sandbox.root(), f)
+    } else {
+        f()
+    }
 }
 
 /// Start the command with its output going to a log file and hand it to
@@ -1379,9 +1407,10 @@ fn run_in_background(
     cmd.stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(stderr_log));
-    let child = cmd
-        .spawn()
-        .map_err(|e| ToolError::CommandFailed(format!("Failed to spawn '{command}': {e}")))?;
+    let child = confined_if(ctx.confine_writes, &ctx.sandbox, || {
+        cmd.spawn()
+            .map_err(|e| ToolError::CommandFailed(format!("Failed to spawn '{command}': {e}")))
+    })?;
     let pid = child.id();
 
     hook.adopt(

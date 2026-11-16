@@ -5,6 +5,7 @@
 //! aimed at: building the `Proposal` from a `ToolProposal`, applying the
 //! per-tool timeout, and resolving live `ask` prompts with provenance.
 
+use super::steps::Authorized;
 use crate::kernel::{Kernel, PendingToolPrompt, ToolApprovalRemember, ToolApprovalResponse};
 use crate::policy::{PolicyEvaluation, PolicyVerdict};
 use aura_core_types::{
@@ -36,7 +37,26 @@ fn tool_manages_own_timeout(tool_name: &str) -> bool {
     TIMEOUT_EXEMPT_TOOLS.contains(&tool_name)
 }
 
+/// `ToolProposal::source` of calls the user made themselves (a command
+/// typed in the terminal), which the approval level never confines.
+const USER_PROPOSAL_SOURCE: &str = "user";
+
 impl Kernel {
+    /// Whether the commands an authorized call spawns may only write
+    /// inside the workspace: under the `yolo` approval level, for calls
+    /// the user neither made nor answered a prompt for.
+    pub(super) fn confines_writes(&self, authorized: &Authorized) -> bool {
+        let user_decided = authorized.proposal.source.as_deref() == Some(USER_PROPOSAL_SOURCE)
+            || matches!(
+                authorized.evaluation.approval,
+                Some(PolicyApproval {
+                    approver: PolicyApprover::User { .. },
+                    ..
+                })
+            );
+        self.policy.approval().confines_writes() && !user_decided
+    }
+
     /// Build the kernel-internal [`Proposal`] (a `Delegate` proposal whose
     /// payload is the serialized [`ToolCall`]) from a reasoner-emitted
     /// [`ToolProposal`]. Single and batch paths both go through this so

@@ -30,8 +30,8 @@ pub use verdict::{PolicyEvaluation, PolicyResult, PolicyVerdict};
 use super::config::PolicyConfig;
 use crate::{PendingToolPrompt, ToolApprovalRemember};
 use aura_core_types::{
-    ActionKind, AgentMode, PermissionLayer, PolicyCheck, PolicyCheckOutcome, PolicyRule,
-    PolicySource, Proposal, RuntimeCapabilityInstall, ToolState,
+    ActionKind, AgentMode, ApprovalLevel, PermissionLayer, PolicyCheck, PolicyCheckOutcome,
+    PolicyRule, PolicySource, Proposal, RuntimeCapabilityInstall, ToolState,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
@@ -87,6 +87,12 @@ impl Policy {
     #[must_use]
     pub fn mode(&self) -> AgentMode {
         self.config().mode
+    }
+
+    /// The approval level this policy currently applies.
+    #[must_use]
+    pub fn approval(&self) -> ApprovalLevel {
+        self.config().approval
     }
 
     /// Enforce `mode` from now on. Only the kernel calls this, after it has

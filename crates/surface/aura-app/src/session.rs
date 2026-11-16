@@ -9,9 +9,9 @@
 use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
 use crate::harness::{
-    agent_tools, background_process_manager, build_hub, build_provider, initial_permission_mode,
-    mode_policy, policy_tool_names, post_edit_check_from_env, project_instructions, Harness,
-    HubSetup,
+    agent_tools, background_process_manager, build_hub, build_provider, initial_approval_level,
+    initial_permission_mode, mode_policy, policy_tool_names, post_edit_check_from_env,
+    project_instructions, Harness, HubSetup,
 };
 use crate::model_selection::ModelSelection;
 use crate::{api_server, event_loop, record_loader, session_helpers};
@@ -38,6 +38,9 @@ pub struct SessionOptions {
     pub provider: String,
     /// Permit FullAccess sessions to bypass command allowlists
     pub allow_unrestricted_full_access: bool,
+    /// Approval level agents start at (`--approval`); `None` reads
+    /// `AURA_TUI_APPROVAL`, else `ask`
+    pub approval: Option<aura_ui_terminal::ApprovalLevel>,
 }
 
 impl Default for SessionOptions {
@@ -46,6 +49,7 @@ impl Default for SessionOptions {
             dir: None,
             provider: "anthropic".to_string(),
             allow_unrestricted_full_access: false,
+            approval: None,
         }
     }
 }
@@ -162,8 +166,11 @@ pub async fn start(
         let _ = cmd_tx.try_send(UiCommand::SetStatus("Mock Mode".to_string()));
     }
 
-    let mode = initial_permission_mode(requested_mode);
-    info!(%mode, "Terminal permission mode");
+    let permissions = event_loop::Permissions::new(
+        initial_permission_mode(requested_mode),
+        initial_approval_level(args.approval),
+    );
+    info!(permissions = %permissions.name(), "Terminal permissions");
     let tool_names = policy_tool_names(&tools);
     let approvals = Arc::new(event_loop::TerminalApprovals::new(
         cmd_tx.clone(),
@@ -191,14 +198,14 @@ pub async fn start(
             tools,
             limits: models.limits(),
         },
-        policy: mode_policy(mode, &tool_names),
+        policy: mode_policy(permissions, &tool_names),
         record_observer: Some(record_observer),
         record_panel: record_panel.clone(),
         commands: cmd_tx.clone(),
         long_run: crate::long_run::LongRunSettings::from_env(),
         process_manager,
         background_agents: true,
-        mode,
+        permissions,
         instructions: project_instructions(),
         approvals: Some(Arc::clone(&approvals)),
         web_tools,

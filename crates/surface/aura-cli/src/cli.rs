@@ -1,6 +1,6 @@
 //! CLI argument definitions and parsing.
 
-use crate::ModeFlag;
+use crate::{ApprovalFlag, ModeFlag};
 use aura_app::headless::HeadlessOptions;
 use aura_app::session::SessionOptions;
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -18,6 +18,14 @@ pub struct Cli {
     /// mode does not allow.
     #[arg(long = "mode", value_enum, global = true)]
     pub mode: Option<ModeFlag>,
+
+    /// What tool calls ask first: `yolo` runs everything with commands
+    /// confined to writing inside the working folder, `ask` asks for
+    /// anything not on the allow list, `strict` asks for everything but
+    /// reads. Overrides `AURA_TUI_APPROVAL`; `-p` defaults to `yolo` in
+    /// agent mode.
+    #[arg(long = "approval", value_enum, global = true)]
+    pub approval: Option<ApprovalFlag>,
 
     /// Run one prompt without the terminal UI, print the result, and exit.
     /// `-p -`, or `-p` with no prompt, reads the prompt from stdin; piped
@@ -162,6 +170,7 @@ impl From<HeadlessArgs> for HeadlessOptions {
             model: args.model,
             provider: args.provider,
             verbose: args.verbose,
+            approval: None,
         }
     }
 }
@@ -564,6 +573,7 @@ impl RunArgs {
             dir: self.dir.clone(),
             provider: self.provider.clone(),
             allow_unrestricted_full_access: self.allow_unrestricted_full_access,
+            approval: None,
         }
     }
 }

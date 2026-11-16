@@ -28,7 +28,7 @@ mod tests;
 pub(crate) use chat_lines::{ChatLineCache, GroupState};
 pub(crate) use panels::format_elapsed;
 
-use crate::mode_command::PermissionMode;
+use crate::mode_command::{ApprovalLevel, PermissionMode};
 use crate::{app::PanelAreas, App, Theme};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -250,19 +250,33 @@ fn header_status_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
     spans
 }
 
-/// `qwen3:4b`, after a `PLAN` / `ASK` / `DEBUG` badge outside agent mode.
-/// The model is left out until the kernel reports it.
+/// `ASK · qwen3:4b`: the approval level, then a `PLAN` / `READ-ONLY` /
+/// `DEBUG` badge outside agent mode, then the model. The level and the
+/// model are left out until the kernel reports them.
 pub(super) fn model_indicator_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
     let mut spans = Vec::new();
+    let separator = || Span::styled(" · ", Style::default().fg(theme.colors.muted));
+    if let Some(level) = app.approval() {
+        let (label, color) = match level {
+            ApprovalLevel::Yolo => ("YOLO", theme.colors.error),
+            ApprovalLevel::Ask => ("ASK", theme.colors.muted),
+            ApprovalLevel::Strict => ("STRICT", theme.colors.primary),
+        };
+        spans.push(Span::styled(
+            label,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ));
+    }
     let badge = match app.mode() {
-        PermissionMode::Default | PermissionMode::AcceptEdits | PermissionMode::Unrestricted => {
-            None
-        }
+        PermissionMode::Agent => None,
         PermissionMode::Plan => Some("PLAN"),
-        PermissionMode::Ask => Some("ASK"),
+        PermissionMode::ReadOnly => Some("READ-ONLY"),
         PermissionMode::Debug => Some("DEBUG"),
     };
     if let Some(badge) = badge {
+        if !spans.is_empty() {
+            spans.push(separator());
+        }
         spans.push(Span::styled(
             badge,
             Style::default()
@@ -274,7 +288,7 @@ pub(super) fn model_indicator_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span
         return spans;
     }
     if !spans.is_empty() {
-        spans.push(Span::styled(" · ", Style::default().fg(theme.colors.muted)));
+        spans.push(separator());
     }
     let label = app
         .current_model_option()

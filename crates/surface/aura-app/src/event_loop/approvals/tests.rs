@@ -281,3 +281,85 @@ fn descriptions_show_the_command_line_and_where_it_runs() {
     );
     assert!(describe("odd_tool", &json!({ "x": "y".repeat(1000) })).ends_with('…'));
 }
+
+#[tokio::test]
+async fn strict_asks_even_when_a_rule_allows_and_offers_no_always() {
+    let mut h = harness(DEFAULT_TIMEOUT);
+    let call = ask(
+        &h.approvals,
+        prompt("a:toolu_1", "run_command", cargo_test()),
+    );
+    let (_, id, _) = requested(&mut h.commands).await;
+    h.approvals.answer(&id, Answer::Always).await.unwrap();
+    call.await.unwrap().unwrap();
+
+    h.approvals.set_level(agent(), ApprovalLevel::Strict);
+    let call = ask(
+        &h.approvals,
+        prompt("a:toolu_2", "run_command", cargo_test()),
+    );
+    let (_, id, always) = requested(&mut h.commands).await;
+    assert_eq!(always, "", "strict offers no always-allow");
+    h.approvals.answer(&id, Answer::Deny).await.unwrap();
+    assert_eq!(call.await.unwrap().unwrap().decision, ToolState::Deny);
+
+    h.approvals.set_level(agent(), ApprovalLevel::Ask);
+    let response = h
+        .approvals
+        .prompt(prompt("a:toolu_3", "run_command", cargo_test()))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.decision,
+        ToolState::Allow,
+        "the rule still holds at ask"
+    );
+}
+
+#[tokio::test]
+async fn unconfined_yolo_runs_commands_that_stay_in_the_folder() {
+    let mut h = harness(DEFAULT_TIMEOUT);
+    h.approvals.set_default_level(ApprovalLevel::Yolo);
+    let response = h
+        .approvals
+        .prompt(prompt("a:toolu_1", "run_command", cargo_test()))
+        .await
+        .unwrap();
+    assert_eq!(response.decision, ToolState::Allow);
+    assert!(h.commands.try_recv().is_err());
+
+    let call = ask(
+        &h.approvals,
+        prompt(
+            "a:toolu_2",
+            "run_command",
+            json!({ "program": "rm", "args": ["-rf", "../other"] }),
+        ),
+    );
+    let (_, id, _) = requested(&mut h.commands).await;
+    h.approvals.answer(&id, Answer::Deny).await.unwrap();
+    call.await.unwrap().unwrap();
+}
+
+#[test]
+fn commands_that_reach_outside_the_folder_are_told_apart() {
+    let folder = Path::new("/work/project");
+    let stays = |args: Value| stays_in_folder(&args, folder);
+    assert!(stays(json!({ "program": "cargo", "args": ["test"] })));
+    assert!(stays(json!({ "shell_script": "git status" })));
+    assert!(stays(
+        json!({ "program": "touch", "args": ["/work/project/a"] })
+    ));
+    assert!(stays(
+        json!({ "program": "ls", "args": [">", "/dev/null"] })
+    ));
+    assert!(!stays(json!({ "program": "cat", "args": ["../secret"] })));
+    assert!(!stays(json!({ "program": "rm", "args": ["-rf", "/etc"] })));
+    assert!(!stays(
+        json!({ "program": "cp", "args": ["a", "--target=/usr/x"] })
+    ));
+    assert!(!stays(json!({ "program": "rm", "args": ["~"] })));
+    assert!(!stays(json!({ "shell_script": "rm -rf ~" })));
+    assert!(!stays(json!({ "shell_script": "echo hi > ../x" })));
+    assert!(!stays(json!({ "program": "ls", "cwd": ".." })));
+}

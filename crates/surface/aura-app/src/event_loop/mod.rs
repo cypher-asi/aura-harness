@@ -18,6 +18,7 @@ pub(crate) mod handlers;
 pub(crate) mod host;
 pub(crate) mod hud;
 pub(crate) mod modes;
+pub(crate) use modes::Permissions;
 pub(crate) mod notices;
 pub(crate) mod os_processes;
 pub(crate) mod plan_mode;
@@ -402,10 +403,14 @@ async fn handle_ui_event(
             let agent_id = state.agent_or_active(&agent_id);
             modes::set_mode(state, agent_id, mode).await;
         }
-        UiEvent::CycleMode(agent_id) => {
+        UiEvent::SetApproval { agent_id, level } => {
             let agent_id = state.agent_or_active(&agent_id);
-            let next = state.hub.mode_of(agent_id).next();
-            modes::set_mode(state, agent_id, next).await;
+            modes::set_approval(state, agent_id, level).await;
+        }
+        UiEvent::CycleApproval(agent_id) => {
+            let agent_id = state.agent_or_active(&agent_id);
+            let next = state.hub.permissions_of(agent_id).approval.next();
+            modes::set_approval(state, agent_id, next).await;
         }
         UiEvent::TogglePlan(agent_id) => {
             let agent_id = state.agent_or_active(&agent_id);
@@ -565,7 +570,7 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
     // mode; the agent's own mode decides its calls.
     modes::apply(
         &session.kernel,
-        state.hub.mode_of(agent_id),
+        state.hub.permissions_of(agent_id),
         &state.hub.tool_names(),
     );
     let work = match work {

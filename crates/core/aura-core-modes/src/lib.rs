@@ -47,6 +47,7 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::all)]
 
+mod approval;
 mod capability_profile;
 mod gate;
 mod modes;
@@ -54,6 +55,7 @@ mod profile;
 mod resolution;
 mod violation;
 
+pub use approval::{ApprovalLevel, APPROVAL_LEVEL_NAMES};
 pub use capability_profile::CapabilityProfile;
 pub use gate::{DefaultModeGate, GatedAction, ModeGate};
 pub use modes::{AgentMode, AgentRole, KernelMode, ReplayMode, SandboxMode, SpawnMode};

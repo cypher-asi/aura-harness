@@ -177,6 +177,9 @@ which = "7"
 # Embedded PTY (terminal spawning)
 portable-pty = "0.8"
 
+# Linux Landlock LSM (confining command writes to the workspace)
+landlock = "0.4"
+
 # Unicode display width
 unicode-width = "0.2"
 

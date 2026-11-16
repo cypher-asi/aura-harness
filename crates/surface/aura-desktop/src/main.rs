@@ -1,7 +1,7 @@
 //! `aura-desktop` binary: the desktop window without the rest of the
 //! `aura` CLI.
 
-use aura_core_modes::AgentMode;
+use aura_core_modes::{AgentMode, ApprovalLevel};
 use aura_desktop::DesktopOptions;
 use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
@@ -12,6 +12,11 @@ struct Args {
     /// Session mode; overrides `AURA_DEFAULT_MODE`
     #[arg(long, value_enum)]
     mode: Option<Mode>,
+
+    /// What tool calls ask first (yolo, ask, strict); overrides
+    /// `AURA_TUI_APPROVAL`
+    #[arg(long, value_parser = parse_approval)]
+    approval: Option<ApprovalLevel>,
 
     /// Folder the agent works in (default: the current directory)
     #[arg(short, long)]
@@ -62,6 +67,10 @@ impl From<Mode> for AgentMode {
     }
 }
 
+fn parse_approval(raw: &str) -> Result<ApprovalLevel, String> {
+    ApprovalLevel::parse(raw).ok_or_else(|| format!("expected one of yolo|ask|strict, not `{raw}`"))
+}
+
 fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
     let args = Args::parse();
@@ -73,6 +82,7 @@ fn main() -> anyhow::Result<()> {
         verbose: args.verbose,
         allow_unrestricted_full_access: args.allow_unrestricted_full_access,
         demo: args.demo,
+        approval: args.approval,
     };
     aura_desktop::run(options, args.mode.map(Into::into))
 }

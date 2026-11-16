@@ -41,7 +41,7 @@
     clippy::unnecessary_wraps
 )]
 
-use aura_core_modes::AgentMode;
+use aura_core_modes::{AgentMode, ApprovalLevel};
 use clap::ValueEnum;
 use thiserror::Error;
 
@@ -68,7 +68,8 @@ pub enum ModeFlag {
     Agent,
     /// Read + markdown writes + read-only subprocesses.
     Plan,
-    /// Read-only.
+    /// Read-only (the terminal's `read-only` mode).
+    #[value(alias = "read-only")]
     Ask,
     /// Read + sandboxed probes only.
     Debug,
@@ -92,6 +93,28 @@ impl From<AgentMode> for ModeFlag {
             AgentMode::Plan => ModeFlag::Plan,
             AgentMode::Ask => ModeFlag::Ask,
             AgentMode::Debug => ModeFlag::Debug,
+        }
+    }
+}
+
+/// `clap`-friendly mirror of [`ApprovalLevel`], for `aura --approval`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[clap(rename_all = "lower")]
+pub enum ApprovalFlag {
+    /// Run everything; commands can write only inside the working folder.
+    Yolo,
+    /// Ask for anything not on the project's allow list.
+    Ask,
+    /// Ask for everything except reads, even what the allow list covers.
+    Strict,
+}
+
+impl From<ApprovalFlag> for ApprovalLevel {
+    fn from(value: ApprovalFlag) -> Self {
+        match value {
+            ApprovalFlag::Yolo => ApprovalLevel::Yolo,
+            ApprovalFlag::Ask => ApprovalLevel::Ask,
+            ApprovalFlag::Strict => ApprovalLevel::Strict,
         }
     }
 }

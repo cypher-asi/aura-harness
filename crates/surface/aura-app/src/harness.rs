@@ -18,7 +18,7 @@ use aura_core_types::{AgentPermissions, Transaction};
 use aura_exec_tools::todo::TodoWriteTool;
 use aura_exec_tools::{BackgroundProcessHook, ToolConfig, ToolExecutor};
 use aura_model::ModelProvider;
-use aura_ui_terminal::{PermissionMode, UiCommand};
+use aura_ui_terminal::{ApprovalLevel, PermissionMode, UiCommand};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -103,9 +103,9 @@ pub(crate) struct HubSetup {
     pub process_manager: Arc<ProcessManager>,
     /// Offer `spawn_agent` and the tools that talk to background agents
     pub background_agents: bool,
-    /// Permission mode agents start in; spawned agents take their
-    /// parent's. Should match the mode `policy` was built for.
-    pub mode: PermissionMode,
+    /// Work mode and approval level agents start in; spawned agents take
+    /// their parent's. Should match what `policy` was built for.
+    pub permissions: event_loop::Permissions,
     pub instructions: ProjectInstructions,
     /// Asks the user about tool calls the policy wants approved. Without
     /// it the kernel denies those calls, which `aura -p` relies on.
@@ -148,15 +148,17 @@ pub(crate) fn policy_tool_names(tools: &[aura_model::ToolDefinition]) -> Vec<Str
     names
 }
 
-/// Kernel policy for agents in `mode`, the same table the hub applies
-/// when an agent switches mode or a spawn takes its parent's.
+/// Kernel policy for agents under `permissions`, the same table the hub
+/// applies when an agent switches mode or a spawn takes its parent's.
 pub(crate) fn mode_policy(
-    mode: PermissionMode,
+    permissions: event_loop::Permissions,
     tool_names: &[String],
 ) -> aura_agent_kernel::PolicyConfig {
-    aura_agent_kernel::PolicyConfig::default()
-        .with_mode(mode.agent_mode())
-        .with_user_default(event_loop::modes::user_defaults(mode, tool_names))
+    let mut policy = aura_agent_kernel::PolicyConfig::default()
+        .with_mode(permissions.mode.agent_mode())
+        .with_user_default(event_loop::modes::user_defaults(permissions, tool_names));
+    policy.approval = permissions.approval;
+    policy
 }
 
 /// Project instructions (`AGENTS.md`, `CLAUDE.md`, Cursor rules) as the
@@ -191,7 +193,7 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
         long_run,
         process_manager,
         background_agents,
-        mode,
+        permissions,
         instructions,
         approvals,
         web_tools,
@@ -274,7 +276,9 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
             base,
             commands,
             long_run,
-            mode,
+            mode: permissions.mode,
+            approval: permissions.approval,
+            approvals: approvals.clone(),
             instructions,
             processes,
             agents,
@@ -344,6 +348,22 @@ pub(crate) fn initial_permission_mode(
         }
     }
     PermissionMode::from_agent_mode(aura_config::session_mode(None))
+}
+
+/// The approval level terminal agents start at: `--approval`, else
+/// `AURA_TUI_APPROVAL`, else `ask`. Never remembered from an earlier
+/// session, so a terminal never starts at `yolo` unasked.
+pub(crate) fn initial_approval_level(requested: Option<ApprovalLevel>) -> ApprovalLevel {
+    if let Some(level) = requested {
+        return level;
+    }
+    if let Ok(raw) = std::env::var("AURA_TUI_APPROVAL") {
+        match ApprovalLevel::parse(&raw) {
+            Some(level) => return level,
+            None => warn!(value = %raw, "Ignoring unknown AURA_TUI_APPROVAL"),
+        }
+    }
+    ApprovalLevel::default()
 }
 
 fn unrestricted_full_access_from_env() -> bool {

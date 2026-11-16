@@ -17,7 +17,7 @@ use aura_model::{
     MockProvider, MockResponse, ModelProvider, ModelRequest, ModelResponse, ReasonerError,
 };
 use aura_store_db::RocksStore;
-use aura_ui_terminal::PermissionMode;
+use aura_ui_terminal::{ApprovalLevel, PermissionMode};
 use serde_json::{json, Value};
 use std::io::Write;
 use std::path::Path;
@@ -95,16 +95,16 @@ fn headless(
     provider: MockProvider,
     filter: ToolFilter,
 ) -> (Headless, Arc<Mutex<Vec<ModelRequest>>>) {
-    let mode = super::permission_mode(aura_core_modes::AgentMode::Agent);
-    headless_in(dirs, provider, filter, mode)
+    let permissions = super::permissions(aura_core_modes::AgentMode::Agent, None);
+    headless_in(dirs, provider, filter, permissions)
 }
 
-/// [`headless`] with its agents in permission `mode`.
+/// [`headless`] with its agents under `permissions`.
 fn headless_in(
     dirs: &Dirs,
     provider: MockProvider,
     filter: ToolFilter,
-    mode: PermissionMode,
+    permissions: crate::event_loop::Permissions,
 ) -> (Headless, Arc<Mutex<Vec<ModelRequest>>>) {
     let data = dirs.data.path();
     let workspace = dirs.workspace.path().to_path_buf();
@@ -132,14 +132,14 @@ fn headless_in(
             config,
             tools,
         },
-        policy: filter.apply(mode_policy(mode, &tool_names), &tool_names),
+        policy: filter.apply(mode_policy(permissions, &tool_names), &tool_names),
         record_observer: None,
         record_panel: crate::event_loop::RecordPanelAgent::default(),
         commands,
         long_run: LongRunSettings::default(),
         process_manager,
         background_agents: true,
-        mode,
+        permissions,
         instructions: crate::project_instructions::ProjectInstructions::only_in(&workspace),
         approvals: None,
         web_tools,
@@ -153,7 +153,7 @@ fn headless_in(
         completions,
         notices,
         model: "mock-model".to_string(),
-        mode: mode.agent_mode(),
+        mode: permissions.mode.agent_mode(),
         workspace_root: workspace,
         tool_filter: filter,
         job_wait: Duration::from_secs(5),
@@ -547,7 +547,7 @@ async fn a_call_the_mode_asks_about_is_denied() {
         &dirs,
         write_out_txt(),
         ToolFilter::default(),
-        PermissionMode::Default,
+        crate::event_loop::Permissions::new(PermissionMode::Agent, ApprovalLevel::Ask),
     );
 
     let (report, out) = execute(
@@ -565,19 +565,21 @@ async fn a_call_the_mode_asks_about_is_denied() {
 }
 
 #[test]
-fn headless_modes_match_the_terminal_except_agent() {
+fn headless_runs_agent_mode_at_yolo_unless_told_otherwise() {
     use aura_core_modes::AgentMode;
-    assert_eq!(
-        super::permission_mode(AgentMode::Agent),
-        PermissionMode::Unrestricted
-    );
+    let agent = super::permissions(AgentMode::Agent, None);
+    assert_eq!(agent.mode, PermissionMode::Agent);
+    assert_eq!(agent.approval, ApprovalLevel::Yolo);
     for mode in [AgentMode::Plan, AgentMode::Ask, AgentMode::Debug] {
-        assert_eq!(
-            super::permission_mode(mode),
-            PermissionMode::from_agent_mode(mode)
-        );
-        assert_eq!(super::permission_mode(mode).agent_mode(), mode);
+        let permissions = super::permissions(mode, None);
+        assert_eq!(permissions.mode, PermissionMode::from_agent_mode(mode));
+        assert_eq!(permissions.mode.agent_mode(), mode);
+        assert_eq!(permissions.approval, ApprovalLevel::Ask);
     }
+    assert_eq!(
+        super::permissions(AgentMode::Agent, Some(ApprovalLevel::Strict)).approval,
+        ApprovalLevel::Strict
+    );
 }
 
 #[test]

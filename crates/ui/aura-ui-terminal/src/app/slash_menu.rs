@@ -97,8 +97,14 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "mode",
-        args: "[default|accept-edits|plan|unrestricted]",
-        description: "Show or set what runs without asking",
+        args: "[agent|plan|read-only|debug]",
+        description: "Show or set the kind of work the agent does",
+        needs_args: false,
+    },
+    SlashCommand {
+        name: "approval",
+        args: "[yolo|ask|strict]",
+        description: "Show or set which tool calls ask first",
         needs_args: false,
     },
     SlashCommand {

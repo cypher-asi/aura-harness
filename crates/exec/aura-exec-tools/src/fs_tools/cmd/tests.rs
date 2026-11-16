@@ -1303,3 +1303,53 @@ async fn test_commands_carry_the_calling_agent_in_their_environment() {
         format!("{} toolu_7 {}", agent.to_hex(), std::process::id())
     );
 }
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn test_confined_run_command_cannot_write_above_the_workspace() {
+    if !crate::confine::supported() {
+        return;
+    }
+    // Not under /tmp, which confined commands may write to.
+    let parent = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let workspace = parent.path().join("ws");
+    std::fs::create_dir(&workspace).unwrap();
+    let config = command_config(crate::CommandPolicy {
+        enabled: true,
+        allow_shell: true,
+        binary_allowlist: vec!["sh".to_string(), "touch".to_string()],
+        ..Default::default()
+    });
+    let mut ctx = ToolContext::new(Sandbox::new(&workspace).unwrap(), config);
+    ctx.confine_writes = true;
+
+    for args in [
+        serde_json::json!({ "shell_script": "touch inside" }),
+        serde_json::json!({ "program": "touch", "args": ["inside2"] }),
+    ] {
+        let result = CmdRunTool.execute(&ctx, args).await.unwrap();
+        assert!(result.ok, "{result:?}");
+    }
+    assert!(workspace.join("inside").exists());
+    assert!(workspace.join("inside2").exists());
+
+    for args in [
+        serde_json::json!({ "shell_script": "touch ../outside" }),
+        serde_json::json!({ "program": "touch", "args": ["../outside"] }),
+        serde_json::json!({ "program": "touch", "args": ["../outside"], "tty_cols": 80 }),
+    ] {
+        let result = CmdRunTool.execute(&ctx, args.clone()).await.unwrap();
+        assert!(!result.ok, "{args} should fail: {result:?}");
+    }
+    assert!(!parent.path().join("outside").exists());
+
+    ctx.confine_writes = false;
+    let result = CmdRunTool
+        .execute(
+            &ctx,
+            serde_json::json!({ "program": "touch", "args": ["../outside"] }),
+        )
+        .await
+        .unwrap();
+    assert!(result.ok, "{result:?}");
+}

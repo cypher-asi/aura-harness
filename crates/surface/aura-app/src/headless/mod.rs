@@ -21,6 +21,7 @@ pub(crate) use tools::ToolFilter;
 
 use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
+use crate::event_loop::Permissions;
 use crate::event_loop::TurnBase;
 use crate::harness::{
     agent_tools, background_process_manager, build_hub, build_provider, mode_policy,
@@ -31,7 +32,7 @@ use crate::model_selection::ModelSelection;
 use crate::session_helpers;
 use anyhow::Context;
 use aura_core_modes::AgentMode;
-use aura_ui_terminal::PermissionMode;
+use aura_ui_terminal::{ApprovalLevel, PermissionMode};
 use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -73,6 +74,9 @@ pub struct HeadlessOptions {
     pub provider: Option<String>,
     /// Log debug detail to stderr
     pub verbose: bool,
+    /// Approval level (`--approval`); `None` runs `agent` mode at `yolo`
+    /// and the other modes at `ask`
+    pub approval: Option<ApprovalLevel>,
 }
 
 /// How `aura -p` prints its result.
@@ -291,7 +295,7 @@ async fn build(
     }
 
     let mode = aura_config::session_mode(requested_mode);
-    let permission_mode = permission_mode(mode);
+    let permissions = permissions(mode, args.approval);
     let tool_names = policy_tool_names(&tools);
     let (commands, mut ui_commands) = mpsc::channel(256);
     // Spawned permanent agents report to a chat; nothing shows it here.
@@ -310,14 +314,14 @@ async fn build(
             tools,
             limits: models.limits(),
         },
-        policy: tool_filter.apply(mode_policy(permission_mode, &tool_names), &tool_names),
+        policy: tool_filter.apply(mode_policy(permissions, &tool_names), &tool_names),
         record_observer: None,
         record_panel: crate::event_loop::RecordPanelAgent::default(),
         commands,
         long_run,
         process_manager,
         background_agents: true,
-        mode: permission_mode,
+        permissions,
         instructions: project_instructions(),
         approvals: None,
         web_tools,
@@ -338,17 +342,22 @@ async fn build(
     })
 }
 
-/// The permission mode `aura -p` agents run in for the session mode
-/// `mode` (`--mode`, else `AURA_DEFAULT_MODE`). `plan`, `ask` and `debug`
-/// are the terminal's modes of those names. `agent` would start the
-/// terminal in `default`, which asks before edits and commands; nobody
-/// can answer here, so every ask is denied, and `agent` runs them instead.
-/// `AURA_TUI_MODE` is the terminal's own starting mode and is not read.
-pub(crate) const fn permission_mode(mode: AgentMode) -> PermissionMode {
-    match PermissionMode::from_agent_mode(mode) {
-        PermissionMode::Default => PermissionMode::Unrestricted,
-        other => other,
-    }
+/// The work mode and approval level `aura -p` agents run under for the
+/// session mode `mode` (`--mode`, else `AURA_DEFAULT_MODE`) and the
+/// `--approval` level, if given. Nobody can answer a prompt here, so every
+/// ask is denied: without `--approval`, `agent` runs at `yolo` (commands
+/// confined to the workspace) and the read-only modes at `ask`.
+/// `AURA_TUI_MODE` and `AURA_TUI_APPROVAL` are the terminal's own and are
+/// not read.
+pub(crate) fn permissions(mode: AgentMode, approval: Option<ApprovalLevel>) -> Permissions {
+    let mode = PermissionMode::from_agent_mode(mode);
+    let approval = approval.unwrap_or(match mode {
+        PermissionMode::Agent => ApprovalLevel::Yolo,
+        PermissionMode::Plan | PermissionMode::ReadOnly | PermissionMode::Debug => {
+            ApprovalLevel::Ask
+        }
+    });
+    Permissions::new(mode, approval)
 }
 
 /// `AURA_HEADLESS_JOB_WAIT`, in the same forms as `--max-time`.

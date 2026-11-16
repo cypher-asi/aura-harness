@@ -85,12 +85,17 @@ fn display_available() -> bool {
 /// `aura desktop` in a binary built without the desktop app.
 pub async fn run_cli(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
     let requested_mode = cli.mode.map(aura_core_modes::AgentMode::from);
+    let approval = cli.approval.map(aura_core_modes::ApprovalLevel::from);
 
     if let Some(prompt) = cli.print {
         if cli.command.is_some() {
             anyhow::bail!("-p runs a prompt on its own; it cannot be combined with a subcommand");
         }
-        return aura_app::headless::run(prompt, cli.headless.into(), requested_mode).await;
+        let options = aura_app::headless::HeadlessOptions {
+            approval,
+            ..cli.headless.into()
+        };
+        return aura_app::headless::run(prompt, options, requested_mode).await;
     }
 
     match cli.command {
@@ -111,8 +116,8 @@ pub async fn run_cli(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
         Some(Commands::Runs(args)) => crate::trace_commands::cmd_runs(args).await,
         Some(Commands::Dataset(args)) => crate::trace_commands::cmd_dataset(args),
         Some(Commands::Eval(args)) => crate::trace_commands::cmd_eval(args).await,
-        Some(Commands::Run(args)) => run_with_args(args, requested_mode).await,
-        None => run_with_args(RunArgs::default(), requested_mode).await,
+        Some(Commands::Run(args)) => run_with_args(args, requested_mode, approval).await,
+        None => run_with_args(RunArgs::default(), requested_mode, approval).await,
     }
     .map(|()| std::process::ExitCode::SUCCESS)
 }
@@ -326,9 +331,10 @@ fn update_plugin_enable(
 async fn run_with_args(
     args: RunArgs,
     requested_mode: Option<aura_core_modes::AgentMode>,
+    approval: Option<aura_core_modes::ApprovalLevel>,
 ) -> anyhow::Result<()> {
     match args.ui {
-        UiMode::Terminal => run_terminal(args, requested_mode).await,
+        UiMode::Terminal => run_terminal(args, requested_mode, approval).await,
         UiMode::None => {
             let filter = if args.verbose {
                 EnvFilter::from_default_env().add_directive("aura=debug".parse()?)
@@ -362,9 +368,14 @@ async fn run_with_args(
 async fn run_terminal(
     args: RunArgs,
     requested_mode: Option<aura_core_modes::AgentMode>,
+    approval: Option<aura_core_modes::ApprovalLevel>,
 ) -> anyhow::Result<()> {
     let theme = Theme::by_name(&args.theme);
-    let session = session::start(&args.session_options(), requested_mode).await?;
+    let options = session::SessionOptions {
+        approval,
+        ..args.session_options()
+    };
+    let session = session::start(&options, requested_mode).await?;
 
     let mut app = App::new()
         .with_event_sender(session.events.clone())

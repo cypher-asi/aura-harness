@@ -7,6 +7,38 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Approval levels
+
+##### Added
+
+- An approval level per agent, shown as a badge before the model name in
+  the terminal and desktop status line, and picked with `/approval
+  <level>`, Shift+Tab (`ask` → `strict` → `yolo`), `--approval` or
+  `AURA_TUI_APPROVAL`:
+  - `ask` (the default): reads run; everything else asks unless a
+    project "always allow" rule covers it.
+  - `strict`: everything but reads asks, "always allow" rules are
+    ignored, and prompts offer no "always" answer.
+  - `yolo`: nothing asks, and the agent's commands can write only inside
+    the working folder, temp folders and package caches. On Linux this
+    is enforced with Landlock; elsewhere commands still ask unless they
+    plainly stay in the folder. `AURA_YOLO_WRITABLE_PATHS` adds folders.
+- Spawned agents start at their parent's level, and every level change is
+  recorded in the agent's `mode_change` entries (`agent/ask` →
+  `agent/yolo`).
+
+##### Changed
+
+- `/mode` now picks only the work mode: `agent`, `plan`, `read-only`
+  (formerly `/mode ask`) or `debug`. The old `default`, `accept-edits`
+  and `unrestricted` modes are gone; `/mode unrestricted` points to
+  `/approval yolo`, saved sessions load them as `agent`, and
+  `AURA_TUI_MODE` set to one of them is ignored with a warning.
+- Shift+Tab cycles the approval level instead of the mode.
+- `aura -p` in agent mode runs at `yolo`, so on Linux its commands can no
+  longer write outside the working folder. `--approval ask` or `strict`
+  denies edits and commands instead.
+
 ### Workspace layout
 
 ##### Changed

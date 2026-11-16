@@ -103,6 +103,9 @@ pub struct ToolContext {
     /// Takes over commands `run_command` starts with `background: true`,
     /// and backs the job tools. `None` makes such calls fail.
     pub background_processes: Option<Arc<dyn BackgroundProcessHook>>,
+    /// Commands may only write inside the workspace (see
+    /// [`crate::confine`]); set under the `yolo` approval level.
+    pub confine_writes: bool,
 }
 
 impl ToolContext {
@@ -131,6 +134,7 @@ impl ToolContext {
             current_tool_use_id: None,
             current_action_id: None,
             background_processes: None,
+            confine_writes: false,
         }
     }
 }

@@ -76,6 +76,10 @@ pub struct ExecuteContext {
     /// is **not** the model tool-use id, so this is the only faithful
     /// source of the originating tool-use block id at execution time.
     pub tool_use_id: Option<String>,
+    /// Commands this action spawns may only write inside the workspace
+    /// (plus temp and cache folders). Set under the `yolo` approval level,
+    /// where nothing asks before a command runs.
+    pub confine_writes: bool,
 }
 
 /// Execution limits enforced by the executor.
@@ -115,7 +119,16 @@ impl ExecuteContext {
             workspace_root,
             limits: ExecuteLimits::default(),
             tool_use_id: None,
+            confine_writes: false,
         }
+    }
+
+    /// Confine the writes of the commands this action spawns to the
+    /// workspace.
+    #[must_use]
+    pub const fn with_confined_writes(mut self, confine_writes: bool) -> Self {
+        self.confine_writes = confine_writes;
+        self
     }
 
     /// Set custom limits.

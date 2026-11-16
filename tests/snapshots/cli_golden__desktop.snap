@@ -13,11 +13,19 @@ Options:
           Possible values:
           - agent: Full unrestricted operation subject to user permissions
           - plan:  Read + markdown writes + read-only subprocesses
-          - ask:   Read-only
+          - ask:   Read-only (the terminal's `read-only` mode)
           - debug: Read + sandboxed probes only
 
   -w, --workspace <WORKSPACE>
           Folder the agent works in (default: the current directory)
+
+      --approval <APPROVAL>
+          What tool calls ask first: `yolo` runs everything with commands confined to writing inside the working folder, `ask` asks for anything not on the allow list, `strict` asks for everything but reads. Overrides `AURA_TUI_APPROVAL`; `-p` defaults to `yolo` in agent mode
+
+          Possible values:
+          - yolo:   Run everything; commands can write only inside the working folder
+          - ask:    Ask for anything not on the project's allow list
+          - strict: Ask for everything except reads, even what the allow list covers
 
   -d, --dir <DIR>
           Data directory for agents and records (default: `AURA_DATA_DIR` or `./aura_data`)

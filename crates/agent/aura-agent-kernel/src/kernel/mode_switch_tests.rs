@@ -113,9 +113,10 @@ async fn switch_permissions_records_a_table_change_within_one_mode() {
         .kernel
         .switch_permissions(
             AgentMode::Agent,
+            aura_core_types::ApprovalLevel::Yolo,
             UserToolDefaults::full_access(),
-            "default",
-            "unrestricted",
+            "agent/ask",
+            "agent/yolo",
         )
         .await
         .unwrap()
@@ -126,20 +127,25 @@ async fn switch_permissions_records_a_table_change_within_one_mode() {
             payload.from_permissions.as_deref(),
             payload.to_permissions.as_deref()
         ),
-        (Some("default"), Some("unrestricted"))
+        (Some("agent/ask"), Some("agent/yolo"))
     );
     assert_eq!(
         h.kernel.policy().config().user_default,
         UserToolDefaults::full_access()
+    );
+    assert_eq!(
+        h.kernel.policy().approval(),
+        aura_core_types::ApprovalLevel::Yolo
     );
 
     assert!(h
         .kernel
         .switch_permissions(
             AgentMode::Agent,
+            aura_core_types::ApprovalLevel::Yolo,
             UserToolDefaults::full_access(),
-            "unrestricted",
-            "unrestricted",
+            "agent/yolo",
+            "agent/yolo",
         )
         .await
         .unwrap()

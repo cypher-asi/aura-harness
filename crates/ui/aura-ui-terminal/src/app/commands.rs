@@ -4,7 +4,7 @@ use super::{App, AppState, DetailView, NotificationType, PanelFocus, PendingAppr
 use crate::{
     components::{elapsed_ms, Activity, Message, MessageRole, ToolStatus, ToolStep},
     events::{CallUsage, RewindScope, UiCommand, UiEvent},
-    mode_command::{PermissionMode, SlashModeCommand},
+    mode_command::{parse_approval_command, ApprovalLevel, PermissionMode, SlashModeCommand},
     terminal::KeyResult,
 };
 use tracing::debug;
@@ -142,6 +142,7 @@ impl App {
             }
             "compact" => self.handle_compact_command(arg),
             "mode" => self.handle_mode_command(arg),
+            "approval" | "approvals" => self.handle_approval_command(arg),
             "init" => self.handle_init_command(),
             "resume" => self.handle_resume_command(arg),
             "rewind" => self.handle_rewind_command(arg),
@@ -155,6 +156,7 @@ impl App {
                 self.hud = super::hud::Hud {
                     jobs,
                     mode: self.hud.mode,
+                    approval: self.hud.approval,
                     instructions,
                     ..Default::default()
                 };
@@ -455,24 +457,22 @@ impl App {
         }
     }
 
-    /// `/mode`: show the agent's permission mode and the others; `/mode
+    /// `/mode`: show the agent's work mode and the others; `/mode
     /// <name>`: switch to one for the agent's next tool calls.
     fn handle_mode_command(&mut self, arg: &str) {
         if arg.is_empty() {
             let current = self.hud.mode.unwrap_or_default();
             let mut report = format!("Mode: {current} — {}", current.description());
             for mode in [
-                PermissionMode::Default,
-                PermissionMode::AcceptEdits,
+                PermissionMode::Agent,
                 PermissionMode::Plan,
-                PermissionMode::Unrestricted,
-                PermissionMode::Ask,
+                PermissionMode::ReadOnly,
                 PermissionMode::Debug,
             ] {
                 report.push_str(&format!("\n  {:<14}{}", mode.name(), mode.description()));
             }
             report.push_str("\n/plan enters plan mode, or leaves it.");
-            report.push_str("\nShift+Tab cycles default → accept-edits → plan → unrestricted.");
+            report.push_str("\n/approval picks how much asks first.");
             self.add_message(Message::new(MessageRole::System, &report));
             return;
         }
@@ -481,6 +481,50 @@ impl App {
             Err(e) => {
                 self.notification = Some((e.to_string(), NotificationType::Warning));
             }
+        }
+    }
+
+    /// `/approval`: show the agent's approval level and the others;
+    /// `/approval <level>`: switch to one for the agent's next tool calls.
+    fn handle_approval_command(&mut self, arg: &str) {
+        if arg.is_empty() {
+            let current = self.hud.approval.unwrap_or_default();
+            let mut report = format!("Approval: {current} — {}", current.description());
+            for level in [
+                ApprovalLevel::Yolo,
+                ApprovalLevel::Ask,
+                ApprovalLevel::Strict,
+            ] {
+                report.push_str(&format!("\n  {:<14}{}", level.name(), level.description()));
+            }
+            report.push_str("\nShift+Tab cycles ask → strict → yolo.");
+            self.add_message(Message::new(MessageRole::System, &report));
+            return;
+        }
+        match parse_approval_command(arg) {
+            Ok(level) => self.request_approval(level),
+            Err(e) => {
+                self.notification = Some((e.to_string(), NotificationType::Warning));
+            }
+        }
+    }
+
+    /// Ask the event loop to switch the active agent to `level`. The badge
+    /// changes once the switch is recorded and [`UiCommand::SetApproval`]
+    /// comes back.
+    pub(super) fn request_approval(&mut self, level: ApprovalLevel) {
+        if self.hud.approval == Some(level) {
+            self.notification = Some((
+                format!("Already at approval level {level}"),
+                NotificationType::Warning,
+            ));
+            return;
+        }
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::SetApproval {
+                agent_id: self.active_agent_id.clone(),
+                level,
+            });
         }
     }
 
@@ -660,6 +704,7 @@ impl App {
             }
             UiCommand::CloseApproval(id) => self.cmd_close_approval(&id),
             UiCommand::SetMode(mode) => self.hud.mode = Some(mode),
+            UiCommand::SetApproval(level) => self.hud.approval = Some(level),
             UiCommand::ShowError(msg) => {
                 self.cmd_notification(&msg, "error: ", NotificationType::Error);
             }

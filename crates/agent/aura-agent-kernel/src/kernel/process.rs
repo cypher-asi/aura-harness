@@ -12,8 +12,8 @@
 use super::{Kernel, ProcessResult};
 use crate::context::hash_tx_with_window;
 use aura_core_types::{
-    AgentMode, ModeChangePayload, RecordEntry, RuntimeCapabilityInstall, SystemKind, Transaction,
-    TransactionType, UserToolDefaults,
+    AgentMode, ApprovalLevel, ModeChangePayload, RecordEntry, RuntimeCapabilityInstall, SystemKind,
+    Transaction, TransactionType, UserToolDefaults,
 };
 use aura_store_db::DequeueToken;
 
@@ -117,6 +117,7 @@ impl Kernel {
     pub async fn switch_permissions(
         &self,
         mode: AgentMode,
+        approval: ApprovalLevel,
         user_default: UserToolDefaults,
         from_permissions: &str,
         to_permissions: &str,
@@ -139,6 +140,7 @@ impl Kernel {
         };
         self.policy.reconfigure(|config| {
             config.mode = mode;
+            config.approval = approval;
             config.user_default = user_default;
         });
         Ok(result)

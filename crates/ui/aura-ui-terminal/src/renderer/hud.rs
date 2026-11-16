@@ -33,12 +33,10 @@ pub(super) fn status_parts(hud: &Hud, theme: &Theme) -> Vec<(String, Color)> {
     let mut parts = Vec::new();
     if let Some(mode) = hud.mode {
         let color = match mode {
-            PermissionMode::Default => theme.colors.muted,
-            PermissionMode::AcceptEdits => theme.colors.primary,
-            PermissionMode::Plan | PermissionMode::Ask | PermissionMode::Debug => {
+            PermissionMode::Agent => theme.colors.muted,
+            PermissionMode::Plan | PermissionMode::ReadOnly | PermissionMode::Debug => {
                 theme.colors.secondary
             }
-            PermissionMode::Unrestricted => theme.colors.warning,
         };
         let label = if mode == PermissionMode::Plan {
             "plan mode (/plan to leave)".to_string()

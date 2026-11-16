@@ -83,7 +83,7 @@ pub struct ModeChangePayload {
     pub to: AgentMode,
     /// Name of the per-tool permission table in force before the change,
     /// for surfaces that switch one with the mode (the terminal's
-    /// `default`, `accept-edits`, `unrestricted`, ...)
+    /// `agent/ask`, `plan/strict`, `agent/yolo`, ...)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_permissions: Option<String>,
     /// Name of the per-tool permission table in force from this entry on

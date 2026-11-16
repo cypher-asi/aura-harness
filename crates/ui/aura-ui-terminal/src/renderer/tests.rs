@@ -1281,6 +1281,27 @@ fn test_folder_picker_overlay_lists_the_launch_directory() {
     assert!(screen.contains("Enter create  Esc stop"));
 }
 
+#[test]
+fn test_approval_level_sits_before_the_model() {
+    use crate::events::UiCommand;
+
+    let mut app = app_with_model(None);
+    let input_row = |app: &mut crate::App| {
+        render_rows(app, 120)
+            .into_iter()
+            .find(|row| row.contains("qwen3:4b"))
+            .unwrap()
+    };
+    assert!(!input_row(&mut app).contains("ASK"), "unknown until told");
+
+    app.process_command(UiCommand::SetApproval(crate::ApprovalLevel::Yolo));
+    assert!(input_row(&mut app).contains("YOLO · qwen3:4b"));
+
+    app.process_command(UiCommand::SetApproval(crate::ApprovalLevel::Strict));
+    app.process_command(UiCommand::SetMode(crate::PermissionMode::Plan));
+    assert!(input_row(&mut app).contains("STRICT · PLAN · qwen3:4b"));
+}
+
 fn render_rows(app: &mut crate::App, width: u16) -> Vec<String> {
     let mut terminal =
         ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 30)).unwrap();
@@ -2938,7 +2959,7 @@ fn test_status_line_leads_with_the_mode() {
     let rows = render_rows(&mut app, 160);
     assert!(!rows.last().unwrap().contains("mode"), "unknown until told");
 
-    app.process_command(UiCommand::SetMode(crate::PermissionMode::AcceptEdits));
+    app.process_command(UiCommand::SetMode(crate::PermissionMode::ReadOnly));
     app.process_command(UiCommand::CallStats(CallStats {
         input_tokens: 10_000,
         context_limit: Some(200_000),
@@ -2946,7 +2967,7 @@ fn test_status_line_leads_with_the_mode() {
     }));
     let rows = render_rows(&mut app, 160);
     let status = rows.last().unwrap();
-    let mode = status.find("accept-edits mode").expect(status);
+    let mode = status.find("read-only mode").expect(status);
     let ctx = status.find("ctx 5%").expect(status);
     assert!(mode < ctx, "{status:?}");
 }

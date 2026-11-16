@@ -2465,17 +2465,58 @@ fn shift_tab_and_mode_command_ask_the_event_loop() {
     app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
 
     app.handle_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
-    assert!(matches!(rx.try_recv(), Ok(UiEvent::CycleMode(id)) if id == "aa"));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::CycleApproval(id)) if id == "aa"));
 
-    app.handle_command("/mode accept-edits");
+    app.handle_command("/mode read-only");
     assert!(matches!(
         rx.try_recv(),
-        Ok(UiEvent::SetMode { agent_id, mode: crate::PermissionMode::AcceptEdits }) if agent_id == "aa"
+        Ok(UiEvent::SetMode { agent_id, mode: crate::PermissionMode::ReadOnly }) if agent_id == "aa"
     ));
 
     app.handle_command("/mode chaos");
     assert!(rx.try_recv().is_err());
     assert!(app.notification().unwrap().0.contains("unknown mode"));
+
+    app.handle_command("/mode unrestricted");
+    assert!(rx.try_recv().is_err());
+    assert!(app.notification().unwrap().0.contains("/approval"));
+}
+
+#[test]
+fn approval_command_asks_the_event_loop() {
+    let (tx, mut rx) = mpsc::channel(10);
+    let mut app = App::new().with_event_sender(tx);
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+
+    app.handle_command("/approval strict");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SetApproval { agent_id, level: crate::ApprovalLevel::Strict }) if agent_id == "aa"
+    ));
+
+    app.process_command(UiCommand::SetApproval(crate::ApprovalLevel::Yolo));
+    assert_eq!(app.approval(), Some(crate::ApprovalLevel::Yolo));
+    app.handle_command("/approval yolo");
+    assert!(rx.try_recv().is_err());
+    assert!(app.notification().unwrap().0.contains("Already"));
+
+    app.handle_command("/approval chaos");
+    assert!(rx.try_recv().is_err());
+    assert!(app
+        .notification()
+        .unwrap()
+        .0
+        .contains("unknown approval level"));
+}
+
+#[test]
+fn approval_command_without_a_level_lists_the_levels() {
+    let mut app = App::new();
+    app.process_command(UiCommand::SetApproval(crate::ApprovalLevel::Strict));
+    app.handle_command("/approval");
+    let report = app.messages().back().unwrap().content().to_string();
+    assert!(report.starts_with("Approval: strict"), "{report}");
+    assert!(report.contains("yolo"), "{report}");
 }
 
 #[test]
@@ -2485,15 +2526,17 @@ fn mode_command_without_a_name_lists_the_modes() {
     app.handle_command("/mode");
     let report = app.messages().back().unwrap().content().to_string();
     assert!(report.starts_with("Mode: plan"), "{report}");
-    assert!(report.contains("unrestricted"), "{report}");
+    assert!(report.contains("read-only"), "{report}");
 }
 
 #[test]
 fn new_session_keeps_the_mode() {
     let mut app = App::new();
-    app.process_command(UiCommand::SetMode(crate::PermissionMode::Unrestricted));
+    app.process_command(UiCommand::SetMode(crate::PermissionMode::Debug));
+    app.process_command(UiCommand::SetApproval(crate::ApprovalLevel::Yolo));
     app.handle_command("/new");
-    assert_eq!(app.hud().mode, Some(crate::PermissionMode::Unrestricted));
+    assert_eq!(app.hud().mode, Some(crate::PermissionMode::Debug));
+    assert_eq!(app.hud().approval, Some(crate::ApprovalLevel::Yolo));
 }
 
 #[test]
@@ -2937,7 +2980,7 @@ fn test_mode_commands_request_a_switch() {
     assert!(matches!(
         rx.try_recv(),
         Ok(UiEvent::SetMode {
-            mode: crate::PermissionMode::Ask,
+            mode: crate::PermissionMode::ReadOnly,
             ..
         })
     ));
@@ -2953,12 +2996,12 @@ fn test_mode_commands_request_a_switch() {
 #[test]
 fn test_switching_to_the_current_mode_sends_nothing() {
     let (mut app, mut rx) = app_with_events();
-    app.process_command(UiCommand::SetMode(crate::PermissionMode::Default));
+    app.process_command(UiCommand::SetMode(crate::PermissionMode::Agent));
     app.handle_command("/mode agent");
     assert!(rx.try_recv().is_err());
     assert!(matches!(
         app.notification(),
-        Some((text, NotificationType::Warning)) if text.contains("Already in default mode")
+        Some((text, NotificationType::Warning)) if text.contains("Already in agent mode")
     ));
 }
 

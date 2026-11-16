@@ -296,7 +296,7 @@ impl App {
         }
         if key.code == KeyCode::BackTab {
             if let Some(tx) = &self.event_tx {
-                let _ = tx.try_send(UiEvent::CycleMode(self.active_agent_id.clone()));
+                let _ = tx.try_send(UiEvent::CycleApproval(self.active_agent_id.clone()));
             }
             return KeyResult::continue_running();
         }

@@ -22,7 +22,7 @@ mod theme;
 
 use anyhow::Context;
 use aura_app::session::SessionOptions;
-use aura_core_modes::AgentMode;
+use aura_core_modes::{AgentMode, ApprovalLevel};
 use std::path::PathBuf;
 use std::time::Instant;
 use tracing_subscriber::EnvFilter;
@@ -46,6 +46,9 @@ pub struct DesktopOptions {
     pub allow_unrestricted_full_access: bool,
     /// Run against a scripted session instead of a real agent
     pub demo: bool,
+    /// Approval level agents start at; `None` reads `AURA_TUI_APPROVAL`,
+    /// else `ask`
+    pub approval: Option<ApprovalLevel>,
 }
 
 impl Default for DesktopOptions {
@@ -58,6 +61,7 @@ impl Default for DesktopOptions {
             verbose: false,
             allow_unrestricted_full_access: false,
             demo: false,
+            approval: None,
         }
     }
 }
@@ -95,6 +99,7 @@ pub fn run(args: DesktopOptions, mode: Option<AgentMode>) -> anyhow::Result<()> 
             dir: args.dir,
             provider: args.provider,
             allow_unrestricted_full_access: args.allow_unrestricted_full_access,
+            approval: args.approval,
         };
         let session = runtime.block_on(aura_app::session::start(&options, mode))?;
         let handles = app::Handles {

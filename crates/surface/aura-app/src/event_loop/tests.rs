@@ -13,7 +13,7 @@ use aura_model::{
 };
 use aura_store_db::RocksStore;
 use aura_ui_terminal::events::RewindScope;
-use aura_ui_terminal::PermissionMode;
+use aura_ui_terminal::{ApprovalLevel, PermissionMode};
 use tempfile::TempDir;
 use tokio::sync::Semaphore;
 
@@ -81,6 +81,7 @@ fn fixture() -> (Fixture, mpsc::Receiver<UiCommand>) {
         .create(Some("Second".to_string()))
         .unwrap()
         .agent_id();
+    let approvals = Arc::new(TerminalApprovals::new(commands_tx.clone(), data.path()));
     let parts = AgentHubParts {
         registry,
         definitions: AgentDefinitions::load_or_seed(data.path()).unwrap(),
@@ -95,7 +96,9 @@ fn fixture() -> (Fixture, mpsc::Receiver<UiCommand>) {
         },
         commands: commands_tx.clone(),
         long_run: crate::long_run::LongRunSettings::default(),
-        mode: PermissionMode::Default,
+        mode: PermissionMode::Agent,
+        approval: aura_ui_terminal::ApprovalLevel::Ask,
+        approvals: Some(Arc::clone(&approvals)),
         instructions: crate::project_instructions::ProjectInstructions::only_in(workspace.path()),
         processes: ProcessTable::without_os_scan(None, None),
         agents: None,
@@ -108,7 +111,6 @@ fn fixture() -> (Fixture, mpsc::Receiver<UiCommand>) {
     let provider_gate = Arc::clone(&gate);
     let workspace_root = workspace.path().to_path_buf();
     let checkpoints = crate::session_checkpoint::Checkpoints::new(data.path());
-    let approvals = Arc::new(TerminalApprovals::new(commands_tx.clone(), data.path()));
     let prompter = Arc::clone(&approvals);
     let files = crate::file_checkpoints::FileCheckpoints::new(data.path());
     let factory_files = files.clone();
@@ -982,20 +984,40 @@ async fn a_mode_switch_is_recorded_before_it_takes_effect() {
         .iter()
         .find_map(|e| e.tx.mode_change_payload())
         .expect("a mode_change record for the switch");
-    assert_eq!(switch.from_permissions.as_deref(), Some("default"));
-    assert_eq!(switch.to_permissions.as_deref(), Some("plan"));
+    assert_eq!(switch.from_permissions.as_deref(), Some("agent/ask"));
+    assert_eq!(switch.to_permissions.as_deref(), Some("plan/ask"));
     assert_eq!(switch.to, aura_core_types::AgentMode::Plan);
 
-    handle_ui_event(&mut state, UiEvent::CycleMode(first.to_hex()), &links).await;
-    assert_eq!(state.hub.mode_of(first), PermissionMode::Unrestricted);
-    let shown: Vec<PermissionMode> = drain(&mut commands)
+    handle_ui_event(&mut state, UiEvent::CycleApproval(first.to_hex()), &links).await;
+    assert_eq!(
+        state.hub.permissions_of(first).approval,
+        ApprovalLevel::Strict
+    );
+    assert_eq!(state.hub.mode_of(first), PermissionMode::Plan);
+    let records = kernel.store().scan_record(first, 0, 100).unwrap();
+    let last = records
+        .iter()
+        .filter_map(|e| e.tx.mode_change_payload())
+        .last()
+        .unwrap();
+    assert_eq!(last.to_permissions.as_deref(), Some("plan/strict"));
+    assert_eq!(kernel.policy().approval(), ApprovalLevel::Strict);
+    let shown: Vec<UiCommand> = drain(&mut commands)
         .into_iter()
-        .filter_map(|(to, c)| match c {
-            UiCommand::SetMode(mode) if to == Some(first.to_hex()) => Some(mode),
-            _ => None,
-        })
+        .filter(|(to, _)| *to == Some(first.to_hex()))
+        .map(|(_, c)| c)
+        .filter(|c| matches!(c, UiCommand::SetMode(_) | UiCommand::SetApproval(_)))
         .collect();
-    assert_eq!(shown, [PermissionMode::Plan, PermissionMode::Unrestricted]);
+    assert!(
+        matches!(
+            shown.as_slice(),
+            [
+                UiCommand::SetMode(PermissionMode::Plan),
+                UiCommand::SetApproval(ApprovalLevel::Strict)
+            ]
+        ),
+        "{shown:?}"
+    );
 }
 
 #[tokio::test]
@@ -1011,7 +1033,7 @@ async fn plan_again_returns_to_the_mode_from_before() {
         &mut state,
         UiEvent::SetMode {
             agent_id: agent.clone(),
-            mode: PermissionMode::AcceptEdits,
+            mode: PermissionMode::Debug,
         },
         &links,
     )
@@ -1021,24 +1043,27 @@ async fn plan_again_returns_to_the_mode_from_before() {
     assert_eq!(state.idle[&first].kernel.policy().mode_label(), "plan");
 
     handle_ui_event(&mut state, UiEvent::TogglePlan(agent), &links).await;
-    assert_eq!(state.hub.mode_of(first), PermissionMode::AcceptEdits);
-    assert_eq!(state.idle[&first].kernel.policy().mode_label(), "agent");
+    assert_eq!(state.hub.mode_of(first), PermissionMode::Debug);
+    assert_eq!(state.idle[&first].kernel.policy().mode_label(), "debug");
 }
 
 #[tokio::test]
-async fn unrestricted_mode_runs_commands_without_asking() {
+async fn yolo_runs_commands_without_asking() {
     let (fixture, mut commands) = fixture();
     let mut b = borrowed(&fixture);
     let links = b.links.clone();
     let first = fixture.first;
     let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
     let mut state = loop_state(&fixture, &mut b);
-    let unrestricted = UiEvent::SetMode {
+    let yolo = UiEvent::SetApproval {
         agent_id: first.to_hex(),
-        mode: PermissionMode::Unrestricted,
+        level: ApprovalLevel::Yolo,
     };
+    if !crate::event_loop::modes::commands_confinable() {
+        return;
+    }
 
-    handle_ui_event(&mut state, unrestricted, &links).await;
+    handle_ui_event(&mut state, yolo, &links).await;
     handle_ui_event(&mut state, message(first, "run ls", true), &links).await;
     let finished = next_done(&mut done).await;
     handle_work_done(&mut state, finished).await;

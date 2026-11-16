@@ -14,8 +14,10 @@
 
 use super::agent_events::AgentUi;
 use super::agents::{AgentSession, KernelFactory};
+use super::approvals::TerminalApprovals;
 use super::handlers::{handle_agent_success, run_agent_turn};
 use super::host::{agent_tool_definitions, TerminalAgents};
+use super::modes::Permissions;
 use super::notices::{Notice, NoticeSender};
 use super::processes::{now_ms, task_id, ProcessTable};
 use super::record_ui::RecordPanelAgent;
@@ -85,13 +87,17 @@ pub struct AgentHub {
     commands: mpsc::Sender<UiCommand>,
     /// Per-turn time and cost limits.
     pub(crate) long_run: LongRunSettings,
-    /// Permission mode of each agent the user or a parent set one for
-    modes: Mutex<HashMap<AgentId, PermissionMode>>,
+    /// Mode and approval level of each agent the user or a parent set them
+    /// for
+    permissions: Mutex<HashMap<AgentId, Permissions>>,
     /// Mode each agent in plan mode was in before it, which `/build`
     /// returns it to
     before_plan: Mutex<HashMap<AgentId, PermissionMode>>,
-    /// Mode of every other agent
-    default_mode: PermissionMode,
+    /// Mode and approval level of every other agent
+    default_permissions: Permissions,
+    /// Asks the user about the agents' tool calls; told each agent's
+    /// approval level
+    approvals: Option<Arc<TerminalApprovals>>,
     /// `AGENTS.md`, `CLAUDE.md` and rules for each working folder.
     pub(crate) instructions: ProjectInstructions,
     /// What the Processes tab lists.
@@ -114,6 +120,10 @@ pub struct AgentHubParts {
     pub(crate) long_run: LongRunSettings,
     /// Mode agents start in
     pub mode: PermissionMode,
+    /// Approval level agents start at
+    pub approval: aura_ui_terminal::ApprovalLevel,
+    /// The prompter the agents' kernels ask, if any
+    pub approvals: Option<Arc<TerminalApprovals>>,
     pub instructions: ProjectInstructions,
     /// Lists turns, spawns and background work in the Processes tab.
     pub processes: Arc<ProcessTable>,
@@ -135,6 +145,10 @@ impl AgentHub {
         factory: impl FnOnce(Arc<dyn SubagentDispatchHook>) -> KernelFactory,
     ) -> Arc<Self> {
         let (notices, notice_rx) = mpsc::unbounded_channel();
+        let default_permissions = Permissions::new(parts.mode, parts.approval);
+        if let Some(approvals) = &parts.approvals {
+            approvals.set_default_level(parts.approval);
+        }
         Arc::new_cyclic(|hub: &Weak<Self>| {
             let dispatcher: Arc<dyn SubagentDispatchHook> =
                 Arc::new(TerminalSubagentDispatcher { hub: hub.clone() });
@@ -149,9 +163,10 @@ impl AgentHub {
                 factory: factory(dispatcher),
                 commands: parts.commands,
                 long_run: parts.long_run,
-                modes: Mutex::new(HashMap::new()),
+                permissions: Mutex::new(HashMap::new()),
                 before_plan: Mutex::new(HashMap::new()),
-                default_mode: parts.mode,
+                default_permissions,
+                approvals: parts.approvals,
                 instructions: parts.instructions,
                 processes: parts.processes,
                 notices,
@@ -162,36 +177,44 @@ impl AgentHub {
         })
     }
 
-    /// Permission mode of `agent_id`.
+    /// Work mode of `agent_id`.
     pub fn mode_of(&self, agent_id: AgentId) -> PermissionMode {
-        lock(&self.modes)
-            .get(&agent_id)
-            .copied()
-            .unwrap_or(self.default_mode)
+        self.permissions_of(agent_id).mode
     }
 
-    /// Note that `agent_id` is in `mode` from now on.
-    pub(super) fn set_mode(&self, agent_id: AgentId, mode: PermissionMode) {
-        let from = lock(&self.modes).insert(agent_id, mode);
-        let from = from.unwrap_or(self.default_mode);
-        if mode == PermissionMode::Plan && from != PermissionMode::Plan {
+    /// Work mode and approval level of `agent_id`.
+    pub(crate) fn permissions_of(&self, agent_id: AgentId) -> Permissions {
+        lock(&self.permissions)
+            .get(&agent_id)
+            .copied()
+            .unwrap_or(self.default_permissions)
+    }
+
+    /// Note that `agent_id` works under `permissions` from now on.
+    pub(super) fn set_permissions(&self, agent_id: AgentId, permissions: Permissions) {
+        let from = lock(&self.permissions).insert(agent_id, permissions);
+        let from = from.unwrap_or(self.default_permissions).mode;
+        if permissions.mode == PermissionMode::Plan && from != PermissionMode::Plan {
             lock(&self.before_plan).insert(agent_id, from);
+        }
+        if let Some(approvals) = &self.approvals {
+            approvals.set_level(agent_id, permissions.approval);
         }
     }
 
     /// The mode `/plan` returns `agent_id` to: the one it had before plan
-    /// mode, or `default` when the session started there.
+    /// mode, or `agent` when the session started there.
     pub(super) fn exit_plan_mode(&self, agent_id: AgentId) -> PermissionMode {
         lock(&self.before_plan)
             .get(&agent_id)
             .copied()
             .filter(|mode| *mode != PermissionMode::Plan)
-            .unwrap_or(PermissionMode::Default)
+            .unwrap_or(PermissionMode::Agent)
     }
 
     /// The mode `/build` puts `agent_id` in: its current one when that
     /// lets it edit, else the one it had before plan mode, else
-    /// `default`.
+    /// `agent`.
     pub(super) fn build_mode(&self, agent_id: AgentId) -> PermissionMode {
         let mode = self.mode_of(agent_id);
         if mode.agent_mode() == aura_core_types::AgentMode::Agent {
@@ -201,7 +224,7 @@ impl AgentHub {
             .get(&agent_id)
             .copied()
             .filter(|before| before.agent_mode() == aura_core_types::AgentMode::Agent)
-            .unwrap_or(PermissionMode::Default)
+            .unwrap_or(PermissionMode::Agent)
     }
 
     /// Names of every tool a turn may offer, for the mode tables.
@@ -496,9 +519,9 @@ impl AgentHub {
         let child_id = session.agent_id();
         info!(child = %instance.name, definition = %definition.name, "Spawning permanent agent");
         // A spawn asks no less than the agent that started it.
-        let mode = self.mode_of(request.parent_agent_id);
-        self.set_mode(child_id, mode);
-        super::modes::apply(&session.kernel, mode, &self.tool_names());
+        let permissions = self.permissions_of(request.parent_agent_id);
+        self.set_permissions(child_id, permissions);
+        super::modes::apply(&session.kernel, permissions, &self.tool_names());
 
         let detached = request.spawn_mode == Some(SpawnMode::Detached);
         let cancel = CancellationToken::new();
