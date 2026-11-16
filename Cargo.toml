@@ -8,13 +8,9 @@ publish = false
 name = "aura"
 path = "src/main.rs"
 
-# Phase 10 carve-out 1: the binary body migration moves every
-# line of useful logic out of `src/main.rs` and into
-# `aura_surface_cli::run`. The root binary now depends on the
-# surface-layer composition root and only the minimum set of
-# crates needed to call `aura_surface_cli::run().await`.
+# `src/main.rs` only dispatches: the desktop window, or `aura-cli`.
 [dependencies]
-aura-surface-cli = { path = "crates/aura-surface-cli" }
+aura-cli = { path = "crates/aura-cli" }
 aura-desktop = { path = "crates/aura-desktop", optional = true }
 anyhow = { workspace = true }
 clap = "4.5"
@@ -90,10 +86,10 @@ members = [
     "crates/aura-plugin-hooks",
     "crates/aura-plugin-mcp",
     "crates/aura-plugin-connectors",
-    # Surface layer CLI composition root (+ ModeFlag). The TUI
-    # (aura-terminal), automaton host (aura-automaton) and zOS auth
-    # client (aura-auth) are listed above.
-    "crates/aura-surface-cli",
+    # Surface layer: the session host shared by the terminal, desktop
+    # app and `aura -p`, and the `aura` command line.
+    "crates/aura-app",
+    "crates/aura-cli",
     # Renderer-agnostic UI protocol and state shared by the TUI and the
     # native desktop app (`aura-desktop`, iced).
     "crates/aura-ui-core",
@@ -234,6 +230,7 @@ aes-gcm = "0.10"
 zeroize = "1"
 
 [dev-dependencies]
+aura-app = { path = "crates/aura-app" }
 aura-runtime = { path = "crates/aura-runtime", features = ["test-support"] }
 aura-config = { path = "crates/aura-config" }
 aura-agent-kernel = { path = "crates/aura-agent-kernel" }
@@ -250,8 +247,8 @@ aura-store-record = { path = "crates/aura-store-record" }
 aura-core-types = { path = "crates/aura-core-types" }
 aura-core-permissions = { path = "crates/aura-core-permissions" }
 aura-agent-subagent = { path = "crates/aura-agent-subagent" }
-# Phase 10 carve-out 1: the root binary no longer holds these deps
-# directly (its body lives in `aura-surface-cli`), but the legacy
+# The root binary no longer holds these deps directly (its body
+# lives in `aura-cli`), but the legacy
 # `tests/proptest_tests.rs`, `tests/e2e_*.rs` integration tests at
 # the root harness still consume the agent/terminal/auth surfaces
 # directly. Promoting them to dev-deps keeps the binary surface

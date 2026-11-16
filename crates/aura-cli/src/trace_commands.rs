@@ -19,9 +19,9 @@ use crate::cli::{
     RunsSubcommand,
 };
 use crate::evals::{self, EvalOptions};
-use crate::model_selection::ModelSelection;
-use crate::recorded_runs::{self, HeadlessRun};
-use crate::{event_loop, session_helpers};
+use aura_app::model_selection::ModelSelection;
+use aura_app::recorded_runs::{self, HeadlessRun};
+use aura_app::{event_loop, session_helpers};
 
 fn home() -> anyhow::Result<std::path::PathBuf> {
     Ok(aura_config::AuraHome::resolve()

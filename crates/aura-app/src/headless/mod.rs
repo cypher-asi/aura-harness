@@ -21,11 +21,10 @@ pub(crate) use tools::ToolFilter;
 
 use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
-use crate::cli::{HeadlessArgs, OutputFormat};
 use crate::event_loop::TurnBase;
 use crate::long_run::LongRunSettings;
 use crate::model_selection::ModelSelection;
-use crate::runner::{
+use crate::harness::{
     agent_tools, background_process_manager, build_hub, build_provider, mode_policy,
     policy_tool_names, post_edit_check_from_env, project_instructions, Harness, HubSetup,
 };
@@ -46,6 +45,48 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 /// (`AURA_HEADLESS_JOB_WAIT`).
 const DEFAULT_JOB_WAIT: Duration = Duration::from_secs(10 * 60);
 
+/// Settings for one `aura -p` run.
+#[derive(Debug, Clone, Default)]
+pub struct HeadlessOptions {
+    /// What stdout carries
+    pub output_format: OutputFormat,
+    /// Continue the saved session with this id
+    pub resume: Option<String>,
+    /// Continue the most recent `aura -p` session
+    pub continue_session: bool,
+    /// Only these tools may run; empty allows every tool
+    pub allowed_tools: Vec<String>,
+    /// These tools may not run
+    pub disallowed_tools: Vec<String>,
+    /// Stop after this many model calls
+    pub max_turns: Option<u32>,
+    /// Stop after this long; overrides `AURA_TUI_TURN_TIMEOUT`
+    pub max_time: Option<Duration>,
+    /// Stop once model calls cost more than this many US dollars;
+    /// overrides `AURA_TUI_MAX_TURN_COST_USD`
+    pub max_cost_usd: Option<f64>,
+    /// Work in this directory instead of the current one
+    pub cwd: Option<PathBuf>,
+    /// Model for this run, not saved as the `/model` choice
+    pub model: Option<String>,
+    /// Model provider: `anthropic` (the default) or `mock`
+    pub provider: Option<String>,
+    /// Log debug detail to stderr
+    pub verbose: bool,
+}
+
+/// How `aura -p` prints its result.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OutputFormat {
+    /// The final reply as plain text.
+    #[default]
+    Text,
+    /// One JSON object describing the run.
+    Json,
+    /// Newline-delimited JSON events, ending with the result object.
+    StreamJson,
+}
+
 /// Entry point for `aura -p`. `prompt` is the `-p` value (`-` reads
 /// stdin).
 ///
@@ -53,13 +94,13 @@ const DEFAULT_JOB_WAIT: Duration = Duration::from_secs(10 * 60);
 /// Only for problems before output starts in `text` format (a bad
 /// `--cwd`, an unreadable stdin); `json` and `stream-json` report every
 /// failure as a result object instead.
-pub(crate) async fn run(
+pub async fn run(
     prompt: String,
-    args: HeadlessArgs,
+    args: HeadlessOptions,
     requested_mode: Option<AgentMode>,
 ) -> anyhow::Result<ExitCode> {
     init_tracing(args.verbose);
-    let format = args.output_format.unwrap_or_default();
+    let format = args.output_format;
     let output = Output::new(format, Box::new(std::io::stdout()));
 
     let prepared = prepare(&prompt, &args, requested_mode).await;
@@ -112,7 +153,7 @@ fn init_tracing(verbose: bool) {
 /// agent harness.
 async fn prepare(
     prompt: &str,
-    args: &HeadlessArgs,
+    args: &HeadlessOptions,
     requested_mode: Option<AgentMode>,
 ) -> anyhow::Result<(Headless, Request)> {
     if let Some(dir) = &args.cwd {
@@ -180,7 +221,7 @@ async fn read_prompt(arg: &str) -> anyhow::Result<String> {
 /// The agent harness `aura -p` runs on, built like the terminal's but with
 /// no UI behind its command channel.
 async fn build(
-    args: &HeadlessArgs,
+    args: &HeadlessOptions,
     requested_mode: Option<AgentMode>,
     workspace_root: PathBuf,
     data_dir: &std::path::Path,

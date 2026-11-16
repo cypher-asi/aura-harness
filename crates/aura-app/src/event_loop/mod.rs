@@ -13,7 +13,7 @@ pub(crate) mod agent_events;
 pub(crate) mod agents;
 pub(crate) mod approvals;
 mod attachments;
-pub(crate) mod auth;
+pub mod auth;
 pub(crate) mod handlers;
 pub(crate) mod host;
 pub(crate) mod hud;

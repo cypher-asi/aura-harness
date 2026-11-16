@@ -103,15 +103,9 @@ pub mod memory_observer {
 /// emits an "exiting cleanly" log line on success so log tails
 /// never see a silent process death.
 ///
-/// Lives in `aura-runtime` (rather than `aura-surface-cli`, which
-/// the original Phase 10 spec named) because moving it to
-/// `aura-surface-cli` would create a dependency cycle:
-/// `aura-runtime` owns the `aura-node` binary and would need to
-/// depend on `aura-surface-cli` to call into the function, while
-/// `aura-surface-cli` already depends on `aura-runtime` for the
-/// headless-mode wiring. The `aura_surface_cli::run_node`
-/// documented path is preserved through a `pub use` re-export at
-/// the surface-cli crate root.
+/// Lives in `aura-runtime` because it owns the `aura-node` binary, and
+/// `aura-cli` already depends on `aura-runtime` for `aura run --ui
+/// none`; `aura-cli` re-exports it as `aura_cli::run_node`.
 ///
 /// # Errors
 ///

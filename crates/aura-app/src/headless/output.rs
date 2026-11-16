@@ -3,7 +3,7 @@
 //! stdout carries only this output so scripts can parse it; logs go to
 //! stderr.
 
-use crate::cli::OutputFormat;
+use super::OutputFormat;
 use crate::session_checkpoint::SessionUsage;
 use aura_tools::todo::TodoItem;
 use serde::Serialize;

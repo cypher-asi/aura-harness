@@ -363,8 +363,10 @@ dependencies = [
  "aura-agent-kernel",
  "aura-agent-subagent",
  "aura-agent-trace",
+ "aura-app",
  "aura-auth",
  "aura-automaton",
+ "aura-cli",
  "aura-config",
  "aura-core-modes",
  "aura-core-permissions",
@@ -375,7 +377,6 @@ dependencies = [
  "aura-runtime",
  "aura-store-db",
  "aura-store-record",
- "aura-surface-cli",
  "aura-terminal",
  "aura-tools",
  "axum",
@@ -511,6 +512,52 @@ dependencies = [
 ]
 
 [[package]]
+name = "aura-app"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "aura-agent",
+ "aura-agent-kernel",
+ "aura-agent-trace",
+ "aura-auth",
+ "aura-config",
+ "aura-context-compaction",
+ "aura-context-memory",
+ "aura-context-prompts",
+ "aura-context-skills",
+ "aura-core-modes",
+ "aura-core-types",
+ "aura-engine",
+ "aura-model-reasoner",
+ "aura-runtime",
+ "aura-store-db",
+ "aura-store-record",
+ "aura-store-snapshot",
+ "aura-terminal",
+ "aura-tools",
+ "axum",
+ "blake3",
+ "bytes",
+ "chrono",
+ "dirs",
+ "hex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "similar",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "aura-auth"
 version = "0.1.0"
 dependencies = [
@@ -626,6 +673,34 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "aura-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aura-agent",
+ "aura-agent-trace",
+ "aura-app",
+ "aura-auth",
+ "aura-config",
+ "aura-core-modes",
+ "aura-core-types",
+ "aura-model-reasoner",
+ "aura-plugin-core",
+ "aura-runtime",
+ "aura-terminal",
+ "aura-tools",
+ "clap",
+ "colored",
+ "rpassword",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -751,7 +826,8 @@ name = "aura-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "aura-surface-cli",
+ "aura-app",
+ "aura-core-modes",
  "aura-terminal",
  "aura-ui-core",
  "chrono",
@@ -1024,57 +1100,6 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "zstd",
-]
-
-[[package]]
-name = "aura-surface-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "aura-agent",
- "aura-agent-kernel",
- "aura-agent-trace",
- "aura-auth",
- "aura-config",
- "aura-context-compaction",
- "aura-context-memory",
- "aura-context-prompts",
- "aura-context-skills",
- "aura-core-modes",
- "aura-core-types",
- "aura-engine",
- "aura-model-reasoner",
- "aura-plugin-core",
- "aura-runtime",
- "aura-store-db",
- "aura-store-record",
- "aura-store-snapshot",
- "aura-terminal",
- "aura-tools",
- "axum",
- "blake3",
- "bytes",
- "chrono",
- "clap",
- "colored",
- "dirs",
- "hex",
- "rpassword",
- "serde",
- "serde_json",
- "serde_yaml",
- "similar",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tokio-util",
- "toml",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

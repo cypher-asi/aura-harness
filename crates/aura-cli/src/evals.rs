@@ -28,7 +28,7 @@ use aura_tools::ToolConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::recorded_runs::{self, HeadlessRun};
+use aura_app::recorded_runs::{self, HeadlessRun};
 
 /// Task definition file inside a task directory.
 pub const TASK_FILE: &str = "task.toml";

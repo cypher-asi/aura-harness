@@ -8,9 +8,8 @@
 
 use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
-use crate::cli::RunArgs;
 use crate::model_selection::ModelSelection;
-use crate::runner::{
+use crate::harness::{
     agent_tools, background_process_manager, build_hub, build_provider, initial_permission_mode,
     mode_policy, policy_tool_names, post_edit_check_from_env, project_instructions, Harness,
     HubSetup,
@@ -27,6 +26,29 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
+
+/// Settings for the agent session behind a UI.
+#[derive(Debug, Clone)]
+pub struct SessionOptions {
+    /// Data directory for agents and records (default: `AURA_DATA_DIR` or
+    /// `./aura_data`)
+    pub dir: Option<PathBuf>,
+    /// Model provider: `anthropic` (local Ollama models + aura-router) or
+    /// `mock`
+    pub provider: String,
+    /// Permit FullAccess sessions to bypass command allowlists
+    pub allow_unrestricted_full_access: bool,
+}
+
+impl Default for SessionOptions {
+    fn default() -> Self {
+        Self {
+            dir: None,
+            provider: "anthropic".to_string(),
+            allow_unrestricted_full_access: false,
+        }
+    }
+}
 
 /// A running agent session, as seen by the UI driving it.
 pub struct UiSession {
@@ -78,7 +100,7 @@ impl SessionTask {
 /// Fails when the data directory, agent registry, record store, sign-in
 /// state or model provider can't be opened.
 pub async fn start(
-    args: &RunArgs,
+    args: &SessionOptions,
     requested_mode: Option<aura_core_modes::AgentMode>,
 ) -> anyhow::Result<UiSession> {
     let (ui_tx, mut ui_rx) = mpsc::channel::<UiEvent>(100);

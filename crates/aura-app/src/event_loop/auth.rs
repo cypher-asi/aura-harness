@@ -23,7 +23,7 @@ pub(crate) type LinkOutcome = (ProviderKind, Result<LinkedAccount, AuthError>);
 
 /// What the active identity can use. A router JWT supplied through the
 /// environment counts as a zOS sign-in.
-pub(crate) fn auth_summary(auth: &AuthManager, router_token: Option<&str>) -> AuthSummary {
+pub fn auth_summary(auth: &AuthManager, router_token: Option<&str>) -> AuthSummary {
     let mut summary = auth.summary();
     if summary.zos_user.is_none() && router_token.is_some() {
         summary.zos_user = Some("AURA_ROUTER_JWT".to_string());

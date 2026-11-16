@@ -3,7 +3,7 @@
 //! Layer: surface
 //!
 //! The agent session runs in this process on the same event loop as the
-//! terminal UI (`aura_surface_cli::session`), and the UI itself is the
+//! terminal UI (`aura_app::session`), and the UI itself is the
 //! terminal one (`aura_terminal::App`), drawn on a cell grid with Geist
 //! Mono instead of through a terminal emulator.
 
@@ -21,10 +21,46 @@ mod tab_bar;
 mod theme;
 
 use anyhow::Context;
-use aura_surface_cli::cli::{DesktopArgs, RunArgs};
-use aura_surface_cli::ModeFlag;
+use aura_app::session::SessionOptions;
+use aura_core_modes::AgentMode;
+use std::path::PathBuf;
 use std::time::Instant;
 use tracing_subscriber::EnvFilter;
+
+/// Settings for the desktop window and the session behind it.
+#[derive(Debug, Clone)]
+pub struct DesktopOptions {
+    /// Folder the agent works in (default: the current directory)
+    pub workspace: Option<PathBuf>,
+    /// Data directory for agents and records (default: `AURA_DATA_DIR` or
+    /// `./aura_data`)
+    pub dir: Option<PathBuf>,
+    /// Model provider: `anthropic` (local Ollama models + aura-router) or
+    /// `mock`
+    pub provider: String,
+    /// Theme (cyber, matrix, synthwave, minimal)
+    pub theme: String,
+    /// Log debug output to stderr
+    pub verbose: bool,
+    /// Permit FullAccess sessions to bypass command allowlists
+    pub allow_unrestricted_full_access: bool,
+    /// Run against a scripted session instead of a real agent
+    pub demo: bool,
+}
+
+impl Default for DesktopOptions {
+    fn default() -> Self {
+        Self {
+            workspace: None,
+            dir: None,
+            provider: "anthropic".to_string(),
+            theme: "cyber".to_string(),
+            verbose: false,
+            allow_unrestricted_full_access: false,
+            demo: false,
+        }
+    }
+}
 
 /// Open the desktop window with `args`, starting the agent session in
 /// `mode` (or `AURA_DEFAULT_MODE`), and return once the window closes
@@ -34,7 +70,7 @@ use tracing_subscriber::EnvFilter;
 ///
 /// Fails when the workspace can't be opened, the session doesn't start,
 /// or the window can't be created.
-pub fn run(args: DesktopArgs, mode: Option<ModeFlag>) -> anyhow::Result<()> {
+pub fn run(args: DesktopOptions, mode: Option<AgentMode>) -> anyhow::Result<()> {
     let launched = Instant::now();
     init_tracing(args.verbose);
 
@@ -55,17 +91,12 @@ pub fn run(args: DesktopArgs, mode: Option<ModeFlag>) -> anyhow::Result<()> {
     let (handles, task) = if args.demo {
         (demo::start(&runtime), None)
     } else {
-        let run_args = RunArgs {
+        let options = SessionOptions {
             dir: args.dir,
             provider: args.provider,
-            verbose: args.verbose,
             allow_unrestricted_full_access: args.allow_unrestricted_full_access,
-            ..RunArgs::default()
         };
-        let session = runtime.block_on(aura_surface_cli::session::start(
-            &run_args,
-            mode.map(Into::into),
-        ))?;
+        let session = runtime.block_on(aura_app::session::start(&options, mode))?;
         let handles = app::Handles {
             events: session.events,
             commands: session.commands,

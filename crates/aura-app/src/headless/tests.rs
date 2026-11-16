@@ -3,10 +3,10 @@ use super::run::{parse_session_id, session_id, Headless, Request, RunLimits, Ses
 use super::tools::ToolFilter;
 use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
-use crate::cli::OutputFormat;
+use super::OutputFormat;
 use crate::event_loop::TurnBase;
 use crate::long_run::LongRunSettings;
-use crate::runner::{
+use crate::harness::{
     agent_tools, background_process_manager, build_hub, mode_policy, policy_tool_names, Harness,
     HubSetup,
 };

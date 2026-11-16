@@ -1,21 +1,14 @@
-//! # aura-surface-cli
+//! # aura-cli
 //!
 //! Layer: surface
 //!
-//! Phase 9 + 10 surface-layer composition root for the `aura` CLI
-//! binary. The root `src/main.rs` entry point is a thin shim that
-//! delegates to [`run`]; this crate owns CLI parsing, session
-//! bootstrapping, plugin handling, the embedded TUI / API server,
-//! and the daemon-client wiring.
-//!
-//! Phase 9 shipped the public *type surface* of the composition
-//! root (CLI flag definitions, `AgentMode` resolution helper).
-//! Phase 10 carve-out 1 lifts the full body of `src/main.rs` (the
-//! `aura` binary) into this crate. The `aura-node` binary body lives
-//! in [`aura_runtime::run_node`] because `aura-runtime` owns the
-//! HTTP/WS gateway binary and `aura-surface-cli` already depends on
-//! `aura-runtime` for headless-mode wiring; this crate re-exports it
-//! as [`run_node`] so the documented surface path remains callable.
+//! The `aura` command line. The root `src/main.rs` entry point is a thin
+//! shim that delegates to [`run_cli`]; this crate owns argument parsing,
+//! the subcommands (sign-in, plugins, run traces, evals) and the
+//! ratatui terminal launcher. The agent session itself is `aura-app`'s:
+//! this crate turns its flags into `aura-app` options. The `aura-node`
+//! binary body lives in [`aura_runtime::run_node`], re-exported here as
+//! [`run_node`].
 //!
 //! ## Mode resolution
 //!
@@ -39,11 +32,6 @@
 
 #![forbid(unsafe_code)]
 #![warn(clippy::all)]
-// Phase 10 carve-out 1: the binary body migration brings in a
-// large block of legacy code that pre-dated the workspace's
-// curated clippy set. The lints below are pragma-allowed for
-// the migrated CLI scaffolding only; new code added to this
-// crate is still subject to the workspace defaults.
 #![allow(
     clippy::manual_let_else,
     clippy::map_unwrap_or,
@@ -57,37 +45,15 @@ use aura_core_modes::AgentMode;
 use clap::ValueEnum;
 use thiserror::Error;
 
-pub mod agent_definitions;
-pub mod agent_registry;
-pub mod api_server;
 mod auth_commands;
 pub mod cli;
 pub mod evals;
-pub mod event_loop;
-pub mod file_checkpoints;
-mod headless;
-mod long_run;
-pub mod model_selection;
-pub mod project_instructions;
-pub mod record_loader;
-pub mod recorded_runs;
-pub mod session;
-pub mod session_checkpoint;
-pub mod session_helpers;
-mod trace_commands;
-
 mod runner;
+mod trace_commands;
 
 pub use runner::{desktop_launch, run, run_cli};
 
-/// Phase 10 carve-out 1: surface-layer re-export of the
-/// `aura-node` entrypoint. The implementation lives in
-/// `aura_runtime::run_node` to avoid a dependency cycle between
-/// `aura-surface-cli` and `aura-runtime` (aura-runtime owns the
-/// `aura-node` binary, and aura-surface-cli already depends on
-/// aura-runtime for headless mode wiring). The re-export keeps
-/// the documented Phase 10 acceptance path `aura_surface_cli::run_node`
-/// callable.
+/// The `aura-node` entrypoint; `aura-runtime` owns the gateway binary.
 pub use aura_runtime::run_node;
 
 /// `clap`-friendly mirror of [`AgentMode`].

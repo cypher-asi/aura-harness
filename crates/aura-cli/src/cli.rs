@@ -1,6 +1,8 @@
 //! CLI argument definitions and parsing.
 
 use crate::ModeFlag;
+use aura_app::headless::HeadlessOptions;
+use aura_app::session::SessionOptions;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -135,8 +137,37 @@ pub enum OutputFormat {
     StreamJson,
 }
 
+impl From<OutputFormat> for aura_app::headless::OutputFormat {
+    fn from(value: OutputFormat) -> Self {
+        match value {
+            OutputFormat::Text => Self::Text,
+            OutputFormat::Json => Self::Json,
+            OutputFormat::StreamJson => Self::StreamJson,
+        }
+    }
+}
+
+impl From<HeadlessArgs> for HeadlessOptions {
+    fn from(args: HeadlessArgs) -> Self {
+        Self {
+            output_format: args.output_format.unwrap_or_default().into(),
+            resume: args.resume,
+            continue_session: args.continue_session,
+            allowed_tools: args.allowed_tools,
+            disallowed_tools: args.disallowed_tools,
+            max_turns: args.max_turns,
+            max_time: args.max_time,
+            max_cost_usd: args.max_cost_usd,
+            cwd: args.cwd,
+            model: args.model,
+            provider: args.provider,
+            verbose: args.verbose,
+        }
+    }
+}
+
 fn parse_duration_arg(raw: &str) -> Result<Duration, String> {
-    crate::long_run::parse_duration(raw)
+    aura_app::parse_duration(raw)
         .ok_or_else(|| format!("`{raw}` is not a duration like 90s, 45m or 2h"))
 }
 
@@ -521,6 +552,18 @@ impl Default for RunArgs {
             provider: "anthropic".to_string(),
             verbose: false,
             allow_unrestricted_full_access: false,
+        }
+    }
+}
+
+impl RunArgs {
+    /// The session settings these arguments ask for.
+    #[must_use]
+    pub fn session_options(&self) -> SessionOptions {
+        SessionOptions {
+            dir: self.dir.clone(),
+            provider: self.provider.clone(),
+            allow_unrestricted_full_access: self.allow_unrestricted_full_access,
         }
     }
 }

@@ -10,8 +10,8 @@ use aura_agent_trace::{RunBundle, RunSource, RunTrace};
 use aura_config::TraceLevel;
 use aura_core_types::trace::StepAction;
 use aura_model_reasoner::{MockProvider, MockResponse, ModelProvider};
-use aura_surface_cli::evals::{self, EvalOptions};
-use aura_surface_cli::recorded_runs::{self, HeadlessRun};
+use aura_app::recorded_runs::{self, HeadlessRun};
+use aura_cli::evals::{self, EvalOptions};
 use aura_tools::ToolConfig;
 use serde_json::json;
 

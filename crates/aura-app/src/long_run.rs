@@ -152,7 +152,7 @@ impl LongRunSettings {
 }
 
 /// `90s`, `45m`, `2h`, or a bare number of minutes.
-pub(crate) fn parse_duration(raw: &str) -> Option<Duration> {
+pub fn parse_duration(raw: &str) -> Option<Duration> {
     let raw = raw.trim().to_ascii_lowercase();
     let (number, unit_secs) = if let Some(n) = raw.strip_suffix('h') {
         (n, 3600)

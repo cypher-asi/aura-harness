@@ -14,7 +14,8 @@ path = "src/main.rs"
 
 [dependencies]
 aura-ui-core = { path = "../aura-ui-core" }
-aura-surface-cli = { path = "../aura-surface-cli" }
+aura-app = { path = "../aura-app" }
+aura-core-modes = { path = "../aura-core-modes" }
 aura-terminal = { path = "../aura-terminal" }
 
 iced = { version = "0.14", features = ["tokio", "canvas", "advanced"] }

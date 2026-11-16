@@ -123,7 +123,8 @@ const KNOWN_CRATES: &[(&str, &str)] = &[
     ("aura-plugin-mcp", "plugin"),
     ("aura-plugin-connectors", "plugin"),
     // CLI composition root (ModeFlag, `--mode` resolution input).
-    ("aura-surface-cli", "surface"),
+    ("aura-app", "surface"),
+    ("aura-cli", "surface"),
 ];
 
 /// Phase 9 strict-mode addition: verify every `crates/<name>/src/lib.rs`
