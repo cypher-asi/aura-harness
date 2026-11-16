@@ -150,6 +150,38 @@ async fn always_allow_is_kept_for_the_project_and_survives_a_restart() {
 }
 
 #[tokio::test]
+async fn always_allow_also_allows_the_waiting_calls_it_covers() {
+    let mut h = harness(DEFAULT_TIMEOUT);
+    let first = ask(
+        &h.approvals,
+        prompt("a:toolu_1", "edit_file", json!({"path": "a.ts"})),
+    );
+    let (_, first_id, _) = requested(&mut h.commands).await;
+    let second = ask(
+        &h.approvals,
+        prompt("a:toolu_2", "edit_file", json!({"path": "b.ts"})),
+    );
+    requested(&mut h.commands).await;
+    let other = ask(
+        &h.approvals,
+        prompt("a:toolu_3", "write_file", json!({"path": "c.ts"})),
+    );
+    requested(&mut h.commands).await;
+
+    h.approvals.answer(&first_id, Answer::Always).await.unwrap();
+    assert_eq!(first.await.unwrap().unwrap().decision, ToolState::Allow);
+    assert_eq!(second.await.unwrap().unwrap().decision, ToolState::Allow);
+    let closed = h.commands.recv().await.unwrap();
+    assert!(matches!(
+        closed,
+        UiCommand::ForAgent { command, .. } if matches!(*command, UiCommand::CloseApproval(ref c) if c == "a:toolu_2")
+    ));
+    assert!(h.approvals.is_waiting(agent()), "write_file is not covered");
+    h.approvals.answer("a:toolu_3", Answer::Deny).await.unwrap();
+    assert_eq!(other.await.unwrap().unwrap().decision, ToolState::Deny);
+}
+
+#[tokio::test]
 async fn cancelling_the_turn_denies_its_waiting_call() {
     let mut h = harness(DEFAULT_TIMEOUT);
     let call = ask(

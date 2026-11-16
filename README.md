@@ -18,10 +18,11 @@ Each session also runs in a mode (`agent`, `plan`, `ask` or `debug`) that limits
 You need Rust and LLVM/Clang (Linux also needs `libdbus-1-dev` and `pkg-config`; see [running](docs/running.md)).
 
 ```sh
-ollama pull qwen3:4b        # one-time; the terminal UI defaults to this local model
-cargo run                   # terminal UI (no account needed)
-cargo run -- --mode plan    # terminal UI in plan mode
-cargo run -- login          # optional: unlock cloud models (or /login in the TUI)
+ollama pull qwen3:4b        # one-time; the UI defaults to this local model
+cargo run                   # desktop window (no account needed)
+cargo run -- --terminal     # the same UI in this terminal
+cargo run -- --mode plan    # desktop window in plan mode
+cargo run -- login          # optional: unlock cloud models (or /login in the UI)
 cargo run -- run --ui none  # headless server on 127.0.0.1:8080
 ```
 

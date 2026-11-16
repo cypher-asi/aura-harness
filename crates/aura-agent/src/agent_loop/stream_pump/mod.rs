@@ -2,12 +2,13 @@
 //!
 //! The pump is the per-sampling-request loop body that consumes a
 //! [`aura_model_reasoner::ResponseEventStream`] one event at a time, spawning
-//! tool futures into a [`futures_util::stream::FuturesOrdered`] the
+//! tool futures into a [`futures_util::stream::FuturesUnordered`] the
 //! moment a tool-use item arrives instead of waiting for the entire
 //! model response to buffer. After the model emits
 //! [`aura_model_reasoner::ResponseEvent::Completed`], the pump drains the
-//! FIFO in submission order so tool results appear in the conversation
-//! history in the same order the model emitted them (codex's
+//! calls as they finish and sorts them back into submission order so
+//! tool results appear in the conversation history in the same order
+//! the model emitted them (codex's
 //! `drain_in_flight` contract,
 //! [codex-rs/core/src/session/turn.rs:2141 analog](
 //! https://github.com/.../codex-rs/core/src/session/turn.rs)).
@@ -24,7 +25,7 @@
 //!   and the legacy buffered streaming retry loop; both now read
 //!   `aura_config::reasoner().llm_retry` through
 //!   [`retry::stream_retry_params`].
-//! - [`driver`] — `drive_stream` event loop + `FuturesOrdered` drain.
+//! - [`driver`] — `drive_stream` event loop + in-flight tool drain.
 //!   Owns the per-event timeout / per-tool timeout / FIFO ordering
 //!   invariants documented below.
 //! - Post-pump dispatch tail collapsed into the unified
@@ -44,7 +45,7 @@
 //! - **Atomic cancellation (Rule 6.3)**: when the cancellation token
 //!   fires the pump returns [`StreamPumpOutcome::Cancelled`]
 //!   *without* mutating `state.messages` — in-flight tools are
-//!   aborted by dropping the `FuturesOrdered`. The downstream
+//!   aborted by dropping the `FuturesUnordered`. The downstream
 //!   sampling driver then bails without running the post-execution
 //!   path, so the conversation history never half-writes a
 //!   partially-drained tool batch.
@@ -123,6 +124,10 @@ pub(super) struct StreamPumpCtx<'a> {
     pub(super) cancellation_token: Option<&'a CancellationToken>,
     pub(super) input_queue: Option<&'a InputQueue>,
     pub(super) event_tx: Option<&'a Sender<AgentLoopEvent>>,
+    /// Called with the response once the model finishes streaming and
+    /// before its tool calls are drained, so the call is on record while
+    /// its tools run (or wait for an approval).
+    pub(super) on_response: Option<&'a (dyn Fn(&ModelResponse) + Send + Sync)>,
 }
 
 /// Outcome of [`run_stream_pump`].
@@ -176,7 +181,7 @@ pub(super) enum StreamPumpOutcome {
 /// Opens `provider.complete_response_stream(request)`, then drives
 /// the resulting [`aura_model_reasoner::ResponseEventStream`] to completion
 /// with per-event timeout, biased cancellation, and per-tool
-/// concurrency via [`futures_util::stream::FuturesOrdered`]. See the
+/// concurrency via [`futures_util::stream::FuturesUnordered`]. See the
 /// module-level docs for the full invariant list.
 pub(super) async fn run_stream_pump(
     ctx: StreamPumpCtx<'_>,

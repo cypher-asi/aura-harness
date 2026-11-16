@@ -6,7 +6,9 @@
 
 use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
-use crate::cli::{Cli, Commands, MigrateArgs, PluginsCommand, PluginsSubcommand, RunArgs, UiMode};
+use crate::cli::{
+    Cli, Commands, DesktopArgs, MigrateArgs, PluginsCommand, PluginsSubcommand, RunArgs, UiMode,
+};
 use crate::long_run::{add_long_run_tools, WebTools};
 use crate::project_instructions::{InstructionSettings, ProjectInstructions};
 use crate::{auth_commands, event_loop, session, session_helpers};
@@ -54,22 +56,53 @@ pub fn hello_world() {
 // Entry points
 // ============================================================================
 
-/// Surface-layer entry point for the `aura` binary.
-///
-/// Parses CLI arguments and dispatches to the appropriate
-/// subcommand. The root `src/main.rs` is reduced to a thin shim
-/// that calls `aura_surface_cli::run().await` after invoking
-/// `dotenvy::dotenv()`.
+/// Surface-layer entry point for the `aura` binary: parses the CLI
+/// arguments and runs [`run_cli`].
 ///
 /// # Errors
 ///
-/// Surfaces any error from the dispatched subcommand. Subcommand
-/// errors are typed at their source (e.g. `aura_auth::AuthError`,
-/// `aura_plugin_core::InstallError`) and bubble up here as
-/// `anyhow::Error` because the root binary's `main` is the only
-/// remaining `anyhow`-using boundary in the workspace.
+/// Surfaces any error from the dispatched subcommand.
 pub async fn run() -> anyhow::Result<std::process::ExitCode> {
-    let cli = Cli::parse();
+    run_cli(Cli::parse()).await
+}
+
+/// The desktop window options when `cli` asks for the desktop app:
+/// `aura desktop`, or `aura` alone unless `--terminal` is given or there
+/// is no display to open a window on. The root binary opens the window
+/// itself, since the window needs the main thread.
+#[must_use]
+pub fn desktop_launch(cli: &Cli) -> Option<DesktopArgs> {
+    match &cli.command {
+        Some(Commands::Desktop(args)) => Some(args.clone()),
+        None if cli.print.is_none() && !cli.terminal && display_available() => {
+            Some(DesktopArgs::default())
+        }
+        _ => None,
+    }
+}
+
+/// Whether a window can open: always on macOS and Windows, and on other
+/// systems when an X11 or Wayland display is set.
+fn display_available() -> bool {
+    cfg!(any(target_os = "macos", target_os = "windows"))
+        || ["WAYLAND_DISPLAY", "DISPLAY"]
+            .iter()
+            .any(|var| std::env::var_os(var).is_some_and(|v| !v.is_empty()))
+}
+
+/// Dispatch parsed CLI arguments to the subcommand they name; with no
+/// subcommand the agent runs in the terminal.
+///
+/// Subcommand errors are typed at their source (e.g.
+/// `aura_auth::AuthError`, `aura_plugin_core::InstallError`) and bubble
+/// up here as `anyhow::Error` because the root binary's `main` is the
+/// only remaining `anyhow`-using boundary in the workspace.
+///
+/// # Errors
+///
+/// Surfaces any error from the dispatched subcommand, and refuses
+/// `aura desktop` in a binary built without the desktop app.
+pub async fn run_cli(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
     let requested_mode = cli.mode.map(aura_core_modes::AgentMode::from);
 
     if let Some(prompt) = cli.print {
@@ -80,6 +113,10 @@ pub async fn run() -> anyhow::Result<std::process::ExitCode> {
     }
 
     match cli.command {
+        Some(Commands::Desktop(_)) => Err(anyhow::anyhow!(
+            "this aura was built without the desktop app; rebuild with `--features desktop` \
+             or use `aura --terminal`"
+        )),
         Some(Commands::Hello) => {
             hello_world();
             Ok(())

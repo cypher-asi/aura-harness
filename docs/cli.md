@@ -4,7 +4,7 @@
 
 | Binary | Entry point | Purpose |
 |--------|-------------|---------|
-| `aura` | [`src/main.rs`](../src/main.rs) | The main CLI. Opens the terminal UI by default, runs one prompt and exits with `aura -p`, runs headless with `aura run --ui none`, and hosts the account, plugin and subagent commands below. The CLI body lives in [`aura-surface-cli`](../crates/aura-surface-cli). |
+| `aura` | [`src/main.rs`](../src/main.rs) | The main CLI. Opens the desktop window by default (the terminal UI with `--terminal`, or when there is no display), runs one prompt and exits with `aura -p`, runs headless with `aura run --ui none`, and hosts the account, plugin and subagent commands below. The CLI body lives in [`aura-surface-cli`](../crates/aura-surface-cli). |
 | `aura-node` | [`crates/aura-runtime/src/main.rs`](../crates/aura-runtime/src/main.rs) | Standalone headless server exposing the [HTTP / WebSocket API](api.md). |
 
 Older specs mention a separate `aura-cli` crate. It never shipped; read `aura-cli/src/...` paths as `src/...` in the root crate.
@@ -15,7 +15,8 @@ Defined in [`crates/aura-surface-cli/src/cli.rs`](../crates/aura-surface-cli/src
 
 | Command | Description |
 |---------|-------------|
-| `aura run` (default) | Run the agent. Flags below. |
+| `aura desktop` (default) | Run the agent in the desktop window; `--workspace`, `--demo` and the `aura run` flags below. Needs a build with the default `desktop` feature. See [running.md](running.md#desktop-app). |
+| `aura run`, `aura --terminal` | Run the agent in the terminal (`--ui none`: as a headless server). Flags below. |
 | `aura -p "prompt"` | Run one prompt without the terminal UI, print the result and exit. See [`aura -p`](#aura--p-one-prompt-without-the-terminal). |
 | `aura login [zos\|claude\|chatgpt] [--paste]` | `zos` (default) signs in with email and password and unlocks the aura-router models. `claude` and `chatgpt` link your own Claude Pro/Max or ChatGPT plan through the browser; `--paste` uses a code you paste instead of a local redirect (SSH, headless). `/login [provider] [paste]` in the TUI does the same. |
 | `aura logout [zos\|claude\|chatgpt] [--all]` | Sign out of zOS (linked plans are kept for when you sign back in), unlink one plan, or with `--all` unlink every plan and sign out. `/logout [provider]` in the TUI. |

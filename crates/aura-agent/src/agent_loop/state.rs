@@ -112,6 +112,9 @@ pub(crate) struct LoopState {
     /// Reasoning effort sent on the previous request, so effort
     /// changes are recorded once rather than every iteration.
     pub(crate) last_thinking_effort: Option<String>,
+    /// Tool results the streaming pump already sent to the client as each
+    /// call finished; the dispatch tail skips them and clears the set.
+    pub(crate) reported_tool_results: std::collections::HashSet<String>,
 }
 
 impl LoopState {
@@ -163,6 +166,7 @@ impl LoopState {
             last_thinking_effort: None,
             todos_at_last_nudge: None,
             stalled_todo_nudges: 0,
+            reported_tool_results: std::collections::HashSet::new(),
         }
     }
 

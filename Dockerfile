@@ -14,7 +14,7 @@ COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY src        src/
 COPY crates     crates/
 
-RUN cargo build --release --bin aura \
+RUN cargo build --release --bin aura --no-default-features \
     && strip target/release/aura
 
 # ── Runtime ─────────────────────────────────────────────────────────────────

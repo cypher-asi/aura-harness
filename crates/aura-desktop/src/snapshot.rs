@@ -476,7 +476,7 @@ fn prose_wraps_in_its_own_face() {
         UiCommand::Complete,
     ]);
     let text = h.app.screen().text();
-    assert!(text.contains("I can list the files"), "{text}");
+    assert!(text.contains("the files in the project folder"), "{text}");
     assert!(text.contains("cargo clippy"), "{text}");
     snapshot("prose", &h);
 }

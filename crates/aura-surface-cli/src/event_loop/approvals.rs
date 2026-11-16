@@ -311,9 +311,41 @@ impl TerminalApprovals {
             Answer::Once | Answer::Always => ToolState::Allow,
             Answer::Deny => ToolState::Deny,
         };
+        let agent_id = waiting.agent_id;
         // The call may have been dropped meanwhile; nothing then waits.
         let _ = waiting.reply.send(decision);
+        if answer == Answer::Always {
+            self.allow_covered(agent_id).await;
+        }
         Ok(())
+    }
+
+    /// Allow the calls of `agent_id` still waiting that its project's rules
+    /// now cover, e.g. the other edits of a batch after "always allow".
+    async fn allow_covered(&self, agent_id: AgentId) {
+        let Some(folder) = self.folder_of(agent_id) else {
+            return;
+        };
+        let covered: Vec<(String, Waiting)> = {
+            let rules = lock(&self.rules);
+            let mut pending = lock(&self.pending);
+            let ids: Vec<String> = pending
+                .iter()
+                .filter(|(_, waiting)| {
+                    waiting.agent_id == agent_id
+                        && rules.allows(&folder, &waiting.tool, &waiting.args)
+                })
+                .map(|(id, _)| id.clone())
+                .collect();
+            ids.into_iter()
+                .filter_map(|id| pending.remove(&id).map(|waiting| (id, waiting)))
+                .collect()
+        };
+        for (id, waiting) in covered {
+            info!(tool = %waiting.tool, "Allowed a waiting call by the new approval rule");
+            let _ = waiting.reply.send(ToolState::Allow);
+            self.close_prompt(agent_id, id).await;
+        }
     }
 
     /// Keep an "always allow" rule for the call's project.

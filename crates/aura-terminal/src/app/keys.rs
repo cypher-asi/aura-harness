@@ -156,8 +156,8 @@ impl App {
     /// way; Ctrl+C cancels it instead.
     fn handle_approval_key(&mut self, key: KeyEvent) -> KeyResult {
         let always_offered = self
-            .pending_approval
-            .as_ref()
+            .pending_approvals
+            .front()
             .is_some_and(|a| !a.always.is_empty());
         let answer = match key.code {
             KeyCode::Char('y' | 'Y') => "Approved",
@@ -165,7 +165,8 @@ impl App {
             KeyCode::Char('n' | 'N') | KeyCode::Esc => "Denied",
             _ => return KeyResult::continue_running(),
         };
-        if let Some(approval) = self.pending_approval.take() {
+        if let Some(approval) = self.pending_approvals.pop_front() {
+            self.mark_awaiting_approval(&approval.id, false);
             let event = match key.code {
                 KeyCode::Char('y' | 'Y') => UiEvent::Approve(approval.id),
                 KeyCode::Char('a' | 'A') => UiEvent::ApproveAlways(approval.id),
@@ -176,7 +177,11 @@ impl App {
             }
             self.status = format!("{answer}, continuing...");
         }
-        self.state = AppState::Processing;
+        if self.pending_approvals.is_empty() {
+            self.state = AppState::Processing;
+        } else {
+            self.after_approval_closed();
+        }
         KeyResult::continue_running()
     }
 

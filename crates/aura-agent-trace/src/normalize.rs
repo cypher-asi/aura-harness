@@ -8,6 +8,7 @@ use aura_core_types::trace::{Reward, RewardKind, RewardTarget, Step};
 
 use crate::bundle::{RunBundle, RunMeta};
 use crate::graph::RunGraph;
+use crate::records::RecordRow;
 use crate::rewards;
 use crate::scorecard::RunScorecard;
 use crate::TraceError;
@@ -26,6 +27,8 @@ pub struct RunTrace {
     pub stored_rewards: Vec<Reward>,
     /// Rewards computed from the steps, including outcome credit.
     pub derived_rewards: Vec<Reward>,
+    /// Kernel record rows from `record.jsonl`.
+    pub records: Vec<RecordRow>,
 }
 
 impl RunTrace {
@@ -37,9 +40,12 @@ impl RunTrace {
     pub fn load(bundle: &RunBundle) -> Result<Self, TraceError> {
         let meta = bundle.read_meta()?;
         let mut steps = bundle.read_steps()?;
-        crate::records::join(&mut steps, &bundle.read_records()?);
+        let records = bundle.read_records()?;
+        crate::records::join(&mut steps, &records);
         let stored = bundle.read_rewards()?;
-        Ok(Self::from_parts(meta, steps, stored))
+        let mut trace = Self::from_parts(meta, steps, stored);
+        trace.records = records;
+        Ok(trace)
     }
 
     /// Normalize already-loaded parts.
@@ -57,6 +63,7 @@ impl RunTrace {
             steps,
             stored_rewards,
             derived_rewards: derived,
+            records: Vec::new(),
         }
     }
 
@@ -77,7 +84,9 @@ impl RunTrace {
     /// Scorecard over every reward.
     #[must_use]
     pub fn scorecard(&self) -> RunScorecard {
-        RunScorecard::compute(&self.meta, &self.steps, &self.rewards())
+        let mut card = RunScorecard::compute(&self.meta, &self.steps, &self.rewards());
+        card.apply_tool_timings(&crate::health::tool_call_timings(&self.records));
+        card
     }
 
     /// Linked graph of the run.

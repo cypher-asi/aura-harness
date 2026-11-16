@@ -489,7 +489,7 @@ The same kernel/AgentLoop pipeline drives every front-end. Every tool call passe
 
 ### Flow 1: Interactive TUI session
 
-Default mode when a user runs `cargo run` or `aura`. Participants (left → right): **User**, **TUI** (`aura-terminal`), **EL** (event loop in `aura-surface-cli`), **AL** (`AgentLoop` in `aura-agent`), **MP** (`ModelProvider` in `aura-model-reasoner`), **KTG** (`KernelToolGateway` + `ExecutorRouter` in `aura-agent-kernel`), **Tools** (`ToolExecutor` in `aura-tools`).
+Default mode when a user runs `aura --terminal` (`aura` alone opens the same UI in the desktop window, or in the terminal when there is no display). Participants (left → right): **User**, **TUI** (`aura-terminal`), **EL** (event loop in `aura-surface-cli`), **AL** (`AgentLoop` in `aura-agent`), **MP** (`ModelProvider` in `aura-model-reasoner`), **KTG** (`KernelToolGateway` + `ExecutorRouter` in `aura-agent-kernel`), **Tools** (`ToolExecutor` in `aura-tools`).
 
 Here **MP** is the `RoutedProvider`, which picks a backend from the model id prefix:
 

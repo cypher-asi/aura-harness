@@ -157,8 +157,10 @@ pub struct App {
     pub(super) cursor_pos: usize,
     /// Current status message
     pub(super) status: String,
-    /// Pending approval (if any)
-    pub(super) pending_approval: Option<PendingApproval>,
+    /// Calls waiting for an answer, oldest first; the front one is shown.
+    /// Calls of one turn ask together, so one prompt must not replace
+    /// another.
+    pub(super) pending_approvals: VecDeque<PendingApproval>,
     /// Chat lines below the bottom of the chat view (0 = following the end)
     pub(super) scroll_offset: usize,
     /// Rendered lines of each message, reused between frames
@@ -504,7 +506,7 @@ impl App {
             input_history: InputHistory::new(),
             cursor_pos: 0,
             status: "Ready".to_string(),
-            pending_approval: None,
+            pending_approvals: VecDeque::new(),
             scroll_offset: 0,
             chat_lines: ChatLineCache::default(),
             terminal_lines: ChatLineCache::terminal(),
@@ -1543,10 +1545,16 @@ impl App {
         }
     }
 
-    /// Get the pending approval.
+    /// The approval prompt on screen: the oldest call still waiting.
     #[must_use]
-    pub const fn pending_approval(&self) -> Option<&PendingApproval> {
-        self.pending_approval.as_ref()
+    pub fn pending_approval(&self) -> Option<&PendingApproval> {
+        self.pending_approvals.front()
+    }
+
+    /// How many calls of the chat on screen wait for an answer.
+    #[must_use]
+    pub fn pending_approval_count(&self) -> usize {
+        self.pending_approvals.len()
     }
 
     /// Get the current notification.
@@ -1966,8 +1974,10 @@ impl App {
     pub fn cancel(&mut self) {
         if self.is_busy() {
             // The event loop denies the waiting call when it cancels the
-            // turn, so the prompt can go now.
-            self.pending_approval = None;
+            // turn, so the prompts can go now.
+            for approval in std::mem::take(&mut self.pending_approvals) {
+                self.mark_awaiting_approval(&approval.id, false);
+            }
             self.state = AppState::Idle;
             self.status = "Cancelled".to_string();
             if let Some(tx) = &self.event_tx {

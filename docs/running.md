@@ -15,12 +15,15 @@ macOS and Windows need no extra system packages. Everything else, including the 
 ```sh
 cargo build --release
 
-# Terminal UI — defaults to a small local model, no account needed
+# Desktop window — defaults to a small local model, no account needed
 ollama pull qwen3:4b                      # one-time, ~2.5 GB
 OLLAMA_CONTEXT_LENGTH=32768 ollama serve  # in another terminal
 cargo run
 
-# Terminal UI in Plan mode
+# The same UI in this terminal
+cargo run -- --terminal
+
+# Plan mode (desktop or terminal)
 cargo run -- --mode plan
 
 # Headless node, same binary
@@ -32,16 +35,17 @@ cargo run -p aura-runtime --bin aura-node
 
 ## Desktop app
 
-`aura-desktop` is the terminal UI in a native window: the same agent session, the same screen and the same keys, drawn on the GPU (wgpu, through [iced](https://iced.rs)) on a cell grid instead of through a terminal emulator, with a CPU fallback (tiny-skia) when no GPU is available. Box-drawing lines, block characters, braille spinners and status symbols are drawn as shapes, so borders join without gaps and symbols missing from the font still render. It needs Rust 1.88 or later.
+`aura` with no subcommand opens the desktop window, `aura-desktop`: the terminal UI in a native window: the same agent session, the same screen and the same keys, drawn on the GPU (wgpu, through [iced](https://iced.rs)) on a cell grid instead of through a terminal emulator, with a CPU fallback (tiny-skia) when no GPU is available. Box-drawing lines, block characters, braille spinners and status symbols are drawn as shapes, so borders join without gaps and symbols missing from the font still render. It needs Rust 1.88 or later. `aura --terminal` (or `aura run`) runs in the terminal instead, and so does `aura` when there's no display to open a window on, such as over SSH. Builds with `--no-default-features` leave the desktop app out; the Docker images do.
 
 ```sh
-cargo run --release -p aura-desktop                        # agent in the current directory
-cargo run --release -p aura-desktop -- --workspace ~/proj  # agent in another folder
-cargo run --release -p aura-desktop -- --mode plan
-cargo run --release -p aura-desktop -- --demo              # scripted session, no model needed
+cargo run --release                                          # agent in the current directory
+cargo run --release -- desktop --workspace ~/proj            # agent in another folder
+cargo run --release -- --mode plan
+cargo run --release -- desktop --demo                        # scripted session, no model needed
+cargo run --release -p aura-desktop                          # the window on its own binary
 ```
 
-It takes the terminal's `--dir`, `--provider`, `--mode`, `--theme`, `--verbose` and `--allow-unrestricted-full-access`. Every terminal key works the same way, including Ctrl+C (copy a selection, interrupt the agent, or quit when idle) and Ctrl+D. Drag to select text in a panel; it's copied when you let go. On top of that, the window handles what a terminal emulator would:
+`aura desktop` takes the terminal's `--dir`, `--provider`, `--mode`, `--theme`, `--verbose` and `--allow-unrestricted-full-access`. Every terminal key works the same way, including Ctrl+C (copy a selection, interrupt the agent, or quit when idle) and Ctrl+D. Drag to select text in a panel; it's copied when you let go. On top of that, the window handles what a terminal emulator would:
 
 | Keys (Cmd on macOS) | Action |
 |---|---|

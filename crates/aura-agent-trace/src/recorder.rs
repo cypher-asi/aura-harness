@@ -23,6 +23,8 @@ use aura_store_snapshot::{FsSnapshotStore, SnapshotStore};
 use serde_json::{json, Value};
 
 use crate::bundle::{self, now_ms, RunBundle, RunMeta, STEPS_FILE};
+use crate::health::{duration, APPROVAL_GUESS_MS, DEFAULT_SLOW_MS};
+use crate::records::RecordRow;
 use crate::scorecard::RunScorecard;
 use crate::{RunTrace, TraceError};
 
@@ -40,6 +42,9 @@ pub struct StepBuilder {
     calls: HashMap<String, (u64, String, Value)>,
     /// tool_use_id → unix ms the tool started
     started: HashMap<String, u64>,
+    /// tool_use_id → unix ms the kernel recorded its proposal, until the
+    /// policy decides it
+    proposed: HashMap<String, u64>,
     /// Harness steps since the last model step; they shaped its input.
     pending_causes: Vec<u64>,
     cache_hits: HashSet<String>,
@@ -64,6 +69,7 @@ impl StepBuilder {
             harness_params: serde_json::to_value(params).unwrap_or(Value::Null),
             calls: HashMap::new(),
             started: HashMap::new(),
+            proposed: HashMap::new(),
             pending_causes: Vec::new(),
             cache_hits: HashSet::new(),
             blocked: HashSet::new(),
@@ -373,8 +379,54 @@ impl StepBuilder {
         step.policy.id = "agent_loop".into();
         self.calls.clear();
         self.started.clear();
+        self.proposed.clear();
         self.pending_causes.clear();
         step
+    }
+
+    /// Translate one kernel record row. A policy decision that waited for
+    /// an approval becomes an `approval_wait` step: allowed, flagged when
+    /// the wait was long, or blocked when the call was denied.
+    pub fn on_record(&mut self, row: &RecordRow) -> Option<Step> {
+        let id = row.tool_use_id.as_deref()?;
+        match row.tx_type.as_str() {
+            "tool_proposal" => {
+                self.proposed.insert(id.to_string(), row.at_ms);
+                None
+            }
+            "policy_decision" => {
+                let wait_ms = row.at_ms.saturating_sub(self.proposed.remove(id)?);
+                if row.approver.is_none() && wait_ms < APPROVAL_GUESS_MS {
+                    return None;
+                }
+                let tool = row.tool.clone().unwrap_or_default();
+                let waited = duration(wait_ms);
+                let action = if row.verdict.as_deref() == Some("denied") {
+                    HarnessAction::Block {
+                        tool: tool.clone(),
+                        tool_use_id: Some(id.to_string()),
+                        reason: format!("denied after waiting {waited} for approval"),
+                    }
+                } else if wait_ms >= DEFAULT_SLOW_MS {
+                    HarnessAction::Warn {
+                        message: format!("{tool} waited {waited} for approval"),
+                    }
+                } else {
+                    HarnessAction::Allow
+                };
+                let decision =
+                    HarnessDecision::new(DecisionSource::Policy, "approval_wait", action)
+                        .with_tool_use(id)
+                        .with_trigger(json!({
+                            "tool": tool,
+                            "wait_ms": wait_ms,
+                            "approver": row.approver,
+                            "verdict": row.verdict,
+                        }));
+                Some(self.harness(&decision, row.at_ms))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -628,9 +680,13 @@ impl RunRecorder {
     }
 
     /// Append a kernel record row for the record-log join.
-    pub fn on_record(&self, row: &crate::records::RecordRow) {
+    pub fn on_record(&self, row: &RecordRow) {
         if let Err(e) = self.bundle.append_records(std::slice::from_ref(row)) {
             tracing::debug!(error = %e, "trace record write failed");
+        }
+        let step = lock(&self.builder).on_record(row);
+        if let Some(step) = step {
+            self.emit(step);
         }
     }
 
@@ -810,6 +866,72 @@ mod tests {
         let end = b.turn_end(&AgentLoopResult::default(), 10);
         assert!(matches!(end.action, StepAction::TurnEnd { .. }));
         assert_eq!(end.seq, 5);
+    }
+
+    #[test]
+    fn approval_waits_become_policy_steps() {
+        let row = |tx_type: &str, at_ms: u64, id: &str| RecordRow {
+            seq: 0,
+            tx_type: tx_type.into(),
+            at_ms,
+            tool_use_id: Some(id.into()),
+            tool: Some("edit_file".into()),
+            verdict: None,
+            approver: None,
+        };
+        let mut b = StepBuilder::new("r", &HarnessParams::default(), None);
+        b.user_prompt("x", 0);
+        let model = b
+            .on_event(
+                &exchange(
+                    0,
+                    &[
+                        ("quick", "edit_file", json!({"path": "a.ts"})),
+                        ("slow", "edit_file", json!({"path": "a.ts"})),
+                        ("no", "edit_file", json!({"path": "a.ts"})),
+                    ],
+                ),
+                1,
+            )
+            .unwrap();
+        for id in ["quick", "slow", "no"] {
+            assert!(b.on_record(&row("tool_proposal", 10, id)).is_none());
+        }
+        assert!(
+            b.on_record(&row("policy_decision", 13, "quick")).is_none(),
+            "a decision nobody was asked about is no step"
+        );
+
+        let slow = b
+            .on_record(&RecordRow {
+                verdict: Some("approved".into()),
+                approver: Some("user".into()),
+                ..row("policy_decision", 244_678, "slow")
+            })
+            .unwrap();
+        assert_eq!(slow.parent, Some(model.seq));
+        let StepAction::Harness { name, action, .. } = &slow.action else {
+            panic!("expected a harness step, got {:?}", slow.action);
+        };
+        assert_eq!(name, "approval_wait");
+        assert!(
+            matches!(action, HarnessAction::Warn { message } if message.contains("4m 04s")),
+            "{action:?}"
+        );
+
+        let denied = b
+            .on_record(&RecordRow {
+                verdict: Some("denied".into()),
+                ..row("policy_decision", 600_010, "no")
+            })
+            .unwrap();
+        assert!(matches!(
+            denied.action,
+            StepAction::Harness {
+                action: HarnessAction::Block { .. },
+                ..
+            }
+        ));
     }
 
     #[test]

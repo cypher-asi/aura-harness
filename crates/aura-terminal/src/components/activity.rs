@@ -49,6 +49,8 @@ pub struct ToolStep {
     pub diff: Option<String>,
     /// Policy verdict and deciding rule, e.g. `allowed by user.on`
     pub policy: Option<String>,
+    /// Whether the call waits for the user to approve it
+    pub awaiting_approval: bool,
 }
 
 impl Activity {
@@ -77,6 +79,7 @@ impl Activity {
             duration_ms: None,
             diff: None,
             policy: None,
+            awaiting_approval: false,
         })
     }
 
@@ -150,6 +153,7 @@ impl From<&ActivityData> for Activity {
                 duration_ms: *duration_ms,
                 diff: None,
                 policy: policy.clone(),
+                awaiting_approval: false,
             }),
         }
     }

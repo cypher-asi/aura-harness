@@ -389,12 +389,14 @@ pub(crate) async fn process_tool_results(
         state.had_any_file_write = true;
     }
 
+    let reported = std::mem::take(&mut state.reported_tool_results);
     emit_and_log_results(
         ctx.event_tx,
         &tool_calls,
         &all_results,
         &cached_ids,
         &blocked_ids,
+        &reported,
     );
 
     let task_done_success = tool_calls.iter().any(|tc| {
@@ -532,6 +534,7 @@ fn emit_and_log_results(
     all_results: &[ToolCallResult],
     cached_ids: &HashSet<String>,
     blocked_ids: &HashSet<String>,
+    reported: &HashSet<String>,
 ) {
     console::tools_block(tool_calls, all_results, cached_ids, blocked_ids);
 
@@ -574,7 +577,10 @@ fn emit_and_log_results(
         }
     }
 
-    for r in all_results {
+    for r in all_results
+        .iter()
+        .filter(|r| !reported.contains(&r.tool_use_id))
+    {
         let info = tool_calls.iter().find(|t| t.id == r.tool_use_id);
         let tool_name = info.map_or_else(String::new, |t| t.name.clone());
         emit_event(

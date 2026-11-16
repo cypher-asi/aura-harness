@@ -20,6 +20,7 @@
 pub mod bundle;
 pub mod dataset;
 pub mod graph;
+pub mod health;
 pub mod normalize;
 pub mod recorder;
 pub mod records;
@@ -30,6 +31,7 @@ pub mod scorecard;
 
 pub use bundle::{kernel_snapshot_store, list_runs, RunBundle, RunMeta, RunSource};
 pub use graph::{EdgeKind, GraphEdge, GraphNode, NodeKind, RunGraph};
+pub use health::RunHealth;
 pub use normalize::RunTrace;
 pub use recorder::{RunRecorder, StepBuilder};
 pub use records::{RecordRouter, RecordRow};

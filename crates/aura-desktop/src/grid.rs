@@ -527,7 +527,8 @@ impl Grid<'_> {
                     .unwrap_or(columns.end);
                 let run: String = cells[col..end].iter().map(Cell::symbol).collect();
                 let at = Point::new(self.x_at(row, col), y);
-                self.run_text(frame, &run, at, &look, look.font(), Shaping::Basic);
+                let size = self.metrics.font_size;
+                self.run_text(frame, &run, at, &look, (look.font(), size, Shaping::Basic));
                 self.decorate(frame, &look, at.x, self.x_at(row, end), y);
                 col = end;
                 continue;
@@ -558,7 +559,7 @@ impl Grid<'_> {
                     symbol.to_owned(),
                     Point::new(area.center_x(), at.1),
                     look,
-                    (look.font(), Shaping::Advanced),
+                    (look.font(), self.metrics.font_size, Shaping::Advanced),
                     true,
                 );
             }
@@ -594,11 +595,12 @@ impl Grid<'_> {
                 .find(|&i| looks[i] != look || cells[i].skip || is_code(i) != code)
                 .unwrap_or(columns.end);
             let run: String = cells[col..end].iter().map(Cell::symbol).collect();
-            let (font, width) = if code {
-                (look.font(), (end - col) as f32 * cell.width)
+            let (font, size, width) = if code {
+                let size = self.metrics.font_size;
+                (look.font(), size, (end - col) as f32 * cell.width)
             } else {
-                let font = look.prose_font();
-                (font, run_width(&run, font, self.metrics.font_size))
+                let (font, size) = (look.prose_font(), theme::prose_size(self.metrics.font_size));
+                (font, size, run_width(&run, font, size))
             };
             self.fill_background(frame, look.bg, x.round(), (x + width).round(), y);
             if !look.hidden {
@@ -607,8 +609,7 @@ impl Grid<'_> {
                     &run,
                     Point::new(x, y),
                     &look,
-                    font,
-                    Shaping::Advanced,
+                    (font, size, Shaping::Advanced),
                 );
             }
             self.decorate(frame, &look, x, x + width, y);
@@ -638,12 +639,11 @@ impl Grid<'_> {
         run: &str,
         at: Point,
         look: &Look,
-        font: Font,
-        shaping: Shaping,
+        face: (Font, f32, Shaping),
     ) {
         let text = run.trim_end();
         if !text.is_empty() {
-            self.text(frame, text.to_owned(), at, look, (font, shaping), false);
+            self.text(frame, text.to_owned(), at, look, face, false);
         }
     }
 
@@ -653,14 +653,14 @@ impl Grid<'_> {
         content: String,
         at: Point,
         look: &Look,
-        (font, shaping): (Font, Shaping),
+        (font, size, shaping): (Font, f32, Shaping),
         centered: bool,
     ) {
         frame.fill_text(canvas::Text {
             content,
             position: at,
             color: look.fg,
-            size: Pixels(self.metrics.font_size),
+            size: Pixels(size),
             line_height: LineHeight::Absolute(Pixels(self.metrics.cell.height)),
             font,
             align_x: if centered {
@@ -711,7 +711,7 @@ pub fn prose_cells(text: &str, modifier: Modifier) -> f32 {
         modifier.contains(Modifier::BOLD),
         modifier.contains(Modifier::ITALIC),
     );
-    run_width(text, font, SIZE) / theme::cell_size(SIZE).width
+    run_width(text, font, theme::prose_size(SIZE)) / theme::cell_size(SIZE).width
 }
 
 /// How wide a run of `text` is in `font` at `size`, trailing spaces

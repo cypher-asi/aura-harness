@@ -560,6 +560,9 @@ fn tool_diff(step: &ToolStep) -> Option<DiffView> {
 fn tool_meta(step: &ToolStep) -> String {
     let mut parts = Vec::new();
     match step.status {
+        ToolStatus::Running if step.awaiting_approval => {
+            parts.push("awaiting approval".to_string());
+        }
         ToolStatus::Running => {
             if let Some((attempt, max)) = step.retry {
                 parts.push(format!("retrying ({attempt}/{max})"));
@@ -658,6 +661,7 @@ mod tests {
             duration_ms: Some(300),
             diff: None,
             policy: None,
+            awaiting_approval: false,
         })
     }
 
@@ -810,6 +814,19 @@ mod tests {
     }
 
     #[test]
+    fn a_call_awaiting_approval_says_so_instead_of_counting_up() {
+        let mut activity = tool_step("edit_file", r#"{"path":"a.ts"}"#, ToolStatus::Running, None);
+        if let Activity::Tool(step) = &mut activity {
+            step.started = Some(std::time::Instant::now() - std::time::Duration::from_secs(90));
+            step.awaiting_approval = true;
+        }
+        let lines = activity_lines(&activity, false, None, "⠋", 80, &Theme::default());
+        let header = &texts(&lines)[0];
+        assert!(header.ends_with(" · awaiting approval"), "{header}");
+        assert!(!header.contains("1m"), "{header}");
+    }
+
+    #[test]
     fn long_label_is_cut_to_width() {
         let activity = Activity::Tool(ToolStep {
             id: "t1".to_string(),
@@ -822,6 +839,7 @@ mod tests {
             duration_ms: None,
             diff: None,
             policy: None,
+            awaiting_approval: false,
         });
         let lines = activity_lines(&activity, false, None, "⠋", 40, &Theme::default());
         let header = &texts(&lines)[0];

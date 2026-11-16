@@ -24,7 +24,7 @@ pub(crate) struct AgentView {
     scroll_offset: usize,
     group_open: HashMap<u64, bool>,
     chat_lines: ChatLineCache,
-    pending_approval: Option<PendingApproval>,
+    pending_approvals: VecDeque<PendingApproval>,
     hud: Hud,
     /// Whether the agent has a turn in flight
     busy: bool,
@@ -40,7 +40,7 @@ impl Default for AgentView {
             scroll_offset: 0,
             group_open: HashMap::new(),
             chat_lines: ChatLineCache::default(),
-            pending_approval: None,
+            pending_approvals: VecDeque::new(),
             hud: Hud::default(),
             busy: false,
         }
@@ -70,7 +70,7 @@ impl App {
         mem::swap(&mut self.scroll_offset, &mut view.scroll_offset);
         mem::swap(&mut self.group_open, &mut view.group_open);
         mem::swap(&mut self.chat_lines, &mut view.chat_lines);
-        mem::swap(&mut self.pending_approval, &mut view.pending_approval);
+        mem::swap(&mut self.pending_approvals, &mut view.pending_approvals);
         mem::swap(&mut self.hud, &mut view.hud);
     }
 
@@ -105,8 +105,8 @@ impl App {
 
     /// State of the chat swapped in, whose agent is `busy` or not. A turn
     /// waiting for an approval shows its prompt.
-    const fn chat_state(&self, busy: bool) -> AppState {
-        if self.pending_approval.is_some() {
+    fn chat_state(&self, busy: bool) -> AppState {
+        if !self.pending_approvals.is_empty() {
             AppState::AwaitingApproval
         } else if busy {
             AppState::Processing

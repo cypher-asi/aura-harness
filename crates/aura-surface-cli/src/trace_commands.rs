@@ -7,7 +7,7 @@ use anyhow::{bail, Context};
 use aura_agent::AgentLoopConfig;
 use aura_agent_trace::bundle::{list_runs, now_ms, RunBundle};
 use aura_agent_trace::dataset::{self, ExportFilter, ExportFormat};
-use aura_agent_trace::{report, scorecard, RunTrace};
+use aura_agent_trace::{health, report, scorecard, RunTrace};
 use aura_config::HarnessParams;
 use aura_core_types::trace::{Reward, RewardKind, RewardTarget};
 use aura_model_reasoner::ModelProvider;
@@ -56,12 +56,14 @@ pub async fn cmd_runs(args: RunsCommand) -> anyhow::Result<()> {
         }
         RunsSubcommand::Show { id, steps, json } => {
             let (bundle, trace) = load(&home, &id)?;
+            let health = health::check(&trace, now_ms(), health::DEFAULT_SLOW_MS);
             if json {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&json!({
                         "meta": trace.meta,
                         "scorecard": trace.scorecard(),
+                        "health": health,
                         "steps": trace.steps,
                         "rewards": trace.rewards(),
                     }))?
@@ -73,11 +75,32 @@ pub async fn cmd_runs(args: RunsCommand) -> anyhow::Result<()> {
                 println!("title     {}", trace.meta.title);
             }
             print!("{}", report::scorecard_text(&trace.scorecard()));
+            print!("{}", report::health_text(&health));
             if steps {
                 println!();
                 for step in &trace.steps {
                     println!("{}", report::step_line(step));
                 }
+            }
+        }
+        RunsSubcommand::Check {
+            id,
+            slow_secs,
+            json,
+        } => {
+            let (_, trace) = load(&home, &id)?;
+            let health = health::check(&trace, now_ms(), slow_secs.saturating_mul(1_000));
+            if json {
+                println!("{}", serde_json::to_string_pretty(&health)?);
+            } else {
+                print!("{}", report::health_text(&health));
+            }
+            if !health.is_healthy() {
+                bail!(
+                    "run {} has {} problem(s)",
+                    trace.meta.run_id,
+                    health.problems.len()
+                );
             }
         }
         RunsSubcommand::Diff {

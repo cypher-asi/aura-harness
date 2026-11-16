@@ -99,6 +99,8 @@ pub(crate) struct SamplingCtx<'a> {
     pub(crate) input_queue: Option<&'a InputQueue>,
     pub(crate) state: &'a mut LoopState,
     pub(crate) request: ModelRequest,
+    /// See [`StreamPumpCtx::on_response`].
+    pub(crate) on_response: Option<&'a (dyn Fn(&ModelResponse) + Send + Sync)>,
     /// 0-based sampling iteration index. Kept on the ctx for
     /// transports that need to drive iteration-keyed telemetry; the
     /// pump consumes the counter through `state.result.iterations`.
@@ -166,7 +168,7 @@ pub(crate) trait ModelTransport: Send + Sync {
 ///
 /// Drives `provider.complete_response_stream(...)` with per-event
 /// timeout, overlaps tool execution at `OutputItemDone` boundaries
-/// via [`futures_util::stream::FuturesOrdered`], and returns the
+/// via [`futures_util::stream::FuturesUnordered`], and returns the
 /// pre-executed tool batch in [`TransportOutcome::Streamed`].
 /// Mid-tool cancellation folds `[CANCELLED]` tool_results into the
 /// `pre_executed` vec (see `driver::cancelled_outcome`) so the
@@ -186,6 +188,7 @@ impl ModelTransport for PumpTransport {
             input_queue,
             state,
             request,
+            on_response,
             ..
         } = ctx;
 
@@ -196,6 +199,7 @@ impl ModelTransport for PumpTransport {
                 cancellation_token,
                 input_queue,
                 event_tx,
+                on_response,
             },
             provider,
             request,

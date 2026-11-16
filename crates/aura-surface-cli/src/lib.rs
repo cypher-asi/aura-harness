@@ -78,7 +78,7 @@ mod trace_commands;
 
 mod runner;
 
-pub use runner::run;
+pub use runner::{desktop_launch, run, run_cli};
 
 /// Phase 10 carve-out 1: surface-layer re-export of the
 /// `aura-node` entrypoint. The implementation lives in

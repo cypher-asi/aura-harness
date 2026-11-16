@@ -13,6 +13,7 @@ use aura_core_types::trace::{
 use serde::{Deserialize, Serialize};
 
 use crate::bundle::RunMeta;
+use crate::health::ToolCallTiming;
 
 /// How often a harness decision fired and how often its intended
 /// behavior followed.
@@ -93,6 +94,18 @@ pub struct RunScorecard {
     pub reward_totals: BTreeMap<String, f64>,
     /// Run-level outcome (verification result or explicit label).
     pub outcome: Option<f64>,
+    /// Tool calls that waited for someone to approve them.
+    pub approvals_asked: usize,
+    /// Of those, how many were denied (including unanswered prompts that
+    /// timed out).
+    pub approvals_denied: usize,
+    /// Total time tool calls waited for approval.
+    pub approval_wait_ms: u64,
+    /// Longest single approval wait.
+    pub max_approval_wait_ms: u64,
+    /// Tool calls proposed but not finished when the run was loaded:
+    /// never decided, or allowed but never run.
+    pub open_tool_calls: usize,
 }
 
 impl RunScorecard {
@@ -242,6 +255,24 @@ impl RunScorecard {
             }
         }
         card
+    }
+
+    /// Fill the approval and open-call counts from the kernel record log.
+    pub fn apply_tool_timings(&mut self, timings: &[ToolCallTiming]) {
+        for call in timings {
+            if call.asked_for_approval() {
+                let wait = call.decision_ms().unwrap_or_default();
+                self.approvals_asked += 1;
+                self.approval_wait_ms += wait;
+                self.max_approval_wait_ms = self.max_approval_wait_ms.max(wait);
+                if call.denied() {
+                    self.approvals_denied += 1;
+                }
+            }
+            if call.is_open() {
+                self.open_tool_calls += 1;
+            }
+        }
     }
 }
 

@@ -20,6 +20,9 @@ pub const MAX_FONT_SIZE: f32 = 40.0;
 const ADVANCE_EM: f32 = 0.6;
 /// Line height of one row, in ems.
 const LINE_EM: f32 = 1.3;
+/// Size of the chat's prose relative to the grid's font size: Geist
+/// reads smaller than Geist Mono at the same size.
+const PROSE_EM: f32 = 1.1;
 
 const BUNDLED: [&[u8]; 6] = [
     include_bytes!("../assets/fonts/GeistMono-Regular.ttf"),
@@ -103,4 +106,9 @@ pub fn sans_bold() -> Font {
 /// box borders land on the pixel grid.
 pub fn cell_size(font_size: f32) -> Size {
     Size::new(font_size * ADVANCE_EM, (font_size * LINE_EM).round())
+}
+
+/// Size the chat's prose is set at when the grid is at `font_size`.
+pub fn prose_size(font_size: f32) -> f32 {
+    font_size * PROSE_EM
 }

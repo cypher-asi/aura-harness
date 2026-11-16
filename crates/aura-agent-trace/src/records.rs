@@ -32,6 +32,13 @@ pub struct RecordRow {
     /// Tool named by the payload, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
+    /// Gate verdict of a policy decision (`approved`, `denied`, ...).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<String>,
+    /// Who answered the approval prompt behind a policy decision
+    /// (`user`, `hook`); `None` when nobody was asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approver: Option<String>,
 }
 
 impl RecordRow {
@@ -54,6 +61,11 @@ impl RecordRow {
             at_ms: entry.tx.ts_ms,
             tool_use_id: field("tool_use_id"),
             tool: field("tool"),
+            verdict: field("verdict"),
+            approver: payload
+                .pointer("/approval/approver/kind")
+                .and_then(Value::as_str)
+                .map(str::to_string),
         }
     }
 
@@ -168,6 +180,8 @@ mod tests {
             at_ms: 0,
             tool_use_id: tool_use_id.map(str::to_string),
             tool: None,
+            verdict: None,
+            approver: None,
         }
     }
 
@@ -186,6 +200,23 @@ mod tests {
         assert_eq!(r.tx_type, "tool_proposal");
         assert_eq!(r.tool_use_id.as_deref(), Some("t1"));
         assert_eq!(r.tool.as_deref(), Some("read_file"));
+        assert_eq!(r.approver, None);
+
+        let payload = json!({
+            "tool_use_id": "t1",
+            "tool": "edit_file",
+            "verdict": "approved",
+            "approval": {"approver": {"kind": "user"}, "remember": "once"},
+        });
+        let tx = Transaction::new_chained(
+            agent,
+            TransactionType::PolicyDecision,
+            Bytes::from(payload.to_string()),
+            None,
+        );
+        let r = RecordRow::from_entry(&RecordEntry::builder(8, tx).build());
+        assert_eq!(r.verdict.as_deref(), Some("approved"));
+        assert_eq!(r.approver.as_deref(), Some("user"));
     }
 
     #[test]

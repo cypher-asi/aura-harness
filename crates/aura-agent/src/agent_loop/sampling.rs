@@ -180,6 +180,28 @@ pub(crate) async fn run_sampling_request(
     let observation = exchange::observe(&request, trace_blobs);
     let model_name = request.model.to_string();
     let sample_started_at = Instant::now();
+    // Emitted once: by the pump as soon as the response completes, or
+    // below when the transport returns without calling back.
+    let pending_observation = std::sync::Mutex::new(Some(observation));
+    let emit_exchange = |response: &aura_model_reasoner::ModelResponse| {
+        let Some(observation) = pending_observation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        else {
+            return;
+        };
+        exchange::emit(
+            run.event_tx,
+            iteration,
+            &model_name,
+            observation,
+            response,
+            trace_blobs,
+            u64::try_from(sample_started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+        );
+        streaming::emit_iteration_complete(run.event_tx, iteration, response, iteration_started_at);
+    };
 
     // Phase 4 + 7: route the model call through the pump transport
     // returned by `active_transport`. The transport produces a
@@ -198,6 +220,7 @@ pub(crate) async fn run_sampling_request(
         state,
         request,
         iteration,
+        on_response: Some(&emit_exchange),
     };
     let outcome = match transport_impl.sample(sampling_ctx).await {
         Ok(o) => o,
@@ -231,15 +254,7 @@ pub(crate) async fn run_sampling_request(
         }
     };
 
-    exchange::emit(
-        run.event_tx,
-        iteration,
-        &model_name,
-        observation,
-        &response,
-        trace_blobs,
-        u64::try_from(sample_started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
-    );
+    emit_exchange(&response);
     decisions::flush(state, run.event_tx, iteration);
 
     let produced_visible_output = response_has_visible_output(&response);
@@ -248,7 +263,6 @@ pub(crate) async fn run_sampling_request(
         iteration::accumulate_response(&run.agent.config, state, &response, iteration);
     state.observe_todo_writes(&response, run.event_tx);
     state.result.iterations = iteration + 1;
-    streaming::emit_iteration_complete(run.event_tx, iteration, &response, iteration_started_at);
 
     // Stop fired during or right after sampling: bail before
     // dispatching a fresh batch UNLESS the pump pre-executed a

@@ -1,4 +1,4 @@
-//! Inner stream driver: event-loop body and `FuturesOrdered` drain.
+//! Inner stream driver: event-loop body and in-flight tool drain.
 //!
 //! Separated from the public [`super::run_stream_pump`] entry so the
 //! unit tests can hand it a hand-rolled `ResponseEventStream` without
@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use aura_model_reasoner::{
     OutputItem, ResponseEvent, ResponseEventStream, StreamError, StreamPhase, Usage,
 };
-use futures_util::stream::FuturesOrdered;
+use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -101,12 +101,14 @@ impl Liveness {
     }
 }
 
-/// Boxed per-tool future spawned into [`FuturesOrdered`] inside the
-/// pump. Carries the originating [`ToolCallInfo`] alongside the
-/// result so the drain loop can reassemble FIFO order without an
-/// auxiliary lookup. Aliased per `clippy::type_complexity`.
-type ToolFuture<'a> =
-    Pin<Box<dyn std::future::Future<Output = (ToolCallInfo, ToolCallResult)> + Send + 'a>>;
+/// One finished call: its submission index, the call and its result.
+type IndexedResult = (usize, (ToolCallInfo, ToolCallResult));
+
+/// Boxed per-tool future spawned into [`FuturesUnordered`] inside the
+/// pump. Carries the submission index and the originating
+/// [`ToolCallInfo`] alongside the result so the drain loop can
+/// reassemble submission order without an auxiliary lookup.
+type ToolFuture<'a> = Pin<Box<dyn std::future::Future<Output = IndexedResult> + Send + 'a>>;
 
 /// Drive a single `ResponseEventStream` to terminal completion.
 ///
@@ -127,9 +129,10 @@ pub(super) async fn drive_stream(
         executor,
         cancellation_token,
         event_tx,
+        on_response,
         ..
     } = ctx;
-    let mut in_flight: FuturesOrdered<ToolFuture<'_>> = FuturesOrdered::new();
+    let mut in_flight: FuturesUnordered<ToolFuture<'_>> = FuturesUnordered::new();
     let mut text_chunks: Vec<String> = Vec::new();
     let mut thinking_chunks: Vec<(String, Option<String>)> = Vec::new();
     let mut text_bytes = 0;
@@ -241,11 +244,13 @@ pub(super) async fn drive_stream(
                     tool_calls_seen.push(call.clone());
                     spawned_indices.push(index);
                     preset_indices.push(index);
-                    in_flight.push_back(spawn_tool_with_timeout(
+                    in_flight.push(spawn_tool_with_timeout(
+                        index,
                         executor,
                         call,
                         Some(("invalid_tool_use", ToolCallResult::error(id, reason))),
                         per_tool_timeout,
+                        event_tx,
                     ));
                 }
                 ResponseEvent::OutputItemDone(OutputItem::ToolUse { id, name, input }) => {
@@ -380,18 +385,33 @@ pub(super) async fn drive_stream(
         }
     }
 
-    // Drain the FIFO in submission order (codex `drain_in_flight`).
-    // Honours cancellation: a token fired during drain still aborts
-    // before we mutate `state.messages` in the caller.
+    let response = synthesize_response(
+        &text_chunks,
+        &thinking_chunks,
+        &tool_calls_seen,
+        end_turn,
+        stop_reason,
+        &usage,
+        model_name,
+    );
+    if let Some(on_response) = on_response {
+        on_response(&response);
+    }
+
+    // Drain the in-flight calls (codex `drain_in_flight`). Honours
+    // cancellation: a token fired during drain still aborts before we
+    // mutate `state.messages` in the caller.
     //
-    // Spawned tools resolve in submission order via `FuturesOrdered`;
-    // cached results are interleaved using the per-call submission
-    // index captured above so the final `tool_results` vec mirrors
-    // the order the model emitted the corresponding
-    // `OutputItemDone(tool_use)` events.
+    // Calls are collected as they finish, each tagged with its
+    // submission index, and sorted afterwards so the final
+    // `tool_results` vec mirrors the order the model emitted the
+    // corresponding `OutputItemDone(tool_use)` events. Collecting out of
+    // order matters on cancel: a call that already ran (an edit that
+    // landed) keeps its real result even when an earlier call is still
+    // waiting, e.g. on an approval.
     // While draining potentially long-running tool calls, emit a
     // periodic `tool_running` progress heartbeat. The spawned tool
-    // futures only make progress as `FuturesOrdered` is polled in the
+    // futures only make progress as `FuturesUnordered` is polled in the
     // drain loop below, so this window is the main silent stretch of a
     // turn. The heartbeat keeps the aura-os server's sliding-idle
     // watchdog (`AURA_TURN_MAX_TIMEOUT_SECS`) resetting so only a
@@ -405,7 +425,6 @@ pub(super) async fn drive_stream(
     );
 
     let mut spawned_pairs: Vec<(usize, (ToolCallInfo, ToolCallResult))> = Vec::new();
-    let mut spawn_cursor = 0usize;
     loop {
         let maybe_next = drain_next(&mut in_flight, cancellation_token).await;
         match maybe_next {
@@ -433,20 +452,15 @@ pub(super) async fn drive_stream(
                     usage: &usage,
                     model_name,
                 };
+                note_reported(state, event_tx, &spawned_pairs);
                 return cancelled_outcome(&snap, spawned_pairs);
             }
             DrainStep::Done => break,
-            DrainStep::Result(pair) => {
-                let submission_index = spawned_indices
-                    .get(spawn_cursor)
-                    .copied()
-                    .unwrap_or(usize::MAX);
-                spawn_cursor = spawn_cursor.saturating_add(1);
-                spawned_pairs.push((submission_index, *pair));
-            }
+            DrainStep::Result(indexed) => spawned_pairs.push(*indexed),
         }
     }
 
+    note_reported(state, event_tx, &spawned_pairs);
     spawned_pairs.sort_by_key(|(idx, _)| *idx);
     let tool_results: Vec<(ToolCallInfo, ToolCallResult)> =
         spawned_pairs.into_iter().map(|(_, pair)| pair).collect();
@@ -474,15 +488,6 @@ pub(super) async fn drive_stream(
         &spawned_results,
     );
 
-    let response = synthesize_response(
-        &text_chunks,
-        &thinking_chunks,
-        &tool_calls_seen,
-        end_turn,
-        stop_reason,
-        &usage,
-        model_name,
-    );
     StreamPumpOutcome::Completed {
         response,
         tool_results,
@@ -522,15 +527,15 @@ fn interrupted_outcome(
 /// Phase 8 wrapper bundling the four mutable cursor buffers that
 /// [`drive_stream`] hands to [`handle_tool_use_event`]: the running
 /// `tool_calls_seen` FIFO, the indices of calls with a preset result,
-/// the per-call spawn-index trace, and the `FuturesOrdered`
-/// itself. Grouping them keeps the helper under the clippy ceiling
-/// without splitting the FIFO ordering invariant across helpers —
+/// the per-call spawn-index trace, and the in-flight futures
+/// themselves. Grouping them keeps the helper under the clippy ceiling
+/// without splitting the submission-order invariant across helpers —
 /// every field stays a borrowed mutation target.
 pub(super) struct DriveLocals<'a, 'b> {
     pub(super) tool_calls_seen: &'b mut Vec<ToolCallInfo>,
     pub(super) preset_indices: &'b mut Vec<usize>,
     pub(super) spawned_indices: &'b mut Vec<usize>,
-    pub(super) in_flight: &'b mut FuturesOrdered<ToolFuture<'a>>,
+    pub(super) in_flight: &'b mut FuturesUnordered<ToolFuture<'a>>,
 }
 
 /// Handle one `OutputItemDone(ToolUse)` event: circling-read gate,
@@ -554,6 +559,7 @@ async fn handle_tool_use_event<'a, 'b>(
         cancellation_token: _,
         input_queue,
         event_tx,
+        on_response: _,
     } = ctx;
     let DriveLocals {
         tool_calls_seen,
@@ -597,11 +603,13 @@ async fn handle_tool_use_event<'a, 'b>(
         state.decide(decision);
         spawned_indices.push(submission_index);
         preset_indices.push(submission_index);
-        in_flight.push_back(spawn_tool_with_timeout(
+        in_flight.push(spawn_tool_with_timeout(
+            submission_index,
             executor,
             call,
             Some(("steering_block", blocked)),
             per_tool_timeout,
+            event_tx,
         ));
         return None;
     }
@@ -634,11 +642,13 @@ async fn handle_tool_use_event<'a, 'b>(
         state.decide(super::super::decisions::cache_hit(&call));
         spawned_indices.push(submission_index);
         preset_indices.push(submission_index);
-        in_flight.push_back(spawn_tool_with_timeout(
+        in_flight.push(spawn_tool_with_timeout(
+            submission_index,
             executor,
             call,
             Some(("cache", first)),
             per_tool_timeout,
+            event_tx,
         ));
     } else if !uncached_calls.is_empty() {
         let Some(first) = uncached_calls.into_iter().next() else {
@@ -649,11 +659,13 @@ async fn handle_tool_use_event<'a, 'b>(
             )));
         };
         spawned_indices.push(submission_index);
-        in_flight.push_back(spawn_tool_with_timeout(
+        in_flight.push(spawn_tool_with_timeout(
+            submission_index,
             executor,
             first,
             None,
             per_tool_timeout,
+            event_tx,
         ));
     }
 
@@ -709,13 +721,13 @@ enum DrainStep {
     // Boxed: `ToolCallResult` carries an optional screenshot image, so
     // the pair is large relative to the unit `Done` / `Cancelled`
     // variants. Boxing keeps the enum small (clippy::large_enum_variant).
-    Result(Box<(ToolCallInfo, ToolCallResult)>),
+    Result(Box<IndexedResult>),
     Done,
     Cancelled,
 }
 
 async fn drain_next<'a>(
-    in_flight: &mut FuturesOrdered<ToolFuture<'a>>,
+    in_flight: &mut FuturesUnordered<ToolFuture<'a>>,
     cancellation_token: Option<&CancellationToken>,
 ) -> DrainStep {
     if in_flight.is_empty() {
@@ -829,14 +841,59 @@ fn cancelled_outcome(
     }
 }
 
+/// Remember which results the tool futures already reported, so the
+/// dispatch tail does not report them again.
+fn note_reported(
+    state: &mut super::super::LoopState,
+    event_tx: Option<&tokio::sync::mpsc::Sender<AgentLoopEvent>>,
+    pairs: &[(usize, (ToolCallInfo, ToolCallResult))],
+) {
+    if event_tx.is_some() {
+        state
+            .reported_tool_results
+            .extend(pairs.iter().map(|(_, (call, _))| call.id.clone()));
+    }
+}
+
+/// Tell the client a call finished the moment it does. Calls of one batch
+/// run together, and one waiting on an approval must not keep the others
+/// looking unfinished.
+fn report_result(
+    event_tx: Option<&tokio::sync::mpsc::Sender<AgentLoopEvent>>,
+    call: &ToolCallInfo,
+    result: &ToolCallResult,
+) {
+    emit_event(
+        event_tx,
+        AgentLoopEvent::ToolCallCompleted {
+            tool_use_id: result.tool_use_id.clone(),
+            tool_name: call.name.clone(),
+            input: call.input.clone(),
+            is_error: result.is_error,
+        },
+    );
+    emit_event(
+        event_tx,
+        AgentLoopEvent::ToolResult {
+            tool_use_id: result.tool_use_id.clone(),
+            tool_name: call.name.clone(),
+            content: result.content.clone(),
+            is_error: result.is_error,
+            image: result.image.clone(),
+        },
+    );
+}
+
 /// `preset` is a result the loop already has for `call`, with the reason
 /// it has it; the executor records and gates it instead of running the
 /// tool.
 fn spawn_tool_with_timeout<'a>(
+    index: usize,
     executor: &'a dyn AgentToolExecutor,
     call: ToolCallInfo,
     preset: Option<(&'static str, ToolCallResult)>,
     per_tool_timeout: Duration,
+    event_tx: Option<&'a tokio::sync::mpsc::Sender<AgentLoopEvent>>,
 ) -> ToolFuture<'a> {
     Box::pin(async move {
         let call_clone = call.clone();
@@ -856,6 +913,7 @@ fn spawn_tool_with_timeout<'a>(
                 )
             }
         };
-        (call, result)
+        report_result(event_tx, &call, &result);
+        (index, (call, result))
     })
 }

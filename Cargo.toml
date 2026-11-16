@@ -15,9 +15,18 @@ path = "src/main.rs"
 # crates needed to call `aura_surface_cli::run().await`.
 [dependencies]
 aura-surface-cli = { path = "crates/aura-surface-cli" }
+aura-desktop = { path = "crates/aura-desktop", optional = true }
 anyhow = { workspace = true }
+clap = "4.5"
 tokio = { workspace = true }
 dotenvy = { workspace = true }
+
+# `aura` with no subcommand opens the desktop window. It needs Rust 1.88
+# (iced); build with `--no-default-features` for servers, containers and
+# the 1.85 MSRV check, where `aura` runs in the terminal instead.
+[features]
+default = ["desktop"]
+desktop = ["dep:aura-desktop"]
 
 [workspace]
 resolver = "2"

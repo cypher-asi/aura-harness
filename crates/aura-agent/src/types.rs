@@ -386,10 +386,10 @@ pub trait AgentToolExecutor: Send + Sync {
     /// [`crate::agent_loop::sampling`] calls this per
     /// `ResponseEvent::OutputItemDone(tool_use)` so a tool can start
     /// running while the model is still streaming subsequent items.
-    /// The returned futures are pushed into a `FuturesOrdered<…>`
-    /// and drained in submission order once the model signals
-    /// `Completed`, preserving codex's FIFO `drain_in_flight`
-    /// contract.
+    /// The returned futures are pushed into a `FuturesUnordered<…>`,
+    /// drained as they finish once the model signals `Completed`, and
+    /// sorted back into submission order (codex's `drain_in_flight`
+    /// contract).
     ///
     /// The default implementation forwards to [`Self::execute`] with
     /// a one-element batch, so existing executors (in particular
@@ -400,7 +400,7 @@ pub trait AgentToolExecutor: Send + Sync {
     /// The future borrows `&'a self`, so it shares the executor's
     /// lifetime. The pump holds an `&'a dyn AgentToolExecutor` for
     /// the duration of one sampling request and pushes the returned
-    /// boxed-pin futures into a `FuturesOrdered<'a>`, draining them
+    /// boxed-pin futures into a `FuturesUnordered<'a>`, draining them
     /// once the model signals `Completed`.
     fn spawn_tool_call<'a>(
         &'a self,

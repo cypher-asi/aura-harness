@@ -634,13 +634,18 @@ impl App {
                 description,
                 always,
             } => {
-                self.status = format!("Waiting for approval to run {tool}");
-                self.pending_approval = Some(PendingApproval {
-                    id,
-                    tool,
-                    description,
-                    always,
-                });
+                if self.pending_approvals.is_empty() {
+                    self.status = format!("Waiting for approval to run {tool}");
+                }
+                if !self.pending_approvals.iter().any(|a| a.id == id) {
+                    self.mark_awaiting_approval(&id, true);
+                    self.pending_approvals.push_back(PendingApproval {
+                        id,
+                        tool,
+                        description,
+                        always,
+                    });
+                }
                 self.state = AppState::AwaitingApproval;
             }
             UiCommand::CloseApproval(id) => self.cmd_close_approval(&id),
@@ -893,11 +898,31 @@ impl App {
     /// Drop the prompt for approval `id`, which stopped waiting; the turn
     /// goes on without it.
     fn cmd_close_approval(&mut self, id: &str) {
-        if self.pending_approval.as_ref().is_some_and(|a| a.id == id) {
-            self.pending_approval = None;
-            if self.state == AppState::AwaitingApproval {
-                self.state = AppState::Processing;
-            }
+        let before = self.pending_approvals.len();
+        self.pending_approvals.retain(|a| a.id != id);
+        if self.pending_approvals.len() < before {
+            self.mark_awaiting_approval(id, false);
+            self.after_approval_closed();
+        }
+    }
+
+    /// Mark the tool call behind approval `request_id` as waiting for the
+    /// user, or no longer waiting. The kernel's request id is
+    /// `<agent hex>:<tool use id>`.
+    pub(super) fn mark_awaiting_approval(&mut self, request_id: &str, waiting: bool) {
+        let tool_use_id = request_id
+            .split_once(':')
+            .map_or(request_id, |(_, tool_use_id)| tool_use_id);
+        self.update_tool(tool_use_id, |tool| tool.awaiting_approval = waiting);
+    }
+
+    /// Show the next waiting prompt, or go back to the turn when none is
+    /// left.
+    pub(super) fn after_approval_closed(&mut self) {
+        if let Some(next) = self.pending_approvals.front() {
+            self.status = format!("Waiting for approval to run {}", next.tool);
+        } else if self.state == AppState::AwaitingApproval {
+            self.state = AppState::Processing;
         }
     }
 

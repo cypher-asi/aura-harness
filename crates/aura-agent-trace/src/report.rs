@@ -5,6 +5,7 @@ use std::fmt::Write as _;
 use aura_core_types::trace::{Actor, HarnessAction, Step, StepAction};
 
 use crate::bundle::RunMeta;
+use crate::health::{duration, RunHealth};
 use crate::scorecard::{MetricDelta, RunScorecard};
 
 fn pct(v: f64) -> String {
@@ -127,6 +128,17 @@ pub fn scorecard_text(card: &RunScorecard) -> String {
         "harness   {} blocked, {} cache hits, {} retries, {} files changed",
         card.blocked_calls, card.cache_hits, card.retries, card.files_changed
     );
+    if card.approvals_asked > 0 || card.open_tool_calls > 0 {
+        let _ = writeln!(
+            out,
+            "approval  {} asked ({} denied), waited {} total, longest {}, {} calls unfinished",
+            card.approvals_asked,
+            card.approvals_denied,
+            secs(card.approval_wait_ms),
+            secs(card.max_approval_wait_ms),
+            card.open_tool_calls
+        );
+    }
     if !card.decisions.is_empty() {
         let list: Vec<String> = card
             .decisions
@@ -171,6 +183,25 @@ pub fn scorecard_text(card: &RunScorecard) -> String {
         card.outcome
             .map_or_else(|| "unlabeled".into(), |o| format!("{o:+.2}"))
     );
+    out
+}
+
+/// `aura runs check` report: run state, then one line per problem.
+#[must_use]
+pub fn health_text(health: &RunHealth) -> String {
+    let mut out = String::new();
+    let state = match (health.ended, health.idle_ms) {
+        (true, _) => "ended".to_string(),
+        (false, Some(idle)) => format!("not ended, last activity {} ago", duration(idle)),
+        (false, None) => "not ended".to_string(),
+    };
+    let _ = writeln!(out, "health    {}: {state}", health.run_id);
+    if health.is_healthy() {
+        let _ = writeln!(out, "          no problems found");
+    }
+    for problem in &health.problems {
+        let _ = writeln!(out, "  ! {problem}");
+    }
     out
 }
 

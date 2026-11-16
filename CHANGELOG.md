@@ -26,6 +26,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ##### Added
 
+- `aura` (and so `cargo run`) opens the desktop window when given no
+  subcommand; `aura --terminal` (alias `--tui`) or `aura run` runs in the
+  terminal, as does `aura` with no display (e.g. over SSH). `aura desktop`
+  takes the window's options (`--workspace`, `--demo`, `--theme`, …).
+  The window comes from the root package's default `desktop` feature;
+  the Docker images and the 1.85 MSRV check build without it.
 - Tabs in the desktop window, which work as workspaces. A strip above
   the grid has a numbered box per tab, a `+` box, and a wide box naming
   what the tab in front shows. Each tab holds its own projects and

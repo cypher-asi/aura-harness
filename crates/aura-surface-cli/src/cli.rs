@@ -11,7 +11,7 @@ use std::time::Duration;
     about = "AURA CLI - Autonomous Universal Reasoning Architecture"
 )]
 pub struct Cli {
-    /// Session mode for the interactive terminal. Overrides the daemon
+    /// Session mode for the desktop window or terminal. Overrides the daemon
     /// default (`AURA_DEFAULT_MODE`); the kernel denies any tool call the
     /// mode does not allow.
     #[arg(long = "mode", value_enum, global = true)]
@@ -28,6 +28,11 @@ pub struct Cli {
         default_missing_value = "-"
     )]
     pub print: Option<String>,
+
+    /// Run the agent in this terminal instead of the desktop window.
+    /// Without a display (e.g. over SSH) the terminal is used anyway.
+    #[arg(long, visible_alias = "tui", conflicts_with = "print")]
+    pub terminal: bool,
 
     #[command(flatten)]
     pub headless: HeadlessArgs,
@@ -145,7 +150,9 @@ fn parse_cost_arg(raw: &str) -> Result<f64, String> {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Run the agent (default when no subcommand is given).
+    /// Run the agent in the desktop window (default with no subcommand).
+    Desktop(DesktopArgs),
+    /// Run the agent in the terminal, or as a server with `--ui none`.
     Run(RunArgs),
     /// Sign in to zOS, or link a Claude / ChatGPT plan.
     Login(LoginArgs),
@@ -208,6 +215,19 @@ pub enum RunsSubcommand {
         #[arg(long)]
         steps: bool,
         /// Print the normalized trace as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check whether a run is stuck or wasted time, even one that never
+    /// ended: unfinished tool calls, long approval waits, calls with no
+    /// result step. Exits non-zero when it finds a problem.
+    Check {
+        /// Run id, or a unique prefix or suffix of one.
+        id: String,
+        /// Seconds after which a waiting tool call counts as a problem.
+        #[arg(long, default_value_t = 30)]
+        slow_secs: u64,
+        /// Print the report as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -503,6 +523,52 @@ impl Default for RunArgs {
     }
 }
 
+/// Options for the desktop window (`aura desktop`, or `aura` alone).
+#[derive(Args, Debug, Clone)]
+pub struct DesktopArgs {
+    /// Folder the agent works in (default: the current directory)
+    #[arg(short, long)]
+    pub workspace: Option<PathBuf>,
+
+    /// Data directory for agents and records (default: `AURA_DATA_DIR` or `./aura_data`)
+    #[arg(short, long)]
+    pub dir: Option<PathBuf>,
+
+    /// Model provider: `anthropic` (local Ollama models + aura-router) or `mock`
+    #[arg(long, default_value = "anthropic")]
+    pub provider: String,
+
+    /// Theme (cyber, matrix, synthwave, minimal)
+    #[arg(long, default_value = "cyber")]
+    pub theme: String,
+
+    /// Log debug output to stderr
+    #[arg(short, long)]
+    pub verbose: bool,
+
+    /// Permit FullAccess sessions to bypass command allowlists
+    #[arg(long)]
+    pub allow_unrestricted_full_access: bool,
+
+    /// Run against a scripted session instead of a real agent
+    #[arg(long)]
+    pub demo: bool,
+}
+
+impl Default for DesktopArgs {
+    fn default() -> Self {
+        Self {
+            workspace: None,
+            dir: None,
+            provider: "anthropic".to_string(),
+            theme: "cyber".to_string(),
+            verbose: false,
+            allow_unrestricted_full_access: false,
+            demo: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum UiMode {
     /// Full terminal UI (default)
@@ -588,6 +654,24 @@ mod tests {
         assert_eq!(h.model.as_deref(), Some("claude/claude-sonnet-4-5"));
         assert_eq!(h.provider.as_deref(), Some("mock"));
         assert_eq!(cli.mode, Some(ModeFlag::Plan));
+    }
+
+    #[test]
+    fn only_bare_aura_and_aura_desktop_open_the_window() {
+        let desktop = |args: &[&str]| crate::desktop_launch(&parse(args).unwrap());
+        let window = desktop(&["desktop", "--demo"]).expect("aura desktop opens the window");
+        assert!(window.demo);
+        assert_eq!(window.provider, "anthropic");
+        for args in [
+            &["--terminal"][..],
+            &["--tui", "--mode", "plan"],
+            &["run"],
+            &["-p", "x"],
+            &["runs", "list"],
+        ] {
+            assert!(desktop(args).is_none(), "{args:?} opened the window");
+        }
+        assert!(parse(&["--terminal", "-p", "x"]).is_err());
     }
 
     #[test]

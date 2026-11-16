@@ -53,7 +53,7 @@ fn test_cursor_movement() {
 #[test]
 fn test_approval_state() {
     let mut app = App::new();
-    app.pending_approval = Some(PendingApproval {
+    app.pending_approvals.push_back(PendingApproval {
         id: "test".to_string(),
         tool: "fs.write".to_string(),
         description: "Write file".to_string(),
@@ -62,7 +62,7 @@ fn test_approval_state() {
     app.state = AppState::AwaitingApproval;
 
     app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::empty()));
-    assert!(app.pending_approval.is_none());
+    assert!(app.pending_approvals.is_empty());
     assert_eq!(
         app.state(),
         AppState::Processing,
@@ -90,7 +90,7 @@ fn test_state_transition_to_processing() {
 #[test]
 fn test_state_transition_to_awaiting_approval() {
     let mut app = App::new();
-    app.pending_approval = Some(PendingApproval {
+    app.pending_approvals.push_back(PendingApproval {
         id: "t1".to_string(),
         tool: "write_file".to_string(),
         description: "Write file".to_string(),
@@ -98,7 +98,7 @@ fn test_state_transition_to_awaiting_approval() {
     });
     app.state = AppState::AwaitingApproval;
     assert_eq!(app.state(), AppState::AwaitingApproval);
-    assert!(app.pending_approval.is_some());
+    assert!(app.pending_approval().is_some());
 }
 
 #[test]
@@ -2332,6 +2332,92 @@ fn a_closed_approval_drops_its_prompt() {
     app.process_command(UiCommand::CloseApproval("req-1".to_string()));
     assert!(app.pending_approval().is_none());
     assert_eq!(app.state(), AppState::Processing);
+}
+
+#[test]
+fn approvals_asked_together_are_answered_in_turn() {
+    let (tx, mut rx) = mpsc::channel(10);
+    let mut app = App::new().with_event_sender(tx);
+    for id in ["req-1", "req-2", "req-3"] {
+        app.process_command(approval_request(id, ""));
+    }
+    assert_eq!(app.pending_approval().unwrap().id, "req-1");
+    assert_eq!(app.pending_approval_count(), 3);
+
+    app.handle_key(key(KeyCode::Char('y')));
+    assert_eq!(app.state(), AppState::AwaitingApproval);
+    assert_eq!(app.pending_approval().unwrap().id, "req-2");
+    app.handle_key(key(KeyCode::Char('n')));
+    assert_eq!(app.pending_approval().unwrap().id, "req-3");
+    app.handle_key(key(KeyCode::Char('y')));
+    assert!(app.pending_approval().is_none());
+    assert_eq!(app.state(), AppState::Processing);
+
+    let answered: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
+        .map(|event| match event {
+            UiEvent::Approve(id) => format!("y:{id}"),
+            UiEvent::Deny(id) => format!("n:{id}"),
+            other => format!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(answered, ["y:req-1", "n:req-2", "y:req-3"]);
+}
+
+#[test]
+fn a_call_waiting_for_approval_is_marked_until_answered() {
+    let mut app = App::new();
+    app.process_command(tool_data("toolu_1", "edit_file"));
+    app.process_command(tool_data("toolu_2", "edit_file"));
+    app.process_command(approval_request("aa:toolu_1", ""));
+    app.process_command(approval_request("aa:toolu_2", ""));
+    let waiting = |app: &App| -> Vec<bool> {
+        activities(app)
+            .iter()
+            .map(|a| matches!(a, Activity::Tool(t) if t.awaiting_approval))
+            .collect()
+    };
+    assert_eq!(waiting(&app), [true, true]);
+
+    app.handle_key(key(KeyCode::Char('y')));
+    assert_eq!(waiting(&app), [false, true]);
+    app.process_command(UiCommand::CloseApproval("aa:toolu_2".to_string()));
+    assert_eq!(waiting(&app), [false, false]);
+}
+
+#[test]
+fn closing_a_queued_approval_keeps_the_others_in_order() {
+    let mut app = App::new();
+    for id in ["req-1", "req-2", "req-3"] {
+        app.process_command(approval_request(id, ""));
+    }
+    app.process_command(approval_request("req-2", ""));
+    assert_eq!(
+        app.pending_approval_count(),
+        3,
+        "a repeated request is not queued twice"
+    );
+
+    app.process_command(UiCommand::CloseApproval("req-2".to_string()));
+    assert_eq!(app.pending_approval().unwrap().id, "req-1");
+    app.process_command(UiCommand::CloseApproval("req-1".to_string()));
+    assert_eq!(app.pending_approval().unwrap().id, "req-3");
+    assert_eq!(app.state(), AppState::AwaitingApproval);
+    app.process_command(UiCommand::CloseApproval("req-3".to_string()));
+    assert_eq!(app.state(), AppState::Processing);
+}
+
+#[test]
+fn queued_approvals_follow_their_agent_across_chat_switches() {
+    let mut app = App::new();
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    app.process_command(for_agent("bb", UiCommand::TurnStarted { prompt: None }));
+    app.process_command(for_agent("bb", approval_request("req-1", "")));
+    app.process_command(for_agent("bb", approval_request("req-2", "")));
+    assert!(app.pending_approval().is_none());
+
+    app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
+    assert_eq!(app.pending_approval_count(), 2);
+    assert_eq!(app.pending_approval().unwrap().id, "req-1");
 }
 
 #[test]

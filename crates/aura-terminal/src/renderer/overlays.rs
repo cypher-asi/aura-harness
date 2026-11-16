@@ -20,7 +20,7 @@ use std::path::Path;
 /// Render overlay elements (modals, help).
 pub(super) fn render_overlays(frame: &mut Frame, app: &App, theme: &Theme) {
     if let Some(approval) = app.pending_approval() {
-        render_approval_modal(frame, approval, theme);
+        render_approval_modal(frame, approval, app.pending_approval_count(), theme);
     }
 
     if app.state() == AppState::ShowingHelp {
@@ -41,7 +41,12 @@ pub(super) fn render_overlays(frame: &mut Frame, app: &App, theme: &Theme) {
 }
 
 /// Render the approval modal.
-fn render_approval_modal(frame: &mut Frame, approval: &crate::app::PendingApproval, theme: &Theme) {
+fn render_approval_modal(
+    frame: &mut Frame,
+    approval: &crate::app::PendingApproval,
+    waiting: usize,
+    theme: &Theme,
+) {
     /// Most lines of the action's description shown.
     const MAX_DESCRIPTION_LINES: usize = 6;
 
@@ -85,8 +90,13 @@ fn render_approval_modal(frame: &mut Frame, approval: &crate::app::PendingApprov
     let modal_area = centered_rect(modal_width, height.min(area.height), area);
     frame.render_widget(Clear, modal_area);
 
+    let title = if waiting > 1 {
+        format!(" Approval Required (1 of {waiting}) ")
+    } else {
+        " Approval Required ".to_string()
+    };
     let block = Block::default()
-        .title(" Approval Required ")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.colors.warning));
     let paragraph = Paragraph::new(content)
