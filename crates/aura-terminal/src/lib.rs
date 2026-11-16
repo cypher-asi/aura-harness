@@ -52,7 +52,7 @@ mod terminal;
 
 // Re-exports for convenience
 pub use alerts::AlertSettings;
-pub use app::{App, AppState, ProseRow};
+pub use app::{App, AppState, ProseMeasure, ProseRow};
 pub use events::{UiCommand, UiEvent};
 pub use mode_command::{ModeCommandError, PermissionMode, SlashModeCommand};
 /// Draws the whole UI into a ratatui frame; frontends other than

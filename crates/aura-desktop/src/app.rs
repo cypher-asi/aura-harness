@@ -548,11 +548,11 @@ impl App {
                         iced::clipboard::write(text).chain(Task::done(Message::Copied(chars))),
                     );
                 }
+                self.screen.update(frame.buffer, tui.prose_rows());
             }
             Err(e) => tracing::warn!(error = %e, "render failed"),
         }
-        self.screen
-            .update(tab.terminal.backend(), tab.tui.prose_rows());
+        self.screen.set_cursor(tab.terminal.backend().cursor());
 
         let now = self.now;
         for tab in self.tabs.iter_mut() {

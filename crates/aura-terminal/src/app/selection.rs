@@ -95,8 +95,14 @@ impl Selection {
                     };
                     let symbol = cell.symbol();
                     line.push_str(symbol);
-                    // A wide glyph's trailing cells hold filler blanks.
-                    column += u16::try_from(symbol.width().max(1)).unwrap_or(1);
+                    // A wide glyph's trailing cells hold filler blanks;
+                    // a cell of chat prose may hold several characters.
+                    let width = if symbol.chars().count() == 1 {
+                        symbol.width().max(1)
+                    } else {
+                        1
+                    };
+                    column += u16::try_from(width).unwrap_or(1);
                 }
                 line.trim_end().to_string()
             })

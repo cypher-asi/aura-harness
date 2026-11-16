@@ -1,6 +1,7 @@
 use super::inline::parse_inline;
 use super::render_markdown;
 use super::wrap::wrap_spans;
+use crate::renderer::text::Measure;
 use crate::Theme;
 use ratatui::{
     style::{Color, Modifier, Style},
@@ -301,13 +302,18 @@ fn table_ends_at_first_non_row_line() {
 #[test]
 fn wrap_spans_splits_words_longer_than_a_line() {
     let spans = vec![Span::styled("abcdefghij", base())];
-    let lines = wrap_spans(&spans, 4, &[], &[]);
+    let lines = wrap_spans(&spans, 4, (&[], &[]), Measure::GRID);
     assert_eq!(texts(&lines), ["abcd", "efgh", "ij"]);
 }
 
 #[test]
 fn wrap_spans_applies_prefixes() {
     let spans = vec![Span::raw("one two three")];
-    let lines = wrap_spans(&spans, 7, &[Span::raw("> ")], &[Span::raw("  ")]);
+    let lines = wrap_spans(
+        &spans,
+        7,
+        (&[Span::raw("> ")], &[Span::raw("  ")]),
+        Measure::GRID,
+    );
     assert_eq!(texts(&lines), ["> one", "  two", "  three"]);
 }

@@ -11,13 +11,14 @@ mod table;
 mod tests;
 mod wrap;
 
+use super::text::Measure;
 use crate::Theme;
 use inline::parse_inline;
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
-use wrap::wrap_spans;
+pub(crate) use wrap::wrap_spans;
 
 /// Bullet glyphs by nesting depth, cycling for deeper lists.
 const BULLETS: [&str; 3] = ["•", "◦", "▪"];
@@ -25,18 +26,20 @@ const BULLETS: [&str; 3] = ["•", "◦", "▪"];
 /// Render a markdown text segment (no fenced code) into lines that fit
 /// `width` display columns. A `width` of 0 disables wrapping.
 pub fn render_markdown(text: &str, width: usize, base: Style, theme: &Theme) -> Vec<Line<'static>> {
-    render_markdown_flow(text, width, base, theme).0
+    render_markdown_flow(text, width, base, theme, Measure::GRID).0
 }
 
-/// [`render_markdown`], with whether each line is flowing text
-/// (paragraphs, headings, list items, quotes) rather than a table or a
-/// rule, whose columns have to line up.
-pub fn render_markdown_flow(
+/// [`render_markdown`] with flowing text (paragraphs, headings, list
+/// items, quotes) as wide as `measure` makes it, and for each line whether
+/// it is such text rather than a table or a rule, whose columns have to
+/// line up: `Some` of the columns its marker, quote bar or indent takes.
+pub(crate) fn render_markdown_flow(
     text: &str,
     width: usize,
     base: Style,
     theme: &Theme,
-) -> (Vec<Line<'static>>, Vec<bool>) {
+    measure: Measure,
+) -> (Vec<Line<'static>>, Vec<Option<u16>>) {
     let expanded: Vec<String> = text
         .lines()
         .map(|line| line.replace('\t', "    "))
@@ -50,11 +53,13 @@ pub fn render_markdown_flow(
         if table::starts_at(&lines, i) {
             let end = table::end(&lines, i);
             out.extend(table::render(&lines[i..end], width, base, theme));
-            flow.resize(out.len(), false);
+            flow.resize(out.len(), None);
             i = end;
         } else {
-            render_block_line(&mut out, lines[i], width, base, theme);
-            flow.resize(out.len(), !is_rule(lines[i].trim_start()));
+            let indent = render_block_line(&mut out, lines[i], width, (base, theme), measure);
+            let prose = (!is_rule(lines[i].trim_start()))
+                .then(|| u16::try_from(indent).unwrap_or(u16::MAX));
+            flow.resize(out.len(), prose);
             i += 1;
         }
     }
@@ -66,37 +71,43 @@ pub(crate) fn is_inline_code(style: Style, theme: &Theme) -> bool {
     style.bg == Some(theme.colors.surface)
 }
 
+/// Render one line of markdown, returning how many columns of the lines
+/// it added are a marker, quote bar or indent rather than text.
 fn render_block_line(
     out: &mut Vec<Line<'static>>,
     line: &str,
     width: usize,
-    base: Style,
-    theme: &Theme,
-) {
+    (base, theme): (Style, &Theme),
+    measure: Measure,
+) -> usize {
     let trimmed = line.trim_start();
     let indent = line.len() - trimmed.len();
 
     if trimmed.is_empty() {
         out.push(Line::default());
+        0
     } else if let Some((level, title)) = heading(trimmed) {
         if out.last().is_some_and(|last| last.width() > 0) {
             out.push(Line::default());
         }
         let spans = parse_inline(title, heading_style(level, base, theme), theme);
-        out.extend(wrap_spans(&spans, width, &[], &[]));
+        out.extend(wrap_spans(&spans, width, (&[], &[]), measure));
+        0
     } else if is_rule(trimmed) {
         out.push(Line::from(Span::styled(
             "─".repeat(width.max(3)),
             Style::default().fg(theme.colors.muted),
         )));
+        0
     } else if trimmed.starts_with('>') {
-        render_quote(out, trimmed, width, base, theme);
+        render_quote(out, trimmed, width, (base, theme), measure)
     } else if let Some(item) = list_item(trimmed) {
-        render_list_item(out, indent, &item, width, base, theme);
+        render_list_item(out, indent, &item, width, (base, theme), measure)
     } else {
         let pad = indent_spans(indent);
         let spans = parse_inline(trimmed, base, theme);
-        out.extend(wrap_spans(&spans, width, &pad, &pad));
+        out.extend(wrap_spans(&spans, width, (&pad, &pad), measure));
+        indent
     }
 }
 
@@ -152,9 +163,9 @@ fn render_quote(
     out: &mut Vec<Line<'static>>,
     line: &str,
     width: usize,
-    base: Style,
-    theme: &Theme,
-) {
+    (base, theme): (Style, &Theme),
+    measure: Measure,
+) -> usize {
     let mut depth = 0;
     let mut rest = line;
     while let Some(inner) = rest.trim_start().strip_prefix('>') {
@@ -169,17 +180,19 @@ fn render_quote(
     };
 
     let mut inner_lines = Vec::new();
-    render_block_line(
+    let inner_indent = render_block_line(
         &mut inner_lines,
         rest,
         inner_width,
-        base.add_modifier(Modifier::ITALIC),
-        theme,
+        (base.add_modifier(Modifier::ITALIC), theme),
+        measure,
     );
+    let bar_width = bar.width();
     for mut quoted in inner_lines {
         quoted.spans.insert(0, bar.clone());
         out.push(quoted);
     }
+    bar_width + inner_indent
 }
 
 struct ListItem<'a> {
@@ -229,9 +242,9 @@ fn render_list_item(
     indent: usize,
     item: &ListItem<'_>,
     width: usize,
-    base: Style,
-    theme: &Theme,
-) {
+    (base, theme): (Style, &Theme),
+    measure: Measure,
+) -> usize {
     let marker_style = base.fg(theme.colors.primary);
     let mut prefix = indent_spans(indent);
     prefix.push(if item.ordered {
@@ -251,7 +264,8 @@ fn render_list_item(
     let hang = vec![Span::raw(" ".repeat(hang_width))];
 
     let spans = parse_inline(item.body, base, theme);
-    out.extend(wrap_spans(&spans, width, &prefix, &hang));
+    out.extend(wrap_spans(&spans, width, (&prefix, &hang), measure));
+    hang_width
 }
 
 // ============================================================================

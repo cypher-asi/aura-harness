@@ -824,6 +824,41 @@ fn test_chat_prose_rows_leave_out_code_and_tables() {
 }
 
 #[test]
+fn test_measured_prose_packs_into_the_cells_it_covers() {
+    use crate::components::{Message, MessageRole};
+
+    #[allow(clippy::cast_precision_loss)]
+    fn half(text: &str, _: ratatui::style::Modifier) -> f32 {
+        text.chars().count() as f32 / 2.0
+    }
+
+    let prompt = "word ".repeat(60);
+    let prompt = prompt.trim_end();
+    let mut app = crate::App::new();
+    app.set_prose_measure(half);
+    app.add_message(Message::new(MessageRole::User, prompt));
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 30)).unwrap();
+    let frame = terminal
+        .draw(|frame| super::render(frame, &mut app, &test_theme()))
+        .unwrap();
+
+    let rows = app.prose_rows();
+    let texts: Vec<String> = rows
+        .iter()
+        .map(|row| {
+            (row.x..row.x + row.width)
+                .map(|x| frame.buffer[(x, row.y)].symbol())
+                .collect()
+        })
+        .collect();
+    assert_eq!(texts.join(" "), prompt, "every character is kept, in order");
+    assert!(
+        texts[0].chars().count() > usize::from(rows[0].width) * 3 / 2,
+        "a row holds about twice as many characters as cells: {texts:?}"
+    );
+}
+
+#[test]
 fn test_overlay_covers_chat_prose_rows() {
     use crate::components::{Message, MessageRole};
 

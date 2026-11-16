@@ -1,50 +1,53 @@
 //! Word wrapping for styled spans.
 
+use crate::renderer::text::Measure;
 use ratatui::{
     style::Style,
     text::{Line, Span},
 };
-use unicode_width::UnicodeWidthChar;
 
 /// A run of either whitespace or non-whitespace text, possibly spanning
 /// several styles (e.g. `**bold**,` is one word in two styles).
 struct Token {
     pieces: Vec<(String, Style)>,
-    width: usize,
+    width: f32,
     is_space: bool,
 }
 
-/// Wrap `spans` into lines at most `width` display columns wide.
+/// Wrap `spans` into lines at most `width` display columns wide, text
+/// as wide as `measure` makes it.
 ///
 /// The first line starts with `first_prefix` and every later line with
-/// `rest_prefix`; prefix widths count against `width`. Words only split
-/// when they are wider than a whole line. A `width` of 0 means unbounded.
+/// `rest_prefix`; prefixes stay on the grid and count against `width`.
+/// Words only split when they are wider than a whole line. A `width` of 0
+/// means unbounded.
 pub(crate) fn wrap_spans(
     spans: &[Span<'static>],
     width: usize,
-    first_prefix: &[Span<'static>],
-    rest_prefix: &[Span<'static>],
+    (first_prefix, rest_prefix): (&[Span<'static>], &[Span<'static>]),
+    measure: Measure,
 ) -> Vec<Line<'static>> {
     let mut wrapper = Wrapper {
         lines: Vec::new(),
         current: Vec::new(),
-        current_width: 0,
-        available: 0,
+        current_width: 0.0,
+        available: 0.0,
         width,
         rest_prefix,
+        measure,
     };
     wrapper.start_line(first_prefix);
 
     let mut pending_space: Option<Token> = None;
-    for token in tokenize(spans) {
+    for token in tokenize(spans, measure) {
         if token.is_space {
-            if wrapper.current_width > 0 {
+            if wrapper.current_width > 0.0 {
                 pending_space = Some(token);
             }
             continue;
         }
-        let space_width = pending_space.as_ref().map_or(0, |space| space.width);
-        if wrapper.current_width > 0
+        let space_width = pending_space.as_ref().map_or(0.0, |space| space.width);
+        if wrapper.current_width > 0.0
             && wrapper.current_width + space_width + token.width > wrapper.available
         {
             wrapper.break_line();
@@ -64,24 +67,26 @@ pub(crate) fn wrap_spans(
 struct Wrapper<'p> {
     lines: Vec<Line<'static>>,
     current: Vec<(String, Style)>,
-    current_width: usize,
-    available: usize,
+    current_width: f32,
+    available: f32,
     width: usize,
     rest_prefix: &'p [Span<'static>],
+    measure: Measure,
 }
 
 impl Wrapper<'_> {
+    #[allow(clippy::cast_precision_loss)]
     fn start_line(&mut self, prefix: &[Span<'static>]) {
         let prefix_width: usize = prefix.iter().map(Span::width).sum();
         self.current = prefix
             .iter()
             .map(|span| (span.content.to_string(), span.style))
             .collect();
-        self.current_width = 0;
+        self.current_width = 0.0;
         self.available = if self.width == 0 {
-            usize::MAX
+            f32::INFINITY
         } else {
-            self.width.saturating_sub(prefix_width).max(1)
+            self.width.saturating_sub(prefix_width).max(1) as f32
         };
     }
 
@@ -102,12 +107,13 @@ impl Wrapper<'_> {
     fn push_split(&mut self, token: Token) {
         for (text, style) in token.pieces {
             for c in text.chars() {
-                let char_width = c.width().unwrap_or(0);
-                if self.current_width > 0 && self.current_width + char_width > self.available {
+                let mut buf = [0u8; 4];
+                let c = c.encode_utf8(&mut buf);
+                let char_width = self.measure.width(c, style);
+                if self.current_width > 0.0 && self.current_width + char_width > self.available {
                     self.break_line();
                 }
-                let mut buf = [0u8; 4];
-                push_piece(&mut self.current, c.encode_utf8(&mut buf), style);
+                push_piece(&mut self.current, c, style);
                 self.current_width += char_width;
             }
         }
@@ -120,7 +126,7 @@ impl Wrapper<'_> {
     }
 }
 
-fn tokenize(spans: &[Span<'static>]) -> Vec<Token> {
+fn tokenize(spans: &[Span<'static>], measure: Measure) -> Vec<Token> {
     let mut tokens: Vec<Token> = Vec::new();
     for span in spans {
         for c in span.content.chars() {
@@ -129,16 +135,22 @@ fn tokenize(spans: &[Span<'static>]) -> Vec<Token> {
             if starts_token {
                 tokens.push(Token {
                     pieces: Vec::new(),
-                    width: 0,
+                    width: 0.0,
                     is_space,
                 });
             }
             if let Some(token) = tokens.last_mut() {
                 let mut buf = [0u8; 4];
                 push_piece(&mut token.pieces, c.encode_utf8(&mut buf), span.style);
-                token.width += c.width().unwrap_or(0);
             }
         }
+    }
+    for token in &mut tokens {
+        token.width = token
+            .pieces
+            .iter()
+            .map(|(text, style)| measure.width(text, *style))
+            .sum();
     }
     tokens
 }

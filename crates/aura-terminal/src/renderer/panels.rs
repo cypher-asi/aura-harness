@@ -2,7 +2,7 @@
 
 use super::header::{self, HeaderInfo, PanelHeader};
 use super::markdown::is_inline_code;
-use super::text::display_width;
+use super::text::{display_width, Measure};
 use crate::{
     animation::AURA_WIDTH,
     app::{
@@ -12,6 +12,7 @@ use crate::{
     App, Theme,
 };
 use ratatui::{
+    buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -182,8 +183,10 @@ fn render_chat_lines(
         Some(HoverTarget::Activity(target)) => Some(target),
         _ => None,
     };
+    let measure = Measure::prose(app.prose_measure(), theme);
     let (messages, cache, groups) = app.chat_line_cache();
-    let reflowed = cache.update(messages, padded.width as usize, theme, spinner, &groups);
+    let width = padded.width as usize;
+    let reflowed = cache.update(messages, (width, measure), theme, spinner, &groups);
     let gap = cache.block_gap();
     let mut toggle_rows = Vec::new();
     let mut message_rows = 0;
@@ -243,8 +246,8 @@ fn render_chat_lines(
                 if hovered(offset) {
                     apply_activity_hover(&mut line, theme);
                 }
-                if block.prose.get(offset) == Some(&true) && line.width() > 0 {
-                    prose.push(visible.len());
+                if let Some(Some(indent)) = block.prose.get(offset).filter(|_| line.width() > 0) {
+                    prose.push((visible.len(), *indent));
                 }
                 visible.push(line);
             }
@@ -261,21 +264,27 @@ fn render_chat_lines(
         }
         push_visible(&mut visible, &mut line_index, start, height, line);
     }
-    let prose: Vec<(usize, u16, Vec<Range<u16>>)> = prose
+    let prose_lines: Vec<(usize, u16, Line<'static>)> = prose
         .into_iter()
-        .map(|row| {
-            let (width, code) = prose_columns(&visible[row], padded, theme);
-            (row, width, code)
-        })
+        .map(|(row, indent)| (row, indent.min(padded.width), visible[row].clone()))
         .collect();
     frame.render_widget(Paragraph::new(visible), padded);
     let buffer = frame.buffer_mut();
-    let prose = prose
+    let prose = prose_lines
         .into_iter()
-        .map(|(row, width, code)| {
+        .map(|(row, indent, line)| {
             #[allow(clippy::cast_possible_truncation)]
-            let y = padded.y + row as u16;
-            ProseRow::new(buffer, (padded.x, y), width, code)
+            let row = Rect {
+                y: padded.y + row as u16,
+                height: 1,
+                ..padded
+            };
+            let (width, code) = if measure.is_grid() {
+                prose_columns(&line, row, theme)
+            } else {
+                pack_prose(buffer, &line, (row, indent), measure, theme)
+            };
+            ProseRow::new(buffer, (row.x, row.y), (width, indent), code)
         })
         .collect();
     app.set_prose_rows(prose);
@@ -315,6 +324,85 @@ fn prose_columns(line: &Line<'_>, area: Rect, theme: &Theme) -> (u16, Vec<Range<
         column = next;
     }
     (column - area.x, code)
+}
+
+/// Write a prose `line` into `row` with its text after `indent` columns
+/// packed into the cells it covers in the front end's face, `measure`
+/// wide: each run of one style gets the cells its width rounds to, its
+/// characters spread across them. Inline code keeps a cell per column.
+/// Returns the columns the line covers and where its inline code falls.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+fn pack_prose(
+    buffer: &mut Buffer,
+    line: &Line<'_>,
+    (row, indent): (Rect, u16),
+    measure: Measure,
+    theme: &Theme,
+) -> (u16, Vec<Range<u16>>) {
+    let mut runs: Vec<(Vec<&str>, Style)> = Vec::new();
+    let mut skipped = 0;
+    for grapheme in line.styled_graphemes(Style::default()) {
+        if skipped < usize::from(indent) {
+            skipped += display_width(grapheme.symbol);
+            continue;
+        }
+        match runs.last_mut() {
+            Some((symbols, style)) if *style == grapheme.style => symbols.push(grapheme.symbol),
+            _ => runs.push((vec![grapheme.symbol], grapheme.style)),
+        }
+    }
+
+    let mut code: Vec<Range<u16>> = Vec::new();
+    let mut cell = indent;
+    let mut position = f32::from(indent);
+    let mut last = None;
+    for (symbols, style) in runs {
+        let width = if is_inline_code(style, theme) {
+            symbols.iter().map(|s| display_width(s)).sum::<usize>() as f32
+        } else {
+            measure.width(&symbols.concat(), style)
+        };
+        let start = cell;
+        position += width;
+        let end = if is_inline_code(style, theme) {
+            start.saturating_add(width as u16)
+        } else {
+            (position.round() as u16).max(start + 1)
+        }
+        .min(row.width);
+        if end <= start {
+            // Past the edge: the rest joins the last cell.
+            if let Some(cell) = last.and_then(|x| buffer.cell_mut((x, row.y))) {
+                let joined = format!("{}{}", cell.symbol(), symbols.concat());
+                cell.set_symbol(&joined);
+            }
+            continue;
+        }
+        let cells = usize::from(end - start);
+        for i in 0..cells {
+            let share = &symbols[i * symbols.len() / cells..(i + 1) * symbols.len() / cells];
+            if let Some(slot) = buffer.cell_mut((row.x + start + i as u16, row.y)) {
+                slot.reset();
+                slot.set_symbol(&share.concat()).set_style(style);
+            }
+        }
+        if is_inline_code(style, theme) {
+            code.push(row.x + start..row.x + end);
+        }
+        last = Some(row.x + end - 1);
+        cell = end;
+        position = position.max(f32::from(cell) - 0.5);
+    }
+    for x in cell..row.width {
+        if let Some(slot) = buffer.cell_mut((row.x + x, row.y)) {
+            slot.reset();
+        }
+    }
+    (cell, code)
 }
 
 /// Keep `line` when it falls inside the chat viewport.

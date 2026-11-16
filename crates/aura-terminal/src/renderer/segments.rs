@@ -1,7 +1,7 @@
 //! Text and code segment rendering for the chat panel.
 
-use super::markdown::render_markdown_flow;
-use super::text::{display_width, wrap_words};
+use super::markdown::{render_markdown_flow, wrap_spans};
+use super::text::{display_width, wrap_words, Measure};
 use crate::app::format::{format_cost, format_tokens};
 use crate::components::{CodeBlock, MessageRole};
 use crate::events::CallUsage;
@@ -118,8 +118,10 @@ pub(super) const fn message_style<'a>(
 /// Render a text segment. Assistant replies are rendered as markdown;
 /// user and system text is shown as written, word-wrapped.
 ///
-/// Returns whether each added line is prose: the user's or the agent's
-/// flowing text, not a table, a rule or a system message.
+/// Prose, the user's or the agent's flowing text, is as wide as `measure`
+/// makes it. Returns, for each added line, whether it is prose: `Some` of
+/// the columns its marker, quote bar or indent takes. Tables, rules and
+/// system messages are not.
 pub(super) fn render_text_segment(
     lines: &mut Vec<Line<'_>>,
     text: &str,
@@ -127,32 +129,45 @@ pub(super) fn render_text_segment(
     width: usize,
     role: MessageRole,
     theme: &Theme,
-) -> Vec<bool> {
+    measure: Measure,
+) -> Vec<Option<u16>> {
     let base_style = Style::default().fg(msg_color);
-    if role == MessageRole::Assistant {
-        let (markdown, flow) = render_markdown_flow(text, width, base_style, theme);
-        lines.extend(markdown);
-        flow
-    } else {
-        let plain = plain_lines(text, width, base_style);
-        let prose = vec![role == MessageRole::User; plain.len()];
-        lines.extend(plain);
-        prose
+    match role {
+        MessageRole::Assistant => {
+            let (markdown, flow) = render_markdown_flow(text, width, base_style, theme, measure);
+            lines.extend(markdown);
+            flow
+        }
+        MessageRole::User => {
+            let plain = plain_lines(text, width, base_style, measure);
+            let prose = vec![Some(0); plain.len()];
+            lines.extend(plain);
+            prose
+        }
+        MessageRole::System => {
+            let plain = plain_lines(text, width, base_style, Measure::GRID);
+            let prose = vec![None; plain.len()];
+            lines.extend(plain);
+            prose
+        }
     }
 }
 
-fn plain_lines(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
+fn plain_lines(text: &str, width: usize, style: Style, measure: Measure) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for content_line in text.lines() {
         if content_line.is_empty() {
             lines.push(Line::default());
-            continue;
+        } else if measure.is_grid() {
+            lines.extend(
+                wrap_words(content_line, width)
+                    .into_iter()
+                    .map(|wrapped| Line::from(Span::styled(wrapped, style))),
+            );
+        } else {
+            let spans = [Span::styled(content_line.to_owned(), style)];
+            lines.extend(wrap_spans(&spans, width, (&[], &[]), measure));
         }
-        lines.extend(
-            wrap_words(content_line, width)
-                .into_iter()
-                .map(|wrapped| Line::from(Span::styled(wrapped, style))),
-        );
     }
     lines
 }

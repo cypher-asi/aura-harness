@@ -51,7 +51,7 @@ use file_view::FileView;
 use folder_picker::FolderPicker;
 use hud::Hud;
 pub use processes::SidePanelTab;
-pub use prose::ProseRow;
+pub use prose::{ProseMeasure, ProseRow};
 use ratatui::{
     buffer::Buffer,
     layout::{Position, Rect},
@@ -254,6 +254,8 @@ pub struct App {
     pub(super) areas: PanelAreas,
     /// The chat's prose rows from the last frame
     prose_rows: Vec<ProseRow>,
+    /// How wide prose is in the front end's proportional face, if it has one
+    prose_measure: Option<ProseMeasure>,
     /// Clickable item under the mouse pointer
     hover: Option<HoverTarget>,
     /// When the in-flight turn started (`None` unless processing)
@@ -549,6 +551,7 @@ impl App {
             sandbox_scroll: 0,
             areas: PanelAreas::default(),
             prose_rows: Vec::new(),
+            prose_measure: None,
             hover: None,
             processing_since: None,
             shell_prompt: shell_prompt::detect(),

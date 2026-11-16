@@ -2,6 +2,7 @@
 
 use super::inline::parse_inline;
 use super::wrap::wrap_spans;
+use crate::renderer::text::Measure;
 use crate::Theme;
 use ratatui::{
     style::{Modifier, Style},
@@ -127,7 +128,7 @@ fn render_row(
     let wrapped: Vec<Vec<Line<'static>>> = cells
         .iter()
         .zip(widths)
-        .map(|(cell, &width)| wrap_spans(cell, width, &[], &[]))
+        .map(|(cell, &width)| wrap_spans(cell, width, (&[], &[]), Measure::GRID))
         .collect();
     let height = wrapped.iter().map(Vec::len).max().unwrap_or(1);
 

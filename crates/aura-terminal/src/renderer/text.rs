@@ -1,11 +1,46 @@
 //! Text utility functions: display width, word wrapping, centered rect.
 
+use crate::app::ProseMeasure;
+use crate::Theme;
 use ratatui::layout::Rect;
+use ratatui::style::{Color, Style};
 
 /// Calculate the display width of a string (accounting for Unicode characters).
 pub fn display_width(s: &str) -> usize {
     use unicode_width::UnicodeWidthStr;
     UnicodeWidthStr::width(s)
+}
+
+/// How many cells text takes: one per column on the grid, or what the
+/// front end's proportional face makes of prose. Inline code, set apart
+/// by its background, stays on the grid.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Measure {
+    /// The face's measure, and the background of inline code
+    prose: Option<(ProseMeasure, Color)>,
+}
+
+impl Measure {
+    pub(crate) const GRID: Self = Self { prose: None };
+
+    /// Prose in `measure`'s face, or on the grid without one.
+    pub(crate) fn prose(measure: Option<ProseMeasure>, theme: &Theme) -> Self {
+        Self {
+            prose: measure.map(|measure| (measure, theme.colors.surface)),
+        }
+    }
+
+    pub(crate) const fn is_grid(self) -> bool {
+        self.prose.is_none()
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    pub(crate) fn width(self, text: &str, style: Style) -> f32 {
+        match self.prose {
+            Some((measure, code)) if style.bg != Some(code) => measure(text, style.add_modifier),
+            _ => display_width(text) as f32,
+        }
+    }
 }
 
 /// Wrap text at word boundaries to fit within `max_width` (display width).

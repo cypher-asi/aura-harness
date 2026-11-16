@@ -26,10 +26,10 @@ use ratatui::backend::{Backend, ClearType, WindowSize};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Position, Rect, Size as GridSize};
 use ratatui::style::{Color as TermColor, Modifier};
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
 use std::ops::Range;
+use std::sync::{LazyLock, Mutex, PoisonError};
 use unicode_width::UnicodeWidthStr;
 
 /// Space kept clear around the grid, in pixels.
@@ -324,23 +324,24 @@ impl Look {
     }
 
     fn font(&self) -> Font {
-        self.face(theme::mono(), theme::mono_bold())
+        face((theme::mono(), theme::mono_bold()), self.bold, self.italic)
     }
 
     fn prose_font(&self) -> Font {
-        self.face(theme::sans(), theme::sans_bold())
+        face((theme::sans(), theme::sans_bold()), self.bold, self.italic)
     }
+}
 
-    fn face(&self, regular: Font, bold: Font) -> Font {
-        let font = if self.bold { bold } else { regular };
-        if self.italic {
-            Font {
-                style: Style::Italic,
-                ..font
-            }
-        } else {
-            font
+/// The regular or bold font of a family, upright or italic.
+fn face((regular, heavy): (Font, Font), bold: bool, italic: bool) -> Font {
+    let font = if bold { heavy } else { regular };
+    if italic {
+        Font {
+            style: Style::Italic,
+            ..font
         }
+    } else {
+        font
     }
 }
 
@@ -363,15 +364,14 @@ pub struct Screen {
     /// Rows of chat prose, set in the proportional face
     prose: Vec<ProseRow>,
     cache: Cache,
-    /// Widths of prose runs, by text, face and font size
-    widths: RefCell<HashMap<(String, Font, u32), f32>>,
 }
 
 impl Screen {
-    /// Take the backend's cells and the UI's prose rows; repaints only if
-    /// any changed.
-    pub fn update(&mut self, backend: &GridBackend, prose: &[ProseRow]) {
-        let buffer = backend.buffer();
+    /// Take the cells of a drawn frame and the UI's prose rows; repaints
+    /// only if any changed. The whole frame, not the backend's copy: a
+    /// prose cell can hold several characters, which ratatui's diff takes
+    /// for a wide glyph and skips the cells after.
+    pub fn update(&mut self, buffer: &Buffer, prose: &[ProseRow]) {
         let (cols, rows) = (buffer.area.width, buffer.area.height);
         if cols != self.cols
             || rows != self.rows
@@ -384,7 +384,10 @@ impl Screen {
             self.rows = rows;
             self.cache.clear();
         }
-        self.cursor = backend.cursor();
+    }
+
+    pub fn set_cursor(&mut self, cursor: Option<Position>) {
+        self.cursor = cursor;
     }
 
     /// Drop the cached drawing (the font size or colors changed).
@@ -479,7 +482,7 @@ impl Grid<'_> {
             };
             let prose = self.screen.prose.iter().find(|p| usize::from(p.y) == index);
             let columns = prose.map_or(0..0, |p| {
-                let start = usize::from(p.x).min(cells.len());
+                let start = usize::from(p.x + p.indent).min(cells.len());
                 start..usize::from(p.x + p.width).clamp(start, cells.len())
             });
             for grid in [0..columns.start, columns.end..cells.len()] {
@@ -564,9 +567,9 @@ impl Grid<'_> {
         area.width
     }
 
-    /// A prose row's `columns`, laid out in flow: runs of text in the
-    /// proportional face, as wide as they measure; inline `code` and
-    /// symbols a cell per column, in the monospace face.
+    /// A prose row's `columns` after its indent, laid out in flow: runs
+    /// of text in the proportional face, as wide as they measure; inline
+    /// `code` a cell per column, in the monospace face.
     fn paint_prose(
         &self,
         frame: &mut Frame,
@@ -582,42 +585,21 @@ impl Grid<'_> {
         let mut col = columns.start;
         while col < columns.end {
             let look = looks[col];
-            let symbol = cells[col].symbol();
             if cells[col].skip {
                 col += 1;
                 continue;
             }
-            if is_code(col) {
-                let end = (col..columns.end)
-                    .find(|&i| !is_code(i) || looks[i] != look)
-                    .unwrap_or(columns.end);
-                let run: String = cells[col..end].iter().map(Cell::symbol).collect();
-                let width = (end - col) as f32 * cell.width;
-                self.fill_background(frame, look.bg, x.round(), (x + width).round(), y);
-                if !look.hidden {
-                    let at = Point::new(x, y);
-                    self.run_text(frame, &run, at, &look, look.font(), Shaping::Advanced);
-                }
-                self.decorate(frame, &look, x, x + width, y);
-                x += width;
-                col = end;
-                continue;
-            }
-            if !is_plain(symbol) {
-                let width = symbol.width().max(1) as f32 * cell.width;
-                self.fill_background(frame, look.bg, x.round(), (x + width).round(), y);
-                x += self.paint_symbol(frame, symbol, (x, y), &look);
-                col += 1;
-                continue;
-            }
+            let code = is_code(col);
             let end = (col..columns.end)
-                .find(|&i| {
-                    looks[i] != look || cells[i].skip || !is_plain(cells[i].symbol()) || is_code(i)
-                })
+                .find(|&i| looks[i] != look || cells[i].skip || is_code(i) != code)
                 .unwrap_or(columns.end);
             let run: String = cells[col..end].iter().map(Cell::symbol).collect();
-            let font = look.prose_font();
-            let width = self.measure(&run, font);
+            let (font, width) = if code {
+                (look.font(), (end - col) as f32 * cell.width)
+            } else {
+                let font = look.prose_font();
+                (font, run_width(&run, font, self.metrics.font_size))
+            };
             self.fill_background(frame, look.bg, x.round(), (x + width).round(), y);
             if !look.hidden {
                 self.run_text(
@@ -663,22 +645,6 @@ impl Grid<'_> {
         if !text.is_empty() {
             self.text(frame, text.to_owned(), at, look, (font, shaping), false);
         }
-    }
-
-    /// How wide `run` is set in `font`, trailing spaces included.
-    fn measure(&self, run: &str, font: Font) -> f32 {
-        let size = self.metrics.font_size;
-        let mut widths = self.screen.widths.borrow_mut();
-        if widths.len() > MAX_MEASURED {
-            widths.clear();
-        }
-        let mut width = |text: &str| {
-            *widths
-                .entry((text.to_owned(), font, size.to_bits()))
-                .or_insert_with(|| text_width(text, font, size))
-        };
-        // A closing bar keeps trailing spaces in the measured line.
-        width(&format!("{run}|")) - width("|")
     }
 
     fn text(
@@ -733,6 +699,38 @@ struct Row<'a> {
     y: f32,
     /// Left edge of the grid, in pixels
     origin: f32,
+}
+
+/// How many cells `text` takes in the proportional face: what the
+/// terminal UI wraps chat prose to.
+pub fn prose_cells(text: &str, modifier: Modifier) -> f32 {
+    /// Size widths are measured at, large enough that rounding is lost
+    const SIZE: f32 = 100.0;
+    let font = face(
+        (theme::sans(), theme::sans_bold()),
+        modifier.contains(Modifier::BOLD),
+        modifier.contains(Modifier::ITALIC),
+    );
+    run_width(text, font, SIZE) / theme::cell_size(SIZE).width
+}
+
+/// How wide a run of `text` is in `font` at `size`, trailing spaces
+/// included.
+fn run_width(text: &str, font: Font, size: f32) -> f32 {
+    /// Widths by text, font and font size
+    type Widths = HashMap<(String, Font, u32), f32>;
+    static WIDTHS: LazyLock<Mutex<Widths>> = LazyLock::new(Mutex::default);
+    let mut widths = WIDTHS.lock().unwrap_or_else(PoisonError::into_inner);
+    if widths.len() > MAX_MEASURED {
+        widths.clear();
+    }
+    let mut width = |text: &str| {
+        *widths
+            .entry((text.to_owned(), font, size.to_bits()))
+            .or_insert_with(|| text_width(text, font, size))
+    };
+    // A closing bar keeps trailing spaces in the measured line.
+    width(&format!("{text}|")) - width("|")
 }
 
 /// How wide `text` is laid out on one line in `font` at `size`.

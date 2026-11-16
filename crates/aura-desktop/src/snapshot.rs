@@ -31,6 +31,7 @@ struct Harness {
 }
 
 fn harness() -> Harness {
+    load_fonts();
     let (events, events_rx) = mpsc::channel(64);
     let (_, commands) = mpsc::channel(16);
     let options = Options {
@@ -312,8 +313,8 @@ fn session(h: &mut Harness) {
     reply(h);
 }
 
-/// Draw the app and return its RGBA pixels.
-fn render(app: &App) -> Vec<u8> {
+/// Register the bundled fonts, before the UI measures any prose.
+fn load_fonts() {
     static FONTS: Once = Once::new();
     FONTS.call_once(|| {
         let mut fonts = font_system().write().expect("font system lock");
@@ -321,6 +322,10 @@ fn render(app: &App) -> Vec<u8> {
             fonts.load_font(font);
         }
     });
+}
+
+/// Draw the app and return its RGBA pixels.
+fn render(app: &App) -> Vec<u8> {
     let mut renderer = futures::executor::block_on(<iced::Renderer as Headless>::new(
         theme::mono(),
         Pixels(theme::DEFAULT_FONT_SIZE),
@@ -449,6 +454,31 @@ fn welcome_screen() {
     let mut h = harness();
     seed(&mut h);
     snapshot("welcome", &h);
+}
+
+#[test]
+fn prose_wraps_in_its_own_face() {
+    let mut h = harness();
+    seed(&mut h);
+    h.apply([
+        UiCommand::StartStreaming,
+        UiCommand::AppendText(
+            "Hi! That last message looks like a typo. What would you like to do?\n\n\
+             - **\"ls\":** I said I'd created a task, but I hadn't done anything. If you \
+             want, I can list the files in the project folder now.\n\
+             - **The story:** You asked for 5 paragraphs, and I gave you an outline split \
+             into acts. I can rewrite it as an actual 5-paragraph story.\n\n\
+             Here are some other things I can help with in this repo (`aura-harness`): run \
+             the build, tests, or `cargo clippy`, and look at the codebase."
+                .into(),
+        ),
+        UiCommand::FinishStreaming,
+        UiCommand::Complete,
+    ]);
+    let text = h.app.screen().text();
+    assert!(text.contains("I can list the files"), "{text}");
+    assert!(text.contains("cargo clippy"), "{text}");
+    snapshot("prose", &h);
 }
 
 #[test]

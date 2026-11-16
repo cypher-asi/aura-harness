@@ -8,6 +8,7 @@ use super::segments::{
     message_header, message_style, notice_lines, render_code_segment, render_text_segment,
     reply_meta,
 };
+use super::text::Measure;
 use crate::app::{ToggleRow, ToggleTarget};
 use crate::components::{Activity, Message, MessageRole};
 use crate::Theme;
@@ -85,9 +86,10 @@ pub(crate) struct BlockLines {
     /// Rows that expand or collapse something, `line` counted from the
     /// block's first line
     pub toggles: Vec<ToggleRow>,
-    /// Whether each line is prose, the user's or the agent's flowing text;
-    /// lines past the end are not
-    pub prose: Vec<bool>,
+    /// Whether each line is prose, the user's or the agent's flowing text:
+    /// `Some` of the columns its marker, quote bar or indent takes. Lines
+    /// past the end are not.
+    pub prose: Vec<Option<u16>>,
 }
 
 impl ChatLineCache {
@@ -118,15 +120,15 @@ impl ChatLineCache {
     }
 
     /// Bring the cache up to date with the messages of its pane drawn
-    /// `width` columns wide. Activity still in progress is redrawn every
-    /// frame, with `spinner`.
+    /// `width` columns wide, prose as wide as `measure` makes it. Activity
+    /// still in progress is redrawn every frame, with `spinner`.
     ///
     /// Returns `true` when every block was reflowed because the width or
     /// theme changed, so line positions from the last frame no longer apply.
     pub(crate) fn update(
         &mut self,
         messages: &VecDeque<Message>,
-        width: usize,
+        (width, measure): (usize, Measure),
         theme: &Theme,
         spinner: &str,
         groups: &GroupState<'_>,
@@ -186,14 +188,17 @@ impl ChatLineCache {
                         let mut lines = Vec::new();
                         let mut prose = Vec::new();
                         for member in members {
-                            let (more, flags) = message_lines(member, place, width, theme, spinner);
-                            prose.resize(lines.len(), false);
+                            let (more, flags) =
+                                message_lines(member, place, (width, measure), theme, spinner);
+                            prose.resize(lines.len(), None);
                             prose.extend(flags);
                             lines.extend(more);
                         }
                         (lines, Vec::new(), prose)
                     }
-                    (None, None) => single_lines(members[0], place, width, theme, spinner),
+                    (None, None) => {
+                        single_lines(members[0], place, (width, measure), theme, spinner)
+                    }
                 };
                 self.entries.insert(
                     key,
@@ -442,12 +447,12 @@ fn push_records_link(
 fn single_lines(
     message: &Message,
     place: &TurnPlace,
-    width: usize,
+    (width, measure): (usize, Measure),
     theme: &Theme,
     spinner: &str,
-) -> (Vec<Line<'static>>, Vec<ToggleRow>, Vec<bool>) {
+) -> (Vec<Line<'static>>, Vec<ToggleRow>, Vec<Option<u16>>) {
     let Some(step) = message.activity_step() else {
-        let (lines, prose) = message_lines(message, place, width, theme, spinner);
+        let (lines, prose) = message_lines(message, place, (width, measure), theme, spinner);
         return (lines, Vec::new(), prose);
     };
     let mut lines: Vec<Line<'static>> = turn_header(message, place, width, theme)
@@ -478,15 +483,15 @@ fn single_lines(
 }
 
 /// The header and body lines of one chat message, and whether each is
-/// prose. The agent's replies
-/// after the first block of a turn go without a header, under the turn's.
+/// prose. The agent's replies after the first block of a turn go without
+/// a header, under the turn's.
 fn message_lines(
     message: &Message,
     place: &TurnPlace,
-    width: usize,
+    (width, measure): (usize, Measure),
     theme: &Theme,
     spinner: &str,
-) -> (Vec<Line<'static>>, Vec<bool>) {
+) -> (Vec<Line<'static>>, Vec<Option<u16>>) {
     if let Some(activity) = message.activity_step() {
         let lines = activity_lines(activity, message.is_expanded(), None, spinner, width, theme);
         return (lines, Vec::new());
@@ -526,12 +531,12 @@ fn message_lines(
     };
     let mut prose = Vec::new();
     for segment in parse_content_segments(message.content()) {
-        prose.resize(lines.len(), false);
+        prose.resize(lines.len(), None);
         match segment {
             ContentSegment::Text(text) => {
                 let role = message.role();
                 prose.extend(render_text_segment(
-                    &mut lines, &text, msg_color, width, role, theme,
+                    &mut lines, &text, msg_color, width, role, theme, measure,
                 ));
             }
             ContentSegment::CodeBlock { language, code } => {
