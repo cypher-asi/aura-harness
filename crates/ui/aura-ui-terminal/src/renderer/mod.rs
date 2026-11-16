@@ -116,12 +116,13 @@ fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &T
 
     let (swarm, chat, right) = match (swarm_visible, right_visible) {
         (true, true) => {
+            let side = area.width * 24 / 100;
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
-                    Constraint::Percentage(20),
-                    Constraint::Percentage(50),
-                    Constraint::Percentage(30),
+                    Constraint::Length(side),
+                    Constraint::Fill(1),
+                    Constraint::Length(side),
                 ])
                 .split(area);
             (Some(chunks[0]), chunks[1], Some(chunks[2]))

@@ -766,7 +766,7 @@ fn test_chat_renders_assistant_markdown() {
          | Crate | Tests |\n|---|---:|\n| aura-terminal | 231 |\n\n\
          > note: see [docs](https://example.com)",
     ));
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 30)).unwrap();
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(85, 30)).unwrap();
     terminal
         .draw(|frame| super::render(frame, &mut app, &test_theme()))
         .unwrap();
@@ -968,7 +968,7 @@ fn test_sandbox_panel_sits_below_record() {
     app.process_command(crate::events::UiCommand::SetSandboxRoot(
         dir.path().to_path_buf(),
     ));
-    let rows = render_rows(&mut app, 120);
+    let rows = render_rows(&mut app, 150);
 
     let (record, _) = header_bar(&rows, "│ KERNEL");
     let (sandbox, _) = header_bar(&rows, "SANDBOX");
@@ -994,7 +994,7 @@ fn test_sandbox_panel_sits_below_record() {
 #[test]
 fn test_side_panel_header_matches_the_agents_header() {
     let mut app = crate::App::new();
-    let rows = render_rows(&mut app, 120);
+    let rows = render_rows(&mut app, 150);
     let (tabs, widths) = header_bar(&rows, "SANDBOX");
     assert!(
         rows[tabs].contains(" PRC ") && rows[tabs].contains(" PLANS "),
@@ -1012,7 +1012,7 @@ fn test_side_panel_header_matches_the_agents_header() {
         "top bars line up"
     );
 
-    let rows = render_rows(&mut app, 160);
+    let rows = render_rows(&mut app, 200);
     let (tabs, widths) = header_bar(&rows, "SANDBOX");
     assert!(rows[tabs].contains(" PROCESSES "), "{}", rows[tabs]);
     assert_eq!(widths.len(), 4, "{widths:?}");
@@ -1044,13 +1044,13 @@ fn test_side_panel_tabs_fill_the_bar_without_counts() {
     ]));
 
     let theme = test_theme();
-    let buffer = render_buffer(&mut app, 160);
+    let buffer = render_buffer(&mut app, 200);
     let row = row_of(&buffer, " PROCESSES ");
     let (label, label_style) = find_cell(&buffer, row, "SANDBOX").unwrap();
     assert!(label_style.add_modifier.contains(Modifier::BOLD));
     assert_eq!(label_style.bg, Some(Color::Reset), "active, unfocused");
     assert_eq!(label_style.fg, Some(theme.colors.foreground));
-    let screen = render_rows(&mut app, 160).join("\n");
+    let screen = render_rows(&mut app, 200).join("\n");
     assert!(!screen.contains("FILES"), "{screen}");
 
     let (processes, process_style) = find_cell(&buffer, row, "PROCESSES").unwrap();
@@ -1068,7 +1068,7 @@ fn test_side_panel_tabs_fill_the_bar_without_counts() {
         });
     }
     assert_eq!(app.side_tab(), SidePanelTab::Processes);
-    let screen = render_rows(&mut app, 160).join("\n");
+    let screen = render_rows(&mut app, 200).join("\n");
     assert!(!screen.contains("LIVE"), "{screen}");
 }
 
@@ -1100,7 +1100,7 @@ fn test_processes_tab_lists_processes() {
         let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
     let _ = app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
-    let screen = render_rows(&mut app, 140).join("\n");
+    let screen = render_rows(&mut app, 175).join("\n");
     let row = screen.lines().find(|r| r.contains("cargo build")).unwrap();
     assert!(row.contains("command"), "{row}");
     assert!(screen
@@ -1157,12 +1157,12 @@ fn test_files_command_toggles_sandbox_panel() {
     let mut app = crate::App::new();
     submit(&mut app, "/kernel");
     submit(&mut app, "/files");
-    let screen = render_rows(&mut app, 120).join("\n");
+    let screen = render_rows(&mut app, 150).join("\n");
     assert!(!screen.contains(" KERNEL "));
     assert!(!screen.contains("SANDBOX"));
 
     submit(&mut app, "/files");
-    let screen = render_rows(&mut app, 120).join("\n");
+    let screen = render_rows(&mut app, 150).join("\n");
     assert!(screen.contains("SANDBOX"));
     assert!(!screen.contains(" KERNEL "));
 }
@@ -2710,7 +2710,7 @@ fn test_record_rows_align_kind_what_and_group_columns() {
             policy: None,
         }));
     }
-    let rows = render_rows(&mut app, 200);
+    let rows = render_rows(&mut app, 250);
     let screen = rows.join("\n");
     let row = |needle: &str| {
         rows.iter()
