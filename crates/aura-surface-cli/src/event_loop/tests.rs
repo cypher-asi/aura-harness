@@ -17,8 +17,11 @@ use aura_tools::ToolConfig;
 use tempfile::TempDir;
 use tokio::sync::Semaphore;
 
+/// Model whose route refuses the sign-in, for Gate's re-routing.
+const REFUSING_MODEL: &str = "claude/claude-sonnet-4-6";
+
 /// Answers like a mock model, but holds calls whose last message mentions
-/// "slow" until the test releases them.
+/// "slow" until the test releases them, and refuses [`REFUSING_MODEL`].
 struct GatedProvider {
     inner: MockProvider,
     gate: Arc<Semaphore>,
@@ -31,6 +34,12 @@ impl ModelProvider for GatedProvider {
     }
 
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ReasonerError> {
+        if request.model.as_str() == REFUSING_MODEL {
+            return Err(ReasonerError::Api {
+                status: 401,
+                message: "claude plan models are not available in this session".to_string(),
+            });
+        }
         let last = request.messages.last().map(|m| m.text_content());
         let slow = last.as_deref().is_some_and(|text| text.contains("slow"));
         if slow {
@@ -587,6 +596,56 @@ async fn a_command_its_agent_stopped_needs_no_reply() {
 }
 
 #[tokio::test]
+async fn gate_re_routes_a_turn_whose_route_refuses_the_sign_in() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = ModelSelection::signed_in(
+        &fixture.config,
+        aura_model_reasoner::model_catalog::GATE_MODEL_ID,
+        aura_auth::AuthSummary {
+            subscriptions: vec![aura_auth::ProviderKind::Claude],
+            ..aura_auth::AuthSummary::default()
+        },
+    );
+    assert_eq!(state.models.turn_model(), REFUSING_MODEL);
+
+    handle_ui_event(&mut state, message(first, "hello", true), &links).await;
+    let finished = next_done(&mut done).await;
+    assert_eq!(
+        finished.failure, None,
+        "a refused route is not a failed turn"
+    );
+    assert_eq!(finished.refused_models, [REFUSING_MODEL]);
+    handle_work_done(&mut state, finished).await;
+
+    assert_eq!(
+        state.models.turn_model(),
+        "claude/claude-opus-4-7",
+        "the refused model stays out of the next turns"
+    );
+    let replies: Vec<String> = state.idle[&first]
+        .messages
+        .iter()
+        .map(|m| m.text_content())
+        .collect();
+    assert_eq!(replies, ["hello", "Done."]);
+    let shown: Vec<String> = drain(&mut commands)
+        .into_iter()
+        .filter_map(|(_, c)| match c {
+            UiCommand::ShowMessage(m) if m.content.contains("gate → ") => Some(m.content),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(shown.len(), 2, "{shown:?}");
+    assert!(shown[0].contains("gate → claude-sonnet-4-6 (claude plan)"));
+    assert!(shown[1].contains("gate → claude-opus-4-7 (claude plan)"));
+}
+
+#[tokio::test]
 async fn messages_the_turn_never_saw_run_next() {
     let (fixture, _commands) = fixture();
     let mut b = borrowed(&fixture);
@@ -602,6 +661,7 @@ async fn messages_the_turn_never_saw_run_next() {
             session: Some(session),
             failure: None,
             unseen: vec![(SteerSource::User, "late".to_string())],
+            refused_models: Vec::new(),
         },
     )
     .await;

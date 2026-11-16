@@ -12,14 +12,16 @@ Categories: `bugfix`, `feature`, `refactor`, `tests`, `docs`,
 
 ## Running the comparison
 
-Each arm is one model on the same tasks. `--budget-usd` stops an arm
-once its runs have cost that much.
+Each arm is one model on the same tasks; `--model gate` runs every task
+on Gate's pick for your sign-ins. `--budget-usd` stops an arm once its
+runs have cost that much.
 
 ```sh
 aura eval run evals/gate_cost --model claude/claude-opus-5-5 --arm opus --repeat 3 --budget-usd 20
 aura eval run evals/gate_cost --model claude/claude-haiku-5-5 --arm haiku --repeat 3 --budget-usd 5
+aura eval run evals/gate_cost --model gate --arm gate --repeat 3 --budget-usd 20
 
-aura eval compare --suite gate_cost --arm opus --arm haiku
+aura eval compare --suite gate_cost --arm opus --arm gate
 ```
 
 With 20 tasks and 3 repeats a comparison can show a large cost drop and
@@ -34,7 +36,7 @@ random order, and asks which is better. Judge calls go through
 `aura -p`.
 
 ```sh
-python3 evals/gate_cost/judge.py --reference opus --arm haiku
+python3 evals/gate_cost/judge.py --reference opus --arm gate
 ```
 
 Judgments go to `AURA_HOME/evals/judgments/<reference>-vs-<arm>.jsonl`

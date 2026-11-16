@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::model_catalog::{backend_for, local_model_name, ModelBackend};
+use crate::model_catalog::{backend_for, local_model_name, ModelBackend, GATE_MODEL_ID};
 use crate::{
     ModelName, ModelProvider, ModelRequest, ModelResponse, ReasonerError, ResponseEventStream,
     StreamEventStream,
@@ -56,6 +56,11 @@ impl RoutedProvider {
         &self,
         mut request: ModelRequest,
     ) -> Result<(&dyn ModelProvider, ModelRequest), ReasonerError> {
+        if request.model.as_str() == GATE_MODEL_ID {
+            return Err(ReasonerError::Internal(
+                "`gate` must be resolved to a model before a request is sent".to_string(),
+            ));
+        }
         let backend = backend_for(request.model.as_str());
         let subscription = match backend {
             ModelBackend::Local => {
@@ -145,6 +150,12 @@ mod tests {
         ));
         assert_eq!(rewritten.model.as_str(), "qwen3:4b");
         assert_eq!(rewritten.auth_token, None);
+    }
+
+    #[test]
+    fn unresolved_gate_is_refused() {
+        let err = routed().route(request(GATE_MODEL_ID)).err().unwrap();
+        assert!(matches!(err, ReasonerError::Internal(_)), "{err}");
     }
 
     #[tokio::test]

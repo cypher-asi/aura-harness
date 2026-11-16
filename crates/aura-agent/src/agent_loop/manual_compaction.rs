@@ -78,6 +78,7 @@ impl AgentLoop {
                     CompactHistoryError::Cancelled
                 }
                 LlmCallError::InsufficientCredits(m)
+                | LlmCallError::Unauthorized(m)
                 | LlmCallError::PromptTooLong(m)
                 | LlmCallError::RateLimited(m)
                 | LlmCallError::Fatal(m) => CompactHistoryError::Model(m),

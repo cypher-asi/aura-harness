@@ -40,12 +40,17 @@ Each model id names the route that serves it, and the user picks it in `/model`:
 | `aura-*` and other aliases | aura-router, billed to the zOS account | `aura login` |
 | `claude/<model>` | `api.anthropic.com`, billed to your Claude plan | `aura login claude` |
 | `chatgpt/<model>` | OpenAI Responses API, billed to your ChatGPT plan | `aura login chatgpt` |
+| `gate` (default) | The route of the model Gate picks for the turn. See [Gate](#gate). | nothing; Gate uses what you are signed in to |
 
-Routes never fall back to one another, so who pays never changes silently. If a model loses its sign-in (logout, unlink, revoked token), the terminal switches to the local default model.
+A pinned model's route never falls back to another one. Under `gate` the route can change between turns, so each turn shows `gate → <model> (<route>)` in the chat and the status line shows the turn's model and route. If a pinned model loses its sign-in (logout, unlink, revoked token), the terminal switches to `gate`.
 
 Plan links belong to the identity that made them: this machine's local profile while signed out, otherwise the zOS user. Tokens are stored in the OS keyring, or in `~/.aura/auth/secrets/` (mode 0600) when no keyring is available. Link metadata is in `~/.aura/auth/index.json`.
 
 The Claude link uses the OAuth client that Claude Code uses. Anthropic does not publish it for other apps, and its terms may not allow plan use outside Claude Code. `aura login claude` prints this warning before you sign in.
+
+## Gate
+
+`gate` is the default model and the first entry in `/model`; `--model gate` does the same for `aura -p` and `aura eval run`. `AURA_DEFAULT_MODEL` and a model you pick in `/model` still win. Gate routes each turn to a model you can use right now: installed local models, aura-router models when signed in to zOS, and `claude/*` or `chatgpt/*` models when that plan is linked, with one route per model (your plan before the router). For now every turn goes to the cheapest standard-tier model (Sonnet class), else the strongest one available. If the route refuses your sign-in mid-turn, Gate skips that model until your sign-ins change and carries on with its next pick.
 
 ## Long tasks in the terminal
 

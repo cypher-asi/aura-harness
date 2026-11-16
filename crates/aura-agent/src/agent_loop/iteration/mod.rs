@@ -24,6 +24,8 @@ mod tests;
 /// Describes why an LLM call failed, allowing the main loop to break cleanly.
 pub(super) enum LlmCallError {
     InsufficientCredits(String),
+    /// 401 / 403: the route refused the sign-in or plan behind the request.
+    Unauthorized(String),
     PromptTooLong(String),
     /// 429/529 surfaced by the provider. The message already includes the
     /// upstream `retry after N seconds` hint when one was reported so the
@@ -47,7 +49,7 @@ impl LlmCallError {
                 streaming::emit(
                     event_tx,
                     AgentLoopEvent::Error {
-                        code: "insufficient_credits".to_string(),
+                        code: crate::events::ERROR_INSUFFICIENT_CREDITS.to_string(),
                         message: msg,
                         recoverable: false,
                     },
@@ -64,6 +66,18 @@ impl LlmCallError {
                         // loop cannot recover this turn, but the next user
                         // turn (or a client-side retry) can succeed.
                         recoverable: true,
+                    },
+                );
+                result.llm_error = Some(msg);
+            }
+            Self::Unauthorized(msg) => {
+                warn!(message = %msg, "Model route refused the credentials, stopping loop");
+                streaming::emit(
+                    event_tx,
+                    AgentLoopEvent::Error {
+                        code: crate::events::ERROR_UNAUTHORIZED.to_string(),
+                        message: msg.clone(),
+                        recoverable: false,
                     },
                 );
                 result.llm_error = Some(msg);
@@ -108,6 +122,7 @@ impl LlmCallError {
             other if looks_like_rate_limited(&other.to_string()) => {
                 Self::RateLimited(other.to_string())
             }
+            other if other.rejects_credentials() => Self::Unauthorized(other.to_string()),
             other if other.is_context_overflow() => Self::PromptTooLong(other.to_string()),
             other => Self::Fatal(other.to_string()),
         }

@@ -116,6 +116,20 @@ impl ReasonerError {
         matches!(self, Self::InsufficientCredits(_))
     }
 
+    /// Whether the route refused the caller's sign-in or plan (401, 403,
+    /// or no credits left) rather than failing the request itself.
+    #[must_use]
+    pub const fn rejects_credentials(&self) -> bool {
+        matches!(
+            self,
+            Self::InsufficientCredits(_)
+                | Self::Api {
+                    status: 401 | 403,
+                    ..
+                }
+        )
+    }
+
     #[must_use]
     pub fn is_context_overflow(&self) -> bool {
         match self {
@@ -225,6 +239,23 @@ mod tests {
         };
         assert!(!err.is_retryable_transient());
         assert_eq!(err.retry_after(), None);
+        assert!(err.rejects_credentials());
+    }
+
+    #[test]
+    fn only_sign_in_and_plan_failures_reject_credentials() {
+        assert!(ReasonerError::InsufficientCredits("402".into()).rejects_credentials());
+        let cloudflare = ReasonerError::Transient {
+            status: 403,
+            message: "blocked".into(),
+            retry_after: None,
+        };
+        assert!(!cloudflare.rejects_credentials());
+        let bad_request = ReasonerError::Api {
+            status: 400,
+            message: "bad".into(),
+        };
+        assert!(!bad_request.rejects_credentials());
     }
 
     #[test]

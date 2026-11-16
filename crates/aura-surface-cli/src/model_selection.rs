@@ -1,22 +1,26 @@
 //! Terminal model selection: startup default, `/model` switching, and
 //! persistence of the last choice.
 //!
-//! The TUI defaults to a small local model served by Ollama so it works
-//! without an account. `/login` unlocks the aura-router cloud models and
+//! The default is `gate`: each turn goes to a model Gate picks from what
+//! the user can run right now, a local model served by Ollama when
+//! nothing is signed in. `/login` unlocks the aura-router cloud models and
 //! `/login claude` / `/login chatgpt` unlock models billed to a linked
-//! plan. Each model id names its route, so switching never silently
-//! changes who is billed.
+//! plan. Every other model id names its route. Gate's pick, and so who is
+//! billed, is shown at the start of each turn and in the status line.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use aura_agent::AgentLoopConfig;
+use aura_agent_gate::Candidate;
 use aura_auth::{AuthSummary, CredentialResolver, ProviderKind};
 use aura_model_reasoner::model_catalog::{
-    self, backend_for, local_model_name, LocalServerStatus, ModelBackend, ModelOption,
+    self, backend_for, infer_tier, local_model_name, LocalServerStatus, ModelBackend, ModelOption,
+    GATE_MODEL_ID,
 };
 use aura_terminal::events::ModelOptionView;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use tracing::warn;
 
 const LOCAL_STREAM_TIMEOUT: Duration = Duration::from_secs(600);
@@ -46,6 +50,9 @@ pub struct ModelSelection {
     /// Models reported live by linked plans; empty means use the
     /// built-in lists.
     plan_models: Vec<ModelOption>,
+    /// Models Gate stopped routing to after their route refused the
+    /// user's sign-in or plan, until the sign-ins change.
+    dropped: BTreeSet<String>,
     router_limits: RouterLimits,
     prefs_path: Option<PathBuf>,
 }
@@ -64,12 +71,9 @@ impl ModelSelection {
             .or_else(|_| std::env::var("AURA_ANTHROPIC_MODEL"))
             .ok();
         let default_local = model_catalog::default_local_model_id();
-        let current = resolve_startup_model(
-            env_model.as_deref(),
-            persisted.as_deref(),
-            &default_local,
-            |id| usable(&auth, id),
-        );
+        let current = resolve_startup_model(env_model.as_deref(), persisted.as_deref(), |id| {
+            usable(&auth, id)
+        });
         let mut selection = Self {
             current: String::new(),
             default_local,
@@ -77,6 +81,7 @@ impl ModelSelection {
             local_status: LocalServerStatus::Unreachable,
             auth,
             plan_models: Vec::new(),
+            dropped: BTreeSet::new(),
             router_limits: RouterLimits {
                 max_tokens: config.max_tokens,
                 stream_timeout: config.stream_timeout,
@@ -91,13 +96,20 @@ impl ModelSelection {
     /// Selection fixed on `model`, with no sign-ins and no saved choice.
     #[cfg(test)]
     pub(crate) fn fixed(config: &AgentLoopConfig, model: &str) -> Self {
+        Self::signed_in(config, model, AuthSummary::default())
+    }
+
+    /// [`Self::fixed`] with the sign-ins `auth`.
+    #[cfg(test)]
+    pub(crate) fn signed_in(config: &AgentLoopConfig, model: &str, auth: AuthSummary) -> Self {
         Self {
             current: model.to_string(),
             default_local: model_catalog::default_local_model_id(),
             local_url: model_catalog::local_base_url(),
             local_status: LocalServerStatus::Unreachable,
-            auth: AuthSummary::default(),
+            auth,
             plan_models: Vec::new(),
+            dropped: BTreeSet::new(),
             router_limits: RouterLimits {
                 max_tokens: config.max_tokens,
                 stream_timeout: config.stream_timeout,
@@ -107,9 +119,77 @@ impl ModelSelection {
         }
     }
 
-    /// Model id used for the next turn.
+    /// Selected model id, [`GATE_MODEL_ID`] when Gate picks the model.
     pub fn current(&self) -> &str {
         &self.current
+    }
+
+    /// Whether Gate picks the model of each turn.
+    pub fn is_gate(&self) -> bool {
+        self.current == GATE_MODEL_ID
+    }
+
+    /// The models Gate may route to now, cheapest first.
+    pub fn gate_candidates(&self) -> Vec<Candidate> {
+        let catalog = model_catalog::catalog_with_plans(
+            &self.default_local,
+            self.installed_local(),
+            &self.plan_models,
+        );
+        aura_agent_gate::candidates(
+            &catalog,
+            |provider| self.auth.can_use(provider),
+            |id| self.dropped.contains(id),
+        )
+    }
+
+    /// Gate's pick for the next turn, `None` when a model is pinned or
+    /// nothing can run (then the turn goes to the default local model,
+    /// whose setup hint explains what is missing).
+    pub fn route(&self) -> Option<Candidate> {
+        if !self.is_gate() {
+            return None;
+        }
+        aura_agent_gate::fixed_pick(&self.gate_candidates()).cloned()
+    }
+
+    /// Gate's picks after the next turn's, in the order it goes to them
+    /// when a route refuses the user's sign-in mid-turn.
+    pub fn fallbacks(&self) -> Vec<Candidate> {
+        if !self.is_gate() {
+            return Vec::new();
+        }
+        let candidates = self.gate_candidates();
+        aura_agent_gate::pick_order(&candidates)
+            .into_iter()
+            .skip(1)
+            .cloned()
+            .collect()
+    }
+
+    /// The model the next turn runs on: the selected one, or Gate's pick.
+    pub fn turn_model(&self) -> String {
+        if !self.is_gate() {
+            return self.current.clone();
+        }
+        self.route()
+            .map_or_else(|| self.default_local.clone(), |pick| pick.id)
+    }
+
+    /// Point `config` at Gate's current pick. Returns `true` when the
+    /// model changed.
+    pub fn refresh_route(&self, config: &mut AgentLoopConfig) -> bool {
+        let model = self.turn_model();
+        if config.model == model {
+            return false;
+        }
+        self.limits().configure(config, &model);
+        true
+    }
+
+    /// Stop routing to `id` until the sign-ins change.
+    pub fn drop_model(&mut self, id: &str) {
+        self.dropped.insert(id.to_string());
     }
 
     /// Whether the user is logged in to zOS (and so aura-router).
@@ -121,6 +201,7 @@ impl ModelSelection {
     /// link or unlink).
     pub fn set_auth(&mut self, auth: AuthSummary) {
         self.auth = auth;
+        self.dropped.clear();
     }
 
     /// Whether `id` can run with the current sign-ins.
@@ -179,11 +260,20 @@ impl ModelSelection {
                     .to_string(),
                 backend,
                 installed: backend != ModelBackend::Local || self.local_installed(&self.current),
+                tier: infer_tier(&self.current),
             });
         }
-        options
-            .into_iter()
-            .map(|o| ModelOptionView {
+        let gate = ModelOptionView {
+            id: GATE_MODEL_ID.to_string(),
+            label: GATE_LABEL.to_string(),
+            local: false,
+            installed: true,
+            group: GATE_LABEL.to_string(),
+            provider: None,
+            available: true,
+        };
+        std::iter::once(gate)
+            .chain(options.into_iter().map(|o| ModelOptionView {
                 local: o.backend == ModelBackend::Local,
                 group: group_heading(o.backend).to_string(),
                 provider: o.required_provider().map(|p| p.id().to_string()),
@@ -191,7 +281,7 @@ impl ModelSelection {
                 id: o.id,
                 label: o.label,
                 installed: o.installed,
-            })
+            }))
             .collect()
     }
 
@@ -200,6 +290,9 @@ impl ModelSelection {
         aura_terminal::UiCommand::SetModels {
             options: self.options(),
             current: self.current.clone(),
+            route: self
+                .is_gate()
+                .then(|| model_catalog::route_label(&self.turn_model())),
             user: self.auth.zos_user.clone(),
             plans: self.auth.plan_names.clone(),
         }
@@ -231,27 +324,29 @@ impl ModelSelection {
         Ok(())
     }
 
-    /// Fall back to the default local model when the current model needs
-    /// a sign-in the user no longer has. Returns `true` when the model
-    /// changed. Never falls back to a different paid route.
+    /// Switch to Gate when the current model needs a sign-in the user no
+    /// longer has, and point `config` at Gate's pick for the sign-ins
+    /// left. Returns `true` when the selected model changed.
     pub fn ensure_usable(&mut self, config: &mut AgentLoopConfig) -> bool {
         if !self.usable(&self.current) {
-            let local = self.default_local.clone();
-            self.apply(config, &local);
+            self.apply(config, GATE_MODEL_ID);
             return true;
         }
+        self.refresh_route(config);
         false
     }
 
-    /// Hint shown when the current local model can't run, or `None` when it's ready.
+    /// Hint shown when the next turn's local model can't run, or `None`
+    /// when it's ready.
     pub fn local_hint(&self) -> Option<String> {
-        let name = local_model_name(&self.current)?;
+        let model = self.turn_model();
+        let name = local_model_name(&model)?;
         let setup = format!(
             "Start it with `OLLAMA_CONTEXT_LENGTH={} ollama serve`, then `ollama pull {name}`.",
             model_catalog::local_context_tokens()
         );
         match &self.local_status {
-            LocalServerStatus::Ready { .. } if self.local_installed(&self.current) => None,
+            LocalServerStatus::Ready { .. } if self.local_installed(&model) => None,
             LocalServerStatus::Ready { .. } => Some(format!(
                 "Local model {name} is not pulled yet. Run `ollama pull {name}`, \
                  or use /login to use cloud models."
@@ -271,13 +366,30 @@ impl ModelSelection {
 
     /// Display label for `id`.
     pub fn label(id: &str) -> String {
+        if id == GATE_MODEL_ID {
+            return GATE_LABEL.to_string();
+        }
         let backend = backend_for(id).label();
         format!("{} ({backend})", local_model_name(id).unwrap_or(id))
     }
 
+    /// Display label for the selected model, with Gate's pick:
+    /// `Gate → claude-sonnet-4-6 (claude plan)`.
+    pub fn display(&self) -> String {
+        if self.is_gate() {
+            format!(
+                "{GATE_LABEL} → {}",
+                model_catalog::route_label(&self.turn_model())
+            )
+        } else {
+            Self::label(&self.current)
+        }
+    }
+
     fn apply(&mut self, config: &mut AgentLoopConfig, id: &str) {
         id.clone_into(&mut self.current);
-        self.limits().configure(config, id);
+        let model = self.turn_model();
+        self.limits().configure(config, &model);
     }
 
     /// Limits for configuring other agent loops to run a given model.
@@ -345,12 +457,10 @@ impl ModelLimits {
 }
 
 /// Startup model: explicit `AURA_DEFAULT_MODEL` wins, then the persisted
-/// choice (unless it needs a sign-in the user doesn't have), then the
-/// default local model.
+/// choice (unless it needs a sign-in the user doesn't have), then Gate.
 fn resolve_startup_model(
     env_model: Option<&str>,
     persisted: Option<&str>,
-    default_local: &str,
     usable: impl Fn(&str) -> bool,
 ) -> String {
     if let Some(model) = env_model.map(str::trim).filter(|m| !m.is_empty()) {
@@ -361,14 +471,18 @@ fn resolve_startup_model(
             return model.to_string();
         }
     }
-    default_local.to_string()
+    GATE_MODEL_ID.to_string()
 }
 
 fn usable(auth: &AuthSummary, id: &str) -> bool {
-    backend_for(id)
-        .required_provider()
-        .is_none_or(|provider| auth.can_use(provider))
+    id == GATE_MODEL_ID
+        || backend_for(id)
+            .required_provider()
+            .is_none_or(|provider| auth.can_use(provider))
 }
+
+/// Name of the `gate` entry in `/model` and the status line.
+const GATE_LABEL: &str = "Gate";
 
 fn unusable_reason(id: &str) -> String {
     match backend_for(id).required_provider() {
@@ -410,18 +524,18 @@ mod tests {
     const LOCAL: &str = "local/qwen3:4b";
 
     #[test]
-    fn startup_defaults_to_local_model() {
-        assert_eq!(resolve_startup_model(None, None, LOCAL, |_| false), LOCAL);
+    fn startup_defaults_to_gate() {
+        assert_eq!(resolve_startup_model(None, None, |_| false), GATE_MODEL_ID);
         assert_eq!(
-            resolve_startup_model(Some("  "), None, LOCAL, |_| true),
-            LOCAL
+            resolve_startup_model(Some("  "), None, |_| true),
+            GATE_MODEL_ID
         );
     }
 
     #[test]
     fn startup_env_model_wins() {
         assert_eq!(
-            resolve_startup_model(Some("aura-claude-opus-4-7"), Some(LOCAL), LOCAL, |_| false),
+            resolve_startup_model(Some("aura-claude-opus-4-7"), Some(LOCAL), |_| false),
             "aura-claude-opus-4-7"
         );
     }
@@ -432,20 +546,20 @@ mod tests {
         let zos = signed_in(Some("alice"), &[]);
         let claude = signed_in(None, &[ProviderKind::Claude]);
         let start = |persisted: &str, auth: &AuthSummary| {
-            resolve_startup_model(None, Some(persisted), LOCAL, |id| usable(auth, id))
+            resolve_startup_model(None, Some(persisted), |id| usable(auth, id))
         };
-        assert_eq!(start("aura-claude-sonnet-4-6", &guest), LOCAL);
+        assert_eq!(start("aura-claude-sonnet-4-6", &guest), GATE_MODEL_ID);
         assert_eq!(
             start("aura-claude-sonnet-4-6", &zos),
             "aura-claude-sonnet-4-6"
         );
         assert_eq!(start("local/llama3.2:3b", &guest), "local/llama3.2:3b");
-        assert_eq!(start("claude/claude-sonnet-4-6", &zos), LOCAL);
+        assert_eq!(start("claude/claude-sonnet-4-6", &zos), GATE_MODEL_ID);
         assert_eq!(
             start("claude/claude-sonnet-4-6", &claude),
             "claude/claude-sonnet-4-6"
         );
-        assert_eq!(start("aura-claude-sonnet-4-6", &claude), LOCAL);
+        assert_eq!(start(GATE_MODEL_ID, &guest), GATE_MODEL_ID);
     }
 
     fn signed_in(user: Option<&str>, plans: &[ProviderKind]) -> AuthSummary {
@@ -456,7 +570,7 @@ mod tests {
         }
     }
 
-    fn selection(user: Option<&str>) -> (ModelSelection, AgentLoopConfig) {
+    fn selection_on(auth: AuthSummary, model: &str) -> (ModelSelection, AgentLoopConfig) {
         let mut config = AgentLoopConfig::for_agent("seed");
         let mut selection = ModelSelection {
             current: String::new(),
@@ -466,8 +580,9 @@ mod tests {
                 version: "0.14.0".to_string(),
                 models: vec!["qwen3:4b".to_string()],
             },
-            auth: signed_in(user, &[]),
+            auth,
             plan_models: Vec::new(),
+            dropped: BTreeSet::new(),
             router_limits: RouterLimits {
                 max_tokens: config.max_tokens,
                 stream_timeout: config.stream_timeout,
@@ -475,8 +590,12 @@ mod tests {
             },
             prefs_path: None,
         };
-        selection.apply(&mut config, LOCAL);
+        selection.apply(&mut config, model);
         (selection, config)
+    }
+
+    fn selection(user: Option<&str>) -> (ModelSelection, AgentLoopConfig) {
+        selection_on(signed_in(user, &[]), LOCAL)
     }
 
     #[test]
@@ -509,13 +628,79 @@ mod tests {
     }
 
     #[test]
-    fn logout_falls_back_to_local() {
+    fn gate_runs_turns_on_its_pick_with_that_models_limits() {
+        let (selection, config) = selection_on(signed_in(Some("alice"), &[]), GATE_MODEL_ID);
+        assert!(selection.is_gate());
+        assert_eq!(selection.current(), GATE_MODEL_ID);
+        assert_eq!(config.model, "aura-claude-sonnet-4-6");
+        assert_eq!(config.max_tokens, 16_384);
+        assert_eq!(config.max_context_tokens, Some(1_000_000));
+        assert_eq!(selection.display(), "Gate → aura-claude-sonnet-4-6 (cloud)");
+    }
+
+    #[test]
+    fn gate_follows_sign_ins() {
+        let (mut selection, mut config) = selection_on(AuthSummary::default(), GATE_MODEL_ID);
+        assert_eq!(config.model, LOCAL, "nothing signed in: local models only");
+
+        selection.set_auth(signed_in(Some("alice"), &[]));
+        assert!(selection.refresh_route(&mut config));
+        assert_eq!(config.model, "aura-claude-sonnet-4-6");
+
+        selection.set_auth(signed_in(Some("alice"), &[ProviderKind::Claude]));
+        assert!(selection.refresh_route(&mut config));
+        assert_eq!(
+            config.model, "claude/claude-sonnet-4-6",
+            "the plan route wins over the cloud router"
+        );
+        assert!(!selection.refresh_route(&mut config));
+
+        selection.set_auth(AuthSummary::default());
+        assert!(!selection.ensure_usable(&mut config));
+        assert_eq!(config.model, LOCAL);
+    }
+
+    #[test]
+    fn gate_with_nothing_runnable_points_at_the_local_default() {
+        let (mut selection, mut config) = selection_on(AuthSummary::default(), GATE_MODEL_ID);
+        selection.local_status = LocalServerStatus::Unreachable;
+        selection.refresh_route(&mut config);
+        assert_eq!(selection.route(), None);
+        assert_eq!(config.model, LOCAL);
+        assert!(selection
+            .local_hint()
+            .is_some_and(|hint| hint.contains("No local model server")));
+    }
+
+    #[test]
+    fn a_refused_model_is_dropped_until_sign_ins_change() {
+        let claude = signed_in(None, &[ProviderKind::Claude]);
+        let (mut selection, mut config) = selection_on(claude.clone(), GATE_MODEL_ID);
+        assert_eq!(config.model, "claude/claude-sonnet-4-6");
+        let fallbacks: Vec<String> = selection.fallbacks().into_iter().map(|c| c.id).collect();
+        assert_eq!(
+            fallbacks,
+            ["claude/claude-opus-4-7", "claude/claude-haiku-4-5", LOCAL]
+        );
+
+        selection.drop_model("claude/claude-sonnet-4-6");
+        assert!(selection.refresh_route(&mut config));
+        assert_eq!(config.model, "claude/claude-opus-4-7");
+
+        selection.set_auth(claude);
+        selection.refresh_route(&mut config);
+        assert_eq!(config.model, "claude/claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn losing_a_sign_in_switches_to_gate() {
         let (mut selection, mut config) = selection(Some("alice"));
         selection
             .select(&mut config, "aura-claude-sonnet-4-6")
             .expect("select cloud");
         selection.set_auth(AuthSummary::default());
         assert!(selection.ensure_usable(&mut config));
+        assert_eq!(selection.current(), GATE_MODEL_ID);
         assert_eq!(config.model, LOCAL);
     }
 
@@ -544,10 +729,37 @@ mod tests {
 
         selection.set_auth(signed_in(Some("alice"), &[]));
         assert!(selection.ensure_usable(&mut config));
+        assert_eq!(selection.current(), GATE_MODEL_ID);
         assert_eq!(
-            config.model, LOCAL,
-            "unlinking never switches to another paid route"
+            config.model, "aura-claude-sonnet-4-6",
+            "Gate routes across the sign-ins left"
         );
+    }
+
+    #[test]
+    fn gate_is_listed_first() {
+        let (selection, _) = selection(None);
+        let options = selection.options();
+        assert_eq!(options[0].id, GATE_MODEL_ID);
+        assert_eq!(options[0].label, "Gate");
+        assert!(options[0].available);
+    }
+
+    #[test]
+    fn the_status_line_gets_gates_pick() {
+        let claude = signed_in(None, &[ProviderKind::Claude]);
+        let (gate, _) = selection_on(claude, GATE_MODEL_ID);
+        let aura_terminal::UiCommand::SetModels { current, route, .. } = gate.ui_command() else {
+            panic!("expected SetModels");
+        };
+        assert_eq!(current, GATE_MODEL_ID);
+        assert_eq!(route.as_deref(), Some("claude-sonnet-4-6 (claude plan)"));
+
+        let (pinned, _) = selection(None);
+        let aura_terminal::UiCommand::SetModels { route, .. } = pinned.ui_command() else {
+            panic!("expected SetModels");
+        };
+        assert_eq!(route, None);
     }
 
     #[test]

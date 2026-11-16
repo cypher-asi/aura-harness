@@ -16,7 +16,6 @@ use tracing::warn;
 
 use super::handlers::show_system_message;
 use super::LoopState;
-use crate::model_selection::ModelSelection;
 
 /// A background browser sign-in that finished.
 pub(crate) type LinkOutcome = (ProviderKind, Result<LinkedAccount, AuthError>);
@@ -50,8 +49,9 @@ async fn record_auth_change(state: &LoopState<'_>, payload: serde_json::Value) {
     }
 }
 
-/// Re-gate models after a sign-in change, falling back to the local
-/// default when the current model lost its sign-in.
+/// Re-gate models after a sign-in change, switching to Gate when the
+/// current model lost its sign-in. Gate's candidates follow the new
+/// sign-ins.
 async fn publish_auth(state: &mut LoopState<'_>) {
     let summary = auth_summary(
         &state.auth,
@@ -65,8 +65,8 @@ async fn publish_auth(state: &mut LoopState<'_>) {
         show_system_message(
             state,
             format!(
-                "Switched to local model {}.",
-                ModelSelection::label(state.models.current())
+                "Your model lost its sign-in; switched to {}.",
+                state.models.display()
             ),
         )
         .await;

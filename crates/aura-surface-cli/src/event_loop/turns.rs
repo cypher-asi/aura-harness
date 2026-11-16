@@ -12,7 +12,9 @@ use super::handlers::{handle_agent_success, run_agent_turn, system_message};
 use super::run_command::run_user_command;
 use super::steering::{SteerSource, Steering};
 use crate::long_run::LongRunSettings;
+use crate::model_selection::ModelLimits;
 use aura_agent::{AgentLoop, CompactHistoryError};
+use aura_agent_gate::Candidate;
 use aura_agent_trace::RunRecorder;
 use aura_core_types::{AgentId, RecordEntry, Transaction};
 use aura_model_reasoner::{ContentBlock, ImageSource, Message, Role, ToolDefinition};
@@ -78,6 +80,9 @@ pub(super) enum Task {
         steering: Steering,
         limits: LongRunSettings,
         recorder: Option<Arc<RunRecorder>>,
+        /// Where the turn goes next when Gate picked its model and the
+        /// route refuses the user's sign-in
+        gate: Option<GateTurn>,
     },
     /// A typed shell command.
     Command { command: String, cols: u16 },
@@ -86,6 +91,13 @@ pub(super) enum Task {
         agent_loop: Box<AgentLoop>,
         focus: Option<String>,
     },
+}
+
+/// Gate's next picks for a turn, in order, and how to point an agent
+/// loop at one.
+pub(super) struct GateTurn {
+    pub fallbacks: Vec<Candidate>,
+    pub limits: ModelLimits,
 }
 
 /// An agent's work that ended, handing its session back.
@@ -98,6 +110,8 @@ pub(super) struct WorkDone {
     pub failure: Option<String>,
     /// Messages sent into the turn that the model never got, to run next.
     pub unseen: Vec<(SteerSource, String)>,
+    /// Models Gate picked whose route refused the user's sign-in or plan.
+    pub refused_models: Vec<String>,
 }
 
 /// Run `task` on `session` in the background, reporting to `ui`, and send
@@ -120,7 +134,7 @@ pub(super) fn spawn(
                     None,
                     Outcome {
                         failure: Some(format!("Agent stopped unexpectedly: {e}")),
-                        unseen: Vec::new(),
+                        ..Outcome::default()
                     },
                 )
             }
@@ -131,6 +145,7 @@ pub(super) fn spawn(
                 session,
                 failure: outcome.failure,
                 unseen: outcome.unseen,
+                refused_models: outcome.refused,
             })
             .await;
     });
@@ -141,6 +156,7 @@ pub(super) fn spawn(
 struct Outcome {
     failure: Option<String>,
     unseen: Vec<(SteerSource, String)>,
+    refused: Vec<String>,
 }
 
 async fn run(
@@ -157,13 +173,15 @@ async fn run(
             steering,
             limits,
             recorder,
+            gate,
         } => {
             let turn = TurnParts {
-                agent_loop: &agent_loop,
+                agent_loop,
                 tools,
                 steering: &steering,
                 limits,
                 recorder,
+                gate,
             };
             run_prompt(&mut session, prompt, turn, &ui, &cancel).await
         }
@@ -181,11 +199,12 @@ async fn run(
 
 /// What a turn runs on, besides the session.
 struct TurnParts<'a> {
-    agent_loop: &'a AgentLoop,
+    agent_loop: Box<AgentLoop>,
     tools: Vec<ToolDefinition>,
     steering: &'a Steering,
     limits: LongRunSettings,
     recorder: Option<Arc<RunRecorder>>,
+    gate: Option<GateTurn>,
 }
 
 /// Record `text` on `session` as a prompt from the user. The kernels'
@@ -214,11 +233,13 @@ pub(crate) async fn record_prompt(
 }
 
 /// Record `prompt` as typed and run a turn answering it. The model gets
-/// the files it mentions as well.
+/// the files it mentions as well. When Gate picked the model and its
+/// route refuses the user's sign-in, the turn carries on from where it
+/// stopped on Gate's next pick.
 async fn run_prompt(
     session: &mut AgentSession,
     prompt: Prompt,
-    turn: TurnParts<'_>,
+    mut turn: TurnParts<'_>,
     ui: &AgentUi,
     cancel: &CancellationToken,
 ) -> Outcome {
@@ -239,17 +260,48 @@ async fn run_prompt(
     }
     session.messages.push(model_message(session, prompt).await);
 
-    let (process_result, forwarded) = run_agent_turn(
-        session,
-        turn.agent_loop,
-        turn.tools,
-        ui,
-        cancel,
-        turn.steering,
-        turn.limits,
-        turn.recorder.clone(),
-    )
-    .await;
+    let mut refused = Vec::new();
+    let mut fallbacks = turn
+        .gate
+        .take()
+        .map(|gate| (gate.fallbacks.into_iter(), gate.limits));
+    let (process_result, forwarded) = loop {
+        let (result, forwarded) = run_agent_turn(
+            session,
+            &turn.agent_loop,
+            turn.tools.clone(),
+            ui,
+            cancel,
+            turn.steering,
+            turn.limits,
+            turn.recorder.clone(),
+        )
+        .await;
+        let Some((picks, limits)) = fallbacks.as_mut() else {
+            break (result, forwarded);
+        };
+        if !forwarded.credentials_rejected || cancel.is_cancelled() {
+            break (result, forwarded);
+        }
+        let model = turn.agent_loop.config().model.clone();
+        refused.push(model.clone());
+        let Some(next) = picks.next() else {
+            break (result, forwarded);
+        };
+        session.usage.add(&forwarded.usage);
+        if let Ok(partial) = &result {
+            session.messages.clone_from(&partial.messages);
+        }
+        ui.send(system_message(format!(
+            "{model} refused your sign-in; Gate skips it until your sign-ins change.\n\
+             gate → {}",
+            next.route_label()
+        )))
+        .await;
+        let mut config = turn.agent_loop.config().clone();
+        limits.configure(&mut config, &next.id);
+        *turn.agent_loop = AgentLoop::new(config);
+    };
     if let Some(files) = &session.file_checkpoints {
         files.end_turn(session.agent_id());
     }
@@ -287,7 +339,11 @@ async fn run_prompt(
             Some(e.to_string())
         }
     };
-    Outcome { failure, unseen }
+    Outcome {
+        failure,
+        unseen,
+        refused,
+    }
 }
 
 /// The user message the model gets for `prompt`: its images, then its

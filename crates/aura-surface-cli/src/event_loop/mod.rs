@@ -57,7 +57,7 @@ use steering::{SteerSource, Steering};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
-use turns::{Prompt, Task, Work, WorkDone};
+use turns::{GateTurn, Prompt, Task, Work, WorkDone};
 
 /// How long quitting waits for cancelled turns to record how they ended.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
@@ -134,8 +134,11 @@ impl LoopState<'_> {
         }
     }
 
-    /// Publish the terminal's current config as the base for spawned agents.
+    /// Point the terminal's config at the model the next turn runs on
+    /// (Gate's pick when Gate is selected) and publish it as the base for
+    /// turns and spawned agents.
     fn sync_turn_base(&mut self) {
+        self.models.refresh_route(self.agent_loop.config_mut());
         let config = self.agent_loop.config_mut().clone();
         let mut base = subagents::lock(&self.hub.base);
         base.config = config;
@@ -590,6 +593,7 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
             })
             .await;
             let (agent_loop, tools, recorder) = prepare_turn(state, &session).await;
+            let gate = gate_turn(state, &agent_loop, &ui).await;
             if let Some(rec) = &recorder {
                 rec.begin_turn(&prompt.text);
             }
@@ -607,6 +611,7 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
                 steering: turn_steering,
                 limits: state.hub.long_run,
                 recorder,
+                gate,
             }
         }
         Work::Command { command, cols } => Task::Command { command, cols },
@@ -686,6 +691,31 @@ async fn prepare_turn(
     (AgentLoop::new(config), tools, recorder)
 }
 
+/// When Gate picked the model `agent_loop` runs (a permanent agent may
+/// name its own), show the pick in the chat and the status line, and
+/// return where the turn goes if the pick refuses the user's sign-in.
+async fn gate_turn(
+    state: &LoopState<'_>,
+    agent_loop: &AgentLoop,
+    ui: &AgentUi,
+) -> Option<GateTurn> {
+    let pick = state
+        .models
+        .route()
+        .filter(|pick| pick.id == agent_loop.config().model)?;
+    info!(model = %pick.id, "Gate picked the turn's model");
+    ui.send(handlers::system_message(format!(
+        "gate → {}",
+        pick.route_label()
+    )))
+    .await;
+    let _ = state.commands.send(state.models.ui_command()).await;
+    Some(GateTurn {
+        fallbacks: state.models.fallbacks(),
+        limits: state.models.limits(),
+    })
+}
+
 /// Take back the session of work that ended, report a failure, and start
 /// what was waiting for the agent: first any messages sent into the turn
 /// too late for the model to see, then the queue.
@@ -695,7 +725,14 @@ async fn handle_work_done(state: &mut LoopState<'_>, done: WorkDone) {
         session,
         failure,
         unseen,
+        refused_models,
     } = done;
+    if !refused_models.is_empty() {
+        for model in &refused_models {
+            state.models.drop_model(model);
+        }
+        let _ = state.commands.send(state.models.ui_command()).await;
+    }
     if !unseen.is_empty() {
         let queue = state.queued.entry(agent_id).or_default();
         for (source, text) in unseen.into_iter().rev() {
@@ -735,7 +772,7 @@ async fn handle_work_done(state: &mut LoopState<'_>, done: WorkDone) {
 /// Re-probe Ollama when the selected model is local. Returns `true` after
 /// telling `ui` why it can't run and ending its turn.
 async fn local_model_unavailable(state: &mut LoopState<'_>, ui: &AgentUi) -> bool {
-    if local_model_name(state.models.current()).is_none() {
+    if local_model_name(&state.models.turn_model()).is_none() {
         return false;
     }
     state.models.refresh_local().await;

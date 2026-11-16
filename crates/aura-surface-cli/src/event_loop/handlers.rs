@@ -458,6 +458,7 @@ pub(super) async fn announce_models(state: &mut LoopState<'_>) {
     if let Some(note) = state.models.refresh_plans(state.auth.as_ref()).await {
         show_system_message(state, note).await;
     }
+    state.models.refresh_route(state.agent_loop.config_mut());
     let _ = state.commands.send(state.models.ui_command()).await;
     if let Some(hint) = state.models.local_hint() {
         show_system_message(state, hint).await;
@@ -465,9 +466,8 @@ pub(super) async fn announce_models(state: &mut LoopState<'_>) {
 }
 
 pub(super) async fn handle_select_model(state: &mut LoopState<'_>, id: &str) {
-    if aura_model_reasoner::model_catalog::backend_for(id)
-        == aura_model_reasoner::model_catalog::ModelBackend::Local
-    {
+    use aura_model_reasoner::model_catalog::{backend_for, ModelBackend, GATE_MODEL_ID};
+    if id == GATE_MODEL_ID || backend_for(id) == ModelBackend::Local {
         state.models.refresh_local().await;
     }
     match state.models.select(state.agent_loop.config_mut(), id) {
@@ -477,7 +477,7 @@ pub(super) async fn handle_select_model(state: &mut LoopState<'_>, id: &str) {
                 .commands
                 .send(UiCommand::ShowSuccess(format!(
                     "Model: {}",
-                    crate::model_selection::ModelSelection::label(state.models.current())
+                    state.models.display()
                 )))
                 .await;
             if let Some(hint) = state.models.local_hint() {

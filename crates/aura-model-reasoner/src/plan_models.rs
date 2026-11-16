@@ -7,7 +7,7 @@ use aura_core_auth::{CredentialResolver, ProviderKind};
 use serde::Deserialize;
 
 use crate::anthropic::anthropic_api_base;
-use crate::model_catalog::{ModelBackend, ModelOption, CLAUDE_PREFIX};
+use crate::model_catalog::{infer_tier, ModelBackend, ModelOption, CLAUDE_PREFIX};
 use crate::ReasonerError;
 
 const LIST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -95,12 +95,14 @@ async fn fetch_claude_models_from(
             .await
             .map_err(|e| ReasonerError::Parse(format!("Claude models list: {e}")))?;
         options.extend(page.data.into_iter().map(|m| {
+            let id = format!("{CLAUDE_PREFIX}{}", m.id);
             ModelOption {
                 label: m
                     .display_name
                     .filter(|n| !n.is_empty())
                     .unwrap_or_else(|| m.id.clone()),
-                id: format!("{CLAUDE_PREFIX}{}", m.id),
+                tier: infer_tier(&id),
+                id,
                 backend: ModelBackend::Claude,
                 installed: true,
             }

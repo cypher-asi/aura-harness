@@ -274,11 +274,13 @@ impl App {
         &mut self,
         options: Vec<crate::events::ModelOptionView>,
         current: String,
+        route: Option<String>,
         user: Option<String>,
         plans: Vec<String>,
     ) {
         self.models = options;
         self.current_model = current;
+        self.model_route = route;
         self.user = user;
         self.plans = plans;
         if self.model_cursor >= self.models.len() {
@@ -712,9 +714,10 @@ impl App {
             UiCommand::SetModels {
                 options,
                 current,
+                route,
                 user,
                 plans,
-            } => self.cmd_set_models(options, current, user, plans),
+            } => self.cmd_set_models(options, current, route, user, plans),
             UiCommand::PromptLinkCode { provider } => self.cmd_prompt_link_code(&provider),
             UiCommand::EndLink => self.cmd_end_link(),
             UiCommand::SetPlan(plan) => self.active_plan = plan,

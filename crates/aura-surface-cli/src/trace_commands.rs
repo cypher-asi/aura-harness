@@ -149,7 +149,7 @@ pub async fn cmd_runs(args: RunsCommand) -> anyhow::Result<()> {
                 .model
                 .clone()
                 .unwrap_or_else(|| source.meta.model.clone());
-            let (config, live) = loop_setup(&harness.provider, Some(&model))?;
+            let (config, live) = loop_setup(&harness.provider, Some(&model)).await?;
             let plan = recorded_runs::plan_branch(&source, from_step)?;
             let mut meta = plan.meta;
             meta.arm = arm;
@@ -245,7 +245,8 @@ pub async fn cmd_eval(args: EvalCommand) -> anyhow::Result<()> {
                 }
             }
             let arm = install_params(&harness)?;
-            let (config, provider) = loop_setup(&harness.provider, harness.model.as_deref())?;
+            let (config, provider) =
+                loop_setup(&harness.provider, harness.model.as_deref()).await?;
             let opts = EvalOptions {
                 home: home.clone(),
                 suite: evals::suite_name(&suite),
@@ -334,7 +335,8 @@ fn install_params(args: &HarnessArgs) -> anyhow::Result<Option<String>> {
 
 /// Loop configuration and provider for a headless run. The model is
 /// `model` or the terminal's startup model; the choice is not persisted.
-fn loop_setup(
+/// `gate` runs every run on Gate's pick for the current sign-ins.
+async fn loop_setup(
     provider: &str,
     model: Option<&str>,
 ) -> anyhow::Result<(AgentLoopConfig, Arc<dyn ModelProvider + Send + Sync>)> {
@@ -347,12 +349,19 @@ fn loop_setup(
     }
     let auth = Arc::new(aura_auth::AuthManager::new().context("loading sign-in state")?);
     let summary = event_loop::auth::auth_summary(&auth, config.auth_token.as_deref());
-    let models = ModelSelection::init(&mut config, summary);
+    let mut models = ModelSelection::init(&mut config, summary);
     if let Some(model) = model {
-        if !models.usable(model) {
-            bail!("model `{model}` is not usable with the current sign-in");
+        models
+            .use_for_run(&mut config, model)
+            .map_err(|problem| anyhow::anyhow!("--model {model}: {problem}"))?;
+    }
+    if models.is_gate() {
+        models.refresh_local().await;
+        if let Some(note) = models.refresh_plans(auth.as_ref()).await {
+            eprintln!("{note}");
         }
-        models.limits().configure(&mut config, model);
+        models.refresh_route(&mut config);
+        eprintln!("{}", models.display());
     }
     let resolver: Arc<dyn aura_auth::CredentialResolver> = auth;
     let selection =

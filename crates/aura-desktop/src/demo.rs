@@ -101,6 +101,7 @@ impl Demo {
                 ),
             ],
             current: self.model.clone(),
+            route: None,
             user: Some("demo@aura.dev".into()),
             plans: Vec::new(),
         }

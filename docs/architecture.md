@@ -375,6 +375,10 @@ Subagent derivation, inheritance, registry, and the pure-data adapter layer that
 
 The `SubagentDispatchHook` trait stays at the **exec layer** in `aura-tools` (unchanged — see below); the concrete impl is `AgentHooks` in `aura-engine`. Phase 7a routed the `task` tool through this crate; Phase B widened it to also own the dispatcher's data layer.
 
+#### [`aura-agent-gate`](../crates/aura-agent-gate)
+
+Gate, the router behind the `gate` model id (`router.rs`): the catalog models the user's sign-ins allow, one route per upstream model, ordered by list price, and the model a turn goes to. It never calls a model; the surface resolves `gate` to the pick before the turn's requests are built.
+
 #### [`aura-agent`](../crates/aura-agent)
 
 The multi-step turn loop (`AgentLoop`, `AgentLoopConfig`, `AgentLoopEvent`) and everything that wraps the kernel: streaming, blocking detection, stall detection, budget management, compaction orchestration, build verification, message sanitization, planning, self-review, file-ops pipeline.
@@ -500,7 +504,7 @@ Here **MP** is the `RoutedProvider`, which picks a backend from the model id pre
 
 For the two plan routes, a `CredentialedProvider` asks `AuthManager` for the plan credential on each request. It strips the route prefix, adds the provider's headers and system prompt opening, and removes the Aura billing headers. There is no fallback between routes.
 
-The session starts on the local default model (`local/qwen3:4b`), so no login is required. `/model` sends `UiEvent::SelectModel`, and the EL rewrites `AgentLoopConfig.model` together with its context and output limits. `/login` unlocks the aura-router models, and `/login claude` or `/login chatgpt` links a plan. Browser sign-ins finish in a background task that reports back to the EL. Paste sign-ins prompt for the code.
+The session starts on `gate`, which sends turns to the local default model (`local/qwen3:4b`) while nothing is signed in, so no login is required. `/model` sends `UiEvent::SelectModel`, and the EL rewrites `AgentLoopConfig.model` together with its context and output limits. `/login` unlocks the aura-router models, and `/login claude` or `/login chatgpt` links a plan. Browser sign-ins finish in a background task that reports back to the EL. Paste sign-ins prompt for the code.
 
 The session mode belongs to the terminal (`LoopState.mode`, starting from `--mode`). `UiEvent::SetMode` switches the active agent's kernel through `Kernel::switch_mode`, and an agent opened later is switched when it becomes active. In `Plan` mode each turn's system prompt gets the `plan_mode` section, which tells the model to research and save a plan with `create_plan` (`.aura/plans/<slug>_<id>.plan.md`, YAML frontmatter with todos, then Markdown). The forwarder reloads the plan after each successful `create_plan` or `todo_write` and sends `UiCommand::SetPlan`; the session keeps the latest plan path and restores it from the record when the agent is reopened. `/build` (`UiEvent::BuildPlan`) switches to `Agent` mode and sends the `build_plan` prompt, so the model works through the todos and reports progress with `todo_write`.
 

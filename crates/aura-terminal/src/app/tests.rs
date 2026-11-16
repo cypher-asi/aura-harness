@@ -1768,6 +1768,7 @@ fn app_with_models(user: Option<&str>) -> (App, mpsc::Receiver<UiEvent>) {
             },
         ],
         current: "local/qwen3:4b".to_string(),
+        route: None,
         user: user.map(str::to_string),
         plans: Vec::new(),
     });
@@ -1797,6 +1798,7 @@ fn test_unlinked_plan_pick_starts_link_then_selects() {
     app.process_command(UiCommand::SetModels {
         options: available(app.models()),
         current: "local/qwen3:4b".to_string(),
+        route: None,
         user: Some("alice".to_string()),
         plans: Vec::new(),
     });
@@ -1821,6 +1823,7 @@ fn test_failed_link_drops_pending_model() {
     app.process_command(UiCommand::SetModels {
         options: available(app.models()),
         current: "local/qwen3:4b".to_string(),
+        route: None,
         user: Some("alice".to_string()),
         plans: Vec::new(),
     });
@@ -1881,6 +1884,7 @@ fn test_guest_cloud_pick_starts_login_then_selects() {
     app.process_command(UiCommand::SetModels {
         options: available(app.models()),
         current: "local/qwen3:4b".to_string(),
+        route: None,
         user: Some("alice".to_string()),
         plans: Vec::new(),
     });
@@ -1900,6 +1904,7 @@ fn test_cancelled_login_drops_pending_model() {
     app.process_command(UiCommand::SetModels {
         options: available(app.models()),
         current: "local/qwen3:4b".to_string(),
+        route: None,
         user: Some("alice".to_string()),
         plans: Vec::new(),
     });

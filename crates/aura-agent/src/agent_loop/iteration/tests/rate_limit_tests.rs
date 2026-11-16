@@ -15,6 +15,18 @@ fn from_reasoner_error_maps_rate_limited_variant() {
 }
 
 #[test]
+fn from_reasoner_error_marks_refused_credentials() {
+    let err = aura_model_reasoner::ReasonerError::Api {
+        status: 401,
+        message: "claude plan models are not available in this session".to_string(),
+    };
+    assert!(matches!(
+        LlmCallError::from_reasoner_error(&err),
+        LlmCallError::Unauthorized(_)
+    ));
+}
+
+#[test]
 fn from_reasoner_error_classifies_transient_5xx_as_fatal() {
     // After the provider exhausts its own retry/fallback chain a
     // `Transient` reaches the agent loop. The loop has nowhere left to

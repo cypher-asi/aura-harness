@@ -248,8 +248,9 @@ fn header_status_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
     spans
 }
 
-/// `qwen3:4b`, after a `PLAN` / `ASK` / `DEBUG` badge outside agent mode.
-/// The model is left out until the kernel reports it.
+/// `qwen3:4b`, or `Gate → <model> (<route>)` when Gate picks the model,
+/// after a `PLAN` / `ASK` / `DEBUG` badge outside agent mode. The model
+/// is left out until the kernel reports it.
 pub(super) fn model_indicator_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
     let mut spans = Vec::new();
     let badge = match app.mode() {
@@ -277,6 +278,10 @@ pub(super) fn model_indicator_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span
     let label = app
         .current_model_option()
         .map_or_else(|| app.current_model(), |m| m.label.as_str());
+    let label = match app.model_route() {
+        Some(route) => format!("{label} → {route}"),
+        None => label.to_string(),
+    };
     spans.push(Span::styled(label, Style::default().fg(theme.colors.muted)));
     spans
 }

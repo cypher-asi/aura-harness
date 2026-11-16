@@ -15,7 +15,8 @@ task fails as shipped and passes when solved.
 ```sh
 aura eval run evals/gate_hard --model claude/claude-haiku-5-5 --arm haiku --repeat 3 --budget-usd 2
 aura eval run evals/gate_hard --model claude/claude-opus-5-5 --arm opus --repeat 3 --budget-usd 10
+aura eval run evals/gate_hard --model gate --arm gate --repeat 3 --budget-usd 10
 
-aura eval compare --suite gate_hard --arm opus --arm haiku
-python3 evals/gate_cost/judge.py --suite evals/gate_hard --reference opus --arm haiku
+aura eval compare --suite gate_hard --arm opus --arm gate
+python3 evals/gate_cost/judge.py --suite evals/gate_hard --reference opus --arm gate
 ```

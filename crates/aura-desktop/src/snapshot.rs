@@ -138,6 +138,7 @@ fn seed(h: &mut Harness) {
                 ),
             ],
             current: "local/qwen3-coder".into(),
+            route: None,
             user: Some("demo@aura.dev".into()),
             plans: vec![],
         },

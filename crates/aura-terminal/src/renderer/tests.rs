@@ -1035,6 +1035,7 @@ fn app_with_auth(user: Option<&str>, plans: &[&str]) -> crate::App {
             available: true,
         }],
         current: "local/qwen3:4b".to_string(),
+        route: None,
         user: user.map(str::to_string),
         plans: plans.iter().map(|p| (*p).to_string()).collect(),
     });
@@ -1611,6 +1612,34 @@ fn test_header_shows_zos_user_and_plans() {
             .ends_with("● alice (zOS) · ChatGPT · Claude  http://127.0.0.1:8080"),
         "{:?}",
         rows[1]
+    );
+}
+
+#[test]
+fn test_input_shows_gates_pick() {
+    use crate::events::{ModelOptionView, UiCommand};
+
+    let mut app = app_with_model(None);
+    app.process_command(UiCommand::SetModels {
+        options: vec![ModelOptionView {
+            id: "gate".to_string(),
+            label: "Gate".to_string(),
+            local: false,
+            installed: true,
+            group: "Gate".to_string(),
+            provider: None,
+            available: true,
+        }],
+        current: "gate".to_string(),
+        route: Some("claude-sonnet-4-6 (claude plan)".to_string()),
+        user: None,
+        plans: Vec::new(),
+    });
+    let rows = render_rows(&mut app, 120);
+    let input_row = &rows[rows.len() - 2];
+    assert!(
+        input_row.contains("Gate → claude-sonnet-4-6 (claude plan)"),
+        "{input_row:?}"
     );
 }
 

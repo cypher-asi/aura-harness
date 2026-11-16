@@ -228,8 +228,10 @@ pub struct App {
     pub(super) login_email: String,
     /// Models offered by the selector
     pub(super) models: Vec<ModelOptionView>,
-    /// Id of the model used for the next turn
+    /// Id of the selected model (`gate` when Gate picks it)
     pub(super) current_model: String,
+    /// The model and route Gate sends the next turn to
+    pub(super) model_route: Option<String>,
     /// Logged-in user's display name (`None` = guest)
     pub(super) user: Option<String>,
     /// Labels of the usable linked plans
@@ -537,6 +539,7 @@ impl App {
             login_email: String::new(),
             models: Vec::new(),
             current_model: String::new(),
+            model_route: None,
             user: None,
             plans: Vec::new(),
             active_plan: None,
@@ -1751,6 +1754,13 @@ impl App {
     #[must_use]
     pub fn current_model(&self) -> &str {
         &self.current_model
+    }
+
+    /// The model and route Gate sends the next turn to, `None` for a
+    /// pinned model.
+    #[must_use]
+    pub fn model_route(&self) -> Option<&str> {
+        self.model_route.as_deref()
     }
 
     /// Selector entry for the current model, if listed.

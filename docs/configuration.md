@@ -13,7 +13,7 @@ All cloud LLM traffic goes through the AURA router (proxy) with a per-request JW
 | `AURA_LOCAL_CONTEXT_TOKENS` | `32768` | Context window assumed for local models. Start Ollama with a matching `OLLAMA_CONTEXT_LENGTH`. |
 | `AURA_ROUTER_URL` | `https://aura-router.onrender.com` | Proxy router endpoint. |
 | `AURA_ROUTER_JWT` | — | JWT for terminal/CLI sessions (or run `aura login`). WebSocket clients supply their own. |
-| `AURA_DEFAULT_MODEL` | `claude-opus-4-6` | Model sent to the router only when the request did not pin one. In the terminal UI, setting it overrides the local default and the saved `/model` choice. Legacy `AURA_ANTHROPIC_MODEL` is still read as a fallback. |
+| `AURA_DEFAULT_MODEL` | `claude-opus-4-6` | Model sent to the router only when the request did not pin one. In the terminal UI, setting it overrides `gate` and the saved `/model` choice. Legacy `AURA_ANTHROPIC_MODEL` is still read as a fallback. |
 | `AURA_MEMORY_MODEL` | `aura-claude-haiku-4-5` | Low-cost model for background memory extraction and consolidation, independent of the chat model. |
 | `AURA_DEFAULT_FALLBACK_MODEL` | — | Optional secondary model used on 429/529 retries. |
 | `AURA_MODEL_TIMEOUT_MS` | `300000` | LLM request timeout. |

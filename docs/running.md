@@ -66,10 +66,10 @@ The node listens on `127.0.0.1:8080` by default. Start work with `POST /v1/run` 
 
 ## Local model by default, login optional
 
-The terminal UI starts on `local/qwen3:4b`, served by [Ollama](https://ollama.com) (0.14+, which exposes the Anthropic-compatible `/v1/messages`). It runs on CPU and supports tool calling. Nothing is sent to aura-router and no login is needed. If Ollama isn't running or the model isn't pulled, the chat shows setup instructions.
+The terminal UI starts on `gate`, which with nothing signed in sends every turn to `local/qwen3:4b`, served by [Ollama](https://ollama.com) (0.14+, which exposes the Anthropic-compatible `/v1/messages`). It runs on CPU and supports tool calling. Nothing is sent to aura-router and no login is needed. If Ollama isn't running or the model isn't pulled, the chat shows setup instructions.
 
 - `/model` opens the model selector (↑/↓, Enter, Esc). `/model <id>` switches directly, for example `/model local/qwen3:8b`. The header shows the active model, backend, and user, such as `qwen3:4b · local · guest`.
-- `/login` inside the chat unlocks the aura-router cloud models. Picking a cloud model as a guest starts the login flow and switches to that model once login succeeds. `/logout` returns to the local default.
+- `/login` inside the chat unlocks the aura-router cloud models. Picking a cloud model as a guest starts the login flow and switches to that model once login succeeds. `/logout` switches a cloud model back to `gate`.
 - The last choice is saved to `AURA_HOME/tui.json`. `AURA_DEFAULT_MODEL` overrides it.
 - Other local options: `qwen3:1.7b` for very small machines, or `qwen3:8b` / `qwen2.5-coder:7b` for better quality. Set `AURA_LOCAL_MODEL` to change the default.
 

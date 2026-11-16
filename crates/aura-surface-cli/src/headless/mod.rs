@@ -39,7 +39,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{info, warn};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 /// Default longest wait for background jobs after the agent's last turn
@@ -224,19 +224,20 @@ async fn build(
     } else {
         session_helpers::default_agent_config(aura_model_reasoner::ENV_FALLBACK_MODEL)
     };
-    let (selection, summary) = if mock {
+    let (selection, auth) = if mock {
         // No sign-in state is needed, so tests and offline runs never
         // touch the keyring.
-        (
-            aura_model_reasoner::mock_provider(),
-            aura_auth::AuthSummary::default(),
-        )
+        (aura_model_reasoner::mock_provider(), None)
     } else {
         let auth =
             std::sync::Arc::new(aura_auth::AuthManager::new().context("loading sign-in state")?);
-        let summary = crate::event_loop::auth::auth_summary(&auth, config.auth_token.as_deref());
-        (build_provider(provider_name, &auth)?, summary)
+        (build_provider(provider_name, &auth)?, Some(auth))
     };
+    let summary = auth
+        .as_ref()
+        .map_or_else(aura_auth::AuthSummary::default, |auth| {
+            crate::event_loop::auth::auth_summary(auth, config.auth_token.as_deref())
+        });
     let mut models = ModelSelection::init(&mut config, summary);
     if let Some(model) = &args.model {
         if let Err(problem) = models.use_for_run(&mut config, model) {
@@ -245,12 +246,27 @@ async fn build(
             }
         }
     }
-    if !mock && aura_model_reasoner::model_catalog::local_model_name(models.current()).is_some() {
-        models.refresh_local().await;
-        if let Some(hint) = models.local_hint() {
-            anyhow::bail!("{hint}");
+    if let Some(auth) = &auth {
+        let local = |config: &aura_agent::AgentLoopConfig| {
+            aura_model_reasoner::model_catalog::local_model_name(&config.model).is_some()
+        };
+        if models.is_gate() || local(&config) {
+            models.refresh_local().await;
+        }
+        if models.is_gate() {
+            if let Some(note) = models.refresh_plans(auth.as_ref()).await {
+                warn!("{note}");
+            }
+            models.refresh_route(&mut config);
+            info!(model = %config.model, "{}", models.display());
+        }
+        if local(&config) {
+            if let Some(hint) = models.local_hint() {
+                anyhow::bail!("{hint}");
+            }
         }
     }
+    let model = config.model.clone();
 
     let mode = aura_config::session_mode(requested_mode);
     let permission_mode = permission_mode(mode);
@@ -292,7 +308,7 @@ async fn build(
         background,
         completions,
         notices,
-        model: models.current().to_string(),
+        model,
         mode,
         workspace_root,
         tool_filter,
