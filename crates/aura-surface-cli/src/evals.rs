@@ -179,7 +179,7 @@ pub async fn run_suite(tasks: &[EvalTask], opts: &EvalOptions) -> anyhow::Result
                 return Ok(results);
             }
             let result = run_task(task, opts).await?;
-            spent += result.scorecard.total_cost_usd();
+            spent += result.scorecard.cost_usd;
             results.push(result);
         }
     }
@@ -319,7 +319,7 @@ pub fn results_table(results: &[EvalResult]) -> String {
             if r.passed { "pass" } else { "FAIL" },
             r.scorecard.total_tokens(),
             r.scorecard.model_calls,
-            r.scorecard.total_cost_usd(),
+            r.scorecard.cost_usd,
             r.scorecard.wall_ms as f64 / 1000.0,
             r.run_id,
             r.error
@@ -329,7 +329,7 @@ pub fn results_table(results: &[EvalResult]) -> String {
         );
     }
     let passed = results.iter().filter(|r| r.passed).count();
-    let cost: f64 = results.iter().map(|r| r.scorecard.total_cost_usd()).sum();
+    let cost: f64 = results.iter().map(|r| r.scorecard.cost_usd).sum();
     let _ = writeln!(out, "{passed}/{} passed, ${cost:.4}", results.len());
     out
 }

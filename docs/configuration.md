@@ -85,18 +85,6 @@ Ctrl+G in the input, and editing a permanent agent, open the user's editor.
 | `RUST_LOG` | warnings only | Log filter. Logs go to stderr so stdout stays machine-readable. |
 | `AURA_EVALS_LIVE` | unset | Set to `1` to let [`evals/long_horizon/run.py`](../evals/long_horizon/README.md) call real models (same as its `--live` flag). |
 
-## Cost gate
-
-Read by `GateConfig::from_env` ([`crates/aura-config/src/gate.rs`](../crates/aura-config/src/gate.rs)) when a `gate/<frontier>` model runs, in the terminal, `aura -p` and `aura eval run`. See [Cost gate](architecture.md#cost-gate).
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AURA_GATE_POLICY` | `AURA_HOME/gate/policy.json` if it exists, else the built-in rules | Routing policy file, for example one written by `aura gate fit`. |
-| `AURA_GATE_EXPLORE` | the policy's rate (`0` for the built-in rules) | Share of checked blocks (0.0–1.0) started one tier cheaper than the policy would pick, so the ledger learns whether the cheaper tier passes. |
-| `AURA_GATE_EXPLORE_BUDGET_USD` | `1.0` | Exploration stops once exploring blocks have cost this much in one process. |
-| `AURA_GATE_TIERS` | the frontier's family | Tier overrides: `fast=<model>,standard=<model>,frontier=<model>`. Any subset. |
-| `AURA_GATE_LEDGER` | `AURA_HOME/gate/ledger.jsonl` | Set to `off` to stop appending attempts to the ledger. |
-
 ## Node runtime
 
 | Variable | Default | Description |

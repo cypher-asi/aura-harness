@@ -438,17 +438,8 @@ dependencies = [
 name = "aura-agent-gate"
 version = "0.1.0"
 dependencies = [
- "async-trait",
- "aura-core-types",
+ "aura-core-auth",
  "aura-model-reasoner",
- "aura-tools",
- "serde",
- "serde_json",
- "similar",
- "tempfile",
- "tokio",
- "tracing",
- "walkdir",
 ]
 
 [[package]]

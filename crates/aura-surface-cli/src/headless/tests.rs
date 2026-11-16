@@ -106,17 +106,6 @@ fn headless_in(
     filter: ToolFilter,
     mode: PermissionMode,
 ) -> (Headless, Arc<Mutex<Vec<ModelRequest>>>) {
-    headless_on(dirs, provider, filter, mode, "mock-model")
-}
-
-/// [`headless_in`] with `model` selected.
-fn headless_on(
-    dirs: &Dirs,
-    provider: MockProvider,
-    filter: ToolFilter,
-    mode: PermissionMode,
-    model: &str,
-) -> (Headless, Arc<Mutex<Vec<ModelRequest>>>) {
     let data = dirs.data.path();
     let workspace = dirs.workspace.path().to_path_buf();
     let requests = Arc::new(Mutex::new(Vec::new()));
@@ -126,7 +115,7 @@ fn headless_on(
     });
     let (tool_config, tools, web_tools) = agent_tools(false);
     let tool_names = policy_tool_names(&tools);
-    let config = default_agent_config_with_auth(model, None);
+    let config = default_agent_config_with_auth("mock-model", None);
     let (commands, mut ui) = mpsc::channel(256);
     tokio::spawn(async move { while ui.recv().await.is_some() {} });
     let (process_manager, completions) = background_process_manager();
@@ -156,7 +145,6 @@ fn headless_on(
         web_tools,
         post_edit_check: aura_agent::PostEditCheckConfig::from_lookup(|_| None),
         trace_snapshots: false,
-        gate: crate::gate::runner(Some(data), None),
     });
     let notices = hub.take_notices();
     let headless = Headless {
@@ -164,7 +152,7 @@ fn headless_on(
         background,
         completions,
         notices,
-        model: model.to_string(),
+        model: "mock-model".to_string(),
         mode: mode.agent_mode(),
         workspace_root: workspace,
         tool_filter: filter,
@@ -607,68 +595,4 @@ fn session_ids_round_trip() {
     assert_eq!(parse_session_id(" 12 ", other), Ok((other, 12)));
     assert!(parse_session_id("nope", other).is_err());
     assert!(parse_session_id("zz:12", other).is_err());
-}
-
-#[tokio::test]
-async fn gate_model_drafts_on_the_fast_tier_then_the_coordinator_reviews() {
-    let dirs = dirs();
-    let provider = MockProvider::new().with_responses(vec![
-        MockResponse::tool_use(
-            "w1",
-            "write_file",
-            json!({ "path": "greeting.txt", "content": "hello, aura\n" }),
-        ),
-        MockResponse::text("Wrote greeting.txt."),
-        MockResponse::text("Done."),
-    ]);
-    let mode = super::permission_mode(aura_core_modes::AgentMode::Agent);
-    let (mut h, requests) = headless_on(
-        &dirs,
-        provider,
-        ToolFilter::default(),
-        mode,
-        "gate/claude/claude-opus-5-5",
-    );
-    let (_, out) = execute(
-        &mut h,
-        request("Add a greeting file.", SessionChoice::New),
-        OutputFormat::Text,
-    )
-    .await;
-    assert_eq!(out.text().trim(), "Done.");
-    assert_eq!(
-        std::fs::read_to_string(dirs.workspace.path().join("greeting.txt")).unwrap(),
-        "hello, aura\n"
-    );
-
-    let requests = requests.lock().unwrap();
-    assert_eq!(requests.len(), 3);
-    let tools =
-        |r: &ModelRequest| -> Vec<String> { r.tools.iter().map(|t| t.name.clone()).collect() };
-    let worker = &requests[0];
-    assert_eq!(worker.model.as_str(), "claude/claude-haiku-5-5");
-    assert!(tools(worker).contains(&"write_file".to_string()));
-    assert!(!tools(worker).contains(&"run_blocks".to_string()));
-    let coordinator = &requests[2];
-    assert_eq!(coordinator.model.as_str(), "claude/claude-opus-5-5");
-    assert!(tools(coordinator).contains(&"run_blocks".to_string()));
-    assert!(!tools(coordinator).contains(&"write_file".to_string()));
-    assert!(coordinator.system.contains("Working through the gate"));
-    let seen = serde_json::to_string(&coordinator.messages).unwrap();
-    assert!(seen.contains("run_blocks"), "{seen}");
-    assert!(
-        seen.contains("greeting.txt"),
-        "the draft's diff reaches the coordinator"
-    );
-
-    let ledger = std::fs::read_to_string(dirs.data.path().join("gate/ledger.jsonl")).unwrap();
-    let entries: Vec<Value> = ledger
-        .lines()
-        .map(|l| serde_json::from_str(l).unwrap())
-        .collect();
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0]["tier"], "fast");
-    assert_eq!(entries[0]["bucket"], "draft");
-    assert_eq!(entries[0]["reason"], "draft");
-    assert_eq!(entries[0]["policy"], "v1-draft");
 }

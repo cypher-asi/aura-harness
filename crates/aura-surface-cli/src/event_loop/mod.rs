@@ -14,7 +14,6 @@ pub(crate) mod agents;
 pub(crate) mod approvals;
 mod attachments;
 pub(crate) mod auth;
-pub(crate) mod gate_workers;
 pub(crate) mod handlers;
 pub(crate) mod host;
 pub(crate) mod hud;
@@ -34,7 +33,6 @@ pub(crate) mod turns;
 pub(crate) use agent_events::forward_agent_events;
 pub use agents::{AgentSession, KernelBuilder, KernelFactory};
 pub use approvals::TerminalApprovals;
-pub use gate_workers::GateHost;
 pub use host::{TerminalAgents, TerminalChildKernels};
 pub use processes::{BackgroundCommands, ProcessTable};
 pub use record_ui::{FanoutObserver, RecordPanelAgent, UiRecordObserver};
@@ -592,7 +590,6 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
             })
             .await;
             let (agent_loop, tools, recorder) = prepare_turn(state, &session).await;
-            let drafter = state.hub.gate_drafter(&tools);
             if let Some(rec) = &recorder {
                 rec.begin_turn(&prompt.text);
             }
@@ -610,7 +607,6 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
                 steering: turn_steering,
                 limits: state.hub.long_run,
                 recorder,
-                drafter,
             }
         }
         Work::Command { command, cols } => Task::Command { command, cols },

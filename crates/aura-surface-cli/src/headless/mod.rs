@@ -285,7 +285,6 @@ async fn build(
         web_tools,
         post_edit_check: post_edit_check_from_env(),
         trace_snapshots: false,
-        gate: crate::runner::gate_runner(),
     });
     let notices = hub.take_notices();
     Ok(Headless {

@@ -100,7 +100,6 @@ fn fixture() -> (Fixture, mpsc::Receiver<UiCommand>) {
         processes: ProcessTable::without_os_scan(None, None),
         agents: None,
         record_panel: RecordPanelAgent::default(),
-        gate: None,
     };
     let record_observer: Arc<dyn aura_agent_kernel::RecordObserver> = Arc::new(
         UiRecordObserver::new(commands_tx.clone(), RecordPanelAgent::default()),

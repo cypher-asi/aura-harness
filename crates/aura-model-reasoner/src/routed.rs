@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::model_catalog::{backend_for, gate_frontier, local_model_name, ModelBackend};
+use crate::model_catalog::{backend_for, local_model_name, ModelBackend};
 use crate::{
     ModelName, ModelProvider, ModelRequest, ModelResponse, ReasonerError, ResponseEventStream,
     StreamEventStream,
@@ -52,14 +52,10 @@ impl RoutedProvider {
 
     /// Pick the backend for `request`, rewriting local requests so the
     /// local server sees its own model name and never receives the JWT.
-    /// A gate id runs as its frontier model.
     fn route(
         &self,
         mut request: ModelRequest,
     ) -> Result<(&dyn ModelProvider, ModelRequest), ReasonerError> {
-        if let Some(frontier) = gate_frontier(request.model.as_str()) {
-            request.model = ModelName::from(frontier);
-        }
         let backend = backend_for(request.model.as_str());
         let subscription = match backend {
             ModelBackend::Local => {
@@ -149,20 +145,6 @@ mod tests {
         ));
         assert_eq!(rewritten.model.as_str(), "qwen3:4b");
         assert_eq!(rewritten.auth_token, None);
-    }
-
-    #[test]
-    fn gate_requests_run_as_their_frontier() {
-        let provider = routed();
-        let (target, rewritten) = provider
-            .route(request("gate/aura-claude-opus-4-7"))
-            .unwrap();
-        assert!(std::ptr::eq(
-            std::ptr::from_ref(target).cast::<u8>(),
-            Arc::as_ptr(&provider.router).cast::<u8>()
-        ));
-        assert_eq!(rewritten.model.as_str(), "aura-claude-opus-4-7");
-        assert_eq!(rewritten.auth_token.as_deref(), Some("jwt"));
     }
 
     #[tokio::test]

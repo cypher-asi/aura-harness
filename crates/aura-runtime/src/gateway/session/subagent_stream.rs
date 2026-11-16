@@ -424,7 +424,6 @@ mod tests {
                 total_output_tokens: 0,
                 files_changed: Vec::new(),
                 exit: self.exit.clone(),
-                cost_micros: None,
             })
         }
     }

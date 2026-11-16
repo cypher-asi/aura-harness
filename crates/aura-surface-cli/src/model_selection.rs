@@ -170,8 +170,6 @@ impl ModelSelection {
             self.installed_local(),
             &self.plan_models,
         );
-        let gates = model_catalog::gate_options(&options);
-        options.extend(gates);
         if !options.iter().any(|o| o.id == self.current) {
             let backend = backend_for(&self.current);
             options.push(ModelOption {

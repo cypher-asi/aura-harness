@@ -14,7 +14,6 @@
 
 use super::agent_events::AgentUi;
 use super::agents::{AgentSession, KernelFactory};
-use super::gate_workers::GateHost;
 use super::handlers::{handle_agent_success, run_agent_turn};
 use super::host::{agent_tool_definitions, TerminalAgents};
 use super::notices::{Notice, NoticeSender};
@@ -103,8 +102,6 @@ pub struct AgentHub {
     pub(crate) agents: Option<TerminalAgents>,
     /// The agent the RECORD panel follows.
     pub(crate) record_panel: RecordPanelAgent,
-    /// Runs gate coordinators' blocks; `None` turns gate models off.
-    pub(super) gate: Option<GateHost>,
 }
 
 /// Parts of an [`AgentHub`] other than the kernel factory.
@@ -124,8 +121,6 @@ pub struct AgentHubParts {
     pub agents: Option<TerminalAgents>,
     /// Shared with the kernels' [`super::UiRecordObserver`].
     pub record_panel: RecordPanelAgent,
-    /// Runs gate coordinators' blocks; `None` turns gate models off.
-    pub gate: Option<GateHost>,
 }
 
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -163,7 +158,6 @@ impl AgentHub {
                 notice_rx: Mutex::new(Some(notice_rx)),
                 agents: parts.agents,
                 record_panel: parts.record_panel,
-                gate: parts.gate,
             }
         })
     }
@@ -208,7 +202,6 @@ impl AgentHub {
             .map(|tool| tool.name.clone())
             .collect();
         names.push(TASK_TOOL_NAME.to_string());
-        names.push(crate::gate::RUN_BLOCKS_TOOL.to_string());
         if self.agents.is_some() {
             names.extend(agent_tool_definitions().into_iter().map(|tool| tool.name));
         }
@@ -243,7 +236,6 @@ impl AgentHub {
                 .system_prompt
                 .push_str(&aura_context_prompts::system::sections::plan_mode::render());
         }
-        let tools = self.coordinate(agent_id, &mut config, tools);
         (config, tools)
     }
 
@@ -443,13 +435,6 @@ impl AgentHub {
             .map(|running| Arc::clone(&running.kernel))
     }
 
-    /// Token that stops the work `agent_id` has in flight.
-    pub(super) fn running_cancel(&self, agent_id: AgentId) -> Option<CancellationToken> {
-        lock(&self.running)
-            .get(&agent_id)
-            .map(|running| running.cancel.clone())
-    }
-
     /// Stop the work of `agent_id`. Returns whether it had any.
     pub(super) fn cancel(&self, agent_id: AgentId) -> bool {
         lock(&self.running)
@@ -576,7 +561,6 @@ impl AgentHub {
                     total_output_tokens: 0,
                     files_changed: Vec::new(),
                     exit: SubagentExit::Failed { reason },
-                    cost_micros: None,
                 }
             }
         })
@@ -799,9 +783,6 @@ impl SubagentDispatchHook for TerminalSubagentDispatcher {
                 "task: the terminal is shutting down",
             ));
         };
-        if request.subagent_type == crate::gate::GATE_BLOCK_AGENT {
-            return hub.run_gate_block(request).await;
-        }
         hub.spawn(request).await
     }
 }

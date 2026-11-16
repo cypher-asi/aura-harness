@@ -10,22 +10,18 @@ use anyhow::{bail, Context};
 use aura_agent::{
     AgentLoop, AgentLoopConfig, AgentLoopResult, KernelModelGateway, KernelToolGateway,
 };
-use aura_agent_gate::{RunBlocksTool, GATE_BLOCK_AGENT};
 use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
 use aura_agent_trace::{
-    child_cost_reward, RecordRouter, ReplayProvider, RunMeta, RunRecorder, RunScorecard, RunSource,
-    RunTrace,
+    RecordRouter, ReplayProvider, RunMeta, RunRecorder, RunScorecard, RunSource, RunTrace,
 };
 use aura_config::trace::TraceLevel;
 use aura_core_types::trace::StepAction;
-use aura_core_types::{AgentId, AgentPermissions, SubagentDispatchRequest, SubagentResult};
-use aura_model_reasoner::{Message, ModelProvider, ToolDefinition};
-use aura_store_snapshot::SnapshotStore;
-use aura_tools::{SubagentDispatchHook, ToolConfig, ToolExecutor};
+use aura_core_types::{AgentId, AgentPermissions};
+use aura_model_reasoner::{Message, ModelProvider};
+use aura_tools::{ToolConfig, ToolExecutor};
 use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
 
-use crate::{gate, session_helpers};
+use crate::session_helpers;
 
 /// How long a turn waits for its event forwarder before recording the
 /// turn end.
@@ -84,35 +80,13 @@ pub async fn run(spec: HeadlessRun) -> anyhow::Result<HeadlessOutcome> {
     meta.workspace = spec.workspace.display().to_string();
     let rec = RunRecorder::start(&spec.home, meta, level)?.context("tracing is off")?;
 
-    let store: Arc<dyn aura_store_db::Store> =
-        session_helpers::open_store(&rec.dir().join("record"))?;
+    let store = session_helpers::open_store(&rec.dir().join("record"))?;
     let agent_id = AgentId::generate();
     let records = Arc::new(RecordRouter::new());
     records.attach(agent_id, &rec);
-    let snapshot_store = aura_agent_trace::kernel_snapshot_store(&spec.home)?;
-    let (_, mut tools) = session_helpers::build_executor_router_with_config(&spec.tool_config);
-    let mut executor = ToolExecutor::new(spec.tool_config.clone())
+    let (_, tools) = session_helpers::build_executor_router_with_config(&spec.tool_config);
+    let executor = ToolExecutor::new(spec.tool_config)
         .with_caller_permissions(AgentPermissions::full_access());
-    let mut config = spec.config;
-    let gate_runner = gate::frontier_of(&config.model)
-        .is_some()
-        .then(|| gate::runner(Some(&spec.home), Some(rec.run_id())));
-    if let Some(runner) = &gate_runner {
-        let workers = HeadlessWorkers {
-            store: Arc::clone(&store),
-            provider: Arc::clone(&spec.provider),
-            tool_config: spec.tool_config.clone(),
-            workspace: spec.workspace.clone(),
-            snapshot_store: Arc::clone(&snapshot_store),
-            config: config.clone(),
-            tools: tools.clone(),
-            rec: Arc::clone(&rec),
-        };
-        executor = executor.with_subagent_dispatch_hook(Arc::new(workers));
-        executor.register(Box::new(RunBlocksTool::new(Arc::clone(runner))));
-        tools.push(RunBlocksTool::definition());
-        tools = gate::coordinate(runner, agent_id, &mut config, tools, None);
-    }
     let mut router = ExecutorRouter::new();
     router.add_executor(Arc::new(executor));
     let kernel = Arc::new(Kernel::new(
@@ -123,14 +97,15 @@ pub async fn run(spec: HeadlessRun) -> anyhow::Result<HeadlessOutcome> {
             workspace_base: spec.workspace.clone(),
             use_workspace_base_as_root: true,
             record_observer: Some(records),
-            snapshot_store,
+            snapshot_store: aura_agent_trace::kernel_snapshot_store(&spec.home)?,
             ..KernelConfig::default()
         },
         agent_id,
     )?);
     let model_gateway = KernelModelGateway::new(Arc::clone(&kernel));
-    let tool_gateway = KernelToolGateway::new(Arc::clone(&kernel));
+    let tool_gateway = KernelToolGateway::new(kernel);
 
+    let mut config = spec.config;
     config.trace_blobs = rec.blob_store();
     let agent_loop = AgentLoop::new(config);
 
@@ -140,14 +115,6 @@ pub async fn run(spec: HeadlessRun) -> anyhow::Result<HeadlessOutcome> {
     for prompt in &spec.prompts {
         rec.begin_turn(prompt);
         messages.push(Message::user(prompt.clone()));
-        if let Some(runner) = &gate_runner {
-            messages.extend(
-                gate::draft(runner, &kernel, prompt)
-                    .await
-                    .into_iter()
-                    .flatten(),
-            );
-        }
         let (tx, mut rx) = mpsc::channel(256);
         let sink = Arc::clone(&rec);
         let forwarder = tokio::spawn(async move {
@@ -195,72 +162,6 @@ pub async fn run(spec: HeadlessRun) -> anyhow::Result<HeadlessOutcome> {
         error,
         scorecard,
     })
-}
-
-/// Runs gate workers of a headless run as fresh agents on the run's
-/// record store, adding what they cost to the run's rewards.
-struct HeadlessWorkers {
-    store: Arc<dyn aura_store_db::Store>,
-    provider: Arc<dyn ModelProvider + Send + Sync>,
-    tool_config: ToolConfig,
-    workspace: PathBuf,
-    snapshot_store: Arc<dyn SnapshotStore>,
-    config: AgentLoopConfig,
-    tools: Vec<ToolDefinition>,
-    rec: Arc<RunRecorder>,
-}
-
-#[async_trait::async_trait]
-impl SubagentDispatchHook for HeadlessWorkers {
-    async fn dispatch(&self, request: SubagentDispatchRequest) -> Result<SubagentResult, String> {
-        if request.subagent_type != GATE_BLOCK_AGENT {
-            return Ok(SubagentResult::rejected(
-                "headless runs only dispatch gate workers",
-            ));
-        }
-        let child = AgentId::generate();
-        let mut chain = request.parent_chain.clone();
-        chain.push(request.parent_agent_id);
-        let executor = ToolExecutor::new(self.tool_config.clone())
-            .with_caller_permissions(AgentPermissions::full_access())
-            .with_parent_chain(chain);
-        let mut router = ExecutorRouter::new();
-        router.add_executor(Arc::new(executor));
-        let kernel = Kernel::new(
-            Arc::clone(&self.store),
-            Arc::clone(&self.provider),
-            router,
-            KernelConfig {
-                workspace_base: self.workspace.clone(),
-                use_workspace_base_as_root: true,
-                snapshot_store: Arc::clone(&self.snapshot_store),
-                ..KernelConfig::default()
-            },
-            child,
-        )
-        .map_err(|e| format!("could not start a gate worker: {e}"))?;
-        let result = gate::run_worker(
-            Arc::new(kernel),
-            self.config.clone(),
-            self.tools.clone(),
-            &request,
-            CancellationToken::new(),
-        )
-        .await;
-        if let Some(micros) = result.cost_micros {
-            #[allow(clippy::cast_precision_loss)]
-            let usd = micros as f64 / 1_000_000.0;
-            self.rec.add_rewards(&[child_cost_reward(
-                usd,
-                "gate",
-                serde_json::json!({
-                    "agent": child.to_string(),
-                    "model": request.model_override,
-                }),
-            )]);
-        }
-        Ok(result)
-    }
 }
 
 /// Inputs for re-running `source` from step `from_step`.

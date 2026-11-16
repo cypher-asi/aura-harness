@@ -358,9 +358,6 @@ band. Production holders:
 - [`crates/aura-surface-cli/src/runner.rs`](../crates/aura-surface-cli/src/runner.rs)
   — the interactive TUI composition root constructs a per-agent kernel for
   local sessions.
-- [`crates/aura-surface-cli/src/recorded_runs.rs`](../crates/aura-surface-cli/src/recorded_runs.rs)
-  — the eval and `aura runs branch` root opens the run's store and builds
-  the run's kernel and, for gate models, each worker's kernel on it.
 
 Test-only holders (filenames don't match `*test*.rs` but hits live inside
 `#[cfg(test)] mod tests`): [`crates/aura-agent/src/kernel_gateway.rs`](../crates/aura-agent/src/kernel_gateway.rs),
@@ -533,16 +530,6 @@ early-drop termination paths.
 [`crates/aura-agent-kernel/src/kernel/tests.rs`](../crates/aura-agent-kernel/src/kernel/tests.rs)
 covers the sync (`reason_sync_error_records_failed`) and handshake-error
 (`reason_streaming_handshake_error_records_failed`) paths.
-
-The cost gate ([`aura-agent-gate`](../crates/aura-agent-gate)) does not
-call models. A `gate/<frontier>` id is rewritten to the frontier by
-`RoutedProvider` beneath the coordinator's kernel, and each worker
-(`gate_block`) is a child agent with its own kernel, started through the
-caller's `SubagentDispatchHook`, so worker calls are `Reasoning` records
-in the worker's log. `aura-agent-gate` depends only on the core, model
-and exec layers and never holds a `ModelProvider`;
-[`tests/gate_run.rs`](../tests/gate_run.rs) checks that worker requests
-reach the provider with the tier's model.
 
 ---
 

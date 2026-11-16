@@ -204,20 +204,6 @@ impl KernelFactory {
         Some(checkpoint)
     }
 
-    /// A bare kernel for `agent`, for work that needs no session (gate
-    /// workers).
-    ///
-    /// # Errors
-    /// Returns an error if the kernel cannot be constructed.
-    pub fn build(
-        &self,
-        agent: AgentId,
-        parent_chain: Vec<AgentId>,
-        folder: Option<PathBuf>,
-    ) -> anyhow::Result<Kernel> {
-        (self.build_kernel)(agent, parent_chain, folder)
-    }
-
     /// Open a session (kernel + gateways) for `agent`, working in `folder`
     /// (its project's folder, `None` for the launch directory). The model
     /// picks up the conversation the record holds for the agent.

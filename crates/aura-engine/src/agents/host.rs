@@ -1261,7 +1261,6 @@ impl HostInner {
                 .map(|change| change.path)
                 .collect(),
             exit,
-            cost_micros: None,
         };
         (outcome, Some(result.messages))
     }
@@ -1432,7 +1431,6 @@ fn ended(agent_id: AgentId, exit: SubagentExit) -> SubagentResult {
         total_output_tokens: 0,
         files_changed: Vec::new(),
         exit,
-        cost_micros: None,
     }
 }
 

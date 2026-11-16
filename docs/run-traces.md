@@ -68,7 +68,6 @@ A reward targets a step or the whole run and has a `kind`, a `name`, a `value` (
 | `human_implicit` | Interrupts and similar user behavior. | Stored |
 | `process` | Local progress: an edit applied, a build fixed, a redundant read. | Derived (`process/v1`) |
 | `cost` | Tokens, money and time spent. | Derived (`cost/v1`) |
-| `cost` (`child_cost_usd`) | In eval runs, money spent by gate workers on the run's behalf, from each worker's own usage. | Stored |
 | `decision_effect` | Whether the model did what a harness decision intended within 3 model calls. | Derived (`effect/v1`) |
 
 Derived rewards are recomputed from the steps every time a run is loaded, so improving a labeler relabels all past runs. The normalizer assigns credit with a discounted return (gamma 0.95).
@@ -115,7 +114,7 @@ aura dataset build --format sft|preference|rl|harness-bandit [--filter EXPR] [--
 
 [`evals/coding`](../evals/coding) is a suite of small coding tasks, each a `task.toml` (title, prompt, follow-ups, verify command, iteration cap) plus an optional `workspace/` fixture. `aura eval run` copies each fixture into a fresh directory, runs the task headless, runs the verify command, and stores the result as the run's outcome. See the [suite README](../evals/coding/README.md) for the task format.
 
-A task may set `category` (default `general`) and `tags`, and may keep a `checks/` folder next to `workspace/`: it is copied into the workspace only after the agent finishes, so verify commands can run tests the agent never saw. The results table shows each run's cost, gate workers included, and `--budget-usd` stops starting runs once the suite has spent that much. [`evals/gate_cost`](../evals/gate_cost/README.md) uses both to measure the cost gate; `aura gate bench` compares its arms (see [Gate models](cli.md#gate-models)).
+A task may set `category` (default `general`) and `tags`, and may keep a `checks/` folder next to `workspace/`: it is copied into the workspace only after the agent finishes, so verify commands can run tests the agent never saw. The results table shows each run's cost, and `--budget-usd` stops starting runs once the suite has spent that much.
 
 `aura eval compare` shows mean metrics per arm, per-task pass counts and regressions against the first arm, or against a baseline file with `--baseline`. `scripts/eval-live.sh` and the manually triggered `Live coding evals` workflow run the suite against a live model (`AURA_EVAL_MODEL`) and fail on regressions. `--provider mock` checks the mechanics offline; CI covers it in `tests/eval_suite.rs`.
 

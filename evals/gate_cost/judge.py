@@ -12,7 +12,7 @@ accuracy of the reply.
 
     python3 evals/gate_cost/judge.py --reference opus --arm gate-v2
 
-Judgments are appended to AURA_HOME/gate/judgments/<reference>-vs-<arm>.jsonl
+Judgments are appended to AURA_HOME/evals/judgments/<reference>-vs-<arm>.jsonl
 and a summary is printed. Pairs already judged there are skipped.
 """
 
@@ -199,7 +199,7 @@ def main() -> int:
 
     suite = Path(args.suite)
     ref_runs, arm_runs = runs_by_task(suite.name, args.reference), runs_by_task(suite.name, args.arm)
-    out_dir = aura_home() / "gate" / "judgments"
+    out_dir = aura_home() / "evals" / "judgments"
     out_dir.mkdir(parents=True, exist_ok=True)
     prefix = "" if suite.name == "gate_cost" else f"{suite.name}-"
     out_path = out_dir / f"{prefix}{args.reference}-vs-{args.arm}.jsonl"

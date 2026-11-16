@@ -15,11 +15,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::bundle::RunMeta;
 
-/// Name of the stored [`RewardKind::Cost`] reward that carries the list
-/// price of a child agent's model calls (`value` is minus the USD), so a
-/// run's scorecard counts work it delegated.
-pub const CHILD_COST_REWARD: &str = "child_cost_usd";
-
 /// How often a harness decision fired and how often its intended
 /// behavior followed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -65,9 +60,6 @@ pub struct RunScorecard {
     pub cache_write_tokens: u64,
     /// List price of the run's own model calls, in USD.
     pub cost_usd: f64,
-    /// List price of model calls made by child agents the run delegated
-    /// to, in USD.
-    pub child_cost_usd: f64,
     /// Model calls to models without a known price (not in `cost_usd`).
     pub unpriced_calls: usize,
     /// Wall time from first to last step.
@@ -113,12 +105,6 @@ impl RunScorecard {
     #[must_use]
     pub const fn total_tokens(&self) -> u64 {
         self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_write_tokens
-    }
-
-    /// What the run cost at list prices, including delegated work.
-    #[must_use]
-    pub fn total_cost_usd(&self) -> f64 {
-        self.cost_usd + self.child_cost_usd
     }
 
     /// Share of prompt tokens served from the provider cache.
@@ -238,10 +224,6 @@ impl RunScorecard {
 
         let steps_by_seq: HashMap<u64, &Step> = steps.iter().map(|s| (s.seq, s)).collect();
         for r in rewards {
-            if r.kind == RewardKind::Cost && r.name == CHILD_COST_REWARD {
-                card.child_cost_usd -= r.value;
-                continue;
-            }
             *card
                 .reward_totals
                 .entry(r.kind.as_str().to_string())
@@ -286,20 +268,6 @@ pub fn step_cost_usd(model: &str, usage: TokenUsage) -> Option<f64> {
     )
 }
 
-/// The reward that adds a child agent's model spend to its parent run.
-#[must_use]
-pub fn child_cost_reward(cost_usd: f64, source: &str, evidence: serde_json::Value) -> Reward {
-    Reward {
-        target: RewardTarget::Run,
-        kind: RewardKind::Cost,
-        name: CHILD_COST_REWARD.into(),
-        value: -cost_usd,
-        source: source.into(),
-        at_ms: crate::bundle::now_ms(),
-        evidence,
-    }
-}
-
 /// One metric that differs between two scorecards.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MetricDelta {
@@ -318,7 +286,7 @@ pub struct MetricDelta {
 fn headline(card: &RunScorecard) -> Vec<(&'static str, f64, bool)> {
     vec![
         ("outcome", card.outcome.unwrap_or_default(), true),
-        ("cost_usd", card.total_cost_usd(), false),
+        ("cost_usd", card.cost_usd, false),
         ("total_tokens", card.total_tokens() as f64, false),
         ("model_calls", card.model_calls as f64, false),
         ("wall_ms", card.wall_ms as f64, false),
@@ -428,7 +396,7 @@ mod tests {
     }
 
     #[test]
-    fn prices_each_call_by_its_model_and_adds_child_cost() {
+    fn prices_each_call_by_its_model() {
         let mut opus = model(1, &[]);
         opus.policy.id = "claude-opus-5-5".into();
         let mut haiku = model(2, &[]);
@@ -436,15 +404,11 @@ mod tests {
         let mut local = model(3, &[]);
         local.policy.id = "local/qwen3:4b".into();
         let steps = vec![opus, haiku, local];
-        let rewards = vec![child_cost_reward(0.25, "gate", json!({}))];
-        let card = RunScorecard::compute(&RunMeta::new("m", RunSource::Test), &steps, &rewards);
+        let card = RunScorecard::compute(&RunMeta::new("m", RunSource::Test), &steps, &[]);
         // 1000 in + 100 out: opus $0.006, haiku $0.00015.
         assert!((card.cost_usd - 0.006_15).abs() < 1e-9, "{}", card.cost_usd);
         assert_eq!(card.unpriced_calls, 1);
-        assert!((card.child_cost_usd - 0.25).abs() < 1e-12);
-        assert!((card.total_cost_usd() - 0.256_15).abs() < 1e-9);
-        assert!(!card.reward_totals.contains_key("cost"));
-        assert!(mean(&[card])["cost_usd"] > 0.25);
+        assert!(mean(&[card])["cost_usd"] > 0.006);
     }
 
     #[test]

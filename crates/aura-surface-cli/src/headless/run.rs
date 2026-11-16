@@ -313,7 +313,7 @@ impl Headless {
                 unseen: Vec::new(),
             };
         }
-        session.messages.push(Message::user(text.clone()));
+        session.messages.push(Message::user(text));
 
         let workspace = session.kernel.agent_workspace();
         let (mut config, tools) = self.hub.agent_turn(
@@ -331,11 +331,6 @@ impl Headless {
         let context_limit = config.max_context_tokens;
         let agent_loop = AgentLoop::new(config);
         let tools = self.tool_filter.filter(tools);
-        if let Some(runner) = self.hub.gate_drafter(&tools) {
-            if let Some(draft) = crate::gate::draft(&runner, &session.kernel, &text).await {
-                session.messages.extend(draft);
-            }
-        }
 
         let turn_cancel = interrupt.child_token();
         let steering = Steering::new(&turn_cancel);

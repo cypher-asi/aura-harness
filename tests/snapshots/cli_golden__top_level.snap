@@ -18,7 +18,6 @@ Commands:
   runs     Inspect, compare and label recorded runs (`AURA_HOME/runs/`)
   dataset  Export recorded runs as training data
   eval     Run coding eval suites and compare harness arms
-  gate     Inspect, refit and promote the cost gate's routing policy
   help     Print this message or the help of the given subcommand(s)
 
 Options:
