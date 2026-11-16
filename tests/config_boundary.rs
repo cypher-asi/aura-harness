@@ -166,13 +166,13 @@ fn workspace_root() -> PathBuf {
 }
 
 fn is_inside_aura_config(path: &Path, root: &Path) -> bool {
-    let config_dir = root.join("crates").join("aura-config");
+    let config_dir = root.join("crates").join("config").join("aura-config");
     path.starts_with(config_dir)
 }
 
 /// Best-effort: returns the workspace crate name for a source path
-/// inside `crates/<name>/...`. Returns `""` for files outside any
-/// crate directory.
+/// inside `crates/<layer>/<name>/...`. Returns `""` for files outside
+/// any crate directory.
 fn crate_name_for(path: &Path, workspace_root: &Path) -> String {
     let crates_dir = workspace_root.join("crates");
     let Ok(relative) = path.strip_prefix(&crates_dir) else {
@@ -180,7 +180,7 @@ fn crate_name_for(path: &Path, workspace_root: &Path) -> String {
     };
     relative
         .components()
-        .next()
+        .nth(1)
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
         .unwrap_or_default()
 }

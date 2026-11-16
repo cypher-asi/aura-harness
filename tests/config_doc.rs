@@ -24,6 +24,7 @@ fn every_pub_field_has_a_default_annotation() {
     let workspace_root = workspace_root();
     let aura_config_src = workspace_root
         .join("crates")
+        .join("config")
         .join("aura-config")
         .join("src");
     assert!(
@@ -65,6 +66,7 @@ fn every_env_overridable_field_documents_the_env_var() {
     let workspace_root = workspace_root();
     let aura_config_src = workspace_root
         .join("crates")
+        .join("config")
         .join("aura-config")
         .join("src");
 
@@ -114,6 +116,7 @@ fn crate_level_doc_lists_every_owned_env_var() {
     let workspace_root = workspace_root();
     let lib_rs = workspace_root
         .join("crates")
+        .join("config")
         .join("aura-config")
         .join("src")
         .join("lib.rs");
@@ -122,6 +125,7 @@ fn crate_level_doc_lists_every_owned_env_var() {
     let env_names = collect_env_var_names(
         &workspace_root
             .join("crates")
+            .join("config")
             .join("aura-config")
             .join("src"),
     );
@@ -133,7 +137,7 @@ fn crate_level_doc_lists_every_owned_env_var() {
     }
     assert!(
         missing.is_empty(),
-        "crates/aura-config/src/lib.rs crate-level doc comment must mention every owned env var. Missing: {missing:?}",
+        "crates/config/aura-config/src/lib.rs crate-level doc comment must mention every owned env var. Missing: {missing:?}",
     );
 }
 

@@ -1,0 +1,23 @@
+[package]
+name = "aura-agent-steering"
+description = "Steering evaluators + per-turn registry for the Aura agent loop (Phase 6a)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aura-core-types = { path = "../../core/aura-core-types" }
+aura-config = { path = "../../config/aura-config" }
+aura-context-prompts = { path = "../../context/aura-context-prompts" }
+aura-model = { path = "../../model/aura-model" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# Phase 6a registry tests reuse the same fixture pattern the
+# agent-loop tests use (json! result payloads + dummy
+# ToolCallInfo/ToolCallResult shapes).
+
+[lints]
+workspace = true

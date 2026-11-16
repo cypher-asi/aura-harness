@@ -1,0 +1,54 @@
+[package]
+name = "aura-app"
+description = "Agent session host shared by the aura terminal, desktop app and `aura -p`"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aura-core-modes = { path = "../../core/aura-core-modes" }
+aura-config = { path = "../../config/aura-config" }
+aura-core-types = { path = "../../core/aura-core-types" }
+aura-ui-terminal = { path = "../../ui/aura-ui-terminal" }
+aura-agent-kernel = { path = "../../agent/aura-agent-kernel" }
+aura-store-db = { path = "../../store/aura-store-db" }
+aura-store-record = { path = "../../store/aura-store-record" }
+aura-store-snapshot = { path = "../../store/aura-store-snapshot" }
+aura-model = { path = "../../model/aura-model" }
+aura-exec-tools = { path = "../../exec/aura-exec-tools" }
+aura-agent = { path = "../../agent/aura-agent" }
+aura-context-compaction = { path = "../../context/aura-context-compaction" }
+aura-agent-trace = { path = "../../agent/aura-agent-trace" }
+aura-context-memory = { path = "../../context/aura-context-memory" }
+aura-context-prompts = { path = "../../context/aura-context-prompts" }
+aura-context-skills = { path = "../../context/aura-context-skills" }
+aura-auth = { path = "../../auth/aura-auth" }
+aura-node = { path = "../aura-node" }
+aura-engine = { path = "../../engine/aura-engine" }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+axum = { workspace = true }
+tower-http = { workspace = true }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+dirs = { workspace = true }
+blake3 = { workspace = true }
+bytes = { workspace = true }
+similar = "2"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tower = { workspace = true }
+
+[lints]
+workspace = true

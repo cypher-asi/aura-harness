@@ -498,7 +498,7 @@ async fn rest_record_invalid_agent_returns_400() {
 //
 // These tests pin the HTTP-side validation that used to live on the
 // `InboundMessage::SessionInit` first-frame path before Phase A. The
-// chat-session bootstrap helpers in `crates/aura-node/src/session`
+// chat-session bootstrap helpers in `crates/surface/aura-node/src/session`
 // reject bad workspaces / project paths up-front and surface them as
 // `ChatRequestError { code: "invalid_workspace", ... }`, which the
 // `POST /v1/run` handler maps to HTTP 400.

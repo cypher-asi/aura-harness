@@ -26,7 +26,7 @@ A run is the entry point for all work. Start a chat session, dev-loop automaton,
 | `/ws/terminal` | Terminal bridge used by the TUI. |
 | `/ws/preview/tcp/:port` | WebSocket-to-TCP bridge for previewing a port served from the workspace. |
 
-TypeScript bindings for the wire types are generated into [`crates/aura-core-protocol/bindings/`](../crates/aura-core-protocol/bindings).
+TypeScript bindings for the wire types are generated into [`crates/core/aura-core-protocol/bindings/`](../crates/aura-core-protocol/bindings).
 
 ## Health and workspace
 

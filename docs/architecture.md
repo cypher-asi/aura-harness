@@ -142,7 +142,7 @@ flowchart LR
   hook --> guardrails["aura-exec-tools guardrails: sandbox, allowlists"]
 ```
 
-- **Mode gate** — [`policy/check/mode_gate.rs`](../crates/aura-agent-kernel/src/policy/check/mode_gate.rs) maps each tool to a `GatedAction` through an explicit table (unclassified tools map to `Network`) and asks `DefaultModeGate`. `Agent` mode skips it. [`crates/aura-engine/tests/mode_gate_catalog.rs`](../crates/aura-engine/tests/mode_gate_catalog.rs) fails if a catalog tool is missing from the table.
+- **Mode gate** — [`policy/check/mode_gate.rs`](../crates/aura-agent-kernel/src/policy/check/mode_gate.rs) maps each tool to a `GatedAction` through an explicit table (unclassified tools map to `Network`) and asks `DefaultModeGate`. `Agent` mode skips it. [`crates/engine/aura-engine/tests/mode_gate_catalog.rs`](../crates/aura-engine/tests/mode_gate_catalog.rs) fails if a catalog tool is missing from the table.
 - **Capabilities, scope, integrations, per-tool state** — `Policy::check` in [`policy/check/`](../crates/aura-agent-kernel/src/policy/check/).
 - **PermissionRequest hook** — plugin hook consulted only on `ask`, before the interactive prompter (Invariant §4.b).
 - **Guardrails** — `aura-exec-tools` command / binary / shell-script allowlists and the filesystem sandbox, applied after policy allows the call.
@@ -151,7 +151,7 @@ See [invariants.md §4](invariants.md#4-full-policy-enforcement) for the full ru
 
 ### Subagents
 
-Subagents are ordinary agents started by other agents, and they can start agents of their own. One mechanism, `aura_engine::AgentHost` ([`crates/aura-engine/src/agents/`](../crates/aura-engine/src/agents/)), backs two tools that both require `Capability::SpawnAgent`:
+Subagents are ordinary agents started by other agents, and they can start agents of their own. One mechanism, `aura_engine::AgentHost` ([`crates/engine/aura-engine/src/agents/`](../crates/aura-engine/src/agents/)), backs two tools that both require `Capability::SpawnAgent`:
 
 - `task` starts a child of a bundled kind (`explore`, `general_purpose`, ...) to get a job done and returns its result. In detached mode it returns at once and the result arrives later as a message. A task child is removed once its job is done.
 - `spawn_agent` starts a long-lived named child that keeps its history and handles `send_to_agent` / `delegate_task` messages until `agent_lifecycle` stops it.
@@ -312,7 +312,7 @@ Stdio MCP JSON-RPC client and a first-active-wins connection manager keyed by se
 
 #### [`aura-plugin-connectors`](../crates/aura-plugin-connectors)
 
-Thread-safe registry of plugin-contributed external endpoints. `ConnectorRegistry`, `ConnectorEntry`, `ConnectorError`. Last-wins registration semantics covered by [crates/aura-plugin-connectors/tests/last_wins.rs](../crates/aura-plugin-connectors/tests/last_wins.rs).
+Thread-safe registry of plugin-contributed external endpoints. `ConnectorRegistry`, `ConnectorEntry`, `ConnectorError`. Last-wins registration semantics covered by [crates/plugin/aura-plugin-connectors/tests/last_wins.rs](../crates/aura-plugin-connectors/tests/last_wins.rs).
 
 ---
 
@@ -408,7 +408,7 @@ The HTTP/WS **gateway crate** plus the composition root for the `aura-node` bina
 
 Layout:
 
-- `lib.rs` — re-exports + `run_node()` entry point (calls `Node::run`). Phase 10 carve-out 1 owns the `aura-node` binary body here so `crates/aura-node/src/main.rs` is a ≤10-line shim.
+- `lib.rs` — re-exports + `run_node()` entry point (calls `Node::run`). Phase 10 carve-out 1 owns the `aura-node` binary body here so `crates/surface/aura-node/src/main.rs` is a ≤10-line shim.
 - `main.rs` — `tokio::main` shim that calls `run_node()`.
 - `node.rs` — `Node` composition root: binds the TCP listener, opens the store, builds the `aura-engine` `Scheduler` and `AutomatonBridge`, builds the `aura-exec-domain-http::HttpDomainApi`, builds the gateway `Router`, and runs the axum server with graceful shutdown.
 - `config/` — `NodeConfig::from_env`: env loading, paths, auth-token resolution. Module path unchanged across the refactor.

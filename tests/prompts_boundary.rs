@@ -13,7 +13,7 @@
 //! `Cargo.toml` is the primary enforcement mechanism — adding any of
 //! the forbidden crates as a dep would fail to compile. This test is
 //! the source-level belt-and-suspenders: it scans
-//! `crates/aura-prompts/src/**/*.rs` for `use aura_agent::|use
+//! `crates/context/aura-context-prompts/src/**/*.rs` for `use aura_agent::|use
 //! aura_engine_automaton::|use aura_node::|use aura_model::` and
 //! fails CI when one slips in (e.g. through a copy-paste from a
 //! migrated module that still carried its old `use` line).
@@ -34,6 +34,7 @@ const FORBIDDEN_USE_PATTERNS: &[&str] = &[
 fn aura_prompts_has_no_forbidden_upstream_imports() {
     let prompts_root = workspace_root()
         .join("crates")
+        .join("context")
         .join("aura-context-prompts")
         .join("src");
     let mut offenders: Vec<String> = Vec::new();
@@ -67,6 +68,7 @@ fn aura_prompts_has_no_forbidden_upstream_imports() {
 fn aura_prompts_cargo_toml_does_not_list_forbidden_deps() {
     let manifest = workspace_root()
         .join("crates")
+        .join("context")
         .join("aura-context-prompts")
         .join("Cargo.toml");
     let contents = fs::read_to_string(&manifest)
@@ -95,7 +97,7 @@ fn aura_prompts_cargo_toml_does_not_list_forbidden_deps() {
     }
 }
 
-/// Phase 2.7 hard-deletes `crates/aura-agent/src/prompts/` (no
+/// Phase 2.7 hard-deletes `crates/agent/aura-agent/src/prompts/` (no
 /// re-export shim). This test fires the moment the directory reappears
 /// so a future contributor cannot quietly re-add prompts code back
 /// into `aura-agent`.
@@ -103,12 +105,13 @@ fn aura_prompts_cargo_toml_does_not_list_forbidden_deps() {
 fn old_prompts_module_is_deleted() {
     let legacy = workspace_root()
         .join("crates")
+        .join("agent")
         .join("aura-agent")
         .join("src")
         .join("prompts");
     assert!(
         !legacy.exists(),
-        "Phase 2.7 deleted `crates/aura-agent/src/prompts/`; \
+        "Phase 2.7 deleted `crates/agent/aura-agent/src/prompts/`; \
          it must not be recreated (re-export shim or otherwise). \
          Found at: {}",
         legacy.display(),
@@ -117,12 +120,13 @@ fn old_prompts_module_is_deleted() {
 
 /// Every former `crate::prompts::*` import must now reach the new
 /// boundary crate through `aura_context_prompts::*`. The scan is restricted
-/// to `crates/aura-agent/src/**/*.rs` so it does not double-count
+/// to `crates/agent/aura-agent/src/**/*.rs` so it does not double-count
 /// references inside `aura-prompts` (where the symbol is local).
 #[test]
 fn aura_agent_does_not_reach_into_old_prompts_path() {
     let src_dir = workspace_root()
         .join("crates")
+        .join("agent")
         .join("aura-agent")
         .join("src");
     let mut offenders: Vec<String> = Vec::new();

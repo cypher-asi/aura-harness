@@ -331,9 +331,9 @@ aura-harness/
 │   ├── aura-exec-*      # Tool execution, sandbox, policy, isolation, conflicts
 │   ├── aura-agent-*     # Deterministic kernel, AgentLoop, steering, subagents
 │   └── aura-surface-*   # CLI, SDK, terminal, automaton, auth surface shells
-├── crates/aura-node/ # Sole external Cargo surface; HTTP/WS gateway + aura-node root
-├── crates/aura-engine/  # Orchestration engine: scheduler, workers, automatons, agent host
-├── crates/aura-exec-domain-http/
+├── crates/surface/aura-node/ # Sole external Cargo surface; HTTP/WS gateway + aura-node root
+├── crates/engine/aura-engine/  # Orchestration engine: scheduler, workers, automatons, agent host
+├── crates/exec/aura-exec-domain-http/
 │                         # HTTP DomainApi implementation + JWT wrapper
 ├── tests/               # Workspace integration, boundary, e2e, proptest tests
 ├── docs/                # Architecture, invariants, progress, refactoring notes

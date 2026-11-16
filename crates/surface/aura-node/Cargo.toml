@@ -1,0 +1,102 @@
+[package]
+name = "aura-node"
+description = "HTTP/WS gateway crate for Aura — composes aura-engine + aura-exec-domain-http into the aura-node binary"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "aura-node"
+path = "src/main.rs"
+
+[features]
+default = []
+test-support = []
+
+[dependencies]
+aura-core-types = { path = "../../core/aura-core-types" }
+aura-core-protocol = { path = "../../core/aura-core-protocol" }
+aura-store-db = { path = "../../store/aura-store-db" }
+aura-exec-tools = { path = "../../exec/aura-exec-tools" }
+aura-model = { path = "../../model/aura-model" }
+aura-agent-kernel = { path = "../../agent/aura-agent-kernel" }
+aura-agent = { path = "../../agent/aura-agent" }
+aura-agent-trace = { path = "../../agent/aura-agent-trace" }
+aura-agent-subagent = { path = "../../agent/aura-agent-subagent" }
+aura-context-memory = { path = "../../context/aura-context-memory" }
+aura-engine-automaton = { path = "../../engine/aura-engine-automaton" }
+# Phase B / Commit 3: the chat-session bootstrap renders a typed
+# `<agent_identity>` block via `aura_context_prompts::SystemPromptBuilder`
+# and the session state derives the compaction tier via
+# `aura_compaction`. The engine extraction kept these gateway-side
+# imports in `session/state.rs`, so the deps stay direct.
+aura-context-prompts = { path = "../../context/aura-context-prompts" }
+aura-context-compaction = { path = "../../context/aura-context-compaction" }
+# Phase B / Commit 3 engine extraction. The composition root in
+# `node.rs` instantiates the engine (scheduler + automaton bridge) and
+# the gateway router builds the node's agent host from it.
+aura-engine = { path = "../../engine/aura-engine" }
+# Phase C / Commit 4: HTTP `DomainApi` impl moved out of the gateway.
+# `node.rs` constructs `HttpDomainApi` from here.
+aura-exec-domain-http = { path = "../../exec/aura-exec-domain-http" }
+aura-config = { path = "../../config/aura-config" }
+aura-context-skills = { path = "../../context/aura-context-skills" }
+aura-plugin = { path = "../../plugin/aura-plugin" }
+aura-plugin-hooks = { path = "../../plugin/aura-plugin-hooks" }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bytes = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+axum = { workspace = true }
+# Phase C / Commit 4 note: the HTTP `DomainApi` impl moved to
+# `aura-exec-domain-http` (which now owns the domain-call `reqwest`
+# surface the gateway used to import directly). `reqwest` stays as
+# a direct dep here for the runtime-owned outbound HTTP exceptions:
+# `gateway/session/generation.rs` proxies router SSE generation
+# streams, and `gateway/session/cross_agent_hook.rs` issues the
+# Aura-OS cross-agent callback.
+reqwest = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tower_governor = { workspace = true }
+governor = { workspace = true }
+dashmap = { workspace = true }
+blake3 = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+uuid = { workspace = true }
+futures-util = { workspace = true }
+# `/ws/terminal` PTY sessions (gateway/terminal_ws.rs).
+portable-pty = { workspace = true }
+which = { workspace = true }
+dotenvy = { workspace = true }
+dirs = { workspace = true }
+colored = { workspace = true }
+terminal_size = { workspace = true }
+# Sealed state-at-rest boot flow (Swarm TEE phase 5): the per-agent DEK
+# fetched from the CoCo CDH/KBS is held in zeroizing buffers only.
+zeroize = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+insta = { workspace = true }
+# `test-util` enables tokio's paused-clock test helpers
+# (`#[tokio::test(start_paused = true)]`) used by the chat tool-approval
+# auto-deny-timeout test, without affecting the production build.
+tokio = { workspace = true, features = ["test-util"] }
+
+# Phase 9: `aura-context-skills` is held as a direct dep so the
+# runtime can reach into the Phase 8 plugin-skills wiring without an
+# extra migration touch.
+[package.metadata.cargo-machete]
+ignored = ["aura-context-skills"]
+
+[lints]
+workspace = true
