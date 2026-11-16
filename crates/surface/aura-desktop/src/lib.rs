@@ -47,7 +47,7 @@ pub struct DesktopOptions {
     /// Run against a scripted session instead of a real agent
     pub demo: bool,
     /// Approval level agents start at; `None` reads `AURA_TUI_APPROVAL`,
-    /// else `ask`
+    /// else `yolo`
     pub approval: Option<ApprovalLevel>,
 }
 

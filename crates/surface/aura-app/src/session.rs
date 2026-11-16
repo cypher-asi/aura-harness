@@ -39,7 +39,7 @@ pub struct SessionOptions {
     /// Permit FullAccess sessions to bypass command allowlists
     pub allow_unrestricted_full_access: bool,
     /// Approval level agents start at (`--approval`); `None` reads
-    /// `AURA_TUI_APPROVAL`, else `ask`
+    /// `AURA_TUI_APPROVAL`, else `yolo`
     pub approval: Option<aura_ui_terminal::ApprovalLevel>,
 }
 

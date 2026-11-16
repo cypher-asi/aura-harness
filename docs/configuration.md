@@ -42,7 +42,7 @@ A terminal turn has no iteration cap and no time limit: it runs until the agent 
 | `AURA_TUI_MAX_TURN_COST_USD` | — (no limit) | Stop a turn once its model calls cost more than this many US dollars at API list prices. |
 | `AURA_COMPACTION_TRIGGER` | `0.70` | Context use (0.0–1.0) at which the terminal starts compacting history. Below it the transcript is left untouched so its prompt-cache prefix keeps matching. |
 | `AURA_TUI_MODE` | `AURA_DEFAULT_MODE` | Work mode the terminal starts in when `--mode` is not given: `agent`, `plan`, `read-only` or `debug`. The removed names `default`, `accept-edits` and `unrestricted` are ignored with a warning; use `AURA_TUI_APPROVAL` for how much asks. `aura -p` does not read it. |
-| `AURA_TUI_APPROVAL` | `ask` | Approval level the terminal and desktop start at when `--approval` is not given: `yolo` (nothing asks; commands write only inside the folder), `ask` or `strict`. `aura -p` does not read it. |
+| `AURA_TUI_APPROVAL` | `yolo` | Approval level the terminal and desktop start at when `--approval` is not given: `yolo` (nothing asks; commands write only inside the folder), `ask` or `strict`. `aura -p` does not read it. |
 | `AURA_YOLO_WRITABLE_PATHS` | — | Extra folders, separated like `PATH`, that `yolo` commands may write to besides the working folder, temp folders and package caches. |
 | `AURA_TUI_APPROVAL_TIMEOUT_SECS` | `600` | Seconds an approval prompt waits for an answer. When it runs out, the tool call is denied and the turn goes on. |
 | `AURA_TUI_NOTIFY_AFTER_SECS` | `10` | A finished turn that took at least this many seconds rings the bell (and sends a desktop notification if those are on). `0` alerts after every turn. |

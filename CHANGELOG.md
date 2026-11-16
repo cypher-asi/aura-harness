@@ -13,13 +13,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - An approval level per agent, shown as a badge before the model name in
   the terminal and desktop status line, and picked with `/approval
-  <level>`, Shift+Tab (`ask` → `strict` → `yolo`), `--approval` or
+  <level>`, Shift+Tab (`yolo` → `ask` → `strict`), `--approval` or
   `AURA_TUI_APPROVAL`:
-  - `ask` (the default): reads run; everything else asks unless a
+  - `ask`: reads run; everything else asks unless a
     project "always allow" rule covers it.
   - `strict`: everything but reads asks, "always allow" rules are
     ignored, and prompts offer no "always" answer.
-  - `yolo`: nothing asks, and the agent's commands can write only inside
+  - `yolo` (the default): nothing asks, and the agent's commands can write only inside
     the working folder, temp folders and package caches. On Linux this
     is enforced with Landlock; elsewhere commands still ask unless they
     plainly stay in the folder. `AURA_YOLO_WRITABLE_PATHS` adds folders.

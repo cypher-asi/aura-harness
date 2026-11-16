@@ -351,8 +351,9 @@ pub(crate) fn initial_permission_mode(
 }
 
 /// The approval level terminal agents start at: `--approval`, else
-/// `AURA_TUI_APPROVAL`, else `ask`. Never remembered from an earlier
-/// session, so a terminal never starts at `yolo` unasked.
+/// `AURA_TUI_APPROVAL`, else `yolo`. Never remembered from an earlier
+/// session. The kernel's own default stays `ask`, so only surfaces that
+/// ask for `yolo` confine their commands.
 pub(crate) fn initial_approval_level(requested: Option<ApprovalLevel>) -> ApprovalLevel {
     if let Some(level) = requested {
         return level;
@@ -363,7 +364,7 @@ pub(crate) fn initial_approval_level(requested: Option<ApprovalLevel>) -> Approv
             None => warn!(value = %raw, "Ignoring unknown AURA_TUI_APPROVAL"),
         }
     }
-    ApprovalLevel::default()
+    ApprovalLevel::Yolo
 }
 
 fn unrestricted_full_access_from_env() -> bool {

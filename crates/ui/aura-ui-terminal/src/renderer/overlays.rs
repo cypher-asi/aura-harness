@@ -362,7 +362,7 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "Ctrl+G     Edit the input in $EDITOR",
         "$ / Esc    Open the terminal / back to chat",
         "Tab        Switch panels",
-        "Shift+Tab  Approval level (ask→strict→yolo)",
+        "Shift+Tab  Approval level (yolo→ask→strict)",
         "↑/↓        Navigate / History",
         "Ctrl+N     New project (pick its folder)",
         "Space      Fold the selected project",

@@ -221,16 +221,25 @@ async fn switch(
             to.approval.description()
         )))
         .await;
-        if to.approval == ApprovalLevel::Yolo && !commands_confinable() {
-            ui.send(UiCommand::ShowWarning(
-                "Commands can't be confined to this folder here (Linux Landlock is \
-                 unavailable), so commands that may reach outside it still ask"
-                    .to_string(),
-            ))
-            .await;
+        if to.approval == ApprovalLevel::Yolo {
+            warn_if_unconfined(state, agent_id).await;
         }
     }
     true
+}
+
+/// Tell `agent_id` when it is at `yolo` but its commands can't be confined.
+pub(super) async fn warn_if_unconfined(state: &LoopState<'_>, agent_id: AgentId) {
+    if state.hub.permissions_of(agent_id).approval != ApprovalLevel::Yolo || commands_confinable() {
+        return;
+    }
+    AgentUi::new(state.commands.clone(), agent_id)
+        .send(UiCommand::ShowWarning(
+            "Commands can't be confined to this folder here (Linux Landlock is \
+             unavailable), so commands that may reach outside it still ask"
+                .to_string(),
+        ))
+        .await;
 }
 
 #[cfg(test)]

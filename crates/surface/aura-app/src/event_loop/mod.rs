@@ -199,6 +199,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
     agents::send_sandbox_root(&state).await;
     hud::send_session_of(&state, active).await;
     modes::send_mode(&state, active).await;
+    modes::warn_if_unconfined(&state, active).await;
     hud::send_instructions_of(&state, active).await;
     plan_mode::send_plan_of(&state, active).await;
     handlers::announce_models(&mut state).await;

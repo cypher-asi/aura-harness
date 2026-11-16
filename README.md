@@ -26,7 +26,7 @@ cargo run -- login          # optional: unlock cloud models (or /login in the UI
 cargo run -- run --ui none  # headless server on 127.0.0.1:8080
 ```
 
-In the terminal UI, `/model` switches between local and cloud models; see [running](docs/running.md#local-model-by-default-login-optional). The badge next to the model is the approval level: `ask` (the default) asks before edits and commands outside the allow list, `strict` asks for everything but reads, and `yolo` asks nothing while confining commands to writing inside the current folder. Change it with `/approval` or Shift+Tab; see [the CLI docs](docs/cli.md#long-tasks-in-the-terminal).
+In the terminal UI, `/model` switches between local and cloud models; see [running](docs/running.md#local-model-by-default-login-optional). The badge next to the model is the approval level: `yolo` (the default) asks nothing while confining commands to writing inside the current folder, `ask` asks before edits and commands outside the allow list, and `strict` asks for everything but reads. Change it with `/approval` or Shift+Tab; see [the CLI docs](docs/cli.md#long-tasks-in-the-terminal).
 
 Or with Docker:
 
