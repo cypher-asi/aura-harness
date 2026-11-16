@@ -1,6 +1,6 @@
 [package]
 name = "aura-store-record"
-description = "Append-only record-log domain types and trait (Phase 2: extracted from aura-core / aura-kernel)"
+description = "Append-only record-log types, the RecordLog trait and the backend-neutral ReadStore"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

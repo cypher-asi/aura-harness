@@ -5,7 +5,7 @@ Every coding run can be recorded as a trajectory: an ordered list of steps, each
 - **The model**: each LLM call. The observation is the request, and the action is the response (thinking, text, tool calls).
 - **The harness**: each steering nudge, block, compaction, cache hit, retry, build check or budget stop. The observation is the trigger state, and the action is the choice plus the `HarnessParams` behind it.
 
-One recording feeds the scorecards, the CLI and TUI views, eval comparisons and dataset exports. The code lives in [`aura-agent-trace`](../crates/aura-agent-trace); the schema is in [`aura-core-types/src/types/trace.rs`](../crates/aura-core-types/src/types/trace.rs).
+One recording feeds the scorecards, the CLI and TUI views, eval comparisons and dataset exports. The code lives in [`aura-agent-trace`](../crates/agent/aura-agent-trace); the schema is in [`aura-core-types/src/types/trace.rs`](../crates/core/aura-core-types/src/types/trace.rs).
 
 ## When runs are recorded
 

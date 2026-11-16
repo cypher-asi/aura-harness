@@ -270,16 +270,17 @@ Approval flow for sensitive operations.
 ### Phase 15: CLI (root `aura` binary + `aura-surface-cli`)
 **Status:** ⛔ Superseded (2026, Wave 4 refactor)
 
-Interactive command-line interface. **The separate `aura-cli` crate
-was never created.** Its intended surface is now delivered by the
-root `aura` binary (`src/`) — interactive TUI, login / logout /
-whoami, and the embedded HTTP server for file / record access. The
-headless server half lives in `aura-node`. See
+Interactive command-line interface. The original `aura-cli` crate
+was never created; the surface first shipped as `aura-surface-cli`
+and now lives in `aura-cli` (argument parsing and subcommands) and
+`aura-app` (the session host: interactive TUI, `aura -p`, and the
+embedded HTTP server for file / record access). The headless server
+half lives in `aura-node`. See
 [`docs/cli.md`](cli.md) under "Binaries" for the canonical entry
 point.
 
-- [x] ~~Create `aura-cli` crate~~ — dropped; root `aura` binary
-  is a thin shim into `aura_surface_cli::run`.
+- [x] Create `aura-cli` crate — the root `aura` binary is a thin
+  shim into `aura_cli::run_cli`; the session host is `aura-app`.
 - [x] REPL loop with prompt — delivered by the ratatui TUI in
   `src/event_loop/` and `aura-ui-terminal`.
 - [x] Transaction submission — delivered by `aura run` / the TUI's
@@ -320,21 +321,20 @@ TypeScript gateway dependency removed.
 aura-harness/
 ├── Cargo.toml           # Workspace manifest + root `aura` binary
 ├── rust-toolchain.toml  # Stable local toolchain; MSRV lives in Cargo.toml
-├── src/                 # Root `aura` binary shim into aura-surface-cli
-├── crates/              # 58 workspace crates in the 10-layer architecture
-│   ├── aura-core-*      # Core IDs, modes, permissions, auth, protocol primitives
-│   ├── aura-store-*     # RocksDB store, record log, snapshots
-│   ├── aura-config      # Env/TOML configuration source of truth
-│   ├── aura-model-*     # Router-backed LLM provider abstraction
-│   ├── aura-context-*   # Prompts, memory, compaction, skills
-│   ├── aura-plugin-*    # Plugin API, manifests, hooks, MCP, connectors
-│   ├── aura-exec-*      # Tool execution, sandbox, policy, isolation, conflicts
-│   ├── aura-agent-*     # Deterministic kernel, AgentLoop, steering, subagents
-│   └── aura-surface-*   # CLI, SDK, terminal, automaton, auth surface shells
-├── crates/surface/aura-node/ # Sole external Cargo surface; HTTP/WS gateway + aura-node root
-├── crates/engine/aura-engine/  # Orchestration engine: scheduler, workers, automatons, agent host
-├── crates/exec/aura-exec-domain-http/
-│                         # HTTP DomainApi implementation + JWT wrapper
+├── src/                 # Root `aura` binary shim into aura-cli
+├── crates/              # 40 workspace crates in 12 layer folders, most fundamental first
+│   ├── core/            # IDs, modes, permissions, auth primitives, wire protocol
+│   ├── config/          # Env/TOML configuration source of truth
+│   ├── store/           # Snapshots, record log, RocksDB store
+│   ├── model/           # Router-backed LLM provider abstraction
+│   ├── context/         # Prompts, compaction, skills, memory
+│   ├── plugin/          # Plugin API, hooks, MCP, connectors, manifests
+│   ├── exec/            # Tool seam traits, HTTP DomainApi, tool catalog + executor
+│   ├── agent/           # Deterministic kernel, AgentLoop, steering, subagents, traces
+│   ├── auth/            # zOS identity, linked plans, credential vault
+│   ├── engine/          # Scheduler, workers, agent host, automatons
+│   ├── ui/              # UI protocol, ratatui terminal UI
+│   └── surface/         # aura-app, aura-node, aura-cli, aura-desktop
 ├── tests/               # Workspace integration, boundary, e2e, proptest tests
 ├── docs/                # Architecture, invariants, progress, refactoring notes
 ├── scripts/             # Invariant checks and helpers
@@ -344,9 +344,10 @@ aura-harness/
 > **Historical note (2026):** this tree previously listed
 > `aura-executor/` and `aura-cli/`. `aura-executor` was dissolved into
 > the current exec / agent-layer crates. `aura-cli` was never created —
-> its surface is the root `aura` binary (`src/`) plus `aura-surface-cli`.
-> The `aura-node` crate was renamed to `aura-node`; the binary name
-> remains `aura-node`.
+> its surface was the root `aura` binary (`src/`) plus `aura-surface-cli`,
+> which later split into `aura-app` and `aura-cli`. The `aura-node` crate
+> was renamed to `aura-runtime` and later back to `aura-node`; the binary
+> name stayed `aura-node` throughout.
 
 ---
 

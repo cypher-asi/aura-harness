@@ -1,6 +1,6 @@
 [package]
 name = "aura-store-db"
-description = "RocksDB-backed durable storage implementation for Aura (Phase 2: extracted from aura-store)"
+description = "RocksDB-backed durable storage for Aura and the sealed WriteStore"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

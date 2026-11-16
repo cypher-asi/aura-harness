@@ -1,6 +1,6 @@
 [package]
 name = "aura-agent-subagent"
-description = "Subagent derivation + inheritance (Phase 6a)"
+description = "Subagent derivation and inheritance"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,7 +1,7 @@
 //! WebSocket session protocol message types.
 //!
 //! Re-exports canonical types from `aura-core-protocol` and provides
-//! harness-specific helpers that depend on aura-runtime-internal
+//! harness-specific helpers that depend on aura-node-internal
 //! types (e.g. [`aura_model::ToolDefinition`]).
 //!
 //! Phase A note: the wire→core conversion helpers

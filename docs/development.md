@@ -39,7 +39,7 @@ Each invariant's enforcement (grep band or Rust test) is listed in [invariants.m
 
 ## Where to change things
 
-- Adding a crate: name it `aura-<layer>-<name>`, add a `//! Layer: <layer>` tag to its `lib.rs`, register it in [`tests/layer_boundary.rs`](../tests/layer_boundary.rs) if the name doesn't follow the convention, and add it to `[workspace].members` in [`Cargo.toml`](../Cargo.toml). See [architecture.md](architecture.md).
-- Adding a tool: classify it in the mode gate table ([`mode_gate.rs`](../crates/aura-agent-kernel/src/policy/check/mode_gate.rs)); [`mode_gate_catalog.rs`](../crates/aura-engine/tests/mode_gate_catalog.rs) fails until you do.
-- Changing the wire types: update [`aura-core-protocol`](../crates/aura-core-protocol), regenerate the TypeScript bindings with `cargo test -p aura-core-protocol --features typescript export_typescript_bindings`, and land the matching change in `aura-os`.
+- Adding a crate: put it in `crates/<layer>/`, name it `aura-<layer>-<part>`, add a `//! Layer: <layer>` tag to its `lib.rs`, and add it to `[workspace].members` in [`Cargo.toml`](../Cargo.toml) with the rest of its layer. Path dependencies within a layer are `../aura-…`; across layers they are `../../<layer>/aura-…`. Only surface crates, which are named after what you run, need an entry in `KNOWN_CRATES` in [`tests/layer_boundary.rs`](../tests/layer_boundary.rs). See [architecture.md](architecture.md#naming).
+- Adding a tool: classify it in the mode gate table ([`mode_gate.rs`](../crates/agent/aura-agent-kernel/src/policy/check/mode_gate.rs)); [`mode_gate_catalog.rs`](../crates/engine/aura-engine/tests/mode_gate_catalog.rs) fails until you do.
+- Changing the wire types: update [`aura-core-protocol`](../crates/core/aura-core-protocol), regenerate the TypeScript bindings with `cargo test -p aura-core-protocol --features typescript export_typescript_bindings`, and land the matching change in `aura-os`.
 - Release notes go in [`CHANGELOG.md`](../CHANGELOG.md).

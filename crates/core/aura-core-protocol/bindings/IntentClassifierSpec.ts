@@ -6,7 +6,7 @@ import type { IntentClassifierRule } from "./IntentClassifierRule";
  * [`crate::AgentCapabilities`].
  *
  * Matches the JSON shape that
- * `aura-tools::IntentClassifier::from_profile_json` deserializes,
+ * `aura-exec-tools::IntentClassifier::from_profile_json` deserializes,
  * extended with `tool_domains` so the harness can answer "which
  * domain does this tool belong to?" without hard-coding the
  * mapping in its binary.

@@ -1,6 +1,6 @@
 [package]
 name = "aura-agent-kernel"
-description = "Deterministic kernel for Aura (agent layer, Phase 6a)"
+description = "Deterministic kernel for Aura"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

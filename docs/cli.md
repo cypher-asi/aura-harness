@@ -4,14 +4,12 @@
 
 | Binary | Entry point | Purpose |
 |--------|-------------|---------|
-| `aura` | [`src/main.rs`](../src/main.rs) | The main CLI. Opens the desktop window by default (the terminal UI with `--terminal`, or when there is no display), runs one prompt and exits with `aura -p`, runs headless with `aura run --ui none`, and hosts the account, plugin and subagent commands below. The CLI body lives in [`aura-surface-cli`](../crates/aura-surface-cli). |
-| `aura-node` | [`crates/surface/aura-node/src/main.rs`](../crates/aura-node/src/main.rs) | Standalone headless server exposing the [HTTP / WebSocket API](api.md). |
-
-Older specs mention a separate `aura-cli` crate. It never shipped; read `aura-cli/src/...` paths as `src/...` in the root crate.
+| `aura` | [`src/main.rs`](../src/main.rs) | The main CLI. Opens the desktop window by default (the terminal UI with `--terminal`, or when there is no display), runs one prompt and exits with `aura -p`, runs headless with `aura run --ui none`, and hosts the account, plugin and subagent commands below. The command line lives in [`aura-cli`](../crates/surface/aura-cli); the agent session behind the terminal, the desktop window and `aura -p` lives in [`aura-app`](../crates/surface/aura-app). |
+| `aura-node` | [`crates/surface/aura-node/src/main.rs`](../crates/surface/aura-node/src/main.rs) | Standalone headless server exposing the [HTTP / WebSocket API](api.md). |
 
 ## Commands
 
-Defined in [`crates/aura-surface-cli/src/cli.rs`](../crates/aura-surface-cli/src/cli.rs).
+Defined in [`crates/surface/aura-cli/src/cli.rs`](../crates/surface/aura-cli/src/cli.rs).
 
 | Command | Description |
 |---------|-------------|

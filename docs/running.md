@@ -61,7 +61,7 @@ The strip along the top holds the tabs, numbered from 1, a `+` box, and a wide b
 
 Turn alerts follow the terminal's settings; where the terminal rings the bell, the window asks for attention instead.
 
-Text is set in Geist Mono, bundled (SIL Open Font License, [`assets/fonts/OFL.txt`](../crates/aura-desktop/assets/fonts/OFL.txt)).
+Text is set in Geist Mono, bundled (SIL Open Font License, [`assets/fonts/OFL.txt`](../crates/surface/aura-desktop/assets/fonts/OFL.txt)).
 
 | Variable | Effect |
 |---|---|

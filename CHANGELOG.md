@@ -7,6 +7,51 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Workspace layout
+
+##### Changed
+
+- Crates live in one folder per layer, `crates/<layer>/<crate>`, with
+  layers ordered from most to least fundamental: `core`, `config`,
+  `store`, `model`, `context`, `plugin`, `exec`, `agent`, `auth`,
+  `engine`, `ui`, `surface`. `auth`, `engine` and `ui` are new layers;
+  their crates were previously classified as `surface`, and
+  `aura-exec-domain-http` moved to `exec`.
+- Every crate below `surface` is named `aura-<layer>` or
+  `aura-<layer>-<part>`. Renamed, with no compatibility aliases:
+  - `aura-protocol` → `aura-core-protocol`
+  - `aura-plugin-core` → `aura-plugin`
+  - `aura-tools` → `aura-exec-tools`
+  - `aura-domain-http` → `aura-exec-domain-http`
+  - `aura-ui-core` → `aura-ui`
+  - `aura-terminal` → `aura-ui-terminal`
+  - `aura-runtime` → `aura-node` (the binary keeps its `aura-node` name)
+  - `aura-model-reasoner` → `aura-model`
+  - `aura-automaton` → `aura-engine-automaton`
+- `aura-surface-cli` split into `aura-app`, the session host shared by
+  the terminal, the desktop app and `aura -p`, and `aura-cli`, the
+  command line. `aura-desktop` now depends on `aura-app` instead of the
+  CLI.
+- `ReadStore`, `DequeueToken` and `StoreError` moved to
+  `aura-store-record`; RocksDB errors surface as `StoreError::Backend`.
+  The tool hook traits, `AutomatonController` and `DomainApi` moved to
+  `aura-exec-traits` (still re-exported from `aura-exec-tools`). The
+  `/ws/terminal` PTY handler moved from the terminal UI crate into the
+  `aura-node` gateway.
+- The TypeScript bindings are exported with
+  `cargo test -p aura-core-protocol --features typescript export_typescript_bindings`.
+  `aura-os` still calls its mirror of the wire types `aura_protocol`, so
+  the two no longer share a name.
+
+##### Removed
+
+- `aura-exec-sandbox` and `aura-exec-isolation`, which nothing used.
+  The filesystem sandbox the tools use is `sandbox.rs` in
+  `aura-exec-tools`.
+- The old `aura-core-protocol` placeholder, which only held
+  `ProtocolVersion`. It was merged into the wire protocol crate, which
+  now carries the `aura-core-protocol` name.
+
 ### Run traces (`aura-agent-trace`)
 
 ##### Added

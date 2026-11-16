@@ -5,7 +5,7 @@ import type { CapabilityWire } from "./CapabilityWire";
 /**
  * Wire-compatible mirror of `aura_core_types::AgentPermissions`.
  *
- * Mirrored here so `aura-protocol` stays decoupled from the harness-core
+ * Mirrored here so `aura-core-protocol` stays decoupled from the harness-core
  * crates; the harness translates [`AgentPermissionsWire`] into its own
  * `aura_core_types::AgentPermissions` when a [`crate::RuntimeRequest`] lands.
  * Additive / forward-compatible: unknown capability variants

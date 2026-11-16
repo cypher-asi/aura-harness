@@ -24,7 +24,7 @@ max_turns: number | null,
 temperature: number | null, 
 /**
  * User-selected reasoning-effort tier from the chat model picker's
- * thinking-level flyout. Mapped into `aura_model_reasoner::ThinkingEffort`
+ * thinking-level flyout. Mapped into `aura_model::ThinkingEffort`
  * and hard-pinned across the turn. Absent for models without effort
  * tiers and for older clients.
  */

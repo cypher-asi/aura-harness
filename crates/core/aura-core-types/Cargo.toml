@@ -1,6 +1,6 @@
 [package]
 name = "aura-core-types"
-description = "Behavior-free IDs and wire shapes shared by every layer (Phase 1: new identifiers; remaining types re-exported via aura-core during the split)"
+description = "Behavior-free IDs and domain types shared by every layer"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

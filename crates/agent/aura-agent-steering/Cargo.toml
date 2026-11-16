@@ -1,6 +1,6 @@
 [package]
 name = "aura-agent-steering"
-description = "Steering evaluators + per-turn registry for the Aura agent loop (Phase 6a)"
+description = "Steering evaluators and per-turn registry for the Aura agent loop"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
