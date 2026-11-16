@@ -1216,6 +1216,36 @@ fn test_plans_tab_lists_plans_with_their_todos() {
     );
 }
 
+#[test]
+fn test_active_plan_shows_in_the_side_panel_not_above_the_input() {
+    use crate::events::{PlanView, TodoState, UiCommand};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetPlan(Some(PlanView {
+        path: ".aura/plans/mnda_00000001.plan.md".into(),
+        name: "Edit the MNDA requirement".into(),
+        todos: vec![
+            todo("Add setInviteMnda", TodoState::Pending),
+            todo("Typecheck and lint", TodoState::Pending),
+        ],
+    })));
+    let rows = render_rows(&mut app, 160);
+    let screen = rows.join("\n");
+    assert!(
+        !rows.iter().any(|r| r.trim_start().starts_with("PLAN ")),
+        "{screen}"
+    );
+    let plan_row = rows
+        .iter()
+        .find(|r| r.contains("Edit the MNDA requirement"))
+        .unwrap_or_else(|| panic!("plan missing from:\n{screen}"));
+    assert!(
+        plan_row.find("Edit the MNDA").unwrap() > plan_row.len() / 2,
+        "{plan_row}"
+    );
+    assert!(screen.contains("Add setInviteMnda"), "{screen}");
+}
+
 fn render_with_user(user: Option<&str>, width: u16) -> Vec<String> {
     render_rows(&mut app_with_model(user), width)
 }

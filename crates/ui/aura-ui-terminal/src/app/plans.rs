@@ -344,6 +344,22 @@ mod tests {
     }
 
     #[test]
+    fn a_new_plan_opens_the_plans_tab_but_its_updates_do_not() {
+        use super::super::SidePanelTab;
+
+        let mut app = App::new();
+        app.process_command(UiCommand::SetPlan(Some(plan("a", &[P, P]))));
+        assert_eq!(app.side_tab(), SidePanelTab::Plans);
+
+        app.show_side_tab(SidePanelTab::Sandbox);
+        app.process_command(UiCommand::SetPlan(Some(plan("a", &[C, P]))));
+        assert_eq!(app.side_tab(), SidePanelTab::Sandbox);
+
+        app.process_command(UiCommand::SetPlan(Some(plan("b", &[P]))));
+        assert_eq!(app.side_tab(), SidePanelTab::Plans);
+    }
+
+    #[test]
     fn enter_folds_plans_and_opens_the_plan_file_from_a_todo() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".aura/plans")).unwrap();

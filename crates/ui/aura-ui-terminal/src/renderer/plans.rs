@@ -9,9 +9,9 @@
 //! ```
 
 use super::panels::{cell_style, list_row, render_scrollbar, CellState, ScrollView, StatusIcon};
-use super::plan::{marker, todo_style};
 use crate::app::plans::PlanRow;
 use crate::app::{HoverTarget, PanelFocus};
+use crate::events::TodoState;
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
@@ -23,6 +23,27 @@ use ratatui::{
 
 /// Hint shown at the bottom of the tab when the panel has focus.
 const PLANS_HINT: &str = "⏎ fold / open  ⇧←→ tabs";
+
+const fn marker(status: TodoState) -> &'static str {
+    match status {
+        TodoState::Pending => "○",
+        TodoState::InProgress => "▸",
+        TodoState::Completed => "✓",
+        TodoState::Cancelled => "✗",
+    }
+}
+
+/// How a todo in `state` is drawn.
+fn todo_style(state: TodoState, theme: &Theme) -> Style {
+    match state {
+        TodoState::InProgress => Style::default().fg(theme.colors.primary),
+        TodoState::Pending => Style::default().fg(theme.colors.foreground),
+        TodoState::Completed => Style::default().fg(theme.colors.success),
+        TodoState::Cancelled => Style::default()
+            .fg(theme.colors.muted)
+            .add_modifier(Modifier::CROSSED_OUT),
+    }
+}
 
 /// Draw the plans into `inner`, the body below the tab bar of the panel
 /// bordered by `area`.

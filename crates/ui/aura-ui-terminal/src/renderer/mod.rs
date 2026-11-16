@@ -13,7 +13,6 @@ mod markdown;
 mod mention_menu;
 mod overlays;
 mod panels;
-mod plan;
 mod plans;
 mod processes;
 mod sandbox;
@@ -60,30 +59,24 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
         .constraints([
             Constraint::Length(1),
             Constraint::Min(3),
-            Constraint::Length(plan::strip_height(app, area.height)),
             Constraint::Length(2),
         ])
         .split(area);
     let input_row = Rect {
         height: 1,
-        ..main_chunks[3]
+        ..main_chunks[2]
     };
     let status_row = Rect {
         y: input_row.y.saturating_add(1),
-        height: main_chunks[3].height.saturating_sub(1),
-        ..main_chunks[3]
+        height: main_chunks[2].height.saturating_sub(1),
+        ..main_chunks[2]
     };
 
     render_header(frame, inset_edges(main_chunks[0]), app, theme);
 
     app.set_prose_rows(Vec::new());
     let chat = render_content_panels(frame, main_chunks[1], app, theme);
-    // The plan strip and the border strip show the same todo list; the
-    // border strip only stands in while the plan strip has no room.
-    if main_chunks[2].height == 0 {
-        hud::render_todo_strip(frame, chat, app, theme);
-    }
-    plan::render_plan_strip(frame, main_chunks[2], app, theme);
+    hud::render_todo_strip(frame, chat, app, theme);
     detail::render_detail_view(frame, chat, app, theme);
     if let Some(selection) = app.selection() {
         selection.highlight(frame.buffer_mut());

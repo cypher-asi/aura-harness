@@ -1,6 +1,8 @@
 //! Slash command handling and UI command processing for the App.
 
-use super::{App, AppState, DetailView, NotificationType, PanelFocus, PendingApproval};
+use super::{
+    App, AppState, DetailView, NotificationType, PanelFocus, PendingApproval, SidePanelTab,
+};
 use crate::{
     components::{elapsed_ms, Activity, Message, MessageRole, ToolStatus, ToolStep},
     events::{CallUsage, RewindScope, UiCommand, UiEvent},
@@ -778,6 +780,13 @@ impl App {
             UiCommand::PromptLinkCode { provider } => self.cmd_prompt_link_code(&provider),
             UiCommand::EndLink => self.cmd_end_link(),
             UiCommand::SetPlan(plan) => {
+                let current = self.active_plan.as_ref().map(|p| p.path.as_str());
+                if plan
+                    .as_ref()
+                    .is_some_and(|p| Some(p.path.as_str()) != current)
+                {
+                    self.show_side_tab(SidePanelTab::Plans);
+                }
                 self.plan_list.set_current(plan.as_ref());
                 self.active_plan = plan;
             }

@@ -3043,7 +3043,7 @@ fn test_build_needs_a_plan() {
 }
 
 #[test]
-fn a_plan_for_an_agent_off_screen_leaves_the_plan_strip_alone() {
+fn a_plan_for_an_agent_off_screen_leaves_the_active_plan_alone() {
     let mut app = App::new();
     app.process_command(UiCommand::SetActiveAgent("a1".to_string()));
     app.process_command(UiCommand::SetPlan(Some(sample_plan())));
