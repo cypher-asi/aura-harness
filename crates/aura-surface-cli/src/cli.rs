@@ -218,9 +218,11 @@ pub enum RunsSubcommand {
         #[arg(long)]
         json: bool,
     },
-    /// Check whether a run is stuck or wasted time, even one that never
-    /// ended: unfinished tool calls, long approval waits, calls with no
-    /// result step. Exits non-zero when it finds a problem.
+    /// Check whether a run got stuck, and where.
+    ///
+    /// Works on runs that never ended too. Reports unfinished or
+    /// cancelled tool calls, long approval waits and calls with no result
+    /// step, and exits non-zero when it finds a problem.
     Check {
         /// Run id, or a unique prefix or suffix of one.
         id: String,

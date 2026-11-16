@@ -9,6 +9,7 @@ Usage: aura runs [OPTIONS] <COMMAND>
 Commands:
   list    List recorded runs, newest first
   show    Show a run's scorecard and steps
+  check   Check whether a run got stuck, and where
   diff    Compare two runs' scorecards and flag regressions
   label   Attach a human label to a run or one of its steps
   verify  Run a check in the run's workspace and record it as the outcome
