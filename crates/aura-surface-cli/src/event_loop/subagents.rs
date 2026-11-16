@@ -179,6 +179,16 @@ impl AgentHub {
         }
     }
 
+    /// The mode `/plan` returns `agent_id` to: the one it had before plan
+    /// mode, or `default` when the session started there.
+    pub(super) fn exit_plan_mode(&self, agent_id: AgentId) -> PermissionMode {
+        lock(&self.before_plan)
+            .get(&agent_id)
+            .copied()
+            .filter(|mode| *mode != PermissionMode::Plan)
+            .unwrap_or(PermissionMode::Default)
+    }
+
     /// The mode `/build` puts `agent_id` in: its current one when that
     /// lets it edit, else the one it had before plan mode, else
     /// `default`.

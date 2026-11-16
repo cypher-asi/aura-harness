@@ -119,6 +119,33 @@ fn test_cmd_run_echo_direct() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn test_cmd_run_with_output_larger_than_a_pipe_buffer_finishes() {
+    let (sandbox, _dir) = create_test_sandbox();
+    let started = std::time::Instant::now();
+
+    let result = cmd_run(
+        &sandbox,
+        "sh",
+        &[
+            "-c".to_string(),
+            "yes aaaaaaaaaaaaaaa | head -c 200000".to_string(),
+        ],
+        None,
+        10_000,
+    )
+    .expect("a command that prints 200 KB must finish, not time out");
+
+    assert!(result.ok);
+    assert!(!result.stdout.is_empty());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "took {:?}",
+        started.elapsed()
+    );
+}
+
 #[test]
 fn test_cmd_run_rejects_injection_in_program() {
     let (sandbox, _dir) = create_test_sandbox();

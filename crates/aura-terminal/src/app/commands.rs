@@ -77,7 +77,7 @@ impl App {
                 }
             }
             "spawn" => self.handle_spawn_command(arg),
-            "plan" => self.request_mode(PermissionMode::Plan),
+            "plan" => self.request_plan_toggle(),
             "build" => self.request_build(arg),
             "login" => self.handle_login_command(arg),
             "model" | "models" | "m" => {
@@ -363,6 +363,15 @@ impl App {
         )
     }
 
+    /// `/plan`: enter plan mode, or leave it when the agent is already there.
+    /// The event loop knows the mode from before plan mode, so the same
+    /// command restores it.
+    fn request_plan_toggle(&mut self) {
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::TogglePlan(self.active_agent_id.clone()));
+        }
+    }
+
     /// Ask the event loop to switch the active agent to `mode`. The badge
     /// changes once the switch is recorded and [`UiCommand::SetMode`] comes
     /// back.
@@ -462,6 +471,7 @@ impl App {
             ] {
                 report.push_str(&format!("\n  {:<14}{}", mode.name(), mode.description()));
             }
+            report.push_str("\n/plan enters plan mode, or leaves it.");
             report.push_str("\nShift+Tab cycles default → accept-edits → plan → unrestricted.");
             self.add_message(Message::new(MessageRole::System, &report));
             return;
@@ -722,7 +732,11 @@ impl App {
             } => self.cmd_set_models(options, current, user, plans),
             UiCommand::PromptLinkCode { provider } => self.cmd_prompt_link_code(&provider),
             UiCommand::EndLink => self.cmd_end_link(),
-            UiCommand::SetPlan(plan) => self.active_plan = plan,
+            UiCommand::SetPlan(plan) => {
+                self.plan_list.set_current(plan.as_ref());
+                self.active_plan = plan;
+            }
+            UiCommand::SetPlans(plans) => self.plan_list.set_plans(plans),
         }
     }
 

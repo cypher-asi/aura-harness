@@ -7,7 +7,7 @@
 //! [`AgentUi`] that feeds the chat of the agent whose turn it is.
 
 use super::hud::{call_stats, todo_views};
-use super::plan_mode::plan_view;
+use super::plan_mode::{plan_view, plan_views};
 use super::record_ui::RecordPanelAgent;
 use crate::session_checkpoint::SessionUsage;
 use async_trait::async_trait;
@@ -155,6 +155,9 @@ impl UiCommandSink {
             "Plan ready: {} ({path}). Keep chatting to revise it, or run /build to implement it.",
             view.name
         );
+        self.ui
+            .send_if_shown(UiCommand::SetPlans(plan_views(&self.plan.workspace)))
+            .await;
         self.ui.send_if_shown(UiCommand::SetPlan(Some(view))).await;
         self.ui
             .send(UiCommand::ShowMessage(MessageData::new(

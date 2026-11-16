@@ -349,7 +349,7 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "/graph [id] /runs /status  Run graphs, scores",
         "/model     Choose model (local or cloud)",
         "/mode [name]        What runs without asking",
-        "/plan      Plan mode: research, write a plan",
+        "/plan      Enter or leave plan mode",
         "/build [path]  Implement the plan",
         "/login /whoami  Login for cloud models, status",
         "/login claude|chatgpt [paste]  Link a plan",

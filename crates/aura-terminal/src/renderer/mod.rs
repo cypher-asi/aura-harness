@@ -14,6 +14,7 @@ mod mention_menu;
 mod overlays;
 mod panels;
 mod plan;
+mod plans;
 mod processes;
 mod sandbox;
 mod segments;

@@ -2924,14 +2924,14 @@ fn test_mode_commands_request_a_switch() {
     app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
 
     app.handle_command("/plan");
-    assert!(matches!(
-        rx.try_recv(),
-        Ok(UiEvent::SetMode { agent_id, mode: crate::PermissionMode::Plan }) if agent_id == "aa"
-    ));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::TogglePlan(agent_id)) if agent_id == "aa"));
     assert_eq!(app.hud().mode, None, "badge waits for the kernel");
 
     app.process_command(UiCommand::SetMode(crate::PermissionMode::Plan));
     assert_eq!(app.hud().mode, Some(crate::PermissionMode::Plan));
+    app.handle_command("/plan");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::TogglePlan(agent_id)) if agent_id == "aa"));
+    assert!(app.notification().is_none(), "plan mode toggles off");
 
     app.handle_command("/mode ask");
     assert!(matches!(
@@ -2971,13 +2971,7 @@ fn test_plan_works_mid_turn_but_build_waits() {
     app.handle_command("/build");
     assert!(rx.try_recv().is_err());
     app.handle_command("/plan");
-    assert!(matches!(
-        rx.try_recv(),
-        Ok(UiEvent::SetMode {
-            mode: crate::PermissionMode::Plan,
-            ..
-        })
-    ));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::TogglePlan(_))));
 }
 
 #[test]

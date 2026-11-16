@@ -88,10 +88,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Choose model (local or cloud)",
         needs_args: false,
     },
-    command(
-        "plan",
-        "Plan mode: research and write a plan, no code edits",
-    ),
+    command("plan", "Enter plan mode, or leave it"),
     SlashCommand {
         name: "build",
         args: "[plan path]",

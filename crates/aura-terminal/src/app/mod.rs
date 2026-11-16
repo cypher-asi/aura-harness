@@ -17,6 +17,7 @@ mod input_editor;
 mod keys;
 mod line_edit;
 pub mod mentions;
+pub mod plans;
 mod processes;
 mod prose;
 pub use aura_ui_core::sandbox;
@@ -326,6 +327,8 @@ pub struct App {
     /// Run graph shown by `/graph`
     pub(super) graph: graph::GraphState,
     pub(super) trace_feed: trace_feed::TraceFeed,
+    /// Plans of the PLANS tab
+    pub(super) plan_list: plans::PlanList,
     /// Node to select once the requested graph loads.
     pub(super) pending_graph_node: Option<String>,
 }
@@ -371,6 +374,10 @@ pub struct PanelAreas {
     pub trace_rows: Option<Rect>,
     /// Feed row shown at the top of `trace_rows`
     pub trace_scroll: usize,
+    /// Rows of the Plans tab inside the panel
+    pub plan_rows: Option<Rect>,
+    /// Plans row shown at the top of `plan_rows`
+    pub plans_scroll: usize,
 }
 
 /// What is shown over the chat panel.
@@ -405,6 +412,8 @@ pub(crate) enum HoverTarget {
     SideTab(SidePanelTab),
     /// A row in the Processes tab.
     ProcessRow(usize),
+    /// A row in the Plans tab.
+    PlanRow(usize),
     /// A chat row that expands or collapses agent activity.
     Activity(ToggleTarget),
 }
@@ -587,6 +596,7 @@ impl App {
             pending_kill: None,
             graph: graph::GraphState::default(),
             trace_feed: trace_feed::TraceFeed::default(),
+            plan_list: plans::PlanList::default(),
             pending_graph_node: None,
         }
     }
@@ -937,6 +947,7 @@ impl App {
                     SidePanelTab::Sandbox => self.sandbox.move_by(delta),
                     SidePanelTab::Processes => self.scroll_processes(delta),
                     SidePanelTab::Trace => self.trace_feed.move_by(delta),
+                    SidePanelTab::Plans => self.plan_list.move_by(delta),
                 }
             }
         }
@@ -973,6 +984,7 @@ impl App {
                     SidePanelTab::Sandbox => self.sandbox.move_by(delta),
                     SidePanelTab::Processes => self.scroll_processes(delta),
                     SidePanelTab::Trace => self.trace_feed.move_by(delta),
+                    SidePanelTab::Plans => self.plan_list.move_by(delta),
                 }
             }
         }

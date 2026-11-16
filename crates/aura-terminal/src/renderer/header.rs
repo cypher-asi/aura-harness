@@ -1,5 +1,5 @@
-//! A panel's header bar: its tabs and an info cell inside a bordered
-//! frame of their own, above the panel's body.
+//! A panel's header bar: its tabs, or a title and an info cell, inside a
+//! bordered frame of their own, above the panel's body.
 //!
 //! ```text
 //! ┌──────────┬──────────┬───────────┐
@@ -122,15 +122,13 @@ pub(super) fn render_panel_header<T: Copy + PartialEq>(
         }
         let width = cell.width.min(last - cell.start);
         let style = if header.active == Some(cell.tab) {
-            let fill = if header.focused {
-                colors.primary
-            } else {
-                colors.muted
-            };
-            Style::default()
-                .bg(fill)
-                .fg(colors.background)
-                .add_modifier(Modifier::BOLD)
+            let mut style = Style::default()
+                .fg(colors.foreground)
+                .add_modifier(Modifier::BOLD);
+            if header.focused {
+                style = style.bg(colors.primary).fg(colors.background);
+            }
+            style
         } else if header.hovered == Some(cell.tab) {
             Style::default()
                 .bg(colors.surface_hover)
@@ -162,22 +160,19 @@ fn draw_centered(buf: &mut Buffer, area: Rect, text: &str, style: Style) {
 /// drops, before the title is cut.
 fn draw_info<T>(buf: &mut Buffer, area: Rect, header: &PanelHeader<'_, T>, theme: &Theme) {
     let colors = &theme.colors;
-    let fill = Style::default().bg(colors.surface);
     let room = usize::from(area.width);
     let Some(title) = header.title else {
-        buf.set_style(area, fill);
         if let Some(info) = &header.info {
             let text = [&info.text, &info.short]
                 .into_iter()
                 .find(|text| display_width(text) + 2 <= room)
                 .unwrap_or(&info.short);
-            draw_centered(buf, area, text, fill.fg(info.color));
+            draw_centered(buf, area, text, Style::default().fg(info.color));
         }
         return;
     };
-    buf.set_style(area, fill);
     let title = truncate_record_info(title, room.saturating_sub(2));
-    let title_style = fill
+    let title_style = Style::default()
         .fg(if header.focused {
             colors.primary
         } else {
@@ -201,7 +196,7 @@ fn draw_info<T>(buf: &mut Buffer, area: Rect, header: &PanelHeader<'_, T>, theme
         area.x + area.width - width,
         area.y,
         text,
-        fill.fg(info.color),
+        Style::default().fg(info.color),
     );
 }
 
@@ -239,7 +234,7 @@ mod tests {
             active: Some(0),
             hovered,
             title: None,
-            info: Some(HeaderInfo::count(4, "AGENTS", Color::White)),
+            info: None,
             focused,
         }
     }
@@ -247,9 +242,9 @@ mod tests {
     #[test]
     fn tabs_sit_between_dividers_that_join_the_frame() {
         let buffer = draw(40, 10, &chat_header(40, true, None));
-        assert_eq!(row(&buffer, 0), "┌──────────┬──────────┬────────────────┐");
-        assert_eq!(row(&buffer, 1), "│   CHAT   │ TERMINAL │    4 AGENTS    │");
-        assert_eq!(row(&buffer, 2), "└──────────┴──────────┴────────────────┘");
+        assert_eq!(row(&buffer, 0), "┌───────────────────┬──────────────────┐");
+        assert_eq!(row(&buffer, 1), "│       CHAT        │     TERMINAL     │");
+        assert_eq!(row(&buffer, 2), "└───────────────────┴──────────────────┘");
     }
 
     #[test]
@@ -259,20 +254,25 @@ mod tests {
         let active = focused[(1, 1)].style();
         assert_eq!(active.bg, Some(colors.primary));
         assert_eq!(active.fg, Some(colors.background));
-        let hovered = focused[(12, 1)].style();
+        let hovered = focused[(25, 1)].style();
         assert_eq!(hovered.bg, Some(colors.surface_hover));
         assert_eq!(hovered.fg, Some(colors.secondary));
-        assert_eq!(focused[(25, 1)].style().bg, Some(colors.surface));
 
         let unfocused = draw(40, 10, &chat_header(40, false, None));
-        assert_eq!(unfocused[(1, 1)].style().bg, Some(colors.muted));
+        let active = unfocused[(1, 1)].style();
+        assert_eq!(active.bg, Some(Color::Reset));
+        assert_eq!(active.fg, Some(colors.foreground));
+        assert!(active.add_modifier.contains(Modifier::BOLD));
+        let idle = unfocused[(25, 1)].style();
+        assert_eq!(idle.bg, Some(Color::Reset));
+        assert_eq!(idle.fg, Some(colors.muted));
         assert_eq!(unfocused[(0, 0)].style().fg, Some(colors.muted));
     }
 
     #[test]
     fn short_panels_get_the_tab_row_only() {
         let buffer = draw(40, 5, &chat_header(40, true, None));
-        assert_eq!(row(&buffer, 0), "│   CHAT   │ TERMINAL │    4 AGENTS    │");
+        assert_eq!(row(&buffer, 0), "│       CHAT        │     TERMINAL     │");
         assert_eq!(split(Rect::new(0, 0, 40, 5)).1.y, 1);
     }
 
@@ -288,6 +288,8 @@ mod tests {
         };
         let wide = draw(30, 10, &header(30));
         assert_eq!(row(&wide, 1), "│ KERNEL         128 RECORDS │");
+        assert_eq!(wide[(2, 1)].style().bg, Some(Color::Reset));
+        assert_eq!(wide[(10, 1)].style().bg, Some(Color::Reset));
         let narrow = draw(16, 10, &header(16));
         assert_eq!(row(&narrow, 1), "│ KERNEL   128 │");
         let tiny = draw(10, 10, &header(10));

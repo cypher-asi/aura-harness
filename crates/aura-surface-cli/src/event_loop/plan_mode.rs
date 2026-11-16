@@ -3,7 +3,8 @@
 //! `/plan` is the `plan` permission mode (see [`super::modes`]): the
 //! kernel holds the agent to reads and markdown notes, and its turns get
 //! the plan-mode instructions, so it researches and writes a plan with
-//! `create_plan`. `/build` switches the agent back to a mode that edits,
+//! `create_plan`. `/plan` again leaves that mode and returns to the one
+//! from before. `/build` switches the agent back to a mode that edits,
 //! seeds its todo list with the plan's todos, and asks it to implement
 //! the plan; while it builds, its todo list is mirrored into the plan
 //! file (see [`super::agent_events`]).
@@ -18,8 +19,9 @@ use aura_context_prompts::model_messages::build_plan::build_plan_prompt;
 use aura_core_types::AgentId;
 use aura_terminal::events::{PlanView, TodoState, TodoView};
 use aura_terminal::UiCommand;
-use aura_tools::plan_tools::{is_plan_path, todo_items, PlanFile, TodoStatus};
+use aura_tools::plan_tools::{is_plan_path, todo_items, PlanFile, TodoStatus, PLANS_DIR};
 use std::path::Path;
+use std::time::SystemTime;
 use tracing::{info, warn};
 
 /// The plan at `path` (relative to `workspace`) as the UI shows it, or
@@ -35,6 +37,26 @@ pub(crate) fn plan_view(workspace: &Path, path: &str) -> Option<PlanView> {
             None
         }
     }
+}
+
+/// Every readable plan in `workspace`, most recently changed first.
+pub(crate) fn plan_views(workspace: &Path) -> Vec<PlanView> {
+    let Ok(entries) = std::fs::read_dir(workspace.join(PLANS_DIR)) else {
+        return Vec::new();
+    };
+    let mut plans: Vec<(SystemTime, PlanView)> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = format!("{PLANS_DIR}/{}", entry.file_name().to_str()?);
+            let changed = entry
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            Some((changed, plan_view(workspace, &path)?))
+        })
+        .collect();
+    plans.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.path.cmp(&b.1.path)));
+    plans.into_iter().map(|(_, view)| view).collect()
 }
 
 fn view_of(path: &str, plan: PlanFile) -> PlanView {
@@ -74,6 +96,17 @@ pub(super) async fn send_plan_of(state: &LoopState<'_>, agent_id: AgentId) {
         .and_then(|path| plan_view(&session.kernel.agent_workspace(), path));
     AgentUi::new(state.commands.clone(), agent_id)
         .send(UiCommand::SetPlan(view))
+        .await;
+}
+
+/// Show the Plans tab every plan in `agent_id`'s workspace.
+pub(super) async fn send_plans_of(state: &LoopState<'_>, agent_id: AgentId) {
+    let Some(kernel) = state.kernel_for(agent_id) else {
+        return;
+    };
+    let plans = plan_views(&kernel.agent_workspace());
+    AgentUi::new(state.commands.clone(), agent_id)
+        .send(UiCommand::SetPlans(plans))
         .await;
 }
 
@@ -124,4 +157,47 @@ pub(super) async fn start_build(
         .await;
     ui.send(UiCommand::SetPlan(Some(view))).await;
     Some(build_plan_prompt(&path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn write_plan(workspace: &Path, file: &str, name: &str, age_secs: u64) {
+        let path = workspace.join(PLANS_DIR).join(file);
+        let text = format!(
+            "---\nname: {name}\ntodos:\n  - id: a\n    content: First\n    status: completed\n---\n"
+        );
+        std::fs::write(&path, text).unwrap();
+        let changed = SystemTime::now() - Duration::from_secs(age_secs);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(changed)
+            .unwrap();
+    }
+
+    #[test]
+    fn plan_views_lists_readable_plans_newest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(plan_views(dir.path()).is_empty());
+
+        std::fs::create_dir_all(dir.path().join(PLANS_DIR)).unwrap();
+        write_plan(dir.path(), "old_00000001.plan.md", "Old", 300);
+        write_plan(dir.path(), "new_00000002.plan.md", "New", 10);
+        std::fs::write(dir.path().join(PLANS_DIR).join("notes.md"), "x").unwrap();
+        std::fs::write(
+            dir.path().join(PLANS_DIR).join("broken_00000003.plan.md"),
+            "no frontmatter",
+        )
+        .unwrap();
+
+        let plans = plan_views(dir.path());
+        let names: Vec<&str> = plans.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["New", "Old"]);
+        assert_eq!(plans[0].path, ".aura/plans/new_00000002.plan.md");
+        assert_eq!(plans[0].todos[0].state, TodoState::Completed);
+    }
 }

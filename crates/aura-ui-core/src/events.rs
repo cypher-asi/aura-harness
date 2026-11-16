@@ -57,6 +57,10 @@ pub enum UiEvent {
     /// next permission mode
     CycleMode(String),
 
+    /// User ran `/plan` for the agent with this hex id. Enters plan mode,
+    /// or leaves it and returns to the mode from before when already there.
+    TogglePlan(String),
+
     /// User requested to quit
     Quit,
 
@@ -538,6 +542,9 @@ pub enum UiCommand {
 
     /// The active agent's current plan, `None` when it has none
     SetPlan(Option<PlanView>),
+
+    /// Every plan in the active agent's workspace, newest first
+    SetPlans(Vec<PlanView>),
 }
 
 /// A plan the agent wrote, as the todo list above the input shows it.

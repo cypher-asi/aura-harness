@@ -1,8 +1,8 @@
-//! The panel below the Record panel: a SANDBOX | PROCESSES | TRACE header
-//! bar over the file tree of the active agent's workspace, the Processes
-//! list, or the trace feed.
+//! The panel below the Record panel: a SANDBOX | PROCESSES | TRACE | PLANS
+//! header bar over the file tree of the active agent's workspace, the
+//! Processes list, the trace feed, or the workspace's plans.
 
-use super::header::{self, HeaderInfo, PanelHeader};
+use super::header::{self, PanelHeader};
 use super::panels::{
     hover_style, render_body_block, render_scrollbar, truncate_record_info, ScrollView,
 };
@@ -30,18 +30,12 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
         Some(HoverTarget::SideTab(tab)) => Some(tab),
         _ => None,
     };
-    let tab = app.side_tab();
-    let info = app.side_tab_count(tab).map(|count| match tab {
-        SidePanelTab::Sandbox => HeaderInfo::count(count, "FILES", theme.colors.foreground),
-        SidePanelTab::Processes => HeaderInfo::count(count, "LIVE", theme.colors.foreground),
-        SidePanelTab::Trace => HeaderInfo::count(count, "ISSUES", theme.colors.error),
-    });
     let header = PanelHeader {
         layout: SidePanelTab::layout(bar.width),
-        active: Some(tab),
+        active: Some(app.side_tab()),
         hovered,
         title: None,
-        info,
+        info: None,
         focused: is_focused,
     };
     header::render_panel_header(frame, bar, &header, theme);
@@ -56,6 +50,7 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
             super::processes::render_processes(frame, area, body, app, theme);
         }
         SidePanelTab::Trace => super::trace_feed::render_trace_feed(frame, body, app, theme),
+        SidePanelTab::Plans => super::plans::render_plans(frame, area, body, app, theme),
     }
 }
 

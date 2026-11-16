@@ -208,9 +208,10 @@ Plan mode lets the agent research a task and write a plan before it touches code
 
 | Command | What it does |
 |---------|--------------|
-| `/plan` or Shift+Tab | Switch to plan mode (Shift+Tab switches back to agent mode). The agent can read, search, run commands and write Markdown files, but not edit other files, use the network or spawn agents. |
-| `/mode <agent\|plan\|ask\|debug>` | Switch to any session mode. |
-| `/build [plan path]` | Switch to agent mode and implement the latest plan, or the given one. |
+| `/plan` | Switch to plan mode. `/plan` again leaves it and returns to the previous mode (`default` when the session started in plan mode). In plan mode the agent can read, search, run commands and write Markdown files, but not edit other files, use the network or spawn agents. |
+| Shift+Tab | Cycle `default` → `accept-edits` → `plan` → `unrestricted`. |
+| `/mode <name>` | Switch permission mode (`default`, `accept-edits`, `plan`, `unrestricted`, `ask`, `debug`). |
+| `/build [plan path]` | Leave plan mode and implement the latest plan, or the given one. |
 
 In plan mode, ask for what you want; the agent may ask a question or two, then saves a plan to `.aura/plans/<name>_<id>.plan.md` in its workspace: YAML frontmatter (`name`, `overview`, `todos`) followed by the plan in Markdown. Keep chatting to revise it. While you build, the agent marks todos `in_progress` and `completed` with `todo_write`, and the strip above the input shows its progress. The mode badge next to the model name shows any mode other than agent.
 

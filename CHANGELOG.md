@@ -299,6 +299,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Terminal — plan mode
 
+##### Fixed
+
+- `/plan` leaves plan mode when the session is already in it and returns to the previous permission mode (`default` when the session started in plan mode). While plan mode is on, the status line says `/plan to leave`.
+
 ##### Added
 
 - `/plan` (or Shift+Tab to the `plan` mode) puts the agent on screen in

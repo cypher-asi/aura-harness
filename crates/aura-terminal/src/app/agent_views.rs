@@ -160,9 +160,10 @@ impl App {
                 | UiCommand::ClearRecords
                 | UiCommand::SetSandboxRoot(_)
                 | UiCommand::SetPlan(_)
+                | UiCommand::SetPlans(_)
         ) {
-            // The Record and Sandbox panels and the plan strip show the
-            // active agent only.
+            // The Record and Sandbox panels, the plan strip and the Plans
+            // tab show the active agent only.
             return;
         }
 

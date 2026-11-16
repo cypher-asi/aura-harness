@@ -351,6 +351,21 @@ fn test_default_layout_shows_agents_column() {
     };
     assert_eq!(column_of("@"), column_of("+"));
     assert_eq!(column_of("reviewer"), column_of("New agent"));
+    // The roster `@` is gray; the agent name stays white. Selection paints
+    // both in the selection text color, so step off the row first.
+    app.handle_key(crossterm::event::KeyEvent::from(
+        crossterm::event::KeyCode::Down,
+    ));
+    let buffer = render_buffer(&mut app, 120);
+    let theme = test_theme();
+    let reviewer_row = row_of(&buffer, "reviewer");
+    let (_, at) = find_cell(&buffer, reviewer_row, "@").unwrap();
+    let (_, name) = find_cell(&buffer, reviewer_row, "reviewer").unwrap();
+    assert_eq!(at.fg, Some(theme.colors.muted));
+    assert_eq!(name.fg, Some(theme.colors.secondary));
+    app.handle_key(crossterm::event::KeyEvent::from(
+        crossterm::event::KeyCode::Up,
+    ));
     assert!(!screen.contains("spawn") && !screen.contains(" del"));
     assert!(!screen.contains("Researcher"));
     // "+ New agent" takes the panel's bottom row, like "+ New project".
@@ -422,16 +437,13 @@ fn header_bar(rows: &[String], label: &str) -> (usize, Vec<usize>) {
 #[test]
 fn test_agents_header_is_a_bar_of_equal_tabs() {
     let mut app = crate::App::new();
-    let rows = render_rows(&mut app, 120);
-    let (tabs, widths) = header_bar(&rows, "PROJECTS");
-    assert!(rows[tabs].contains("AGENTS"));
-    assert_eq!(widths.len(), 2, "no room for the info cell: {widths:?}");
-    assert!(widths[0].abs_diff(widths[1]) <= 1, "{widths:?}");
-
-    let rows = render_rows(&mut app, 160);
-    let (_, widths) = header_bar(&rows, "PROJECTS");
-    assert_eq!(widths.len(), 3, "tabs then the info cell: {widths:?}");
-    assert_eq!(widths[0], widths[1]);
+    for width in [120, 160] {
+        let rows = render_rows(&mut app, width);
+        let (tabs, widths) = header_bar(&rows, "PROJECTS");
+        assert!(rows[tabs].contains("AGENTS"));
+        assert_eq!(widths.len(), 2, "the tabs fill the bar: {widths:?}");
+        assert!(widths[0].abs_diff(widths[1]) <= 1, "{widths:?}");
+    }
 }
 
 #[test]
@@ -959,19 +971,22 @@ fn test_sandbox_panel_sits_below_record() {
     let rows = render_rows(&mut app, 120);
 
     let (record, _) = header_bar(&rows, "│ KERNEL");
-    let (sandbox, _) = header_bar(&rows, "│ SANDBOX");
+    let (sandbox, _) = header_bar(&rows, "SANDBOX");
     assert!(sandbox > record + 10, "record={record} sandbox={sandbox}");
     let column = |row: &str, title: &str| row[..row.find(title).unwrap()].chars().count();
+    let kernel_border = column(&rows[record], "│ KERNEL");
     assert_eq!(
-        column(&rows[record], "│ KERNEL"),
-        column(&rows[sandbox], "│ SANDBOX")
+        rows[sandbox].chars().nth(kernel_border),
+        Some('│'),
+        "{}",
+        rows[sandbox]
     );
-    assert!(rows[sandbox].contains("PROCESSES"));
+    assert!(rows[sandbox].contains("PLANS"));
     assert!(rows[sandbox + 3].contains("▸ src/"));
     assert!(rows[sandbox + 4].contains("Cargo.toml"));
     assert_eq!(
         column(&rows[sandbox + 3], "▸ src/"),
-        column(&rows[sandbox], "│ SANDBOX") + 2,
+        kernel_border + 2,
         "tree rows share the Record panel's one-column gutter"
     );
 }
@@ -982,11 +997,15 @@ fn test_side_panel_header_matches_the_agents_header() {
     let rows = render_rows(&mut app, 120);
     let (tabs, widths) = header_bar(&rows, "SANDBOX");
     assert!(
-        rows[tabs].contains("│PROCESSES│"),
-        "tight cells: {}",
+        rows[tabs].contains(" PRC ") && rows[tabs].contains(" PLANS "),
+        "full labels where they fit: {}",
         rows[tabs]
     );
-    assert_eq!(widths[..3], [9, 9, 9]);
+    assert_eq!(widths.len(), 4, "the tabs fill the bar: {widths:?}");
+    assert!(
+        widths.iter().all(|w| w.abs_diff(widths[0]) <= 1),
+        "{widths:?}"
+    );
     assert_eq!(
         header_bar(&rows, "PROJECTS").0,
         header_bar(&rows, "KERNEL").0,
@@ -995,16 +1014,12 @@ fn test_side_panel_header_matches_the_agents_header() {
 
     let rows = render_rows(&mut app, 160);
     let (tabs, widths) = header_bar(&rows, "SANDBOX");
-    assert!(
-        rows[tabs].contains("│ PROCESSES │"),
-        "padded cells: {}",
-        rows[tabs]
-    );
-    assert_eq!(widths[..3], [11, 11, 11]);
+    assert!(rows[tabs].contains(" PROCESSES "), "{}", rows[tabs]);
+    assert_eq!(widths.len(), 4, "{widths:?}");
 }
 
 #[test]
-fn test_side_panel_tabs_count_files_and_running_processes() {
+fn test_side_panel_tabs_fill_the_bar_without_counts() {
     use crate::app::SidePanelTab;
     use crate::events::{ProcessStatus, ProcessSummary, UiCommand};
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -1030,17 +1045,13 @@ fn test_side_panel_tabs_count_files_and_running_processes() {
 
     let theme = test_theme();
     let buffer = render_buffer(&mut app, 160);
-    let row = row_of(&buffer, "│ PROCESSES │");
+    let row = row_of(&buffer, " PROCESSES ");
     let (label, label_style) = find_cell(&buffer, row, "SANDBOX").unwrap();
-    let (_, count_style) = find_cell(&buffer, row, "3 FILES").unwrap();
     assert!(label_style.add_modifier.contains(Modifier::BOLD));
-    assert_eq!(
-        label_style.bg,
-        Some(theme.colors.muted),
-        "active, unfocused"
-    );
-    assert_eq!(label_style.fg, Some(theme.colors.background));
-    assert_eq!(count_style.bg, Some(theme.colors.surface));
+    assert_eq!(label_style.bg, Some(Color::Reset), "active, unfocused");
+    assert_eq!(label_style.fg, Some(theme.colors.foreground));
+    let screen = render_rows(&mut app, 160).join("\n");
+    assert!(!screen.contains("FILES"), "{screen}");
 
     let (processes, process_style) = find_cell(&buffer, row, "PROCESSES").unwrap();
     assert!(processes > label);
@@ -1058,12 +1069,7 @@ fn test_side_panel_tabs_count_files_and_running_processes() {
     }
     assert_eq!(app.side_tab(), SidePanelTab::Processes);
     let screen = render_rows(&mut app, 160).join("\n");
-    assert!(screen.contains("2 LIVE"), "{screen}");
-    let short = render_rows(&mut app, 120).join("\n");
-    assert!(
-        !short.contains("2 LIVE") && short.contains("│ 2  │"),
-        "{short}"
-    );
+    assert!(!screen.contains("LIVE"), "{screen}");
 }
 
 #[test]
@@ -1133,9 +1139,11 @@ fn test_trace_tab_lists_live_steps() {
     while app.focus() != PanelFocus::Sandbox {
         let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
-    let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    for _ in 0..2 {
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    }
     let screen = render_rows(&mut app, 160).join("\n");
-    assert!(screen.contains("1 ISSUES"), "{screen}");
+    assert!(!screen.contains("ISSUES"), "{screen}");
     let row = screen
         .lines()
         .find(|r| r.contains("implement_now"))
@@ -1151,12 +1159,70 @@ fn test_files_command_toggles_sandbox_panel() {
     submit(&mut app, "/files");
     let screen = render_rows(&mut app, 120).join("\n");
     assert!(!screen.contains(" KERNEL "));
-    assert!(!screen.contains(" SANDBOX "));
+    assert!(!screen.contains("SANDBOX"));
 
     submit(&mut app, "/files");
     let screen = render_rows(&mut app, 120).join("\n");
-    assert!(screen.contains(" SANDBOX "));
+    assert!(screen.contains("SANDBOX"));
     assert!(!screen.contains(" KERNEL "));
+}
+
+#[test]
+fn test_plans_tab_lists_plans_with_their_todos() {
+    use crate::app::PanelFocus;
+    use crate::events::{PlanView, TodoState, TodoView, UiCommand};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let todo = |content: &str, state| TodoView {
+        content: content.into(),
+        state,
+    };
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetPlans(vec![
+        PlanView {
+            path: ".aura/plans/auth_00000001.plan.md".into(),
+            name: "Auth rework".into(),
+            todos: vec![
+                todo("Add session table", TodoState::Completed),
+                todo("Write the login handler", TodoState::InProgress),
+            ],
+        },
+        PlanView {
+            path: ".aura/plans/parser_00000002.plan.md".into(),
+            name: "Parser cleanup".into(),
+            todos: vec![todo("Split the lexer", TodoState::Completed)],
+        },
+    ]));
+    while app.focus() != PanelFocus::Sandbox {
+        let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
+    }
+    let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    let rows = render_rows(&mut app, 160);
+    let row_with = |text: &str| {
+        rows.iter()
+            .position(|r| r.contains(text))
+            .unwrap_or_else(|| panic!("no {text} in:\n{}", rows.join("\n")))
+    };
+    let auth = row_with("Auth rework");
+    assert!(
+        rows[auth].contains('▾') && rows[auth].contains("1/2"),
+        "{}",
+        rows[auth]
+    );
+    assert_eq!(row_with("Add session table"), auth + 1);
+    assert!(rows[auth + 1].contains('✓'));
+    assert!(
+        rows[auth + 2].contains("▸  Write the login handler"),
+        "{}",
+        rows[auth + 2]
+    );
+    let parser = row_with("Parser cleanup");
+    assert_eq!(parser, auth + 3);
+    assert!(rows[parser].contains("1/1"));
+    assert!(
+        !rows.join("\n").contains("Split the lexer"),
+        "done plans start folded"
+    );
 }
 
 fn render_with_user(user: Option<&str>, width: u16) -> Vec<String> {
@@ -1235,13 +1301,15 @@ fn render_rows(app: &mut crate::App, width: u16) -> Vec<String> {
 /// The chat panel's header tab row and its left and right border columns,
 /// found from its CHAT | TERMINAL header bar.
 fn chat_panel(rows: &[String]) -> (usize, usize, usize) {
-    const TABS: &str = "│   CHAT   │ TERMINAL │";
     let tabs = rows
         .iter()
-        .position(|r| r.contains(TABS))
+        .position(|r| r.contains(" CHAT ") && r.contains(" TERMINAL "))
         .unwrap_or_else(|| panic!("no chat header bar in:\n{}", rows.join("\n")));
-    let row = &rows[tabs];
-    let left = row[..row.find(TABS).unwrap()].chars().count();
+    let row: Vec<char> = rows[tabs].chars().collect();
+    let chat = rows[tabs][..rows[tabs].find(" CHAT ").unwrap()]
+        .chars()
+        .count();
+    let left = row[..=chat].iter().rposition(|&c| c == '│').unwrap();
     let right = left
         + 1
         + rows[tabs - 1]
@@ -1551,9 +1619,11 @@ fn test_chat_panel_tabs_switch_between_chat_and_terminal() {
 
     let mut app = app_with_model(None);
     let rows = render_rows(&mut app, 120);
-    let (tabs, left, _) = chat_panel(&rows);
-    assert_eq!(rows[tabs - 1].chars().nth(left + 11), Some('┬'));
-    assert_eq!(rows[tabs + 1].chars().nth(left + 11), Some('┴'));
+    let (tabs, left, right) = chat_panel(&rows);
+    let first = ChatTab::layout(u16::try_from(right - left + 1).unwrap()).cells[0];
+    let divider = left + usize::from(first.start + first.width);
+    assert_eq!(rows[tabs - 1].chars().nth(divider), Some('┬'));
+    assert_eq!(rows[tabs + 1].chars().nth(divider), Some('┴'));
     assert_eq!(rows[tabs + 2].chars().nth(left), Some('┌'), "body below");
 
     let theme = test_theme();

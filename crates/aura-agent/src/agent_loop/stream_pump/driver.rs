@@ -194,7 +194,8 @@ pub(super) async fn drive_stream(
                     usage: &usage,
                     model_name,
                 };
-                return cancelled_outcome(&snap, Vec::new());
+                // Tool futures are only polled in the drain below, so none has run yet.
+                return cancelled_outcome(&snap, Vec::new(), false);
             }
             StreamStep::TimedOut => {
                 let elapsed_ms = stream_event_timeout
@@ -443,6 +444,14 @@ pub(super) async fn drive_stream(
                 // bare `Cancelled` and let `executor.execute(...)` run
                 // to natural completion — the regression contract is
                 // `pipeline_cancellation_mid_tool_execution_aborts_loop`.
+                settle_pending_writes(
+                    &mut in_flight,
+                    &tool_calls_seen,
+                    &spawned_indices,
+                    &mut spawned_pairs,
+                    WRITE_SETTLE_GRACE,
+                )
+                .await;
                 let snap = CancelledSnapshot {
                     text_chunks: &text_chunks,
                     thinking_chunks: &thinking_chunks,
@@ -453,7 +462,7 @@ pub(super) async fn drive_stream(
                     model_name,
                 };
                 note_reported(state, event_tx, &spawned_pairs);
-                return cancelled_outcome(&snap, spawned_pairs);
+                return cancelled_outcome(&snap, spawned_pairs, true);
             }
             DrainStep::Done => break,
             DrainStep::Result(indexed) => spawned_pairs.push(*indexed),
@@ -750,6 +759,49 @@ async fn drain_next<'a>(
     }
 }
 
+/// How long a cancel waits for file-changing calls that are already in
+/// flight. A write that has reached the filesystem runs to completion even
+/// when its future is dropped, so reporting it as cancelled would tell the
+/// model the file is unchanged when it isn't. File operations finish in
+/// milliseconds; anything still pending after this (say, waiting on an
+/// approval) is reported as possibly applied.
+const WRITE_SETTLE_GRACE: Duration = Duration::from_secs(2);
+
+const CANCELLED_CONTENT: &str =
+    "[CANCELLED] Tool execution was cancelled by the user before the tool returned.";
+
+const CANCELLED_WRITE_CONTENT: &str =
+    "[CANCELLED] Tool execution was cancelled by the user before the tool returned. \
+     The change may already have been made: re-read the file before editing it again.";
+
+/// On cancel, keep draining `in_flight` for up to `grace` while any
+/// spawned file-changing call is still without a result, so the ones that
+/// land keep their real results.
+async fn settle_pending_writes(
+    in_flight: &mut FuturesUnordered<ToolFuture<'_>>,
+    tool_calls_seen: &[ToolCallInfo],
+    spawned_indices: &[usize],
+    spawned_pairs: &mut Vec<IndexedResult>,
+    grace: Duration,
+) {
+    let deadline = tokio::time::Instant::now() + grace;
+    loop {
+        let write_pending = spawned_indices.iter().any(|idx| {
+            tool_calls_seen
+                .get(*idx)
+                .is_some_and(|call| crate::helpers::is_write_tool(&call.name))
+                && !spawned_pairs.iter().any(|(done, _)| done == idx)
+        });
+        if !write_pending {
+            return;
+        }
+        match tokio::time::timeout_at(deadline, in_flight.next()).await {
+            Ok(Some(pair)) => spawned_pairs.push(pair),
+            Ok(None) | Err(_) => return,
+        }
+    }
+}
+
 /// Build a `Completed` outcome that carries `[CANCELLED]` tool_results
 /// for every emitted tool_use that did NOT yet produce a paired
 /// result. Drains `cached_pairs` + `spawned_pairs` first (already-
@@ -782,9 +834,12 @@ struct CancelledSnapshot<'a> {
     model_name: &'a str,
 }
 
+/// `started` says whether the pending calls may have begun running, in
+/// which case an unfinished file change is reported as possibly applied.
 fn cancelled_outcome(
     snap: &CancelledSnapshot<'_>,
     mut spawned_pairs: Vec<(usize, (ToolCallInfo, ToolCallResult))>,
+    started: bool,
 ) -> StreamPumpOutcome {
     use std::collections::HashSet;
     let &CancelledSnapshot {
@@ -807,11 +862,14 @@ fn cancelled_outcome(
 
     for idx in still_pending {
         if let Some(call) = tool_calls_seen.get(idx) {
+            let content = if started && crate::helpers::is_write_tool(&call.name) {
+                CANCELLED_WRITE_CONTENT
+            } else {
+                CANCELLED_CONTENT
+            };
             let result = ToolCallResult {
                 tool_use_id: call.id.clone(),
-                content:
-                    "[CANCELLED] Tool execution was cancelled by the user before the tool returned."
-                        .to_string(),
+                content: content.to_string(),
                 is_error: true,
                 kind: aura_core_types::ToolResultKind::AgentError,
                 stop_loop: true,

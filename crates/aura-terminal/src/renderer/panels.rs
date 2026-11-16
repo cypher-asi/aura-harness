@@ -31,21 +31,12 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
         Some(HoverTarget::ChatTab(tab)) => Some(tab),
         _ => None,
     };
-    let agent = app
-        .agents()
-        .iter()
-        .find(|agent| agent.id == app.active_agent_id())
-        .map(|agent| agent.name.to_uppercase());
     let header = PanelHeader {
         layout: ChatTab::layout(bar.width),
         active: Some(app.chat_tab()),
         hovered,
         title: None,
-        info: agent.map(|name| HeaderInfo {
-            short: name.clone(),
-            text: name,
-            color: theme.colors.foreground,
-        }),
+        info: None,
         focused: is_focused,
     };
     header::render_panel_header(frame, bar, &header, theme);
@@ -561,25 +552,12 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
         Some(HoverTarget::AgentTab(tab)) => Some(tab),
         _ => None,
     };
-    let info = match app.agents_tab() {
-        AgentsTab::Projects => {
-            let projects = app
-                .project_rows()
-                .iter()
-                .filter(|row| matches!(row, ProjectListRow::Project { .. }))
-                .count();
-            HeaderInfo::count(projects, "PROJECTS", theme.colors.foreground)
-        }
-        AgentsTab::Roster => {
-            HeaderInfo::count(app.definitions().len(), "AGENTS", theme.colors.foreground)
-        }
-    };
     let header = PanelHeader {
         layout: AgentsTab::layout(bar.width),
         active: Some(app.agents_tab()),
         hovered,
         title: None,
-        info: Some(info),
+        info: None,
         focused: is_focused,
     };
     header::render_panel_header(frame, bar, &header, theme);
@@ -895,9 +873,10 @@ pub(super) fn hover_style(theme: &Theme) -> Style {
     Style::default().fg(theme.colors.secondary)
 }
 
-/// Roster rows: "@  name" for each permanent agent, then "+  New agent",
-/// which the panel pins to its bottom row, with the markers and the names
-/// in the same columns as the projects list.
+/// Roster rows: a gray `@` and the name for each permanent agent, then
+/// "+  New agent", which the panel pins to its bottom row. Markers and
+/// names share columns with the projects list. A selected row still paints
+/// the `@` in the selection text color.
 fn build_definition_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>> {
     let is_focused = app.focus() == PanelFocus::Swarm;
     let selected = app.selected_definition();
@@ -905,18 +884,30 @@ fn build_definition_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line
     let names = app
         .definitions()
         .iter()
-        .map(|definition| ("@", definition.name.as_str(), theme.colors.secondary))
-        .chain(std::iter::once(("+", "New agent", theme.colors.muted)));
+        .map(|definition| {
+            (
+                "@",
+                definition.name.as_str(),
+                theme.colors.secondary,
+                theme.colors.muted,
+            )
+        })
+        .chain(std::iter::once((
+            "+",
+            "New agent",
+            theme.colors.muted,
+            theme.colors.muted,
+        )));
 
     names
         .enumerate()
-        .map(|(i, (marker, name, text))| {
+        .map(|(i, (marker, name, text, icon_color))| {
             let is_selected = i == selected && is_focused;
             let is_hovered =
                 matches!(app.hover(), Some(HoverTarget::DefinitionRow(row)) if row == i);
             let state = CellState::of(is_selected, is_hovered);
             let cell = cell_style(theme, state, Style::default().fg(text));
-            let icon = StatusIcon::new(marker, cell.text.fg.unwrap_or(text));
+            let icon = StatusIcon::new(marker, icon_color);
             list_row(width, 0, icon, name, cell, None)
         })
         .collect()

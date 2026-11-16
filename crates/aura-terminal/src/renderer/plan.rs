@@ -47,12 +47,24 @@ fn window_start(plan: &PlanView) -> usize {
     first_open.saturating_sub(1).min(last_start)
 }
 
-fn marker(status: TodoState) -> &'static str {
+pub(super) const fn marker(status: TodoState) -> &'static str {
     match status {
         TodoState::Pending => "○",
         TodoState::InProgress => "▸",
         TodoState::Completed => "✓",
         TodoState::Cancelled => "✗",
+    }
+}
+
+/// How a todo in `state` is drawn.
+pub(super) fn todo_style(state: TodoState, theme: &Theme) -> Style {
+    match state {
+        TodoState::InProgress => Style::default().fg(theme.colors.primary),
+        TodoState::Pending => Style::default().fg(theme.colors.foreground),
+        TodoState::Completed => Style::default().fg(theme.colors.success),
+        TodoState::Cancelled => Style::default()
+            .fg(theme.colors.muted)
+            .add_modifier(Modifier::CROSSED_OUT),
     }
 }
 
@@ -88,12 +100,7 @@ pub(super) fn render_plan_strip(frame: &mut Frame, area: Rect, app: &App, theme:
         .skip(window_start(plan))
         .take(usize::from(area.height) - 1)
     {
-        let style = match todo.state {
-            TodoState::InProgress => Style::default().fg(theme.colors.primary),
-            TodoState::Pending => Style::default().fg(theme.colors.foreground),
-            TodoState::Completed => Style::default().fg(theme.colors.success),
-            TodoState::Cancelled => muted.add_modifier(Modifier::CROSSED_OUT),
-        };
+        let style = todo_style(todo.state, theme);
         lines.push(Line::from(vec![
             Span::styled(format!("  {} ", marker(todo.state)), style),
             Span::styled(fit(&todo.content, width.saturating_sub(4)), style),

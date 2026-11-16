@@ -40,7 +40,12 @@ pub(super) fn status_parts(hud: &Hud, theme: &Theme) -> Vec<(String, Color)> {
             }
             PermissionMode::Unrestricted => theme.colors.warning,
         };
-        parts.push((format!("{mode} mode"), color));
+        let label = if mode == PermissionMode::Plan {
+            "plan mode (/plan to leave)".to_string()
+        } else {
+            format!("{mode} mode")
+        };
+        parts.push((label, color));
     }
     if stats.context_tokens > 0 {
         let mut text = format!("ctx {}", format_tokens(stats.context_tokens));
@@ -244,6 +249,17 @@ fn truncate(text: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plan_mode_status_says_how_to_leave() {
+        let theme = Theme::default();
+        let hud = crate::app::hud::Hud {
+            mode: Some(PermissionMode::Plan),
+            ..crate::app::hud::Hud::default()
+        };
+        let parts = status_parts(&hud, &theme);
+        assert_eq!(parts[0].0, "plan mode (/plan to leave)");
+    }
 
     #[test]
     fn gauge_fills_by_fifths() {

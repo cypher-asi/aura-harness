@@ -68,10 +68,10 @@ Panels without tabs (Kernel) show a title on the left of the info cell.
 ```
 
 - **Frame and dividers**: the panel's border color
-- **Active tab**: filled `primary` while the panel is focused, `muted` otherwise, with its label in `background` (inverted) and bold
+- **Active tab**: filled `primary` while the panel is focused, with its label in `background` (inverted) and bold. While the panel is not focused, the label is bold `foreground` with no fill
 - **Hovered tab**: `surface_hover` fill with a `secondary` label
 - **Other tabs**: `muted` label, no fill
-- **Info cell**: `surface` fill; counts in `foreground`, problems (trace issues) in `error`
+- **Info cell**: no fill; counts in `foreground`, problems (trace issues) in `error`
 
 Narrow bars drop the tab padding, then switch to three-letter labels
 (`short_label`), and give the info cell's room to the tabs when it would be

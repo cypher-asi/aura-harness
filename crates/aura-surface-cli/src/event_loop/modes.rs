@@ -125,7 +125,7 @@ pub(super) async fn switch_mode(
     if mode == PermissionMode::Plan {
         ui.send(system_message(
             "Plan mode: the agent researches and writes a plan instead of changing code. \
-             Run /build when the plan looks right."
+             /plan again returns to the previous mode. /build implements the plan."
                 .to_string(),
         ))
         .await;

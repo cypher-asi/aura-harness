@@ -1162,3 +1162,101 @@ async fn cancelling_keeps_the_real_result_of_a_call_that_already_ran() {
         "the finished call keeps its result"
     );
 }
+
+/// `edit_file` takes `edit_delay` to land, or never lands when `None`;
+/// `fast` returns at once.
+struct SlowEditExecutor {
+    edit_delay: Option<Duration>,
+}
+
+#[async_trait]
+impl AgentToolExecutor for SlowEditExecutor {
+    async fn execute(&self, tool_calls: &[ToolCallInfo]) -> Vec<ToolCallResult> {
+        let mut results = Vec::new();
+        for call in tool_calls {
+            if call.name == "edit_file" {
+                match self.edit_delay {
+                    Some(delay) => tokio::time::sleep(delay).await,
+                    None => std::future::pending::<()>().await,
+                }
+                results.push(ToolCallResult::success(call.id.clone(), "edited"));
+            } else {
+                results.push(ToolCallResult::success(call.id.clone(), "done"));
+            }
+        }
+        results
+    }
+}
+
+/// Cancels once `fast` reports, while `edit_file` is still in flight.
+async fn cancel_with_edit_in_flight(executor: &SlowEditExecutor) -> Vec<(String, String)> {
+    let config = AgentLoopConfig::for_agent("claude-test-model");
+    let stream = mk_stream(vec![
+        mk_call("toolu_edit", "edit_file"),
+        mk_call("toolu_fast", "fast"),
+        ResponseEvent::Completed {
+            stop_reason: None,
+            end_turn: Some(false),
+            usage: Usage::new(1, 1),
+        },
+    ]);
+    let mut state = super::super::LoopState::new_for_tests(&config, Vec::new());
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    let cancel = CancellationToken::new();
+    let drive = drive_stream(
+        StreamPumpCtx {
+            event_tx: Some(&tx),
+            cancellation_token: Some(&cancel),
+            ..test_ctx(&config, executor)
+        },
+        stream,
+        &mut state,
+        "test-model",
+    );
+    let cancel_after_fast = async {
+        while let Some(event) = rx.recv().await {
+            if matches!(event, AgentLoopEvent::ToolResult { ref tool_use_id, .. } if tool_use_id == "toolu_fast")
+            {
+                cancel.cancel();
+                return;
+            }
+        }
+    };
+    let (outcome, ()) = tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::join!(drive, cancel_after_fast)
+    })
+    .await
+    .expect("cancel must end the drain");
+    let StreamPumpOutcome::Completed { tool_results, .. } = outcome else {
+        panic!("expected Completed with cancelled results, got {outcome:?}");
+    };
+    tool_results
+        .into_iter()
+        .map(|(c, r)| (c.id, r.content))
+        .collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancelling_waits_for_an_edit_already_in_flight() {
+    let executor = SlowEditExecutor {
+        edit_delay: Some(Duration::from_millis(200)),
+    };
+    let results = cancel_with_edit_in_flight(&executor).await;
+    assert_eq!(
+        results[0],
+        ("toolu_edit".to_string(), "edited".to_string()),
+        "an edit that lands after the cancel must report that it landed"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancelling_an_unfinished_edit_says_it_may_have_applied() {
+    let executor = SlowEditExecutor { edit_delay: None };
+    let results = cancel_with_edit_in_flight(&executor).await;
+    assert_eq!(results[0].0, "toolu_edit");
+    assert!(
+        results[0].1.starts_with("[CANCELLED]") && results[0].1.contains("re-read the file"),
+        "{results:?}"
+    );
+    assert_eq!(results[1], ("toolu_fast".to_string(), "done".to_string()));
+}

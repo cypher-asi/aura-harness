@@ -1,10 +1,11 @@
 //! Where the cells of a panel's header bar fall: equal-width tab cells
-//! between shared dividers, then an info cell filling the rest of the bar.
+//! between shared dividers, filling the bar. A bar with no tabs is one info
+//! cell.
 //!
 //! ```text
-//! ┌──────────┬──────────┬───────────┐
-//! │   CHAT   │ TERMINAL │  PLANNER  │
-//! └──────────┴──────────┴───────────┘
+//! ┌───────────┬───────────┬───────────┐
+//! │   CHAT    │ TERMINAL  │  PLANNER  │
+//! └───────────┴───────────┴───────────┘
 //! ```
 
 /// How a bar's tab cells fit, roomiest first. Every tab in a bar uses the
@@ -15,7 +16,7 @@ pub enum TabFit {
     Padded,
     /// The widest label, no padding
     Tight,
-    /// Three-letter labels
+    /// Three-letter labels, except in cells wide enough for the full one
     Short,
 }
 
@@ -35,19 +36,17 @@ pub struct TabCell<T> {
 pub struct TabLayout<T> {
     pub fit: TabFit,
     pub cells: Vec<TabCell<T>>,
-    /// First column and width of the info cell, when there is room for one
+    /// First column and width of the info cell, for bars without tabs
     pub info: Option<(u16, u16)>,
 }
 
 /// A tab's label for one of the fits.
 type Labels<'a, T> = &'a dyn Fn(T) -> &'static str;
 
-/// Narrowest info cell drawn; less room than this widens the tabs instead.
-const MIN_INFO_WIDTH: u16 = 3;
-
 impl<T: Copy + PartialEq> TabLayout<T> {
     /// Lay out `tabs` in a bar `width` columns wide, padded if they fit,
-    /// then tight, then with their short labels.
+    /// then tight, then with their short labels. Columns left over widen
+    /// the cells so the tabs span the bar.
     pub fn new<const N: usize>(
         tabs: [T; N],
         label: impl Fn(T) -> &'static str,
@@ -78,9 +77,8 @@ impl<T: Copy + PartialEq> TabLayout<T> {
         let used = 1 + count * (cell + 1);
         let spare = width.saturating_sub(used);
         // The info cell also needs the frame's right border after it.
-        let info_width = spare.saturating_sub(1);
-        let info = (N == 0 || info_width >= MIN_INFO_WIDTH).then_some((used, info_width));
-        let extra = if info.is_some() || N == 0 { 0 } else { spare };
+        let info = (N == 0).then_some((used, spare.saturating_sub(1)));
+        let extra = if N == 0 { 0 } else { spare };
 
         let mut start = 1;
         let cells = tabs
@@ -89,9 +87,14 @@ impl<T: Copy + PartialEq> TabLayout<T> {
             .map(|(i, &tab)| {
                 let index = u16::try_from(i).unwrap_or(u16::MAX);
                 let width = cell + extra / count + u16::from(index < extra % count);
+                let full = label(tab);
                 let placed = TabCell {
                     tab,
-                    label: text(tab),
+                    label: if full.len() <= usize::from(width) {
+                        full
+                    } else {
+                        text(tab)
+                    },
                     start,
                     width,
                 };
@@ -134,34 +137,36 @@ mod tests {
     }
 
     #[test]
-    fn cells_are_as_wide_as_the_widest_label() {
+    fn tabs_share_the_whole_bar() {
         let wide = layout(60);
         assert_eq!(wide.fit, TabFit::Padded);
-        assert_eq!(widths(&wide), [11, 11, 11]);
-        assert_eq!(wide.cells[1].start, 13);
-        assert_eq!(wide.info, Some((37, 22)));
+        assert_eq!(widths(&wide), [19, 19, 18]);
+        assert_eq!(wide.cells[1].start, 21);
+        assert_eq!(wide.info, None);
+        let last = wide.cells[2];
+        assert_eq!(last.start + last.width, 59);
     }
 
     #[test]
     fn narrow_bars_drop_padding_then_use_short_labels() {
         let side = layout(36);
         assert_eq!(side.fit, TabFit::Tight);
-        assert_eq!(widths(&side), [9, 9, 9]);
-        assert_eq!(side.info, Some((31, 4)));
+        assert_eq!(widths(&side), [11, 11, 10]);
 
         let narrow = layout(20);
         assert_eq!(narrow.fit, TabFit::Short);
         assert_eq!(narrow.cells[0].label, "SBX");
+        let last = narrow.cells[2];
+        assert_eq!(last.start + last.width, 19);
     }
 
     #[test]
-    fn leftover_too_small_for_info_widens_the_tabs() {
-        let tabs = layout(39);
-        assert_eq!(tabs.fit, TabFit::Padded);
-        assert_eq!(tabs.info, None);
-        assert_eq!(widths(&tabs), [12, 12, 11]);
-        let last = tabs.cells[2];
-        assert_eq!(last.start + last.width, 38);
+    fn short_bars_keep_full_labels_that_fit_their_cell() {
+        let bar = layout(28);
+        assert_eq!(bar.fit, TabFit::Short);
+        assert_eq!(widths(&bar), [8, 8, 8]);
+        let labels: Vec<&str> = bar.cells.iter().map(|cell| cell.label).collect();
+        assert_eq!(labels, ["SANDBOX", "PRC", "TRACE"]);
     }
 
     #[test]
@@ -169,9 +174,10 @@ mod tests {
         let tabs = layout(60);
         assert_eq!(tabs.tab_at(0), None);
         assert_eq!(tabs.tab_at(1), Some(0));
-        assert_eq!(tabs.tab_at(12), None);
-        assert_eq!(tabs.tab_at(13), Some(1));
-        assert_eq!(tabs.tab_at(40), None);
+        assert_eq!(tabs.tab_at(20), None);
+        assert_eq!(tabs.tab_at(21), Some(1));
+        assert_eq!(tabs.tab_at(41), Some(2));
+        assert_eq!(tabs.tab_at(59), None);
     }
 
     #[test]

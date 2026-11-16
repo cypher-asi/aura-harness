@@ -586,19 +586,20 @@ mod tests {
         ((top, left), (bottom, right))
     }
 
-    /// The chat panel's CHAT | TERMINAL header bar.
-    const CHAT_TABS: &str = "   CHAT   │ TERMINAL │";
-
     /// Corners of the chat panel's body, the box right below the header
-    /// bar holding its tabs.
+    /// bar holding its CHAT | TERMINAL tabs.
     fn chat_corners(rows: &[Vec<String>]) -> ((usize, usize), (usize, usize)) {
-        let len = CHAT_TABS.chars().count();
         let (top, left) = rows
             .iter()
             .enumerate()
             .find_map(|(y, row)| {
-                let x = (0..row.len().saturating_sub(len))
-                    .find(|&x| row[x] == "│" && row[x + 1..=x + len].concat() == CHAT_TABS)?;
+                let text = row.concat();
+                if !text.contains(" TERMINAL ") {
+                    return None;
+                }
+                let chat =
+                    (0..row.len().saturating_sub(4)).find(|&x| row[x..x + 4].concat() == "CHAT")?;
+                let x = (0..chat).rev().find(|&x| row[x] == "│")?;
                 Some((y + 2, x))
             })
             .expect("no chat header bar");
@@ -652,7 +653,10 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert_eq!(box_corners(&rows, " Record #60 ✓ "), chat, "{text}");
-        assert!(text.contains(CHAT_TABS), "header bar stays: {text}");
+        assert!(
+            text.contains(" CHAT ") && text.contains(" TERMINAL "),
+            "header bar stays: {text}"
+        );
         assert!(text.contains("Sequence:    60"), "{text}");
         assert!(text.contains("Esc close"), "{text}");
     }

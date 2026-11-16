@@ -6,7 +6,6 @@ use super::{
     NotificationType,
 };
 use crate::app::file_view::FileView;
-use crate::app::sandbox::MAX_COUNTED_FILES;
 use crate::events::{ProcessSummary, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
@@ -21,10 +20,12 @@ pub enum SidePanelTab {
     Processes,
     /// Live feed of recorded steps and harness decisions.
     Trace,
+    /// The workspace's plans, each with its todos.
+    Plans,
 }
 
 impl SidePanelTab {
-    pub const ALL: [Self; 3] = [Self::Sandbox, Self::Processes, Self::Trace];
+    pub const ALL: [Self; 4] = [Self::Sandbox, Self::Processes, Self::Trace, Self::Plans];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
@@ -32,6 +33,7 @@ impl SidePanelTab {
             Self::Sandbox => "SANDBOX",
             Self::Processes => "PROCESSES",
             Self::Trace => "TRACE",
+            Self::Plans => "PLANS",
         }
     }
 
@@ -42,6 +44,7 @@ impl SidePanelTab {
             Self::Sandbox => "SBX",
             Self::Processes => "PRC",
             Self::Trace => "TRC",
+            Self::Plans => "PLN",
         }
     }
 
@@ -56,15 +59,17 @@ impl SidePanelTab {
         match self {
             Self::Sandbox => Self::Processes,
             Self::Processes => Self::Trace,
-            Self::Trace => Self::Sandbox,
+            Self::Trace => Self::Plans,
+            Self::Plans => Self::Sandbox,
         }
     }
 
     pub(super) const fn prev(self) -> Self {
         match self {
-            Self::Sandbox => Self::Trace,
+            Self::Sandbox => Self::Plans,
             Self::Processes => Self::Sandbox,
             Self::Trace => Self::Processes,
+            Self::Plans => Self::Trace,
         }
     }
 }
@@ -74,33 +79,6 @@ impl App {
     #[must_use]
     pub const fn side_tab(&self) -> SidePanelTab {
         self.side_tab
-    }
-
-    /// The count shown in the header's info cell while `tab` is open:
-    /// files in the sandbox, processes still running, or trace issues.
-    /// `None` before there is a sandbox, and while the trace has no issues.
-    #[must_use]
-    pub fn side_tab_count(&self, tab: SidePanelTab) -> Option<String> {
-        match tab {
-            SidePanelTab::Sandbox => self.sandbox.file_count().map(|files| {
-                if files >= MAX_COUNTED_FILES {
-                    format!("{files}+")
-                } else {
-                    files.to_string()
-                }
-            }),
-            SidePanelTab::Processes => Some(
-                self.processes
-                    .iter()
-                    .filter(|process| process.status.is_live())
-                    .count()
-                    .to_string(),
-            ),
-            SidePanelTab::Trace => {
-                let issues = self.trace_feed.issues();
-                (issues > 0).then(|| issues.to_string())
-            }
-        }
     }
 
     /// Rows of the Processes tab, in display order.
@@ -333,6 +311,7 @@ impl App {
                     self.trace_feed.select(index);
                 }
             }
+            SidePanelTab::Plans => self.click_plan_row(column, row),
         }
     }
 
@@ -363,12 +342,13 @@ impl App {
         if let Some(tab) = self.side_tab_at(column, row) {
             return Some(HoverTarget::SideTab(tab));
         }
-        if self.side_tab == SidePanelTab::Processes {
-            return self
+        match self.side_tab {
+            SidePanelTab::Processes => self
                 .process_row_at(column, row)
-                .map(HoverTarget::ProcessRow);
+                .map(HoverTarget::ProcessRow),
+            SidePanelTab::Plans => self.plan_row_at(column, row).map(HoverTarget::PlanRow),
+            SidePanelTab::Sandbox | SidePanelTab::Trace => None,
         }
-        None
     }
 }
 
@@ -420,9 +400,12 @@ mod tests {
         app.handle_key(key(KeyCode::Left));
         assert_eq!(app.side_tab(), SidePanelTab::Sandbox);
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
-        assert_eq!(app.side_tab(), SidePanelTab::Trace);
+        assert_eq!(app.side_tab(), SidePanelTab::Plans);
         app.handle_key(key(KeyCode::Left));
-        assert_eq!(app.side_tab(), SidePanelTab::Processes);
+        assert_eq!(app.side_tab(), SidePanelTab::Trace);
+        app.handle_key(key(KeyCode::Right));
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+        assert_eq!(app.side_tab(), SidePanelTab::Sandbox);
     }
 
     #[test]

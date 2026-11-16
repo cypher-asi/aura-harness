@@ -320,18 +320,22 @@ impl ToolExecutor {
         let Some(tool) = self.tools.get(tool_name.as_str()) else {
             return Err(ToolError::UnknownTool(tool_name.clone()));
         };
-        let change = match (&self.file_change_hook, tool.changed_path(&tool_call.args)) {
-            (Some(hook), Some(path)) => resolve_changed_path(&tool_ctx.sandbox, path)
-                .await
-                .map(|path| (hook, path)),
-            _ => None,
+        let changed = match tool.changed_path(&tool_call.args) {
+            Some(path) => resolve_changed_path(&tool_ctx.sandbox, path).await,
+            None => None,
         };
+        // Held until the change (and its hook notifications) are done.
+        let _path_lock = match &changed {
+            Some(path) => Some(crate::path_locks::lock_path(path).await),
+            None => None,
+        };
+        let change = self.file_change_hook.as_ref().zip(changed.as_ref());
         let tool_use_id = ctx.tool_use_id.as_deref();
-        if let Some((hook, path)) = &change {
+        if let Some((hook, path)) = change {
             hook.before_change(path, tool_use_id).await;
         }
         let result = tool.execute(&tool_ctx, tool_call.args.clone()).await;
-        if let Some((hook, path)) = &change {
+        if let Some((hook, path)) = change {
             let succeeded = result.as_ref().is_ok_and(|r| r.ok);
             hook.after_change(path, tool_use_id, succeeded).await;
         }
@@ -590,6 +594,41 @@ mod tests {
         let calls = hook.calls.lock().unwrap().clone();
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[1].3, Some(false));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_edits_to_one_file_all_land() {
+        let (ctx, dir) = create_test_context();
+        let count = 20;
+        let original: String = (0..count).map(|i| format!("item-{i:02}\n")).collect();
+        std::fs::write(dir.path().join("many.txt"), &original).unwrap();
+        let executor = ToolExecutor::with_defaults();
+
+        let actions: Vec<Action> = (0..count)
+            .map(|i| {
+                let edit = ToolCall::new(
+                    "edit_file",
+                    serde_json::json!({
+                        "path": "many.txt",
+                        "old_text": format!("item-{i:02}"),
+                        "new_text": format!("done-{i:02}"),
+                    }),
+                );
+                Action::delegate_tool(&edit).unwrap()
+            })
+            .collect();
+        let effects =
+            futures_util::future::join_all(actions.iter().map(|a| executor.execute(&ctx, a))).await;
+        for effect in effects {
+            assert_eq!(effect.unwrap().status, EffectStatus::Committed);
+        }
+
+        let expected: String = (0..count).map(|i| format!("done-{i:02}\n")).collect();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("many.txt")).unwrap(),
+            expected,
+            "every edit that reported success must be on disk"
+        );
     }
 
     #[tokio::test]

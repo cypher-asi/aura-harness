@@ -49,7 +49,7 @@ use aura_core_types::{AgentId, Transaction};
 use aura_model_reasoner::model_catalog::local_model_name;
 use aura_model_reasoner::ToolDefinition;
 use aura_terminal::events::{ImageAttachment, ProcessStatus};
-use aura_terminal::{UiCommand, UiEvent};
+use aura_terminal::{PermissionMode, UiCommand, UiEvent};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
@@ -405,6 +405,15 @@ async fn handle_ui_event(
         UiEvent::CycleMode(agent_id) => {
             let agent_id = state.agent_or_active(&agent_id);
             let next = state.hub.mode_of(agent_id).next();
+            modes::set_mode(state, agent_id, next).await;
+        }
+        UiEvent::TogglePlan(agent_id) => {
+            let agent_id = state.agent_or_active(&agent_id);
+            let next = if state.hub.mode_of(agent_id) == PermissionMode::Plan {
+                state.hub.exit_plan_mode(agent_id)
+            } else {
+                PermissionMode::Plan
+            };
             modes::set_mode(state, agent_id, next).await;
         }
         UiEvent::Quit => {

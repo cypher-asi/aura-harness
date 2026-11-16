@@ -1003,6 +1003,33 @@ async fn a_mode_switch_is_recorded_before_it_takes_effect() {
 }
 
 #[tokio::test]
+async fn plan_again_returns_to_the_mode_from_before() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut state = loop_state(&fixture, &mut b);
+    let agent = first.to_hex();
+
+    handle_ui_event(
+        &mut state,
+        UiEvent::SetMode {
+            agent_id: agent.clone(),
+            mode: PermissionMode::AcceptEdits,
+        },
+        &links,
+    )
+    .await;
+    handle_ui_event(&mut state, UiEvent::TogglePlan(agent.clone()), &links).await;
+    assert_eq!(state.hub.mode_of(first), PermissionMode::Plan);
+    assert_eq!(state.idle[&first].kernel.policy().mode_label(), "plan");
+
+    handle_ui_event(&mut state, UiEvent::TogglePlan(agent), &links).await;
+    assert_eq!(state.hub.mode_of(first), PermissionMode::AcceptEdits);
+    assert_eq!(state.idle[&first].kernel.policy().mode_label(), "agent");
+}
+
+#[tokio::test]
 async fn unrestricted_mode_runs_commands_without_asking() {
     let (fixture, mut commands) = fixture();
     let mut b = borrowed(&fixture);

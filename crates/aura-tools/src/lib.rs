@@ -39,6 +39,7 @@ pub mod git_tool;
 pub mod http_tool;
 pub mod intent_classifier;
 pub mod jobs;
+mod path_locks;
 pub mod permissions;
 pub mod plan_tools;
 pub mod resolver;

@@ -640,6 +640,15 @@ fn wait_with_threshold(
     }
 }
 
+/// Read `pipe` to its end on its own thread.
+fn drain_pipe<R: std::io::Read + Send + 'static>(mut pipe: R) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = pipe.read_to_end(&mut buf);
+        buf
+    })
+}
+
 /// Wait for a child process with a hard timeout (kills on timeout).
 ///
 /// This is the original timeout behavior - if the process doesn't complete
@@ -648,27 +657,24 @@ fn wait_with_hard_timeout(
     mut child: std::process::Child,
     timeout: std::time::Duration,
 ) -> std::io::Result<std::process::Output> {
-    use std::io::Read;
     use std::thread;
     use std::time::Instant;
+
+    // Read both pipes while waiting: a child that fills a pipe buffer
+    // (about 64 KB) blocks on write and would never exit.
+    let stdout = child.stdout.take().map(drain_pipe);
+    let stderr = child.stderr.take().map(drain_pipe);
+    let collect = |reader: Option<thread::JoinHandle<Vec<u8>>>| {
+        reader.map_or_else(Vec::new, |handle| handle.join().unwrap_or_default())
+    };
 
     let start = Instant::now();
     loop {
         if let Some(status) = child.try_wait()? {
-            let stdout = child.stdout.take().map_or_else(Vec::new, |mut s| {
-                let mut buf = Vec::new();
-                let _ = s.read_to_end(&mut buf);
-                buf
-            });
-            let stderr = child.stderr.take().map_or_else(Vec::new, |mut s| {
-                let mut buf = Vec::new();
-                let _ = s.read_to_end(&mut buf);
-                buf
-            });
             return Ok(std::process::Output {
                 status,
-                stdout,
-                stderr,
+                stdout: collect(stdout),
+                stderr: collect(stderr),
             });
         }
 
