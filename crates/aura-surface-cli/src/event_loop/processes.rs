@@ -17,7 +17,7 @@ use aura_agent::{ProcessInfo, ProcessManager, ProcessMeta};
 use aura_core_types::{ActionId, AgentId, Hash, ProcessId};
 use aura_engine::agents::LifecycleAction;
 use aura_engine::{AgentHost, AgentInfo, AgentState};
-use aura_store_db::ReadStore;
+use aura_store_record::ReadStore;
 use aura_terminal::events::{JobView, ProcessKind, ProcessStatus, ProcessSummary};
 use aura_terminal::UiCommand;
 use aura_tools::{BackgroundJob, BackgroundProcess, BackgroundProcessHook};

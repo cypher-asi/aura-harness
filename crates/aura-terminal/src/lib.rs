@@ -43,7 +43,6 @@ pub mod input;
 pub mod layout;
 pub use aura_ui_core::mode_command;
 pub mod themes;
-pub mod ws;
 
 mod app;
 mod clipboard;

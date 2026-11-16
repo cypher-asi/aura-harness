@@ -24,7 +24,7 @@ use aura_core_types::{
     AgentId, AgentPermissions, AgentToolPermissions, Identity, RecordEntry, UserDefaultMode,
     UserToolDefaults,
 };
-use aura_store_db::ReadStore;
+use aura_store_record::ReadStore;
 use std::collections::HashSet;
 
 /// Replayed snapshot of the per-agent tool-permission state used by

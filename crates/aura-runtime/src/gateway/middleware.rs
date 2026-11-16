@@ -16,9 +16,9 @@
 //!   [`is_loopback_origin`], [`build_global_governor`],
 //!   [`build_strict_governor`], [`ensure_connect_info`],
 //!   [`inbound_failure_observer_mw`].
-//! - The terminal-upgrade delegate [`terminal_ws_handler`] (forwards
-//!   to `aura_terminal::ws::handle_terminal_ws` — see
-//!   `crate::terminal` re-export) and the `/health` handler.
+//! - The terminal-upgrade handler [`terminal_ws_handler`] (forwards
+//!   to [`super::terminal_ws::handle_terminal_ws`]) and the `/health`
+//!   handler.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -46,8 +46,6 @@ use tower_http::{
     trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer},
 };
 use tracing::{warn, Level};
-
-use crate::terminal;
 
 use super::auth_mw;
 use super::handlers::files::{
@@ -548,7 +546,7 @@ async fn terminal_ws_handler(
     ws.on_upgrade(move |socket| async move {
         // `permit` is moved into the per-socket task so the slot
         // is only released when the socket task actually exits.
-        terminal::handle_terminal_ws(socket).await;
+        super::terminal_ws::handle_terminal_ws(socket).await;
         drop(permit);
     })
     .into_response()

@@ -2,23 +2,30 @@
 //!
 //! Layer: exec
 //!
-//! Low-level executor and spawn-hook traits for the exec layer.
+//! The exec layer's seams: the executor and spawn-hook traits, the hooks
+//! tools call out through (agent control, subagent dispatch, file changes,
+//! background processes, automaton control), and the [`domain::DomainApi`]
+//! the domain tools call.
 //!
-//! These traits were relocated out of the agent-layer `aura-agent-kernel`
-//! crate so that the exec-layer `aura-tools` crate can consume them without
-//! an upward layer dependency. The crate depends only on `aura-core` (plus
-//! non-aura deps) so both `aura-tools` and `aura-agent-kernel` can depend on
-//! it downward without forming a cycle.
+//! The crate depends only on `aura-core-types` (plus non-aura deps), so the
+//! tool catalog, the kernel, and every hook implementor can depend on it
+//! without depending on each other.
 
 #![forbid(unsafe_code)]
 #![warn(clippy::all)]
 
+pub mod domain;
 mod executor;
+mod hooks;
 mod router;
 mod spawn_hook;
 
 pub use executor::{
     decode_tool_effect, DecodedToolResult, ExecuteContext, ExecuteLimits, Executor, ExecutorError,
+};
+pub use hooks::{
+    AgentControlHook, AgentReadHook, AutomatonController, BackgroundJob, BackgroundProcess,
+    BackgroundProcessHook, FileChangeHook, SubagentDispatchHook,
 };
 pub use router::ExecutorRouter;
 pub use spawn_hook::{ChildAgentSpec, NoopSpawnHook, SpawnError, SpawnHook, SpawnOutcome};

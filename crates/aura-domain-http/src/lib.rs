@@ -2,7 +2,7 @@
 //!
 //! Layer: surface
 //!
-//! HTTP-backed [`aura_tools::domain_tools::DomainApi`] implementation
+//! HTTP-backed [`aura_exec_traits::domain::DomainApi`] implementation
 //! plus the JWT-injecting wrapper the automaton bridge uses to stamp
 //! a captured token onto every call site that did not supply one.
 //!
@@ -10,7 +10,7 @@
 //! the gateway crate no longer owns domain HTTP logic or depends on
 //! `reqwest` for domain calls. Both crates sit at the surface layer:
 //! this crate composes lower-layer types
-//! ([`aura_tools::domain_tools::DomainApi`]) into a deployable HTTP
+//! ([`aura_exec_traits::domain::DomainApi`]) into a deployable HTTP
 //! edge, and the gateway composes both this crate and the engine into
 //! a runnable HTTP/WS server. `aura-runtime` still has separate direct
 //! outbound HTTP surfaces (for example the generation proxy and

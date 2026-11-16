@@ -11,6 +11,11 @@
 //! [`RecordLog`] types are defined locally; they are the forward
 //! shape that Phase 6+ migrates the rest of the workspace to.
 //!
+//! It also owns the backend-neutral read seam: [`ReadStore`],
+//! [`DequeueToken`] and [`StoreError`]. Crates that only read records or
+//! enqueue transactions depend on this crate; the sealed `WriteStore`
+//! and the `RocksDB` implementation stay in `aura-store-db`.
+//!
 //! ## Invariants (per `.cursor/rules.md` §13)
 //!
 //! - Per-agent record append is **linearisable**: a single writer
@@ -47,14 +52,18 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::all)]
 
+mod error;
 mod kind;
 mod log;
 mod payload;
+mod read_store;
 mod record;
 
+pub use error::StoreError;
 pub use kind::RecordKind;
 pub use log::{RecordLog, RecordLogError};
 pub use payload::{summarize_payload, RecordPayload, DEFAULT_SUMMARY_CHUNK_BYTES};
+pub use read_store::{DequeueToken, ReadStore};
 pub use record::{RecordEntry, RecordEntryBuilder, KERNEL_VERSION};
 
 /// Schema version of the on-disk record / transaction wire format.

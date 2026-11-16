@@ -7,7 +7,7 @@
 //! module is the harness-side primitive aura-os calls to walk the chain.
 
 use aura_core_types::{AgentId, RecordEntry, ToolExecution};
-use aura_store_db::ReadStore;
+use aura_store_record::ReadStore;
 
 const LATEST_PARENT_LOOKBACK_LIMIT: usize = 10_000;
 
@@ -115,7 +115,7 @@ mod tests {
         AgentStatus, Effect, EffectKind, EffectStatus, RuntimeCapabilityInstall, ToolGateVerdict,
         Transaction, TransactionType, UserToolDefaults,
     };
-    use aura_store_db::{DequeueToken, StoreError};
+    use aura_store_record::{DequeueToken, StoreError};
     use bytes::Bytes;
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -139,7 +139,7 @@ mod tests {
         }
     }
 
-    impl aura_store_db::ReadStore for MemStore {
+    impl aura_store_record::ReadStore for MemStore {
         fn enqueue_tx(&self, _tx: &Transaction) -> Result<(), StoreError> {
             Ok(())
         }

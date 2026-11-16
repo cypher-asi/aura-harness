@@ -36,7 +36,7 @@
 //!   been flushed to disk yet.
 
 use crate::cf;
-use crate::error::StoreError;
+use crate::error::{backend, StoreError};
 use crate::keys::{AgentMetaKey, InboxKey, KeyCodec, RecordKey};
 use crate::seal::SealCipher;
 use crate::store::ReadStore;
@@ -175,7 +175,7 @@ impl RocksStore {
             .collect();
 
         let db =
-            DBWithThreadMode::<MultiThreaded>::open_cf_descriptors(&opts, path, cf_descriptors)?;
+            DBWithThreadMode::<MultiThreaded>::open_cf_descriptors(&opts, path, cf_descriptors).map_err(backend)?;
 
         Ok(Self {
             db: Arc::new(db),
@@ -272,7 +272,7 @@ impl RocksStore {
         let cf = self.cf(cf::AGENT_META)?;
         let encoded_key = key.encode();
 
-        match self.db.get_cf(&cf, &encoded_key)? {
+        match self.db.get_cf(&cf, &encoded_key).map_err(backend)? {
             Some(bytes) => {
                 let arr: [u8; 8] = bytes
                     .as_slice()
@@ -385,7 +385,7 @@ impl RocksStore {
             clear_runtime_capabilities,
         )?;
 
-        self.db.write_opt(batch, &self.write_opts())?;
+        self.db.write_opt(batch, &self.write_opts()).map_err(backend)?;
         debug!("Record entry committed (direct)");
         Ok(())
     }
@@ -428,7 +428,7 @@ impl RocksStore {
             clear_runtime_capabilities,
         )?;
 
-        self.db.write_opt(batch, &self.write_opts())?;
+        self.db.write_opt(batch, &self.write_opts()).map_err(backend)?;
 
         debug!("Record entry committed atomically");
         Ok(())
@@ -465,7 +465,7 @@ impl ReadStore for RocksStore {
         batch.put_cf(&cf_inbox, inbox_key.encode(), tx_bytes);
         batch.put_cf(&cf_meta, tail_key.encode(), (tail + 1).to_be_bytes());
 
-        self.db.write_opt(batch, &self.write_opts())?;
+        self.db.write_opt(batch, &self.write_opts()).map_err(backend)?;
 
         debug!(inbox_seq = tail, "Transaction enqueued");
         Ok(())
@@ -494,12 +494,12 @@ impl ReadStore for RocksStore {
         let inbox_key = InboxKey::new(agent_id, head);
         let encoded_key = inbox_key.encode();
 
-        if let Some(bytes) = self.db.get_cf(&cf_inbox, &encoded_key)? {
+        if let Some(bytes) = self.db.get_cf(&cf_inbox, &encoded_key).map_err(backend)? {
             let bytes = self.open_value(&bytes)?;
             let tx: Transaction = serde_json::from_slice(&bytes)
                 .map_err(|e| StoreError::Deserialization(e.to_string()))?;
             debug!(inbox_seq = head, "Transaction dequeued");
-            let token = crate::store::DequeueToken { inbox_seq: head };
+            let token = crate::store::DequeueToken::from_inbox_seq(head);
             Ok(Some((token, tx)))
         } else {
             Err(StoreError::InboxCorruption {
@@ -534,7 +534,7 @@ impl ReadStore for RocksStore {
         let mut entries = Vec::with_capacity(limit);
 
         for item in iter {
-            let (key, value) = item?;
+            let (key, value) = item.map_err(backend)?;
 
             if key.as_ref() >= end_key.as_slice() {
                 break;
@@ -582,7 +582,7 @@ impl ReadStore for RocksStore {
         let mut entries = Vec::with_capacity(limit);
 
         for item in iter {
-            let (key, value) = item?;
+            let (key, value) = item.map_err(backend)?;
 
             if key.as_ref() < agent_start_key.as_slice() {
                 break;
@@ -613,7 +613,7 @@ impl ReadStore for RocksStore {
         let cf = self.cf(cf::RECORD)?;
         let key = RecordKey::new(agent_id, seq);
 
-        match self.db.get_cf(&cf, key.encode())? {
+        match self.db.get_cf(&cf, key.encode()).map_err(backend)? {
             Some(bytes) => {
                 let bytes = self.open_value(&bytes)?;
                 let entry: RecordEntry = serde_json::from_slice(&bytes)
@@ -629,7 +629,7 @@ impl ReadStore for RocksStore {
         let cf = self.cf(cf::AGENT_META)?;
         let key = AgentMetaKey::status(agent_id);
 
-        match self.db.get_cf(&cf, key.encode())? {
+        match self.db.get_cf(&cf, key.encode()).map_err(backend)? {
             Some(bytes) => {
                 if bytes.is_empty() {
                     return Ok(AgentStatus::default());
@@ -649,7 +649,7 @@ impl ReadStore for RocksStore {
         let cf = self.cf(cf::RUNTIME_CAPABILITIES)?;
         let key = Self::runtime_capability_key(agent_id);
 
-        match self.db.get_cf(&cf, key)? {
+        match self.db.get_cf(&cf, key).map_err(backend)? {
             Some(bytes) => {
                 let bytes = self.open_value(&bytes)?;
                 let capability_state = serde_json::from_slice(&bytes)
@@ -666,7 +666,7 @@ impl ReadStore for RocksStore {
         let key = AgentMetaKey::status(agent_id);
 
         self.db
-            .put_cf_opt(&cf, key.encode(), [status.as_byte()], &self.write_opts())?;
+            .put_cf_opt(&cf, key.encode(), [status.as_byte()], &self.write_opts()).map_err(backend)?;
         Ok(())
     }
 
@@ -690,7 +690,7 @@ impl ReadStore for RocksStore {
         user_id: &str,
     ) -> Result<Option<UserToolDefaults>, StoreError> {
         let cf = self.cf(cf::USER_TOOL_DEFAULTS)?;
-        match self.db.get_cf(&cf, user_id.as_bytes())? {
+        match self.db.get_cf(&cf, user_id.as_bytes()).map_err(backend)? {
             Some(bytes) => {
                 let bytes = self.open_value(&bytes)?;
                 let defaults = serde_json::from_slice::<UserToolDefaults>(&bytes)
@@ -710,7 +710,7 @@ impl ReadStore for RocksStore {
         let cf = self.cf(cf::USER_TOOL_DEFAULTS)?;
         let bytes = self.seal_value(serde_json::to_vec(defaults)?)?;
         self.db
-            .put_cf_opt(&cf, user_id.as_bytes(), bytes, &self.write_opts())?;
+            .put_cf_opt(&cf, user_id.as_bytes(), bytes, &self.write_opts()).map_err(backend)?;
         Ok(())
     }
 
@@ -718,7 +718,7 @@ impl ReadStore for RocksStore {
     fn delete_user_tool_defaults(&self, user_id: &str) -> Result<(), StoreError> {
         let cf = self.cf(cf::USER_TOOL_DEFAULTS)?;
         self.db
-            .delete_cf_opt(&cf, user_id.as_bytes(), &self.write_opts())?;
+            .delete_cf_opt(&cf, user_id.as_bytes(), &self.write_opts()).map_err(backend)?;
         Ok(())
     }
 
@@ -731,11 +731,11 @@ impl ReadStore for RocksStore {
         let cf = self.cf(cf::AGENT_META)?;
         let key = Self::processing_claim_key(agent_id);
 
-        if self.db.get_cf(&cf, &key)?.is_some() {
+        if self.db.get_cf(&cf, &key).map_err(backend)?.is_some() {
             return Ok(false);
         }
 
-        self.db.put_cf_opt(&cf, key, [1_u8], &self.write_opts())?;
+        self.db.put_cf_opt(&cf, key, [1_u8], &self.write_opts()).map_err(backend)?;
         Ok(true)
     }
 
@@ -747,7 +747,7 @@ impl ReadStore for RocksStore {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let cf = self.cf(cf::AGENT_META)?;
         let key = Self::processing_claim_key(agent_id);
-        self.db.delete_cf_opt(&cf, key, &self.write_opts())?;
+        self.db.delete_cf_opt(&cf, key, &self.write_opts()).map_err(backend)?;
         Ok(())
     }
 
@@ -755,7 +755,7 @@ impl ReadStore for RocksStore {
     fn is_agent_processing(&self, agent_id: AgentId) -> Result<bool, StoreError> {
         let cf = self.cf(cf::AGENT_META)?;
         let key = Self::processing_claim_key(agent_id);
-        Ok(self.db.get_cf(&cf, key)?.is_some())
+        Ok(self.db.get_cf(&cf, key).map_err(backend)?.is_some())
     }
 }
 
@@ -865,7 +865,7 @@ impl crate::store::WriteStore for RocksStore {
         let last_seq = base_seq + entries.len() as u64 - 1;
         batch.put_cf(&cf_meta, head_seq_key.encode(), last_seq.to_be_bytes());
 
-        self.db.write_opt(batch, &self.write_opts())?;
+        self.db.write_opt(batch, &self.write_opts()).map_err(backend)?;
 
         debug!(last_seq, "Batch record entries committed");
         Ok(())
@@ -972,7 +972,7 @@ impl RocksStore {
                 let mut batch = WriteBatch::default();
                 batch.put_cf(&cf_record, record_key.encode(), entry_bytes);
                 batch.put_cf(&cf_meta, head_seq_key.encode(), next_seq.to_be_bytes());
-                self.db.write_opt(batch, &self.write_opts())?;
+                self.db.write_opt(batch, &self.write_opts()).map_err(backend)?;
 
                 // Intentionally no inbox delete — this is the bug.
                 Err(fault_err("InsideBatch (broken non-atomic path)"))

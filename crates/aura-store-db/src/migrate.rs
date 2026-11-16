@@ -17,7 +17,7 @@ use std::path::Path;
 use rocksdb::{ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options, WriteBatch};
 
 use crate::cf;
-use crate::error::StoreError;
+use crate::error::{backend, StoreError};
 use crate::seal::SealCipher;
 
 type Db = DBWithThreadMode<MultiThreaded>;
@@ -103,8 +103,8 @@ pub fn seal_db_copy(
 ) -> Result<SealCopyStats, StoreError> {
     // Enumerate the CFs the source actually has (an older database may
     // predate newer CFs) and open it read-only.
-    let src_cf_names = Db::list_cf(&Options::default(), src)?;
-    let src_db = Db::open_cf_for_read_only(&Options::default(), src, &src_cf_names, false)?;
+    let src_cf_names = Db::list_cf(&Options::default(), src).map_err(backend)?;
+    let src_db = Db::open_cf_for_read_only(&Options::default(), src, &src_cf_names, false).map_err(backend)?;
 
     // The destination gets the union of the canonical CF set and the
     // source's CFs, so nothing is dropped and the sealed store finds
@@ -125,7 +125,7 @@ pub fn seal_db_copy(
         dst_cf_names
             .iter()
             .map(|name| ColumnFamilyDescriptor::new(name, Options::default())),
-    )?;
+    ).map_err(backend)?;
 
     let mut stats = SealCopyStats::default();
 
@@ -142,7 +142,7 @@ pub fn seal_db_copy(
         let mut batch = WriteBatch::default();
         let mut batched = 0usize;
         for item in src_db.iterator_cf(&src_cf, rocksdb::IteratorMode::Start) {
-            let (key, value) = item?;
+            let (key, value) = item.map_err(backend)?;
 
             if seal_values && !SealCipher::is_sealed(&value) {
                 let sealed = cipher.seal(&value).map_err(|e| {
@@ -157,12 +157,12 @@ pub fn seal_db_copy(
 
             batched += 1;
             if batched >= COPY_BATCH_SIZE {
-                dst_db.write(std::mem::take(&mut batch))?;
+                dst_db.write(std::mem::take(&mut batch)).map_err(backend)?;
                 batched = 0;
             }
         }
         if batched > 0 {
-            dst_db.write(batch)?;
+            dst_db.write(batch).map_err(backend)?;
         }
     }
 
@@ -170,10 +170,10 @@ pub fn seal_db_copy(
     // caller's signal that the copy is durable and safe to swap in.
     for cf_name in &dst_cf_names {
         if let Some(handle) = dst_db.cf_handle(cf_name) {
-            dst_db.flush_cf(&handle)?;
+            dst_db.flush_cf(&handle).map_err(backend)?;
         }
     }
-    dst_db.flush()?;
+    dst_db.flush().map_err(backend)?;
 
     Ok(stats)
 }

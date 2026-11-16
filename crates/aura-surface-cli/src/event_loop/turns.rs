@@ -417,7 +417,7 @@ pub(crate) async fn drain_stale_inbox(session: &AgentSession) {
 fn enqueue_and_dequeue(
     session: &AgentSession,
     tx: Transaction,
-) -> Result<(Transaction, aura_store_db::DequeueToken), String> {
+) -> Result<(Transaction, aura_store_record::DequeueToken), String> {
     let store = session.kernel.store();
     if let Err(e) = store.enqueue_tx(&tx) {
         error!(error = %e, "Failed to enqueue transaction");

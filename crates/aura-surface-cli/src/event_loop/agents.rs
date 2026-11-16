@@ -23,7 +23,7 @@ use aura_agent::{
 use aura_agent_kernel::Kernel;
 use aura_core_types::{AgentId, Identity};
 use aura_model_reasoner::{ContentBlock, Message};
-use aura_store_db::ReadStore;
+use aura_store_record::ReadStore;
 use aura_terminal::UiCommand;
 use aura_tools::todo::{apply_todo_write, TodoItem, TODO_WRITE_TOOL_NAME};
 use std::path::{Path, PathBuf};

@@ -774,7 +774,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "aura-tools",
+ "aura-exec-traits",
  "reqwest",
  "serde",
  "serde_json",
@@ -819,6 +819,7 @@ dependencies = [
 name = "aura-exec-traits"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "aura-core-types",
  "bytes",
@@ -945,7 +946,6 @@ dependencies = [
  "aura-plugin-hooks",
  "aura-protocol",
  "aura-store-db",
- "aura-terminal",
  "aura-tools",
  "axum",
  "base64 0.22.1",
@@ -959,6 +959,7 @@ dependencies = [
  "futures-util",
  "governor",
  "insta",
+ "portable-pty",
  "reqwest",
  "serde",
  "serde_json",
@@ -973,6 +974,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "which",
  "zeroize",
 ]
 
@@ -1046,6 +1048,7 @@ dependencies = [
  "aura-plugin-core",
  "aura-runtime",
  "aura-store-db",
+ "aura-store-record",
  "aura-store-snapshot",
  "aura-terminal",
  "aura-tools",
@@ -1078,15 +1081,11 @@ dependencies = [
 name = "aura-terminal"
 version = "0.1.0"
 dependencies = [
- "aura-core-modes",
  "aura-ui-core",
- "axum",
  "base64 0.22.1",
  "chrono",
  "crossterm 0.28.1",
  "dirs",
- "futures-util",
- "portable-pty",
  "ratatui",
  "serde",
  "serde_json",
@@ -1096,7 +1095,6 @@ dependencies = [
  "tokio",
  "tracing",
  "unicode-width",
- "which",
 ]
 
 [[package]]
@@ -1107,7 +1105,7 @@ dependencies = [
  "async-trait",
  "aura-core-types",
  "aura-exec-traits",
- "aura-store-db",
+ "aura-store-record",
  "base64 0.22.1",
  "bytes",
  "futures-util",

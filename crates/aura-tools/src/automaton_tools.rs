@@ -2,9 +2,9 @@
 //! `run_task`).
 //!
 //! These tools let the chat agent manage automaton lifecycle within the harness.
-//! Actual automaton operations are delegated to an [`AutomatonController`] trait
-//! whose concrete implementation lives in the node layer (avoiding circular deps
-//! with `aura-automaton`).
+//! Actual automaton operations are delegated to an [`AutomatonController`]
+//! (declared in `aura-exec-traits`) whose concrete implementation lives in
+//! the node layer.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,48 +13,10 @@ use async_trait::async_trait;
 use aura_core_types::ToolDefinition;
 use aura_core_types::ToolResult;
 
+pub use aura_exec_traits::AutomatonController;
+
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
-
-// ---------------------------------------------------------------------------
-// Controller trait (implemented in aura-runtime)
-// ---------------------------------------------------------------------------
-
-/// Abstraction over automaton lifecycle so tools don't depend on `aura-automaton`.
-#[async_trait]
-pub trait AutomatonController: Send + Sync {
-    /// Install and start a dev-loop automaton for `project_id`.
-    /// Returns the automaton ID on success.
-    async fn start_dev_loop(
-        &self,
-        project_id: &str,
-        workspace_root: Option<PathBuf>,
-        auth_token: Option<String>,
-        model: Option<String>,
-        git_repo_url: Option<String>,
-        git_branch: Option<String>,
-    ) -> Result<String, String>;
-
-    /// Pause the running dev-loop for `project_id`.
-    async fn pause_dev_loop(&self, project_id: &str) -> Result<(), String>;
-
-    /// Stop (cancel) the running dev-loop for `project_id`.
-    async fn stop_dev_loop(&self, project_id: &str) -> Result<(), String>;
-
-    /// Execute a single task through the dev-loop engine (non-blocking).
-    /// Returns the automaton ID immediately.
-    #[allow(clippy::too_many_arguments)]
-    async fn run_task(
-        &self,
-        project_id: &str,
-        task_id: &str,
-        workspace_root: Option<PathBuf>,
-        auth_token: Option<String>,
-        model: Option<String>,
-        git_repo_url: Option<String>,
-        git_branch: Option<String>,
-    ) -> Result<String, String>;
-}
 
 // ---------------------------------------------------------------------------
 // start_dev_loop

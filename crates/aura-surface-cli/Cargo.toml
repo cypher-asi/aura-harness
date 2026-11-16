@@ -16,6 +16,7 @@ aura-core-types = { path = "../aura-core-types" }
 aura-terminal = { path = "../aura-terminal" }
 aura-agent-kernel = { path = "../aura-agent-kernel" }
 aura-store-db = { path = "../aura-store-db" }
+aura-store-record = { path = "../aura-store-record" }
 aura-store-snapshot = { path = "../aura-store-snapshot" }
 aura-model-reasoner = { path = "../aura-model-reasoner" }
 aura-tools = { path = "../aura-tools" }

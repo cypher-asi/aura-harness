@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use aura_tools::domain_tools::{
+use aura_exec_traits::domain::{
     CreateSessionParams, DomainApi, MessageDescriptor, ProjectDescriptor, ProjectUpdate,
     SaveMessageParams, SessionDescriptor, SpecDescriptor, TaskDescriptor, TaskUpdate,
 };

@@ -9,11 +9,6 @@
 //! 3. Bidirectional I/O: `input`/`output`/`resize`/`exit` JSON frames,
 //!    with binary data base64-encoded — same protocol as aura-os.
 //! 4. Closing the WebSocket kills the PTY.
-//!
-//! Phase C / Commit 4 moves this out of `aura-runtime` so the gateway
-//! crate no longer pulls in `portable-pty` / `which` directly. The
-//! gateway keeps a thin delegating handler that forwards the upgrade
-//! to [`handle_terminal_ws`].
 
 use std::io::Read;
 use std::sync::{Arc, Mutex};

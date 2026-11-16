@@ -1,6 +1,6 @@
 [package]
 name = "aura-exec-traits"
-description = "Executor / spawn-hook traits for the exec layer (relocated from aura-agent-kernel)"
+description = "Executor, tool hook and DomainApi traits for the Aura exec layer"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 aura-core-types = { path = "../aura-core-types" }
+anyhow = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }

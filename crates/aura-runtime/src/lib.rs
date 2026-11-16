@@ -23,8 +23,7 @@
 //!
 //! Phase C / Commit 4 pulled the HTTP `DomainApi` impl into the
 //! `aura-domain-http` crate (along with the JWT-injecting wrapper
-//! that Phase B had parked in `aura-engine`) and lifted the PTY
-//! WebSocket handler into `aura-terminal`. The former
+//! that Phase B had parked in `aura-engine`). The former
 //! `crate::router` module was renamed to `crate::gateway` and
 //! reorganized into a handler-grouped layout
 //! (`gateway::handlers::{run, run_ws, files, tx, memory, skills,
@@ -71,13 +70,6 @@ pub mod sealing;
 pub mod state_migration;
 pub(crate) mod tool_permissions;
 pub mod trigger_registrar;
-/// Phase C / Commit 4: legacy `crate::terminal::handle_terminal_ws`
-/// import path inside the gateway points at this re-export so the
-/// terminal-upgrade handler keeps reading naturally even though the
-/// implementation now lives in `aura-terminal`.
-pub(crate) mod terminal {
-    pub(crate) use aura_terminal::ws::handle_terminal_ws;
-}
 
 pub use config::NodeConfig;
 pub use node::Node;

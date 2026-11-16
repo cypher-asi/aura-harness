@@ -31,8 +31,6 @@ use crate::config::NodeConfig;
 #[allow(unused_imports)]
 use crate::gateway::session::WsContext;
 #[allow(unused_imports)]
-use crate::terminal;
-#[allow(unused_imports)]
 use aura_core_types::{Hash, Transaction, TransactionType};
 #[allow(unused_imports)]
 use aura_engine::automaton::AutomatonBridge;
@@ -92,6 +90,7 @@ pub(crate) mod handlers;
 pub(crate) mod middleware;
 pub(crate) mod session;
 pub(crate) mod state;
+mod terminal_ws;
 
 #[cfg(test)]
 mod tests;

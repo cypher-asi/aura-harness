@@ -7,6 +7,22 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+/// Deserialize a string that may be null or missing into `String::default()`.
+fn deser_string_or_default<'de, D>(d: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(d).map(Option::unwrap_or_default)
+}
+
+/// Deserialize a u32 that may be null or missing into `0`.
+fn deser_u32_or_default<'de, D>(d: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<u32>::deserialize(d).map(|opt| opt.unwrap_or(0))
+}
+
 // ---------------------------------------------------------------------------
 // Descriptor types – lightweight DTOs that avoid pulling in app domain types
 // ---------------------------------------------------------------------------
@@ -18,23 +34,23 @@ pub struct SpecDescriptor {
     #[serde(
         alias = "projectId",
         default,
-        deserialize_with = "super::helpers::deser_string_or_default"
+        deserialize_with = "deser_string_or_default"
     )]
     pub project_id: String,
-    #[serde(default, deserialize_with = "super::helpers::deser_string_or_default")]
+    #[serde(default, deserialize_with = "deser_string_or_default")]
     pub title: String,
     #[serde(
         alias = "markdownContents",
         alias = "markdown_contents",
         default,
-        deserialize_with = "super::helpers::deser_string_or_default"
+        deserialize_with = "deser_string_or_default"
     )]
     pub content: String,
     #[serde(
         alias = "orderIndex",
         alias = "order_index",
         default,
-        deserialize_with = "super::helpers::deser_u32_or_default"
+        deserialize_with = "deser_u32_or_default"
     )]
     pub order: u32,
     #[serde(alias = "parentId", default)]
@@ -55,20 +71,20 @@ pub struct TaskDescriptor {
     #[serde(
         alias = "specId",
         default,
-        deserialize_with = "super::helpers::deser_string_or_default"
+        deserialize_with = "deser_string_or_default"
     )]
     pub spec_id: String,
     #[serde(
         alias = "projectId",
         default,
-        deserialize_with = "super::helpers::deser_string_or_default"
+        deserialize_with = "deser_string_or_default"
     )]
     pub project_id: String,
-    #[serde(default, deserialize_with = "super::helpers::deser_string_or_default")]
+    #[serde(default, deserialize_with = "deser_string_or_default")]
     pub title: String,
-    #[serde(default, deserialize_with = "super::helpers::deser_string_or_default")]
+    #[serde(default, deserialize_with = "deser_string_or_default")]
     pub description: String,
-    #[serde(default, deserialize_with = "super::helpers::deser_string_or_default")]
+    #[serde(default, deserialize_with = "deser_string_or_default")]
     pub status: String,
     #[serde(alias = "dependencyIds", alias = "dependency_ids", default)]
     pub dependencies: Vec<String>,
@@ -76,7 +92,7 @@ pub struct TaskDescriptor {
         alias = "orderIndex",
         alias = "order_index",
         default,
-        deserialize_with = "super::helpers::deser_u32_or_default"
+        deserialize_with = "deser_u32_or_default"
     )]
     pub order: u32,
 }

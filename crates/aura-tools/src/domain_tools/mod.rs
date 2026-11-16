@@ -5,7 +5,7 @@
 //! is delegated through the [`DomainApi`] trait so that the harness never
 //! depends on app-level crates.
 
-pub mod api;
+pub use aura_exec_traits::domain as api;
 pub mod helpers;
 pub mod network;
 pub mod orbit;

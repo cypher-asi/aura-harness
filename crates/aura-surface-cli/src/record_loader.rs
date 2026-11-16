@@ -9,7 +9,7 @@ use aura_core_types::{
     RecordEntry, ToolExecution, ToolGateVerdict, ToolProposal, Transaction, TransactionType,
 };
 use aura_model_reasoner::{Message, Usage};
-use aura_store_db::{ReadStore, StoreError};
+use aura_store_record::{ReadStore, StoreError};
 use aura_terminal::{
     events::{
         ActivityData, AgentSummary, CallUsage, MessageData, MessageRole, PolicyDetail,

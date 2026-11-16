@@ -40,10 +40,6 @@ aura-engine = { path = "../aura-engine" }
 # Phase C / Commit 4: HTTP `DomainApi` impl moved out of the gateway.
 # `node.rs` constructs `HttpDomainApi` from here.
 aura-domain-http = { path = "../aura-domain-http" }
-# Phase C / Commit 4: PTY WebSocket handler moved out of the gateway.
-# The `/ws/terminal` upgrade handler is a thin delegate over
-# `aura_terminal::ws::handle_terminal_ws`.
-aura-terminal = { path = "../aura-terminal" }
 aura-config = { path = "../aura-config" }
 aura-context-skills = { path = "../aura-context-skills" }
 aura-plugin-core = { path = "../aura-plugin-core" }
@@ -77,6 +73,9 @@ async-trait = { workspace = true }
 base64 = { workspace = true }
 uuid = { workspace = true }
 futures-util = { workspace = true }
+# `/ws/terminal` PTY sessions (gateway/terminal_ws.rs).
+portable-pty = { workspace = true }
+which = { workspace = true }
 dotenvy = { workspace = true }
 dirs = { workspace = true }
 colored = { workspace = true }
