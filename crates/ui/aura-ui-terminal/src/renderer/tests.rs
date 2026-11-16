@@ -780,14 +780,14 @@ fn test_chat_renders_assistant_markdown() {
         })
         .collect();
     let screen = rows.join("\n");
-    let header = rows.iter().position(|r| r.contains("AURA  ")).unwrap();
-    assert!(rows[header + 1].contains("Summary"), "{screen}");
+    assert!(!screen.contains("AURA  "), "{screen}");
+    assert!(screen.contains("Summary"), "{screen}");
     assert!(!screen.contains("##") && !screen.contains("**"), "{screen}");
     assert!(screen.contains("The build is green and cargo"), "{screen}");
     assert!(screen.contains("• [✓] done"), "{screen}");
     assert!(screen.contains("│ aura-terminal │   231 │"), "{screen}");
     assert!(screen.contains("│ note: see docs"), "{screen}");
-    assert!(screen.contains("│ (https://example.com)"), "{screen}");
+    assert!(screen.contains("(https://example.com)"), "{screen}");
 
     let bullet_row = rows.iter().find(|r| r.contains("• first point")).unwrap();
     let bullet_col = bullet_row.chars().position(|c| c == '•').unwrap();
@@ -827,7 +827,7 @@ fn test_chat_prose_rows_leave_out_code_and_tables() {
         .collect();
     assert_eq!(
         prose,
-        ["run the tests", "Run cargo test now.", "All green."],
+        ["> run the tests", "Run cargo test now.", "All green."],
         "only flowing text is prose"
     );
     let run = &app.prose_rows()[1];
@@ -858,11 +858,12 @@ fn test_measured_prose_packs_into_the_cells_it_covers() {
     let texts: Vec<String> = rows
         .iter()
         .map(|row| {
-            (row.x..row.x + row.width)
+            (row.x + row.indent..row.x + row.width)
                 .map(|x| frame.buffer[(x, row.y)].symbol())
                 .collect()
         })
         .collect();
+    assert!(rows.iter().all(|row| row.indent == 2), "after the prompt");
     assert_eq!(texts.join(" "), prompt, "every character is kept, in order");
     assert!(
         texts[0].chars().count() > usize::from(rows[0].width) * 3 / 2,
@@ -891,7 +892,7 @@ fn test_overlay_covers_chat_prose_rows() {
 }
 
 #[test]
-fn test_chat_names_sit_above_centered_text() {
+fn test_chat_reads_like_a_terminal_from_the_left_edge() {
     use crate::components::{Message, MessageRole};
 
     let mut app = crate::App::new();
@@ -920,34 +921,24 @@ fn test_chat_names_sit_above_centered_text() {
             .unwrap_or_else(|| panic!("{needle:?} not in {row:?}"));
         row[..i].chars().count()
     };
-    let user = rows.iter().position(|r| r.contains("YOU  ")).unwrap();
-    let aura = rows.iter().position(|r| r.contains("AURA  ")).unwrap();
+    let screen = rows.join("\n");
+    assert!(
+        !screen.contains("YOU  ") && !screen.contains("AURA  "),
+        "{screen}"
+    );
+    let user = rows.iter().position(|r| r.contains("> hi")).unwrap();
+    let reply = rows.iter().position(|r| r.contains("The task")).unwrap();
+    assert_eq!(reply, user + 2, "the reply follows the prompt: {screen}");
 
-    let text_col = col(&rows[user], "YOU");
-    assert_eq!(col(&rows[user + 1], "hi"), text_col);
-    assert_eq!(col(&rows[aura], "AURA"), text_col);
-    assert_eq!(col(&rows[aura + 1], "The task"), text_col);
-    assert_eq!(rows[aura + 2].chars().nth(text_col - 1), Some(' '));
-    assert_ne!(rows[aura + 2].chars().nth(text_col), Some(' '));
-}
-
-#[test]
-fn test_chat_text_is_centered_with_margins() {
-    use super::panels::centered_text_area;
-
-    let gaps = |area: Rect| {
-        let text = centered_text_area(area);
-        (
-            text.x - area.x,
-            (area.x + area.width) - (text.x + text.width),
-        )
-    };
-    assert_eq!(gaps(Rect::new(10, 0, 60, 20)), (4, 4));
-    let (left, right) = gaps(Rect::new(10, 0, 61, 20));
-    assert!(left.abs_diff(right) <= 1);
-    let wide = Rect::new(0, 0, 200, 20);
-    assert_eq!(centered_text_area(wide).width, 88);
-    assert_eq!(gaps(wide), (56, 56));
+    let text_col = col(&rows[user], "> hi");
+    let border = rows[user][..rows[user].find("> hi").unwrap()]
+        .chars()
+        .collect::<Vec<_>>()
+        .iter()
+        .rposition(|&c| c == '│')
+        .unwrap();
+    assert_eq!(text_col, border + 2, "one column in from the border");
+    assert_eq!(col(&rows[reply], "The task"), text_col);
 }
 
 fn submit(app: &mut crate::App, text: &str) {
@@ -1300,6 +1291,51 @@ fn test_approval_level_sits_before_the_model() {
     app.process_command(UiCommand::SetApproval(crate::ApprovalLevel::Strict));
     app.process_command(UiCommand::SetMode(crate::PermissionMode::Plan));
     assert!(input_row(&mut app).contains("STRICT · PLAN · qwen3:4b"));
+}
+
+#[test]
+fn test_hosted_panels_leave_their_title_bars_to_the_front_end() {
+    use crate::app::{ChatTab, Pane, PaneSplits, PaneTab};
+
+    let mut app = crate::App::new();
+    app.set_host_chrome(true);
+    let rows = render_rows(&mut app, 150);
+    let screen = rows.join("\n");
+    assert!(
+        !screen.contains("CHAT") && !screen.contains("KERNEL"),
+        "{screen}"
+    );
+    let panes: Vec<Pane> = app.pane_chrome().iter().map(|c| c.pane).collect();
+    assert_eq!(panes, [Pane::Agents, Pane::Chat, Pane::Records, Pane::Side]);
+
+    let chat = app.pane_chrome()[1].clone();
+    assert_eq!(chat.active, Some(PaneTab::Chat(ChatTab::Chat)));
+    let row = |y: u16| -> String {
+        rows[usize::from(y)]
+            .chars()
+            .skip(usize::from(chat.bar.x))
+            .take(usize::from(chat.bar.width))
+            .collect()
+    };
+    assert!(row(chat.bar.y).starts_with('┌'), "{screen}");
+    assert_eq!(row(chat.bar.y + 1).trim_matches('│').trim(), "", "{screen}");
+    let joint = row(chat.bar.y + 2);
+    assert!(joint.starts_with('├') && joint.ends_with('┤'), "{screen}");
+
+    app.set_pane_splits(PaneSplits {
+        agents: Some(0.1),
+        ..PaneSplits::default()
+    });
+    render_rows(&mut app, 150);
+    assert_eq!(app.pane_chrome()[0].area.width, 15);
+    assert_eq!(app.pane_chrome()[1].area.x, 15);
+
+    app.set_pane_splits(PaneSplits {
+        agents: Some(0.9),
+        ..PaneSplits::default()
+    });
+    render_rows(&mut app, 150);
+    assert!(app.pane_chrome()[1].area.width >= 30, "the chat keeps room");
 }
 
 fn render_rows(app: &mut crate::App, width: u16) -> Vec<String> {
@@ -1912,9 +1948,16 @@ fn test_chat_shows_working_indicator_until_reply_streams() {
 
     let mut app = crate::App::new();
     submit_message(&mut app, "hi");
-    let chat = render_rows(&mut app, 120).join("\n");
-    assert!(chat.contains("AURA  "), "{chat}");
-    assert!(chat.contains("thinking…"), "{chat}");
+    let rows = render_rows(&mut app, 120);
+    let chat = rows.join("\n");
+    assert!(!chat.contains("AURA  "), "{chat}");
+    let working = rows.iter().find(|r| r.contains("thinking…")).unwrap();
+    let prompt = rows.iter().find(|r| r.contains("> hi")).unwrap();
+    assert_eq!(
+        working.find(|c: char| !c.is_whitespace() && c != '│'),
+        prompt.find('>'),
+        "the spinner starts at the prompt's column: {chat}"
+    );
 
     app.process_command(UiCommand::StartStreaming);
     assert!(render_rows(&mut app, 120).join("\n").contains("thinking…"));
@@ -1926,9 +1969,9 @@ fn test_chat_shows_working_indicator_until_reply_streams() {
     assert!(app.working_label().is_none());
 }
 
-/// The chat row of the reply header, after a turn whose reply came from
-/// `model` with `usage`, drawn `width` columns wide.
-fn reply_header_row(model: &str, usage: Option<CallUsage>, width: u16) -> String {
+/// The chat row closing a turn whose reply came from `model` with
+/// `usage`, drawn `width` columns wide, from its `[` to its `]`.
+fn reply_footer_row(model: &str, usage: Option<CallUsage>, width: u16) -> String {
     use crate::events::UiCommand;
 
     let mut app = crate::App::new();
@@ -1942,80 +1985,62 @@ fn reply_header_row(model: &str, usage: Option<CallUsage>, width: u16) -> String
     app.process_command(UiCommand::Complete);
 
     let rows = render_rows(&mut app, width);
-    let you = rows.iter().find(|r| r.contains("YOU  ")).unwrap();
-    assert!(!you.contains(" · "), "{you:?}");
-    let aura = rows.iter().find(|r| r.contains("AURA  ")).unwrap();
-    let time = app.messages().back().unwrap().timestamp_local();
-    assert!(aura.contains(&format!("AURA  {time}")), "{aura:?}");
-    let header = &aura[aura.find("AURA  ").unwrap()..];
-    header[..header.find('│').unwrap()].to_string()
+    let prompt = rows.iter().position(|r| r.contains("> hi")).unwrap();
+    assert!(!rows[prompt].contains(" · "), "{:?}", rows[prompt]);
+    let reply = rows.iter().position(|r| r.contains("hello")).unwrap();
+    let footer = &rows[reply + 1];
+    let start = footer.find('[').unwrap_or_else(|| panic!("{footer:?}"));
+    let end = footer.find(']').unwrap();
+    footer[start..=end].to_string()
 }
 
 #[test]
-fn test_reply_header_shows_model_tokens_and_cost_at_the_right() {
+fn test_reply_footer_shows_model_tokens_and_cost_after_the_turn() {
     let usage = CallUsage {
         tokens: 12_400,
         cost_usd: Some(0.0418),
     };
-    let header = reply_header_row("claude-opus-4-7", Some(usage), 200);
-    let meta = "claude-opus-4-7 · 12.4k tok · $0.042";
-    assert!(header.trim_end().ends_with(meta), "{header:?}");
-    assert!(
-        header.contains(&format!("    {meta}")),
-        "meta should sit apart from the time: {header:?}"
-    );
+    let footer = reply_footer_row("claude-opus-4-7", Some(usage), 200);
+    assert_eq!(footer, "[claude-opus-4-7 · 12.4k tok · $0.042]");
 }
 
 #[test]
-fn test_reply_header_without_usage_or_cost() {
-    let header = reply_header_row("qwen3:4b", None, 200);
-    assert!(header.trim_end().ends_with("qwen3:4b"), "{header:?}");
+fn test_reply_footer_without_usage_or_cost() {
+    assert_eq!(reply_footer_row("qwen3:4b", None, 200), "[qwen3:4b]");
 
     let local = CallUsage {
         tokens: 900,
         cost_usd: None,
     };
-    let header = reply_header_row("qwen3:4b", Some(local), 200);
-    assert!(
-        header.trim_end().ends_with("qwen3:4b · 900 tok"),
-        "{header:?}"
+    assert_eq!(
+        reply_footer_row("qwen3:4b", Some(local), 200),
+        "[qwen3:4b · 900 tok]"
     );
 }
 
 #[test]
-fn test_reply_header_drops_cost_then_tokens_when_narrow() {
-    use super::segments::{message_header, reply_meta};
+fn test_reply_footer_drops_cost_then_tokens_when_narrow() {
+    use super::segments::{reply_footer, reply_meta};
 
     let usage = CallUsage {
         tokens: 1_250_000,
         cost_usd: Some(3.5),
     };
     let meta = reply_meta(Some("claude-opus-4-7"), Some(usage));
-    let header = |width| {
-        let line = message_header(
-            "AURA",
-            ratatui::style::Color::Reset,
-            "12:00:00",
-            &meta,
-            width,
-            &test_theme(),
-        );
-        line.spans
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect::<String>()
+    let footer = |width| {
+        reply_footer(&meta, width, &test_theme()).map(|line| {
+            line.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+        })
     };
-    assert_eq!(
-        header(50),
-        "AURA  12:00:00  claude-opus-4-7 · 1.2M tok · $3.50"
-    );
-    assert!(header(45).ends_with(" claude-opus-4-7 · 1.2M tok"));
-    assert!(header(35).ends_with(" claude-opus-4-7"));
-    assert!(header(25).ends_with(" claude-o…"));
-    for width in [45, 35, 25] {
-        assert_eq!(display_width(&header(width)), width, "{:?}", header(width));
-    }
-    assert_eq!(header(17), "AURA  12:00:00");
+    assert_eq!(footer(50).unwrap(), "[claude-opus-4-7 · 1.2M tok · $3.50]");
+    assert_eq!(footer(30).unwrap(), "[claude-opus-4-7 · 1.2M tok]");
+    assert_eq!(footer(20).unwrap(), "[claude-opus-4-7]");
+    assert_eq!(footer(12).unwrap(), "[claude-op…]");
+    assert!(footer(3).is_none());
+    assert!(reply_footer(&[], 50, &test_theme()).is_none());
 }
 
 #[test]
@@ -2203,21 +2228,22 @@ fn read_tool(app: &mut crate::App, id: &str, path: &str) {
 }
 
 #[test]
-fn test_turn_header_stays_put_while_steps_arrive() {
+fn test_turn_output_starts_right_under_the_prompt_while_steps_arrive() {
     use crate::events::UiCommand;
 
     let mut app = crate::App::new();
     submit_message(&mut app, "fix it");
     let aura_row = |app: &mut crate::App| {
         let rows = render_rows(app, 120);
-        let found: Vec<usize> = rows
+        let prompt = rows
             .iter()
-            .enumerate()
-            .filter(|(_, row)| row.contains("AURA  "))
-            .map(|(i, _)| i)
-            .collect();
-        assert_eq!(found.len(), 1, "{}", rows.join("\n"));
-        found[0]
+            .position(|row| row.contains("> fix it"))
+            .unwrap();
+        let below = &rows[prompt + 2];
+        let text = below.trim_matches(|c: char| c.is_whitespace() || c == '│');
+        assert!(!text.is_empty(), "{}", rows.join("\n"));
+        assert!(!rows.join("\n").contains("AURA  "));
+        prompt
     };
     let waiting = aura_row(&mut app);
 
@@ -2389,7 +2415,7 @@ fn test_policy_decisions_fold_into_their_tool_calls() {
 }
 
 #[test]
-fn test_policy_lines_share_a_row_with_their_time_and_stack() {
+fn test_policy_lines_follow_a_star_and_stack() {
     use crate::events::{MessageData, MessageRole, UiCommand};
 
     let mut app = crate::App::new();
@@ -2407,15 +2433,8 @@ fn test_policy_lines_share_a_row_with_their_time_and_stack() {
             .unwrap_or_else(|| panic!("{needle:?} not in:\n{}", rows.join("\n")))
     };
     let first = row("policy: write_file allowed by user.on");
-    let time = app
-        .messages()
-        .iter()
-        .rev()
-        .nth(1)
-        .unwrap()
-        .timestamp_local();
     assert!(
-        rows[first].contains(&format!("*  {time}  policy: write_file")),
+        rows[first].contains("│ * policy: write_file"),
         "{}",
         rows[first]
     );

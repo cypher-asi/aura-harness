@@ -147,10 +147,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `aura_terminal::render`, `App::paste_from_clipboard` and
   `alerts::desktop_notify` are public so other frontends can draw the UI
   and share its clipboard and notifications.
+- Panels are window panes: the window draws their title bars itself,
+  with tabs packed to the left, each as wide as its label and always
+  outlined, the shown one filled (in the accent while its panel has
+  focus). Panels without tabs show their title in a filled box and their
+  info at the right. Dragging the border between two panels resizes
+  them. `App::set_host_chrome`, `App::pane_chrome`,
+  `App::set_pane_splits`, `App::select_pane_tab` and `App::focus_pane`
+  let other frontends do the same.
 
 ##### Changed
 
 - The CI MSRV check skips `aura-desktop`, which needs Rust 1.88.
+- The chat reads like a terminal in both frontends: it starts at the
+  panel's left edge, prompts are echoed as `> text`, replies follow
+  without `YOU` / `AURA` headers, a dim `[model · tokens · cost]` line
+  closes each reply, and notices start with `*`.
+- The window draws everything in Geist Mono, chat prose included, with
+  a block cursor; the proportional Geist faces are no longer bundled.
 
 ### Surface — UI protocol and agent session shared by every frontend
 

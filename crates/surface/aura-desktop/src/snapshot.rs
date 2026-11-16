@@ -4,6 +4,7 @@
 //! Set `AURA_DESKTOP_SNAPSHOTS=<dir>` to also write each screen as a PNG.
 
 use crate::app::{App, Handles, Message, Options};
+use crate::chrome::Divider;
 use crate::demo::{DIFF, LISTING, REPLY, TEST_OUTPUT};
 use crate::grid::Palette;
 use crate::tab_bar::Hit;
@@ -12,10 +13,11 @@ use aura_ui::events::{
     AgentDefinitionSummary, AgentSummary, CallUsage, MessageData, MessageRole, ModelOptionView,
     ProcessKind, ProcessStatus, ProcessSummary, ToolData, UiCommand, UiEvent,
 };
+use aura_ui_terminal::{ChatTab, Pane, PaneTab};
 use iced::advanced::graphics::text::font_system;
 use iced::advanced::renderer::{Headless, Style};
 use iced::keyboard::{self, key, Key, Location, Modifiers};
-use iced::{mouse, Pixels, Size};
+use iced::{mouse, Pixels, Point, Size};
 use iced_runtime::user_interface::{Cache, UserInterface};
 use std::sync::Once;
 use std::time::Instant;
@@ -113,6 +115,20 @@ impl Harness {
         for event in [
             mouse::Event::CursorMoved { position },
             mouse::Event::ButtonPressed(mouse::Button::Left),
+            mouse::Event::ButtonReleased(mouse::Button::Left),
+        ] {
+            let _ = self.app.update(Message::Mouse(event));
+        }
+    }
+
+    /// Press the left button at `from` on the grid's canvas and let go
+    /// at `to`.
+    fn drag(&mut self, from: Point, to: Point) {
+        let (from, to) = (self.app.on_window(from), self.app.on_window(to));
+        for event in [
+            mouse::Event::CursorMoved { position: from },
+            mouse::Event::ButtonPressed(mouse::Button::Left),
+            mouse::Event::CursorMoved { position: to },
             mouse::Event::ButtonReleased(mouse::Button::Left),
         ] {
             let _ = self.app.update(Message::Mouse(event));
@@ -313,7 +329,7 @@ fn session(h: &mut Harness) {
     reply(h);
 }
 
-/// Register the bundled fonts, before the UI measures any prose.
+/// Register the bundled fonts, before anything is drawn.
 fn load_fonts() {
     static FONTS: Once = Once::new();
     FONTS.call_once(|| {
@@ -457,28 +473,41 @@ fn welcome_screen() {
 }
 
 #[test]
-fn prose_wraps_in_its_own_face() {
+fn panel_tabs_and_dividers_belong_to_the_window() {
     let mut h = harness();
-    seed(&mut h);
-    h.apply([
-        UiCommand::StartStreaming,
-        UiCommand::AppendText(
-            "Hi! That last message looks like a typo. What would you like to do?\n\n\
-             - **\"ls\":** I said I'd created a task, but I hadn't done anything. If you \
-             want, I can list the files in the project folder now.\n\
-             - **The story:** You asked for 5 paragraphs, and I gave you an outline split \
-             into acts. I can rewrite it as an actual 5-paragraph story.\n\n\
-             Here are some other things I can help with in this repo (`aura-harness`): run \
-             the build, tests, or `cargo clippy`, and look at the codebase."
-                .into(),
-        ),
-        UiCommand::FinishStreaming,
-        UiCommand::Complete,
-    ]);
-    let text = h.app.screen().text();
-    assert!(text.contains("the files in the project folder"), "{text}");
-    assert!(text.contains("cargo clippy"), "{text}");
-    snapshot("prose", &h);
+    session(&mut h);
+    let chat = |h: &Harness| {
+        let tui = &h.app.tabs().front().tui;
+        let pane = tui.pane_chrome().iter().find(|c| c.pane == Pane::Chat);
+        pane.expect("the chat has a bar").clone()
+    };
+    let text = h.text();
+    assert!(
+        !text.contains("TERMINAL"),
+        "tab labels are drawn, not cells"
+    );
+
+    let terminal = PaneTab::Chat(ChatTab::Terminal);
+    let tab = h.app.chrome().spot(terminal).expect("the tab is drawn");
+    h.drag(tab, tab);
+    assert_eq!(h.app.tabs().front().tui.chat_tab(), ChatTab::Terminal);
+    assert!(chat(&h).focused);
+    assert_eq!(chat(&h).active, Some(terminal));
+
+    let before = chat(&h).area;
+    let band = h
+        .app
+        .chrome()
+        .band(Divider::Agents)
+        .expect("agents beside the chat");
+    let cell = crate::grid::Metrics::new(theme::DEFAULT_FONT_SIZE)
+        .cell
+        .width;
+    h.drag(band, Point::new(band.x + 10.0 * cell, band.y));
+    let after = chat(&h).area;
+    assert_eq!(after.right(), before.right());
+    assert_eq!(after.x, before.x + 10, "{before:?} → {after:?}");
+    snapshot("panes", &h);
 }
 
 #[test]

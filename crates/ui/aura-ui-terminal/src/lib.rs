@@ -51,7 +51,10 @@ mod terminal;
 
 // Re-exports for convenience
 pub use alerts::AlertSettings;
-pub use app::{App, AppState, ProseMeasure, ProseRow};
+pub use app::{
+    AgentsTab, App, AppState, ChatTab, Pane, PaneChrome, PaneSplits, PaneTab, ProseMeasure,
+    ProseRow, SidePanelTab,
+};
 pub use events::{UiCommand, UiEvent};
 pub use mode_command::{ApprovalLevel, ModeCommandError, PermissionMode, SlashModeCommand};
 /// Draws the whole UI into a ratatui frame; frontends other than

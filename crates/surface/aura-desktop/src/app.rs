@@ -8,8 +8,11 @@
 //! tab is kept up to date; only the one in front is rendered.
 //!
 //! The window has no frame from the system: the tab bar is its title bar,
-//! and its edges resize it.
+//! and its edges resize it. The panels' title bars are the window's too
+//! ([`crate::chrome`]): clicks on them pick tabs and focus panels, and
+//! the borders between panels drag.
 
+use crate::chrome::{self, Chrome, Divider};
 use crate::grid::{Grid, Metrics, Palette, Screen};
 use crate::perf::Perf;
 use crate::router::{self, Arrangement, Tabs};
@@ -80,6 +83,7 @@ pub struct App {
     tui_theme: aura_ui_terminal::Theme,
     /// The grid of the tab in front.
     screen: Screen,
+    chrome: Chrome,
     bar: Bar,
     metrics: Metrics,
     palette: Palette,
@@ -87,6 +91,10 @@ pub struct App {
     modifiers: Modifiers,
     /// The grid cell under the pointer.
     pointer: Option<Position>,
+    /// Where the pointer is on the grid's canvas while it is over it.
+    grid_pointer: Option<Point>,
+    /// The divider being dragged.
+    dragging: Option<Divider>,
     /// Where the pointer is while it is over the tab bar.
     bar_pointer: Option<Point>,
     /// The window side or corner under the pointer.
@@ -153,11 +161,14 @@ impl App {
             palette: Palette::from_theme(&tui_theme),
             tui_theme,
             screen: Screen::default(),
+            chrome: Chrome::default(),
             bar: Bar::default(),
             metrics: Metrics::new(theme::initial_font_size()),
             window: WINDOW,
             modifiers: Modifiers::empty(),
             pointer: None,
+            grid_pointer: None,
+            dragging: None,
             bar_pointer: None,
             edge: None,
             last_bar_press: None,
@@ -199,6 +210,7 @@ impl App {
             .height(Length::Fixed(tab_bar::height(&self.metrics)));
         let grid = canvas(Grid {
             screen: &self.screen,
+            chrome: &self.chrome,
             metrics: self.metrics,
             palette: self.palette,
             cursor_on: self.cursor_on(),
@@ -206,8 +218,20 @@ impl App {
         .width(Length::Fill)
         .height(Length::Fill);
         let mut area = mouse_area(column![bar, grid]);
+        let divider = self.dragging.or(match self.chrome.hover() {
+            Some(chrome::Hit::Divider(divider)) => Some(divider),
+            _ => None,
+        });
         if let Some(edge) = self.edge {
             area = area.interaction(resize_cursor(edge));
+        } else if let Some(divider) = divider {
+            area = area.interaction(if divider.sideways() {
+                mouse::Interaction::ResizingHorizontally
+            } else {
+                mouse::Interaction::ResizingVertically
+            });
+        } else if matches!(self.chrome.hover(), Some(chrome::Hit::Tab(_))) {
+            area = area.interaction(mouse::Interaction::Pointer);
         }
         let element = area.into();
         self.perf.view(started.elapsed());
@@ -420,14 +444,26 @@ impl App {
                     .flatten();
                 let bar = tab_bar::height(&self.metrics);
                 // A drag that began in the grid keeps selecting there.
-                if position.y < bar && !self.left_down {
+                if position.y < bar && !self.left_down && self.dragging.is_none() {
                     self.bar_pointer = Some(position);
                     self.pointer = None;
+                    self.grid_pointer = None;
+                    self.chrome.point(None);
                     return Task::none();
                 }
                 self.bar_pointer = None;
                 let (cols, rows) = self.screen.size();
                 let in_grid = Point::new(position.x, position.y - bar);
+                self.grid_pointer = Some(in_grid);
+                if let Some(divider) = self.dragging {
+                    let tui = &mut self.tabs.front_mut().tui;
+                    let splits = self.chrome.drag(divider, in_grid, tui.pane_splits());
+                    tui.set_pane_splits(splits);
+                    return Task::none();
+                }
+                if !self.left_down {
+                    self.chrome.point(Some(in_grid));
+                }
                 let at = self.metrics.cell_at(self.grid_area(), cols, rows, in_grid);
                 if self.pointer == Some(at) {
                     return Task::none();
@@ -442,6 +478,8 @@ impl App {
             mouse::Event::CursorLeft => {
                 self.pointer = None;
                 self.bar_pointer = None;
+                self.grid_pointer = None;
+                self.chrome.point(None);
                 self.edge = None;
                 return Task::none();
             }
@@ -452,6 +490,10 @@ impl App {
                 if self.bar_pointer.is_some() {
                     return self.bar_press(button);
                 }
+                if let Some(hit) = self.chrome.hover() {
+                    self.chrome_press(hit, button);
+                    return Task::none();
+                }
                 let Some(button) = mouse_button(button) else {
                     return Task::none();
                 };
@@ -459,6 +501,10 @@ impl App {
                 MouseEventKind::Down(button)
             }
             mouse::Event::ButtonReleased(button) => {
+                if button == mouse::Button::Left && self.dragging.take().is_some() {
+                    self.chrome.point(self.grid_pointer);
+                    return Task::none();
+                }
                 let Some(button) = mouse_button(button) else {
                     return Task::none();
                 };
@@ -529,6 +575,20 @@ impl App {
         Task::none()
     }
 
+    /// A button went down on a panel's title bar or a divider: left picks
+    /// the tab, focuses the panel or starts dragging the divider.
+    fn chrome_press(&mut self, hit: chrome::Hit, button: mouse::Button) {
+        if button != mouse::Button::Left {
+            return;
+        }
+        let tui = &mut self.tabs.front_mut().tui;
+        match hit {
+            chrome::Hit::Tab(tab) => tui.select_pane_tab(tab),
+            chrome::Hit::Bar(pane) => tui.focus_pane(pane),
+            chrome::Hit::Divider(divider) => self.dragging = Some(divider),
+        }
+    }
+
     fn send_mouse(&mut self, kind: MouseEventKind) {
         let Some(at) = self.pointer else {
             return;
@@ -597,7 +657,14 @@ impl App {
                         iced::clipboard::write(text).chain(Task::done(Message::Copied(chars))),
                     );
                 }
-                self.screen.update(frame.buffer, tui.prose_rows());
+                self.screen.update(frame.buffer);
+                let at = (
+                    self.metrics.origin(area, cols, rows),
+                    self.metrics,
+                    self.palette,
+                );
+                let model = chrome::Model::new(tui.pane_chrome(), frame.buffer, at);
+                self.chrome.update(model, self.grid_pointer);
             }
             Err(e) => tracing::warn!(error = %e, "render failed"),
         }
@@ -663,6 +730,17 @@ impl App {
     #[cfg(test)]
     pub fn bar(&self) -> &Bar {
         &self.bar
+    }
+
+    #[cfg(test)]
+    pub fn chrome(&self) -> &Chrome {
+        &self.chrome
+    }
+
+    /// A point on the grid's canvas, in the window.
+    #[cfg(test)]
+    pub fn on_window(&self, at: Point) -> Point {
+        Point::new(at.x, at.y + tab_bar::height(&self.metrics))
     }
 }
 

@@ -5,7 +5,7 @@ use super::command::shell_lines;
 use super::diff::diff_message_lines;
 use super::markdown::{parse_content_segments, ContentSegment};
 use super::segments::{
-    message_header, message_style, notice_lines, render_code_segment, render_text_segment,
+    message_style, prefixed_lines, render_code_segment, render_text_segment, reply_footer,
     reply_meta,
 };
 use super::text::Measure;
@@ -31,11 +31,9 @@ pub(crate) struct GroupState<'a> {
 /// Where a block falls in its turn: everything from one prompt to the next.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct TurnPlace {
-    /// Whether the block is the turn's first from the agent, drawn under
-    /// the turn's `AURA` header
-    header: bool,
-    /// Model, tokens and cost of the turn's latest reply, for that header
-    meta: Vec<String>,
+    /// Model, tokens and cost of the turn's latest reply, drawn after the
+    /// block when it is the turn's last from the agent
+    footer: Vec<String>,
     /// Number of the block's first step, counted from 1 across the turn
     first_step: usize,
     /// When the turn's prompt was sent, in Unix milliseconds
@@ -43,11 +41,10 @@ struct TurnPlace {
 }
 
 impl TurnPlace {
-    /// A block outside any turn, drawn with its own header.
+    /// A block outside any turn.
     const fn alone() -> Self {
         Self {
-            header: true,
-            meta: Vec::new(),
+            footer: Vec::new(),
             first_step: 1,
             started_ms: 0,
         }
@@ -173,7 +170,7 @@ impl ChatLineCache {
                     .is_none_or(|block| block.revision != revision)
             {
                 let shell = members[0].shell_run().filter(|_| self.terminal);
-                let (lines, toggles, prose) = match (shell, view) {
+                let (mut lines, toggles, prose) = match (shell, view) {
                     (Some(run), _) => (
                         shell_lines(run, &self.prompt, width, theme),
                         Vec::new(),
@@ -189,7 +186,7 @@ impl ChatLineCache {
                         let mut prose = Vec::new();
                         for member in members {
                             let (more, flags) =
-                                message_lines(member, place, (width, measure), theme, spinner);
+                                message_lines(member, (width, measure), theme, spinner);
                             prose.resize(lines.len(), None);
                             prose.extend(flags);
                             lines.extend(more);
@@ -200,6 +197,7 @@ impl ChatLineCache {
                         single_lines(members[0], place, (width, measure), theme, spinner)
                     }
                 };
+                lines.extend(reply_footer(&place.footer, width, theme));
                 self.entries.insert(
                     key,
                     BlockLines {
@@ -249,8 +247,7 @@ fn block_runs(messages: &[&Message]) -> Vec<Range<usize>> {
     runs
 }
 
-/// A one-line system message such as `policy: read_file allowed by …`,
-/// drawn on the same line as its time.
+/// A one-line system message such as `policy: read_file allowed by …`.
 fn is_notice(message: &Message) -> bool {
     message.role() == MessageRole::System
         && message.activity_step().is_none()
@@ -260,28 +257,27 @@ fn is_notice(message: &Message) -> bool {
 }
 
 /// Each block's place in its turn. A prompt starts a turn; the agent's
-/// first block after it carries the turn's header, and steps are numbered
-/// in order across the turn.
+/// last block in it carries the footer of the turn's latest reply, and
+/// steps are numbered in order across the turn.
 fn turn_places(shown: &[&Message], runs: &[Range<usize>]) -> Vec<TurnPlace> {
     let mut places: Vec<TurnPlace> = Vec::with_capacity(runs.len());
-    let mut header_at: Option<usize> = None;
+    let mut last_agent: Option<usize> = None;
+    let mut meta: Vec<String> = Vec::new();
     let mut steps = 0;
     let mut started_ms = shown.first().map_or(0, |m| m.timestamp_ms());
     for run in runs {
         let first = shown[run.start];
         if first.role() == MessageRole::User {
-            header_at = None;
+            close_turn(&mut places, last_agent.take(), std::mem::take(&mut meta));
             steps = 0;
             started_ms = first.timestamp_ms();
         }
         let agent = first.role() == MessageRole::Assistant;
-        let header = agent && header_at.is_none();
-        if header {
-            header_at = Some(places.len());
+        if agent {
+            last_agent = Some(places.len());
         }
         places.push(TurnPlace {
-            header,
-            meta: Vec::new(),
+            footer: Vec::new(),
             first_step: steps + 1,
             started_ms,
         });
@@ -290,40 +286,18 @@ fn turn_places(shown: &[&Message], runs: &[Range<usize>]) -> Vec<TurnPlace> {
             .filter(|m| m.activity_step().is_some())
             .count();
         if agent && first.activity_step().is_none() && first.model().is_some() {
-            if let Some(at) = header_at {
-                places[at].meta = reply_meta(first.model(), first.usage());
-            }
+            meta = reply_meta(first.model(), first.usage());
         }
     }
+    close_turn(&mut places, last_agent, meta);
     places
 }
 
-/// The `AURA` line over the agent's first block of a turn.
-fn turn_header(
-    message: &Message,
-    place: &TurnPlace,
-    width: usize,
-    theme: &Theme,
-) -> Option<Line<'static>> {
-    if message.role() != MessageRole::Assistant || !place.header {
-        return None;
+/// Put a turn's `meta` under its last block from the agent, at `last`.
+fn close_turn(places: &mut [TurnPlace], last: Option<usize>, meta: Vec<String>) {
+    if let Some(place) = last.and_then(|at| places.get_mut(at)) {
+        place.footer = meta;
     }
-    let (nick, nick_color, _) = message_style(message.role(), theme);
-    let own;
-    let meta = if place.meta.is_empty() {
-        own = reply_meta(message.model(), message.usage());
-        &own
-    } else {
-        &place.meta
-    };
-    Some(message_header(
-        nick,
-        nick_color,
-        &message.timestamp_local(),
-        meta,
-        width,
-        theme,
-    ))
 }
 
 /// How much of a group to show: what the user chose, else everything under
@@ -370,9 +344,7 @@ fn group_lines(
     } else {
         String::new()
     };
-    let mut lines: Vec<Line<'static>> = turn_header(members[0], place, width, theme)
-        .into_iter()
-        .collect();
+    let mut lines: Vec<Line<'static>> = Vec::new();
     let group = ToggleTarget::Group(members[0].version().0);
     let mut toggles = vec![ToggleRow {
         line: lines.len(),
@@ -452,14 +424,12 @@ fn single_lines(
     spinner: &str,
 ) -> (Vec<Line<'static>>, Vec<ToggleRow>, Vec<Option<u16>>) {
     let Some(step) = message.activity_step() else {
-        let (lines, prose) = message_lines(message, place, (width, measure), theme, spinner);
+        let (lines, prose) = message_lines(message, (width, measure), theme, spinner);
         return (lines, Vec::new(), prose);
     };
-    let mut lines: Vec<Line<'static>> = turn_header(message, place, width, theme)
-        .into_iter()
-        .collect();
+    let mut lines: Vec<Line<'static>> = Vec::new();
     let mut toggles = vec![ToggleRow {
-        line: lines.len(),
+        line: 0,
         target: ToggleTarget::Step(message.version().0),
         open: message.is_expanded(),
     }];
@@ -482,12 +452,11 @@ fn single_lines(
     (lines, toggles, Vec::new())
 }
 
-/// The header and body lines of one chat message, and whether each is
-/// prose. The agent's replies after the first block of a turn go without
-/// a header, under the turn's.
+/// The lines of one chat message, and whether each is prose. What the user
+/// sent follows a `> ` prompt and system messages a `* `; the agent's
+/// replies stand on their own, like a program's output.
 fn message_lines(
     message: &Message,
-    place: &TurnPlace,
     (width, measure): (usize, Measure),
     theme: &Theme,
     spinner: &str,
@@ -496,50 +465,53 @@ fn message_lines(
         let lines = activity_lines(activity, message.is_expanded(), None, spinner, width, theme);
         return (lines, Vec::new());
     }
-    let timestamp = message.timestamp_local();
     if let Some(run) = message.shell_run() {
-        return (shell_lines(run, &timestamp, width, theme), Vec::new());
+        let lines = shell_lines(run, &message.timestamp_local(), width, theme);
+        return (lines, Vec::new());
     }
     if let Some(block) = message.diff_block() {
-        return (
-            diff_message_lines(block, &timestamp, width, theme),
-            Vec::new(),
-        );
+        return (diff_message_lines(block, width, theme), Vec::new());
     }
-    let (nick, nick_color, msg_color) = message_style(message.role(), theme);
+    let role = message.role();
+    let (prompt, prompt_color, msg_color) = message_style(role, theme);
     if is_notice(message) {
-        let lines = notice_lines(
-            nick,
-            nick_color,
-            &timestamp,
+        let lines = prefixed_lines(
+            (prompt, prompt_color),
             message.content(),
             msg_color,
             width,
-            theme,
+            Measure::GRID,
         );
         return (lines, Vec::new());
     }
-    let mut lines: Vec<Line<'static>> = if message.role() == MessageRole::Assistant {
-        turn_header(message, place, width, theme)
-            .into_iter()
-            .collect()
-    } else {
-        let meta = reply_meta(message.model(), message.usage());
-        vec![message_header(
-            nick, nick_color, &timestamp, &meta, width, theme,
-        )]
-    };
+    let mut lines: Vec<Line<'static>> = Vec::new();
     let mut prose = Vec::new();
-    for segment in parse_content_segments(message.content()) {
+    for (i, segment) in parse_content_segments(message.content())
+        .into_iter()
+        .enumerate()
+    {
         prose.resize(lines.len(), None);
         match segment {
             ContentSegment::Text(text) => {
-                let role = message.role();
                 prose.extend(render_text_segment(
-                    &mut lines, &text, msg_color, width, role, theme, measure,
+                    &mut lines,
+                    &text,
+                    (role, i == 0),
+                    width,
+                    theme,
+                    measure,
                 ));
             }
             ContentSegment::CodeBlock { language, code } => {
+                if i == 0 && !prompt.is_empty() {
+                    lines.extend(prefixed_lines(
+                        (prompt, prompt_color),
+                        "",
+                        msg_color,
+                        width,
+                        Measure::GRID,
+                    ));
+                }
                 render_code_segment(&mut lines, &language, &code, width, theme);
             }
         }

@@ -10,7 +10,8 @@
 use super::panels::truncate_record_info;
 use super::text::display_width;
 use crate::app::tab_bar::TabLayout;
-use crate::Theme;
+use crate::app::{AgentsTab, ChatTab, Pane, PaneChrome, PaneTab, SidePanelTab};
+use crate::{App, Theme};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -21,15 +22,20 @@ use ratatui::{
 /// Rows of a framed header bar.
 const FRAMED_HEIGHT: u16 = 3;
 
+/// Rows of a bar the front end draws (see [`crate::App::set_host_chrome`]): the
+/// frame's top and an empty row. The body's top border closes it.
+const HOSTED_HEIGHT: u16 = 2;
+
 /// Shortest panel given a framed bar; shorter ones get its middle row.
 const FRAMED_MIN_PANEL_HEIGHT: u16 = 6;
 
 /// Split a panel's area into its header bar and the body below it.
-pub(super) fn split(area: Rect) -> (Rect, Rect) {
-    let height = if area.height >= FRAMED_MIN_PANEL_HEIGHT {
-        FRAMED_HEIGHT
-    } else {
-        area.height.min(1)
+/// `hosted` bars are the front end's to draw.
+pub(super) fn split(area: Rect, hosted: bool) -> (Rect, Rect) {
+    let height = match (area.height >= FRAMED_MIN_PANEL_HEIGHT, hosted) {
+        (true, true) => HOSTED_HEIGHT,
+        (true, false) => FRAMED_HEIGHT,
+        (false, _) => area.height.min(1),
     };
     let bar = Rect { height, ..area };
     let body = Rect {
@@ -68,6 +74,75 @@ pub(super) struct PanelHeader<'a, T> {
     pub title: Option<&'a str>,
     pub info: Option<HeaderInfo>,
     pub focused: bool,
+    /// Whether the front end draws the bar: the grid keeps only its frame
+    pub hosted: bool,
+}
+
+/// A tab of a header bar, as the front end names it.
+pub(super) trait HostTab: Copy + PartialEq {
+    fn pane_tab(self) -> Option<PaneTab>;
+}
+
+impl HostTab for () {
+    fn pane_tab(self) -> Option<PaneTab> {
+        None
+    }
+}
+
+impl HostTab for AgentsTab {
+    fn pane_tab(self) -> Option<PaneTab> {
+        Some(PaneTab::Agents(self))
+    }
+}
+
+impl HostTab for ChatTab {
+    fn pane_tab(self) -> Option<PaneTab> {
+        Some(PaneTab::Chat(self))
+    }
+}
+
+impl HostTab for SidePanelTab {
+    fn pane_tab(self) -> Option<PaneTab> {
+        Some(PaneTab::Side(self))
+    }
+}
+
+impl<T: HostTab> PanelHeader<'_, T> {
+    /// What the front end draws for this bar of `pane`, which covers `area`.
+    pub(super) fn chrome(&self, pane: Pane, area: Rect, bar: Rect) -> PaneChrome {
+        PaneChrome {
+            pane,
+            area,
+            bar,
+            tabs: self
+                .layout
+                .cells
+                .iter()
+                .filter_map(|cell| cell.tab.pane_tab())
+                .collect(),
+            active: self.active.and_then(HostTab::pane_tab),
+            title: self.title.map(str::to_string),
+            info: self.info.as_ref().map(|info| info.text.clone()),
+            info_short: self.info.as_ref().map(|info| info.short.clone()),
+            info_color: self.info.as_ref().map_or(Color::Reset, |info| info.color),
+            focused: self.focused,
+        }
+    }
+}
+
+/// Draw the header of `pane`, which covers `area`, into `bar`; a hosted
+/// one is also handed to the front end to draw over its frame.
+pub(super) fn show<T: HostTab>(
+    frame: &mut Frame,
+    app: &mut App,
+    (pane, area, bar): (Pane, Rect, Rect),
+    header: &PanelHeader<'_, T>,
+    theme: &Theme,
+) {
+    render_panel_header(frame, bar, header, theme);
+    if header.hosted {
+        app.push_pane_chrome(header.chrome(pane, area, bar));
+    }
 }
 
 /// Draw `header` into `bar`, the area `split` gave it.
@@ -87,6 +162,10 @@ pub(super) fn render_panel_header<T: Copy + PartialEq>(
         colors.muted
     });
     let buf = frame.buffer_mut();
+    if header.hosted {
+        draw_hosted_frame(buf, bar, frame_style);
+        return;
+    }
     let framed = bar.height >= FRAMED_HEIGHT;
     let middle = if framed { bar.y + 1 } else { bar.y };
 
@@ -143,6 +222,21 @@ pub(super) fn render_panel_header<T: Copy + PartialEq>(
     if let Some((start, width)) = header.layout.info {
         let area = Rect::new(bar.x + start, middle, width.min(last - start), 1);
         draw_info(buf, area, header, theme);
+    }
+}
+
+/// The frame of a bar the front end draws: its top and sides around empty
+/// rows, open at the bottom for the body's top border to close.
+fn draw_hosted_frame(buf: &mut Buffer, bar: Rect, style: Style) {
+    let inner = usize::from(bar.width.saturating_sub(2));
+    let mut rows = bar.rows();
+    if bar.height > 1 {
+        if let Some(top) = rows.next() {
+            buf.set_string(top.x, top.y, format!("┌{}┐", "─".repeat(inner)), style);
+        }
+    }
+    for row in rows {
+        buf.set_string(row.x, row.y, format!("│{}│", " ".repeat(inner)), style);
     }
 }
 
@@ -211,7 +305,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
             .draw(|frame| {
-                let (bar, _) = split(frame.area());
+                let (bar, _) = split(frame.area(), header.hosted);
                 render_panel_header(frame, bar, header, &Theme::cyber());
             })
             .unwrap();
@@ -236,6 +330,7 @@ mod tests {
             title: None,
             info: None,
             focused,
+            hosted: false,
         }
     }
 
@@ -273,7 +368,62 @@ mod tests {
     fn short_panels_get_the_tab_row_only() {
         let buffer = draw(40, 5, &chat_header(40, true, None));
         assert_eq!(row(&buffer, 0), "│       CHAT        │     TERMINAL     │");
-        assert_eq!(split(Rect::new(0, 0, 40, 5)).1.y, 1);
+        assert_eq!(split(Rect::new(0, 0, 40, 5), false).1.y, 1);
+    }
+
+    #[test]
+    fn hosted_bars_keep_only_their_frame_for_the_front_end() {
+        let header = PanelHeader {
+            hosted: true,
+            ..chat_header(20, true, None)
+        };
+        let buffer = draw(20, 10, &header);
+        assert_eq!(row(&buffer, 0), "┌──────────────────┐");
+        assert_eq!(row(&buffer, 1), "│                  │");
+        assert_eq!(split(Rect::new(0, 0, 20, 10), true).1.y, 2);
+        assert_eq!(split(Rect::new(0, 0, 20, 5), true).1.y, 1);
+    }
+
+    #[test]
+    fn hosted_bars_tell_the_front_end_what_they_show() {
+        let area = Rect::new(4, 1, 30, 12);
+        let bar = Rect::new(4, 1, 30, 2);
+        let tabs = PanelHeader {
+            layout: ChatTab::layout(30),
+            active: Some(ChatTab::Terminal),
+            hovered: None,
+            title: None,
+            info: None,
+            focused: true,
+            hosted: true,
+        };
+        let chrome = tabs.chrome(Pane::Chat, area, bar);
+        assert_eq!(
+            chrome.tabs,
+            [
+                PaneTab::Chat(ChatTab::Chat),
+                PaneTab::Chat(ChatTab::Terminal)
+            ]
+        );
+        assert_eq!(chrome.active, Some(PaneTab::Chat(ChatTab::Terminal)));
+        assert_eq!((chrome.area, chrome.bar), (area, bar));
+        assert!(chrome.focused);
+
+        let titled = PanelHeader::<()> {
+            layout: TabLayout::untabbed(30),
+            active: None,
+            hovered: None,
+            title: Some("KERNEL"),
+            info: Some(HeaderInfo::count(128, "RECORDS", Color::Gray)),
+            focused: false,
+            hosted: true,
+        };
+        let chrome = titled.chrome(Pane::Records, area, bar);
+        assert!(chrome.tabs.is_empty());
+        assert_eq!(chrome.title.as_deref(), Some("KERNEL"));
+        assert_eq!(chrome.info.as_deref(), Some("128 RECORDS"));
+        assert_eq!(chrome.info_short.as_deref(), Some("128"));
+        assert_eq!(chrome.info_color, Color::Gray);
     }
 
     #[test]
@@ -285,6 +435,7 @@ mod tests {
             title: Some("KERNEL"),
             info: Some(HeaderInfo::count(128, "RECORDS", Color::Gray)),
             focused: false,
+            hosted: false,
         };
         let wide = draw(30, 10, &header(30));
         assert_eq!(row(&wide, 1), "│ KERNEL         128 RECORDS │");

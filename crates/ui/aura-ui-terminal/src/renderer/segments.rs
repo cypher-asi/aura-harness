@@ -11,61 +11,46 @@ use ratatui::{
     text::{Line, Span},
 };
 
-/// `AURA  12:00:00      claude-opus-4-7 · 12.4k tok · $0.042` — the line
-/// above a message's body. `meta` (see [`reply_meta`]) sits at the right
-/// edge of `width`; its trailing parts are dropped when it doesn't fit.
-pub(super) fn message_header<'a>(
-    nick: &str,
-    nick_color: ratatui::style::Color,
-    timestamp: &str,
-    meta: &[String],
-    width: usize,
-    theme: &Theme,
-) -> Line<'a> {
-    let muted = Style::default().fg(theme.colors.muted);
-    let detail = format!("  {timestamp}");
-    let used = display_width(nick) + display_width(&detail);
-    let mut spans = vec![
-        Span::styled(
-            nick.to_string(),
-            Style::default().fg(nick_color).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(detail, muted),
-    ];
-    if let Some(right) = fit_meta(meta, width.saturating_sub(used + 2)) {
-        let gap = width.saturating_sub(used + display_width(&right));
-        spans.push(Span::raw(" ".repeat(gap)));
-        spans.push(Span::styled(right, muted));
-    }
-    Line::from(spans)
+/// `[claude-opus-4-7 · 12.4k tok · $0.042]` — the dim line closing a
+/// turn. `meta` (see [`reply_meta`]) loses its trailing parts when it
+/// doesn't fit in `width`.
+pub(super) fn reply_footer(meta: &[String], width: usize, theme: &Theme) -> Option<Line<'static>> {
+    let text = fit_meta(meta, width.saturating_sub(2))?;
+    Some(Line::from(Span::styled(
+        format!("[{text}]"),
+        Style::default().fg(theme.colors.muted),
+    )))
 }
 
-/// `* 07:48:20  policy: write_file allowed by …` — a one-line notice with
-/// its header, wrapped under the text when it runs past `width`.
-pub(super) fn notice_lines(
-    nick: &str,
-    nick_color: ratatui::style::Color,
-    timestamp: &str,
+/// `> fix the login bug` or `* policy: write_file allowed by …`: `prefix`
+/// before the first row of `text`, later rows indented under it, the way
+/// a terminal echoes what was typed after its prompt.
+pub(super) fn prefixed_lines(
+    (prefix, prefix_color): (&str, ratatui::style::Color),
     text: &str,
     text_color: ratatui::style::Color,
     width: usize,
-    theme: &Theme,
+    measure: Measure,
 ) -> Vec<Line<'static>> {
-    let mut header = message_header(nick, nick_color, timestamp, &[], width, theme);
-    header.spans.push(Span::raw("  "));
-    let indent = header.width();
+    let indent = display_width(prefix);
     let style = Style::default().fg(text_color);
-    let mut rows = wrap_words(text, width.saturating_sub(indent).max(1)).into_iter();
-    header
-        .spans
-        .push(Span::styled(rows.next().unwrap_or_default(), style));
-    let mut lines = vec![header];
-    lines.extend(rows.map(|row| {
-        Line::from(vec![
-            Span::raw(" ".repeat(indent)),
-            Span::styled(row, style),
-        ])
-    }));
+    let mut lines = plain_lines(text, width.saturating_sub(indent).max(1), style, measure);
+    if lines.is_empty() {
+        lines.push(Line::default());
+    }
+    for (i, line) in lines.iter_mut().enumerate() {
+        let lead = if i == 0 {
+            Span::styled(
+                prefix.to_string(),
+                Style::default()
+                    .fg(prefix_color)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::raw(" ".repeat(indent))
+        };
+        line.spans.insert(0, lead);
+    }
     lines
 }
 
@@ -93,8 +78,8 @@ fn fit_meta(meta: &[String], room: usize) -> Option<String> {
     Some(cut)
 }
 
-/// Right-hand header parts for a reply, most important first: the model,
-/// then the call's tokens and cost when known.
+/// Parts of a reply's footer, most important first: the model, then the
+/// call's tokens and cost when known.
 pub(super) fn reply_meta(model: Option<&str>, usage: Option<CallUsage>) -> Vec<String> {
     let mut parts: Vec<String> = model.map(str::to_string).into_iter().collect();
     if let Some(usage) = usage {
@@ -104,19 +89,27 @@ pub(super) fn reply_meta(model: Option<&str>, usage: Option<CallUsage>) -> Vec<S
     parts
 }
 
+/// The prompt before a message's first row, its color, and the color of
+/// the message's text. The agent's replies have no prompt.
 pub(super) const fn message_style<'a>(
     role: MessageRole,
     theme: &Theme,
 ) -> (&'a str, ratatui::style::Color, ratatui::style::Color) {
     match role {
-        MessageRole::User => ("YOU", theme.colors.success, theme.colors.muted),
-        MessageRole::Assistant => ("AURA", theme.colors.muted, theme.colors.text),
-        MessageRole::System => ("*", theme.colors.muted, theme.colors.muted),
+        MessageRole::User => (USER_PROMPT, theme.colors.primary, theme.colors.foreground),
+        MessageRole::Assistant => ("", theme.colors.muted, theme.colors.text),
+        MessageRole::System => (NOTICE_PROMPT, theme.colors.muted, theme.colors.muted),
     }
 }
 
+/// Before a prompt the user sent, as in the input row.
+pub(super) const USER_PROMPT: &str = "> ";
+/// Before a system message.
+pub(super) const NOTICE_PROMPT: &str = "* ";
+
 /// Render a text segment. Assistant replies are rendered as markdown;
-/// user and system text is shown as written, word-wrapped.
+/// user and system text is shown as written, word-wrapped after its
+/// prompt (see [`message_style`]) when `first` is the message's first.
 ///
 /// Prose, the user's or the agent's flowing text, is as wide as `measure`
 /// makes it. Returns, for each added line, whether it is prose: `Some` of
@@ -125,32 +118,32 @@ pub(super) const fn message_style<'a>(
 pub(super) fn render_text_segment(
     lines: &mut Vec<Line<'_>>,
     text: &str,
-    msg_color: ratatui::style::Color,
+    (role, first): (MessageRole, bool),
     width: usize,
-    role: MessageRole,
     theme: &Theme,
     measure: Measure,
 ) -> Vec<Option<u16>> {
-    let base_style = Style::default().fg(msg_color);
-    match role {
-        MessageRole::Assistant => {
-            let (markdown, flow) = render_markdown_flow(text, width, base_style, theme, measure);
-            lines.extend(markdown);
-            flow
-        }
-        MessageRole::User => {
-            let plain = plain_lines(text, width, base_style, measure);
-            let prose = vec![Some(0); plain.len()];
-            lines.extend(plain);
-            prose
-        }
-        MessageRole::System => {
-            let plain = plain_lines(text, width, base_style, Measure::GRID);
-            let prose = vec![None; plain.len()];
-            lines.extend(plain);
-            prose
-        }
+    let (prompt, prompt_color, msg_color) = message_style(role, theme);
+    if role == MessageRole::Assistant {
+        let base_style = Style::default().fg(msg_color);
+        let (markdown, flow) = render_markdown_flow(text, width, base_style, theme, measure);
+        lines.extend(markdown);
+        return flow;
     }
+    let (measure, flow) = if role == MessageRole::User {
+        (
+            measure,
+            Some(u16::try_from(display_width(prompt)).unwrap_or(0)),
+        )
+    } else {
+        (Measure::GRID, None)
+    };
+    let indent = " ".repeat(display_width(prompt));
+    let lead = if first { prompt } else { indent.as_str() };
+    let plain = prefixed_lines((lead, prompt_color), text, msg_color, width, measure);
+    let prose = vec![flow; plain.len()];
+    lines.extend(plain);
+    prose
 }
 
 fn plain_lines(text: &str, width: usize, style: Style, measure: Measure) -> Vec<Line<'static>> {

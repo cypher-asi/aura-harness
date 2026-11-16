@@ -8,6 +8,7 @@
 //! Mono instead of through a terminal emulator.
 
 mod app;
+mod chrome;
 mod demo;
 mod glyphs;
 mod grid;

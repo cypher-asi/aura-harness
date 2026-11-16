@@ -17,6 +17,7 @@ mod input_editor;
 mod keys;
 mod line_edit;
 pub mod mentions;
+mod panes;
 pub mod plans;
 mod processes;
 mod prose;
@@ -51,6 +52,7 @@ pub use definitions::AgentsTab;
 use file_view::FileView;
 use folder_picker::FolderPicker;
 use hud::Hud;
+pub use panes::{Pane, PaneChrome, PaneSplits, PaneTab};
 pub use processes::SidePanelTab;
 pub use prose::{ProseMeasure, ProseRow};
 use ratatui::{
@@ -259,6 +261,13 @@ pub struct App {
     prose_rows: Vec<ProseRow>,
     /// How wide prose is in the front end's proportional face, if it has one
     prose_measure: Option<ProseMeasure>,
+    /// Whether the front end draws the panels' title bars itself
+    host_chrome: bool,
+    /// What each panel's title bar showed in the last frame, for a front
+    /// end that draws them
+    pane_chrome: Vec<PaneChrome>,
+    /// Where the front end put the dividers between panels
+    pane_splits: PaneSplits,
     /// Clickable item under the mouse pointer
     hover: Option<HoverTarget>,
     /// When the in-flight turn started (`None` unless processing)
@@ -563,6 +572,9 @@ impl App {
             areas: PanelAreas::default(),
             prose_rows: Vec::new(),
             prose_measure: None,
+            host_chrome: false,
+            pane_chrome: Vec::new(),
+            pane_splits: PaneSplits::default(),
             hover: None,
             processing_since: None,
             shell_prompt: shell_prompt::detect(),

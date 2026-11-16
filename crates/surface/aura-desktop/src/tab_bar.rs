@@ -69,12 +69,12 @@ fn box_height(metrics: &Metrics) -> f32 {
     (metrics.cell.height * 1.25).round()
 }
 
-fn label_size(metrics: &Metrics) -> f32 {
+pub(crate) fn label_size(metrics: &Metrics) -> f32 {
     (metrics.font_size * 0.85).round()
 }
 
 /// Advance of one label character.
-fn unit(metrics: &Metrics) -> f32 {
+pub(crate) fn unit(metrics: &Metrics) -> f32 {
     theme::cell_size(label_size(metrics)).width
 }
 
@@ -393,7 +393,7 @@ fn paint(frame: &mut Frame, model: &Model, layout: &Layout, hover: Option<Hit>) 
 }
 
 /// A box outline `line` pixels thick, on whole pixels inside `rect`.
-fn outline(frame: &mut Frame, rect: Rectangle, color: Color, line: f32) {
+pub(crate) fn outline(frame: &mut Frame, rect: Rectangle, color: Color, line: f32) {
     let (x, y, w, h) = (rect.x, rect.y, rect.width, rect.height);
     frame.fill_rectangle(Point::new(x, y), Size::new(w, line), color);
     frame.fill_rectangle(Point::new(x, y + h - line), Size::new(w, line), color);

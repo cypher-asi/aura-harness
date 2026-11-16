@@ -45,7 +45,7 @@ impl Tab {
         let mut tui = aura_ui_terminal::App::new()
             .with_event_sender(sender)
             .with_alert_settings(settings.alerts);
-        tui.set_prose_measure(crate::grid::prose_cells);
+        tui.set_host_chrome(true);
         if settings.verbose {
             tui.set_verbose(true);
         }

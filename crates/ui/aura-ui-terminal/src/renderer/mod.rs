@@ -111,18 +111,37 @@ const fn right_column_visible(app: &App) -> bool {
 /// Render the content panels (Swarm, Chat, Record, Sandbox) based on visibility,
 /// returning where the Chat panel's body was drawn, below its header bar.
 fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) -> Rect {
+    app.clear_pane_chrome();
     let swarm_visible = app.swarm_panel_visible();
     let right_visible = right_column_visible(app);
+    let splits = app.pane_splits();
 
+    let room = area.width.saturating_sub(MIN_CHAT_WIDTH);
+    let side = |split: Option<f32>, percent: u16| match split {
+        Some(split) => [
+            Constraint::Length(dragged(area.width, split).min(room)),
+            Constraint::Fill(1),
+        ],
+        None => [
+            Constraint::Percentage(percent),
+            Constraint::Percentage(100 - percent),
+        ],
+    };
     let (swarm, chat, right) = match (swarm_visible, right_visible) {
         (true, true) => {
-            let side = area.width * 24 / 100;
+            let default = area.width * 24 / 100;
+            let left = splits
+                .agents
+                .map_or(default, |split| dragged(area.width, split).min(room / 2));
+            let right = splits.right.map_or(default, |split| {
+                dragged(area.width, split).min(room.saturating_sub(left))
+            });
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
-                    Constraint::Length(side),
+                    Constraint::Length(left),
                     Constraint::Fill(1),
-                    Constraint::Length(side),
+                    Constraint::Length(right),
                 ])
                 .split(area);
             (Some(chunks[0]), chunks[1], Some(chunks[2]))
@@ -130,14 +149,15 @@ fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &T
         (true, false) => {
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
+                .constraints(side(splits.agents, 25))
                 .split(area);
             (Some(chunks[0]), chunks[1], None)
         }
         (false, true) => {
+            let [right, chat] = side(splits.right, 35);
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+                .constraints([chat, right])
                 .split(area);
             (None, chunks[0], Some(chunks[1]))
         }
@@ -165,20 +185,41 @@ fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &T
     if let Some(sandbox) = areas.sandbox {
         sandbox::render_sandbox_panel(frame, sandbox, app, theme);
     }
-    header::split(chat).1
+    header::split(chat, app.host_chrome()).1
 }
 
-/// Record on the top half and Sandbox on the bottom half; either one takes
-/// the whole column when the other is hidden.
+/// Columns the Chat panel keeps however far the dividers are dragged.
+const MIN_CHAT_WIDTH: u16 = 30;
+
+/// Rows each panel of the right column keeps when they share it.
+const MIN_STACKED_HEIGHT: u16 = 6;
+
+/// The cells a divider dragged to `split` of `total` leaves before it.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn dragged(total: u16, split: f32) -> u16 {
+    (f32::from(total) * split.clamp(0.0, 1.0)).round() as u16
+}
+
+/// Record on top and Sandbox below, halves unless the divider between
+/// them was moved; either one takes the whole column when the other is
+/// hidden.
 fn split_right_column(right: Option<Rect>, app: &App) -> (Option<Rect>, Option<Rect>) {
     let Some(area) = right else {
         return (None, None);
     };
     match (app.record_panel_visible(), app.sandbox_panel_visible()) {
         (true, true) => {
+            let constraints = app.pane_splits().records.map_or(
+                [Constraint::Percentage(50), Constraint::Percentage(50)],
+                |split| {
+                    let keep = MIN_STACKED_HEIGHT.min(area.height / 2);
+                    let top = dragged(area.height, split).clamp(keep, area.height - keep);
+                    [Constraint::Length(top), Constraint::Fill(1)]
+                },
+            );
             let halves = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .constraints(constraints)
                 .split(area);
             (Some(halves[0]), Some(halves[1]))
         }

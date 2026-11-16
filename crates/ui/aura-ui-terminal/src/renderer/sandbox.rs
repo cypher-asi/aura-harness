@@ -8,7 +8,7 @@ use super::panels::{
 };
 use super::text::display_width;
 use crate::app::sandbox::{SandboxEntryKind, SandboxRow};
-use crate::app::{HoverTarget, PanelFocus, SidePanelTab};
+use crate::app::{HoverTarget, Pane, PanelFocus, SidePanelTab};
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
@@ -24,8 +24,12 @@ const SANDBOX_HINT: &str = "↑↓ move  ⏎ open  ← up";
 /// Render the panel: its header bar, then the open tab.
 pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Sandbox;
-    let (bar, area) = header::split(area);
-    app.set_side_tabs_area(bar);
+    let hosted = app.host_chrome();
+    let panel = area;
+    let (bar, area) = header::split(area, hosted);
+    if !hosted {
+        app.set_side_tabs_area(bar);
+    }
     let hovered = match app.hover() {
         Some(HoverTarget::SideTab(tab)) => Some(tab),
         _ => None,
@@ -37,10 +41,11 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
         title: None,
         info: None,
         focused: is_focused,
+        hosted,
     };
-    header::render_panel_header(frame, bar, &header, theme);
+    header::show(frame, app, (Pane::Side, panel, bar), &header, theme);
 
-    let Some(body) = render_body_block(frame, area, is_focused, theme) else {
+    let Some(body) = render_body_block(frame, area, (is_focused, hosted), theme) else {
         return;
     };
 

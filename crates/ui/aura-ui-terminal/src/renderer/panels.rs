@@ -6,8 +6,8 @@ use super::text::{display_width, Measure};
 use crate::{
     animation::AURA_WIDTH,
     app::{
-        tab_bar::TabLayout, AgentsTab, ChatTab, HoverTarget, PanelFocus, ProjectListRow, ProseRow,
-        ToggleRow, ToggleTarget,
+        tab_bar::TabLayout, AgentsTab, ChatTab, HoverTarget, Pane, PanelFocus, ProjectListRow,
+        ProseRow, ToggleRow, ToggleTarget,
     },
     App, Theme,
 };
@@ -25,8 +25,12 @@ use std::ops::Range;
 /// conversation or the shell commands run this session.
 pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Chat;
-    let (bar, area) = header::split(area);
-    app.set_chat_tabs_area(bar);
+    let hosted = app.host_chrome();
+    let panel = area;
+    let (bar, area) = header::split(area, hosted);
+    if !hosted {
+        app.set_chat_tabs_area(bar);
+    }
     let hovered = match app.hover() {
         Some(HoverTarget::ChatTab(tab)) => Some(tab),
         _ => None,
@@ -38,19 +42,16 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
         title: None,
         info: None,
         focused: is_focused,
+        hosted,
     };
-    header::render_panel_header(frame, bar, &header, theme);
+    header::show(frame, app, (Pane::Chat, panel, bar), &header, theme);
 
-    let Some(body) = render_body_block(frame, area, is_focused, theme) else {
+    let Some(body) = render_body_block(frame, area, (is_focused, hosted), theme) else {
         return;
     };
 
     let terminal = app.terminal_pane();
-    let padded = if terminal {
-        terminal_text_area(body)
-    } else {
-        centered_text_area(body)
-    };
+    let padded = terminal_text_area(body);
     app.set_chat_width(padded.width);
     app.set_chat_text_area(padded);
 
@@ -83,11 +84,12 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
 }
 
 /// Draw a panel's bordered body in `area`, below its header bar, returning
-/// the area inside the border when it has any rows.
+/// the area inside the border when it has any rows. A `hosted` bar is
+/// open at the bottom, so the body's top border joins its sides.
 pub(super) fn render_body_block(
     frame: &mut Frame,
     area: Rect,
-    is_focused: bool,
+    (is_focused, hosted): (bool, bool),
     theme: &Theme,
 ) -> Option<Rect> {
     let border_color = if is_focused {
@@ -95,8 +97,18 @@ pub(super) fn render_body_block(
     } else {
         theme.colors.muted
     };
+    let border_set = if hosted {
+        ratatui::symbols::border::Set {
+            top_left: "├",
+            top_right: "┤",
+            ..ratatui::symbols::border::PLAIN
+        }
+    } else {
+        ratatui::symbols::border::PLAIN
+    };
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_set(border_set)
         .border_style(Style::default().fg(border_color));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -450,14 +462,8 @@ fn render_lines_below_hint(frame: &mut Frame, panel: Rect, below: usize, theme: 
     );
 }
 
-/// Narrowest gap kept between the chat text and each side of the panel.
-const CHAT_SIDE_MARGIN: u16 = 4;
-
-/// Widest the chat text runs; wider panels grow the side margins instead.
-const CHAT_MAX_TEXT_WIDTH: u16 = 88;
-
-/// The terminal's text area: all of `area` but a column on each side, so
-/// output starts at the top left like a terminal's.
+/// The text area of the chat and the terminal: all of `area` but a column
+/// on each side, so output starts at the top left like a terminal's.
 fn terminal_text_area(area: Rect) -> Rect {
     Rect {
         x: area.x.saturating_add(1),
@@ -466,40 +472,18 @@ fn terminal_text_area(area: Rect) -> Rect {
     }
 }
 
-/// The chat text column, horizontally centered in `area`.
-pub(super) fn centered_text_area(area: Rect) -> Rect {
-    let width = area
-        .width
-        .saturating_sub(CHAT_SIDE_MARGIN * 2)
-        .min(CHAT_MAX_TEXT_WIDTH);
-    Rect {
-        x: area.x + (area.width - width) / 2,
-        width,
-        ..area
-    }
-}
-
-/// `AURA  ⠹ thinking… 12s` — shown below the conversation while a turn is
-/// in flight and no reply text is streaming. Once the agent has shown
-/// something this turn, `AURA` heads that instead, and the indicator sits
-/// under it in line with the steps: `  ⠹ thinking… 12s`.
+/// `⠹ thinking… 12s` — shown below the conversation while a turn is in
+/// flight and no reply text is streaming. Once the agent has shown
+/// something this turn, it sits in line with the steps:
+/// `  ⠹ thinking… 12s`.
 pub(super) fn working_indicator_line<'a>(app: &App, theme: &Theme) -> Option<Line<'a>> {
     if app.has_live_activity() || app.ends_in_live_group() {
         return None;
     }
     let label = app.working_label()?;
-    let lead = if app.turn_has_agent_block() {
-        Span::raw("  ")
-    } else {
-        Span::styled(
-            "AURA  ",
-            Style::default()
-                .fg(theme.colors.muted)
-                .add_modifier(Modifier::BOLD),
-        )
-    };
+    let lead = if app.turn_has_agent_block() { "  " } else { "" };
     let mut spans = vec![
-        lead,
+        Span::raw(lead),
         Span::styled(
             format!("{} ", app.spinner_char()),
             Style::default().fg(theme.colors.secondary),
@@ -546,8 +530,12 @@ fn render_welcome(frame: &mut Frame, area: Rect, terminal: bool, theme: &Theme) 
 /// live agents or the roster of permanent agents.
 pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Swarm;
-    let (bar, area) = header::split(area);
-    app.set_agent_tabs_area(bar);
+    let hosted = app.host_chrome();
+    let panel = area;
+    let (bar, area) = header::split(area, hosted);
+    if !hosted {
+        app.set_agent_tabs_area(bar);
+    }
     let hovered = match app.hover() {
         Some(HoverTarget::AgentTab(tab)) => Some(tab),
         _ => None,
@@ -559,10 +547,11 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
         title: None,
         info: None,
         focused: is_focused,
+        hosted,
     };
-    header::render_panel_header(frame, bar, &header, theme);
+    header::show(frame, app, (Pane::Agents, panel, bar), &header, theme);
 
-    let Some(body) = render_body_block(frame, area, is_focused, theme) else {
+    let Some(body) = render_body_block(frame, area, (is_focused, hosted), theme) else {
         return;
     };
     let bottom_row = Rect {
@@ -935,7 +924,9 @@ fn truncate_agent_name(name: &str, max_width: usize) -> String {
 /// header bar with no tabs.
 pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Records;
-    let (bar, area) = header::split(area);
+    let hosted = app.host_chrome();
+    let panel = area;
+    let (bar, area) = header::split(area, hosted);
     let header = PanelHeader {
         layout: TabLayout::untabbed(bar.width),
         active: None,
@@ -947,10 +938,11 @@ pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, 
             theme.colors.muted,
         )),
         focused: is_focused,
+        hosted,
     };
-    header::render_panel_header(frame, bar, &header, theme);
+    header::show(frame, app, (Pane::Records, panel, bar), &header, theme);
 
-    let Some(inner) = render_body_block(frame, area, is_focused, theme) else {
+    let Some(inner) = render_body_block(frame, area, (is_focused, hosted), theme) else {
         return;
     };
 

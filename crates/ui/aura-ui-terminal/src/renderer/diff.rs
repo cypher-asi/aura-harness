@@ -1,6 +1,7 @@
 //! File changes in the chat: the `/diff` message, one diff per file.
 
-use super::segments::{message_header, message_style};
+use super::segments::{message_style, prefixed_lines};
+use super::text::Measure;
 use crate::components::{DiffBlock, DiffView, MessageRole};
 use crate::Theme;
 use ratatui::{
@@ -29,18 +30,17 @@ pub(super) fn diff_stat_spans(view: &DiffView, theme: &Theme) -> Vec<Span<'stati
 /// Lines for a message showing `block`, drawn `width` columns wide.
 pub(super) fn diff_message_lines(
     block: &DiffBlock,
-    timestamp: &str,
     width: usize,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
-    let (nick, nick_color, _) = message_style(MessageRole::System, theme);
-    let mut lines = vec![
-        message_header(nick, nick_color, timestamp, &[], width, theme),
-        Line::from(Span::styled(
-            block.title.clone(),
-            Style::default().fg(theme.colors.foreground),
-        )),
-    ];
+    let (prompt, prompt_color, _) = message_style(MessageRole::System, theme);
+    let mut lines = prefixed_lines(
+        (prompt, prompt_color),
+        &block.title,
+        theme.colors.foreground,
+        width,
+        Measure::GRID,
+    );
     let mut shown = 0;
     let mut hidden = 0;
     for file in &block.files {
