@@ -8,7 +8,7 @@
 //! consumes (heuristic extraction + write reporting), keeping the
 //! context-layer crate free of any agent-layer types. The conversion
 //! from `AgentLoopResult` to `TurnSummary` lives one layer up in
-//! `aura-runtime::memory_observer` where both crates are in scope.
+//! `aura-node::memory_observer` where both crates are in scope.
 //!
 //! # Invariants
 //!
@@ -85,10 +85,10 @@ pub struct TurnSummary {
 
     /// Final message history at the end of the turn.
     ///
-    /// `aura_model_reasoner::Message` is a context-layer-friendly dependency
+    /// `aura_model::Message` is a context-layer-friendly dependency
     /// (the reasoner sits below `context` in the layer order). The
     /// refiner builds a [`crate::extraction::ConversationTurn`] from
     /// these messages, walking backward to recover the last
     /// user/assistant exchange for the LLM extraction prompt.
-    pub messages: Vec<aura_model_reasoner::Message>,
+    pub messages: Vec<aura_model::Message>,
 }

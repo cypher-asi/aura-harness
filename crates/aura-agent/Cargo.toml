@@ -13,10 +13,10 @@ aura-context-prompts = { path = "../aura-context-prompts" }
 aura-agent-kernel = { path = "../aura-agent-kernel" }
 aura-agent-steering = { path = "../aura-agent-steering" }
 aura-context-compaction = { path = "../aura-context-compaction" }
-aura-model-reasoner = { path = "../aura-model-reasoner" }
+aura-model = { path = "../aura-model" }
 aura-store-db = { path = "../aura-store-db" }
 aura-store-snapshot = { path = "../aura-store-snapshot" }
-aura-tools = { path = "../aura-tools" }
+aura-exec-tools = { path = "../aura-exec-tools" }
 # Phase 9: aura-agent no longer depends on aura-auth.
 # Credential storage was moved out to the surface layer
 # (aura-auth); see crates/aura-agent/src/session_bootstrap.rs

@@ -309,7 +309,7 @@ mod serialization_tests {
 
 mod sandbox_tests {
     use super::*;
-    use aura_tools::Sandbox;
+    use aura_exec_tools::Sandbox;
     use tempfile::TempDir;
 
     // Strategy for generating "safe" relative paths
@@ -356,7 +356,7 @@ mod sandbox_tests {
 
 mod progress_tests {
     use super::*;
-    use aura_terminal::ProgressBar;
+    use aura_ui_terminal::ProgressBar;
 
     proptest! {
         /// Progress value is clamped to [0, 1].
@@ -382,7 +382,7 @@ mod progress_tests {
 // Input History Tests
 // ============================================================================
 
-// Note: History tests are in aura-terminal's internal test module
+// Note: History tests are in aura-ui-terminal's internal test module
 // since InputHistory is not re-exported publicly
 
 // ============================================================================

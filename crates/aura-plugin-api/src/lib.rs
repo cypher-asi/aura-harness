@@ -7,7 +7,7 @@
 //! **Scope** (Phase 4b): This crate is NOT a dynamic plugin loader.
 //! It defines the Rust trait surface that first-party plugins compile
 //! against. On-disk plugin manifests (`.aura-plugin`, `.codex-plugin`,
-//! `.claude-plugin`) flow through `aura-plugin-core` and contribute
+//! `.claude-plugin`) flow through `aura-plugin` and contribute
 //! via the runtime integration crates (`aura-plugin-hooks`,
 //! `aura-plugin-mcp`, `aura-plugin-connectors`).
 //!
@@ -21,7 +21,7 @@
 //!   this file deliberately matches every variant without a `_`
 //!   wildcard so the compiler catches a missed case.
 //! - This crate has zero `aura-*` deps. It sits at the bottom of the
-//!   plugin layer and is consumed by `aura-plugin-core` for shared
+//!   plugin layer and is consumed by `aura-plugin` for shared
 //!   identity types.
 
 #![forbid(unsafe_code)]
@@ -34,7 +34,7 @@ use thiserror::Error;
 /// A first-party plugin identity. Newtype around `String` per rules §5.
 ///
 /// V1 keeps the identity flat (just a string). The richer
-/// `name@marketplace` form lives in `aura-plugin-core::PluginId`
+/// `name@marketplace` form lives in `aura-plugin::PluginId`
 /// when the marketplace pipeline lands — for the first-party
 /// contributor API there is no marketplace, only the plugin's own
 /// chosen id.
@@ -119,10 +119,10 @@ pub trait PluginContributor: Send + Sync {
 }
 
 /// Root location of a materialised on-disk plugin payload. Owned by
-/// `aura-plugin-core`'s install pipeline; exposed here so first-party
+/// `aura-plugin`'s install pipeline; exposed here so first-party
 /// contributors that bridge into the on-disk plugin world (e.g. the
 /// future skills materialiser) can reference the cache without
-/// pulling a hard dep on `aura-plugin-core`.
+/// pulling a hard dep on `aura-plugin`.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PluginRoot {
     /// Absolute path to the plugin payload root (cache version dir).

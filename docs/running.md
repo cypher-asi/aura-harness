@@ -30,7 +30,7 @@ cargo run -- --mode plan
 cargo run -- run --ui none
 
 # Standalone server binary
-cargo run -p aura-runtime --bin aura-node
+cargo run -p aura-node --bin aura-node
 ```
 
 ## Desktop app

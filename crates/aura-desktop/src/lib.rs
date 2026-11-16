@@ -4,7 +4,7 @@
 //!
 //! The agent session runs in this process on the same event loop as the
 //! terminal UI (`aura_app::session`), and the UI itself is the
-//! terminal one (`aura_terminal::App`), drawn on a cell grid with Geist
+//! terminal one (`aura_ui_terminal::App`), drawn on a cell grid with Geist
 //! Mono instead of through a terminal emulator.
 
 mod app;

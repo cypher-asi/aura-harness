@@ -37,7 +37,7 @@ use crate::events::AgentLoopEvent;
 use crate::helpers;
 use crate::types::{AgentToolExecutor, BuildBaseline, ToolCallInfo, ToolCallResult};
 use aura_config::{TOOL_ERROR_PREVIEW_LIMIT, WRITE_FILE_CHUNK_BYTES};
-use aura_model_reasoner::{ContentBlock, Message, ModelResponse, Role, ToolResultContent};
+use aura_model::{ContentBlock, Message, ModelResponse, Role, ToolResultContent};
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -633,7 +633,7 @@ pub(super) fn push_tool_result_message(
     for r in results {
         if let Some(image) = &r.image {
             image_blocks.push(ContentBlock::Image {
-                source: aura_model_reasoner::ImageSource {
+                source: aura_model::ImageSource {
                     source_type: "base64".to_string(),
                     media_type: image.media_type.clone(),
                     data: image.base64.clone(),
@@ -671,7 +671,7 @@ pub(crate) async fn dispatch(
     batch: ToolBatch,
     ctx: ToolEffectCtx<'_>,
 ) -> bool {
-    use aura_model_reasoner::StopReason;
+    use aura_model::StopReason;
     let event_tx = ctx.event_tx;
     state.result.output_truncated = response.stop_reason == StopReason::MaxTokens;
     match response.stop_reason {

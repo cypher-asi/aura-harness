@@ -55,11 +55,11 @@ const KNOWN_CRATES: &[(&str, &str)] = &[
     ("aura-store-db", "store"),
     ("aura-store-record", "store"),
     ("aura-store-snapshot", "store"),
-    // Exec layer: aura-tools holds the Tool impls, catalog and
+    // Exec layer: aura-exec-tools holds the Tool impls, catalog and
     // executor.
-    ("aura-tools", "exec"),
+    ("aura-exec-tools", "exec"),
     // Phase 1 refactor: low-level executor/spawn traits relocated out
-    // of aura-agent-kernel so aura-tools no longer depends upward.
+    // of aura-agent-kernel so aura-exec-tools no longer depends upward.
     ("aura-exec-traits", "exec"),
     // Phase 3 model + context layer crates. Phase 4 deleted the
     // original `aura-<name>` compatibility shells; consumers now
@@ -69,7 +69,7 @@ const KNOWN_CRATES: &[(&str, &str)] = &[
     // so they could theoretically be omitted from this table, but
     // we list them explicitly for clarity.
     ("aura-context-compaction", "context"),
-    ("aura-model-reasoner", "model"),
+    ("aura-model", "model"),
     ("aura-context-memory", "context"),
     ("aura-context-skills", "context"),
     ("aura-context-prompts", "context"),
@@ -77,9 +77,9 @@ const KNOWN_CRATES: &[(&str, &str)] = &[
     // shell was removed in Phase 4.
     ("aura-agent-kernel", "agent"),
     ("aura-agent-subagent", "agent"),
-    ("aura-terminal", "surface"),
+    ("aura-ui-terminal", "surface"),
     // UI protocol shared by the terminal and the native desktop app.
-    ("aura-ui-core", "surface"),
+    ("aura-ui", "surface"),
     ("aura-desktop", "surface"),
     ("aura-agent", "agent"),
     // Phase 3 placeholder, populated in Phase 6a.
@@ -96,25 +96,25 @@ const KNOWN_CRATES: &[(&str, &str)] = &[
     ("aura-auth-zos", "surface"),
     ("aura-auth-chatgpt", "surface"),
     ("aura-auth-claude", "surface"),
-    ("aura-automaton", "surface"),
+    ("aura-engine-automaton", "surface"),
     // Phase B / Commit 3 surface-layer extraction: orchestration
-    // engine pulled out of aura-runtime into aura-engine. Both live at
-    // the surface layer — aura-runtime is the HTTP/WS gateway, aura-engine
+    // engine pulled out of aura-node into aura-engine. Both live at
+    // the surface layer — aura-node is the HTTP/WS gateway, aura-engine
     // is the reusable orchestration core the gateway composes.
     ("aura-engine", "surface"),
     // Phase C / Commit 4 surface-layer extraction: HTTP `DomainApi`
-    // implementation + JWT wrapper pulled out of aura-runtime /
+    // implementation + JWT wrapper pulled out of aura-node /
     // aura-engine. Stays at the surface layer because it composes
-    // lower-layer types (aura-tools::domain_tools::DomainApi) into a
+    // lower-layer types (aura-exec-tools::domain_tools::DomainApi) into a
     // deployable HTTP edge.
-    ("aura-domain-http", "surface"),
-    ("aura-runtime", "surface"),
-    ("aura-protocol", "core"),
+    ("aura-exec-domain-http", "surface"),
+    ("aura-node", "surface"),
+    ("aura-core-protocol", "core"),
     // Phase 4b plugin layer:
     //   aura-plugin-api  — in-process contributor traits (first-party only)
-    //   aura-plugin-core — declarative manifest + install + cache + marketplace
+    //   aura-plugin — declarative manifest + install + cache + marketplace
     ("aura-plugin-api", "plugin"),
-    ("aura-plugin-core", "plugin"),
+    ("aura-plugin", "plugin"),
     // Phase 4c plugin runtime surfaces:
     //   aura-plugin-hooks      — HookEngine + 10 Codex/Claude events
     //   aura-plugin-mcp        — stdio JSON-RPC client + connection manager
@@ -209,17 +209,17 @@ fn every_crate_carries_a_matching_layer_doc_tag() {
 }
 
 /// External-consumer invariant: the current wire flow must be reachable from
-/// the `aura-runtime` Cargo surface alone. If these re-exports disappear,
-/// external consumers would have to depend on `aura-protocol` or lower
+/// the `aura-node` Cargo surface alone. If these re-exports disappear,
+/// external consumers would have to depend on `aura-core-protocol` or lower
 /// orchestration crates directly, which the architecture forbids.
 #[test]
-fn aura_runtime_reexports_canonical_wire_types() {
+fn aura_node_reexports_canonical_wire_types() {
     fn assert_external_wire_type<T: Send + Sync + 'static>() {}
 
-    assert_external_wire_type::<aura_runtime::RuntimeRequest>();
-    assert_external_wire_type::<aura_runtime::RuntimeRunResponse>();
-    assert_external_wire_type::<aura_runtime::InboundMessage>();
-    assert_external_wire_type::<aura_runtime::OutboundMessage>();
+    assert_external_wire_type::<aura_node::RuntimeRequest>();
+    assert_external_wire_type::<aura_node::RuntimeRunResponse>();
+    assert_external_wire_type::<aura_node::InboundMessage>();
+    assert_external_wire_type::<aura_node::OutboundMessage>();
 }
 
 #[test]

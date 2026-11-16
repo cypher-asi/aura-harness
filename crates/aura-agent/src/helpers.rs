@@ -14,7 +14,7 @@ use crate::types::{FileChange, FileChangeKind};
 pub use aura_agent_steering::{append_warning, is_exploration_tool, is_write_tool};
 
 #[cfg(test)]
-use aura_model_reasoner::{Message, Role};
+use aura_model::{Message, Role};
 
 /// Infer file mutations for a successful write tool call.
 ///

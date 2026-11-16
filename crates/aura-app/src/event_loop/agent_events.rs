@@ -16,13 +16,13 @@ use aura_agent::{
     PROGRESS_TODOS_UPDATED,
 };
 use aura_core_types::AgentId;
-use aura_model_reasoner::{model_catalog, Usage};
-use aura_terminal::{
+use aura_exec_tools::plan_tools::{plan_path_from_output, sync_todo_list, CREATE_PLAN_TOOL_NAME};
+use aura_exec_tools::todo::TodoItem;
+use aura_model::{model_catalog, Usage};
+use aura_ui_terminal::{
     events::{CallUsage, MessageData, MessageRole, ToolData},
     UiCommand,
 };
-use aura_tools::plan_tools::{plan_path_from_output, sync_todo_list, CREATE_PLAN_TOOL_NAME};
-use aura_tools::todo::TodoItem;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;

@@ -8,7 +8,7 @@
 //!
 //! Every block is emitted through `tracing::info!` with a dedicated
 //! `"aura::console"` target so the custom event formatter in
-//! `crates/aura-runtime/src/console_format.rs` can render the
+//! `crates/aura-node/src/console_format.rs` can render the
 //! message verbatim — without level / target / field noise — while
 //! every other log line keeps the default compact format.
 //!
@@ -34,7 +34,7 @@
 
 use std::time::Duration;
 
-use aura_model_reasoner::StreamPhase;
+use aura_model::StreamPhase;
 use colored::Colorize;
 use tracing::info;
 
@@ -492,7 +492,7 @@ fn tool_arg_summary(name: &str, input: &serde_json::Value) -> Option<String> {
 }
 
 /// Reconstruct the command line for a `run_command` call, mirroring
-/// `parse_run_args` in `aura-tools`: prefer `program` + `args`, then
+/// `parse_run_args` in `aura-exec-tools`: prefer `program` + `args`, then
 /// fall back to `shell_script`, then the legacy `command` alias.
 fn run_command_summary(input: &serde_json::Value) -> Option<String> {
     if let Some(program) = input.get("program").and_then(|v| v.as_str()) {

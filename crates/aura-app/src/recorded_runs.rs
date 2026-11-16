@@ -17,8 +17,8 @@ use aura_agent_trace::{
 use aura_config::trace::TraceLevel;
 use aura_core_types::trace::StepAction;
 use aura_core_types::{AgentId, AgentPermissions};
-use aura_model_reasoner::{Message, ModelProvider};
-use aura_tools::{ToolConfig, ToolExecutor};
+use aura_exec_tools::{ToolConfig, ToolExecutor};
+use aura_model::{Message, ModelProvider};
 use tokio::sync::mpsc;
 
 use crate::session_helpers;

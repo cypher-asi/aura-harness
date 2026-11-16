@@ -243,8 +243,8 @@ fn spawn_build_child(
 
 /// PATHEXT-aware bare-name resolution used by [`spawn_build_child`] on
 /// Windows. See the analogous helper in
-/// `aura_tools::fs_tools::cmd` — kept duplicated here to avoid widening
-/// `aura-tools`' public surface for what's a small, very local fix.
+/// `aura_exec_tools::fs_tools::cmd` — kept duplicated here to avoid widening
+/// `aura-exec-tools`' public surface for what's a small, very local fix.
 ///
 /// Returns `None` for inputs that already look like a path or carry an
 /// explicit executable extension; the caller then falls back to passing

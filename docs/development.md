@@ -14,7 +14,7 @@ bash scripts/check_invariants.sh
 cargo test -p aura --test layer_boundary
 
 # Crates that build without RocksDB / LLVM
-cargo check -p aura-core-types -p aura-core-modes -p aura-protocol -p aura-config -p aura-model-reasoner
+cargo check -p aura-core-types -p aura-core-modes -p aura-core-protocol -p aura-config -p aura-model
 
 # Desktop app screens, rendered offscreen and saved as PNGs
 AURA_DESKTOP_SNAPSHOTS=target/snapshots cargo test -p aura-desktop snapshot
@@ -41,5 +41,5 @@ Each invariant's enforcement (grep band or Rust test) is listed in [invariants.m
 
 - Adding a crate: name it `aura-<layer>-<name>`, add a `//! Layer: <layer>` tag to its `lib.rs`, register it in [`tests/layer_boundary.rs`](../tests/layer_boundary.rs) if the name doesn't follow the convention, and add it to `[workspace].members` in [`Cargo.toml`](../Cargo.toml). See [architecture.md](architecture.md).
 - Adding a tool: classify it in the mode gate table ([`mode_gate.rs`](../crates/aura-agent-kernel/src/policy/check/mode_gate.rs)); [`mode_gate_catalog.rs`](../crates/aura-engine/tests/mode_gate_catalog.rs) fails until you do.
-- Changing the wire types: update [`aura-protocol`](../crates/aura-protocol), regenerate the TypeScript bindings with `cargo test -p aura-protocol --features typescript export_typescript_bindings`, and land the matching change in `aura-os`.
+- Changing the wire types: update [`aura-core-protocol`](../crates/aura-core-protocol), regenerate the TypeScript bindings with `cargo test -p aura-core-protocol --features typescript export_typescript_bindings`, and land the matching change in `aura-os`.
 - Release notes go in [`CHANGELOG.md`](../CHANGELOG.md).

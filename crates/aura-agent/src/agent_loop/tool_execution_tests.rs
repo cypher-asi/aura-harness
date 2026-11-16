@@ -1,4 +1,4 @@
-use aura_model_reasoner::ContentBlock;
+use aura_model::ContentBlock;
 
 use crate::types::ToolCallInfo;
 use crate::types::ToolCallResult;
@@ -37,7 +37,7 @@ fn tool_results_are_emitted_before_context_texts() {
     push_tool_result_message(&mut messages, results, context);
 
     assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].role, aura_model_reasoner::Role::User);
+    assert_eq!(messages[0].role, aura_model::Role::User);
     assert!(matches!(
         messages[0].content.first(),
         Some(ContentBlock::ToolResult { tool_use_id, .. }) if tool_use_id == "tool_1"
@@ -296,7 +296,7 @@ fn truncate_preview_uses_ascii_marker() {
 // ---------------------------------------------------------------------------
 
 /// Build the line-numbered `read_file` rendering the way
-/// `aura_tools::fs_tools::read::fs_read` emits it (`{:>6}|{content}`,
+/// `aura_exec_tools::fs_tools::read::fs_read` emits it (`{:>6}|{content}`,
 /// newline-joined). Each line body is the literal `body` string.
 fn fake_read_file_rendered(start: usize, end: usize, body: &str) -> String {
     (start..=end)

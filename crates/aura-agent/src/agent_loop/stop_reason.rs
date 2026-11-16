@@ -24,7 +24,7 @@
 
 use aura_config::CHARS_PER_TOKEN;
 use aura_context_compaction as compaction;
-use aura_model_reasoner::{
+use aura_model::{
     ContentBlock, Message, ModelProvider, ModelRequest, ModelRequestKind, ThinkingEffort,
     ToolChoice, ToolDefinition,
 };
@@ -101,7 +101,7 @@ impl AgentLoop {
         // the model would lose its plan mid-task.
         if !state.result.todos.is_empty() {
             summary_text.push_str("\n\nCurrent todo list (keep it updated with todo_write):\n");
-            summary_text.push_str(&aura_tools::todo::render_todos(&state.result.todos));
+            summary_text.push_str(&aura_exec_tools::todo::render_todos(&state.result.todos));
         }
 
         let before = state.result.estimated_context_tokens;

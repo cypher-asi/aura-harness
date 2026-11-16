@@ -12,10 +12,10 @@
 use crate::event_loop::agent_events::AgentUi;
 use async_trait::async_trait;
 use aura_core_types::AgentId;
+use aura_exec_tools::FileChangeHook;
 use aura_store_snapshot::{DirSnapshotStore, SnapshotStore};
-use aura_terminal::events::FileDiffData;
-use aura_terminal::UiCommand;
-use aura_tools::FileChangeHook;
+use aura_ui_terminal::events::FileDiffData;
+use aura_ui_terminal::UiCommand;
 use serde::{Deserialize, Serialize};
 use similar::TextDiff;
 use std::collections::{BTreeMap, HashMap};

@@ -10,7 +10,7 @@ use aura_auth::{
     Owner, ProviderKind,
 };
 use aura_core_types::{SystemKind, Transaction, TransactionType};
-use aura_terminal::UiCommand;
+use aura_ui_terminal::UiCommand;
 use tokio::sync::mpsc;
 use tracing::warn;
 

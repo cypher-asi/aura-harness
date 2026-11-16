@@ -4,14 +4,14 @@
 //! per-run `AgentRunnerConfig` / `AgentIdentity` and by the gateway's
 //! chat-session state when caller-selected models land on the wire.
 //! Phase B / Commit 3 lifts this out of the gateway-side `session/state.rs`
-//! so engine-internal callers don't reach back into `aura-runtime`.
+//! so engine-internal callers don't reach back into `aura-node`.
 
 /// Map a model identifier to its maximum context window in tokens.
 #[must_use]
 pub fn context_window_for_model(model: &str) -> u64 {
     match model {
-        m if m.starts_with(aura_model_reasoner::model_catalog::LOCAL_PREFIX) => {
-            aura_model_reasoner::model_catalog::local_context_tokens()
+        m if m.starts_with(aura_model::model_catalog::LOCAL_PREFIX) => {
+            aura_model::model_catalog::local_context_tokens()
         }
 
         // Anthropic
@@ -99,7 +99,7 @@ mod tests {
     fn local_models_use_local_window() {
         assert_eq!(
             context_window_for_model("local/qwen3:4b"),
-            aura_model_reasoner::model_catalog::local_context_tokens()
+            aura_model::model_catalog::local_context_tokens()
         );
     }
 

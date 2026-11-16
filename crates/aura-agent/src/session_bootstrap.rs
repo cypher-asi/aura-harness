@@ -1,4 +1,4 @@
-//! Shared session-bootstrap helpers for `aura-runtime`, the TUI harness
+//! Shared session-bootstrap helpers for `aura-node`, the TUI harness
 //! and any future embedder.
 //!
 //! Phase 3 consolidated the per-binary copies of
@@ -10,9 +10,9 @@
 use crate::AgentLoopConfig;
 use aura_agent_kernel::ExecutorRouter;
 use aura_context_prompts::default_system_prompt;
-use aura_model_reasoner::ToolDefinition;
+use aura_exec_tools::{ToolCatalog, ToolConfig, ToolExecutor};
+use aura_model::ToolDefinition;
 use aura_store_db::RocksStore;
-use aura_tools::{ToolCatalog, ToolConfig, ToolExecutor};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -77,14 +77,14 @@ pub fn open_store(path: &Path) -> anyhow::Result<Arc<RocksStore>> {
 ///
 /// **Phase 5 hardening note:** This wires in
 /// [`ToolExecutor::with_defaults()`], which — after the Phase 5 flip of
-/// [`aura_tools::ToolConfig::default`] — is a *no-shell, no-commands*
+/// [`aura_exec_tools::ToolConfig::default`] — is a *no-shell, no-commands*
 /// tool router. Filesystem tools (`read_file`, `write_file`, `list_files`,
 /// …) are reachable, but `run_command` is blocked at `CmdRunTool::execute`
 /// (`command.enabled = false` and an empty `binary_allowlist`).
 ///
 /// Production callers that want command execution must *not* rely on
 /// this helper. They should construct a custom
-/// [`aura_tools::ToolConfig`] with `command.enabled: true` and a
+/// [`aura_exec_tools::ToolConfig`] with `command.enabled: true` and a
 /// populated `binary_allowlist`, feed it into [`ToolExecutor::new`],
 /// and register that executor on their own `ExecutorRouter`. The opt-in
 /// is deliberately plumbed through user-supplied config rather than a
@@ -116,16 +116,16 @@ pub fn load_auth_token() -> Option<String> {
 }
 
 // `ProviderSelection` / `select_provider` were removed in Wave 4. The
-// canonical factory now lives in [`aura_model_reasoner::provider_factory`].
-// Callers use `aura_model_reasoner::default_provider_from_env`,
-// `aura_model_reasoner::with_session_overrides`, and
-// `aura_model_reasoner::mock_provider`.
+// canonical factory now lives in [`aura_model::provider_factory`].
+// Callers use `aura_model::default_provider_from_env`,
+// `aura_model::with_session_overrides`, and
+// `aura_model::mock_provider`.
 
 // ---------------------------------------------------------------------
 // Phase 3 consolidation: moved from `src/session_helpers.rs`.
 //
 // These helpers used to live next to the TUI binary but were needed by
-// `aura-runtime` and future embedders too. The remaining bootstrap helpers
+// `aura-node` and future embedders too. The remaining bootstrap helpers
 // are configuration-identical across deploys; per-tool enablement is policy
 // state, not environment.
 // ---------------------------------------------------------------------
@@ -136,7 +136,7 @@ pub fn load_auth_token() -> Option<String> {
 /// defaults.
 ///
 /// Callers must thread their model selection through here. The TUI uses
-/// [`aura_model_reasoner::ENV_FALLBACK_MODEL`] (the seed of the reasoner's
+/// [`aura_model::ENV_FALLBACK_MODEL`] (the seed of the reasoner's
 /// `AURA_DEFAULT_MODEL` env-var fallback). Higher-level surfaces — the
 /// chat WS path, the dev-loop / task-run automatons — pin the
 /// user-selected model and never fall through to the env seed.

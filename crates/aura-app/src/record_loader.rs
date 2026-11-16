@@ -8,17 +8,17 @@ use aura_core_types::{
     ActionResultPayload, AgentId, EffectStatus, PolicyApprover, PolicyCheckOutcome, PolicyDecision,
     RecordEntry, ToolExecution, ToolGateVerdict, ToolProposal, Transaction, TransactionType,
 };
-use aura_model_reasoner::{Message, Usage};
+use aura_exec_tools::plan_tools::{plan_path_from_output, CREATE_PLAN_TOOL_NAME};
+use aura_exec_tools::todo::TODO_WRITE_TOOL_NAME;
+use aura_model::{Message, Usage};
 use aura_store_record::{ReadStore, StoreError};
-use aura_terminal::{
+use aura_ui_terminal::{
     events::{
         ActivityData, AgentSummary, CallUsage, MessageData, MessageRole, PolicyDetail,
         RecordStatus, RecordSummary,
     },
     UiCommand,
 };
-use aura_tools::plan_tools::{plan_path_from_output, CREATE_PLAN_TOOL_NAME};
-use aura_tools::todo::TODO_WRITE_TOOL_NAME;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc;
@@ -164,7 +164,7 @@ fn push_model_message(messages: &mut Vec<Message>, tx: &Transaction) {
 /// its result.
 #[must_use]
 pub fn chat_from_messages(messages: &[Message]) -> Vec<MessageData> {
-    use aura_model_reasoner::{ContentBlock, Role, ToolResultContent};
+    use aura_model::{ContentBlock, Role, ToolResultContent};
 
     let mut chat: Vec<MessageData> = Vec::new();
     let mut tool_calls: HashMap<String, usize> = HashMap::new();

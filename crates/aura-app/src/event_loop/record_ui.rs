@@ -1,7 +1,7 @@
 use crate::record_loader::{build_record_summary, format_local_time, policy_outcome};
 use aura_agent_kernel::RecordObserver;
 use aura_core_types::{AgentId, PolicyDecision, RecordEntry, Transaction, TransactionType};
-use aura_terminal::UiCommand;
+use aura_ui_terminal::UiCommand;
 use std::sync::{Arc, Mutex, PoisonError};
 use tokio::sync::mpsc;
 

@@ -198,7 +198,7 @@ fn extract_path_arg(input: &Value) -> Option<String> {
 
 /// Pull `(canonical_path, start_line, end_line)` out of a `read_file`
 /// invocation's input JSON. `start_line` / `end_line` are 1-indexed
-/// and inclusive, matching `aura_tools::fs_tools::read::fs_read`.
+/// and inclusive, matching `aura_exec_tools::fs_tools::read::fs_read`.
 fn read_file_window(input: &Value) -> Option<(String, Option<usize>, Option<usize>)> {
     let path = extract_path_arg(input)?;
     let start = input
@@ -327,7 +327,7 @@ fn slice_raw_to_line_numbered(
     Some(body.join("\n"))
 }
 
-/// Compute the same `content_hash` that `aura_tools::fs_tools::read`
+/// Compute the same `content_hash` that `aura_exec_tools::fs_tools::read`
 /// stamps onto its `read_file` metadata. We re-derive it here because
 /// the agent-loop cache only receives the rendered `String` payload,
 /// not the upstream `ToolResult` metadata map. Keeping a private copy

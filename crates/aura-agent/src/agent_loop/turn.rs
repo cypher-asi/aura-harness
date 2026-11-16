@@ -32,7 +32,7 @@
 //! the turn-scoped identity (task_id, turn_index, iteration_offset,
 //! input_queue, tools) that the loop body needs.
 
-use aura_model_reasoner::Message;
+use aura_model::Message;
 use tokio::sync::mpsc::Sender;
 use tracing::instrument;
 
@@ -360,7 +360,7 @@ pub(super) const MAX_STALLED_TODO_NUDGES: u32 = 2;
 /// `None` when the turn should really end: nothing is open, the model
 /// is waiting on the user, or recent nudges changed nothing.
 fn open_todo_nudge(state: &mut LoopState) -> Option<String> {
-    use aura_tools::todo::TodoStatus;
+    use aura_exec_tools::todo::TodoStatus;
     let todos = &state.result.todos;
     let next = todos
         .iter()
@@ -390,7 +390,7 @@ are blocked or need a decision from the user, say so plainly and stop.",
 /// Whether the last assistant message asks the user something or says
 /// it is blocked, in which case ending the turn is the right call.
 fn waits_on_user(messages: &[Message]) -> bool {
-    use aura_model_reasoner::{ContentBlock, Role};
+    use aura_model::{ContentBlock, Role};
     let Some(message) = messages.iter().rev().find(|m| m.role == Role::Assistant) else {
         return false;
     };
@@ -420,7 +420,7 @@ fn waits_on_user(messages: &[Message]) -> bool {
 }
 
 fn is_planning_request(messages: &[Message]) -> bool {
-    use aura_model_reasoner::{ContentBlock, Role};
+    use aura_model::{ContentBlock, Role};
     let text = messages
         .iter()
         .rev()
@@ -459,7 +459,7 @@ fn is_planning_request(messages: &[Message]) -> bool {
 }
 
 fn ends_with_unfinished_action(messages: &[Message]) -> bool {
-    use aura_model_reasoner::{ContentBlock, Role};
+    use aura_model::{ContentBlock, Role};
     let Some(message) = messages.iter().rev().find(|m| m.role == Role::Assistant) else {
         return false;
     };
@@ -696,7 +696,7 @@ pub(crate) async fn run_turn_stop_hooks(
 mod tests {
     use super::*;
     use crate::agent_loop::AgentLoopConfig;
-    use aura_tools::todo::{TodoItem, TodoStatus};
+    use aura_exec_tools::todo::{TodoItem, TodoStatus};
 
     fn state_with_todos(statuses: &[TodoStatus], last_reply: &str) -> LoopState {
         let config = AgentLoopConfig {

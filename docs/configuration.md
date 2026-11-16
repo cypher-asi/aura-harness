@@ -1,6 +1,6 @@
 # Configuration
 
-The node reads configuration from environment variables via `NodeConfig::from_env()` in [`crates/aura-runtime/src/config/mod.rs`](../crates/aura-runtime/src/config/mod.rs); agent and subagent settings come from [`aura-config`](../crates/aura-config). Copy [`.env.example`](../.env.example) as a starting point.
+The node reads configuration from environment variables via `NodeConfig::from_env()` in [`crates/aura-node/src/config/mod.rs`](../crates/aura-node/src/config/mod.rs); agent and subagent settings come from [`aura-config`](../crates/aura-config). Copy [`.env.example`](../.env.example) as a starting point.
 
 ## LLM routing
 

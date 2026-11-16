@@ -1,5 +1,5 @@
-//! Bridge between `AutomatonController` (defined in `aura-tools`) and the
-//! concrete `AutomatonRuntime` + automaton types (from `aura-automaton`).
+//! Bridge between `AutomatonController` (defined in `aura-exec-tools`) and the
+//! concrete `AutomatonRuntime` + automaton types (from `aura-engine-automaton`).
 //!
 //! This module lives in `aura-engine` because it depends on both crates.
 //! It handles: JWT injection, tool executor wiring, event broadcasting,
@@ -43,17 +43,17 @@ use dashmap::DashMap;
 use tracing::{info, warn};
 
 use aura_agent::agent_runner::AgentRunnerConfig;
-use aura_automaton::{AutomatonHandle, AutomatonRuntime};
 use aura_core_types::{AgentId, SystemKind, Transaction, TransactionType};
-use aura_model_reasoner::ModelProvider;
+use aura_engine_automaton::{AutomatonHandle, AutomatonRuntime};
+use aura_exec_tools::automaton_tools::AutomatonController;
+use aura_exec_tools::catalog::ToolCatalog;
+use aura_exec_tools::domain_tools::DomainApi;
+use aura_exec_tools::ToolConfig;
+use aura_model::ModelProvider;
 use aura_store_db::Store;
-use aura_tools::automaton_tools::AutomatonController;
-use aura_tools::catalog::ToolCatalog;
-use aura_tools::domain_tools::DomainApi;
-use aura_tools::ToolConfig;
 
 use crate::scheduler::Scheduler;
-use aura_domain_http::JwtDomainApi;
+use aura_exec_domain_http::JwtDomainApi;
 
 pub(crate) use event_channel::EventChannel;
 pub use event_channel::EventSubscription;
@@ -182,7 +182,7 @@ impl AutomatonBridge {
         aura_session_id: Option<&str>,
         aura_agent_id: Option<&str>,
         aura_project_id: Option<&str>,
-        request_kind: aura_model_reasoner::ModelRequestKind,
+        request_kind: aura_model::ModelRequestKind,
     ) {
         let Some(scheduler) = self.scheduler.as_ref() else {
             return;
@@ -196,7 +196,7 @@ impl AutomatonBridge {
             aura_agent_id: aura_agent_id.map(String::from),
             aura_project_id: aura_project_id.map(String::from),
             // Dev-loop / task-run paths run their automaton-driven
-            // prompt assembly inside `aura-automaton`. The
+            // prompt assembly inside `aura-engine-automaton`. The
             // post-completion fan-out scheduling that lands on the
             // worker carries no follow-up user prompt, so an empty
             // system prompt is the right default — the registry is
@@ -289,16 +289,16 @@ impl AutomatonBridge {
     fn register_execution_profile(
         &self,
         agent_id: AgentId,
-        profile: Option<&aura_protocol::ModelSelection>,
+        profile: Option<&aura_core_protocol::ModelSelection>,
     ) {
         let (Some(scheduler), Some(profile)) = (self.scheduler.as_ref(), profile) else {
             return;
         };
         let registry = scheduler.identity_registry();
         if let Some(mut identity) = registry.get(agent_id) {
-            identity.reasoning_effort = profile.reasoning_effort.and_then(|effort| {
-                aura_model_reasoner::ThinkingEffort::from_wire(effort.as_wire())
-            });
+            identity.reasoning_effort = profile
+                .reasoning_effort
+                .and_then(|effort| aura_model::ThinkingEffort::from_wire(effort.as_wire()));
             if let Some(tokens) = profile.max_tokens {
                 identity.max_tokens = tokens;
             }
@@ -350,7 +350,7 @@ impl AutomatonBridge {
         // dev-loop / task-run invocations for the same project onto the
         // same prompt cache. Anthropic caching does not need this — the
         // provider's ephemeral `cache_control` breakpoints in
-        // `aura_model_reasoner::anthropic::convert` handle prefix reuse based
+        // `aura_model::anthropic::convert` handle prefix reuse based
         // on byte-identical system/tools/last-user-block content.
         config.prompt_cache_key = aura_project_id.map(|pid| format!("devloop:{pid}"));
         config
@@ -420,12 +420,12 @@ impl AutomatonBridge {
     }
 
     /// Get the status of an automaton by its ID.
-    pub fn get_status(&self, automaton_id: &str) -> Option<aura_automaton::AutomatonInfo> {
+    pub fn get_status(&self, automaton_id: &str) -> Option<aura_engine_automaton::AutomatonInfo> {
         self.runtime.get_info(automaton_id)
     }
 
     /// List all running automatons.
-    pub fn list_automatons(&self) -> Vec<aura_automaton::AutomatonInfo> {
+    pub fn list_automatons(&self) -> Vec<aura_engine_automaton::AutomatonInfo> {
         self.runtime.list()
     }
 }

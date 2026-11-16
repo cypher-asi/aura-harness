@@ -12,10 +12,10 @@ use std::time::Duration;
 
 use aura_agent::AgentLoopConfig;
 use aura_auth::{AuthSummary, CredentialResolver, ProviderKind};
-use aura_model_reasoner::model_catalog::{
+use aura_model::model_catalog::{
     self, backend_for, local_model_name, LocalServerStatus, ModelBackend, ModelOption,
 };
-use aura_terminal::events::ModelOptionView;
+use aura_ui_terminal::events::ModelOptionView;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -135,7 +135,7 @@ impl ModelSelection {
             self.plan_models.clear();
             return None;
         }
-        match aura_model_reasoner::plan_models::fetch_claude_models(resolver).await {
+        match aura_model::plan_models::fetch_claude_models(resolver).await {
             Ok(models) => {
                 self.plan_models = models;
                 None
@@ -196,8 +196,8 @@ impl ModelSelection {
     }
 
     /// `UiCommand::SetModels` payload for the current state.
-    pub fn ui_command(&self) -> aura_terminal::UiCommand {
-        aura_terminal::UiCommand::SetModels {
+    pub fn ui_command(&self) -> aura_ui_terminal::UiCommand {
+        aura_ui_terminal::UiCommand::SetModels {
             options: self.options(),
             current: self.current.clone(),
             user: self.auth.zos_user.clone(),

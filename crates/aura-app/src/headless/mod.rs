@@ -22,16 +22,16 @@ pub(crate) use tools::ToolFilter;
 use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
 use crate::event_loop::TurnBase;
-use crate::long_run::LongRunSettings;
-use crate::model_selection::ModelSelection;
 use crate::harness::{
     agent_tools, background_process_manager, build_hub, build_provider, mode_policy,
     policy_tool_names, post_edit_check_from_env, project_instructions, Harness, HubSetup,
 };
+use crate::long_run::LongRunSettings;
+use crate::model_selection::ModelSelection;
 use crate::session_helpers;
 use anyhow::Context;
 use aura_core_modes::AgentMode;
-use aura_terminal::PermissionMode;
+use aura_ui_terminal::PermissionMode;
 use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -258,18 +258,15 @@ async fn build(
     let provider_name = args.provider.as_deref().unwrap_or("anthropic");
     let mock = provider_name == "mock";
     let mut config = if mock {
-        session_helpers::default_agent_config_with_auth(
-            aura_model_reasoner::ENV_FALLBACK_MODEL,
-            None,
-        )
+        session_helpers::default_agent_config_with_auth(aura_model::ENV_FALLBACK_MODEL, None)
     } else {
-        session_helpers::default_agent_config(aura_model_reasoner::ENV_FALLBACK_MODEL)
+        session_helpers::default_agent_config(aura_model::ENV_FALLBACK_MODEL)
     };
     let (selection, summary) = if mock {
         // No sign-in state is needed, so tests and offline runs never
         // touch the keyring.
         (
-            aura_model_reasoner::mock_provider(),
+            aura_model::mock_provider(),
             aura_auth::AuthSummary::default(),
         )
     } else {
@@ -286,7 +283,7 @@ async fn build(
             }
         }
     }
-    if !mock && aura_model_reasoner::model_catalog::local_model_name(models.current()).is_some() {
+    if !mock && aura_model::model_catalog::local_model_name(models.current()).is_some() {
         models.refresh_local().await;
         if let Some(hint) = models.local_hint() {
             anyhow::bail!("{hint}");

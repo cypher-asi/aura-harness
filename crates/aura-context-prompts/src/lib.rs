@@ -27,10 +27,10 @@
 //!   parsing, and `file_ops::resolve_error_context` stay in
 //!   `aura-agent/src/build/` and `aura-agent/src/file_ops/`.
 //! - No reasoner-message mutation. Steering rendering produces a
-//!   `String` envelope; appending it to `Vec<aura_model_reasoner::Message>`
+//!   `String` envelope; appending it to `Vec<aura_model::Message>`
 //!   is the agent's job (`aura-agent/src/agent_loop/steering/inject.rs`).
 //!
-//! Cargo.toml forbids `aura-agent`, `aura-automaton`, `aura-runtime`,
+//! Cargo.toml forbids `aura-agent`, `aura-engine-automaton`, `aura-node`,
 //! and `aura-reasoner` so the boundary can never regress at compile
 //! time. The workspace-level `tests/prompts_boundary.rs` test does a
 //! belt-and-suspenders source-level scan for forbidden imports.

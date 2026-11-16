@@ -10,7 +10,7 @@ license.workspace = true
 aura-core-types = { path = "../aura-core-types" }
 aura-config = { path = "../aura-config" }
 aura-context-prompts = { path = "../aura-context-prompts" }
-aura-model-reasoner = { path = "../aura-model-reasoner" }
+aura-model = { path = "../aura-model" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

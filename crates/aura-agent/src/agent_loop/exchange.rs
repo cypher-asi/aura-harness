@@ -13,7 +13,7 @@ use aura_core_types::trace::{
     blob_id, BlobId, ModelAction, ModelExchange, ModelObservation, TokenUsage, ToolCallAction,
     ToolIntent,
 };
-use aura_model_reasoner::{ContentBlock, ModelRequest, ModelResponse};
+use aura_model::{ContentBlock, ModelRequest, ModelResponse};
 use aura_store_snapshot::SnapshotStore;
 use chrono::Utc;
 use serde_json::json;

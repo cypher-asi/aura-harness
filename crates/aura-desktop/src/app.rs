@@ -1,8 +1,8 @@
-//! The window: hosts the terminal UI (`aura_terminal::App`) and draws it
+//! The window: hosts the terminal UI (`aura_ui_terminal::App`) and draws it
 //! on a GPU cell grid instead of a terminal, one copy per tab under a
 //! tab bar. A tab is a workspace holding some of the session's projects.
 //!
-//! The loop mirrors `aura_terminal::Terminal`: tick every 50 ms (the UI's
+//! The loop mirrors `aura_ui_terminal::Terminal`: tick every 50 ms (the UI's
 //! animations count ticks), apply agent commands, render the frame, then
 //! copy selections and hand files to an editor when the UI asks. Every
 //! tab is kept up to date; only the one in front is rendered.
@@ -13,7 +13,7 @@ use crate::router::{self, Arrangement, Tabs};
 use crate::tab::{Settings, Watch};
 use crate::tab_bar::{self, Bar, Hit};
 use crate::{input, theme};
-use aura_ui_core::events::{UiCommand, UiEvent};
+use aura_ui::events::{UiCommand, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use futures::Stream;
 use iced::keyboard::{self, key::Named, Key, Modifiers};
@@ -68,7 +68,7 @@ pub struct App {
     tabs_file: Option<PathBuf>,
     /// The split of projects over tabs as last written to `tabs_file`.
     saved: Arrangement,
-    tui_theme: aura_terminal::Theme,
+    tui_theme: aura_ui_terminal::Theme,
     /// The grid of the tab in front.
     screen: Screen,
     bar: Bar,
@@ -123,9 +123,9 @@ impl App {
     ) -> (Self, Task<Message>) {
         let settings = Settings {
             verbose: options.verbose,
-            alerts: aura_terminal::AlertSettings::from_env(),
+            alerts: aura_ui_terminal::AlertSettings::from_env(),
         };
-        let tui_theme = aura_terminal::Theme::by_name(&options.theme);
+        let tui_theme = aura_ui_terminal::Theme::by_name(&options.theme);
         let now = Instant::now();
         let saved = options
             .tabs_file
@@ -508,7 +508,7 @@ impl App {
         let settings = self.tabs.settings().alerts;
         if settings.desktop {
             for alert in &alerts {
-                aura_terminal::alerts::desktop_notify(alert);
+                aura_ui_terminal::alerts::desktop_notify(alert);
             }
         }
         if !settings.bell {
@@ -539,7 +539,7 @@ impl App {
         let (tui, tui_theme) = (&mut tab.tui, &self.tui_theme);
         match tab
             .terminal
-            .draw(|frame| aura_terminal::render(frame, tui, tui_theme))
+            .draw(|frame| aura_ui_terminal::render(frame, tui, tui_theme))
         {
             Ok(frame) => {
                 if let Some(text) = tui.take_copy_text(frame.buffer) {

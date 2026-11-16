@@ -1,7 +1,7 @@
 //! Per-crate boundary test that "trivially holds" because
 //! `crates/aura-context-prompts/Cargo.toml` does not depend on
-//! `aura-agent`, `aura-automaton`, `aura-runtime`,
-//! `aura-reasoner` / `aura-model-reasoner`, or any of their shells.
+//! `aura-agent`, `aura-engine-automaton`, `aura-node`,
+//! `aura-reasoner` / `aura-model`, or any of their shells.
 //!
 //! Phase 2 of the core-loop architecture refactor enforces the
 //! prompt-construction boundary at three layers:
@@ -26,8 +26,8 @@
 #[test]
 fn aura_context_prompts_does_not_link_forbidden_upstream_crates() {
     // The mere fact that this test compiles inside the aura-context-prompts
-    // crate without `extern crate aura_agent` / `aura_automaton` /
-    // `aura_runtime` / `aura_reasoner` / `aura_model_reasoner` available
+    // crate without `extern crate aura_agent` / `aura_engine_automaton` /
+    // `aura_node` / `aura_reasoner` / `aura_model` available
     // proves the dependency table is clean: Rust would refuse to
     // resolve the names below if any of them had been added.
     fn _ensure_forbidden_paths_remain_unresolvable() {
@@ -39,10 +39,10 @@ fn aura_context_prompts_does_not_link_forbidden_upstream_crates() {
         // Cargo.toml not letting the dep through in the first place.
         let forbidden = [
             "aura_agent",
-            "aura_automaton",
-            "aura_runtime",
+            "aura_engine_automaton",
+            "aura_node",
             "aura_reasoner",
-            "aura_model_reasoner",
+            "aura_model",
         ];
         for name in forbidden {
             assert!(!name.is_empty());

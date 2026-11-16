@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use aura_agent::AgentLoopEvent;
 use aura_agent_kernel::{ChildAgentSpec, SpawnError, SpawnHook, SpawnOutcome};
 use aura_core_types::{AgentId, SubagentDispatchRequest, SubagentResult};
-use aura_tools::{AgentControlHook, AgentReadHook, SubagentDispatchHook, ToolResolver};
+use aura_exec_tools::{AgentControlHook, AgentReadHook, SubagentDispatchHook, ToolResolver};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 

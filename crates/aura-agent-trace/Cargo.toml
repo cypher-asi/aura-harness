@@ -11,7 +11,7 @@ aura-core-types = { path = "../aura-core-types" }
 aura-config = { path = "../aura-config" }
 aura-agent = { path = "../aura-agent" }
 aura-agent-kernel = { path = "../aura-agent-kernel" }
-aura-model-reasoner = { path = "../aura-model-reasoner" }
+aura-model = { path = "../aura-model" }
 aura-store-snapshot = { path = "../aura-store-snapshot" }
 async-trait = { workspace = true }
 blake3 = { workspace = true }

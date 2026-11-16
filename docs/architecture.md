@@ -21,15 +21,15 @@ plugin  <  exec  <  agent   <  surface
 
 | Layer    | Purpose                                                                          | Crates                                                                                                                                                                                       |
 |----------|----------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| core     | Behavior-free IDs, domain types, capability enums, mode primitives, wire types. | `aura-core-types`, `aura-core-modes`, `aura-core-permissions`, `aura-core-auth`, `aura-core-protocol`, `aura-protocol`. |
+| core     | Behavior-free IDs, domain types, capability enums, mode primitives, wire types. | `aura-core-types`, `aura-core-modes`, `aura-core-permissions`, `aura-core-auth`, `aura-core-protocol`, `aura-core-protocol`. |
 | store    | Durable storage: agent state, append-only audit log, snapshot seam.              | `aura-store-db`, `aura-store-record`, `aura-store-snapshot`. |
 | config   | Single source of truth for env vars + TOML config.                               | `aura-config`. |
-| model    | LLM provider trait + streaming completions.                                      | `aura-model-reasoner`. |
+| model    | LLM provider trait + streaming completions.                                      | `aura-model`. |
 | context  | Read-only context assembly (memory, skills, compaction, prompts).                | `aura-context-prompts`, `aura-context-memory`, `aura-context-compaction`, `aura-context-skills`. |
-| plugin   | Plugin manifest schema, in-process API, hooks, MCP, connectors.                  | `aura-plugin-api`, `aura-plugin-core`, `aura-plugin-hooks`, `aura-plugin-mcp`, `aura-plugin-connectors`. |
-| exec     | Tool catalog + executor, executor traits, sandbox, isolation.                    | `aura-tools`, `aura-exec-traits`, `aura-exec-sandbox`, `aura-exec-isolation`. |
+| plugin   | Plugin manifest schema, in-process API, hooks, MCP, connectors.                  | `aura-plugin-api`, `aura-plugin`, `aura-plugin-hooks`, `aura-plugin-mcp`, `aura-plugin-connectors`. |
+| exec     | Tool catalog + executor, executor traits, sandbox, isolation.                    | `aura-exec-tools`, `aura-exec-traits`, `aura-exec-sandbox`, `aura-exec-isolation`. |
 | agent    | Single-agent kernel + turn loop + steering + subagent derivation.                | `aura-agent-kernel`, `aura-agent`, `aura-agent-steering`, `aura-agent-subagent`. |
-| surface  | Composition roots: HTTP/WS gateway, orchestration engine, CLI, TUI, automaton host, domain HTTP, auth. | `aura-runtime`, `aura-engine`, `aura-surface-cli`, `aura-domain-http`, `aura-terminal`, `aura-automaton`, `aura-auth`, `aura-auth-kit`, `aura-auth-zos`, `aura-auth-chatgpt`, `aura-auth-claude`. |
+| surface  | Composition roots: HTTP/WS gateway, orchestration engine, CLI, TUI, automaton host, domain HTTP, auth. | `aura-node`, `aura-engine`, `aura-surface-cli`, `aura-exec-domain-http`, `aura-ui-terminal`, `aura-engine-automaton`, `aura-auth`, `aura-auth-kit`, `aura-auth-zos`, `aura-auth-chatgpt`, `aura-auth-claude`. |
 
 ### Dependency rules
 
@@ -45,8 +45,8 @@ Each box is a layer. Arrows point in the only allowed dependency direction: **do
    ┌────────────────────────────────────────────────────────────────┐
    │  surface — HTTP/WS gateway · orchestration engine · CLI · TUI  │
    │  · automaton host · domain HTTP · auth                         │
-   │  aura-runtime, aura-engine, aura-surface-cli, aura-domain-http,│
-   │  aura-terminal, aura-automaton, aura-auth                      │
+   │  aura-node, aura-engine, aura-surface-cli, aura-exec-domain-http,│
+   │  aura-ui-terminal, aura-engine-automaton, aura-auth                      │
    └─────────────────────────────┬──────────────────────────────────┘
                                  │
    ┌─────────────────────────────▼──────────────────────────────────┐
@@ -58,7 +58,7 @@ Each box is a layer. Arrows point in the only allowed dependency direction: **do
    ┌─────────────────────────────▼──────────────────────────────────┐
    │  exec — tool catalog + executor · executor traits · sandbox ·  │
    │  isolation                                                     │
-   │  aura-tools, aura-exec-{traits,sandbox,isolation}              │
+   │  aura-exec-tools, aura-exec-{traits,sandbox,isolation}              │
    └─────────────────────────────┬──────────────────────────────────┘
                                  │
    ┌─────────────────────────────▼──────────────────────────────────┐
@@ -75,7 +75,7 @@ Each box is a layer. Arrows point in the only allowed dependency direction: **do
                                  │
    ┌─────────────────────────────▼──────────────────────────────────┐
    │  model — LLM provider trait · streaming completions            │
-   │  aura-model-reasoner                                           │
+   │  aura-model                                           │
    └─────────────────────────────┬──────────────────────────────────┘
                                  │
    ┌─────────────────────────────▼──────────────────────────────────┐
@@ -91,7 +91,7 @@ Each box is a layer. Arrows point in the only allowed dependency direction: **do
    ┌─────────────────────────────▼──────────────────────────────────┐
    │  core — IDs · domain types · capability enums · modes · wire   │
    │  aura-core-{types,modes,permissions,auth,protocol},            │
-   │  aura-protocol                                                 │
+   │  aura-core-protocol                                                 │
    └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -102,7 +102,7 @@ How a request flows through the running system. The kernel boundary cuts at the 
 ```text
                  aura (TUI)  ·  aura run --ui none  ·  aura-node
                                     │
-                    HTTP / WebSocket gateway (aura-runtime)
+                    HTTP / WebSocket gateway (aura-node)
                                     │
                 Scheduler (aura-engine): store-backed per-agent claim (§12.a)
                      │                  │                  │
@@ -125,7 +125,7 @@ How a request flows through the running system. The kernel boundary cuts at the 
 2. **Daemon default** — `aura_config::AgentConfig::default_mode` (`AURA_DEFAULT_MODE`; the older `AURA_FLEET_DEFAULT_MODE` is still read).
 3. **Fallback** — `AgentMode::Agent`.
 
-The gateway stores the resolved mode on the chat session and sets `PolicyConfig::mode` when it builds the session kernel; the CLI terminal runner does the same for its local kernel. Child agents take `SubagentSpec.mode` from `derive_subagent`, which can only narrow. Dev-loop and task-run requests are rejected with `400` unless the resolved mode is `Agent`, so automaton kernels always run in `Agent` mode. In the TUI, `/mode`, `/plan`, Shift+Tab and `/build` pick an `aura_terminal::PermissionMode` per agent (`default`, `accept-edits`, `plan`, `unrestricted`, plus the `ask` and `debug` ceilings); each maps to a session-mode ceiling plus per-tool `user_default` states. The event loop switches through `Kernel::switch_permissions`, which appends one `mode_change` `System` record naming the mode and both permission tables, then swaps the kernel's `PolicyConfig` with `Policy::reconfigure`, so the next tool call is evaluated, and its decision recorded, under the new policy hash. `Kernel::switch_mode` does the same for the mode alone; submitted `mode_change` transactions are rejected as kernel-only. Tools whose state is `Ask` go through the kernel's `ToolApprovalPrompter`, which the terminal implements with a prompt in that agent's chat; `aura -p` installs none, so those calls are denied.
+The gateway stores the resolved mode on the chat session and sets `PolicyConfig::mode` when it builds the session kernel; the CLI terminal runner does the same for its local kernel. Child agents take `SubagentSpec.mode` from `derive_subagent`, which can only narrow. Dev-loop and task-run requests are rejected with `400` unless the resolved mode is `Agent`, so automaton kernels always run in `Agent` mode. In the TUI, `/mode`, `/plan`, Shift+Tab and `/build` pick an `aura_ui_terminal::PermissionMode` per agent (`default`, `accept-edits`, `plan`, `unrestricted`, plus the `ask` and `debug` ceilings); each maps to a session-mode ceiling plus per-tool `user_default` states. The event loop switches through `Kernel::switch_permissions`, which appends one `mode_change` `System` record naming the mode and both permission tables, then swaps the kernel's `PolicyConfig` with `Policy::reconfigure`, so the next tool call is evaluated, and its decision recorded, under the new policy hash. `Kernel::switch_mode` does the same for the mode alone; submitted `mode_change` transactions are rejected as kernel-only. Tools whose state is `Ask` go through the kernel's `ToolApprovalPrompter`, which the terminal implements with a prompt in that agent's chat; `aura -p` installs none, so those calls are denied.
 
 ### Tool authorization pipeline
 
@@ -139,13 +139,13 @@ flowchart LR
   agentPerms --> integration[IntegrationRequirements]
   integration --> toolState["Per-tool on/off/ask"]
   toolState --> hook["PermissionRequest hook (ask only)"]
-  hook --> guardrails["aura-tools guardrails: sandbox, allowlists"]
+  hook --> guardrails["aura-exec-tools guardrails: sandbox, allowlists"]
 ```
 
 - **Mode gate** — [`policy/check/mode_gate.rs`](../crates/aura-agent-kernel/src/policy/check/mode_gate.rs) maps each tool to a `GatedAction` through an explicit table (unclassified tools map to `Network`) and asks `DefaultModeGate`. `Agent` mode skips it. [`crates/aura-engine/tests/mode_gate_catalog.rs`](../crates/aura-engine/tests/mode_gate_catalog.rs) fails if a catalog tool is missing from the table.
 - **Capabilities, scope, integrations, per-tool state** — `Policy::check` in [`policy/check/`](../crates/aura-agent-kernel/src/policy/check/).
 - **PermissionRequest hook** — plugin hook consulted only on `ask`, before the interactive prompter (Invariant §4.b).
-- **Guardrails** — `aura-tools` command / binary / shell-script allowlists and the filesystem sandbox, applied after policy allows the call.
+- **Guardrails** — `aura-exec-tools` command / binary / shell-script allowlists and the filesystem sandbox, applied after policy allows the call.
 
 See [invariants.md §4](invariants.md#4-full-policy-enforcement) for the full rules.
 
@@ -156,7 +156,7 @@ Subagents are ordinary agents started by other agents, and they can start agents
 - `task` starts a child of a bundled kind (`explore`, `general_purpose`, ...) to get a job done and returns its result. In detached mode it returns at once and the result arrives later as a message. A task child is removed once its job is done.
 - `spawn_agent` starts a long-lived named child that keeps its history and handles `send_to_agent` / `delegate_task` messages until `agent_lifecycle` stops it.
 
-The gateway holds one node-wide `AgentHost` on `RouterState`. Each chat session registers itself as a root agent in [`gateway/session/helpers.rs`](../crates/aura-runtime/src/gateway/session/helpers.rs) and attaches the returned `AgentHooks` to its kernel; `session/child_kernel.rs` builds the tool surface for each child. A spawn derives the child spec with `derive_subagent` (mode, permissions and model may only narrow; tools are filtered by the child's permissions), appends a `SubagentSpawn` audit row to the parent, and runs the child through the engine's `Scheduler`, so the child gets the same per-agent claim and record pipeline as ordinary work. Depth is capped by `AURA_SUBAGENT_MAX_DEPTH` (default 8) and concurrent children by `AURA_SUBAGENT_MAX_RUNNING` (default 32). Messages for a root (for example a detached task's result) land in the session's mailbox and start a new turn once the session is idle.
+The gateway holds one node-wide `AgentHost` on `RouterState`. Each chat session registers itself as a root agent in [`gateway/session/helpers.rs`](../crates/aura-node/src/gateway/session/helpers.rs) and attaches the returned `AgentHooks` to its kernel; `session/child_kernel.rs` builds the tool surface for each child. A spawn derives the child spec with `derive_subagent` (mode, permissions and model may only narrow; tools are filtered by the child's permissions), appends a `SubagentSpawn` audit row to the parent, and runs the child through the engine's `Scheduler`, so the child gets the same per-agent claim and record pipeline as ordinary work. Depth is capped by `AURA_SUBAGENT_MAX_DEPTH` (default 8) and concurrent children by `AURA_SUBAGENT_MAX_RUNNING` (default 32). Messages for a root (for example a detached task's result) land in the session's mailbox and start a new turn once the session is idle.
 
 The interactive terminal holds its own `AgentHost` ([`event_loop/host.rs`](../crates/aura-surface-cli/src/event_loop/host.rs)). Each terminal agent, and each permanent-agent instance it starts with `task`, registers as a root before its turn, and every terminal kernel gets that agent's `AgentHooks`, so `spawn_agent`, `send_to_agent`, `agent_lifecycle`, `get_agent_state` and `list_agents` work there too (`task` still goes to the terminal's permanent agents). A message for a terminal agent becomes a notice ([`event_loop/notices.rs`](../crates/aura-surface-cli/src/event_loop/notices.rs)). Terminal agents work in parallel, each turn on its own task, so a notice is delivered like any other message: into the agent's running turn through its steering handle if it has one, else as the start of a new turn, whether or not the agent is on screen. Background `task` spawns (`spawn_mode: "detached"`) and background `run_command` calls report back the same way. `aura -p` builds the same hub (`runner::build_hub`) and feeds the notices for its agent into its turns, waiting for outstanding background work before it ends.
 
@@ -173,7 +173,7 @@ Each row links to the agent that started it and to the record entry of its tool 
 
 ### External contract
 
-External consumers (`aura-os`, any future client) talk to [`aura-runtime`](../crates/aura-runtime) over the wire — `POST /v1/run` for submission, `WS /stream/:run_id` for events, the management endpoints (skills, memory, tool defaults, files, tx) for everything else. Workspace crates are internal packaging; no external `Cargo.toml` depends on them. `aura-os` keeps its own mirror of the `aura-protocol` wire types, so a wire change (such as `RuntimeRequest.mode`) has to land in both repositories. `tests/layer_boundary.rs::aura_runtime_reexports_canonical_wire_types` pins that the `POST /v1/run` + `WS /stream/:run_id` wire types stay reachable through `aura-runtime`.
+External consumers (`aura-os`, any future client) talk to [`aura-node`](../crates/aura-node) over the wire — `POST /v1/run` for submission, `WS /stream/:run_id` for events, the management endpoints (skills, memory, tool defaults, files, tx) for everything else. Workspace crates are internal packaging; no external `Cargo.toml` depends on them. `aura-os` keeps its own mirror of the `aura-core-protocol` wire types, so a wire change (such as `RuntimeRequest.mode`) has to land in both repositories. `tests/layer_boundary.rs::aura_node_reexports_canonical_wire_types` pins that the `POST /v1/run` + `WS /stream/:run_id` wire types stay reachable through `aura-node`.
 
 ---
 
@@ -201,15 +201,15 @@ Privilege types (`Capability`, `Permissions`, `EffectivePermissions`) and the pu
 
 #### [`aura-core-auth`](../crates/aura-core-auth)
 
-Auth primitives and the contracts each auth method implements. Types: `AccessToken`, `RefreshToken`, `Token`, `StoredSession`, `AuthError`, `ProviderKind` (`local`, `zos`, `chatgpt`, `claude`), `Owner`, `OAuthTokens`, `LinkedAccount`, `InferenceCredential`. Traits: `IdentityProvider` (zOS), `SubscriptionProvider` (ChatGPT, Claude) and `CredentialResolver`, which the model layer calls for a fresh plan credential per request. Keeping the traits here means provider crates never depend on each other and `aura-model-reasoner` never depends on a surface crate. No I/O.
+Auth primitives and the contracts each auth method implements. Types: `AccessToken`, `RefreshToken`, `Token`, `StoredSession`, `AuthError`, `ProviderKind` (`local`, `zos`, `chatgpt`, `claude`), `Owner`, `OAuthTokens`, `LinkedAccount`, `InferenceCredential`. Traits: `IdentityProvider` (zOS), `SubscriptionProvider` (ChatGPT, Claude) and `CredentialResolver`, which the model layer calls for a fresh plan credential per request. Keeping the traits here means provider crates never depend on each other and `aura-model` never depends on a surface crate. No I/O.
 
 #### [`aura-core-protocol`](../crates/aura-core-protocol)
 
 Phase 1 wire-protocol primitives — currently just `ProtocolVersion` and `PROTOCOL_VERSION`.
 
-#### [`aura-protocol`](../crates/aura-protocol)
+#### [`aura-core-protocol`](../crates/aura-core-protocol)
 
-Serde types for the wire API consumed by `aura-runtime` and external clients (e.g. the `aura-os` web UI). After the Phase A wire-shape unification this crate owns:
+Serde types for the wire API consumed by `aura-node` and external clients (e.g. the `aura-os` web UI). After the Phase A wire-shape unification this crate owns:
 
 - **`RuntimeRequest`** — canonical `POST /v1/run` body. Fields: `r#type` (a `RuntimeRequestType` discriminated union over `Chat { conversation_messages }` / `DevLoop {}` / `TaskRun { task_id, prior_failure, work_log }`), `agent_identity` (an `AgentIdentity` wrapper carrying `template_id`, `partition_id`, `persona`, `skills`, `system_prompt`), `model` (a `ModelSelection`: id, max_tokens, max_turns, temperature, provider_overrides), `workspace` (a `WorkspaceLocation`), `project` (an `Option<ProjectContext>`), `agent_permissions` (kernel-enforced policy bundle), `tool_permissions` (per-tool on/off overrides), `agent_capabilities` (runtime-resolved tools / integrations / classifier the agent **can** use), `auth_jwt: Option<String>`, `user_id`, and optional `mode` (`agent` / `plan` / `ask` / `debug`; see [`AgentMode` resolution](#agentmode-resolution)).
 - **`RuntimeRunResponse`** — synchronous body returned by `POST /v1/run`: `{ run_id, event_stream_url }`. The caller then opens `WS /stream/:run_id`.
@@ -222,7 +222,7 @@ Serde types for the wire API consumed by `aura-runtime` and external clients (e.
 - `agent_permissions` vs `agent_capabilities` — permissions decide whether a capability is **allowed** (kernel-enforced policy gate); capabilities decide what concrete tools / integrations / classifier materialize it (runtime resolution). The "agent_" prefix qualifies the noun so neither field is confused with `aura_core_permissions::Capability` (the privilege enum).
 - `auth_jwt: Option<String>` rather than a struct wrapper — the credential shape is a bare bearer JWT today, and the field stays a plain `Option<String>` so the wire surface doesn't pretend to support polymorphic credential types it doesn't actually have. If richer auth ever lands it gets its own field rather than a typed `AuthCredentials` enum.
 
-`SessionInit`, `AutomatonStartRequest`, and the pre-rename `AgentIdentityWire` are all **removed** with no aliases. External consumers of `aura-protocol` (e.g. `aura-os`) mirror the same shape in their own kept-in-sync copy of this crate rather than depending on it.
+`SessionInit`, `AutomatonStartRequest`, and the pre-rename `AgentIdentityWire` are all **removed** with no aliases. External consumers of `aura-core-protocol` (e.g. `aura-os`) mirror the same shape in their own kept-in-sync copy of this crate rather than depending on it.
 
 ---
 
@@ -258,7 +258,7 @@ Configuration loading and the resolved configuration types. The single source of
 
 LLM provider abstraction. Defines the `ModelProvider` trait, normalized message and stream types, and the (single) Anthropic-shaped router/proxy client. **Invariant §1** lives here: only `KernelModelGateway` (in the agent layer) may hold a `ModelProvider` for production code paths — automatons take `P: aura_agent::RecordingModelProvider`, a sealed marker trait that only the recording gateway implements.
 
-#### [`aura-model-reasoner`](../crates/aura-model-reasoner)
+#### [`aura-model`](../crates/aura-model)
 
 `ModelProvider` trait (`complete`, `complete_streaming`, `health_check`), `ModelRequest` / `ModelResponse` shapes, `Message` / `ContentBlock` / `StopReason`, the `StreamEvent` SSE family and `StreamAccumulator`, the proxy-routed `AnthropicProvider` (with retry + model-chain fallback), `RoutedProvider` (TUI only: `local/*` models to a local Anthropic-compatible Ollama server without the JWT, everything else to aura-router), the `model_catalog` used by the TUI `/model` selector, and `MockProvider` for tests. The Anthropic SSE parser is split into `anthropic/sse/{parse,event,state}.rs` for readability.
 
@@ -298,7 +298,7 @@ The plugin runtime. Splits into a contributor API surface (first-party plugins s
 
 In-process contributor trait surface for first-party plugins. `PluginContributor`, `ContributionKind`, `PluginRoot`, `PluginId`. Not a dynamic loader — plugins are compiled in and registered at startup.
 
-#### [`aura-plugin-core`](../crates/aura-plugin-core)
+#### [`aura-plugin`](../crates/aura-plugin)
 
 Declarative manifest schema, install pipeline, cache layout under `AURA_HOME/plugins/`, and marketplace lookup. Owns `PluginManifest`, `install`, `marketplace`, and the trust-prompt flow. Consumed by `aura plugins install/list/enable/disable`.
 
@@ -318,11 +318,11 @@ Thread-safe registry of plugin-contributed external endpoints. `ConnectorRegistr
 
 ### Exec layer
 
-Tool execution surface: the tool catalog and executor (`aura-tools`), the executor traits the kernel and tools share (`aura-exec-traits`), and the sandbox and worktree-isolation primitives.
+Tool execution surface: the tool catalog and executor (`aura-exec-tools`), the executor traits the kernel and tools share (`aura-exec-traits`), and the sandbox and worktree-isolation primitives.
 
 #### [`aura-exec-traits`](../crates/aura-exec-traits)
 
-`Executor`, `ExecuteContext`, `ExecutorError` and `SpawnHook`. Relocated out of `aura-agent-kernel` so `aura-tools` can implement them without an upward dependency; both `aura-tools` and the kernel depend on this crate.
+`Executor`, `ExecuteContext`, `ExecutorError` and `SpawnHook`. Relocated out of `aura-agent-kernel` so `aura-exec-tools` can implement them without an upward dependency; both `aura-exec-tools` and the kernel depend on this crate.
 
 #### [`aura-exec-isolation`](../crates/aura-exec-isolation)
 
@@ -332,16 +332,16 @@ Subagent workspace isolation. `WorktreeIsolation` (git worktree) is the preferre
 
 OS-level containment primitives: `FsSandbox` (path canonicalisation, prefix-check, symlink guard) and `ProcessSandbox` (subprocess spawn guardrails). Used by every filesystem and command tool.
 
-#### [`aura-tools`](../crates/aura-tools)
+#### [`aura-exec-tools`](../crates/aura-exec-tools)
 
 Tool catalog, resolver, `ToolExecutor`, and sandboxed filesystem/command execution. Implements the `Executor` trait from `aura-exec-traits`. Hosts:
 
 - Built-in filesystem tools: `list_files`, `read_file`, `write_file`, `edit_file`, `stat_file`, `find_files`, `delete_file`, `search_code` (ripgrep), `run_command` (with sync / async threshold).
 - Git tools under `git_tool/`: `git_commit`, `git_push`, `git_commit_push` — the *only* permitted call-site for mutating `Command::new("git")` (Invariant §1, enforced by `scripts/check_invariants.sh`).
-- Domain tools under `domain_tools/`: HTTP/API-backed handlers for orbit, network, specs, tasks, projects, storage via the `DomainApi` trait. The HTTP `DomainApi` implementation itself lives in the surface-layer [`aura-domain-http`](#aura-domain-http) crate — `aura-tools` only owns the trait + the tool wrappers.
+- Domain tools under `domain_tools/`: HTTP/API-backed handlers for orbit, network, specs, tasks, projects, storage via the `DomainApi` trait. The HTTP `DomainApi` implementation itself lives in the surface-layer [`aura-exec-domain-http`](#aura-exec-domain-http) crate — `aura-exec-tools` only owns the trait + the tool wrappers.
 - `task` tool — consumes the exec-layer `SubagentDispatchHook` trait this crate declares. The concrete dispatcher is `aura-engine`'s `AgentHooks`, so the strict layer boundary holds.
 - Automaton tools under `automaton_tools/`: dev-loop and task-run controls gated behind an `AutomatonController` trait.
-- `permissions.rs` (new in Phase B / Commit 3) — `load_agent_tool_context` + `validate_user_defaults` + `validate_agent_tool_permissions`, lifted from the pre-refactor top-level `aura-runtime/src/tool_permissions.rs`. Pure utility functions consumed by the gateway's HTTP handlers; the gateway keeps the routing/HTTP wrapper alongside its other handlers.
+- `permissions.rs` (new in Phase B / Commit 3) — `load_agent_tool_context` + `validate_user_defaults` + `validate_agent_tool_permissions`, lifted from the pre-refactor top-level `aura-node/src/tool_permissions.rs`. Pure utility functions consumed by the gateway's HTTP handlers; the gateway keeps the routing/HTTP wrapper alongside its other handlers.
 - Catalog + resolver: `ToolCatalog`, `ToolResolver`, `ToolProfile` (`Core` / `Agent` / `Engine`), `CatalogEntry`. The resolver's trusted-integration helpers (GitHub, Linear, Slack, Resend, Brave) live under `resolver/trusted/integrations/`.
 
 ---
@@ -370,10 +370,10 @@ Subagent derivation, inheritance, registry, and the pure-data adapter layer that
 - `manifest.rs` — `OverrideManifest`, `OverriddenField`.
 - `spec.rs` — `SubagentSpec`, `AuditAttribution`, `SubagentLineage`.
 - `errors.rs` — the `DerivationError` closed taxonomy.
-- `registry.rs` — `SubagentRegistry` + bundled kinds, absorbed from the pre-Phase-B `aura-runtime/src/subagent_registry.rs`.
-- `adapters.rs` — `parent_context_from_request`, `overrides_from_request`, `narrow_permissions`, `legacy_permissions_to_modes`, `core_to_modes_kernel`. These are the dispatcher's pure-data helpers, lifted out of the old `aura-runtime/src/subagent_dispatch.rs` so the agent layer owns every piece of subagent state assembly without taking any runtime deps.
+- `registry.rs` — `SubagentRegistry` + bundled kinds, absorbed from the pre-Phase-B `aura-node/src/subagent_registry.rs`.
+- `adapters.rs` — `parent_context_from_request`, `overrides_from_request`, `narrow_permissions`, `legacy_permissions_to_modes`, `core_to_modes_kernel`. These are the dispatcher's pure-data helpers, lifted out of the old `aura-node/src/subagent_dispatch.rs` so the agent layer owns every piece of subagent state assembly without taking any runtime deps.
 
-The `SubagentDispatchHook` trait stays at the **exec layer** in `aura-tools` (unchanged — see below); the concrete impl is `AgentHooks` in `aura-engine`. Phase 7a routed the `task` tool through this crate; Phase B widened it to also own the dispatcher's data layer.
+The `SubagentDispatchHook` trait stays at the **exec layer** in `aura-exec-tools` (unchanged — see below); the concrete impl is `AgentHooks` in `aura-engine`. Phase 7a routed the `task` tool through this crate; Phase B widened it to also own the dispatcher's data layer.
 
 #### [`aura-agent`](../crates/aura-agent)
 
@@ -387,7 +387,7 @@ Key types and modules:
 - `agent_runner/` — higher-level run coordination for autonomous task execution.
 - `session_bootstrap.rs` — shared embedder bootstrap (`open_store`, `default_agent_config`, `build_executor_router`).
 - `blocking/`, `stall.rs`, `budget.rs`, `build.rs`, `verify/`, `planning.rs`, `self_review.rs`, `sanitize.rs`, `read_guard.rs`, `file_ops/`.
-- `git.rs` — **read-only** git helpers only (`is_git_repo`, `list_unpushed_commits`). Mutating ops moved to `aura-tools/src/git_tool/`.
+- `git.rs` — **read-only** git helpers only (`is_git_repo`, `list_unpushed_commits`). Mutating ops moved to `aura-exec-tools/src/git_tool/`.
 - `events/` — `TurnEventSink`, the agent-loop event enum, and the `map_agent_loop_event` dispatch shared by the TUI `UiCommandSink` and the runtime `OutboundMessageSink`.
 
 ---
@@ -398,47 +398,47 @@ Composition roots. Each surface assembles dependencies from the lower layers int
 
 #### [`aura-surface-cli`](../crates/aura-surface-cli)
 
-CLI composition root. Owns the clap `Cli` / `Commands` / `RunArgs` definitions, the `ModeFlag` global flag (the request rung of the `AgentMode` resolution chain for the interactive terminal), the event-loop wiring (`event_loop/`), the record-loader utility, and the surface-layer `session_helpers` that chain `aura_auth::CredentialStore` onto `aura_agent::session_bootstrap`. The workspace root `src/main.rs` is now a thin binary that delegates to `aura_surface_cli::run`; the `aura-node` binary still enters through `aura_runtime::run_node` and is re-exported as `aura_surface_cli::run_node` to avoid a dependency cycle.
+CLI composition root. Owns the clap `Cli` / `Commands` / `RunArgs` definitions, the `ModeFlag` global flag (the request rung of the `AgentMode` resolution chain for the interactive terminal), the event-loop wiring (`event_loop/`), the record-loader utility, and the surface-layer `session_helpers` that chain `aura_auth::CredentialStore` onto `aura_agent::session_bootstrap`. The workspace root `src/main.rs` is now a thin binary that delegates to `aura_surface_cli::run`; the `aura-node` binary still enters through `aura_node::run_node` and is re-exported as `aura_surface_cli::run_node` to avoid a dependency cycle.
 
-#### [`aura-runtime`](../crates/aura-runtime)
+#### [`aura-node`](../crates/aura-node)
 
-The HTTP/WS **gateway crate** plus the composition root for the `aura-node` binary. After the Phase C / Commit 4 reorganization `aura-runtime` no longer owns scheduling, orchestration, subagent dispatch, HTTP domain calls, or the PTY terminal handler — those moved out to dedicated crates (see the next two entries). What remains is the inbound-traffic seam plus the composition root that assembles every lower layer into a runnable server.
+The HTTP/WS **gateway crate** plus the composition root for the `aura-node` binary. After the Phase C / Commit 4 reorganization `aura-node` no longer owns scheduling, orchestration, subagent dispatch, HTTP domain calls, or the PTY terminal handler — those moved out to dedicated crates (see the next two entries). What remains is the inbound-traffic seam plus the composition root that assembles every lower layer into a runnable server.
 
-`aura-runtime` owns the external wire contract (see [External contract](#external-contract)). External consumers talk to it over HTTP and WebSocket rather than depending on workspace crates.
+`aura-node` owns the external wire contract (see [External contract](#external-contract)). External consumers talk to it over HTTP and WebSocket rather than depending on workspace crates.
 
 Layout:
 
-- `lib.rs` — re-exports + `run_node()` entry point (calls `Node::run`). Phase 10 carve-out 1 owns the `aura-node` binary body here so `crates/aura-runtime/src/main.rs` is a ≤10-line shim.
+- `lib.rs` — re-exports + `run_node()` entry point (calls `Node::run`). Phase 10 carve-out 1 owns the `aura-node` binary body here so `crates/aura-node/src/main.rs` is a ≤10-line shim.
 - `main.rs` — `tokio::main` shim that calls `run_node()`.
-- `node.rs` — `Node` composition root: binds the TCP listener, opens the store, builds the `aura-engine` `Scheduler` and `AutomatonBridge`, builds the `aura-domain-http::HttpDomainApi`, builds the gateway `Router`, and runs the axum server with graceful shutdown.
+- `node.rs` — `Node` composition root: binds the TCP listener, opens the store, builds the `aura-engine` `Scheduler` and `AutomatonBridge`, builds the `aura-exec-domain-http::HttpDomainApi`, builds the gateway `Router`, and runs the axum server with graceful shutdown.
 - `config/` — `NodeConfig::from_env`: env loading, paths, auth-token resolution. Module path unchanged across the refactor.
 - `auth.rs` — bearer-token check shared with `aura-surface-cli`'s embedded API server.
 - `inbound_console.rs` — paired request/failure observer formatting under the `aura::console` target.
 - `files_api.rs` — shared workspace walker and capped file reader used by the node's `/v1/files` + `/v1/read-file` and the TUI-embedded `src/api_server.rs`.
 - `tool_permissions.rs` — HTTP-driven tri-state tool permission writes. The single sanctioned non-kernel `append_entry_*` call site, guarded by the per-agent scheduler claim.
-- `protocol.rs` — wire ↔ core conversion shim now reduced to a re-export adapter; the canonical conversions live in `aura-protocol::conversions`.
+- `protocol.rs` — wire ↔ core conversion shim now reduced to a re-export adapter; the canonical conversions live in `aura-core-protocol::conversions`.
 - `gateway/` — the HTTP/WS gateway, renamed from `router/` in Phase C:
   - `mod.rs` — module declarations + `pub use create_router / RouterState / RouterStateConfig`.
-  - `middleware.rs` — `create_router`, the middleware stack (CORS, governor, body-limit, connect-info, observer, timeout, trace), the terminal-WS delegate (`terminal_ws_handler` → `aura_terminal::ws::handle_terminal_ws`), and the `/health` handler.
+  - `middleware.rs` — `create_router`, the middleware stack (CORS, governor, body-limit, connect-info, observer, timeout, trace), the terminal-WS delegate (`terminal_ws_handler` → `aura_ui_terminal::ws::handle_terminal_ws`), and the `/health` handler.
   - `state.rs` — `RouterState` + `RouterStateConfig` threaded through every handler.
   - `auth_mw.rs` — bearer-token enforcing axum middleware.
   - `errors.rs` — `ApiError` JSON failure shape.
   - `handlers/` — per-endpoint bundles: `run.rs` (`POST /v1/run` + the lifecycle endpoints), `run_ws.rs` (`WS /stream/:run_id`), `files.rs`, `tx.rs`, `memory/`, `skills.rs`, `tool_permissions.rs`, `util.rs`.
-  - `session/` — per-WebSocket-connection state. `chat.rs` (bidirectional Chat-run handler), `child_kernel.rs` (session-scoped child-kernel factory), `cross_agent_hook.rs` (cross-agent callback path), `generation.rs` (router SSE generation proxy guarded by [`tests/generation_proxy_guard.rs`](../crates/aura-runtime/tests/generation_proxy_guard.rs)), `helpers.rs` (session kernel policy, including `PolicyConfig::mode`, and registering the session as a root agent), `agent_inbox.rs` (mailbox for messages from spawned agents), `partial_json.rs`, `state.rs` (resolved session mode), `tool_approval.rs`.
+  - `session/` — per-WebSocket-connection state. `chat.rs` (bidirectional Chat-run handler), `child_kernel.rs` (session-scoped child-kernel factory), `cross_agent_hook.rs` (cross-agent callback path), `generation.rs` (router SSE generation proxy guarded by [`tests/generation_proxy_guard.rs`](../crates/aura-node/tests/generation_proxy_guard.rs)), `helpers.rs` (session kernel policy, including `PolicyConfig::mode`, and registering the session as a root agent), `agent_inbox.rs` (mailbox for messages from spawned agents), `partial_json.rs`, `state.rs` (resolved session mode), `tool_approval.rs`.
 
-Backward-compat re-exports preserved at the crate root: `aura_runtime::scheduler::*` and `aura_runtime::memory_observer::*` now resolve to thin re-export modules over `aura_engine::*`. Internal callers should reach `aura-engine` directly, but the old paths keep `aura-surface-cli` and any future re-export-driven external consumer building without ripple changes.
+Backward-compat re-exports preserved at the crate root: `aura_node::scheduler::*` and `aura_node::memory_observer::*` now resolve to thin re-export modules over `aura_engine::*`. Internal callers should reach `aura-engine` directly, but the old paths keep `aura-surface-cli` and any future re-export-driven external consumer building without ripple changes.
 
 HTTP routes are listed in [api.md](api.md).
 
 #### [`aura-engine`](../crates/aura-engine)
 
-Phase B / Commit 3 crate that owns the orchestration engine. Lives at the surface layer because every member composes lower-layer (kernel + store + agent) types into a runnable orchestration loop; the engine is what `aura-runtime`'s gateway hands `RuntimeRequest` payloads to. Splitting it out of `aura-runtime` lets the gateway crate shrink to inbound-only concerns, and lets another surface composition re-use the engine without dragging in HTTP/WS plumbing.
+Phase B / Commit 3 crate that owns the orchestration engine. Lives at the surface layer because every member composes lower-layer (kernel + store + agent) types into a runnable orchestration loop; the engine is what `aura-node`'s gateway hands `RuntimeRequest` payloads to. Splitting it out of `aura-node` lets the gateway crate shrink to inbound-only concerns, and lets another surface composition re-use the engine without dragging in HTTP/WS plumbing.
 
 Layout:
 
-- `scheduler.rs` — per-agent single-writer claim (Invariant §12.a), `IdentityRegistry`, per-turn `AgentLoopConfig` resolution. The claim semantics are unchanged from the pre-refactor `aura-runtime/src/scheduler.rs` — only the crate moved.
+- `scheduler.rs` — per-agent single-writer claim (Invariant §12.a), `IdentityRegistry`, per-turn `AgentLoopConfig` resolution. The claim semantics are unchanged from the pre-refactor `aura-node/src/scheduler.rs` — only the crate moved.
 - `worker.rs` — `process_agent`: dequeue + `AgentLoop` execution + atomic record append. Owns the `AGENT_LOOP_TIMEOUT` boundary timeout (rules.md §6.2).
-- `automaton/{mod,build,dispatch,event_channel}.rs` — `AutomatonBridge`: builds per-agent automaton kernels, turns automaton events into outbound `OutboundMessage` frames, records lifecycle changes. Formerly `aura-runtime/src/automaton_bridge/`.
+- `automaton/{mod,build,dispatch,event_channel}.rs` — `AutomatonBridge`: builds per-agent automaton kernels, turns automaton events into outbound `OutboundMessage` frames, records lifecycle changes. Formerly `aura-node/src/automaton_bridge/`.
 - `memory_observer.rs` — `MemoryTurnObserver`: `TurnObserver` adapter feeding completed turns into `aura_context_memory::MemoryManager`.
 - `capabilities.rs` — `record_runtime_capabilities` helper called by the automaton bridge during dev-loop / task-run bootstrap.
 - `executor.rs` — shared `ToolResolver` / `ExecutorRouter` construction helpers (formerly `executor_factory.rs`).
@@ -446,11 +446,11 @@ Layout:
 - `model_context.rs` — `context_window_for_model` lookup used by the automaton bridge and the gateway-side session config.
 - `lib.rs` — re-exports `AutomatonBridge`, `EventSubscription`, `AgentHost`, `AgentHooks`, `MemoryTurnObserver`, `turn_summary_from_result`, `context_window_for_model`, `Scheduler`, `SchedulerError`, `AgentIdentity`, `AgentIdentityRegistry`, `process_agent_detailed`, `ProcessedAgent`.
 
-Library crate, so it ships typed `thiserror` errors (rules.md §4.2) — `aura-runtime`'s binary `aura-node` still uses `anyhow` at the top-level `main`.
+Library crate, so it ships typed `thiserror` errors (rules.md §4.2) — `aura-node`'s binary `aura-node` still uses `anyhow` at the top-level `main`.
 
-#### [`aura-domain-http`](../crates/aura-domain-http)
+#### [`aura-exec-domain-http`](../crates/aura-exec-domain-http)
 
-Phase C / Commit 4 crate hosting the HTTP `DomainApi` implementation that the kernel domain gateway and automaton bridge consume. Stays at the surface layer because it composes lower-layer storage / network clients into a deployable HTTP edge — analogous to how `aura-runtime` composes the engine + middleware stack into a deployable HTTP server.
+Phase C / Commit 4 crate hosting the HTTP `DomainApi` implementation that the kernel domain gateway and automaton bridge consume. Stays at the surface layer because it composes lower-layer storage / network clients into a deployable HTTP edge — analogous to how `aura-node` composes the engine + middleware stack into a deployable HTTP server.
 
 Layout:
 
@@ -458,13 +458,13 @@ Layout:
 - `jwt.rs` — `JwtDomainApi`: wraps any other `DomainApi` and injects a captured JWT on every call site that didn't supply one. Used by the automaton bridge to stamp the captured bearer onto every domain call without modifying the underlying `DomainApi` impl.
 - `lib.rs` — re-exports `HttpDomainApi` and `JwtDomainApi`.
 
-The `DomainApi` *trait* continues to live in `aura-tools::domain_tools`; only the HTTP implementations live here. `aura-runtime` therefore no longer depends on `reqwest` *for domain calls* — but it still depends on `reqwest` directly for the generation proxy in `gateway/session/generation.rs` and the cross-agent callback path in `gateway/session/cross_agent_hook.rs`, which are separate outbound surfaces.
+The `DomainApi` *trait* continues to live in `aura-exec-tools::domain_tools`; only the HTTP implementations live here. `aura-node` therefore no longer depends on `reqwest` *for domain calls* — but it still depends on `reqwest` directly for the generation proxy in `gateway/session/generation.rs` and the cross-agent callback path in `gateway/session/cross_agent_hook.rs`, which are separate outbound surfaces.
 
-#### [`aura-terminal`](../crates/aura-terminal)
+#### [`aura-ui-terminal`](../crates/aura-ui-terminal)
 
 Ratatui-based terminal UI library: themed rendering, components (`HeaderBar`, `InputField`, `Message`, `ToolCard`, `StatusBar`, `ProgressBar`, `DiffView`), input handling, layout. `App` is the UI state machine; `UiEvent` and `UiCommand` are the bridge to the agent loop. `mode_command.rs` holds `PermissionMode` (`default`, `accept-edits`, `plan`, `unrestricted`, `ask`, `debug`) and the `/mode` parser; the app sends `UiEvent::SetMode { agent_id, mode }` (`/mode`, `/plan`, Shift+Tab) and shows the mode badge once `UiCommand::SetMode` confirms it, and `/build` sends `UiEvent::BuildPlan`. `renderer/plan.rs` draws the active plan's todos above the input while any are open; `renderer/processes.rs` draws the PROCESSES tab. `alerts.rs` rings the bell and sends optional desktop notifications.
 
-#### [`aura-automaton`](../crates/aura-automaton)
+#### [`aura-engine-automaton`](../crates/aura-engine-automaton)
 
 Long-running automaton workflows that drive `AgentLoop` on a schedule. Built-ins: `ChatAutomaton`, `DevLoopAutomaton` (with commit-and-push support; `dev_loop/{mod,aggregate,forward_event,validation}.rs`), `SpecGenAutomaton`, `TaskRunAutomaton`. `AutomatonRuntime` installs / runs / cancels instances; `TickContext` carries per-tick state.
 
@@ -489,7 +489,7 @@ The same kernel/AgentLoop pipeline drives every front-end. Every tool call passe
 
 ### Flow 1: Interactive TUI session
 
-Default mode when a user runs `aura --terminal` (`aura` alone opens the same UI in the desktop window, or in the terminal when there is no display). Participants (left → right): **User**, **TUI** (`aura-terminal`), **EL** (event loop in `aura-surface-cli`), **AL** (`AgentLoop` in `aura-agent`), **MP** (`ModelProvider` in `aura-model-reasoner`), **KTG** (`KernelToolGateway` + `ExecutorRouter` in `aura-agent-kernel`), **Tools** (`ToolExecutor` in `aura-tools`).
+Default mode when a user runs `aura --terminal` (`aura` alone opens the same UI in the desktop window, or in the terminal when there is no display). Participants (left → right): **User**, **TUI** (`aura-ui-terminal`), **EL** (event loop in `aura-surface-cli`), **AL** (`AgentLoop` in `aura-agent`), **MP** (`ModelProvider` in `aura-model`), **KTG** (`KernelToolGateway` + `ExecutorRouter` in `aura-agent-kernel`), **Tools** (`ToolExecutor` in `aura-exec-tools`).
 
 Here **MP** is the `RoutedProvider`, which picks a backend from the model id prefix:
 
@@ -549,9 +549,9 @@ The session mode belongs to the terminal (`LoopState.mode`, starting from `--mod
 
 ---
 
-### Flow 2: Run kickoff + WebSocket session (`aura-runtime` + `aura-engine`)
+### Flow 2: Run kickoff + WebSocket session (`aura-node` + `aura-engine`)
 
-Used by `aura-os` and other clients connecting over the harness wire. After Phase A this is a **two-step exchange**: the client submits a `RuntimeRequest` over HTTP, receives a `run_id` back, then opens a per-run WebSocket. The client never sends an init frame — the run is already up by the time the WS attaches. Participants: **Client**, **GW** (gateway HTTP/WS handlers in `aura-runtime`), **Engine** (`aura-engine::Engine`), **Sess** (per-WS session state), **AL** (`AgentLoop`), **MP** (`ModelProvider`), **KTG** (`KernelToolGateway`), **Tools** (`ToolExecutor`).
+Used by `aura-os` and other clients connecting over the harness wire. After Phase A this is a **two-step exchange**: the client submits a `RuntimeRequest` over HTTP, receives a `run_id` back, then opens a per-run WebSocket. The client never sends an init frame — the run is already up by the time the WS attaches. Participants: **Client**, **GW** (gateway HTTP/WS handlers in `aura-node`), **Engine** (`aura-engine::Engine`), **Sess** (per-WS session state), **AL** (`AgentLoop`), **MP** (`ModelProvider`), **KTG** (`KernelToolGateway`), **Tools** (`ToolExecutor`).
 
 ```text
  Client            GW              Engine           Sess          AL         MP / KTG / Tools
@@ -611,7 +611,7 @@ Used by `aura-os` and other clients connecting over the harness wire. After Phas
 
 ### Flow 3: Headless node (scheduler-driven)
 
-When running `aura run --ui none` or as `aura-node`, transactions are submitted via HTTP and processed by the engine's scheduler. Subagent spawns from inside the loop go through `aura-engine`'s `AgentHost`. Participants: **Client**, **Router** (HTTP gateway in `aura-runtime`), **Store** (`RocksStore`), **Sched** (`aura-engine::Scheduler`), **Worker** (`aura-engine::process_agent`), **AL** (`AgentLoop`), **MP** (`ModelProvider`), **KTG** (`KernelToolGateway`), **Host** (`AgentHost`).
+When running `aura run --ui none` or as `aura-node`, transactions are submitted via HTTP and processed by the engine's scheduler. Subagent spawns from inside the loop go through `aura-engine`'s `AgentHost`. Participants: **Client**, **Router** (HTTP gateway in `aura-node`), **Store** (`RocksStore`), **Sched** (`aura-engine::Scheduler`), **Worker** (`aura-engine::process_agent`), **AL** (`AgentLoop`), **MP** (`ModelProvider`), **KTG** (`KernelToolGateway`), **Host** (`AgentHost`).
 
 ```text
  Client     Router       Store        Sched         Worker         AL          MP / KTG / Host

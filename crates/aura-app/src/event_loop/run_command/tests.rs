@@ -1,9 +1,9 @@
 use super::*;
 use aura_agent_kernel::KernelConfig;
 use aura_core_types::{AgentId, EffectStatus, ToolGateVerdict, TransactionType};
-use aura_model_reasoner::{MockProvider, ModelProvider};
+use aura_exec_tools::ToolConfig;
+use aura_model::{MockProvider, ModelProvider};
 use aura_store_db::{ReadStore, RocksStore};
-use aura_tools::ToolConfig;
 use std::sync::Arc;
 use tempfile::TempDir;
 

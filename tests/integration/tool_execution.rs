@@ -5,7 +5,7 @@
 use aura_core_types::{Action, ActionId, AgentId, ToolCall};
 use aura_agent_kernel::ExecuteContext;
 use aura_agent_kernel::ExecutorRouter;
-use aura_tools::{Sandbox, ToolConfig, ToolExecutor};
+use aura_exec_tools::{Sandbox, ToolConfig, ToolExecutor};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -45,7 +45,7 @@ fn create_cmd_executor() -> ExecutorRouter {
     // Phase 5 defaults turn command execution off. Tests that genuinely
     // exercise the command path must opt-in explicitly.
     let config = ToolConfig {
-        command: aura_tools::CommandPolicy {
+        command: aura_exec_tools::CommandPolicy {
             enabled: true,
             binary_allowlist: vec![
                 "echo".to_string(),

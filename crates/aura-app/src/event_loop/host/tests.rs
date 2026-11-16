@@ -2,9 +2,9 @@ use super::*;
 use crate::event_loop::ProcessTable;
 use crate::session_helpers::default_agent_config_with_auth;
 use aura_agent_kernel::{ChildAgentSpec, SpawnHook};
-use aura_model_reasoner::MockProvider;
+use aura_model::MockProvider;
 use aura_store_db::{RocksStore, Store};
-use aura_terminal::events::ProcessKind;
+use aura_ui_terminal::events::ProcessKind;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
@@ -19,7 +19,7 @@ impl BackgroundProcessHook for NoBackground {
     fn adopt(
         &self,
         _agent: AgentId,
-        _process: aura_tools::BackgroundProcess,
+        _process: aura_exec_tools::BackgroundProcess,
     ) -> Result<(), String> {
         Err("not in this test".into())
     }

@@ -17,7 +17,7 @@ use aura_agent_kernel::{
 use aura_core_types::{
     Action, ActionKind, AgentId, AgentToolPermissions, Effect, ToolCall, ToolResult, ToolState,
 };
-use aura_model_reasoner::{
+use aura_model::{
     ContentBlock, Message, MockProvider, MockResponse, ModelProvider, StopReason, ToolDefinition,
     Usage,
 };

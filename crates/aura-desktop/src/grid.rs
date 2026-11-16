@@ -15,7 +15,7 @@
 #![allow(clippy::cast_precision_loss)]
 
 use crate::{glyphs, theme};
-use aura_terminal::ProseRow;
+use aura_ui_terminal::ProseRow;
 use iced::advanced::text::Paragraph as _;
 use iced::alignment::Vertical;
 use iced::font::Style;
@@ -212,7 +212,7 @@ pub struct Palette {
 }
 
 impl Palette {
-    pub fn from_theme(theme: &aura_terminal::Theme) -> Self {
+    pub fn from_theme(theme: &aura_ui_terminal::Theme) -> Self {
         let fg = color(theme.colors.foreground, Color::from_rgb8(0xe6, 0xe6, 0xe6));
         Self {
             fg,

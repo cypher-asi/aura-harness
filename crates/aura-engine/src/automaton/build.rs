@@ -16,7 +16,7 @@ use aura_core_types::{
     installed_integrations_satisfy, AgentId, AgentPermissions, InstalledIntegrationDefinition,
     InstalledToolDefinition,
 };
-use aura_tools::domain_tools::{DomainApi, DomainToolExecutor};
+use aura_exec_tools::domain_tools::{DomainApi, DomainToolExecutor};
 use tracing::warn;
 
 use crate::executor;
@@ -25,13 +25,13 @@ use super::AutomatonBridge;
 
 impl AutomatonBridge {
     pub(super) fn prepare_installed_tools(
-        installed_tools: Option<Vec<aura_protocol::InstalledTool>>,
+        installed_tools: Option<Vec<aura_core_protocol::InstalledTool>>,
         installed_integrations: &[InstalledIntegrationDefinition],
     ) -> Vec<InstalledToolDefinition> {
         installed_tools
             .unwrap_or_default()
             .into_iter()
-            .map(aura_protocol::installed_tool_to_core)
+            .map(aura_core_protocol::installed_tool_to_core)
             .filter(|tool| match tool.required_integration.as_ref() {
                 Some(req) => installed_integrations_satisfy(req, installed_integrations),
                 None => true,

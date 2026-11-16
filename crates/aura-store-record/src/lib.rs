@@ -39,7 +39,7 @@
 //! - The kernel is the sole producer of [`RecordEntry`] values today.
 //!   Phase 6a introduces [`RecordKind::PermissionsUpdate`] to close
 //!   the only remaining non-kernel write path (today's
-//!   `aura-runtime::tool_permissions` direct append).
+//!   `aura-node::tool_permissions` direct append).
 //!
 //! ## Failure modes
 //!

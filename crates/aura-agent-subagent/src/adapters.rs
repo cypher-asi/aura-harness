@@ -2,7 +2,7 @@
 //! the [`crate`] (agent-layer) derivation surface.
 //!
 //! Phase B / Commit 3 / Step 3a moved these helpers out of the
-//! gateway-side `aura-runtime/src/subagent_dispatch.rs` so the
+//! gateway-side `aura-node/src/subagent_dispatch.rs` so the
 //! dispatcher can be sliced cleanly out. None of them touch
 //! runtime types — they translate parent context, narrowing
 //! policy, and override fields between the wire/core types in

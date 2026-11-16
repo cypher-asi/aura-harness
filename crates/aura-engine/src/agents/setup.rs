@@ -172,7 +172,7 @@ mod tests {
 
     fn parent_identity(model: &str) -> AgentIdentity {
         AgentIdentity {
-            reasoning_effort: Some(aura_model_reasoner::ThinkingEffort::XHigh),
+            reasoning_effort: Some(aura_model::ThinkingEffort::XHigh),
             upstream_provider_family: None,
             model: model.to_string(),
             aura_org_id: Some("org-parent".to_string()),
@@ -182,7 +182,7 @@ mod tests {
             system_prompt: "parent prompt".to_string(),
             prompt_cache_key: None,
             prompt_cache_retention: None,
-            request_kind: aura_model_reasoner::ModelRequestKind::Chat,
+            request_kind: aura_model::ModelRequestKind::Chat,
             max_tokens: 1024,
             max_context_tokens: 200_000,
             auth_token: Some("parent-jwt".to_string()),
@@ -207,7 +207,7 @@ mod tests {
         assert_eq!(config.auth_token.as_deref(), Some("parent-jwt"));
         assert_eq!(
             config.user_thinking_effort,
-            Some(aura_model_reasoner::ThinkingEffort::XHigh)
+            Some(aura_model::ThinkingEffort::XHigh)
         );
         assert_eq!(config.max_iterations, kind.budget.max_iterations as usize);
     }

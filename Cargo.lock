@@ -365,20 +365,20 @@ dependencies = [
  "aura-agent-trace",
  "aura-app",
  "aura-auth",
- "aura-automaton",
  "aura-cli",
  "aura-config",
  "aura-core-modes",
  "aura-core-permissions",
+ "aura-core-protocol",
  "aura-core-types",
  "aura-desktop",
- "aura-model-reasoner",
- "aura-protocol",
- "aura-runtime",
+ "aura-engine-automaton",
+ "aura-exec-tools",
+ "aura-model",
+ "aura-node",
  "aura-store-db",
  "aura-store-record",
- "aura-terminal",
- "aura-tools",
+ "aura-ui-terminal",
  "axum",
  "base64 0.22.1",
  "bytes",
@@ -412,11 +412,11 @@ dependencies = [
  "aura-context-compaction",
  "aura-context-prompts",
  "aura-core-types",
- "aura-model-reasoner",
+ "aura-exec-tools",
+ "aura-model",
  "aura-plugin-hooks",
  "aura-store-db",
  "aura-store-snapshot",
- "aura-tools",
  "chrono",
  "colored",
  "dashmap 5.5.3",
@@ -444,7 +444,7 @@ dependencies = [
  "aura-core-modes",
  "aura-core-types",
  "aura-exec-traits",
- "aura-model-reasoner",
+ "aura-model",
  "aura-plugin-hooks",
  "aura-store-db",
  "aura-store-record",
@@ -469,7 +469,7 @@ dependencies = [
  "aura-config",
  "aura-context-prompts",
  "aura-core-types",
- "aura-model-reasoner",
+ "aura-model",
  "serde",
  "serde_json",
 ]
@@ -496,7 +496,7 @@ dependencies = [
  "aura-agent-kernel",
  "aura-config",
  "aura-core-types",
- "aura-model-reasoner",
+ "aura-model",
  "aura-store-snapshot",
  "blake3",
  "bytes",
@@ -529,13 +529,13 @@ dependencies = [
  "aura-core-modes",
  "aura-core-types",
  "aura-engine",
- "aura-model-reasoner",
- "aura-runtime",
+ "aura-exec-tools",
+ "aura-model",
+ "aura-node",
  "aura-store-db",
  "aura-store-record",
  "aura-store-snapshot",
- "aura-terminal",
- "aura-tools",
+ "aura-ui-terminal",
  "axum",
  "blake3",
  "bytes",
@@ -651,31 +651,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aura-automaton"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "aura-agent",
- "aura-agent-trace",
- "aura-config",
- "aura-context-prompts",
- "aura-core-types",
- "aura-model-reasoner",
- "aura-tools",
- "chrono",
- "dashmap 5.5.3",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tokio-util",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "aura-cli"
 version = "0.1.0"
 dependencies = [
@@ -687,11 +662,11 @@ dependencies = [
  "aura-config",
  "aura-core-modes",
  "aura-core-types",
- "aura-model-reasoner",
- "aura-plugin-core",
- "aura-runtime",
- "aura-terminal",
- "aura-tools",
+ "aura-exec-tools",
+ "aura-model",
+ "aura-node",
+ "aura-plugin",
+ "aura-ui-terminal",
  "clap",
  "colored",
  "rpassword",
@@ -721,7 +696,7 @@ name = "aura-context-compaction"
 version = "0.1.0"
 dependencies = [
  "aura-config",
- "aura-model-reasoner",
+ "aura-model",
  "serde_json",
  "tracing",
 ]
@@ -731,7 +706,7 @@ name = "aura-context-memory"
 version = "0.1.0"
 dependencies = [
  "aura-core-types",
- "aura-model-reasoner",
+ "aura-model",
  "aura-store-db",
  "blake3",
  "chrono",
@@ -805,6 +780,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "aura-core-protocol"
+version = "0.1.0"
+dependencies = [
+ "aura-core-types",
+ "blake3",
+ "serde",
+ "serde_json",
+ "ts-rs",
+]
+
+[[package]]
 name = "aura-core-types"
 version = "0.1.0"
 dependencies = [
@@ -828,8 +814,8 @@ dependencies = [
  "anyhow",
  "aura-app",
  "aura-core-modes",
- "aura-terminal",
- "aura-ui-core",
+ "aura-ui",
+ "aura-ui-terminal",
  "chrono",
  "clap",
  "crossterm 0.28.1",
@@ -845,7 +831,64 @@ dependencies = [
 ]
 
 [[package]]
-name = "aura-domain-http"
+name = "aura-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "aura-agent",
+ "aura-agent-kernel",
+ "aura-agent-subagent",
+ "aura-context-compaction",
+ "aura-context-memory",
+ "aura-context-prompts",
+ "aura-core-protocol",
+ "aura-core-types",
+ "aura-engine-automaton",
+ "aura-exec-domain-http",
+ "aura-exec-tools",
+ "aura-model",
+ "aura-store-db",
+ "aura-store-snapshot",
+ "bytes",
+ "dashmap 5.5.3",
+ "insta",
+ "parking_lot",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "aura-engine-automaton"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "aura-agent",
+ "aura-agent-trace",
+ "aura-config",
+ "aura-context-prompts",
+ "aura-core-types",
+ "aura-exec-tools",
+ "aura-model",
+ "chrono",
+ "dashmap 5.5.3",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "aura-exec-domain-http"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -860,35 +903,33 @@ dependencies = [
 ]
 
 [[package]]
-name = "aura-engine"
+name = "aura-exec-tools"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "aura-agent",
- "aura-agent-kernel",
- "aura-agent-subagent",
- "aura-automaton",
- "aura-context-compaction",
- "aura-context-memory",
- "aura-context-prompts",
  "aura-core-types",
- "aura-domain-http",
- "aura-model-reasoner",
- "aura-protocol",
- "aura-store-db",
- "aura-store-snapshot",
- "aura-tools",
+ "aura-exec-traits",
+ "aura-store-record",
+ "base64 0.22.1",
  "bytes",
- "dashmap 5.5.3",
- "insta",
- "parking_lot",
+ "futures-util",
+ "glob",
+ "portable-pty",
+ "regex",
+ "reqwest",
+ "serde",
  "serde_json",
+ "serde_yaml",
+ "similar",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
- "tokio-util",
+ "toml",
  "tracing",
+ "uuid",
+ "walkdir",
+ "which",
 ]
 
 [[package]]
@@ -907,15 +948,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "aura-model-reasoner"
+name = "aura-model"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "aura-config",
  "aura-core-auth",
+ "aura-core-protocol",
  "aura-core-types",
- "aura-protocol",
  "bytes",
  "colored",
  "futures-util",
@@ -930,76 +971,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "aura-plugin-api"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "aura-plugin-connectors"
-version = "0.1.0"
-dependencies = [
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "aura-plugin-core"
-version = "0.1.0"
-dependencies = [
- "aura-config",
- "aura-plugin-api",
- "aura-plugin-connectors",
- "aura-plugin-hooks",
- "aura-plugin-mcp",
- "semver",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "toml",
- "tracing",
- "walkdir",
-]
-
-[[package]]
-name = "aura-plugin-hooks"
-version = "0.1.0"
-dependencies = [
- "aura-core-types",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tracing",
-]
-
-[[package]]
-name = "aura-plugin-mcp"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tracing",
-]
-
-[[package]]
-name = "aura-protocol"
-version = "0.1.0"
-dependencies = [
- "aura-core-types",
- "blake3",
- "serde",
- "serde_json",
- "ts-rs",
-]
-
-[[package]]
-name = "aura-runtime"
+name = "aura-node"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1008,21 +980,21 @@ dependencies = [
  "aura-agent-kernel",
  "aura-agent-subagent",
  "aura-agent-trace",
- "aura-automaton",
  "aura-config",
  "aura-context-compaction",
  "aura-context-memory",
  "aura-context-prompts",
  "aura-context-skills",
+ "aura-core-protocol",
  "aura-core-types",
- "aura-domain-http",
  "aura-engine",
- "aura-model-reasoner",
- "aura-plugin-core",
+ "aura-engine-automaton",
+ "aura-exec-domain-http",
+ "aura-exec-tools",
+ "aura-model",
+ "aura-plugin",
  "aura-plugin-hooks",
- "aura-protocol",
  "aura-store-db",
- "aura-tools",
  "axum",
  "base64 0.22.1",
  "blake3",
@@ -1052,6 +1024,64 @@ dependencies = [
  "uuid",
  "which",
  "zeroize",
+]
+
+[[package]]
+name = "aura-plugin"
+version = "0.1.0"
+dependencies = [
+ "aura-config",
+ "aura-plugin-api",
+ "aura-plugin-connectors",
+ "aura-plugin-hooks",
+ "aura-plugin-mcp",
+ "semver",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "toml",
+ "tracing",
+ "walkdir",
+]
+
+[[package]]
+name = "aura-plugin-api"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "aura-plugin-connectors"
+version = "0.1.0"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "aura-plugin-hooks"
+version = "0.1.0"
+dependencies = [
+ "aura-core-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "aura-plugin-mcp"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tracing",
 ]
 
 [[package]]
@@ -1103,10 +1133,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "aura-terminal"
+name = "aura-ui"
 version = "0.1.0"
 dependencies = [
- "aura-ui-core",
+ "aura-core-modes",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "aura-ui-terminal"
+version = "0.1.0"
+dependencies = [
+ "aura-ui",
  "base64 0.22.1",
  "chrono",
  "crossterm 0.28.1",
@@ -1120,47 +1161,6 @@ dependencies = [
  "tokio",
  "tracing",
  "unicode-width",
-]
-
-[[package]]
-name = "aura-tools"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "aura-core-types",
- "aura-exec-traits",
- "aura-store-record",
- "base64 0.22.1",
- "bytes",
- "futures-util",
- "glob",
- "portable-pty",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "serde_yaml",
- "similar",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "toml",
- "tracing",
- "uuid",
- "walkdir",
- "which",
-]
-
-[[package]]
-name = "aura-ui-core"
-version = "0.1.0"
-dependencies = [
- "aura-core-modes",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
 ]
 
 [[package]]

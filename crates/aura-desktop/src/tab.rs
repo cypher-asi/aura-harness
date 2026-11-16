@@ -3,7 +3,7 @@
 //! input draft, panels, overlays and scroll position.
 
 use crate::grid::GridBackend;
-use aura_ui_core::events::{AgentSummary, UiEvent};
+use aura_ui::events::{AgentSummary, UiEvent};
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
 use tokio::sync::mpsc;
@@ -15,7 +15,7 @@ const EVENT_QUEUE: usize = 256;
 #[derive(Debug, Clone, Copy)]
 pub struct Settings {
     pub verbose: bool,
-    pub alerts: aura_terminal::AlertSettings,
+    pub alerts: aura_ui_terminal::AlertSettings,
 }
 
 /// A file the user is editing in an app that doesn't report closing; it
@@ -29,7 +29,7 @@ pub struct Watch {
 pub struct Tab {
     /// Stays the same while tabs around it open and close.
     pub id: u64,
-    pub tui: aura_terminal::App,
+    pub tui: aura_ui_terminal::App,
     pub terminal: ratatui::Terminal<GridBackend>,
     pub watch: Option<Watch>,
     /// Hex ids of the root agents heading the projects in this tab. The
@@ -42,7 +42,7 @@ pub struct Tab {
 impl Tab {
     pub fn new(id: u64, settings: Settings) -> Self {
         let (sender, events) = mpsc::channel(EVENT_QUEUE);
-        let mut tui = aura_terminal::App::new()
+        let mut tui = aura_ui_terminal::App::new()
             .with_event_sender(sender)
             .with_alert_settings(settings.alerts);
         tui.set_prose_measure(crate::grid::prose_cells);

@@ -15,7 +15,7 @@ use crate::types::{
 use crate::write_pipeline::{MemoryWritePipeline, WriteConfig, WriteReport};
 use aura_core_types::AgentId;
 use aura_core_types::ProcedureId;
-use aura_model_reasoner::ModelProvider;
+use aura_model::ModelProvider;
 use rocksdb::{DBWithThreadMode, MultiThreaded};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -41,7 +41,7 @@ impl MemoryManager {
     /// Invariant §3 ("Every LLM Call Is Recorded") holds. The context
     /// layer accepts the abstract trait object to keep this crate free
     /// of any upward edge into `aura-agent`; the runtime composition
-    /// root (`aura_runtime::node`) is the single place that knows how
+    /// root (`aura_node::node`) is the single place that knows how
     /// to construct a recording provider.
     pub fn new(
         db: Arc<DBWithThreadMode<MultiThreaded>>,
@@ -157,7 +157,7 @@ impl MemoryManager {
     /// `<agent_memory>` block to ensure idempotency, then appends a
     /// fresh one. Operating on `&mut String` (rather than `&mut
     /// AgentLoopConfig`) keeps this crate free of any upward edge into
-    /// `aura-agent` — callers in `aura-runtime` pass
+    /// `aura-agent` — callers in `aura-node` pass
     /// `&mut config.system_prompt` explicitly.
     pub async fn prepare_context(&self, agent_id: AgentId, system_prompt: &mut String) {
         self.prepare_context_with_query(agent_id, system_prompt, MemoryQueryContext::default())

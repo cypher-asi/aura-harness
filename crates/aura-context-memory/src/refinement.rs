@@ -7,7 +7,7 @@ use crate::error::MemoryError;
 use crate::extraction::ConversationTurn;
 use crate::types::{CandidateType, MemoryCandidate, MemoryScope, RefinedCandidate};
 use crate::DEFAULT_MEMORY_MODEL;
-use aura_model_reasoner::{Message, ModelProvider, ModelRequest};
+use aura_model::{Message, ModelProvider, ModelRequest};
 use std::fmt::Write;
 use std::sync::Arc;
 
@@ -17,7 +17,7 @@ const MAX_TURN_TEXT_LEN: usize = 3000;
 ///
 /// Accepts any [`ModelProvider`] but production wiring MUST pass a
 /// recording-capable provider (e.g. `aura_agent::KernelModelGateway`).
-/// The runtime composition root in `aura_runtime::node` is the single
+/// The runtime composition root in `aura_node::node` is the single
 /// place that knows about the kernel gateway, and it is responsible for
 /// upholding Invariant §3 ("Every LLM Call Is Recorded") by passing a
 /// kernel-mediated provider here. The context layer cannot enforce this
@@ -480,7 +480,7 @@ Be selective. Only extract items that would be useful across future sessions.";
 mod tests {
     use super::*;
     use crate::types::{CandidateType, MemoryCandidate};
-    use aura_model_reasoner::MockProvider;
+    use aura_model::MockProvider;
 
     fn make_candidate(key: &str) -> MemoryCandidate {
         MemoryCandidate {

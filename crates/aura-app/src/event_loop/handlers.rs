@@ -16,8 +16,10 @@ use aura_agent::{AgentLoopEvent, RunOptions, WithPostEditCheck};
 use aura_context_prompts::model_messages::init_project::init_project_prompt;
 use aura_core_types::AgentId;
 use aura_core_types::{RecordEntry, Transaction};
-use aura_terminal::events::{MessageData, MessageRole, ProcessKind, ProcessStatus, ProcessSummary};
-use aura_terminal::UiCommand;
+use aura_ui_terminal::events::{
+    MessageData, MessageRole, ProcessKind, ProcessStatus, ProcessSummary,
+};
+use aura_ui_terminal::UiCommand;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
@@ -29,7 +31,7 @@ use tracing::{debug, error, info, warn};
 pub(super) async fn run_agent_turn(
     session: &AgentSession,
     agent_loop: &aura_agent::AgentLoop,
-    tools: Vec<aura_model_reasoner::ToolDefinition>,
+    tools: Vec<aura_model::ToolDefinition>,
     ui: &AgentUi,
     cancel: &CancellationToken,
     steering: &Steering,
@@ -106,7 +108,7 @@ pub(super) async fn run_agent_turn(
 pub(crate) async fn drive_turn(
     session: &AgentSession,
     agent_loop: &aura_agent::AgentLoop,
-    tools: Vec<aura_model_reasoner::ToolDefinition>,
+    tools: Vec<aura_model::ToolDefinition>,
     events: tokio::sync::mpsc::Sender<AgentLoopEvent>,
     turn_cancel: &CancellationToken,
     steering: &Steering,
@@ -465,8 +467,7 @@ pub(super) async fn announce_models(state: &mut LoopState<'_>) {
 }
 
 pub(super) async fn handle_select_model(state: &mut LoopState<'_>, id: &str) {
-    if aura_model_reasoner::model_catalog::backend_for(id)
-        == aura_model_reasoner::model_catalog::ModelBackend::Local
+    if aura_model::model_catalog::backend_for(id) == aura_model::model_catalog::ModelBackend::Local
     {
         state.models.refresh_local().await;
     }

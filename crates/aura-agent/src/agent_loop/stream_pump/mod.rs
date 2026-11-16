@@ -1,11 +1,11 @@
 //! Streaming sampling pump with stream-level tool overlap (Layer E.3).
 //!
 //! The pump is the per-sampling-request loop body that consumes a
-//! [`aura_model_reasoner::ResponseEventStream`] one event at a time, spawning
+//! [`aura_model::ResponseEventStream`] one event at a time, spawning
 //! tool futures into a [`futures_util::stream::FuturesUnordered`] the
 //! moment a tool-use item arrives instead of waiting for the entire
 //! model response to buffer. After the model emits
-//! [`aura_model_reasoner::ResponseEvent::Completed`], the pump drains the
+//! [`aura_model::ResponseEvent::Completed`], the pump drains the
 //! calls as they finish and sorts them back into submission order so
 //! tool results appear in the conversation history in the same order
 //! the model emitted them (codex's
@@ -32,7 +32,7 @@
 //!   [`super::tool_pipeline::dispatch`] entry point in Phase 4 (the
 //!   previous `dispatch` submodule is gone).
 //! - [`synthesize`] — `synthesize_response`: rebuilds a
-//!   [`aura_model_reasoner::ModelResponse`] from the per-block chunks the
+//!   [`aura_model::ModelResponse`] from the per-block chunks the
 //!   pump observed. Includes the corrected `end_turn = Some(false)`
 //!   stop-reason interpretation (Phase 3).
 //! - [`tests`] — pump-scope unit tests; transport / executor parity
@@ -54,7 +54,7 @@
 //!   so a *genuinely* silent stream surfaces as
 //!   [`crate::AgentError::StreamTimeout`] instead of hanging. Pings
 //!   and intra-block deltas arrive as
-//!   [`aura_model_reasoner::ResponseEvent::Keepalive`] and reset the
+//!   [`aura_model::ResponseEvent::Keepalive`] and reset the
 //!   window (and drive the phase-transition transcript lines), so a
 //!   slow-but-alive thinking block is not mistaken for a dead stream.
 //! - **Per-tool timeout (Rule 6.2)**: each spawned tool future is
@@ -74,9 +74,7 @@
 //!   `expect()` calls that remain inside `#[cfg(test)]` are
 //!   intentional — test fixtures are exempt per Rule 4.1.
 
-use aura_model_reasoner::{
-    ModelProvider, ModelRequest, ModelResponse, PartialToolUse, ReasonerError,
-};
+use aura_model::{ModelProvider, ModelRequest, ModelResponse, PartialToolUse, ReasonerError};
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
@@ -113,7 +111,7 @@ use retry::{update_partial_retry_state, PartialRetryState};
 ///
 /// `provider` is intentionally NOT in the bundle: it is only
 /// consumed by [`run_stream_pump`] to open the
-/// [`aura_model_reasoner::ResponseEventStream`]; once the stream is open
+/// [`aura_model::ResponseEventStream`]; once the stream is open
 /// the driver never touches the provider again. Keeping it out lets
 /// the driver-scope unit tests construct a `StreamPumpCtx` without
 /// having to stub a full `ModelProvider`.
@@ -179,7 +177,7 @@ pub(super) enum StreamPumpOutcome {
 /// Drive one sampling request through the streaming pump.
 ///
 /// Opens `provider.complete_response_stream(request)`, then drives
-/// the resulting [`aura_model_reasoner::ResponseEventStream`] to completion
+/// the resulting [`aura_model::ResponseEventStream`] to completion
 /// with per-event timeout, biased cancellation, and per-tool
 /// concurrency via [`futures_util::stream::FuturesUnordered`]. See the
 /// module-level docs for the full invariant list.
@@ -214,7 +212,7 @@ pub(super) async fn run_stream_pump(
                     "stream retry requested without an interrupted request".to_string(),
                 )));
             }
-            let delay = aura_model_reasoner::anthropic::exp_backoff_with_jitter(
+            let delay = aura_model::anthropic::exp_backoff_with_jitter(
                 attempt - 1,
                 backoff_initial_ms,
                 backoff_cap_ms,

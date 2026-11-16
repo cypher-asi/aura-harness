@@ -2,11 +2,11 @@
 
 The wire API is Aura's external contract: clients such as `aura-os` talk to the `aura-node` server over HTTP and WebSocket, never by linking workspace crates.
 
-All routes are defined in [`gateway/middleware.rs`](../crates/aura-runtime/src/gateway/middleware.rs) (`create_router`), with handlers grouped under [`gateway/handlers/`](../crates/aura-runtime/src/gateway/handlers). The shared `RouterState` lives in [`gateway/state.rs`](../crates/aura-runtime/src/gateway/state.rs). Paths below use Axum path-parameter syntax. Authentication is described in [configuration.md](configuration.md#authentication).
+All routes are defined in [`gateway/middleware.rs`](../crates/aura-node/src/gateway/middleware.rs) (`create_router`), with handlers grouped under [`gateway/handlers/`](../crates/aura-node/src/gateway/handlers). The shared `RouterState` lives in [`gateway/state.rs`](../crates/aura-node/src/gateway/state.rs). Paths below use Axum path-parameter syntax. Authentication is described in [configuration.md](configuration.md#authentication).
 
 ## Runs
 
-A run is the entry point for all work. Start a chat session, dev-loop automaton, or single-task automaton by posting an [`aura_protocol::RuntimeRequest`](../crates/aura-protocol/src/runtime_request.rs) to `/v1/run`. The [`RuntimeRunResponse`](../crates/aura-protocol/src/runtime_request.rs) carries a `run_id` and the WebSocket path the client opens to receive events (and, on chat runs, to send user messages).
+A run is the entry point for all work. Start a chat session, dev-loop automaton, or single-task automaton by posting an [`aura_core_protocol::RuntimeRequest`](../crates/aura-core-protocol/src/runtime_request.rs) to `/v1/run`. The [`RuntimeRunResponse`](../crates/aura-core-protocol/src/runtime_request.rs) carries a `run_id` and the WebSocket path the client opens to receive events (and, on chat runs, to send user messages).
 
 `RuntimeRequest.mode` (`agent` / `plan` / `ask` / `debug`, optional) sets the session mode. When omitted it falls back to `AURA_DEFAULT_MODE`, then `agent`. Dev-loop and task-run requests are rejected with `400` unless the resolved mode is `agent`.
 
@@ -26,7 +26,7 @@ A run is the entry point for all work. Start a chat session, dev-loop automaton,
 | `/ws/terminal` | Terminal bridge used by the TUI. |
 | `/ws/preview/tcp/:port` | WebSocket-to-TCP bridge for previewing a port served from the workspace. |
 
-TypeScript bindings for the wire types are generated into [`crates/aura-protocol/bindings/`](../crates/aura-protocol/bindings).
+TypeScript bindings for the wire types are generated into [`crates/aura-core-protocol/bindings/`](../crates/aura-core-protocol/bindings).
 
 ## Health and workspace
 

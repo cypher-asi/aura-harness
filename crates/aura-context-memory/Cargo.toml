@@ -9,7 +9,7 @@ license.workspace = true
 [dependencies]
 aura-core-types = { path = "../aura-core-types" }
 aura-store-db = { path = "../aura-store-db" }
-aura-model-reasoner = { path = "../aura-model-reasoner" }
+aura-model = { path = "../aura-model" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

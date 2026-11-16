@@ -8,7 +8,7 @@ license.workspace = true
 
 # IMPORTANT — boundary contract (Phase 2 of the core-loop architecture
 # refactor): this crate is render-only. It must NOT depend on
-# `aura-agent`, `aura-automaton`, `aura-runtime`, or `aura-reasoner`.
+# `aura-agent`, `aura-engine-automaton`, `aura-node`, or `aura-reasoner`.
 # The forbidden-imports test in `tests/no_upstream_imports.rs` re-asserts
 # this at the source level; the actual enforcement is here, in Cargo.
 # Any future PR that tries to add one of those deps will fail to

@@ -10,7 +10,7 @@ use aura_core_types::{
     PolicyCheckOutcome, PolicySource, ToolExecution, ToolGateVerdict, ToolProposal, Transaction,
     TransactionType, UserToolDefaults,
 };
-use aura_model_reasoner::{MockProvider, ModelProvider};
+use aura_model::{MockProvider, ModelProvider};
 use aura_store_db::{RocksStore, Store};
 use aura_store_snapshot::NoopSnapshotStore;
 use std::sync::Mutex as StdMutex;
@@ -304,8 +304,8 @@ async fn observer_sees_every_entry_the_kernel_writes() {
         .unwrap();
     h.kernel
         .reason(
-            aura_model_reasoner::ModelRequest::builder("test-model", "system")
-                .message(aura_model_reasoner::Message::user("hello"))
+            aura_model::ModelRequest::builder("test-model", "system")
+                .message(aura_model::Message::user("hello"))
                 .try_build()
                 .unwrap(),
         )

@@ -6,8 +6,8 @@
 //! bridge, child runner, memory observer, runtime capabilities, and
 //! executor factory.
 //!
-//! The HTTP/WS gateway in [`aura-runtime`] composes the primitives
-//! exposed here and hands them [`aura_protocol::RuntimeRequest`]
+//! The HTTP/WS gateway in [`aura-node`] composes the primitives
+//! exposed here and hands them [`aura_core_protocol::RuntimeRequest`]
 //! payloads. The engine never owns inbound HTTP/WS plumbing; the
 //! gateway never owns the orchestration loop.
 //!
@@ -18,7 +18,7 @@
 //!   gateway used pre-extraction.
 //! - [`worker`] — kernel-mediated agent-loop driver. Owns the
 //!   `AGENT_LOOP_TIMEOUT` boundary timeout.
-//! - [`automaton`] — `AutomatonBridge` that wires `aura-automaton`'s
+//! - [`automaton`] — `AutomatonBridge` that wires `aura-engine-automaton`'s
 //!   dev-loop / task-run automatons through per-agent kernels with
 //!   recorded `System::AutomatonLifecycle` audit entries.
 //! - [`agents`] — `AgentHost`: recursive agents. Any agent can spawn
@@ -36,7 +36,7 @@
 //!
 //! Phase C / Commit 4 moved the `JwtDomainApi` wrapper (and the
 //! HTTP `DomainApi` impl that used to live in the gateway) into the
-//! dedicated `aura-domain-http` crate; the automaton bridge imports
+//! dedicated `aura-exec-domain-http` crate; the automaton bridge imports
 //! it from there now.
 
 #![forbid(unsafe_code)]

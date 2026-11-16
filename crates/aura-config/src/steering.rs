@@ -129,7 +129,7 @@ impl Default for SteeringConfig {
 ///
 /// Unlike [`SteeringConfig`], this struct is **per-task** rather than
 /// process-wide: it is constructed inside the automaton builtin (e.g.
-/// `aura_automaton::builtins::task_run::TaskRunConfig`) from the
+/// `aura_engine_automaton::builtins::task_run::TaskRunConfig`) from the
 /// dispatch JSON and threaded through `aura_agent::agent_runner`'s
 /// `AgentRunnerConfig` → `AgentLoopConfig` chain into the per-run
 /// `SteeringRegistry`. The fields are not env-driven; no

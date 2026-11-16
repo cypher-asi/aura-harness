@@ -84,14 +84,14 @@ fn model_history_resumes_the_conversation_since_the_last_session_start() {
     }
 
     let history = model_history(&store, agent).unwrap();
-    let rendered: Vec<(aura_model_reasoner::Role, &str)> = history
+    let rendered: Vec<(aura_model::Role, &str)> = history
         .iter()
         .map(|m| match m.content.as_slice() {
-            [aura_model_reasoner::ContentBlock::Text { text }] => (m.role, text.as_str()),
+            [aura_model::ContentBlock::Text { text }] => (m.role, text.as_str()),
             other => panic!("expected one text block, got {other:?}"),
         })
         .collect();
-    use aura_model_reasoner::Role::{Assistant, User};
+    use aura_model::Role::{Assistant, User};
     assert_eq!(
         rendered,
         [

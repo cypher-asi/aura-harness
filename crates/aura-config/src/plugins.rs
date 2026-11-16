@@ -70,7 +70,7 @@ pub struct PluginConfig {
     /// `enabled = true`. See plan §4 for the full gating matrix.
     pub trusted: bool,
     /// Operator-pinned plugin version. `None` means "use whatever
-    /// `aura-plugin-core` resolves".
+    /// `aura-plugin` resolves".
     pub version: Option<String>,
 }
 

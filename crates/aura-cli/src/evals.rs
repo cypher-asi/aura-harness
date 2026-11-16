@@ -23,8 +23,8 @@ use aura_agent_trace::bundle::{list_runs, now_ms, RunBundle};
 use aura_agent_trace::{scorecard, RunMeta, RunScorecard, RunSource, RunTrace};
 use aura_config::trace::TraceLevel;
 use aura_core_types::trace::{Reward, RewardKind, RewardTarget};
-use aura_model_reasoner::ModelProvider;
-use aura_tools::ToolConfig;
+use aura_exec_tools::ToolConfig;
+use aura_model::ModelProvider;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 

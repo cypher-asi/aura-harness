@@ -17,17 +17,17 @@ use super::event_channel::EVENT_HISTORY_CAPACITY;
 use super::AutomatonBridge;
 use crate::scheduler::Scheduler;
 use async_trait::async_trait;
-use aura_automaton::AutomatonRuntime;
 use aura_core_types::{AgentId, InstalledIntegrationDefinition, TransactionType};
-use aura_model_reasoner::{MockProvider, ModelProvider};
-use aura_store_db::{RocksStore, Store};
-use aura_tools::{
+use aura_engine_automaton::AutomatonRuntime;
+use aura_exec_tools::{
     domain_tools::{
         CreateSessionParams, DomainApi, MessageDescriptor, ProjectDescriptor, ProjectUpdate,
         SaveMessageParams, SessionDescriptor, SpecDescriptor, TaskDescriptor, TaskUpdate,
     },
     ToolCatalog, ToolConfig,
 };
+use aura_model::{MockProvider, ModelProvider};
+use aura_store_db::{RocksStore, Store};
 use std::sync::Arc;
 
 /// A `DomainApi` stub whose methods all panic — the lifecycle test
@@ -292,7 +292,7 @@ async fn start_then_stop_records_two_automaton_lifecycle_entries() {
         None,
         None,
         None,
-        aura_model_reasoner::ModelRequestKind::DevLoopBootstrap,
+        aura_model::ModelRequestKind::DevLoopBootstrap,
     );
 
     bridge
@@ -363,7 +363,7 @@ async fn pause_then_stop_records_distinct_lifecycle_entries_in_order() {
         None,
         None,
         None,
-        aura_model_reasoner::ModelRequestKind::DevLoopBootstrap,
+        aura_model::ModelRequestKind::DevLoopBootstrap,
     );
 
     bridge
@@ -394,7 +394,7 @@ async fn pause_then_stop_records_distinct_lifecycle_entries_in_order() {
 fn prepare_installed_tools_filters_by_required_integration() {
     let tools = AutomatonBridge::prepare_installed_tools(
         Some(vec![
-            aura_protocol::InstalledTool {
+            aura_core_protocol::InstalledTool {
                 name: "brave_search_web".to_string(),
                 description: "Search the web using Brave".to_string(),
                 input_schema: serde_json::json!({
@@ -403,18 +403,20 @@ fn prepare_installed_tools_filters_by_required_integration() {
                     "required": ["query"]
                 }),
                 endpoint: "https://example.com/brave".to_string(),
-                auth: aura_protocol::ToolAuth::None,
+                auth: aura_core_protocol::ToolAuth::None,
                 timeout_ms: None,
                 namespace: None,
-                required_integration: Some(aura_protocol::InstalledToolIntegrationRequirement {
-                    integration_id: None,
-                    provider: Some("brave_search".to_string()),
-                    kind: Some("workspace_integration".to_string()),
-                }),
+                required_integration: Some(
+                    aura_core_protocol::InstalledToolIntegrationRequirement {
+                        integration_id: None,
+                        provider: Some("brave_search".to_string()),
+                        kind: Some("workspace_integration".to_string()),
+                    },
+                ),
                 runtime_execution: None,
                 metadata: Default::default(),
             },
-            aura_protocol::InstalledTool {
+            aura_core_protocol::InstalledTool {
                 name: "list_org_integrations".to_string(),
                 description: "List org integrations".to_string(),
                 input_schema: serde_json::json!({
@@ -422,7 +424,7 @@ fn prepare_installed_tools_filters_by_required_integration() {
                     "properties": {},
                 }),
                 endpoint: "https://example.com/list".to_string(),
-                auth: aura_protocol::ToolAuth::None,
+                auth: aura_core_protocol::ToolAuth::None,
                 timeout_ms: None,
                 namespace: None,
                 required_integration: None,
@@ -447,7 +449,7 @@ fn prepare_installed_tools_filters_by_required_integration() {
     assert!(names.contains(&"list_org_integrations"));
 
     let filtered = AutomatonBridge::prepare_installed_tools(
-        Some(vec![aura_protocol::InstalledTool {
+        Some(vec![aura_core_protocol::InstalledTool {
             name: "brave_search_web".to_string(),
             description: "Search the web using Brave".to_string(),
             input_schema: serde_json::json!({
@@ -456,10 +458,10 @@ fn prepare_installed_tools_filters_by_required_integration() {
                 "required": ["query"]
             }),
             endpoint: "https://example.com/brave".to_string(),
-            auth: aura_protocol::ToolAuth::None,
+            auth: aura_core_protocol::ToolAuth::None,
             timeout_ms: None,
             namespace: None,
-            required_integration: Some(aura_protocol::InstalledToolIntegrationRequirement {
+            required_integration: Some(aura_core_protocol::InstalledToolIntegrationRequirement {
                 integration_id: None,
                 provider: Some("brave_search".to_string()),
                 kind: Some("workspace_integration".to_string()),
@@ -521,7 +523,7 @@ fn test_bridge() -> AutomatonBridge {
 /// sees the full sequence via [`EventSubscription::history`].
 #[tokio::test]
 async fn late_subscriber_sees_replayed_history_after_done() {
-    use aura_automaton::AutomatonEvent;
+    use aura_engine_automaton::AutomatonEvent;
 
     let bridge = test_bridge();
     let automaton_id = "aut-replay".to_string();
@@ -594,7 +596,7 @@ async fn late_subscriber_sees_replayed_history_after_done() {
 /// `POST /automaton/start` returned.
 #[tokio::test]
 async fn mid_stream_subscriber_sees_history_then_live_events() {
-    use aura_automaton::AutomatonEvent;
+    use aura_engine_automaton::AutomatonEvent;
 
     let bridge = test_bridge();
     let automaton_id = "aut-mid".to_string();
@@ -653,7 +655,7 @@ async fn mid_stream_subscriber_sees_history_then_live_events() {
 /// subscriber that fell behind.
 #[tokio::test]
 async fn history_caps_at_capacity_and_drops_oldest() {
-    use aura_automaton::AutomatonEvent;
+    use aura_engine_automaton::AutomatonEvent;
 
     let bridge = test_bridge();
     let automaton_id = "aut-cap".to_string();

@@ -21,7 +21,7 @@ use std::task::{Context, Poll};
 use std::time::Instant;
 
 use aura_agent_kernel::ReasonStreamHandle;
-use aura_model_reasoner::{ReasonerError, StreamAccumulator, StreamEvent, StreamEventStream};
+use aura_model::{ReasonerError, StreamAccumulator, StreamEvent, StreamEventStream};
 use futures_util::Stream;
 
 /// Reason string used when `RecordingStream` is dropped before any
@@ -67,8 +67,8 @@ impl RecordingStream {
         let stop_reason = self
             .accumulator
             .stop_reason
-            .unwrap_or(aura_model_reasoner::StopReason::EndTurn);
-        let usage = aura_model_reasoner::Usage {
+            .unwrap_or(aura_model::StopReason::EndTurn);
+        let usage = aura_model::Usage {
             input_tokens: self.accumulator.input_tokens,
             output_tokens: self.accumulator.output_tokens,
             cache_creation_input_tokens: self.accumulator.cache_creation_input_tokens,
@@ -164,7 +164,7 @@ mod tests {
     use super::*;
     use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
     use aura_core_types::{AgentId, TransactionType};
-    use aura_model_reasoner::{Message, MockProvider, ModelProvider, ModelRequest, StreamEvent};
+    use aura_model::{Message, MockProvider, ModelProvider, ModelRequest, StreamEvent};
     use aura_store_db::{RocksStore, Store};
     use futures_util::{stream, StreamExt};
     use std::sync::Arc;
@@ -181,7 +181,7 @@ mod tests {
         async fn complete(
             &self,
             _request: ModelRequest,
-        ) -> Result<aura_model_reasoner::ModelResponse, ReasonerError> {
+        ) -> Result<aura_model::ModelResponse, ReasonerError> {
             Err(ReasonerError::Internal("streaming-only mock".into()))
         }
 
@@ -237,14 +237,14 @@ mod tests {
         async fn complete(
             &self,
             _request: ModelRequest,
-        ) -> Result<aura_model_reasoner::ModelResponse, ReasonerError> {
+        ) -> Result<aura_model::ModelResponse, ReasonerError> {
             Err(ReasonerError::Internal("streaming-only mock".into()))
         }
 
         async fn complete_streaming(
             &self,
             _request: ModelRequest,
-        ) -> Result<aura_model_reasoner::StreamEventStream, ReasonerError> {
+        ) -> Result<aura_model::StreamEventStream, ReasonerError> {
             let events: Vec<Result<StreamEvent, ReasonerError>> = vec![
                 Ok(StreamEvent::MessageStart {
                     message_id: "msg-err-1".to_string(),
@@ -441,14 +441,14 @@ mod tests {
         async fn complete(
             &self,
             _request: ModelRequest,
-        ) -> Result<aura_model_reasoner::ModelResponse, ReasonerError> {
+        ) -> Result<aura_model::ModelResponse, ReasonerError> {
             Err(ReasonerError::Internal("streaming-only mock".into()))
         }
 
         async fn complete_streaming(
             &self,
             _request: ModelRequest,
-        ) -> Result<aura_model_reasoner::StreamEventStream, ReasonerError> {
+        ) -> Result<aura_model::StreamEventStream, ReasonerError> {
             let events: Vec<Result<StreamEvent, ReasonerError>> = vec![
                 Ok(StreamEvent::MessageStart {
                     message_id: "msg-think-1".to_string(),

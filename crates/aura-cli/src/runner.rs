@@ -1,7 +1,7 @@
 //! Body of the `aura` CLI binary. The root `src/main.rs` initialises
 //! `dotenvy` and calls [`run_cli`]; subcommands dispatch from here, and
 //! the agent session itself runs in `aura-app`. The `aura-node`
-//! entrypoint lives in `aura_runtime::run_node` and is re-exported from
+//! entrypoint lives in `aura_node::run_node` and is re-exported from
 //! this crate root.
 
 use crate::auth_commands;
@@ -11,7 +11,7 @@ use crate::cli::{
 
 use anyhow::Context;
 use aura_app::session;
-use aura_terminal::{AlertSettings, App, Terminal, Theme};
+use aura_ui_terminal::{AlertSettings, App, Terminal, Theme};
 use clap::Parser;
 use tracing::{info, warn};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -75,7 +75,7 @@ fn display_available() -> bool {
 /// subcommand the agent runs in the terminal.
 ///
 /// Subcommand errors are typed at their source (e.g.
-/// `aura_auth::AuthError`, `aura_plugin_core::InstallError`) and bubble
+/// `aura_auth::AuthError`, `aura_plugin::InstallError`) and bubble
 /// up here as `anyhow::Error` because the root binary's `main` is the
 /// only remaining `anyhow`-using boundary in the workspace.
 ///
@@ -140,15 +140,15 @@ fn cmd_migrate(args: MigrateArgs) -> anyhow::Result<()> {
 ///
 /// Dispatches to the install / list / enable / disable handlers.
 /// Resolves `AURA_HOME` once and constructs a single
-/// [`aura_plugin_core::PluginCache`] rooted at `AURA_HOME/plugins/`
+/// [`aura_plugin::PluginCache`] rooted at `AURA_HOME/plugins/`
 /// before dispatching so every subcommand sees the same cache root
 /// resolution rules.
 fn cmd_plugins(args: PluginsCommand) -> anyhow::Result<()> {
     let aura_home = aura_config::AuraHome::resolve().context("resolving AURA_HOME")?;
-    let cache = aura_plugin_core::PluginCache::new(aura_home.path.join("plugins"));
+    let cache = aura_plugin::PluginCache::new(aura_home.path.join("plugins"));
     match args.action {
         PluginsSubcommand::Install { source, trust } => {
-            let installed = aura_plugin_core::install_with_trust(&source, &cache, trust)
+            let installed = aura_plugin::install_with_trust(&source, &cache, trust)
                 .with_context(|| format!("installing plugin from {}", source.display()))?;
             println!(
                 "installed {} v{}",
@@ -183,20 +183,18 @@ fn cmd_plugins(args: PluginsCommand) -> anyhow::Result<()> {
 /// `aura plugins enable` flow with trust-prompt support.
 ///
 /// Reads the prior `[plugins.<id>]` state from `config.toml`, hands
-/// the cache + state to [`aura_plugin_core::enable_with_prompter`]
+/// the cache + state to [`aura_plugin::enable_with_prompter`]
 /// with the appropriate prompter (`AlwaysYes` for `--yes`,
 /// `AlwaysNo` for `--no`, `TtyPrompter` otherwise), and writes the
 /// resulting decision back to `config.toml`.
 fn cmd_plugin_enable(
     aura_home: &std::path::Path,
-    cache: &aura_plugin_core::PluginCache,
+    cache: &aura_plugin::PluginCache,
     id: &str,
     yes: bool,
     no: bool,
 ) -> anyhow::Result<()> {
-    use aura_plugin_core::{
-        enable_with_prompter, AlwaysNo, AlwaysYes, EnableDecision, TtyPrompter,
-    };
+    use aura_plugin::{enable_with_prompter, AlwaysNo, AlwaysYes, EnableDecision, TtyPrompter};
 
     let prior = read_plugin_enable_state(aura_home, id)?;
 
@@ -236,12 +234,12 @@ fn cmd_plugin_enable(
 fn read_plugin_enable_state(
     aura_home: &std::path::Path,
     id: &str,
-) -> anyhow::Result<aura_plugin_core::PluginEnableState> {
+) -> anyhow::Result<aura_plugin::PluginEnableState> {
     use std::fs;
 
     let config_path = aura_home.join("config.toml");
     if !config_path.exists() {
-        return Ok(aura_plugin_core::PluginEnableState::default());
+        return Ok(aura_plugin::PluginEnableState::default());
     }
     let body = fs::read_to_string(&config_path)
         .with_context(|| format!("reading {}", config_path.display()))?;
@@ -257,7 +255,7 @@ fn read_plugin_enable_state(
     let trusted = table
         .and_then(|t| t.get("trusted"))
         .and_then(toml::Value::as_bool);
-    Ok(aura_plugin_core::PluginEnableState { enabled, trusted })
+    Ok(aura_plugin::PluginEnableState { enabled, trusted })
 }
 
 /// Minimal `~/.aura/config.toml` mutation: read (or synthesise) the
@@ -340,8 +338,7 @@ async fn run_with_args(
 
             tracing_subscriber::registry()
                 .with(
-                    fmt::layer()
-                        .event_format(aura_runtime::console_format::AuraConsoleFormat::new()),
+                    fmt::layer().event_format(aura_node::console_format::AuraConsoleFormat::new()),
                 )
                 .with(filter)
                 .init();
@@ -391,10 +388,10 @@ async fn run_terminal(
 async fn run_headless(args: RunArgs) -> anyhow::Result<()> {
     info!("Starting AURA CLI in headless mode (node server)");
 
-    let mut config = aura_runtime::NodeConfig::from_env();
+    let mut config = aura_node::NodeConfig::from_env();
     config.allow_unrestricted_full_access |= args.allow_unrestricted_full_access;
 
-    aura_runtime::Node::new(config).run().await
+    aura_node::Node::new(config).run().await
 }
 
 #[cfg(test)]

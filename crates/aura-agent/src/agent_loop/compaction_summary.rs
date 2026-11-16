@@ -2,7 +2,7 @@
 //!
 //! The render-only template (system prompt, header literals,
 //! numeric-input formatter) lives in
-//! `aura_context_prompts::auxiliary::compaction`. The `Vec<aura_model_reasoner::Message>`
+//! `aura_context_prompts::auxiliary::compaction`. The `Vec<aura_model::Message>`
 //! walker that produces the per-message text for the two body
 //! sections has to stay in `aura-agent` because it depends on
 //! `aura-reasoner`, which the prompts crate is forbidden from
@@ -16,7 +16,7 @@
 use aura_context_prompts::auxiliary::compaction::{
     build_compact_summary_user_prompt, CompactSummaryHeader,
 };
-use aura_model_reasoner::{ContentBlock, Message, ToolResultContent};
+use aura_model::{ContentBlock, Message, ToolResultContent};
 
 /// Render the user-channel prompt for the compaction-summary LLM
 /// call.

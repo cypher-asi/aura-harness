@@ -18,7 +18,7 @@ fn prompt(request_id: &str, tool: &str, args: Value) -> PendingToolPrompt {
 }
 
 fn cargo_test() -> Value {
-    json!({ "program": "cargo", "args": ["test", "-p", "aura-tools"] })
+    json!({ "program": "cargo", "args": ["test", "-p", "aura-exec-tools"] })
 }
 
 struct Harness {

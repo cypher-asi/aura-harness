@@ -83,8 +83,8 @@ pub(crate) struct SamplingRequestResult {
 /// A response that is only thinking or native `tool_use` blocks
 /// returns `false`; read-only tools are useful internally but are not
 /// a completed user-visible answer by themselves.
-fn response_has_visible_output(response: &aura_model_reasoner::ModelResponse) -> bool {
-    use aura_model_reasoner::ContentBlock;
+fn response_has_visible_output(response: &aura_model::ModelResponse) -> bool {
+    use aura_model::ContentBlock;
     response.message.content.iter().any(|block| match block {
         ContentBlock::Text { text } => !text.trim().is_empty(),
         _ => false,
@@ -183,7 +183,7 @@ pub(crate) async fn run_sampling_request(
     // Emitted once: by the pump as soon as the response completes, or
     // below when the transport returns without calling back.
     let pending_observation = std::sync::Mutex::new(Some(observation));
-    let emit_exchange = |response: &aura_model_reasoner::ModelResponse| {
+    let emit_exchange = |response: &aura_model::ModelResponse| {
         let Some(observation) = pending_observation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

@@ -4,7 +4,7 @@
 //!
 //! Single source of truth for **agent behavior knobs** and the **shared
 //! LLM retry / thinking env vars** consumed by `aura-agent`,
-//! `aura-automaton`, and `aura-reasoner`. After Phase 1 of the
+//! `aura-engine-automaton`, and `aura-reasoner`. After Phase 1 of the
 //! core-loop architecture refactor, *every* numeric magic value, tool
 //! list, default budget, and owned env var that controls agent
 //! behavior lives here. "Where is this knob read?" and "what is this
@@ -197,7 +197,7 @@ pub use verify::{
 /// Root configuration tree.
 ///
 /// Holds the [`AgentConfig`] sub-tree (consumed by `aura-agent`,
-/// `aura-automaton`, and the future `aura-prompts` crate) and the
+/// `aura-engine-automaton`, and the future `aura-prompts` crate) and the
 /// [`ReasonerConfig`] sub-tree (consumed by `aura-reasoner` and the
 /// agent streaming retry paths).
 ///

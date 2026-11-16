@@ -15,7 +15,7 @@
 //! mirror lives in `aura-os` at `interface/src/utils/tool-markers.ts`
 //! (display) and `.../persist_task/sanitize.rs` (persistence).
 
-use aura_model_reasoner::{ContentBlock, Message};
+use aura_model::{ContentBlock, Message};
 
 /// XML tag names whose `<tag ...>` / `</tag>` forms may leak from the
 /// model into assistant text (Anthropic tool-call syntax).
@@ -141,7 +141,7 @@ fn collapse_blank_lines(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_model_reasoner::Role;
+    use aura_model::Role;
 
     #[test]
     fn leaves_plain_text_untouched() {

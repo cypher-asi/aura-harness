@@ -70,7 +70,7 @@ pub fn check_budget_warning(
 /// `max_iterations == usize::MAX` is treated as "unlimited" — the
 /// iteration check short-circuits and termination is driven solely by
 /// the credit budget (when set). Callers using a wire-protocol u32
-/// (e.g. `aura_runtime::session::state::Session::max_turns`) should
+/// (e.g. `aura_node::session::state::Session::max_turns`) should
 /// map `u32::MAX` → `usize::MAX` before reaching this function.
 pub const fn should_stop_for_budget(
     iteration: usize,
@@ -159,7 +159,7 @@ mod tests {
     fn test_unlimited_max_iterations_never_stops_for_iterations() {
         // `usize::MAX` is the sentinel for "unlimited iterations" set
         // by `aura_config::MAX_ITERATIONS` (default) and by
-        // `aura_runtime` when the wire-protocol `max_turns == u32::MAX`.
+        // `aura_node` when the wire-protocol `max_turns == u32::MAX`.
         // The function must never report a stop based on the iteration
         // counter alone — even at very high iteration values.
         assert!(!should_stop_for_budget(0, usize::MAX, 0, 0, None));

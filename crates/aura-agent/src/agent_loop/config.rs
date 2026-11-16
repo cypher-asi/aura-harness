@@ -18,8 +18,8 @@ use aura_config::{
     EarlyTestOracleConfig, MAX_ITERATIONS, THINKING_MIN_BUDGET, THINKING_TAPER_AFTER,
     THINKING_TAPER_FACTOR,
 };
-use aura_model_reasoner::{ModelRequestKind, ToolDefinition};
-use aura_tools::IntentClassifier;
+use aura_exec_tools::IntentClassifier;
+use aura_model::{ModelRequestKind, ToolDefinition};
 
 use crate::types::TurnObserver;
 
@@ -98,7 +98,7 @@ pub struct AgentLoopConfig {
     /// Org UUID for X-Aura-Org-Id billing header.
     pub aura_org_id: Option<String>,
     /// Stable `prompt_cache_key` forwarded to OpenAI-family routing. See
-    /// `aura_model_reasoner::ModelRequest::prompt_cache_key`.
+    /// `aura_model::ModelRequest::prompt_cache_key`.
     pub prompt_cache_key: Option<String>,
     /// Retention hint paired with `prompt_cache_key`. Wire values
     /// `"in_memory"` / `"24h"`.
@@ -121,8 +121,8 @@ pub struct AgentLoopConfig {
     /// the manifest are passed through unchanged, so core filesystem /
     /// shell tools stay visible regardless of classifier state.
     ///
-    /// Populated via [`aura_protocol::AgentCapabilities::intent_classifier`]
-    /// on the [`aura_protocol::RuntimeRequest`] submitted to `POST /v1/run`.
+    /// Populated via [`aura_core_protocol::AgentCapabilities::intent_classifier`]
+    /// on the [`aura_core_protocol::RuntimeRequest`] submitted to `POST /v1/run`.
     /// This lets the harness reproduce the aura-os CEO super-agent's
     /// tier-1/tier-2 filtering without baking the tool manifest into
     /// the harness binary.
@@ -138,14 +138,14 @@ pub struct AgentLoopConfig {
     /// Character count of the static skills surface for this session,
     /// used by the per-turn context breakdown to estimate the "Skills"
     /// bucket. Computed once at session start by the runtime crate from
-    /// the resolved [`aura_protocol::SkillInfo`] list. Defaults to `0`
+    /// the resolved [`aura_core_protocol::SkillInfo`] list. Defaults to `0`
     /// when the harness is run without skills wired in (e.g. unit
     /// tests, dev loop), in which case the bucket reads as zero.
     pub skills_chars: usize,
     /// Character count of the static subagent registry for this
     /// session, used by the per-turn context breakdown to estimate the
     /// "Subagents" bucket. Computed once at session start by the
-    /// runtime crate from the active [`aura_runtime::SubagentRegistry`].
+    /// runtime crate from the active [`aura_node::SubagentRegistry`].
     /// Defaults to `0` for the same reasons as [`Self::skills_chars`].
     pub subagents_chars: usize,
     /// Per-skill `(name, text)` pairs for the "Skills" bucket of the
@@ -170,7 +170,7 @@ pub struct AgentLoopConfig {
     /// a fresh budget. `None` for non-task callers (e.g. chat).
     pub phase_reset_signal: Option<Arc<AtomicBool>>,
     /// Dev-loop signal: pin reasoning effort to
-    /// [`aura_model_reasoner::ThinkingEffort::Medium`] across every
+    /// [`aura_model::ThinkingEffort::Medium`] across every
     /// iteration of the run (see
     /// `LoopState::compute_thinking_effort`).
     ///
@@ -194,7 +194,7 @@ pub struct AgentLoopConfig {
     /// iteration, overriding the internal `compute_thinking_effort`
     /// taper so the user's explicit choice always wins. `None` (chat
     /// with no selection, dev-loop, subagents) keeps the heuristic.
-    pub user_thinking_effort: Option<aura_model_reasoner::ThinkingEffort>,
+    pub user_thinking_effort: Option<aura_model::ThinkingEffort>,
     /// Layer E.1: hard cap on the number of *turns* one task may run.
     /// A turn is the unit of work between "model starts talking" and
     /// "model goes quiet without follow-up signal"; codex's
@@ -222,7 +222,7 @@ pub struct AgentLoopConfig {
     /// [`AgentError::StreamTimeout`](crate::AgentError::StreamTimeout)
     /// instead of hanging the turn forever. This measures the gap
     /// between *liveness frames*, not completed blocks: pings and
-    /// intra-block deltas surface as [`aura_model_reasoner::ResponseEvent::Keepalive`]
+    /// intra-block deltas surface as [`aura_model::ResponseEvent::Keepalive`]
     /// and reset the window, so a long extended-thinking block (which
     /// streams thinking deltas but completes no top-level item for a
     /// while) does NOT trip the timeout. Default `90s` — comfortably
@@ -280,7 +280,7 @@ pub struct AgentLoopConfig {
     /// this to get cache hits until compaction is really needed.
     pub compaction_trigger: Option<f64>,
     /// Todo list carried in from the previous run of this session.
-    pub initial_todos: Vec<aura_tools::todo::TodoItem>,
+    pub initial_todos: Vec<aura_exec_tools::todo::TodoItem>,
     /// When the model ends its turn while `todo_write` items are still
     /// open, steer it back to the next item instead of stopping. Gives
     /// up after [`super::turn::MAX_STALLED_TODO_NUDGES`] nudges that
@@ -385,7 +385,7 @@ impl AgentLoopConfig {
 }
 
 /// Parse the wire-level `prompt_cache_retention` string forwarded by
-/// `aura-os` into a typed [`aura_model_reasoner::PromptCacheRetention`].
+/// `aura-os` into a typed [`aura_model::PromptCacheRetention`].
 /// Unknown or blank values fall through as `None` so the reasoner
 /// falls back to the upstream provider default.
 ///
@@ -395,15 +395,11 @@ impl AgentLoopConfig {
 /// keeps the wire-string contract one file away from the consumers.
 pub(super) fn parse_cache_retention(
     value: Option<&str>,
-) -> Option<aura_model_reasoner::PromptCacheRetention> {
+) -> Option<aura_model::PromptCacheRetention> {
     let v = value?.trim();
     match v {
-        "24h" | "h24" | "hours_24" | "Hours24" => {
-            Some(aura_model_reasoner::PromptCacheRetention::Hours24)
-        }
-        "in_memory" | "InMemory" | "memory" => {
-            Some(aura_model_reasoner::PromptCacheRetention::InMemory)
-        }
+        "24h" | "h24" | "hours_24" | "Hours24" => Some(aura_model::PromptCacheRetention::Hours24),
+        "in_memory" | "InMemory" | "memory" => Some(aura_model::PromptCacheRetention::InMemory),
         _ => None,
     }
 }

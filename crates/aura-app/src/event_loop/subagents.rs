@@ -33,15 +33,15 @@ use aura_context_skills::SkillManager;
 use aura_core_types::{
     AgentId, SpawnMode, SubagentDispatchRequest, SubagentExit, SubagentResult, Transaction,
 };
-use aura_model_reasoner::{Message, ToolDefinition};
-use aura_terminal::events::{
+use aura_exec_tools::agents::task::TASK_TOOL_NAME;
+use aura_exec_tools::jobs::{JOB_KILL_TOOL_NAME, JOB_OUTPUT_TOOL_NAME};
+use aura_exec_tools::todo::TODO_WRITE_TOOL_NAME;
+use aura_exec_tools::SubagentDispatchHook;
+use aura_model::{Message, ToolDefinition};
+use aura_ui_terminal::events::{
     AgentDefinitionSummary, AgentSummary, ProcessKind, ProcessStatus, ProcessSummary,
 };
-use aura_terminal::{PermissionMode, UiCommand};
-use aura_tools::agents::task::TASK_TOOL_NAME;
-use aura_tools::jobs::{JOB_KILL_TOOL_NAME, JOB_OUTPUT_TOOL_NAME};
-use aura_tools::todo::TODO_WRITE_TOOL_NAME;
-use aura_tools::SubagentDispatchHook;
+use aura_ui_terminal::{PermissionMode, UiCommand};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};

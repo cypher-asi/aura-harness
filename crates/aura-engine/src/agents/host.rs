@@ -19,9 +19,9 @@ use aura_core_types::{
     AgentId, AgentMode, AgentPermissions, AgentToolPermissions, SpawnMode, SubagentDispatchRequest,
     SubagentExit, SubagentResult, Transaction, TransactionType, UserToolDefaults,
 };
-use aura_model_reasoner::{Message, ToolDefinition};
+use aura_exec_tools::{AgentControlHook, AgentReadHook};
+use aura_model::{Message, ToolDefinition};
 use aura_store_db::Store;
-use aura_tools::{AgentControlHook, AgentReadHook};
 use bytes::Bytes;
 use dashmap::DashMap;
 use parking_lot::Mutex;
@@ -302,7 +302,7 @@ struct ChildPlan {
     mode: AgentMode,
     model: String,
     system_prompt: String,
-    reasoning_effort: Option<aura_model_reasoner::ThinkingEffort>,
+    reasoning_effort: Option<aura_model::ThinkingEffort>,
     response_max_tokens: Option<u32>,
     kind: Option<aura_core_types::SubagentKindSpec>,
     iteration_cap: Option<u32>,
@@ -544,7 +544,7 @@ impl HostInner {
         }
         let reasoning_effort = match spec.reasoning_effort.as_deref() {
             None => None,
-            Some(effort) => match aura_model_reasoner::ThinkingEffort::from_wire(effort) {
+            Some(effort) => match aura_model::ThinkingEffort::from_wire(effort) {
                 Some(effort) => Some(effort),
                 None => {
                     return SubagentResult::rejected(format!("invalid reasoning effort: {effort}"))
@@ -581,7 +581,7 @@ impl HostInner {
         let model = if spec.model_id.is_empty() {
             kind.default_model
                 .clone()
-                .unwrap_or_else(|| aura_model_reasoner::ENV_FALLBACK_MODEL.to_string())
+                .unwrap_or_else(|| aura_model::ENV_FALLBACK_MODEL.to_string())
         } else {
             spec.model_id.clone()
         };

@@ -13,7 +13,7 @@ use crate::types::{
 };
 use crate::DEFAULT_MEMORY_MODEL;
 use aura_core_types::{AgentEventId, AgentId, FactId};
-use aura_model_reasoner::{Message, ModelProvider, ModelRequest};
+use aura_model::{Message, ModelProvider, ModelRequest};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
@@ -94,7 +94,7 @@ pub struct ConsolidationReport {
 /// provider (e.g. `aura_agent::KernelModelGateway`) so Invariant §3
 /// ("Every LLM Call Is Recorded") holds. The context layer accepts the
 /// abstract trait object to avoid an upward edge into `aura-agent`; the
-/// runtime composition root in `aura_runtime::node` is the single place
+/// runtime composition root in `aura_node::node` is the single place
 /// responsible for picking the right impl.
 pub struct MemoryConsolidator {
     store: Arc<dyn MemoryStoreApi>,

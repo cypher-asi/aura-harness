@@ -4,7 +4,7 @@ use aura_agent::{AgentLoop, AgentLoopEvent, AgentLoopResult};
 use aura_agent::{KernelModelGateway, KernelToolGateway};
 use aura_agent_kernel::Kernel;
 use aura_core_types::AgentId;
-use aura_model_reasoner::{Message, ToolDefinition};
+use aura_model::{Message, ToolDefinition};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -146,13 +146,13 @@ mod tests {
     use super::*;
     use aura_agent_kernel::{ExecutorRouter, KernelConfig};
     use aura_core_types::{Transaction, TransactionType};
-    use aura_model_reasoner::MockProvider;
+    use aura_model::MockProvider;
     use aura_store_db::{RocksStore, Store};
     use bytes::Bytes;
 
     fn create_test_kernel(dir: &std::path::Path, agent_id: AgentId) -> Arc<Kernel> {
         let store: Arc<dyn Store> = Arc::new(RocksStore::open(dir.join("db"), false).unwrap());
-        let provider: Arc<dyn aura_model_reasoner::ModelProvider + Send + Sync> =
+        let provider: Arc<dyn aura_model::ModelProvider + Send + Sync> =
             Arc::new(MockProvider::simple_response("response"));
         let ws_dir = dir.join("workspaces");
         std::fs::create_dir_all(&ws_dir).unwrap();
@@ -185,7 +185,7 @@ mod tests {
         let agent_id = AgentId::generate();
         let store: Arc<dyn Store> =
             Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
-        let provider: Arc<dyn aura_model_reasoner::ModelProvider + Send + Sync> =
+        let provider: Arc<dyn aura_model::ModelProvider + Send + Sync> =
             Arc::new(MockProvider::simple_response("I processed your request."));
         let ws_dir = dir.path().join("workspaces");
         std::fs::create_dir_all(&ws_dir).unwrap();

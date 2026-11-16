@@ -10,8 +10,8 @@
 //! start is ignored.
 
 use aura_core_types::AgentId;
-use aura_model_reasoner::{ContentBlock, Message, Role};
-use aura_tools::todo::TodoItem;
+use aura_exec_tools::todo::TodoItem;
+use aura_model::{ContentBlock, Message, Role};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::warn;
@@ -250,7 +250,7 @@ pub fn is_resumable(messages: &[Message]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_tools::todo::TodoStatus;
+    use aura_exec_tools::todo::TodoStatus;
 
     fn checkpoint(started_ms: u64, prompt: &str) -> SessionCheckpoint {
         SessionCheckpoint::new(

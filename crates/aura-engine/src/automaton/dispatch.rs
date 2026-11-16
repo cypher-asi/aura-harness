@@ -20,15 +20,15 @@ use std::sync::Arc;
 use aura_agent::agent_runner::AgentRunnerConfig;
 use aura_agent::{KernelDomainGateway, KernelModelGateway, KernelToolGateway};
 use aura_agent_kernel::Kernel;
-use aura_automaton::{DevLoopAutomaton, TaskRunAutomaton};
+use aura_core_protocol::AgentPersona;
 use aura_core_types::AgentPermissions;
-use aura_protocol::AgentPersona;
-use aura_tools::catalog::ToolCatalog;
-use aura_tools::domain_tools::DomainApi;
+use aura_engine_automaton::{DevLoopAutomaton, TaskRunAutomaton};
+use aura_exec_tools::catalog::ToolCatalog;
+use aura_exec_tools::domain_tools::DomainApi;
 use tracing::{info, warn};
 
 use crate::capabilities;
-use aura_protocol::installed_integration_to_core;
+use aura_core_protocol::installed_integration_to_core;
 
 use super::{AutomatonBridge, ProjectHandle};
 
@@ -93,8 +93,8 @@ impl AutomatonBridge {
         // `"missing model"` before reaching this helper when the
         // operator forgot to set one.
         model: &str,
-        installed_tools: Option<Vec<aura_protocol::InstalledTool>>,
-        installed_integrations: Option<Vec<aura_protocol::InstalledIntegration>>,
+        installed_tools: Option<Vec<aura_core_protocol::InstalledTool>>,
+        installed_integrations: Option<Vec<aura_core_protocol::InstalledIntegration>>,
         agent_permissions: AgentPermissions,
         aura_org_id: Option<&str>,
         aura_session_id: Option<&str>,
@@ -165,10 +165,10 @@ impl AutomatonBridge {
             aura_agent_id,
             Some(project_id),
         );
-        let catalog = Arc::new(
-            self.catalog
-                .with_installed_tools(aura_tools::catalog::ToolProfile::Engine, &installed_tools),
-        );
+        let catalog = Arc::new(self.catalog.with_installed_tools(
+            aura_exec_tools::catalog::ToolProfile::Engine,
+            &installed_tools,
+        ));
 
         Ok(AutomatonRunContext {
             kernel,
@@ -190,8 +190,8 @@ impl AutomatonBridge {
         model: Option<String>,
         git_repo_url: Option<String>,
         git_branch: Option<String>,
-        installed_tools: Option<Vec<aura_protocol::InstalledTool>>,
-        installed_integrations: Option<Vec<aura_protocol::InstalledIntegration>>,
+        installed_tools: Option<Vec<aura_core_protocol::InstalledTool>>,
+        installed_integrations: Option<Vec<aura_core_protocol::InstalledIntegration>>,
         agent_permissions: AgentPermissions,
         aura_org_id: Option<String>,
         aura_session_id: Option<String>,
@@ -199,7 +199,7 @@ impl AutomatonBridge {
         agent_persona: Option<AgentPersona>,
         agent_skills: Vec<String>,
         agent_system_prompt: Option<String>,
-        execution_profile: Option<aura_protocol::ModelSelection>,
+        execution_profile: Option<aura_core_protocol::ModelSelection>,
     ) -> Result<String, String> {
         // Hard-fail when the operator did not pin a model. The
         // pre-fix dev-loop path silently fell back to a build-time
@@ -310,7 +310,7 @@ impl AutomatonBridge {
             aura_session_id.as_deref(),
             aura_agent_id.as_deref(),
             Some(project_id),
-            aura_model_reasoner::ModelRequestKind::DevLoopBootstrap,
+            aura_model::ModelRequestKind::DevLoopBootstrap,
         );
         self.spawn_event_forwarder(automaton_id.clone(), event_rx);
         self.register_execution_profile(ctx.kernel.agent_id, execution_profile.as_ref());
@@ -354,8 +354,8 @@ impl AutomatonBridge {
         model: Option<String>,
         git_repo_url: Option<String>,
         git_branch: Option<String>,
-        installed_tools: Option<Vec<aura_protocol::InstalledTool>>,
-        installed_integrations: Option<Vec<aura_protocol::InstalledIntegration>>,
+        installed_tools: Option<Vec<aura_core_protocol::InstalledTool>>,
+        installed_integrations: Option<Vec<aura_core_protocol::InstalledIntegration>>,
         agent_permissions: AgentPermissions,
         prior_failure: Option<String>,
         work_log: Vec<String>,
@@ -365,7 +365,7 @@ impl AutomatonBridge {
         agent_persona: Option<AgentPersona>,
         agent_skills: Vec<String>,
         agent_system_prompt: Option<String>,
-        execution_profile: Option<aura_protocol::ModelSelection>,
+        execution_profile: Option<aura_core_protocol::ModelSelection>,
     ) -> Result<String, String> {
         // Mirror the dev-loop entry-point: refuse to start without an
         // explicit model. Same regression rationale.
@@ -444,7 +444,7 @@ impl AutomatonBridge {
             aura_session_id.as_deref(),
             aura_agent_id.as_deref(),
             Some(project_id),
-            aura_model_reasoner::ModelRequestKind::Chat,
+            aura_model::ModelRequestKind::Chat,
         );
         self.spawn_event_forwarder(automaton_id.clone(), event_rx);
         self.register_execution_profile(ctx.kernel.agent_id, execution_profile.as_ref());
@@ -468,7 +468,7 @@ impl AutomatonBridge {
 /// model selection at the HTTP-to-automaton boundary.
 fn apply_execution_profile(
     config: &mut AgentRunnerConfig,
-    profile: Option<&aura_protocol::ModelSelection>,
+    profile: Option<&aura_core_protocol::ModelSelection>,
 ) -> Result<(), String> {
     let Some(profile) = profile else {
         return Ok(());
@@ -488,7 +488,7 @@ fn apply_execution_profile(
     }
     config.reasoning_effort = profile
         .reasoning_effort
-        .and_then(|effort| aura_model_reasoner::ThinkingEffort::from_wire(effort.as_wire()));
+        .and_then(|effort| aura_model::ThinkingEffort::from_wire(effort.as_wire()));
     Ok(())
 }
 
@@ -498,10 +498,10 @@ mod execution_profile_tests {
     #[test]
     fn task_profile_preserves_effort_and_limits() {
         let mut config = AgentRunnerConfig::for_agent("test-model");
-        let profile = aura_protocol::ModelSelection {
+        let profile = aura_core_protocol::ModelSelection {
             max_tokens: Some(1024),
             max_turns: Some(7),
-            reasoning_effort: Some(aura_protocol::ReasoningEffort::XHigh),
+            reasoning_effort: Some(aura_core_protocol::ReasoningEffort::XHigh),
             ..Default::default()
         };
         apply_execution_profile(&mut config, Some(&profile)).unwrap();
@@ -510,17 +510,17 @@ mod execution_profile_tests {
         assert_eq!(config.max_agentic_iterations, 7);
         assert_eq!(
             config.reasoning_effort,
-            Some(aura_model_reasoner::ThinkingEffort::XHigh)
+            Some(aura_model::ThinkingEffort::XHigh)
         );
     }
     #[test]
     fn zero_execution_limits_are_rejected() {
         for profile in [
-            aura_protocol::ModelSelection {
+            aura_core_protocol::ModelSelection {
                 max_tokens: Some(0),
                 ..Default::default()
             },
-            aura_protocol::ModelSelection {
+            aura_core_protocol::ModelSelection {
                 max_turns: Some(0),
                 ..Default::default()
             },

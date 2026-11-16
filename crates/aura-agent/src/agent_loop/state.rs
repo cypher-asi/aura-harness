@@ -10,9 +10,7 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 use aura_core_types::trace::HarnessDecision;
-use aura_model_reasoner::{
-    Message, ModelRequest, ModelRequestKind, Role, ThinkingEffort, ToolDefinition,
-};
+use aura_model::{Message, ModelRequest, ModelRequestKind, Role, ThinkingEffort, ToolDefinition};
 
 use crate::budget::{BudgetState, ExplorationState};
 use crate::types::{AgentLoopResult, BuildBaseline};
@@ -103,7 +101,7 @@ pub(crate) struct LoopState {
     pub(crate) failed_edit_attempts: std::collections::HashMap<String, u32>,
     /// Todo list as of the last open-todo nudge, and how many nudges in
     /// a row left it unchanged. See `turn::open_todo_nudge`.
-    pub(crate) todos_at_last_nudge: Option<Vec<aura_tools::todo::TodoItem>>,
+    pub(crate) todos_at_last_nudge: Option<Vec<aura_exec_tools::todo::TodoItem>>,
     pub(crate) stalled_todo_nudges: u32,
     /// Harness decisions made since the last flush to the event
     /// channel. Sites without an event sender queue here and
@@ -174,13 +172,13 @@ impl LoopState {
     /// and tell the client about the new list.
     pub(super) fn observe_todo_writes(
         &mut self,
-        response: &aura_model_reasoner::ModelResponse,
+        response: &aura_model::ModelResponse,
         event_tx: Option<&tokio::sync::mpsc::Sender<crate::events::AgentLoopEvent>>,
     ) {
-        use aura_tools::todo::{apply_todo_write, TODO_WRITE_TOOL_NAME};
+        use aura_exec_tools::todo::{apply_todo_write, TODO_WRITE_TOOL_NAME};
         let mut changed = false;
         for block in &response.message.content {
-            let aura_model_reasoner::ContentBlock::ToolUse { name, input, .. } = block else {
+            let aura_model::ContentBlock::ToolUse { name, input, .. } = block else {
                 continue;
             };
             if name != TODO_WRITE_TOOL_NAME {
@@ -345,7 +343,7 @@ impl LoopState {
         // streak counter and the force-tool-choice path that rode on
         // top of it. `tool_choice` is always `Auto`; the model picks
         // its own next move.
-        let tool_choice = aura_model_reasoner::ToolChoice::Auto;
+        let tool_choice = aura_model::ToolChoice::Auto;
 
         // Response space and reasoning effort are independent controls.
         let effective_max_tokens = self.thinking.budget.min(config.max_tokens);
@@ -496,10 +494,10 @@ pub(super) fn latest_user_text(messages: &[Message]) -> Option<&str> {
             && msg
                 .content
                 .iter()
-                .any(|b| matches!(b, aura_model_reasoner::ContentBlock::Text { .. }))
+                .any(|b| matches!(b, aura_model::ContentBlock::Text { .. }))
         {
             return msg.content.iter().find_map(|b| match b {
-                aura_model_reasoner::ContentBlock::Text { text } => Some(text.as_str()),
+                aura_model::ContentBlock::Text { text } => Some(text.as_str()),
                 _ => None,
             });
         }
@@ -510,8 +508,8 @@ pub(super) fn latest_user_text(messages: &[Message]) -> Option<&str> {
 #[cfg(test)]
 mod intent_classifier_tests {
     use super::*;
-    use aura_model_reasoner::ToolDefinition;
-    use aura_tools::IntentClassifier;
+    use aura_exec_tools::IntentClassifier;
+    use aura_model::ToolDefinition;
     use serde_json::json;
     use std::sync::Arc;
 
@@ -578,7 +576,7 @@ mod intent_classifier_tests {
             Message::assistant("calling tool"),
             Message::tool_results(vec![(
                 "tu_1".into(),
-                aura_model_reasoner::ToolResultContent::Text("100".into()),
+                aura_model::ToolResultContent::Text("100".into()),
                 false,
             )]),
         ];
@@ -613,7 +611,7 @@ mod intent_classifier_tests {
             Message::assistant("calling tool"),
             Message::tool_results(vec![(
                 "tu_1".into(),
-                aura_model_reasoner::ToolResultContent::Text("large requirements".into()),
+                aura_model::ToolResultContent::Text("large requirements".into()),
                 false,
             )]),
         ];
@@ -629,10 +627,7 @@ mod intent_classifier_tests {
         let names: Vec<&str> = req.tools.iter().map(|t| t.name.as_str()).collect();
 
         assert_eq!(names, vec!["read_file", "create_task"]);
-        assert!(matches!(
-            req.tool_choice,
-            aura_model_reasoner::ToolChoice::Auto
-        ));
+        assert!(matches!(req.tool_choice, aura_model::ToolChoice::Auto));
     }
 
     #[test]
@@ -652,10 +647,7 @@ mod intent_classifier_tests {
         let names: Vec<&str> = req.tools.iter().map(|t| t.name.as_str()).collect();
 
         assert_eq!(names, vec!["read_file", "create_task"]);
-        assert!(matches!(
-            req.tool_choice,
-            aura_model_reasoner::ToolChoice::Auto
-        ));
+        assert!(matches!(req.tool_choice, aura_model::ToolChoice::Auto));
     }
 
     /// Regression: a `Chat` request with `create_task` in scope must

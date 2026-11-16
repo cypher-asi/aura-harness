@@ -1,11 +1,11 @@
 //! `SpawnHook` trait + `NoopSpawnHook` default impl.
 //!
-//! The `spawn_agent` tool in `aura-tools` produces a permission-checked
+//! The `spawn_agent` tool in `aura-exec-tools` produces a permission-checked
 //! [`ChildAgentSpec`] and delegates the actual persistence (creating the
 //! child `Identity`, seeding its record log, and emitting the `Delegate`
 //! transaction on the *caller's* record log) to a `SpawnHook`.
 //!
-//! The trait lives in this exec-layer crate so the exec-layer `aura-tools`
+//! The trait lives in this exec-layer crate so the exec-layer `aura-exec-tools`
 //! can consume it without an upward dependency on the agent-layer kernel.
 //! The kernel-backed production impl (`KernelSpawnHook`) stays in
 //! `aura-agent-kernel` and implements this trait.

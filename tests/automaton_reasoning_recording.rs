@@ -12,14 +12,14 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use aura_agent::KernelModelGateway;
 use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
-use aura_automaton::{Automaton, AutomatonId, AutomatonState, TickContext};
 use aura_core_types::{AgentId, TransactionType};
-use aura_model_reasoner::{MockProvider, ModelProvider};
-use aura_store_db::{RocksStore, Store};
-use aura_tools::domain_tools::{
+use aura_engine_automaton::{Automaton, AutomatonId, AutomatonState, TickContext};
+use aura_exec_tools::domain_tools::{
     CreateSessionParams, DomainApi, MessageDescriptor, ProjectDescriptor, ProjectUpdate,
     SaveMessageParams, SessionDescriptor, SpecDescriptor, TaskDescriptor, TaskUpdate,
 };
+use aura_model::{MockProvider, ModelProvider};
+use aura_store_db::{RocksStore, Store};
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -271,7 +271,7 @@ async fn spec_gen_via_kernel_model_gateway_records_reasoning_entry() {
     // is the only public implementor.
     let gateway: Arc<KernelModelGateway> = Arc::new(KernelModelGateway::new(kernel.clone()));
     let domain: Arc<dyn DomainApi> = Arc::new(DummyDomain);
-    let automaton = aura_automaton::SpecGenAutomaton::new(domain, gateway);
+    let automaton = aura_engine_automaton::SpecGenAutomaton::new(domain, gateway);
 
     let (event_tx, _event_rx) = mpsc::channel(64);
     let mut ctx = TickContext::new(
@@ -293,7 +293,7 @@ async fn spec_gen_via_kernel_model_gateway_records_reasoning_entry() {
 
     let outcome = automaton.tick(&mut ctx).await.expect("spec-gen tick");
     assert!(
-        matches!(outcome, aura_automaton::TickOutcome::Done),
+        matches!(outcome, aura_engine_automaton::TickOutcome::Done),
         "spec-gen should complete in one tick"
     );
 

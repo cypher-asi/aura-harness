@@ -8,13 +8,13 @@
 //! dedicated `aura-prompts` crate. The crate is render-only: it
 //! depends on `aura-config` plus `serde`/`serde_json`/`regex`/
 //! `tracing`/`thiserror` and **must not** depend on `aura-agent`,
-//! `aura-automaton`, `aura-runtime`, or `aura-reasoner`.
+//! `aura-engine-automaton`, `aura-node`, or `aura-reasoner`.
 //!
 //! `Cargo.toml` is the primary enforcement mechanism — adding any of
 //! the forbidden crates as a dep would fail to compile. This test is
 //! the source-level belt-and-suspenders: it scans
 //! `crates/aura-prompts/src/**/*.rs` for `use aura_agent::|use
-//! aura_automaton::|use aura_runtime::|use aura_model_reasoner::` and
+//! aura_engine_automaton::|use aura_node::|use aura_model::` and
 //! fails CI when one slips in (e.g. through a copy-paste from a
 //! migrated module that still carried its old `use` line).
 
@@ -23,11 +23,11 @@ use std::path::{Path, PathBuf};
 
 const FORBIDDEN_USE_PATTERNS: &[&str] = &[
     "use aura_agent::",
-    "use aura_automaton::",
-    "use aura_runtime::",
-    "use aura_model_reasoner::",
+    "use aura_engine_automaton::",
+    "use aura_node::",
+    "use aura_model::",
     "use aura_agent_kernel::",
-    "use aura_tools::",
+    "use aura_exec_tools::",
 ];
 
 #[test]
@@ -82,11 +82,11 @@ fn aura_prompts_cargo_toml_does_not_list_forbidden_deps() {
 
     for forbidden in [
         "aura-agent",
-        "aura-automaton",
-        "aura-runtime",
-        "aura-model-reasoner",
+        "aura-engine-automaton",
+        "aura-node",
+        "aura-model",
         "aura-agent-kernel",
-        "aura-tools",
+        "aura-exec-tools",
     ] {
         assert!(
             !stripped.contains(forbidden),

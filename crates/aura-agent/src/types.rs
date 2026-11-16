@@ -16,7 +16,7 @@ use std::sync::Arc;
 pub use aura_agent_steering::{FileChange, FileChangeKind, ToolCallInfo, ToolCallResult};
 
 /// Per-bucket token estimates surfaced on [`AgentLoopResult`] and
-/// forwarded to clients via `aura_protocol::ContextBreakdown`. Buckets
+/// forwarded to clients via `aura_core_protocol::ContextBreakdown`. Buckets
 /// follow the same `chars / CHARS_PER_TOKEN` heuristic that produces
 /// [`AgentLoopResult::estimated_context_tokens`], so they are
 /// directly comparable on the wire.
@@ -43,9 +43,9 @@ pub struct AgentContextBreakdown {
 
 /// Rendered text plus token estimate for a single context entry — one
 /// tool, one skill, or one subagent kind. Converted at the wire
-/// boundary into `aura_protocol::ContextSegment` (see the
-/// `aura-runtime` gateway), mirroring how [`AgentContextBreakdown`]
-/// becomes `aura_protocol::ContextBreakdown`.
+/// boundary into `aura_core_protocol::ContextSegment` (see the
+/// `aura-node` gateway), mirroring how [`AgentContextBreakdown`]
+/// becomes `aura_core_protocol::ContextBreakdown`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentContextSegment {
     /// Short human-readable label (tool name, skill name, subagent kind).
@@ -80,7 +80,7 @@ pub struct AgentContextContents {
 
 impl AgentContextContents {
     /// True when no bucket carries any content. The wire boundary uses
-    /// this to leave `aura_protocol::SessionUsage::context_contents`
+    /// this to leave `aura_core_protocol::SessionUsage::context_contents`
     /// `None` for empty turns.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -266,7 +266,7 @@ pub struct AgentLoopResult {
     /// Actual rendered text for each static context bucket, parallel to
     /// [`Self::context_breakdown`]'s token counts. Built each turn
     /// alongside the breakdown in [`crate::agent_loop::context`] and
-    /// converted to `aura_protocol::ContextContents` at the wire
+    /// converted to `aura_core_protocol::ContextContents` at the wire
     /// boundary. Empty (`AgentContextContents::default()`) on turns
     /// that never reach the compaction step.
     pub context_contents: AgentContextContents,
@@ -275,12 +275,12 @@ pub struct AgentLoopResult {
     /// Number of iterations completed.
     pub iterations: usize,
     /// Final message history.
-    pub messages: Vec<aura_model_reasoner::Message>,
+    pub messages: Vec<aura_model::Message>,
     /// Todo list after the run: [`crate::AgentLoopConfig::initial_todos`]
     /// with every `todo_write` call applied. Callers carry it into the
     /// next run because summary compaction can drop the calls from
     /// history.
-    pub todos: Vec<aura_tools::todo::TodoItem>,
+    pub todos: Vec<aura_exec_tools::todo::TodoItem>,
     /// Summary compactions performed during the run.
     pub summary_compactions: u32,
 }

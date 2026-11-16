@@ -36,7 +36,7 @@ mod wire;
 mod tests;
 
 /// `Progress` stage sent after a `todo_write` call; `message` is the
-/// full list as JSON (`Vec<aura_tools::todo::TodoItem>`).
+/// full list as JSON (`Vec<aura_exec_tools::todo::TodoItem>`).
 pub const PROGRESS_TODOS_UPDATED: &str = "todos_updated";
 /// `Progress` stage sent after the transcript was summarized to free
 /// context; `message` is a short human-readable description.

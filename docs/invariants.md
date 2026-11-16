@@ -131,14 +131,14 @@ sync with the `Enforcement:` lines under each section.
 
 | # | Invariant | Enforcement |
 |---|---|---|
-| §1 | Each agent's kernel is the sole external gateway | CI-gated `rg` bands in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh) + [`.github/workflows/invariants.yml`](../.github/workflows/invariants.yml) (`ModelProvider.complete(`, `append_entry_*`, `Command::new("git")`, `aura_store` imports inside `aura-agent/src/agent_loop/`). Type-level seal: [`aura_agent::RecordingModelProvider`](../crates/aura-agent/src/kernel_gateway.rs) is a crate-sealed marker trait; automatons take `P: RecordingModelProvider` so only `KernelModelGateway` (the recording wrapper) can be plugged in. Git-mutation surface covered by [`crates/aura-tools/src/git_tool/tests.rs`](../crates/aura-tools/src/git_tool/tests.rs) (`commit_reports_sha_when_there_are_changes`, `commit_rejects_empty_message`, `commit_surfaces_nonzero_exit_from_add`, `spawn_git_enforces_subcommand_allowlist`, `tool_executes_commit_via_context`, `tool_rejects_workspace_escape_via_config`, `git_push_rejects_missing_fields`). Automaton `DomainApi` mediation covered by [`crates/aura-agent/src/kernel_domain_gateway/tests.rs`](../crates/aura-agent/src/kernel_domain_gateway/tests.rs). |
+| §1 | Each agent's kernel is the sole external gateway | CI-gated `rg` bands in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh) + [`.github/workflows/invariants.yml`](../.github/workflows/invariants.yml) (`ModelProvider.complete(`, `append_entry_*`, `Command::new("git")`, `aura_store` imports inside `aura-agent/src/agent_loop/`). Type-level seal: [`aura_agent::RecordingModelProvider`](../crates/aura-agent/src/kernel_gateway.rs) is a crate-sealed marker trait; automatons take `P: RecordingModelProvider` so only `KernelModelGateway` (the recording wrapper) can be plugged in. Git-mutation surface covered by [`crates/aura-exec-tools/src/git_tool/tests.rs`](../crates/aura-exec-tools/src/git_tool/tests.rs) (`commit_reports_sha_when_there_are_changes`, `commit_rejects_empty_message`, `commit_surfaces_nonzero_exit_from_add`, `spawn_git_enforces_subcommand_allowlist`, `tool_executes_commit_via_context`, `tool_rejects_workspace_escape_via_config`, `git_push_rejects_missing_fields`). Automaton `DomainApi` mediation covered by [`crates/aura-agent/src/kernel_domain_gateway/tests.rs`](../crates/aura-agent/src/kernel_domain_gateway/tests.rs). |
 | §2 | Every state change for agent A passes through agent A's kernel | [`tests/pipeline_tests.rs`](../tests/pipeline_tests.rs), [`tests/kernel_integration.rs`](../tests/kernel_integration.rs), [`crates/aura-agent-kernel/src/kernel/tests.rs`](../crates/aura-agent-kernel/src/kernel/tests.rs), [`crates/aura-engine/src/automaton/tests.rs`](../crates/aura-engine/src/automaton/tests.rs) (`start_then_stop_records_two_automaton_lifecycle_entries`), and the recursive-spawn tests in [`crates/aura-engine/src/agents/tests.rs`](../crates/aura-engine/src/agents/tests.rs) (`task_children_spawn_their_own_children`, `detached_task_result_reaches_the_parent`). |
 | §3 | Every LLM call is recorded | [`crates/aura-agent/src/recording_stream.rs`](../crates/aura-agent/src/recording_stream.rs) tests (`streaming_natural_end_records_completed`, `streaming_error_records_failed`, `streaming_drop_records_failed`), [`crates/aura-agent-kernel/src/kernel/tests.rs`](../crates/aura-agent-kernel/src/kernel/tests.rs) (`reason_sync_error_records_failed`, `reason_streaming_handshake_error_records_failed`), [`tests/automaton_reasoning_recording.rs`](../tests/automaton_reasoning_recording.rs). |
 | §8 | Gateway transparency | [`crates/aura-agent/src/agent_loop/parity_tests.rs`](../crates/aura-agent/src/agent_loop/parity_tests.rs). |
 | §9 | AgentLoop isolation | Architectural / `rg` grep bands (see Declared Exceptions) — CI-gated via [`scripts/check_invariants.sh`](../scripts/check_invariants.sh) (`aura_store` import band scoped to `aura-agent/src/agent_loop/`). |
-| §4 | Full policy enforcement | [`crates/aura-core-permissions/src/tests.rs`](../crates/aura-core-permissions/src/tests.rs) resolver/full-access tests, [`crates/aura-agent-kernel/src/policy/check/tests.rs`](../crates/aura-agent-kernel/src/policy/check/tests.rs) (including the per-mode gate matrix), [`crates/aura-agent-kernel/src/kernel/tests.rs`](../crates/aura-agent-kernel/src/kernel/tests.rs) (Plan-mode denial is recorded), [`crates/aura-engine/tests/mode_gate_catalog.rs`](../crates/aura-engine/tests/mode_gate_catalog.rs) (every catalog tool has a mode classification), [`crates/aura-runtime/src/tool_permissions.rs`](../crates/aura-runtime/src/tool_permissions.rs) validation/monotonic tests, [`crates/aura-runtime/src/gateway/session/helpers.rs`](../crates/aura-runtime/src/gateway/session/helpers.rs) session tool-config composition tests, [`crates/aura-agent-subagent/src/tests.rs`](../crates/aura-agent-subagent/src/tests.rs) policy-narrowing tests, [`crates/aura-tools/src/fs_tools/cmd/tests.rs`](../crates/aura-tools/src/fs_tools/cmd/tests.rs) command guardrail tests, and [`crates/aura-runtime/tests/hook_permission_request_short_circuits.rs`](../crates/aura-runtime/tests/hook_permission_request_short_circuits.rs) (carve-out 5b). |
+| §4 | Full policy enforcement | [`crates/aura-core-permissions/src/tests.rs`](../crates/aura-core-permissions/src/tests.rs) resolver/full-access tests, [`crates/aura-agent-kernel/src/policy/check/tests.rs`](../crates/aura-agent-kernel/src/policy/check/tests.rs) (including the per-mode gate matrix), [`crates/aura-agent-kernel/src/kernel/tests.rs`](../crates/aura-agent-kernel/src/kernel/tests.rs) (Plan-mode denial is recorded), [`crates/aura-engine/tests/mode_gate_catalog.rs`](../crates/aura-engine/tests/mode_gate_catalog.rs) (every catalog tool has a mode classification), [`crates/aura-node/src/tool_permissions.rs`](../crates/aura-node/src/tool_permissions.rs) validation/monotonic tests, [`crates/aura-node/src/gateway/session/helpers.rs`](../crates/aura-node/src/gateway/session/helpers.rs) session tool-config composition tests, [`crates/aura-agent-subagent/src/tests.rs`](../crates/aura-agent-subagent/src/tests.rs) policy-narrowing tests, [`crates/aura-exec-tools/src/fs_tools/cmd/tests.rs`](../crates/aura-exec-tools/src/fs_tools/cmd/tests.rs) command guardrail tests, and [`crates/aura-node/tests/hook_permission_request_short_circuits.rs`](../crates/aura-node/tests/hook_permission_request_short_circuits.rs) (carve-out 5b). |
 | §11 | Session-scoped tool decisions | [`crates/aura-agent-kernel/src/policy/check/tests.rs`](../crates/aura-agent-kernel/src/policy/check/tests.rs) live prompt and session-state tests. |
-| §14 | Plugin sandbox | [`crates/aura-plugin-hooks/tests/sandbox_env_scrubbing.rs`](../crates/aura-plugin-hooks/tests/sandbox_env_scrubbing.rs), [`crates/aura-runtime/tests/hook_permission_request_short_circuits.rs`](../crates/aura-runtime/tests/hook_permission_request_short_circuits.rs), [`crates/aura-runtime/tests/plugin_e2e.rs`](../crates/aura-runtime/tests/plugin_e2e.rs). |
+| §14 | Plugin sandbox | [`crates/aura-plugin-hooks/tests/sandbox_env_scrubbing.rs`](../crates/aura-plugin-hooks/tests/sandbox_env_scrubbing.rs), [`crates/aura-node/tests/hook_permission_request_short_circuits.rs`](../crates/aura-node/tests/hook_permission_request_short_circuits.rs), [`crates/aura-node/tests/plugin_e2e.rs`](../crates/aura-node/tests/plugin_e2e.rs). |
 
 ### Principle 3 — One writer per agent
 
@@ -333,27 +333,27 @@ pins the `ReadStore` surface so record-append methods stay on the sealed
 CI gate in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh) §10
 band. Production holders:
 
-- [`crates/aura-runtime/src/gateway/state.rs`](../crates/aura-runtime/src/gateway/state.rs)
+- [`crates/aura-node/src/gateway/state.rs`](../crates/aura-node/src/gateway/state.rs)
   — the `RouterState.store` field piped into `WsContext`.
 - [`crates/aura-engine/src/automaton/`](../crates/aura-engine/src/automaton/)
   (`mod.rs` + `build.rs` + `dispatch.rs` + `event_channel.rs`) —
   `AutomatonBridge` builds per-agent automaton kernels.
 - [`crates/aura-engine/src/scheduler.rs`](../crates/aura-engine/src/scheduler.rs)
   — `Scheduler` builds per-agent kernels.
-- [`crates/aura-runtime/src/gateway/session/mod.rs`](../crates/aura-runtime/src/gateway/session/mod.rs)
+- [`crates/aura-node/src/gateway/session/mod.rs`](../crates/aura-node/src/gateway/session/mod.rs)
   — `WsContext` handed to `Kernel::new`.
-- [`crates/aura-runtime/src/gateway/session/child_kernel.rs`](../crates/aura-runtime/src/gateway/session/child_kernel.rs)
+- [`crates/aura-node/src/gateway/session/child_kernel.rs`](../crates/aura-node/src/gateway/session/child_kernel.rs)
   — session-scoped child-kernel factory captures the same store handle as
   `WsContext` so nested child runs route through `AgentHost` /
   `Scheduler`.
 - [`crates/aura-engine/src/agents/host.rs`](../crates/aura-engine/src/agents/host.rs)
   — `AgentHost` runs spawned agents through the scheduler and writes
   `SubagentSpawn` audit rows and inbox fallback records.
-- [`crates/aura-runtime/src/node.rs`](../crates/aura-runtime/src/node.rs)
+- [`crates/aura-node/src/node.rs`](../crates/aura-node/src/node.rs)
   — boots the process-wide store.
-- [`crates/aura-runtime/src/tool_permissions.rs`](../crates/aura-runtime/src/tool_permissions.rs)
+- [`crates/aura-node/src/tool_permissions.rs`](../crates/aura-node/src/tool_permissions.rs)
   — HTTP-driven tool-permissions append serialized via the scheduler claim.
-- [`crates/aura-runtime/src/gateway/session/cross_agent_hook.rs`](../crates/aura-runtime/src/gateway/session/cross_agent_hook.rs)
+- [`crates/aura-node/src/gateway/session/cross_agent_hook.rs`](../crates/aura-node/src/gateway/session/cross_agent_hook.rs)
   — cross-agent chat/spawn hook.
 - [`crates/aura-surface-cli/src/runner.rs`](../crates/aura-surface-cli/src/runner.rs)
   — the interactive TUI composition root constructs a per-agent kernel for
@@ -438,7 +438,7 @@ Two production sites append to an agent's record log *without* going through
 `Kernel::process_*`, both via the `aura_agent_kernel::write_system_record`
 helper (so they still emit a kernel-built, context-hashed `RecordEntry`):
 
-- [`crates/aura-runtime/src/tool_permissions.rs`](../crates/aura-runtime/src/tool_permissions.rs)
+- [`crates/aura-node/src/tool_permissions.rs`](../crates/aura-node/src/tool_permissions.rs)
   (`append_agent_tool_permissions_entry` ~line 172) — HTTP-driven tool-permission
   PUT. Acquires the scheduler's per-agent processing claim first so the write
   serializes with concurrent inbox drains for the same agent.
@@ -458,9 +458,9 @@ Sanctioned `Command::new(...)` call sites:
 
 | Call site | Purpose | Rule |
 |---|---|---|
-| [`crates/aura-tools/src/git_tool/`](../crates/aura-tools/src/git_tool/) (`commit.rs`, `push.rs`, `commit_push.rs`, `executor.rs`) | Mutating `git add` / `commit` / `push` | Funnels through the kernel's `ToolExecutor`; allowlisted by `Command::new("git")` band. |
+| [`crates/aura-exec-tools/src/git_tool/`](../crates/aura-exec-tools/src/git_tool/) (`commit.rs`, `push.rs`, `commit_push.rs`, `executor.rs`) | Mutating `git add` / `commit` / `push` | Funnels through the kernel's `ToolExecutor`; allowlisted by `Command::new("git")` band. |
 | [`crates/aura-agent/src/git.rs`](../crates/aura-agent/src/git.rs) | Read-only `git log` / `git status` helpers (`is_git_repo`, `list_unpushed_commits`) | No external side effect; declared exception. |
-| [`crates/aura-runtime/src/gateway/handlers/safe_workspace.rs`](../crates/aura-runtime/src/gateway/handlers/safe_workspace.rs) | Local worktree, imported-project baseline, shadow checkpoint, restore, and apply lifecycle for explicitly selected hosted Safe Workspaces | Control-plane isolation infrastructure. A closed local subcommand allowlist rejects clone/fetch/pull/push/remote operations and terminal prompting is disabled; declared exception. |
+| [`crates/aura-node/src/gateway/handlers/safe_workspace.rs`](../crates/aura-node/src/gateway/handlers/safe_workspace.rs) | Local worktree, imported-project baseline, shadow checkpoint, restore, and apply lifecycle for explicitly selected hosted Safe Workspaces | Control-plane isolation infrastructure. A closed local subcommand allowlist rejects clone/fetch/pull/push/remote operations and terminal prompting is disabled; declared exception. |
 | [`crates/aura-plugin-hooks/src/engine.rs`](../crates/aura-plugin-hooks/src/engine.rs) | Lifecycle hook scripts (PreToolUse, PostToolUse, PermissionRequest, …) | Scrubbed env per §14; never touches `append_entry_*` or `ModelProvider`. |
 | [`crates/aura-plugin-mcp/src/client.rs`](../crates/aura-plugin-mcp/src/client.rs) | MCP server stdio JSON-RPC clients | Scrubbed env per §14; tool calls reaching models must still route through the kernel gateway. |
 
@@ -597,7 +597,7 @@ flowchart LR
   agentPerms --> integration[IntegrationRequirements]
   integration --> toolState["Per-tool on/off/ask"]
   toolState --> hook["PermissionRequest hook (ask only)"]
-  hook --> guardrails["aura-tools guardrails: sandbox, allowlists"]
+  hook --> guardrails["aura-exec-tools guardrails: sandbox, allowlists"]
 ```
 
 The policy pipeline for a `ToolProposal`:
@@ -671,7 +671,7 @@ keeps one mode per run.
 save its plan.
 
 `Plan` mode allows `Subprocess` per the gate table, so the mode gate does
-not block `run_command` in `Plan`; the per-tool layer and the `aura-tools`
+not block `run_command` in `Plan`; the per-tool layer and the `aura-exec-tools`
 command guardrails still apply.
 
 ### 4.a Tool execution guardrails remain orthogonal
@@ -679,10 +679,10 @@ command guardrails still apply.
 The tri-state tool layer answers whether a tool is enabled for this agent. It
 does not authorize unsafe execution shapes. `run_command` still requires
 explicit `ToolConfig::command.enabled`, and operator-provided
-command/binary/shell-script guardrails are enforced inside `aura-tools` after
+command/binary/shell-script guardrails are enforced inside `aura-exec-tools` after
 policy allows the tool.
 
-Complementary enforcement in `aura-tools`:
+Complementary enforcement in `aura-exec-tools`:
 
 - `run_command` rejects the legacy shell form (`program` set, `args` empty)
   and the explicit `command` / `shell_script` fields unless the caller passes
@@ -732,11 +732,11 @@ proves a mode switch is recorded before it is enforced, a no-op switch
 writes nothing, and a submitted `mode_change` is rejected.
 [`crates/aura-engine/tests/mode_gate_catalog.rs`](../crates/aura-engine/tests/mode_gate_catalog.rs)
 fails if a catalog tool has no explicit mode classification.
-[`crates/aura-runtime/src/gateway/session/helpers.rs`](../crates/aura-runtime/src/gateway/session/helpers.rs)
+[`crates/aura-node/src/gateway/session/helpers.rs`](../crates/aura-node/src/gateway/session/helpers.rs)
 covers operator-plus-agent composition into session-scoped tool config.
-[`crates/aura-tools/src/fs_tools/cmd/tests.rs`](../crates/aura-tools/src/fs_tools/cmd/tests.rs)
+[`crates/aura-exec-tools/src/fs_tools/cmd/tests.rs`](../crates/aura-exec-tools/src/fs_tools/cmd/tests.rs)
 covers command/shell/binary guardrails. Carve-out 5b is pinned by
-[`crates/aura-runtime/tests/hook_permission_request_short_circuits.rs`](../crates/aura-runtime/tests/hook_permission_request_short_circuits.rs).
+[`crates/aura-node/tests/hook_permission_request_short_circuits.rs`](../crates/aura-node/tests/hook_permission_request_short_circuits.rs).
 
 ---
 
@@ -766,7 +766,7 @@ covers live prompt and session-state behaviour.
 the kernel boundary for record writes, model calls, or domain mutations.**
 
 The plugin layer ([`aura-plugin-api`](../crates/aura-plugin-api/),
-[`-core`](../crates/aura-plugin-core/), [`-hooks`](../crates/aura-plugin-hooks/),
+[`-core`](../crates/aura-plugin/), [`-hooks`](../crates/aura-plugin-hooks/),
 [`-mcp`](../crates/aura-plugin-mcp/), [`-connectors`](../crates/aura-plugin-connectors/))
 spawns external processes for lifecycle hooks and MCP servers. Three
 properties hold:
@@ -797,8 +797,8 @@ properties hold:
    integration layers from §4.
 
 **Enforcement:** [`crates/aura-plugin-hooks/tests/sandbox_env_scrubbing.rs`](../crates/aura-plugin-hooks/tests/sandbox_env_scrubbing.rs),
-[`crates/aura-runtime/tests/hook_permission_request_short_circuits.rs`](../crates/aura-runtime/tests/hook_permission_request_short_circuits.rs),
-[`crates/aura-runtime/tests/plugin_e2e.rs`](../crates/aura-runtime/tests/plugin_e2e.rs),
+[`crates/aura-node/tests/hook_permission_request_short_circuits.rs`](../crates/aura-node/tests/hook_permission_request_short_circuits.rs),
+[`crates/aura-node/tests/plugin_e2e.rs`](../crates/aura-node/tests/plugin_e2e.rs),
 [`crates/aura-plugin-connectors/tests/last_wins.rs`](../crates/aura-plugin-connectors/tests/last_wins.rs).
 
 ---
@@ -839,7 +839,7 @@ header doc comment "Concurrency Model" / "Store-Backed Processing Claims"
   crash.
 
 The HTTP-driven non-kernel append in
-[`crates/aura-runtime/src/tool_permissions.rs`](../crates/aura-runtime/src/tool_permissions.rs)
+[`crates/aura-node/src/tool_permissions.rs`](../crates/aura-node/src/tool_permissions.rs)
 (`append_agent_tool_permissions_entry` ~line 172) acquires this same claim
 before calling `aura_agent_kernel::write_system_record` so it serializes correctly
 with concurrent scheduler drains for the same agent.
@@ -906,10 +906,10 @@ the system, not a hazard the design tolerates.
 
 # Principle 4 — The wire API is the contract
 
-External consumers talk to `aura-runtime` over HTTP and WebSocket
+External consumers talk to `aura-node` over HTTP and WebSocket
 (`POST /v1/run`, `WS /stream/:run_id`, management endpoints). Crates are
 internal packaging; no workspace crate is a public Rust API. `aura-os`
-keeps its own mirror of the `aura-protocol` wire types, so a wire change has
+keeps its own mirror of the `aura-core-protocol` wire types, so a wire change has
 to land in both repositories. §13 keeps the internal packaging organized.
 
 ---
@@ -962,16 +962,16 @@ The following operations intentionally do NOT route through `Kernel::process_*`:
 | Read-only file operations (`workspace_map`, `file_walkers`, `error_context`, `prompts`) | No state mutation, no external side effect. |
 | Infrastructure bootstrap (`RocksStore::open`, `create_dir_all` for data dirs) | One-time setup, not a runtime state transition. |
 | Server listeners (`TcpListener::bind`) | Inbound edge, not an outbound state change. |
-| Interactive PTY ([`crates/aura-runtime/src/gateway/terminal_ws.rs`](../crates/aura-runtime/src/gateway/terminal_ws.rs)) | User-driven interactive shell behind `/ws/terminal`; different execution model. |
-| Tool sandbox setup (`sandbox.rs` directory creation in `aura-tools`) | Infrastructure for the kernel-managed tool pipeline. |
-| Read-only `git` operations in [`crates/aura-agent/src/git.rs`](../crates/aura-agent/src/git.rs) (`git diff`, `git status`, `git log`) | No external side effect. `is_git_repo` filesystem probe and `list_unpushed_commits` (`git log` scan) stay in `aura-agent` as read-only helpers. Every mutating `git` subprocess (`add`, `commit`, `push`) lives behind the `GitExecutor` in [`crates/aura-tools/src/git_tool/`](../crates/aura-tools/src/git_tool/) and routes through the kernel's `ToolExecutor`. Pinned by the `Command::new("git")` band in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh). |
-| Hosted Safe Workspace Git lifecycle in [`crates/aura-runtime/src/gateway/handlers/safe_workspace.rs`](../crates/aura-runtime/src/gateway/handlers/safe_workspace.rs) | Control-plane isolation for an explicitly user-selected hosted rollback boundary. It may initialize an imported local project, create/remove a detached worktree, create local shadow checkpoints, restore one, or apply its patch back to the source workspace. It never contacts a Git remote: the module's closed subcommand allowlist rejects clone/fetch/pull/push/remote operations and sets `GIT_TERMINAL_PROMPT=0`. Pinned by the exact-file §1 exception plus unit coverage for the local-only allowlist. |
-| HTTP-driven `write_system_record` in [`crates/aura-runtime/src/tool_permissions.rs`](../crates/aura-runtime/src/tool_permissions.rs) | Tool-permissions PUT handler appends a `System` record entry via `aura_agent_kernel::write_system_record` so the operator's UI write is durable on the response. Acquires the scheduler's per-agent processing claim first (§12.a) so it interleaves correctly with the kernel's own writes for the same agent. Pinned by the §2 allowlist in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh); any other non-kernel/non-store `append_entry_*` call is a CI failure. |
+| Interactive PTY ([`crates/aura-node/src/gateway/terminal_ws.rs`](../crates/aura-node/src/gateway/terminal_ws.rs)) | User-driven interactive shell behind `/ws/terminal`; different execution model. |
+| Tool sandbox setup (`sandbox.rs` directory creation in `aura-exec-tools`) | Infrastructure for the kernel-managed tool pipeline. |
+| Read-only `git` operations in [`crates/aura-agent/src/git.rs`](../crates/aura-agent/src/git.rs) (`git diff`, `git status`, `git log`) | No external side effect. `is_git_repo` filesystem probe and `list_unpushed_commits` (`git log` scan) stay in `aura-agent` as read-only helpers. Every mutating `git` subprocess (`add`, `commit`, `push`) lives behind the `GitExecutor` in [`crates/aura-exec-tools/src/git_tool/`](../crates/aura-exec-tools/src/git_tool/) and routes through the kernel's `ToolExecutor`. Pinned by the `Command::new("git")` band in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh). |
+| Hosted Safe Workspace Git lifecycle in [`crates/aura-node/src/gateway/handlers/safe_workspace.rs`](../crates/aura-node/src/gateway/handlers/safe_workspace.rs) | Control-plane isolation for an explicitly user-selected hosted rollback boundary. It may initialize an imported local project, create/remove a detached worktree, create local shadow checkpoints, restore one, or apply its patch back to the source workspace. It never contacts a Git remote: the module's closed subcommand allowlist rejects clone/fetch/pull/push/remote operations and sets `GIT_TERMINAL_PROMPT=0`. Pinned by the exact-file §1 exception plus unit coverage for the local-only allowlist. |
+| HTTP-driven `write_system_record` in [`crates/aura-node/src/tool_permissions.rs`](../crates/aura-node/src/tool_permissions.rs) | Tool-permissions PUT handler appends a `System` record entry via `aura_agent_kernel::write_system_record` so the operator's UI write is durable on the response. Acquires the scheduler's per-agent processing claim first (§12.a) so it interleaves correctly with the kernel's own writes for the same agent. Pinned by the §2 allowlist in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh); any other non-kernel/non-store `append_entry_*` call is a CI failure. |
 | Agent-host `write_system_record` callers in [`crates/aura-engine/src/agents/host.rs`](../crates/aura-engine/src/agents/host.rs) (`SubagentSpawn` audit rows, undelivered-message fallback records on a root) | Spawning writes audit rows directly via `aura_agent_kernel::write_system_record`. Spawn rows hold the per-parent spawn lock (§12.b) so sibling spawns of the same parent linearise. Not a raw `append_entry_*` call — the entry is built by the kernel helper and committed via the sealed `WriteStore` surface. |
 | Read-only `DomainApi` calls (`list_tasks`, `get_project`, `get_spec`) | No external mutation. Only mutating calls require kernel mediation. |
 | Plugin hook subprocesses ([`crates/aura-plugin-hooks/src/engine.rs`](../crates/aura-plugin-hooks/src/engine.rs)) | Lifecycle hook scripts run with scrubbed env (§14). They never touch `append_entry_*`, `ModelProvider`, or `DomainApi`. Their only kernel-visible effect is the `PermissionRequest` carve-out 5b in §4. |
 | MCP server stdio child processes ([`crates/aura-plugin-mcp/src/client.rs`](../crates/aura-plugin-mcp/src/client.rs)) | First-active-wins JSON-RPC clients run with cleared env and per-request timeouts (§14). MCP-routed tool calls that reach a model must still pass through the kernel gateway. |
-| Generation proxy ([`crates/aura-runtime/src/gateway/session/generation.rs`](../crates/aura-runtime/src/gateway/session/generation.rs)) for image/video/3D requests | Pure SSE proxy to `aura-router`; the session does not mutate local state or consume LLM credits. All remote calls use bounded `reqwest` connect/read timeouts. When this surface starts spending credits or persisting artifacts locally it **must** move behind a `KernelGenerationGateway`. **Regression guard:** [`crates/aura-runtime/tests/generation_proxy_guard.rs`](../crates/aura-runtime/tests/generation_proxy_guard.rs) reads `gateway/session/generation.rs` from disk and fails if `RecordEntry`, `Kernel`, `ModelProvider`, or any `append_entry_*` helper appears in the source. |
+| Generation proxy ([`crates/aura-node/src/gateway/session/generation.rs`](../crates/aura-node/src/gateway/session/generation.rs)) for image/video/3D requests | Pure SSE proxy to `aura-router`; the session does not mutate local state or consume LLM credits. All remote calls use bounded `reqwest` connect/read timeouts. When this surface starts spending credits or persisting artifacts locally it **must** move behind a `KernelGenerationGateway`. **Regression guard:** [`crates/aura-node/tests/generation_proxy_guard.rs`](../crates/aura-node/tests/generation_proxy_guard.rs) reads `gateway/session/generation.rs` from disk and fails if `RecordEntry`, `Kernel`, `ModelProvider`, or any `append_entry_*` helper appears in the source. |
 
 This list is frozen. A new entry requires a **principle-level
 justification**: it must explain which of the four principles the operation
@@ -1001,7 +1001,7 @@ holder, or a new crate that funnels through `aura_agent_kernel::write_system_rec
 **update both the script's allowlist and this document in the same PR**.
 The script's header comment enumerates the crate layout
 (`aura-agent-kernel`, `aura-store-db`, `aura-store-record`, `aura-store-snapshot`,
-`aura-model-reasoner`, `aura-context-memory`) so contributors know which path
+`aura-model`, `aura-context-memory`) so contributors know which path
 to allowlist.
 
 The remaining §4 (Policy), §5 (Audit), §6 (Determinism), §7 (Sequencing),

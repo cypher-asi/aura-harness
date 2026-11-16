@@ -1,9 +1,9 @@
 //! Round-trip tests asserting serde compatibility between
-//! aura-core and aura-protocol duplicate types.
+//! aura-core and aura-core-protocol duplicate types.
 
 use std::collections::HashMap;
 
-/// ToolAuth: serialize from aura-core, deserialize as aura-protocol, and vice versa.
+/// ToolAuth: serialize from aura-core, deserialize as aura-core-protocol, and vice versa.
 #[test]
 fn tool_auth_roundtrip_core_to_protocol() {
     let variants: Vec<aura_core_types::ToolAuth> = vec![
@@ -27,7 +27,7 @@ fn tool_auth_roundtrip_core_to_protocol() {
 
     for core_val in &variants {
         let json = serde_json::to_string(core_val).expect("serialize core ToolAuth");
-        let proto_val: aura_protocol::ToolAuth =
+        let proto_val: aura_core_protocol::ToolAuth =
             serde_json::from_str(&json).expect("deserialize as protocol ToolAuth");
         let back_json = serde_json::to_string(&proto_val).expect("re-serialize protocol ToolAuth");
         let roundtrip: aura_core_types::ToolAuth =
@@ -38,16 +38,16 @@ fn tool_auth_roundtrip_core_to_protocol() {
 
 #[test]
 fn tool_auth_roundtrip_protocol_to_core() {
-    let variants: Vec<aura_protocol::ToolAuth> = vec![
-        aura_protocol::ToolAuth::None,
-        aura_protocol::ToolAuth::Bearer {
+    let variants: Vec<aura_core_protocol::ToolAuth> = vec![
+        aura_core_protocol::ToolAuth::None,
+        aura_core_protocol::ToolAuth::Bearer {
             token: "sk-test-789".into(),
         },
-        aura_protocol::ToolAuth::ApiKey {
+        aura_core_protocol::ToolAuth::ApiKey {
             header: "X-Key".into(),
             key: "abc".into(),
         },
-        aura_protocol::ToolAuth::Headers {
+        aura_core_protocol::ToolAuth::Headers {
             headers: {
                 let mut m = HashMap::new();
                 m.insert("H1".into(), "V1".into());
@@ -61,7 +61,7 @@ fn tool_auth_roundtrip_protocol_to_core() {
         let core_val: aura_core_types::ToolAuth =
             serde_json::from_str(&json).expect("deserialize as core ToolAuth");
         let back_json = serde_json::to_string(&core_val).expect("re-serialize core ToolAuth");
-        let roundtrip: aura_protocol::ToolAuth =
+        let roundtrip: aura_core_protocol::ToolAuth =
             serde_json::from_str(&back_json).expect("deserialize back to protocol ToolAuth");
         assert_eq!(
             proto_val, &roundtrip,
@@ -111,7 +111,7 @@ fn installed_tool_roundtrip_core_to_protocol() {
     };
 
     let json = serde_json::to_string(&core_tool).expect("serialize core InstalledToolDefinition");
-    let proto_tool: aura_protocol::InstalledTool =
+    let proto_tool: aura_core_protocol::InstalledTool =
         serde_json::from_str(&json).expect("deserialize as protocol InstalledTool");
 
     assert_eq!(core_tool.name, proto_tool.name);
@@ -157,37 +157,39 @@ fn installed_tool_roundtrip_core_to_protocol() {
 
 #[test]
 fn installed_tool_roundtrip_protocol_to_core() {
-    let proto_tool = aura_protocol::InstalledTool {
+    let proto_tool = aura_core_protocol::InstalledTool {
         name: "proto_tool".into(),
         description: "Protocol tool".into(),
         input_schema: serde_json::json!({"type": "object"}),
         endpoint: "http://example.com/api".into(),
-        auth: aura_protocol::ToolAuth::ApiKey {
+        auth: aura_core_protocol::ToolAuth::ApiKey {
             header: "X-Key".into(),
             key: "secret".into(),
         },
         timeout_ms: None,
         namespace: None,
-        required_integration: Some(aura_protocol::InstalledToolIntegrationRequirement {
+        required_integration: Some(aura_core_protocol::InstalledToolIntegrationRequirement {
             integration_id: None,
             provider: Some("github".into()),
             kind: Some("workspace_integration".into()),
         }),
-        runtime_execution: Some(aura_protocol::InstalledToolRuntimeExecution::AppProvider(
-            aura_protocol::InstalledToolRuntimeProviderExecution {
-                provider: "github".into(),
-                base_url: "https://api.github.com".into(),
-                static_headers: HashMap::new(),
-                integrations: vec![aura_protocol::InstalledToolRuntimeIntegration {
-                    integration_id: "int-2".into(),
-                    base_url: None,
-                    auth: aura_protocol::InstalledToolRuntimeAuth::AuthorizationBearer {
-                        token: "secret".into(),
-                    },
-                    provider_config: HashMap::new(),
-                }],
-            },
-        )),
+        runtime_execution: Some(
+            aura_core_protocol::InstalledToolRuntimeExecution::AppProvider(
+                aura_core_protocol::InstalledToolRuntimeProviderExecution {
+                    provider: "github".into(),
+                    base_url: "https://api.github.com".into(),
+                    static_headers: HashMap::new(),
+                    integrations: vec![aura_core_protocol::InstalledToolRuntimeIntegration {
+                        integration_id: "int-2".into(),
+                        base_url: None,
+                        auth: aura_core_protocol::InstalledToolRuntimeAuth::AuthorizationBearer {
+                            token: "secret".into(),
+                        },
+                        provider_config: HashMap::new(),
+                    }],
+                },
+            ),
+        ),
         metadata: HashMap::new(),
     };
 
@@ -212,7 +214,7 @@ fn installed_tool_roundtrip_protocol_to_core() {
 
     let back_json =
         serde_json::to_string(&core_tool).expect("re-serialize core InstalledToolDefinition");
-    let roundtrip: aura_protocol::InstalledTool =
+    let roundtrip: aura_core_protocol::InstalledTool =
         serde_json::from_str(&back_json).expect("deserialize back to protocol InstalledTool");
 
     assert_eq!(proto_tool.name, roundtrip.name);
@@ -232,61 +234,67 @@ fn installed_tool_roundtrip_protocol_to_core() {
 
 #[test]
 fn aura_os_contract_includes_current_additive_wire_fields() {
-    let request = aura_protocol::RuntimeRequest {
-        r#type: aura_protocol::RuntimeRequestType::TaskRun {
+    let request = aura_core_protocol::RuntimeRequest {
+        r#type: aura_core_protocol::RuntimeRequestType::TaskRun {
             task_id: "task-1".into(),
             prior_failure: Some("previous assertion failed".into()),
             work_log: vec!["implemented parser".into()],
         },
-        agent_identity: aura_protocol::AgentIdentity {
+        agent_identity: aura_core_protocol::AgentIdentity {
             template_id: Some("template-1".into()),
             partition_id: Some("template-1::instance-1::session-1".into()),
             ..Default::default()
         },
-        model: aura_protocol::ModelSelection::default(),
-        workspace: aura_protocol::WorkspaceLocation::default(),
-        project: Some(aura_protocol::ProjectContext {
+        model: aura_core_protocol::ModelSelection::default(),
+        workspace: aura_core_protocol::WorkspaceLocation::default(),
+        project: Some(aura_core_protocol::ProjectContext {
             project_id: "project-1".into(),
             aura_org_id: Some("org-1".into()),
             aura_session_id: Some("session-1".into()),
             aura_agent_id: Some("agent-1".into()),
             ..Default::default()
         }),
-        agent_permissions: aura_protocol::AgentPermissionsWire::default(),
+        agent_permissions: aura_core_protocol::AgentPermissionsWire::default(),
         tool_permissions: None,
-        agent_capabilities: aura_protocol::AgentCapabilities {
-            installed_tools: vec![aura_protocol::InstalledTool {
+        agent_capabilities: aura_core_protocol::AgentCapabilities {
+            installed_tools: vec![aura_core_protocol::InstalledTool {
                 name: "trusted_search".into(),
                 description: "Search through an app provider".into(),
                 input_schema: serde_json::json!({"type": "object"}),
                 endpoint: "app://provider/search".into(),
-                auth: aura_protocol::ToolAuth::None,
+                auth: aura_core_protocol::ToolAuth::None,
                 timeout_ms: Some(3_000),
                 namespace: Some("search".into()),
-                required_integration: Some(aura_protocol::InstalledToolIntegrationRequirement {
-                    integration_id: Some("integration-1".into()),
-                    provider: Some("brave_search".into()),
-                    kind: Some("workspace_integration".into()),
-                }),
-                runtime_execution: Some(aura_protocol::InstalledToolRuntimeExecution::AppProvider(
-                    aura_protocol::InstalledToolRuntimeProviderExecution {
-                        provider: "brave_search".into(),
-                        base_url: "https://api.search.brave.com".into(),
-                        static_headers: HashMap::new(),
-                        integrations: vec![aura_protocol::InstalledToolRuntimeIntegration {
-                            integration_id: "integration-1".into(),
-                            base_url: None,
-                            auth: aura_protocol::InstalledToolRuntimeAuth::Header {
-                                name: "X-Subscription-Token".into(),
-                                value: "secret".into(),
-                            },
-                            provider_config: HashMap::new(),
-                        }],
+                required_integration: Some(
+                    aura_core_protocol::InstalledToolIntegrationRequirement {
+                        integration_id: Some("integration-1".into()),
+                        provider: Some("brave_search".into()),
+                        kind: Some("workspace_integration".into()),
                     },
-                )),
+                ),
+                runtime_execution: Some(
+                    aura_core_protocol::InstalledToolRuntimeExecution::AppProvider(
+                        aura_core_protocol::InstalledToolRuntimeProviderExecution {
+                            provider: "brave_search".into(),
+                            base_url: "https://api.search.brave.com".into(),
+                            static_headers: HashMap::new(),
+                            integrations: vec![
+                                aura_core_protocol::InstalledToolRuntimeIntegration {
+                                    integration_id: "integration-1".into(),
+                                    base_url: None,
+                                    auth: aura_core_protocol::InstalledToolRuntimeAuth::Header {
+                                        name: "X-Subscription-Token".into(),
+                                        value: "secret".into(),
+                                    },
+                                    provider_config: HashMap::new(),
+                                },
+                            ],
+                        },
+                    ),
+                ),
                 metadata: HashMap::new(),
             }],
-            installed_integrations: vec![aura_protocol::InstalledIntegration {
+            installed_integrations: vec![aura_core_protocol::InstalledIntegration {
                 integration_id: "integration-1".into(),
                 name: "Brave Search".into(),
                 provider: "brave_search".into(),
@@ -322,23 +330,24 @@ fn aura_os_contract_includes_current_additive_wire_fields() {
         serde_json::json!("app_provider")
     );
 
-    let ready = aura_protocol::OutboundMessage::SessionReady(aura_protocol::SessionReady {
-        session_id: "run-1".into(),
-        tools: vec![aura_protocol::ToolInfo {
-            name: "trusted_search".into(),
-            description: "Search through an app provider".into(),
-            effective_state: aura_protocol::ToolStateWire::Ask,
-        }],
-        skills: vec![],
-    });
+    let ready =
+        aura_core_protocol::OutboundMessage::SessionReady(aura_core_protocol::SessionReady {
+            session_id: "run-1".into(),
+            tools: vec![aura_core_protocol::ToolInfo {
+                name: "trusted_search".into(),
+                description: "Search through an app provider".into(),
+                effective_state: aura_core_protocol::ToolStateWire::Ask,
+            }],
+            skills: vec![],
+        });
     let ready_json = serde_json::to_value(&ready).unwrap();
     assert_eq!(ready_json["tools"][0]["effective_state"], "ask");
 
-    let end = aura_protocol::OutboundMessage::AssistantMessageEnd(Box::new(
-        aura_protocol::AssistantMessageEnd {
+    let end = aura_core_protocol::OutboundMessage::AssistantMessageEnd(Box::new(
+        aura_core_protocol::AssistantMessageEnd {
             message_id: "msg-1".into(),
             stop_reason: "end_turn".into(),
-            usage: aura_protocol::SessionUsage {
+            usage: aura_core_protocol::SessionUsage {
                 input_tokens: 10,
                 output_tokens: 5,
                 estimated_context_tokens: 20,
@@ -351,7 +360,7 @@ fn aura_os_contract_includes_current_additive_wire_fields() {
                 context_utilization: 0.25,
                 model: "claude-opus-4-7".into(),
                 provider: "anthropic".into(),
-                context_breakdown: aura_protocol::ContextBreakdown {
+                context_breakdown: aura_core_protocol::ContextBreakdown {
                     system_prompt_tokens: 1,
                     tools_tokens: 2,
                     skills_tokens: 3,
@@ -361,9 +370,9 @@ fn aura_os_contract_includes_current_additive_wire_fields() {
                     cache_read_tokens: 7,
                     cache_creation_tokens: 3,
                 },
-                context_contents: Some(aura_protocol::ContextContents {
+                context_contents: Some(aura_core_protocol::ContextContents {
                     system_prompt: Some("you are a helpful agent".into()),
-                    tools: vec![aura_protocol::ContextSegment {
+                    tools: vec![aura_core_protocol::ContextSegment {
                         label: "read_file".into(),
                         text: "read_file\n\nRead a file.\n\n{}".into(),
                         tokens: 7,
@@ -373,11 +382,11 @@ fn aura_os_contract_includes_current_additive_wire_fields() {
                     mcp: vec![],
                 }),
             },
-            files_changed: aura_protocol::FilesChanged {
+            files_changed: aura_core_protocol::FilesChanged {
                 created: vec!["new.txt".into()],
                 modified: vec!["changed.txt".into()],
                 deleted: vec![],
-                diffs: vec![aura_protocol::FileDiff {
+                diffs: vec![aura_core_protocol::FileDiff {
                     path: "changed.txt".into(),
                     lines_added: 2,
                     lines_removed: 1,
@@ -403,9 +412,10 @@ fn aura_os_contract_includes_current_additive_wire_fields() {
         end_json["usage"]["context_contents"]["tools"][0]["label"],
         "read_file"
     );
-    let end_decoded: aura_protocol::OutboundMessage = serde_json::from_value(end_json).unwrap();
+    let end_decoded: aura_core_protocol::OutboundMessage =
+        serde_json::from_value(end_json).unwrap();
     match end_decoded {
-        aura_protocol::OutboundMessage::AssistantMessageEnd(end) => {
+        aura_core_protocol::OutboundMessage::AssistantMessageEnd(end) => {
             let contents = end
                 .usage
                 .context_contents
@@ -416,7 +426,7 @@ fn aura_os_contract_includes_current_additive_wire_fields() {
         other => panic!("unexpected variant: {other:?}"),
     }
 
-    let err = aura_protocol::OutboundMessage::Error(aura_protocol::ErrorMsg {
+    let err = aura_core_protocol::OutboundMessage::Error(aura_core_protocol::ErrorMsg {
         code: "agent_stalled".into(),
         message: "Agent made no progress".into(),
         recoverable: true,

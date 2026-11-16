@@ -7,7 +7,7 @@
 //! [`KernelDomainGateway::record_response`](super::handle::KernelDomainGateway::record_response).
 
 use async_trait::async_trait;
-use aura_tools::domain_tools::{
+use aura_exec_tools::domain_tools::{
     CreateSessionParams, DomainApi, MessageDescriptor, ProjectDescriptor, ProjectUpdate,
     SaveMessageParams, SessionDescriptor, SpecDescriptor, TaskDescriptor, TaskUpdate,
 };

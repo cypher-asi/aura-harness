@@ -1,8 +1,6 @@
 //! Reassemble streamed blocks without losing the provider's termination signal.
 use crate::types::ToolCallInfo;
-use aura_model_reasoner::{
-    ContentBlock, Message, ModelResponse, ProviderTrace, Role, StopReason, Usage,
-};
+use aura_model::{ContentBlock, Message, ModelResponse, ProviderTrace, Role, StopReason, Usage};
 
 pub(super) fn synthesize_response(
     text_chunks: &[String],

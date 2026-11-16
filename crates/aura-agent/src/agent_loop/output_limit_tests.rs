@@ -3,7 +3,7 @@ use super::{AgentLoop, AgentLoopConfig, LoopState};
 use crate::agent_runner::{configure_loop_config, AgentRunnerConfig};
 use crate::turn_config::TaskComplexity;
 use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
-use aura_model_reasoner::{
+use aura_model::{
     ContentBlock, Message, ModelProvider, ModelRequest, ModelResponse, ProviderTrace,
     ReasonerError, Role, StopReason, ThinkingEffort, ToolDefinition, Usage,
 };
@@ -273,13 +273,12 @@ async fn tracked_task_rejects_text_without_accepted_task_done() {
         "text or a passing build is not a task_done handshake"
     );
     assert_eq!(executor.0.load(Ordering::SeqCst), 0);
-    let provider = aura_model_reasoner::MockProvider::new().with_response(
-        aura_model_reasoner::MockResponse::tool_use(
+    let provider =
+        aura_model::MockProvider::new().with_response(aura_model::MockResponse::tool_use(
             "done",
             "task_done",
             serde_json::json!({"no_changes_needed":true, "notes":"Already correct"}),
-        ),
-    );
+        ));
     let tracking = TaskTrackingConfig {
         inner_executor: executor,
         project_folder: folder.clone(),
@@ -298,7 +297,7 @@ async fn tracked_task_rejects_text_without_accepted_task_done() {
 
 #[tokio::test]
 async fn repeated_truncation_is_bounded_and_not_reported_as_success() {
-    use aura_model_reasoner::{MockProvider, MockResponse};
+    use aura_model::{MockProvider, MockResponse};
     let provider = MockProvider::new()
         .with_response(MockResponse::text("one").with_stop_reason(StopReason::MaxTokens))
         .with_response(MockResponse::text("two").with_stop_reason(StopReason::MaxTokens))

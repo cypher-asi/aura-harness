@@ -8,22 +8,22 @@ license.workspace = true
 
 [dependencies]
 aura-core-types = { path = "../aura-core-types" }
-aura-protocol = { path = "../aura-protocol" }
+aura-core-protocol = { path = "../aura-core-protocol" }
 aura-store-db = { path = "../aura-store-db" }
 aura-store-snapshot = { path = "../aura-store-snapshot" }
-aura-tools = { path = "../aura-tools" }
-aura-model-reasoner = { path = "../aura-model-reasoner" }
+aura-exec-tools = { path = "../aura-exec-tools" }
+aura-model = { path = "../aura-model" }
 aura-agent-kernel = { path = "../aura-agent-kernel" }
 aura-agent = { path = "../aura-agent" }
 aura-agent-subagent = { path = "../aura-agent-subagent" }
 aura-context-memory = { path = "../aura-context-memory" }
-aura-automaton = { path = "../aura-automaton" }
+aura-engine-automaton = { path = "../aura-engine-automaton" }
 aura-context-compaction = { path = "../aura-context-compaction" }
 aura-context-prompts = { path = "../aura-context-prompts" }
 # Phase C / Commit 4: the JWT-injecting `DomainApi` wrapper moved
-# into `aura-domain-http` alongside the HTTP impl. The automaton
+# into `aura-exec-domain-http` alongside the HTTP impl. The automaton
 # bridge imports `JwtDomainApi` from there.
-aura-domain-http = { path = "../aura-domain-http" }
+aura-exec-domain-http = { path = "../aura-exec-domain-http" }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde_json = { workspace = true }

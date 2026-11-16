@@ -10,9 +10,7 @@ use crate::recording_stream::RecordingStream;
 use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
 use async_trait::async_trait;
 use aura_agent_kernel::{Kernel, KernelError, PresetToolResult, ToolRun};
-use aura_model_reasoner::{
-    ModelProvider, ModelRequest, ModelResponse, ReasonerError, StreamEventStream,
-};
+use aura_model::{ModelProvider, ModelRequest, ModelResponse, ReasonerError, StreamEventStream};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -232,7 +230,7 @@ mod sealed {
 /// requires `RecordingModelProvider` is structurally guaranteed to
 /// receive a kernel-mediated provider — not a raw HTTP client.
 ///
-/// Production-side automaton constructors in `aura-automaton`
+/// Production-side automaton constructors in `aura-engine-automaton`
 /// (`DevLoopAutomaton::new`, `TaskRunAutomaton::new`,
 /// `SpecGenAutomaton::new`, `ChatAutomaton::new`) take an
 /// `Arc<P: RecordingModelProvider>` rather than `Arc<dyn ModelProvider>`
@@ -288,9 +286,9 @@ mod tests {
     use super::*;
     use aura_agent_kernel::{ExecutorRouter, KernelConfig};
     use aura_core_types::AgentId;
-    use aura_model_reasoner::{Message, MockProvider};
+    use aura_exec_tools::ToolExecutor;
+    use aura_model::{Message, MockProvider};
     use aura_store_db::RocksStore;
-    use aura_tools::ToolExecutor;
     use serde_json::json;
     use tempfile::TempDir;
 

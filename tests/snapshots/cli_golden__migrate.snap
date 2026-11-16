@@ -4,7 +4,7 @@ expression: help
 ---
 Phase 4a stub: migrate aura state (no-op today).
 
-Future phases will populate this with Codex → Aura state migration. The stub exists so the CLI surface is stable when `aura-store-db` and `aura-plugin-core` (Phase 4b+) start producing migration-aware on-disk layouts.
+Future phases will populate this with Codex → Aura state migration. The stub exists so the CLI surface is stable when `aura-store-db` and `aura-plugin` (Phase 4b+) start producing migration-aware on-disk layouts.
 
 Usage: aura migrate [OPTIONS]
 

@@ -11,24 +11,24 @@
 //!    tooling. It is never persisted.
 //!
 //! 2. **Sandboxed file access.** The `/api/files` and `/api/read-file`
-//!    handlers route every incoming path through [`aura_tools::Sandbox`],
+//!    handlers route every incoming path through [`aura_exec_tools::Sandbox`],
 //!    which canonicalises the workspace root and the candidate path
 //!    before comparing prefixes. That catches both plain `../` traversal
 //!    and symlinks / junctions whose real target lives outside the
 //!    workspace.
 //!
 //! The directory-walking and capped-read logic lives in
-//! [`aura_runtime::files_api`] — the TUI server and the aura-runtime HTTP
+//! [`aura_node::files_api`] — the TUI server and the aura-node HTTP
 //! router share the same implementation so a change to the ignore list
 //! or the read cap only needs to land in one place. This module owns
 //! the bearer middleware, the sandbox-aware path resolution, and the
-//! wire-format mapping from [`aura_runtime::files_api::WalkedEntry`] onto
+//! wire-format mapping from [`aura_node::files_api::WalkedEntry`] onto
 //! the TUI JSON contract.
 
-use aura_runtime::auth::check_bearer;
-use aura_runtime::files_api::{self, ReadOutcome, WalkedEntry, MAX_READ_BYTES, MAX_WALK_DEPTH};
-use aura_terminal::UiCommand;
-use aura_tools::Sandbox;
+use aura_exec_tools::Sandbox;
+use aura_node::auth::check_bearer;
+use aura_node::files_api::{self, ReadOutcome, WalkedEntry, MAX_READ_BYTES, MAX_WALK_DEPTH};
+use aura_ui_terminal::UiCommand;
 use axum::{
     extract::{Query, Request, State},
     http::StatusCode,
@@ -102,7 +102,7 @@ pub async fn start_api_server(
     };
 
     // The embedded TUI API server follows the same `AURA_NODE_REQUIRE_AUTH`
-    // gate as the aura-runtime HTTP server. When auth is disabled we mint
+    // gate as the aura-node HTTP server. When auth is disabled we mint
     // no token and skip the bearer middleware.
     let require_auth = auth_required_from_env();
     let token = if require_auth {
@@ -154,8 +154,8 @@ pub async fn start_api_server(
                 // strong as its handling.
                 if require_auth {
                     let _ = cmd_tx.try_send(UiCommand::ShowMessage(
-                        aura_terminal::events::MessageData {
-                            role: aura_terminal::events::MessageRole::System,
+                        aura_ui_terminal::events::MessageData {
+                            role: aura_ui_terminal::events::MessageRole::System,
                             content: format!("API server bearer token: {token}"),
                             is_streaming: false,
                             timestamp_ms: None,
@@ -206,9 +206,9 @@ pub async fn start_api_server(
 /// Whether the embedded API server should enforce bearer-token auth.
 ///
 /// Reads `AURA_NODE_REQUIRE_AUTH` — the same gate that controls the
-/// aura-runtime router — and treats `1` / `true` (case-insensitive) as
+/// aura-node router — and treats `1` / `true` (case-insensitive) as
 /// "enable auth". Any other value, including unset, means auth is
-/// disabled. Keeping the TUI API server aligned with `aura-runtime`
+/// disabled. Keeping the TUI API server aligned with `aura-node`
 /// means local dev operators can toggle a single env var instead of
 /// juggling two.
 fn auth_required_from_env() -> bool {
@@ -239,7 +239,7 @@ fn generate_token() -> String {
 /// would leak whether a particular token-length probe had succeeded.
 ///
 /// The actual parsing and constant-time compare live in
-/// [`aura_runtime::auth::check_bearer`], shared with the aura-runtime HTTP
+/// [`aura_node::auth::check_bearer`], shared with the aura-node HTTP
 /// router so the two servers can't drift on edge cases (empty secrets,
 /// prefix-length probing, etc.).
 async fn require_bearer_mw(
@@ -280,10 +280,10 @@ fn default_files_depth() -> usize {
 ///
 /// Paths are reported as absolute strings (matching the pre-consolidation
 /// behaviour) because the TUI workspace panel resolves them directly.
-/// The `aura-runtime` HTTP router uses a different DTO with workspace-
+/// The `aura-node` HTTP router uses a different DTO with workspace-
 /// relative paths — the two JSON contracts are deliberately separate
 /// and each caller owns its own mapping away from
-/// [`aura_runtime::files_api::WalkedEntry`].
+/// [`aura_node::files_api::WalkedEntry`].
 #[derive(serde::Serialize)]
 struct DirEntry {
     name: String,
@@ -309,7 +309,7 @@ fn to_dir_entries(entries: Vec<WalkedEntry>) -> Vec<DirEntry> {
 ///
 /// Lists directory contents recursively, returning a tree of
 /// [`DirEntry`] objects. Depth is clamped to
-/// [`aura_runtime::files_api::MAX_WALK_DEPTH`].
+/// [`aura_node::files_api::MAX_WALK_DEPTH`].
 async fn api_list_files_handler(
     State(state): State<ApiState>,
     Query(query): Query<ListFilesQuery>,
@@ -355,7 +355,7 @@ struct ReadFileQuery {
 /// `GET /api/read-file?path=...`
 ///
 /// Reads a file and returns its text content, capped at
-/// [`aura_runtime::files_api::MAX_READ_BYTES`]. Files whose canonical path
+/// [`aura_node::files_api::MAX_READ_BYTES`]. Files whose canonical path
 /// is outside the sandbox root are refused with `403 Forbidden`; files
 /// exceeding the cap return `413 Payload Too Large`.
 async fn api_read_file_handler(
@@ -419,13 +419,13 @@ async fn api_read_file_handler(
     }
 }
 
-/// Map [`aura_tools::ToolError`] variants onto HTTP responses.
+/// Map [`aura_exec_tools::ToolError`] variants onto HTTP responses.
 ///
 /// `SandboxViolation` is `403 Forbidden` because the caller asked for
 /// something they aren't allowed to see; `PathNotFound` is `404`;
 /// anything else (I/O, permission) falls through as `400 Bad Request`.
-fn sandbox_error_response(err: &aura_tools::ToolError) -> Response {
-    use aura_tools::ToolError;
+fn sandbox_error_response(err: &aura_exec_tools::ToolError) -> Response {
+    use aura_exec_tools::ToolError;
     match err {
         ToolError::SandboxViolation { .. } => (
             StatusCode::FORBIDDEN,
@@ -586,7 +586,7 @@ mod tests {
     }
 
     // The constant-time bearer compare now lives in
-    // `aura_runtime::auth::check_bearer` and is exercised by that crate's
+    // `aura_node::auth::check_bearer` and is exercised by that crate's
     // test suite. No duplicated test kept here — see
-    // `crates/aura-runtime/src/auth.rs::tests` for coverage.
+    // `crates/aura-node/src/auth.rs::tests` for coverage.
 }

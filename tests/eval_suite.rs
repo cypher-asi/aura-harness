@@ -7,12 +7,12 @@ use std::sync::Arc;
 
 use aura_agent::AgentLoopConfig;
 use aura_agent_trace::{RunBundle, RunSource, RunTrace};
-use aura_config::TraceLevel;
-use aura_core_types::trace::StepAction;
-use aura_model_reasoner::{MockProvider, MockResponse, ModelProvider};
 use aura_app::recorded_runs::{self, HeadlessRun};
 use aura_cli::evals::{self, EvalOptions};
-use aura_tools::ToolConfig;
+use aura_config::TraceLevel;
+use aura_core_types::trace::StepAction;
+use aura_exec_tools::ToolConfig;
+use aura_model::{MockProvider, MockResponse, ModelProvider};
 use serde_json::json;
 
 const SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/evals/coding");

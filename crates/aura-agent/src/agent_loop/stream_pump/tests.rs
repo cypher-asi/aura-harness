@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use aura_model_reasoner::{
+use aura_model::{
     response_stream_from_event_stream, ContentBlock, Message, ModelResponse, OutputItem,
     ProviderTrace, ResponseEvent, ResponseEventStream, Role, StopReason, StreamContentType,
     StreamEvent, StreamEventStream, StreamPhase, Usage,
@@ -92,9 +92,7 @@ fn mk_call(id: &str, name: &str) -> ResponseEvent {
 
 fn mk_stream(events: Vec<ResponseEvent>) -> ResponseEventStream {
     Box::pin(futures_util::stream::iter(
-        events
-            .into_iter()
-            .map(Ok::<_, aura_model_reasoner::StreamError>),
+        events.into_iter().map(Ok::<_, aura_model::StreamError>),
     ))
 }
 
@@ -271,7 +269,7 @@ async fn pump_per_outputitemdone_input_drain() {
             .iter()
             .any(|m| m.content.iter().any(|b| matches!(
                 b,
-                aura_model_reasoner::ContentBlock::Text { text } if text.contains("queued-message")
+                aura_model::ContentBlock::Text { text } if text.contains("queued-message")
             ))),
         "drained user input must be appended to messages mid-pump"
     );
@@ -321,7 +319,7 @@ async fn pump_keepalive_resets_liveness_timeout() {
             if i < 4 {
                 tokio::time::sleep(gap).await;
                 Some((
-                    Ok::<_, aura_model_reasoner::StreamError>(ResponseEvent::Keepalive(
+                    Ok::<_, aura_model::StreamError>(ResponseEvent::Keepalive(
                         StreamPhase::Thinking,
                     )),
                     i + 1,
@@ -656,7 +654,7 @@ async fn pump_streams_tool_input_while_the_block_is_open() {
         futures_util::stream::iter(events),
         |event| async move {
             tokio::time::sleep(Duration::from_millis(300)).await;
-            Ok::<_, aura_model_reasoner::StreamError>(event)
+            Ok::<_, aura_model::StreamError>(event)
         },
     ));
     let mut state = super::super::LoopState::new_for_tests(&config, Vec::new());
@@ -717,7 +715,7 @@ async fn pump_streams_thinking_incrementally_not_just_at_block_close() {
     let executor = CountingExecutor::default();
     let config = AgentLoopConfig::for_agent("claude-test-model");
 
-    let wire: Vec<Result<StreamEvent, aura_model_reasoner::ReasonerError>> = vec![
+    let wire: Vec<Result<StreamEvent, aura_model::ReasonerError>> = vec![
         Ok(StreamEvent::MessageStart {
             message_id: "msg".into(),
             model: "test".into(),
@@ -1000,7 +998,7 @@ async fn pump_triggers_auto_build_on_write() {
         m.content.iter().any(|b| match b {
             ContentBlock::Text { text } => text.contains("Build check failed"),
             ContentBlock::ToolResult {
-                content: aura_model_reasoner::ToolResultContent::Text(t),
+                content: aura_model::ToolResultContent::Text(t),
                 ..
             } => t.contains("Build check failed"),
             _ => false,

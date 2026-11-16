@@ -5,7 +5,7 @@
 //! taxonomy of effects the audited kernel records: model proposals,
 //! tool effects, child spawns, compaction events, steering
 //! decisions, policy verdicts, and permission updates. Phase 6a will
-//! consume `PermissionsUpdate` to absorb today's `aura-runtime`
+//! consume `PermissionsUpdate` to absorb today's `aura-node`
 //! direct-append site.
 //!
 //! ## Forward-compatibility invariant
@@ -51,7 +51,7 @@ pub enum RecordKind {
     /// Policy gate emitted an approve/deny/ask verdict.
     PolicyVerdict,
     /// Per-tool / per-agent permission ledger update — the entry
-    /// Phase 6a uses to consolidate today's `aura-runtime` direct
+    /// Phase 6a uses to consolidate today's `aura-node` direct
     /// append into the audited kernel write path.
     PermissionsUpdate,
     /// Phase 7b: parent agent successfully derived + dispatched a

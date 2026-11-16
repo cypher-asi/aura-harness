@@ -199,7 +199,7 @@ pub enum Commands {
     ///
     /// Future phases will populate this with Codex → Aura state
     /// migration. The stub exists so the CLI surface is stable when
-    /// `aura-store-db` and `aura-plugin-core` (Phase 4b+) start
+    /// `aura-store-db` and `aura-plugin` (Phase 4b+) start
     /// producing migration-aware on-disk layouts.
     Migrate(MigrateArgs),
     /// Manage declarative plugins (Phase 4b).

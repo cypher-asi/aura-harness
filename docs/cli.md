@@ -5,7 +5,7 @@
 | Binary | Entry point | Purpose |
 |--------|-------------|---------|
 | `aura` | [`src/main.rs`](../src/main.rs) | The main CLI. Opens the desktop window by default (the terminal UI with `--terminal`, or when there is no display), runs one prompt and exits with `aura -p`, runs headless with `aura run --ui none`, and hosts the account, plugin and subagent commands below. The CLI body lives in [`aura-surface-cli`](../crates/aura-surface-cli). |
-| `aura-node` | [`crates/aura-runtime/src/main.rs`](../crates/aura-runtime/src/main.rs) | Standalone headless server exposing the [HTTP / WebSocket API](api.md). |
+| `aura-node` | [`crates/aura-node/src/main.rs`](../crates/aura-node/src/main.rs) | Standalone headless server exposing the [HTTP / WebSocket API](api.md). |
 
 Older specs mention a separate `aura-cli` crate. It never shipped; read `aura-cli/src/...` paths as `src/...` in the root crate.
 

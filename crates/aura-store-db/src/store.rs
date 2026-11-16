@@ -27,8 +27,8 @@
 //! once the workspace has `trybuild` wired into CI.
 
 use crate::error::StoreError;
-pub use aura_store_record::{DequeueToken, ReadStore};
 use aura_core_types::{AgentId, RecordEntry, RuntimeCapabilityInstall};
+pub use aura_store_record::{DequeueToken, ReadStore};
 
 pub(crate) mod sealed {
     /// Marker bound that seals [`super::WriteStore`] against new

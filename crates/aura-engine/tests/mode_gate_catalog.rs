@@ -5,8 +5,8 @@
 
 use aura_agent_kernel::tool_mode_class;
 use aura_core_types::AgentPermissions;
-use aura_tools::catalog::ToolProfile;
-use aura_tools::{ToolCatalog, GIT_TOOL_NAMES};
+use aura_exec_tools::catalog::ToolProfile;
+use aura_exec_tools::{ToolCatalog, GIT_TOOL_NAMES};
 use std::collections::BTreeSet;
 
 #[test]

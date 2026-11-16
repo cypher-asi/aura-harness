@@ -3,7 +3,7 @@
 //! Verifies that `AgentLoop::run_with_events` emits the correct
 //! `AgentLoopEvent` variants in the expected order.
 
-use aura_model_reasoner::{
+use aura_model::{
     ContentBlock, Message, MockProvider, MockResponse, ModelProvider, ModelRequest, ModelResponse,
     ReasonerError, StreamContentType, StreamEvent, StreamEventStream, ToolDefinition,
 };

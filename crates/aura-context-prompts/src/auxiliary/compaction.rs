@@ -5,7 +5,7 @@
 //! summarise the compactable middle of the transcript. This module
 //! owns the **model-facing strings** the call uses (system prompt
 //! constant + the user-prompt header template). The actual message
-//! rendering (walking `aura_model_reasoner::Message` blocks and producing
+//! rendering (walking `aura_model::Message` blocks and producing
 //! the per-message text bodies) stays in `aura-agent` because it
 //! requires the reasoner crate, which is a forbidden dep here (see
 //! crate-level docs).
@@ -14,7 +14,7 @@
 //!
 //! The plan instructed "auxiliary/compaction.rs — moved verbatim".
 //! Doing so would force a `aura-reasoner` dependency on this crate
-//! (the verbatim function takes `&[aura_model_reasoner::Message]` and walks
+//! (the verbatim function takes `&[aura_model::Message]` and walks
 //! `ContentBlock` variants), which the boundary contract explicitly
 //! forbids. The pragmatic split is:
 //!
@@ -73,7 +73,7 @@ pub struct CompactSummaryHeader {
 /// Render the compaction-summary user prompt.
 ///
 /// `compactable_middle_block` and `recent_tail_block` are pre-rendered
-/// by `aura-agent` (it walks the `Vec<aura_model_reasoner::Message>` slices
+/// by `aura-agent` (it walks the `Vec<aura_model::Message>` slices
 /// and produces the per-message text). Both arguments may be empty
 /// strings when the corresponding section is empty.
 #[must_use]

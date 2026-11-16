@@ -1,6 +1,6 @@
 //! Hooks the tool layer calls out through.
 //!
-//! Tools in `aura-tools` reach agents, subagents, background processes and
+//! Tools in `aura-exec-tools` reach agents, subagents, background processes and
 //! automatons only through these traits; the engine and the surfaces
 //! implement them. Keeping them here lets an implementor depend on the
 //! seam without depending on the tool catalog.
@@ -73,8 +73,8 @@ pub trait AgentReadHook: Send + Sync {
 
 /// Hook invoked by the `task` tool to run a foreground subagent.
 ///
-/// The trait intentionally uses only `aura-core` data types so `aura-tools`
-/// remains independent from `aura-runtime`, `aura-agent` event types, and
+/// The trait intentionally uses only `aura-core` data types so `aura-exec-tools`
+/// remains independent from `aura-node`, `aura-agent` event types, and
 /// transport protocols.
 #[async_trait]
 pub trait SubagentDispatchHook: Send + Sync {
@@ -84,7 +84,7 @@ pub trait SubagentDispatchHook: Send + Sync {
 /// Told about each file a tool call is about to change and again once the
 /// call is done, so a surface can checkpoint the file and show the change.
 ///
-/// Only tools that name the file they change (see `Tool::changed_path` in `aura-tools`)
+/// Only tools that name the file they change (see `Tool::changed_path` in `aura-exec-tools`)
 /// are reported; `run_command` and other tools with side effects the
 /// executor can't see are not.
 #[async_trait]
@@ -154,7 +154,7 @@ pub struct BackgroundJob {
     pub started_ms: u64,
 }
 
-/// Abstraction over automaton lifecycle so tools don't depend on `aura-automaton`.
+/// Abstraction over automaton lifecycle so tools don't depend on `aura-engine-automaton`.
 #[async_trait]
 pub trait AutomatonController: Send + Sync {
     /// Install and start a dev-loop automaton for `project_id`.

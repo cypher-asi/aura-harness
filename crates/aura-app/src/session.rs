@@ -8,19 +8,19 @@
 
 use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
-use crate::model_selection::ModelSelection;
 use crate::harness::{
     agent_tools, background_process_manager, build_hub, build_provider, initial_permission_mode,
     mode_policy, policy_tool_names, post_edit_check_from_env, project_instructions, Harness,
     HubSetup,
 };
+use crate::model_selection::ModelSelection;
 use crate::{api_server, event_loop, record_loader, session_helpers};
 
 use anyhow::Context;
 use aura_agent::AgentLoop;
 use aura_agent_kernel::RecordObserver;
-use aura_terminal::{UiCommand, UiEvent};
-use aura_tools::BackgroundProcessHook;
+use aura_exec_tools::BackgroundProcessHook;
+use aura_ui_terminal::{UiCommand, UiEvent};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -143,7 +143,7 @@ pub async fn start(
     // locally (env, persisted `/model` choice, then the local default) —
     // higher-level surfaces (chat WS, dev-loop, task-run) plumb the
     // user-selected model through their own paths.
-    let mut config = session_helpers::default_agent_config(aura_model_reasoner::ENV_FALLBACK_MODEL);
+    let mut config = session_helpers::default_agent_config(aura_model::ENV_FALLBACK_MODEL);
     let auth = Arc::new(aura_auth::AuthManager::new().context("loading sign-in state")?);
     let summary = event_loop::auth::auth_summary(&auth, config.auth_token.as_deref());
     let models = ModelSelection::init(&mut config, summary);

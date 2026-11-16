@@ -155,7 +155,7 @@ async fn background_commands_are_listed_killed_and_reported() {
 #[cfg(target_os = "linux")]
 #[test]
 fn tagged_os_processes_are_listed_under_their_parent_and_killable() {
-    use aura_tools::{AGENT_ID_VAR, HARNESS_PID_VAR};
+    use aura_exec_tools::{AGENT_ID_VAR, HARNESS_PID_VAR};
     use std::os::unix::process::CommandExt;
 
     let table = ProcessTable::new(None, None);

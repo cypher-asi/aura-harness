@@ -1,6 +1,6 @@
 //! Advanced agent loop tests: checkpoints, stall detection, exploration compaction.
 
-use aura_model_reasoner::{
+use aura_model::{
     ContentBlock, Message, MockProvider, MockResponse, ToolDefinition, ToolResultContent,
 };
 

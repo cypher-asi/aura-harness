@@ -5,13 +5,13 @@
 
 use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
 use aura_core_types::{AgentId, TransactionType};
-use aura_model_reasoner::{Message, MockProvider, ModelRequest};
+use aura_model::{Message, MockProvider, ModelRequest};
 use aura_store_db::{RocksStore, Store};
 use std::sync::Arc;
 use tempfile::TempDir;
 
 fn create_test_kernel(
-    provider: Arc<dyn aura_model_reasoner::ModelProvider + Send + Sync>,
+    provider: Arc<dyn aura_model::ModelProvider + Send + Sync>,
 ) -> (Arc<Kernel>, Arc<dyn Store>, TempDir) {
     let dir = TempDir::new().unwrap();
     let store: Arc<dyn Store> = Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
@@ -31,7 +31,7 @@ fn create_test_kernel(
 
 #[tokio::test]
 async fn test_full_kernel_mediated_flow() {
-    let provider: Arc<dyn aura_model_reasoner::ModelProvider + Send + Sync> =
+    let provider: Arc<dyn aura_model::ModelProvider + Send + Sync> =
         Arc::new(MockProvider::simple_response("I'll help with that."));
     let (kernel, store, _dir) = create_test_kernel(provider);
 
@@ -88,7 +88,7 @@ async fn test_full_kernel_mediated_flow() {
 
 #[tokio::test]
 async fn test_dequeued_processing() {
-    let provider: Arc<dyn aura_model_reasoner::ModelProvider + Send + Sync> =
+    let provider: Arc<dyn aura_model::ModelProvider + Send + Sync> =
         Arc::new(MockProvider::simple_response("processed"));
     let (kernel, store, _dir) = create_test_kernel(provider);
 
@@ -107,7 +107,7 @@ async fn test_dequeued_processing() {
 
 #[tokio::test]
 async fn test_sequence_continuity() {
-    let provider: Arc<dyn aura_model_reasoner::ModelProvider + Send + Sync> =
+    let provider: Arc<dyn aura_model::ModelProvider + Send + Sync> =
         Arc::new(MockProvider::simple_response("response"));
     let (kernel, store, _dir) = create_test_kernel(provider);
 

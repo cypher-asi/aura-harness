@@ -7,7 +7,7 @@
 //! the subcommands (sign-in, plugins, run traces, evals) and the
 //! ratatui terminal launcher. The agent session itself is `aura-app`'s:
 //! this crate turns its flags into `aura-app` options. The `aura-node`
-//! binary body lives in [`aura_runtime::run_node`], re-exported here as
+//! binary body lives in [`aura_node::run_node`], re-exported here as
 //! [`run_node`].
 //!
 //! ## Mode resolution
@@ -53,8 +53,8 @@ mod trace_commands;
 
 pub use runner::{desktop_launch, run, run_cli};
 
-/// The `aura-node` entrypoint; `aura-runtime` owns the gateway binary.
-pub use aura_runtime::run_node;
+/// The `aura-node` entrypoint; `aura-node` owns the gateway binary.
+pub use aura_node::run_node;
 
 /// `clap`-friendly mirror of [`AgentMode`].
 ///

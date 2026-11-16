@@ -3,7 +3,7 @@
 //! ## Error Strategy
 //!
 //! The workspace uses a layered error approach:
-//! - **Boundary crates** (`aura-store`, `aura-auth`, `aura-tools`, `aura-reasoner`) define
+//! - **Boundary crates** (`aura-store`, `aura-auth`, `aura-exec-tools`, `aura-reasoner`) define
 //!   typed error enums (`StoreError`, `AuthError`, `ToolError`, `ReasonerError`) for their
 //!   specific failure modes.
 //! - **Orchestration layers** (`aura-kernel`, `aura-agent::runtime`, `aura-agent`, CLI binaries)

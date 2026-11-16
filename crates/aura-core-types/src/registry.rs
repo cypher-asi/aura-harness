@@ -5,12 +5,12 @@
 //!
 //! - `aura_context_skills::SkillRegistry` — in-memory map of loaded skills,
 //!   populated from a `SkillLoader`.
-//! - `aura_tools::ToolCatalog` — immutable, compile-time–constructed
+//! - `aura_exec_tools::ToolCatalog` — immutable, compile-time–constructed
 //!   catalog of tool metadata. Implements the read-only slice of
 //!   [`Registry`] (`get` / `iter` / `len`) and reports `Unsupported`
 //!   for mutating calls; callers that need profile- or
 //!   capability-filtered views must use the inherent methods.
-//! - `aura_automaton::AutomatonRuntime` — running automaton instances
+//! - `aura_engine_automaton::AutomatonRuntime` — running automaton instances
 //!   keyed by their id string.
 //!
 //! Implementors keep their inherent methods for compatibility; the trait

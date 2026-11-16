@@ -7,13 +7,13 @@ use aura_agent::AgentLoopConfig;
 use aura_agent_kernel::KernelConfig;
 use aura_auth::{Vault, ZosIdentity};
 use aura_context_skills::{SkillLoader, SkillManager};
-use aura_model_reasoner::{
+use aura_exec_tools::ToolConfig;
+use aura_model::{
     MockProvider, MockResponse, ModelProvider, ModelRequest, ModelResponse, ReasonerError,
 };
 use aura_store_db::RocksStore;
-use aura_terminal::events::RewindScope;
-use aura_terminal::PermissionMode;
-use aura_tools::ToolConfig;
+use aura_ui_terminal::events::RewindScope;
+use aura_ui_terminal::PermissionMode;
 use tempfile::TempDir;
 use tokio::sync::Semaphore;
 
@@ -231,8 +231,8 @@ fn message(agent_id: AgentId, text: &str, shown: bool) -> UiEvent {
     }
 }
 
-fn png(data: &str) -> aura_terminal::events::ImageAttachment {
-    aura_terminal::events::ImageAttachment {
+fn png(data: &str) -> aura_ui_terminal::events::ImageAttachment {
+    aura_ui_terminal::events::ImageAttachment {
         media_type: "image/png".to_string(),
         data: data.to_string(),
         bytes: 3,
@@ -254,10 +254,10 @@ fn user_images(state: &LoopState<'_>, agent_id: AgentId) -> Vec<(String, String)
     state.idle[&agent_id]
         .messages
         .iter()
-        .filter(|m| m.role == aura_model_reasoner::Role::User)
+        .filter(|m| m.role == aura_model::Role::User)
         .flat_map(|m| m.content.iter())
         .filter_map(|block| match block {
-            aura_model_reasoner::ContentBlock::Image { source } => {
+            aura_model::ContentBlock::Image { source } => {
                 Some((source.media_type.clone(), source.data.clone()))
             }
             _ => None,
@@ -343,8 +343,8 @@ fn user_texts(state: &LoopState<'_>, agent_id: AgentId) -> Vec<String> {
     state.idle[&agent_id]
         .messages
         .iter()
-        .filter(|m| m.role == aura_model_reasoner::Role::User)
-        .map(aura_model_reasoner::Message::text_content)
+        .filter(|m| m.role == aura_model::Role::User)
+        .map(aura_model::Message::text_content)
         .collect()
 }
 
@@ -435,13 +435,13 @@ async fn a_pasted_image_goes_to_the_model_as_an_image_block() {
     let prompt = state.idle[&first]
         .messages
         .iter()
-        .find(|m| m.role == aura_model_reasoner::Role::User)
+        .find(|m| m.role == aura_model::Role::User)
         .unwrap();
     assert!(matches!(
         prompt.content.as_slice(),
         [
-            aura_model_reasoner::ContentBlock::Image { .. },
-            aura_model_reasoner::ContentBlock::Text { text },
+            aura_model::ContentBlock::Image { .. },
+            aura_model::ContentBlock::Text { text },
         ] if text == "[image 1] what is this?"
     ));
     assert_eq!(
@@ -674,18 +674,14 @@ async fn compact_summarizes_the_older_history() {
     let first = fixture.first;
     let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
     let mut state = loop_state(&fixture, &mut b);
-    let history: Vec<aura_model_reasoner::Message> =
-        std::iter::once(aura_model_reasoner::Message::user("build it"))
-            .chain((0..12).flat_map(|i| {
-                [
-                    aura_model_reasoner::Message::assistant(format!(
-                        "step {i}: {}",
-                        "x".repeat(400)
-                    )),
-                    aura_model_reasoner::Message::user(format!("ok {i}")),
-                ]
-            }))
-            .collect();
+    let history: Vec<aura_model::Message> = std::iter::once(aura_model::Message::user("build it"))
+        .chain((0..12).flat_map(|i| {
+            [
+                aura_model::Message::assistant(format!("step {i}: {}", "x".repeat(400))),
+                aura_model::Message::user(format!("ok {i}")),
+            ]
+        }))
+        .collect();
     let before = history.len();
     state.idle.get_mut(&first).unwrap().messages = history;
 
@@ -748,8 +744,8 @@ async fn queued_work_is_counted_for_the_status_line() {
 }
 
 /// A tool call with its result, as a turn leaves them in the history.
-fn tool_exchange(id: &str) -> [aura_model_reasoner::Message; 2] {
-    use aura_model_reasoner::{ContentBlock, Message, Role, ToolResultContent};
+fn tool_exchange(id: &str) -> [aura_model::Message; 2] {
+    use aura_model::{ContentBlock, Message, Role, ToolResultContent};
     [
         Message::new(
             Role::Assistant,
@@ -775,11 +771,11 @@ fn open_again(fixture: &Fixture, agent_id: AgentId) -> AgentSession {
     fixture.hub.factory.open(&agent, Vec::new(), None).unwrap()
 }
 
-fn todo(content: &str) -> aura_tools::todo::TodoItem {
-    aura_tools::todo::TodoItem {
+fn todo(content: &str) -> aura_exec_tools::todo::TodoItem {
+    aura_exec_tools::todo::TodoItem {
         id: "1".to_string(),
         content: content.to_string(),
-        status: aura_tools::todo::TodoStatus::InProgress,
+        status: aura_exec_tools::todo::TodoStatus::InProgress,
     }
 }
 
@@ -806,7 +802,7 @@ async fn a_restart_keeps_tool_calls_todos_and_usage() {
     assert!(reopened.messages[2]
         .content
         .iter()
-        .any(|b| matches!(b, aura_model_reasoner::ContentBlock::ToolUse { .. })));
+        .any(|b| matches!(b, aura_model::ContentBlock::ToolUse { .. })));
     assert_eq!(reopened.todos, [todo("Fix main")]);
     assert_eq!(reopened.usage.calls, 4);
     assert_eq!(reopened.started_ms, state.idle[&first].started_ms);
@@ -840,7 +836,7 @@ async fn a_new_session_drops_the_checkpoint_and_resume_brings_it_back() {
     let first = fixture.first;
     let mut state = loop_state(&fixture, &mut b);
     let session = state.idle.get_mut(&first).unwrap();
-    session.messages = vec![aura_model_reasoner::Message::user("old task")];
+    session.messages = vec![aura_model::Message::user("old task")];
     session.messages.extend(tool_exchange("t1"));
     session.todos = vec![todo("Finish the old task")];
     session.started_ms = 1_000;
@@ -895,7 +891,7 @@ fn tool_results(state: &LoopState<'_>, agent_id: AgentId) -> Vec<bool> {
         .iter()
         .flat_map(|m| m.content.iter())
         .filter_map(|b| match b {
-            aura_model_reasoner::ContentBlock::ToolResult { is_error, .. } => Some(*is_error),
+            aura_model::ContentBlock::ToolResult { is_error, .. } => Some(*is_error),
             _ => None,
         })
         .collect()
@@ -1104,7 +1100,7 @@ async fn checkpointed_turn(
     prompt: &str,
     edits: &[(&str, Option<&str>)],
 ) {
-    use aura_model_reasoner::Message;
+    use aura_model::Message;
 
     let session = state.idle.get_mut(&agent_id).unwrap();
     fixture
@@ -1249,9 +1245,8 @@ async fn a_summarized_turn_cannot_be_rewound_in_the_chat() {
         &[("a.txt", Some("x\n"))],
     )
     .await;
-    state.idle.get_mut(&first).unwrap().messages = vec![aura_model_reasoner::Message::user(
-        "summary of earlier work",
-    )];
+    state.idle.get_mut(&first).unwrap().messages =
+        vec![aura_model::Message::user("summary of earlier work")];
     rewind::handle_rewind(&mut state, first, Some(1), RewindScope::Both).await;
 
     let said = system_texts(&drain(&mut commands));

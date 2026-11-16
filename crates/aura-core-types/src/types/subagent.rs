@@ -1,7 +1,7 @@
 //! Shared subagent request/result data.
 //!
 //! These are behavior-free wire/data shapes. Runtime orchestration belongs in
-//! `aura-runtime`; tool dispatch belongs in `aura-tools`.
+//! `aura-node`; tool dispatch belongs in `aura-exec-tools`.
 
 use crate::{AgentId, AgentPermissions, AgentToolPermissions, Capability, UserToolDefaults};
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,7 @@ pub const DEFAULT_SUBAGENT_TIMEOUT_MS: u64 = 300_000;
 /// the system:
 ///
 /// - [`SubagentBudget::default`]'s `max_iterations`,
-/// - `aura_runtime::session::state::Session::max_turns` default and the
+/// - `aura_node::session::state::Session::max_turns` default and the
 ///   wire-level `RuntimeRequest.model.max_turns` override,
 /// - `aura_agent::AgentLoopConfig::{max_iterations, max_turns_per_task,
 ///   max_iterations_per_task}` defaults,

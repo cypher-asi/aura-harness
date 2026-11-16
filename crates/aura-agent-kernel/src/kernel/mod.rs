@@ -33,7 +33,7 @@ use aura_core_modes::KernelMode;
 use aura_core_types::{
     AgentId, Hash, PolicyDecision, RecordEntry, RuntimeCapabilityInstall, ToolState,
 };
-use aura_model_reasoner::ModelProvider;
+use aura_model::ModelProvider;
 use aura_plugin_hooks::PluginHookHost;
 use aura_store_db::Store;
 use aura_store_record::DEFAULT_SUMMARY_CHUNK_BYTES;
@@ -338,7 +338,7 @@ pub struct ReasonResult {
     /// The record entry created
     pub entry: RecordEntry,
     /// The model response
-    pub response: aura_model_reasoner::ModelResponse,
+    pub response: aura_model::ModelResponse,
 }
 
 // ============================================================================
@@ -549,7 +549,7 @@ impl Kernel {
 /// Phase 6a consolidation: write a System-shaped `RecordEntry`
 /// through the kernel crate.
 ///
-/// Previously `aura-runtime::tool_permissions::append_agent_tool_permissions_entry`
+/// Previously `aura-node::tool_permissions::append_agent_tool_permissions_entry`
 /// constructed and appended this entry inline, bypassing the kernel
 /// and violating the "kernel owns every `RecordEntry` write"
 /// invariant. The body of the build-and-write now lives here; the

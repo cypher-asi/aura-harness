@@ -12,9 +12,9 @@ use aura_engine::{
     AgentEnv, AgentHooks, AgentHost, AgentIdentity, ChildKernel, ChildKernelFactory,
     ChildKernelRequest, InboxMessage, ParentInbox, RootAgent, Scheduler,
 };
-use aura_model_reasoner::{ModelRequestKind, ToolDefinition};
-use aura_tools::agents::task::TASK_TOOL_NAME;
-use aura_tools::{BackgroundProcessHook, ToolCatalog, ToolConfig};
+use aura_exec_tools::agents::task::TASK_TOOL_NAME;
+use aura_exec_tools::{BackgroundProcessHook, ToolCatalog, ToolConfig};
+use aura_model::{ModelRequestKind, ToolDefinition};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -24,7 +24,7 @@ use std::sync::Arc;
 /// agents, and tool names must be unique in a request.
 #[must_use]
 pub fn agent_tool_definitions() -> Vec<ToolDefinition> {
-    aura_tools::agents::cross_agent_catalog_entries()
+    aura_exec_tools::agents::cross_agent_catalog_entries()
         .into_iter()
         .map(|(_, definition, _)| definition)
         .filter(|definition| !matches!(definition.name.as_str(), "delegate_task" | TASK_TOOL_NAME))

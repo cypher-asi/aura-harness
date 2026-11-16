@@ -8,7 +8,7 @@
 
 use super::subagents::lock;
 use aura_agent::{AgentRunnerHandle, SessionId, UserInput};
-use aura_model_reasoner::{ContentBlock, Message, Role};
+use aura_model::{ContentBlock, Message, Role};
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 

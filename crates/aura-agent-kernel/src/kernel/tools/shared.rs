@@ -28,7 +28,7 @@ use std::time::Duration;
 /// agent loop runs under the agent host's own (longer) timeout +
 /// parent cancellation token. The kernel's 120s default would otherwise abort
 /// a legitimately long child run prematurely. The name is hardcoded rather than
-/// imported from `aura-tools` to keep the kernel free of an upward dependency
+/// imported from `aura-exec-tools` to keep the kernel free of an upward dependency
 /// on the tool crate.
 const TIMEOUT_EXEMPT_TOOLS: &[&str] = &["run_command", "task"];
 

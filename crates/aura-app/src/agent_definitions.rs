@@ -11,8 +11,8 @@
 use anyhow::{bail, Context};
 use aura_context_skills::prompt::{inject_full_skills, SkillPromptEntry};
 use aura_context_skills::SkillManager;
-use aura_model_reasoner::ToolDefinition;
-use aura_tools::agents::task::TASK_TOOL_NAME;
+use aura_exec_tools::agents::task::TASK_TOOL_NAME;
+use aura_model::ToolDefinition;
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};

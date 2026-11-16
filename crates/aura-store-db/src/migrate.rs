@@ -8,7 +8,7 @@
 //! copy is indistinguishable from a database that was sealed from birth.
 //!
 //! The atomic/resumable orchestration (temp dir, swap, `.aura-sealed`
-//! marker, plaintext-backup cleanup) lives in `aura-runtime`'s
+//! marker, plaintext-backup cleanup) lives in `aura-node`'s
 //! `state_migration` module; this module only knows how to produce a
 //! sealed copy.
 
@@ -104,7 +104,8 @@ pub fn seal_db_copy(
     // Enumerate the CFs the source actually has (an older database may
     // predate newer CFs) and open it read-only.
     let src_cf_names = Db::list_cf(&Options::default(), src).map_err(backend)?;
-    let src_db = Db::open_cf_for_read_only(&Options::default(), src, &src_cf_names, false).map_err(backend)?;
+    let src_db = Db::open_cf_for_read_only(&Options::default(), src, &src_cf_names, false)
+        .map_err(backend)?;
 
     // The destination gets the union of the canonical CF set and the
     // source's CFs, so nothing is dropped and the sealed store finds
@@ -125,7 +126,8 @@ pub fn seal_db_copy(
         dst_cf_names
             .iter()
             .map(|name| ColumnFamilyDescriptor::new(name, Options::default())),
-    ).map_err(backend)?;
+    )
+    .map_err(backend)?;
 
     let mut stats = SealCopyStats::default();
 

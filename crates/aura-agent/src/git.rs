@@ -3,7 +3,7 @@
 //! Phase 2 remediation (Invariant §1 — Sole External Gateway):
 //! **mutating** git operations (`git add`, `git commit`, `git push`,
 //! `git remote set-url`) now live exclusively in
-//! [`aura_tools::git_tool`](../../../aura-tools/src/git_tool/mod.rs),
+//! [`aura_exec_tools::git_tool`](../../../aura-exec-tools/src/git_tool/mod.rs),
 //! where they run inside the kernel-mediated tool pipeline. This module
 //! retains only the read-only helpers used by the agent surface
 //! (`is_git_repo`, `list_unpushed_commits`) — the former is a filesystem
@@ -11,7 +11,7 @@
 //! explicitly listed as a declared exception in `docs/invariants.md`.
 //!
 //! If you find yourself adding a mutating helper here, route it through
-//! `aura_tools::git_tool` instead.
+//! `aura_exec_tools::git_tool` instead.
 
 use std::path::Path;
 use std::time::Duration;
@@ -21,13 +21,13 @@ use tokio::process::Command;
 use tracing::debug;
 
 /// Timeout used for the read-only helpers below. Mutating operations
-/// have their own timeout managed by the git tools in `aura-tools`.
+/// have their own timeout managed by the git tools in `aura-exec-tools`.
 const GIT_READ_TIMEOUT: Duration = Duration::from_secs(aura_config::GIT_READ_TIMEOUT_SECS);
 
 /// Lightweight record of a single commit surfaced by
 /// [`list_unpushed_commits`]. Kept stable so external consumers
 /// (aura-os run-log forwarder) that key off the commits payload do
-/// not churn when the push helper is moved to `aura-tools`.
+/// not churn when the push helper is moved to `aura-exec-tools`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommitInfo {
     pub sha: String,

@@ -8,7 +8,7 @@
 use super::RecordObserver;
 use crate::context::hash_tx_with_window;
 use aura_core_types::{AgentId, RecordEntry, Transaction, TransactionType};
-use aura_model_reasoner::{StopReason, Usage};
+use aura_model::{StopReason, Usage};
 use aura_store_db::Store;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;

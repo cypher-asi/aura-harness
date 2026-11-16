@@ -5,7 +5,7 @@ use super::*;
 use crate::ExecutorRouter;
 use aura_core_modes::AgentMode;
 use aura_core_types::{AgentId, SystemKind, ToolProposal, Transaction, TransactionType};
-use aura_model_reasoner::{MockProvider, ModelProvider};
+use aura_model::{MockProvider, ModelProvider};
 use aura_store_db::{RocksStore, Store};
 use std::sync::Arc;
 use tempfile::TempDir;

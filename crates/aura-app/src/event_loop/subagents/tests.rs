@@ -3,9 +3,9 @@ use crate::session_helpers::{build_executor_router_with_config, default_agent_co
 use aura_agent_kernel::{Kernel, KernelConfig};
 use aura_context_skills::SkillLoader;
 use aura_core_types::{AgentPermissions, UserToolDefaults};
-use aura_model_reasoner::{MockProvider, ModelProvider};
+use aura_exec_tools::ToolConfig;
+use aura_model::{MockProvider, ModelProvider};
 use aura_store_db::RocksStore;
-use aura_tools::ToolConfig;
 use tempfile::TempDir;
 
 struct Fixture {
@@ -48,7 +48,7 @@ fn slow_fixture(reply: &str, latency_ms: u64) -> Fixture {
         },
         commands: tx,
         long_run: crate::long_run::LongRunSettings::default(),
-        mode: aura_terminal::PermissionMode::Default,
+        mode: aura_ui_terminal::PermissionMode::Default,
         instructions: ProjectInstructions::only_in(workspace.path()),
         processes: ProcessTable::without_os_scan(None, None),
         agents: None,

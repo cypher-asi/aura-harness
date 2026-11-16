@@ -4,7 +4,7 @@ use aura_context_compaction::{
     self as compaction, CompactionAction, CompactionInput, CompactionPolicy, SummaryInput,
     SummaryOutput,
 };
-use aura_model_reasoner::{ModelRequestKind, ToolDefinition};
+use aura_model::{ModelRequestKind, ToolDefinition};
 use tokio::sync::mpsc::Sender;
 
 use crate::budget;
@@ -90,7 +90,7 @@ fn compaction_pressure_tokens(
         .min(max_ctx)
 }
 
-fn heuristic_context_tokens(messages: &[aura_model_reasoner::Message]) -> u64 {
+fn heuristic_context_tokens(messages: &[aura_model::Message]) -> u64 {
     #[allow(clippy::cast_possible_truncation)]
     {
         (compaction::estimate_message_chars(messages) / CHARS_PER_TOKEN) as u64
@@ -405,7 +405,7 @@ mod tests {
     use crate::agent_loop::AgentLoopConfig;
     use crate::agent_loop::LoopState;
     use aura_context_compaction::{pick_stricter_tier, CompactionConfig};
-    use aura_model_reasoner::{Message, ModelRequestKind, ToolDefinition};
+    use aura_model::{Message, ModelRequestKind, ToolDefinition};
     use std::sync::{Mutex, OnceLock};
 
     /// Serialize tests that swap `aura_config` to flip the compaction

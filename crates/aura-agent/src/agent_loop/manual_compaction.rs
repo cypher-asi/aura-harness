@@ -2,8 +2,8 @@
 //! turns, rather than when context pressure forces it inside one.
 
 use aura_context_compaction as compaction;
-use aura_model_reasoner::{ContentBlock, Message, ModelProvider};
-use aura_tools::todo::{render_todos, TodoItem};
+use aura_exec_tools::todo::{render_todos, TodoItem};
+use aura_model::{ContentBlock, Message, ModelProvider};
 use tokio_util::sync::CancellationToken;
 
 use super::config::AgentLoopConfig;

@@ -1,7 +1,7 @@
 //! Context building for the kernel.
 
 use aura_core_types::{hash, ContextHash, RecordEntry, Transaction};
-use aura_model_reasoner::RecordSummary;
+use aura_model::RecordSummary;
 use tracing::debug;
 
 /// Canonical context-hash function for every kernel processing path.

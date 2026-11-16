@@ -175,7 +175,8 @@ impl RocksStore {
             .collect();
 
         let db =
-            DBWithThreadMode::<MultiThreaded>::open_cf_descriptors(&opts, path, cf_descriptors).map_err(backend)?;
+            DBWithThreadMode::<MultiThreaded>::open_cf_descriptors(&opts, path, cf_descriptors)
+                .map_err(backend)?;
 
         Ok(Self {
             db: Arc::new(db),
@@ -385,7 +386,9 @@ impl RocksStore {
             clear_runtime_capabilities,
         )?;
 
-        self.db.write_opt(batch, &self.write_opts()).map_err(backend)?;
+        self.db
+            .write_opt(batch, &self.write_opts())
+            .map_err(backend)?;
         debug!("Record entry committed (direct)");
         Ok(())
     }
@@ -428,7 +431,9 @@ impl RocksStore {
             clear_runtime_capabilities,
         )?;
 
-        self.db.write_opt(batch, &self.write_opts()).map_err(backend)?;
+        self.db
+            .write_opt(batch, &self.write_opts())
+            .map_err(backend)?;
 
         debug!("Record entry committed atomically");
         Ok(())
@@ -465,7 +470,9 @@ impl ReadStore for RocksStore {
         batch.put_cf(&cf_inbox, inbox_key.encode(), tx_bytes);
         batch.put_cf(&cf_meta, tail_key.encode(), (tail + 1).to_be_bytes());
 
-        self.db.write_opt(batch, &self.write_opts()).map_err(backend)?;
+        self.db
+            .write_opt(batch, &self.write_opts())
+            .map_err(backend)?;
 
         debug!(inbox_seq = tail, "Transaction enqueued");
         Ok(())
@@ -666,7 +673,8 @@ impl ReadStore for RocksStore {
         let key = AgentMetaKey::status(agent_id);
 
         self.db
-            .put_cf_opt(&cf, key.encode(), [status.as_byte()], &self.write_opts()).map_err(backend)?;
+            .put_cf_opt(&cf, key.encode(), [status.as_byte()], &self.write_opts())
+            .map_err(backend)?;
         Ok(())
     }
 
@@ -710,7 +718,8 @@ impl ReadStore for RocksStore {
         let cf = self.cf(cf::USER_TOOL_DEFAULTS)?;
         let bytes = self.seal_value(serde_json::to_vec(defaults)?)?;
         self.db
-            .put_cf_opt(&cf, user_id.as_bytes(), bytes, &self.write_opts()).map_err(backend)?;
+            .put_cf_opt(&cf, user_id.as_bytes(), bytes, &self.write_opts())
+            .map_err(backend)?;
         Ok(())
     }
 
@@ -718,7 +727,8 @@ impl ReadStore for RocksStore {
     fn delete_user_tool_defaults(&self, user_id: &str) -> Result<(), StoreError> {
         let cf = self.cf(cf::USER_TOOL_DEFAULTS)?;
         self.db
-            .delete_cf_opt(&cf, user_id.as_bytes(), &self.write_opts()).map_err(backend)?;
+            .delete_cf_opt(&cf, user_id.as_bytes(), &self.write_opts())
+            .map_err(backend)?;
         Ok(())
     }
 
@@ -735,7 +745,9 @@ impl ReadStore for RocksStore {
             return Ok(false);
         }
 
-        self.db.put_cf_opt(&cf, key, [1_u8], &self.write_opts()).map_err(backend)?;
+        self.db
+            .put_cf_opt(&cf, key, [1_u8], &self.write_opts())
+            .map_err(backend)?;
         Ok(true)
     }
 
@@ -747,7 +759,9 @@ impl ReadStore for RocksStore {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let cf = self.cf(cf::AGENT_META)?;
         let key = Self::processing_claim_key(agent_id);
-        self.db.delete_cf_opt(&cf, key, &self.write_opts()).map_err(backend)?;
+        self.db
+            .delete_cf_opt(&cf, key, &self.write_opts())
+            .map_err(backend)?;
         Ok(())
     }
 
@@ -865,7 +879,9 @@ impl crate::store::WriteStore for RocksStore {
         let last_seq = base_seq + entries.len() as u64 - 1;
         batch.put_cf(&cf_meta, head_seq_key.encode(), last_seq.to_be_bytes());
 
-        self.db.write_opt(batch, &self.write_opts()).map_err(backend)?;
+        self.db
+            .write_opt(batch, &self.write_opts())
+            .map_err(backend)?;
 
         debug!(last_seq, "Batch record entries committed");
         Ok(())
@@ -972,7 +988,9 @@ impl RocksStore {
                 let mut batch = WriteBatch::default();
                 batch.put_cf(&cf_record, record_key.encode(), entry_bytes);
                 batch.put_cf(&cf_meta, head_seq_key.encode(), next_seq.to_be_bytes());
-                self.db.write_opt(batch, &self.write_opts()).map_err(backend)?;
+                self.db
+                    .write_opt(batch, &self.write_opts())
+                    .map_err(backend)?;
 
                 // Intentionally no inbox delete — this is the bug.
                 Err(fault_err("InsideBatch (broken non-atomic path)"))

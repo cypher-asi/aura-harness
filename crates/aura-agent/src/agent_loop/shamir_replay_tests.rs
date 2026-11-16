@@ -42,7 +42,7 @@ use std::path::PathBuf;
 
 use aura_agent_steering::TurnSteering;
 use aura_context_compaction::dedup_read_results_by_content_hash;
-use aura_model_reasoner::{ContentBlock, Message, Role, ToolResultContent};
+use aura_model::{ContentBlock, Message, Role, ToolResultContent};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -154,7 +154,7 @@ fn line_numbered_slice(
 
 /// Derive the canonical rendered `read_file` output for a fixture
 /// entry. Unbounded calls return the raw whole-file body (matches
-/// what `aura_tools::fs_tools::read::fs_read` emits when neither
+/// what `aura_exec_tools::fs_tools::read::fs_read` emits when neither
 /// `start_line` nor `end_line` is supplied); bounded calls return the
 /// `{:>6}|{content}` line-numbered slice (matches the same tool's
 /// bounded branch).
@@ -185,7 +185,7 @@ fn synthesize_result_bytes(
     }
 }
 
-/// Mirror of `aura_tools::fs_tools::read::content_hash_hex` /
+/// Mirror of `aura_exec_tools::fs_tools::read::content_hash_hex` /
 /// `aura_context_compaction::messages::dedup_content_hash_hex`. Reproduced
 /// here so the replay harness has zero new dependencies and the hash
 /// stamp matches what the read tool would have produced for the same

@@ -41,12 +41,12 @@ members = [
     "crates/aura-store-db",
     "crates/aura-store-record",
     "crates/aura-store-snapshot",
-    "crates/aura-tools",
+    "crates/aura-exec-tools",
     # Phase 1 refactor: exec-layer executor/spawn traits relocated out
-    # of aura-agent-kernel so aura-tools no longer depends upward.
+    # of aura-agent-kernel so aura-exec-tools no longer depends upward.
     "crates/aura-exec-traits",
     # Phase 3 model layer crate
-    "crates/aura-model-reasoner",
+    "crates/aura-model",
     # Agent layer:
     #   aura-agent-kernel    - deterministic kernel (renamed from aura-kernel)
     #   aura-agent           - agent turn loop
@@ -54,7 +54,7 @@ members = [
     #   aura-agent-subagent  - subagent derivation + inheritance
     "crates/aura-agent-kernel",
     "crates/aura-agent-subagent",
-    "crates/aura-terminal",
+    "crates/aura-ui-terminal",
     "crates/aura-agent",
     "crates/aura-agent-steering",
     "crates/aura-agent-trace",
@@ -64,23 +64,23 @@ members = [
     "crates/aura-auth-zos",
     "crates/aura-auth-chatgpt",
     "crates/aura-auth-claude",
-    "crates/aura-automaton",
+    "crates/aura-engine-automaton",
     # Phase B / Commit 3 surface-layer extraction: the orchestration
     # engine (scheduler / worker / automaton bridge / memory observer /
     # capabilities / executor / agent host) lives in
-    # `aura-engine`; `aura-runtime` is shrinking toward the gateway-only
+    # `aura-engine`; `aura-node` is shrinking toward the gateway-only
     # composition root.
     "crates/aura-engine",
     # Phase C / Commit 4 surface-layer extraction: HTTP `DomainApi`
-    # implementation (formerly `aura-runtime::domain`) plus the
+    # implementation (formerly `aura-node::domain`) plus the
     # JWT-injecting wrapper (formerly `aura-engine::jwt_domain`) live
     # here so the gateway crate no longer owns domain HTTP logic.
-    "crates/aura-domain-http",
-    "crates/aura-runtime",
-    "crates/aura-protocol",
+    "crates/aura-exec-domain-http",
+    "crates/aura-node",
+    "crates/aura-core-protocol",
     # Phase 4b plugin layer (in-process API + on-disk manifest pipeline)
     "crates/aura-plugin-api",
-    "crates/aura-plugin-core",
+    "crates/aura-plugin",
     # Phase 4c plugin runtime surfaces (hook engine + MCP + connectors).
     # No agent-loop wiring yet; Phase 8 lands the consumer side.
     "crates/aura-plugin-hooks",
@@ -92,7 +92,7 @@ members = [
     "crates/aura-cli",
     # Renderer-agnostic UI protocol and state shared by the TUI and the
     # native desktop app (`aura-desktop`, iced).
-    "crates/aura-ui-core",
+    "crates/aura-ui",
     "crates/aura-desktop",
 ]
 
@@ -231,17 +231,17 @@ zeroize = "1"
 
 [dev-dependencies]
 aura-app = { path = "crates/aura-app" }
-aura-runtime = { path = "crates/aura-runtime", features = ["test-support"] }
+aura-node = { path = "crates/aura-node", features = ["test-support"] }
 aura-config = { path = "crates/aura-config" }
 aura-agent-kernel = { path = "crates/aura-agent-kernel" }
 aura-store-db = { path = "crates/aura-store-db" }
-aura-model-reasoner = { path = "crates/aura-model-reasoner" }
+aura-model = { path = "crates/aura-model" }
 aura-agent = { path = "crates/aura-agent" }
 aura-agent-trace = { path = "crates/aura-agent-trace" }
 chrono = { workspace = true }
-aura-automaton = { path = "crates/aura-automaton" }
-aura-tools = { path = "crates/aura-tools" }
-aura-protocol = { path = "crates/aura-protocol" }
+aura-engine-automaton = { path = "crates/aura-engine-automaton" }
+aura-exec-tools = { path = "crates/aura-exec-tools" }
+aura-core-protocol = { path = "crates/aura-core-protocol" }
 aura-core-modes = { path = "crates/aura-core-modes" }
 aura-store-record = { path = "crates/aura-store-record" }
 aura-core-types = { path = "crates/aura-core-types" }
@@ -254,7 +254,7 @@ aura-agent-subagent = { path = "crates/aura-agent-subagent" }
 # directly. Promoting them to dev-deps keeps the binary surface
 # slim without dropping the existing test coverage.
 aura-auth = { path = "crates/aura-auth" }
-aura-terminal = { path = "crates/aura-terminal" }
+aura-ui-terminal = { path = "crates/aura-ui-terminal" }
 axum = { workspace = true }
 tokio-util = { workspace = true }
 parking_lot = { workspace = true }

@@ -14,8 +14,8 @@ use aura_agent_trace::graph::{GraphNode, NodeStatus};
 use aura_agent_trace::{report, RunGraph, RunMeta, RunRecorder, RunSource, RunTrace};
 use aura_core_types::trace::{Reward, RewardKind, RewardTarget};
 use aura_core_types::AgentId;
-use aura_terminal::events::{TraceNode, TraceNodeStatus};
-use aura_terminal::UiCommand;
+use aura_ui_terminal::events::{TraceNode, TraceNodeStatus};
+use aura_ui_terminal::UiCommand;
 use serde_json::Value;
 use tokio::sync::mpsc;
 

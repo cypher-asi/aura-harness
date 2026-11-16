@@ -12,7 +12,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 
-use aura_model_reasoner::{Message, ModelProvider, ModelRequestKind, ToolDefinition};
+use aura_model::{Message, ModelProvider, ModelRequestKind, ToolDefinition};
 
 use crate::agent_loop::{AgentLoop, AgentLoopConfig};
 use crate::events::AgentLoopEvent;
@@ -102,7 +102,7 @@ pub struct TaskExecutionResult {
     /// Final message history from the agent loop. Downstream validators use
     /// this to build recovery hints (e.g. which file paths the agent tried
     /// to write before truncation).
-    pub messages: Vec<aura_model_reasoner::Message>,
+    pub messages: Vec<aura_model::Message>,
 }
 
 /// Suggested follow-up task from agent execution.
@@ -131,7 +131,7 @@ pub struct AgentRunnerConfig {
     pub task_execution_max_tokens: u32,
     pub thinking_budget: u32,
     /// Explicit selected effort, independent of the response token allowance.
-    pub reasoning_effort: Option<aura_model_reasoner::ThinkingEffort>,
+    pub reasoning_effort: Option<aura_model::ThinkingEffort>,
     pub stream_timeout_secs: u64,
     pub max_context_tokens: u64,
     pub max_task_credits: Option<u64>,
@@ -175,7 +175,7 @@ pub struct AgentRunnerConfig {
     /// so cross-task agent invocations land on the same OpenAI cache
     /// bucket. Anthropic caching does not need a key — the provider's
     /// ephemeral `cache_control` breakpoints in
-    /// `aura_model_reasoner::anthropic::convert` handle prefix reuse.
+    /// `aura_model::anthropic::convert` handle prefix reuse.
     pub prompt_cache_key: Option<String>,
     /// Phase 5: per-task switch for the early test-gate oracle.
     ///

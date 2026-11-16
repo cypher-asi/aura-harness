@@ -3,7 +3,7 @@
 //! These descriptors are intentionally minimal: each one is the
 //! smallest set of fields a builder needs, kept as `&str` borrows so
 //! the prompt layer stays free of agent-/runtime-layer domain types.
-//! Conversions from heavyweight `aura-core` / `aura-protocol` types
+//! Conversions from heavyweight `aura-core` / `aura-core-protocol` types
 //! happen at the `aura-agent` boundary.
 //!
 //! Phase 0 rules debt: every public field below now documents its
@@ -40,8 +40,8 @@ pub struct ProjectInfo<'a> {
 
 /// Borrowed agent-identity fields consumed by
 /// [`crate::system::SystemPromptBuilder::agent_identity`]. The owning
-/// representation on the wire is `aura_protocol::AgentIdentityWire`;
-/// the `aura-runtime` automaton bridge converts wire → borrowed at
+/// representation on the wire is `aura_core_protocol::AgentIdentityWire`;
+/// the `aura-node` automaton bridge converts wire → borrowed at
 /// the kickoff site so this crate stays free of protocol dependencies.
 #[derive(Debug, Clone, Copy)]
 pub struct AgentIdentity<'a> {

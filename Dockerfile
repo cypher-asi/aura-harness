@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /build
 
 # The workspace is self-contained — every dependency (including the
-# WebSocket `aura-protocol` types) lives under ./crates. Copy the whole
+# WebSocket `aura-core-protocol` types) lives under ./crates. Copy the whole
 # tree so all workspace members resolve.
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY src        src/

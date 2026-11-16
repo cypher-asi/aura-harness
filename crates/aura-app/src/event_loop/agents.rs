@@ -22,10 +22,10 @@ use aura_agent::{
 };
 use aura_agent_kernel::Kernel;
 use aura_core_types::{AgentId, Identity};
-use aura_model_reasoner::{ContentBlock, Message};
+use aura_exec_tools::todo::{apply_todo_write, TodoItem, TODO_WRITE_TOOL_NAME};
+use aura_model::{ContentBlock, Message};
 use aura_store_record::ReadStore;
-use aura_terminal::UiCommand;
-use aura_tools::todo::{apply_todo_write, TodoItem, TODO_WRITE_TOOL_NAME};
+use aura_ui_terminal::UiCommand;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

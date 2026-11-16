@@ -9,7 +9,7 @@
 //! with the breakdown on every turn that reaches the compaction step.
 
 use aura_config::CHARS_PER_TOKEN;
-use aura_model_reasoner::ToolDefinition;
+use aura_model::ToolDefinition;
 
 use super::AgentLoopConfig;
 use crate::types::{AgentContextContents, AgentContextSegment};
@@ -91,7 +91,7 @@ pub(super) fn build_context_contents(
 mod tests {
     use super::build_context_contents;
     use crate::agent_loop::AgentLoopConfig;
-    use aura_model_reasoner::ToolDefinition;
+    use aura_model::ToolDefinition;
 
     fn dummy_tool(name: &str, description: &str) -> ToolDefinition {
         ToolDefinition::new(

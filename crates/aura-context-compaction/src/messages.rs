@@ -1,6 +1,6 @@
 //! Message-history compaction and summarization helpers.
 
-use aura_model_reasoner::{ContentBlock, Message, ModelRequestKind, Role, ToolResultContent};
+use aura_model::{ContentBlock, Message, ModelRequestKind, Role, ToolResultContent};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -795,7 +795,7 @@ pub fn compact_older_messages(messages: &mut [Message], config: &CompactionConfi
 }
 
 /// Stable hex digest matching the one stamped by
-/// `aura_tools::fs_tools::read::content_hash_hex`. Re-derived locally
+/// `aura_exec_tools::fs_tools::read::content_hash_hex`. Re-derived locally
 /// from the rendered ToolResult bytes because compaction sees the
 /// `Message`-level shape (with no metadata side-channel) — and because
 /// `DefaultHasher` is deterministic for the same bytes, the hash
@@ -1246,7 +1246,7 @@ pub fn compact_for_storage(messages: &mut [Message]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_model_reasoner::Role;
+    use aura_model::Role;
 
     #[test]
     fn forced_summary_covers_the_middle_of_any_size() {
@@ -1273,7 +1273,7 @@ mod tests {
     fn compaction_stubs_images_outside_recent_tail_including_first_message() {
         fn image(bytes: usize) -> ContentBlock {
             ContentBlock::Image {
-                source: aura_model_reasoner::ImageSource {
+                source: aura_model::ImageSource {
                     source_type: "base64".to_string(),
                     media_type: "image/png".to_string(),
                     data: "A".repeat(bytes),

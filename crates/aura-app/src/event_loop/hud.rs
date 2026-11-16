@@ -8,10 +8,10 @@ use super::LoopState;
 use crate::session_checkpoint::SessionUsage;
 use aura_agent::AgentLoopResult;
 use aura_core_types::AgentId;
-use aura_model_reasoner::{model_catalog, Usage};
-use aura_terminal::events::{CallStats, ContextView, SessionTotals, TodoState, TodoView};
-use aura_terminal::UiCommand;
-use aura_tools::todo::{TodoItem, TodoStatus};
+use aura_exec_tools::todo::{TodoItem, TodoStatus};
+use aura_model::{model_catalog, Usage};
+use aura_ui_terminal::events::{CallStats, ContextView, SessionTotals, TodoState, TodoView};
+use aura_ui_terminal::UiCommand;
 
 /// `todos` as the UI shows them.
 pub(super) fn todo_views(todos: &[TodoItem]) -> Vec<TodoView> {

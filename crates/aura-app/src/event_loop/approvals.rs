@@ -17,7 +17,7 @@ use aura_agent_kernel::{
     ToolApprovalResponse,
 };
 use aura_core_types::{AgentId, ToolState};
-use aura_terminal::UiCommand;
+use aura_ui_terminal::UiCommand;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};

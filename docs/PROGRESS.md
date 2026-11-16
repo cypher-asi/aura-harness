@@ -7,7 +7,7 @@ This file is the historical implementation log for the Aura Harness workspace. T
 - [`README.md`](../README.md) — overview, principles, and links to the [running](running.md), [API](api.md), [CLI](cli.md), [configuration](configuration.md), and [development](development.md) references.
 - [`docs/architecture.md`](architecture.md) — layered crate map, external-consumer invariant, and run/WebSocket flows.
 
-The active post-Phase-A/B/C shape is a self-contained Cargo workspace with `aura-runtime` as the sole external Rust surface and HTTP/WS gateway. `aura-engine` owns orchestration, `aura-domain-http` owns the HTTP `DomainApi` implementation, and `aura-engine::agents::AgentHost` owns recursive agent spawning (`task` / `spawn_agent`). Clients start work with `POST /v1/run` (`RuntimeRequest` → `RuntimeRunResponse`) and then attach to `WS /stream/:run_id`; there is no client-sent `SessionInit` first frame.
+The active post-Phase-A/B/C shape is a self-contained Cargo workspace with `aura-node` as the sole external Rust surface and HTTP/WS gateway. `aura-engine` owns orchestration, `aura-exec-domain-http` owns the HTTP `DomainApi` implementation, and `aura-engine::agents::AgentHost` owns recursive agent spawning (`task` / `spawn_agent`). Clients start work with `POST /v1/run` (`RuntimeRequest` → `RuntimeRunResponse`) and then attach to `WS /stream/:run_id`; there is no client-sent `SessionInit` first frame.
 
 Original MVP specifications:
 - `specs/spec-01.md` - MVP Foundation (Complete)
@@ -85,7 +85,7 @@ RocksDB implementation with column families and atomic commits.
 ### Phase 3: Executor Framework (now `aura-exec-*` + `aura-agent-kernel`)
 **Status:** 🟢 Complete
 
-Executor trait and router for dispatching actions. The original milestone name predated the layered split; there is no current `aura-executor` crate. Execution is now spread across the exec-layer crates (`aura-exec-*`, `aura-tools`) and the agent-layer kernel traits (`aura-agent-kernel`, re-exported by `aura-kernel`).
+Executor trait and router for dispatching actions. The original milestone name predated the layered split; there is no current `aura-executor` crate. Execution is now spread across the exec-layer crates (`aura-exec-*`, `aura-exec-tools`) and the agent-layer kernel traits (`aura-agent-kernel`, re-exported by `aura-kernel`).
 
 - [x] `Executor` trait definition
 - [x] `ExecuteContext` struct
@@ -97,7 +97,7 @@ Executor trait and router for dispatching actions. The original milestone name p
 
 ---
 
-### Phase 4: Tools (`aura-tools`)
+### Phase 4: Tools (`aura-exec-tools`)
 **Status:** 🟢 Complete (code written, requires LLVM to build)
 
 Filesystem and command tools with sandbox.
@@ -155,10 +155,10 @@ Deterministic kernel with context building and policy.
 
 ---
 
-### Phase 7: Runtime Gateway + Engine Split (`aura-runtime`, `aura-engine`)
+### Phase 7: Runtime Gateway + Engine Split (`aura-node`, `aura-engine`)
 **Status:** 🟢 Complete (code written, requires LLVM to build)
 
-HTTP/WS gateway, scheduler, and worker management. The original scheduler/worker implementation later moved out of `aura-runtime` into the surface-layer `aura-engine` orchestration crate; `aura-runtime` is now the gateway and `aura-node` composition root.
+HTTP/WS gateway, scheduler, and worker management. The original scheduler/worker implementation later moved out of `aura-node` into the surface-layer `aura-engine` orchestration crate; `aura-node` is now the gateway and `aura-node` composition root.
 
 - [x] Axum HTTP router setup
 - [x] `POST /tx` endpoint
@@ -169,7 +169,7 @@ HTTP/WS gateway, scheduler, and worker management. The original scheduler/worker
 - [x] `GET /health` endpoint
 - [x] Per-agent processing claim in `aura-engine::Scheduler`
 - [x] Worker loop implementation in `aura-engine::process_agent`
-- [x] HTTP `DomainApi` implementation in `aura-domain-http`
+- [x] HTTP `DomainApi` implementation in `aura-exec-domain-http`
 - [x] Recursive agent spawning via `aura-engine::agents::AgentHost` (replaces the fleet crates)
 - [x] `NodeConfig` struct
 
@@ -274,18 +274,18 @@ Interactive command-line interface. **The separate `aura-cli` crate
 was never created.** Its intended surface is now delivered by the
 root `aura` binary (`src/`) — interactive TUI, login / logout /
 whoami, and the embedded HTTP server for file / record access. The
-headless server half lives in `aura-runtime`. See
+headless server half lives in `aura-node`. See
 [`docs/cli.md`](cli.md) under "Binaries" for the canonical entry
 point.
 
 - [x] ~~Create `aura-cli` crate~~ — dropped; root `aura` binary
   is a thin shim into `aura_surface_cli::run`.
 - [x] REPL loop with prompt — delivered by the ratatui TUI in
-  `src/event_loop/` and `aura-terminal`.
+  `src/event_loop/` and `aura-ui-terminal`.
 - [x] Transaction submission — delivered by `aura run` / the TUI's
   session bootstrap.
 - [x] Record streaming / tailing — delivered by the `/stream`
-  WebSocket in `aura-runtime`.
+  WebSocket in `aura-node`.
 - [x] Slash commands (/status, /history, /approve, /deny) — TUI
   command palette / event loop.
 - [x] Approval prompts inline — TUI approval modal.
@@ -331,9 +331,9 @@ aura-harness/
 │   ├── aura-exec-*      # Tool execution, sandbox, policy, isolation, conflicts
 │   ├── aura-agent-*     # Deterministic kernel, AgentLoop, steering, subagents
 │   └── aura-surface-*   # CLI, SDK, terminal, automaton, auth surface shells
-├── crates/aura-runtime/ # Sole external Cargo surface; HTTP/WS gateway + aura-node root
+├── crates/aura-node/ # Sole external Cargo surface; HTTP/WS gateway + aura-node root
 ├── crates/aura-engine/  # Orchestration engine: scheduler, workers, automatons, agent host
-├── crates/aura-domain-http/
+├── crates/aura-exec-domain-http/
 │                         # HTTP DomainApi implementation + JWT wrapper
 ├── tests/               # Workspace integration, boundary, e2e, proptest tests
 ├── docs/                # Architecture, invariants, progress, refactoring notes
@@ -345,7 +345,7 @@ aura-harness/
 > `aura-executor/` and `aura-cli/`. `aura-executor` was dissolved into
 > the current exec / agent-layer crates. `aura-cli` was never created —
 > its surface is the root `aura` binary (`src/`) plus `aura-surface-cli`.
-> The `aura-node` crate was renamed to `aura-runtime`; the binary name
+> The `aura-node` crate was renamed to `aura-node`; the binary name
 > remains `aura-node`.
 
 ---
@@ -364,7 +364,7 @@ One-paragraph summary per phase:
 - **Phase 0 — Invariant gating + crate rename.** Routed the HTTP
   `tool_permissions` PUT handler under the per-agent scheduler lock so
   its `append_entry_direct` call is correctly serialized with the
-  kernel's own writes. Renamed the `aura-node` crate to `aura-runtime`
+  kernel's own writes. Renamed the `aura-node` crate to `aura-node`
   to match the layered-architecture vocabulary while keeping the
   binary name (`aura-node.exe`) stable for operators. Wired
   `scripts/check_invariants.sh` into CI via
@@ -384,13 +384,13 @@ One-paragraph summary per phase:
   scope, verdict, tests). `kernel/tools.rs` → `kernel/tools/`
   (single, batch, shared). `context.rs` → `context/` to lift the
   ~400 lines of `#[cfg(test)]` out of the production module.
-- **Phase 2b — God-module splits in `aura-tools` / `aura-reasoner`.**
+- **Phase 2b — God-module splits in `aura-exec-tools` / `aura-reasoner`.**
   `resolver/trusted.rs` → `resolver/trusted/` with
   `integrations/{github,linear,slack,resend,brave}.rs`.
   `git_tool/mod.rs` → per-subcommand modules (`executor`, `sandbox`,
   `commit`, `push`, `commit_push`, `redact`, `tests`).
   `anthropic/sse.rs` → `anthropic/sse/{parse,event,state,tests}.rs`.
-- **Phase 2c — God-module splits in `aura-runtime` / `aura-agent`.**
+- **Phase 2c — God-module splits in `aura-node` / `aura-agent`.**
   `automaton_bridge.rs` → `automaton_bridge/` (`mod`, `build`,
   `event_channel`, `dispatch`, `tests`). `kernel_domain_gateway.rs`
   → `kernel_domain_gateway/` (`specs`, `project`, `storage`, `orbit`,
@@ -401,7 +401,7 @@ One-paragraph summary per phase:
   thin re-export. Introduced `aura_agent::events::TurnEventSink` plus
   `map_agent_loop_event` so the TUI `UiCommandSink` and the node
   `OutboundMessageSink` share one mapping. Pulled the workspace
-  walker / capped reader into `aura_runtime::files_api` so both the
+  walker / capped reader into `aura_node::files_api` so both the
   node `/api/files` handlers and the TUI-embedded `src/api_server.rs`
   go through the same code.
 - **Phase 4 — Type-state seal + mid-loop refactor.** Introduced the
@@ -414,7 +414,7 @@ One-paragraph summary per phase:
   the `iteration/` directory and introduced `IterCounters` /
   `ThinkingBudget`. Renamed `tool_processing` → `tool_pipeline` and
   extracted `ToolResultCache`. Split `aura_agent::events` and
-  `aura_runtime::router::memory` along the `types`/`wire`/`handlers`/
+  `aura_node::router::memory` along the `types`/`wire`/`handlers`/
   `tests` axis. Split `dev_loop` into `aggregate.rs`,
   `forward_event.rs`, and `validation.rs`.
 - **Phase 5 — Test-only reachability cleanup.** Gated

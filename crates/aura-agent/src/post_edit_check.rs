@@ -688,7 +688,7 @@ mod tests {
 
         #[tokio::test]
         async fn a_step_with_several_edits_runs_the_check_once_and_feeds_back_failures() {
-            use aura_model_reasoner::{
+            use aura_model::{
                 ContentBlock, Message, MockProvider, MockResponse, StopReason, ToolDefinition,
                 Usage,
             };

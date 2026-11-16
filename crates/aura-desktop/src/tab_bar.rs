@@ -359,7 +359,7 @@ mod tests {
             x: 9.0,
             width,
             metrics: Metrics::new(14.0),
-            palette: Palette::from_theme(&aura_terminal::Theme::by_name("cyber")),
+            palette: Palette::from_theme(&aura_ui_terminal::Theme::by_name("cyber")),
         }
     }
 

@@ -13,7 +13,7 @@
 use super::{Kernel, ReasonResult, ReasonStreamHandle};
 use crate::context::hash_tx_with_window;
 use aura_core_types::{RecordEntry, Transaction, TransactionType};
-use aura_model_reasoner::{ModelRequest, StreamEventStream};
+use aura_model::{ModelRequest, StreamEventStream};
 use tracing::error;
 
 impl Kernel {
@@ -84,9 +84,7 @@ impl Kernel {
             .content
             .iter()
             .filter_map(|block| match block {
-                aura_model_reasoner::ContentBlock::Thinking { thinking, .. } => {
-                    Some(thinking.as_str())
-                }
+                aura_model::ContentBlock::Thinking { thinking, .. } => Some(thinking.as_str()),
                 _ => None,
             })
             .collect();

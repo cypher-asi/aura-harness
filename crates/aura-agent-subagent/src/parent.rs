@@ -35,7 +35,7 @@ pub struct ParentContext {
     /// the parent's mode default).
     pub permissions: Permissions,
     /// Parent's selected model identifier (free-form string today;
-    /// `ModelId` newtype landing in `aura-model-reasoner`).
+    /// `ModelId` newtype landing in `aura-model`).
     pub model_id: String,
     /// Parent → root agent lineage. Defaults to a chain consisting
     /// of just the parent agent itself.

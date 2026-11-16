@@ -5,7 +5,7 @@
 
 use super::OutputFormat;
 use crate::session_checkpoint::SessionUsage;
-use aura_tools::todo::TodoItem;
+use aura_exec_tools::todo::TodoItem;
 use serde::Serialize;
 use std::io::Write;
 use std::sync::{Arc, Mutex, PoisonError};

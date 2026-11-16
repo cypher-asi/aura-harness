@@ -10,8 +10,8 @@ use aura_agent_trace::dataset::{self, ExportFilter, ExportFormat};
 use aura_agent_trace::{health, report, scorecard, RunTrace};
 use aura_config::HarnessParams;
 use aura_core_types::trace::{Reward, RewardKind, RewardTarget};
-use aura_model_reasoner::ModelProvider;
-use aura_tools::ToolConfig;
+use aura_exec_tools::ToolConfig;
+use aura_model::ModelProvider;
 use serde_json::json;
 
 use crate::cli::{
@@ -359,12 +359,12 @@ fn loop_setup(
     provider: &str,
     model: Option<&str>,
 ) -> anyhow::Result<(AgentLoopConfig, Arc<dyn ModelProvider + Send + Sync>)> {
-    let mut config = session_helpers::default_agent_config(aura_model_reasoner::ENV_FALLBACK_MODEL);
+    let mut config = session_helpers::default_agent_config(aura_model::ENV_FALLBACK_MODEL);
     if provider == "mock" {
         if let Some(model) = model {
             config.model = model.to_string();
         }
-        return Ok((config, aura_model_reasoner::mock_provider().provider));
+        return Ok((config, aura_model::mock_provider().provider));
     }
     let auth = Arc::new(aura_auth::AuthManager::new().context("loading sign-in state")?);
     let summary = event_loop::auth::auth_summary(&auth, config.auth_token.as_deref());
@@ -377,6 +377,6 @@ fn loop_setup(
     }
     let resolver: Arc<dyn aura_auth::CredentialResolver> = auth;
     let selection =
-        aura_model_reasoner::routed_provider(Some(resolver)).context("building model provider")?;
+        aura_model::routed_provider(Some(resolver)).context("building model provider")?;
     Ok((config, selection.provider))
 }

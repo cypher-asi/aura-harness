@@ -1,23 +1,23 @@
 use super::output::{ExitReason, Output};
 use super::run::{parse_session_id, session_id, Headless, Request, RunLimits, SessionChoice};
 use super::tools::ToolFilter;
+use super::OutputFormat;
 use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
-use super::OutputFormat;
 use crate::event_loop::TurnBase;
-use crate::long_run::LongRunSettings;
 use crate::harness::{
     agent_tools, background_process_manager, build_hub, mode_policy, policy_tool_names, Harness,
     HubSetup,
 };
+use crate::long_run::LongRunSettings;
 use crate::session_helpers::default_agent_config_with_auth;
 use async_trait::async_trait;
 use aura_core_types::AgentId;
-use aura_model_reasoner::{
+use aura_model::{
     MockProvider, MockResponse, ModelProvider, ModelRequest, ModelResponse, ReasonerError,
 };
 use aura_store_db::RocksStore;
-use aura_terminal::PermissionMode;
+use aura_ui_terminal::PermissionMode;
 use serde_json::{json, Value};
 use std::io::Write;
 use std::path::Path;
@@ -302,8 +302,8 @@ fn last_prompts(requests: &Mutex<Vec<ModelRequest>>) -> Vec<String> {
         .unwrap()
         .messages
         .iter()
-        .filter(|m| m.role == aura_model_reasoner::Role::User)
-        .map(aura_model_reasoner::Message::text_content)
+        .filter(|m| m.role == aura_model::Role::User)
+        .map(aura_model::Message::text_content)
         .filter(|t| !t.is_empty())
         .collect()
 }
@@ -362,10 +362,7 @@ async fn resume_and_continue_pick_up_a_saved_session() {
         assert_eq!(last_prompts(&requests), ["remember 42", "what was it?"]);
         assert_eq!(report.todos.len(), 1);
         let sent = &requests.lock().unwrap()[0];
-        assert!(sent
-            .messages
-            .iter()
-            .any(aura_model_reasoner::Message::has_tool_use));
+        assert!(sent.messages.iter().any(aura_model::Message::has_tool_use));
     }
 
     // `--continue` keeps going in the session the last run used.

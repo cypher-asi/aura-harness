@@ -2,7 +2,7 @@
 //!
 //! The [`SpawnHook`] trait, [`ChildAgentSpec`], [`SpawnOutcome`],
 //! [`SpawnError`], and the default [`NoopSpawnHook`] now live in the
-//! exec-layer crate `aura-exec-traits` so the `aura-tools` exec crate can
+//! exec-layer crate `aura-exec-traits` so the `aura-exec-tools` exec crate can
 //! consume them without an upward dependency on this agent-layer kernel.
 //!
 //! [`KernelSpawnHook`] — the production wiring — stays here because it needs

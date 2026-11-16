@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
 use aura_core_types::trace::{ModelAction, Step, StepAction};
-use aura_model_reasoner::{
+use aura_model::{
     ContentBlock, Message, ModelProvider, ModelRequest, ModelResponse, ProviderTrace,
     ReasonerError, Role, StopReason, Usage,
 };

@@ -10,8 +10,8 @@ use aura_agent::{
     map_agent_loop_event, AgentLoopEvent, DebugEvent, TurnEventSink, PROGRESS_CONTEXT_SUMMARIZED,
     PROGRESS_TODOS_UPDATED,
 };
-use aura_model_reasoner::Usage;
-use aura_tools::todo::TodoItem;
+use aura_exec_tools::todo::TodoItem;
+use aura_model::Usage;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;

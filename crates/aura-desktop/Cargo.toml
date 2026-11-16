@@ -13,10 +13,10 @@ name = "aura-desktop"
 path = "src/main.rs"
 
 [dependencies]
-aura-ui-core = { path = "../aura-ui-core" }
+aura-ui = { path = "../aura-ui" }
 aura-app = { path = "../aura-app" }
 aura-core-modes = { path = "../aura-core-modes" }
-aura-terminal = { path = "../aura-terminal" }
+aura-ui-terminal = { path = "../aura-ui-terminal" }
 
 iced = { version = "0.14", features = ["tokio", "canvas", "advanced"] }
 ratatui = { workspace = true }

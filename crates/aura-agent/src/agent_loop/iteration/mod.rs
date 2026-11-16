@@ -1,6 +1,6 @@
 //! Per-iteration logic: LLM calls, response accumulation, and stop-reason handling.
 
-use aura_model_reasoner::{ContentBlock, ModelProvider, ModelRequest, ModelResponse};
+use aura_model::{ContentBlock, ModelProvider, ModelRequest, ModelResponse};
 use tokio::sync::mpsc::Sender;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -84,17 +84,17 @@ impl LlmCallError {
 }
 
 impl LlmCallError {
-    /// Convert a structured [`aura_model_reasoner::ReasonerError`] into an
+    /// Convert a structured [`aura_model::ReasonerError`] into an
     /// [`LlmCallError`] with the same credit/context/fatal classification
     /// the loop already applies to non-streaming errors. Kept as a
     /// dedicated constructor so `streaming.rs` can surface errors without
     /// going through `anyhow`.
-    pub(super) fn from_reasoner_error(e: &aura_model_reasoner::ReasonerError) -> Self {
+    pub(super) fn from_reasoner_error(e: &aura_model::ReasonerError) -> Self {
         match e {
-            aura_model_reasoner::ReasonerError::InsufficientCredits(msg) => {
+            aura_model::ReasonerError::InsufficientCredits(msg) => {
                 Self::InsufficientCredits(msg.clone())
             }
-            aura_model_reasoner::ReasonerError::RateLimited { message, .. } => {
+            aura_model::ReasonerError::RateLimited { message, .. } => {
                 Self::RateLimited(message.clone())
             }
             // Defensive fallback: foreign providers (mock, test
@@ -125,7 +125,7 @@ fn looks_like_rate_limited(message: &str) -> bool {
         || lower.contains("too many requests")
 }
 
-fn classify_reasoner_error(e: &aura_model_reasoner::ReasonerError) -> LlmCallError {
+fn classify_reasoner_error(e: &aura_model::ReasonerError) -> LlmCallError {
     LlmCallError::from_reasoner_error(e)
 }
 

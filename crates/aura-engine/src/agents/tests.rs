@@ -7,13 +7,15 @@ use aura_core_types::{
     AgentId, AgentPermissions, Capability, SpawnMode, SubagentDispatchRequest, SubagentExit,
     ToolResultContent, UserToolDefaults,
 };
-use aura_model_reasoner::{
+use aura_exec_tools::catalog::ToolProfile;
+use aura_exec_tools::{
+    AgentControlHook, AgentReadHook, SubagentDispatchHook, ToolCatalog, ToolConfig,
+};
+use aura_model::{
     ContentBlock, Message, ModelProvider, ModelRequest, ModelResponse, ProviderTrace,
     ReasonerError, Role, StopReason, Usage,
 };
 use aura_store_db::{RocksStore, Store};
-use aura_tools::catalog::ToolProfile;
-use aura_tools::{AgentControlHook, AgentReadHook, SubagentDispatchHook, ToolCatalog, ToolConfig};
 use tokio::sync::mpsc;
 
 use super::*;
@@ -125,7 +127,7 @@ impl ChildKernelFactory for CatalogFactory {
     fn build_child(&self, request: &ChildKernelRequest) -> ChildKernel {
         let config = ToolConfig::default();
         ChildKernel {
-            resolver: aura_tools::ToolResolver::new(self.catalog.clone(), config.clone()),
+            resolver: aura_exec_tools::ToolResolver::new(self.catalog.clone(), config.clone()),
             tools: self.catalog.visible_tools_with_permissions(
                 ToolProfile::Agent,
                 &config,

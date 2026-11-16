@@ -71,15 +71,15 @@ const MIGRATED_CONST_NAMES: &[&str] = &[
 ];
 
 /// Allow-list of `(crate, const_name)` pairs where the name shadowing
-/// is legitimate (e.g. aura-tools has its own, unrelated
+/// is legitimate (e.g. aura-exec-tools has its own, unrelated
 /// `WRITE_FILE_CHUNK_BYTES` constant for its tool-sandbox layer; it
 /// intentionally lives outside aura-config because the tool-sandbox
 /// boundary is out of scope per Phase 1's plan).
 const SHADOW_ALLOWLIST: &[(&str, &str)] = &[
-    // `aura-tools` keeps its own per-tool write-cap constant for the
+    // `aura-exec-tools` keeps its own per-tool write-cap constant for the
     // executor-side guard. The agent-side cap lives in `aura-config`;
     // the two are intentionally separate.
-    ("aura-tools", "WRITE_FILE_CHUNK_BYTES"),
+    ("aura-exec-tools", "WRITE_FILE_CHUNK_BYTES"),
 ];
 
 #[test]

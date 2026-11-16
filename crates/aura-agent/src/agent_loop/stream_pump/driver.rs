@@ -18,9 +18,7 @@
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
-use aura_model_reasoner::{
-    OutputItem, ResponseEvent, ResponseEventStream, StreamError, StreamPhase, Usage,
-};
+use aura_model::{OutputItem, ResponseEvent, ResponseEventStream, StreamError, StreamPhase, Usage};
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use tokio::time::timeout;
@@ -507,20 +505,20 @@ pub(super) async fn drive_stream(
 /// may have side effects and user inputs may already have been drained.
 /// Partial tool input alone has not executed and retains its retry path.
 fn interrupted_outcome(
-    err: aura_model_reasoner::StreamError,
+    err: aura_model::StreamError,
     no_tools_admitted: bool,
     text_bytes: usize,
     thinking_bytes: usize,
 ) -> StreamPumpOutcome {
     match err {
-        aura_model_reasoner::StreamError::TransportClosed { .. } if no_tools_admitted => {
+        aura_model::StreamError::TransportClosed { .. } if no_tools_admitted => {
             StreamPumpOutcome::RetryableTransport {
                 error: AgentError::Stream(err),
                 text_bytes,
                 thinking_bytes,
             }
         }
-        aura_model_reasoner::StreamError::StreamAbortedWithPartial {
+        aura_model::StreamError::StreamAbortedWithPartial {
             reason,
             partial_tool_use,
         } if no_tools_admitted => StreamPumpOutcome::AbortedWithPartial {
@@ -696,7 +694,7 @@ enum StreamStep {
     End,
     Cancelled,
     TimedOut,
-    TransportErr(aura_model_reasoner::StreamError),
+    TransportErr(aura_model::StreamError),
 }
 
 async fn next_stream_step(

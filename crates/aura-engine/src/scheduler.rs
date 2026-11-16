@@ -37,7 +37,7 @@ use aura_agent_kernel::{
     Executor, ExecutorRouter, Kernel, KernelConfig, PolicyConfig, RecordObserver,
 };
 use aura_core_types::{AgentId, AgentStatus};
-use aura_model_reasoner::{ModelProvider, ModelRequestKind, PromptCacheRetention, ToolDefinition};
+use aura_model::{ModelProvider, ModelRequestKind, PromptCacheRetention, ToolDefinition};
 use aura_store_db::Store;
 use dashmap::DashMap;
 use std::path::PathBuf;
@@ -87,7 +87,7 @@ pub struct ScheduleOverrides {
     /// Earlier conversation to continue from. The first dequeued prompt
     /// is appended to it, so a long-lived agent keeps its context
     /// across runs.
-    pub history: Vec<aura_model_reasoner::Message>,
+    pub history: Vec<aura_model::Message>,
 }
 
 /// Per-agent identity recorded by the chat WS / automaton bridge / `/tx`
@@ -101,7 +101,7 @@ pub struct ScheduleOverrides {
 #[derive(Debug, Clone)]
 pub struct AgentIdentity {
     /// Explicit caller effort; inherited by worker and child runs.
-    pub reasoning_effort: Option<aura_model_reasoner::ThinkingEffort>,
+    pub reasoning_effort: Option<aura_model::ThinkingEffort>,
     pub upstream_provider_family: Option<String>,
     /// Caller-selected model (e.g. `claude-opus-4-7`). Required.
     pub model: String,
@@ -609,7 +609,7 @@ impl Scheduler {
 mod tests {
     use super::*;
     use aura_core_types::{Transaction, TransactionType};
-    use aura_model_reasoner::MockProvider;
+    use aura_model::MockProvider;
     use aura_store_db::RocksStore;
     use bytes::Bytes;
     use std::time::Duration;

@@ -8,8 +8,8 @@
 //! nesting works to any depth without an upward dependency.
 
 use aura_core_types::{AgentId, AgentPermissions, AgentToolPermissions, UserToolDefaults};
-use aura_model_reasoner::ToolDefinition;
-use aura_tools::ToolResolver;
+use aura_exec_tools::ToolResolver;
+use aura_model::ToolDefinition;
 
 /// Per-child inputs for [`ChildKernelFactory::build_child`].
 #[derive(Debug, Clone)]

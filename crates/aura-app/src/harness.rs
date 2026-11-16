@@ -15,10 +15,10 @@ use aura_agent_kernel::{
 };
 use aura_context_skills::{SkillLoader, SkillManager};
 use aura_core_types::{AgentPermissions, Transaction};
-use aura_model_reasoner::ModelProvider;
-use aura_terminal::{PermissionMode, UiCommand};
-use aura_tools::todo::TodoWriteTool;
-use aura_tools::{BackgroundProcessHook, ToolConfig, ToolExecutor};
+use aura_exec_tools::todo::TodoWriteTool;
+use aura_exec_tools::{BackgroundProcessHook, ToolConfig, ToolExecutor};
+use aura_model::ModelProvider;
+use aura_ui_terminal::{PermissionMode, UiCommand};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -35,11 +35,7 @@ const BACKGROUND_COMMAND_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1000;
 /// list.
 pub(crate) fn agent_tools(
     allow_unrestricted_full_access: bool,
-) -> (
-    ToolConfig,
-    Vec<aura_model_reasoner::ToolDefinition>,
-    WebTools,
-) {
+) -> (ToolConfig, Vec<aura_model::ToolDefinition>, WebTools) {
     let mut tool_config = ToolConfig::for_autonomous_dev_loop();
     tool_config.sync_threshold_ms = crate::long_run::COMMAND_TIMEOUT_MS;
     if allow_unrestricted_full_access || unrestricted_full_access_from_env() {
@@ -73,11 +69,11 @@ pub(crate) fn post_edit_check_from_env() -> aura_agent::PostEditCheckConfig {
 pub(crate) fn build_provider(
     name: &str,
     auth: &Arc<aura_auth::AuthManager>,
-) -> anyhow::Result<aura_model_reasoner::ProviderSelection> {
+) -> anyhow::Result<aura_model::ProviderSelection> {
     let resolver: Arc<dyn aura_auth::CredentialResolver> = auth.clone();
     match name {
-        "mock" => Ok(aura_model_reasoner::mock_provider()),
-        _ => aura_model_reasoner::routed_provider(Some(resolver)),
+        "mock" => Ok(aura_model::mock_provider()),
+        _ => aura_model::routed_provider(Some(resolver)),
     }
     .context("building model provider")
 }
@@ -146,9 +142,9 @@ pub(crate) fn background_process_manager() -> (Arc<ProcessManager>, mpsc::Receiv
 
 /// Names of every tool an agent may be offered: `tools` plus `task`,
 /// which the subagent dispatcher adds.
-pub(crate) fn policy_tool_names(tools: &[aura_model_reasoner::ToolDefinition]) -> Vec<String> {
+pub(crate) fn policy_tool_names(tools: &[aura_model::ToolDefinition]) -> Vec<String> {
     let mut names: Vec<String> = tools.iter().map(|tool| tool.name.clone()).collect();
-    names.push(aura_tools::agents::task::TASK_TOOL_NAME.to_string());
+    names.push(aura_exec_tools::agents::task::TASK_TOOL_NAME.to_string());
     names
 }
 

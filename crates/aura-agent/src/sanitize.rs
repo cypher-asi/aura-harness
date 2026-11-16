@@ -10,7 +10,7 @@
 //! 6. Assert positional `tool_use/tool_result` constraint (debug guard)
 
 use crate::dup_audit;
-use aura_model_reasoner::{ContentBlock, Message, Role, ToolResultContent};
+use aura_model::{ContentBlock, Message, Role, ToolResultContent};
 use std::collections::HashSet;
 use tracing::warn;
 

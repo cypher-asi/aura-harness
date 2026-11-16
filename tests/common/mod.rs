@@ -5,7 +5,7 @@
 //!
 //! Phase A wire-shape migration: every chat session is now bootstrapped
 //! via `POST /v1/run` + `WS /stream/:run_id`. The helpers in this module
-//! build [`aura_protocol::RuntimeRequest`]-shaped JSON payloads, post
+//! build [`aura_core_protocol::RuntimeRequest`]-shaped JSON payloads, post
 //! them to the gateway, and attach a [`WsClient`] to the freshly minted
 //! run id — collapsing the previous "open WS + send init frame + wait
 //! SessionReady" three-step dance into a single call.
@@ -19,12 +19,12 @@ use std::time::Duration;
 
 use aura_agent_kernel::Executor;
 use aura_auth::CredentialStore;
-use aura_model_reasoner::{AnthropicConfig, AnthropicProvider, MockProvider, ModelProvider};
-use aura_runtime::test_support::{create_router, RouterState, RouterStateConfig, Scheduler};
-use aura_runtime::NodeConfig;
+use aura_exec_tools::catalog::ToolProfile;
+use aura_exec_tools::{ToolCatalog, ToolConfig, ToolResolver};
+use aura_model::{AnthropicConfig, AnthropicProvider, MockProvider, ModelProvider};
+use aura_node::test_support::{create_router, RouterState, RouterStateConfig, Scheduler};
+use aura_node::NodeConfig;
 use aura_store_db::RocksStore;
-use aura_tools::catalog::ToolProfile;
-use aura_tools::{ToolCatalog, ToolConfig, ToolResolver};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
@@ -32,7 +32,7 @@ use tokio_tungstenite::tungstenite::Message as WsMsg;
 
 /// Default full-access `agent_permissions` payload for
 /// [`RuntimeRequest`] bodies. Matches the wire shape of
-/// `aura_protocol::AgentPermissionsWire`.
+/// `aura_core_protocol::AgentPermissionsWire`.
 pub(crate) fn default_agent_permissions_payload() -> Value {
     json!({
         "scope": { "orgs": [], "projects": [], "agent_ids": [] },
@@ -177,7 +177,7 @@ impl TestServer {
             Arc::new(RocksStore::open(&db_path, false).expect("open rocks"));
 
         let tool_config = ToolConfig {
-            command: aura_tools::CommandPolicy {
+            command: aura_exec_tools::CommandPolicy {
                 enabled: true,
                 ..Default::default()
             },
@@ -280,7 +280,7 @@ pub async fn start_mock_server() -> TestServer {
 // RuntimeRequest builders (Phase A wire shape)
 // ============================================================================
 
-/// Build a minimal chat-kind [`aura_protocol::RuntimeRequest`] payload.
+/// Build a minimal chat-kind [`aura_core_protocol::RuntimeRequest`] payload.
 ///
 /// Fields the harness validates:
 ///
@@ -315,7 +315,7 @@ pub fn chat_request_payload_full(
     )
 }
 
-/// Build a chat [`aura_protocol::RuntimeRequest`] payload from a
+/// Build a chat [`aura_core_protocol::RuntimeRequest`] payload from a
 /// full options bag. Mirrors what the wire layer accepts; every
 /// `None` field is omitted so the harness's serde defaults apply.
 pub fn chat_request_payload_extended(workspace: &Path, opts: ChatRequestOpts<'_>) -> Value {

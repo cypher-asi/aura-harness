@@ -11,9 +11,9 @@ use aura_agent_kernel::PolicyConfig;
 use aura_core_types::{
     resolve_effective_permission, AgentToolPermissions, ToolState, UserToolDefaults,
 };
-use aura_model_reasoner::ToolDefinition;
-use aura_tools::jobs::{JOB_KILL_TOOL_NAME, JOB_OUTPUT_TOOL_NAME};
-use aura_tools::todo::TODO_WRITE_TOOL_NAME;
+use aura_exec_tools::jobs::{JOB_KILL_TOOL_NAME, JOB_OUTPUT_TOOL_NAME};
+use aura_exec_tools::todo::TODO_WRITE_TOOL_NAME;
+use aura_model::ToolDefinition;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

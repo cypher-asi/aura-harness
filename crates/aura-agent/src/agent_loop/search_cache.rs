@@ -177,7 +177,7 @@ mod tests {
 
         let different_path = normalized_search_key(
             "search_code",
-            &json!({"pattern": "NeuralKey", "path": "crates/aura-tools"}),
+            &json!({"pattern": "NeuralKey", "path": "crates/aura-exec-tools"}),
         )
         .unwrap();
         assert_ne!(base, different_path);

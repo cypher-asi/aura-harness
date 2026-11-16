@@ -2,8 +2,8 @@
 //! entry plus runtime-owned guardrails.
 //!
 //! The shape lives in this crate (rather than re-using
-//! `aura_plugin_core::McpContribution` directly) so the runtime
-//! manager doesn't need to pull `aura-plugin-core` as a dependency.
+//! `aura_plugin::McpContribution` directly) so the runtime
+//! manager doesn't need to pull `aura-plugin` as a dependency.
 //! The bridge from the manifest entry to a [`ServerConfig`] lives in
 //! the plugin runtime contribution loader.
 

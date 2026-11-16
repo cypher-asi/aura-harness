@@ -11,14 +11,14 @@ aura-core-modes = { path = "../aura-core-modes" }
 aura-config = { path = "../aura-config" }
 aura-app = { path = "../aura-app" }
 aura-core-types = { path = "../aura-core-types" }
-aura-terminal = { path = "../aura-terminal" }
-aura-model-reasoner = { path = "../aura-model-reasoner" }
-aura-tools = { path = "../aura-tools" }
+aura-ui-terminal = { path = "../aura-ui-terminal" }
+aura-model = { path = "../aura-model" }
+aura-exec-tools = { path = "../aura-exec-tools" }
 aura-agent = { path = "../aura-agent" }
 aura-agent-trace = { path = "../aura-agent-trace" }
 aura-auth = { path = "../aura-auth" }
-aura-runtime = { path = "../aura-runtime" }
-aura-plugin-core = { path = "../aura-plugin-core" }
+aura-node = { path = "../aura-node" }
+aura-plugin = { path = "../aura-plugin" }
 clap = { version = "4.5", features = ["derive"] }
 thiserror = { workspace = true }
 anyhow = { workspace = true }

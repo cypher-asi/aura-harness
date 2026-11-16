@@ -6,7 +6,7 @@
 //! launched even after it detached and was re-parented away from the
 //! harness.
 
-use aura_tools::{AGENT_ID_VAR, HARNESS_PID_VAR, TOOL_USE_ID_VAR};
+use aura_exec_tools::{AGENT_ID_VAR, HARNESS_PID_VAR, TOOL_USE_ID_VAR};
 use std::path::PathBuf;
 
 /// One process carrying an agent tag.

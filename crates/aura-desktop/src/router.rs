@@ -18,7 +18,7 @@
 //! tab that asked for it; `+` asks for one in a tab of its own.
 
 use crate::tab::{Settings, Tab};
-use aura_ui_core::events::{AgentSummary, ProcessSummary, UiCommand, UiEvent};
+use aura_ui::events::{AgentSummary, ProcessSummary, UiCommand, UiEvent};
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 
@@ -536,8 +536,8 @@ impl Tabs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_terminal::AlertSettings;
-    use aura_ui_core::events::{MessageData, MessageRole};
+    use aura_ui::events::{MessageData, MessageRole};
+    use aura_ui_terminal::AlertSettings;
 
     fn tabs_with(restore: &[&[&str]]) -> (Tabs, mpsc::Receiver<UiEvent>) {
         let (session, events) = mpsc::channel(64);

@@ -101,7 +101,7 @@ pub use types::{
 /// Errors arising from the agent orchestration loop (model calls, tool execution, timeouts).
 ///
 /// Phase 5 (error-handling polish) reshaped this enum so that
-/// [`aura_model_reasoner::ReasonerError`] and [`aura_agent_kernel::KernelError`]
+/// [`aura_model::ReasonerError`] and [`aura_agent_kernel::KernelError`]
 /// are preserved end-to-end instead of being flattened to a `String`
 /// inside [`AgentError::Internal`]. Callers (and tests) can now match
 /// on the underlying variant — for example
@@ -115,12 +115,12 @@ pub use types::{
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
     /// Provider-side failure surfaced through the kernel gateway. The
-    /// inner [`aura_model_reasoner::ReasonerError`] keeps its variant
+    /// inner [`aura_model::ReasonerError`] keeps its variant
     /// (`RateLimited`, `InsufficientCredits`, `Api { status }`,
     /// `StreamAbortedWithPartial`, …) so the agent loop and CLI can
     /// branch on it.
     #[error(transparent)]
-    Reason(#[from] aura_model_reasoner::ReasonerError),
+    Reason(#[from] aura_model::ReasonerError),
     /// Non-reasoner kernel failure (store, serialization, internal
     /// invariants, kernel-level timeout). Reasoner failures wrapped
     /// in [`aura_agent_kernel::KernelError::Reasoner`] are unwrapped into
@@ -185,9 +185,9 @@ pub enum AgentError {
     },
     /// Layer E.3: raised by the streaming sampling pump when
     /// `tokio::time::timeout(config.stream_event_timeout, …)` elapses
-    /// waiting for the next [`aura_model_reasoner::ResponseEvent`]
+    /// waiting for the next [`aura_model::ResponseEvent`]
     /// (Rule 6.2 boundary timeout). Because pings and intra-block
-    /// deltas surface as [`aura_model_reasoner::ResponseEvent::Keepalive`]
+    /// deltas surface as [`aura_model::ResponseEvent::Keepalive`]
     /// and reset the window, this fires only on a genuinely silent
     /// stream (no frame at all for the full boundary) — not on a
     /// slow-but-alive one. `elapsed_ms` carries the configured
@@ -200,12 +200,12 @@ pub enum AgentError {
     },
     /// Layer E.3: in-band or transport-level streaming error
     /// surfaced by the sampling pump. Wraps the typed
-    /// [`aura_model_reasoner::StreamError`] so the variant survives the
+    /// [`aura_model::StreamError`] so the variant survives the
     /// trip through the agent loop and matches downstream branches
     /// (TransportClosed vs InvalidEvent vs Timeout) without parsing
     /// the formatted message.
     #[error(transparent)]
-    Stream(aura_model_reasoner::StreamError),
+    Stream(aura_model::StreamError),
     #[error("{0}")]
     Internal(String),
 }

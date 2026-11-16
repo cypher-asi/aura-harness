@@ -3,7 +3,7 @@
 //! be shown and profiled without a model or an agent store.
 
 use crate::app::Handles;
-use aura_ui_core::events::{
+use aura_ui::events::{
     AgentDefinitionSummary, AgentSummary, CallUsage, MessageData, MessageRole, ModelOptionView,
     ProcessKind, ProcessStatus, ProcessSummary, RecordStatus, RecordSummary, ToolData, UiCommand,
     UiEvent,
@@ -440,7 +440,7 @@ fn now_ms() -> u64 {
 }
 
 pub(crate) const LISTING: &str =
-    "aura-agent/\naura-desktop/\naura-terminal/\naura-ui-core/\naura-surface-cli/";
+    "aura-agent/\naura-app/\naura-cli/\naura-desktop/\naura-ui/\naura-ui-terminal/";
 
 pub(crate) const DIFF: &str = "--- a/README.md\n+++ b/README.md\n@@ -1,3 +1,3 @@\n # AURA\n\
 -A fast agent harness.\n+A fast and native agent harness.\n Runs locally.";
@@ -452,10 +452,10 @@ test result: \x1b[1;32mok\x1b[0m. 42 passed; 0 failed; 0 ignored";
 pub(crate) const REPLY: &str = "Here's what I found for **{prompt}**:\n\n\
 ## Layout\n\n\
 | Crate | Role |\n|---|---|\n\
-| `aura-ui-core` | event protocol shared by the frontends |\n\
-| `aura-terminal` | the ratatui terminal UI |\n\
+| `aura-ui` | event protocol shared by the frontends |\n\
+| `aura-ui-terminal` | the ratatui terminal UI |\n\
 | `aura-desktop` | this window, drawn on the GPU with iced |\n\n\
 The tests pass, and I updated the README:\n\n\
-```rust\nlet session = aura_surface_cli::session::start(&args, mode).await?;\n```\n\n\
+```rust\nlet session = aura_app::session::start(&options, mode).await?;\n```\n\n\
 - Both UIs share one event loop\n- Fonts are Geist and Geist Mono\n\n\
 See [iced](https://iced.rs) for the toolkit.";

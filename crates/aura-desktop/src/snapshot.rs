@@ -8,7 +8,7 @@ use crate::demo::{DIFF, LISTING, REPLY, TEST_OUTPUT};
 use crate::grid::Palette;
 use crate::tab_bar::Hit;
 use crate::theme;
-use aura_ui_core::events::{
+use aura_ui::events::{
     AgentDefinitionSummary, AgentSummary, CallUsage, MessageData, MessageRole, ModelOptionView,
     ProcessKind, ProcessStatus, ProcessSummary, ToolData, UiCommand, UiEvent,
 };
@@ -352,7 +352,7 @@ fn render(app: &App) -> Vec<u8> {
 }
 
 fn palette() -> Palette {
-    Palette::from_theme(&aura_terminal::Theme::by_name("cyber"))
+    Palette::from_theme(&aura_ui_terminal::Theme::by_name("cyber"))
 }
 
 /// Render, check something besides the background was drawn, and save the

@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use aura_model_reasoner::{
+use aura_model::{
     ContentBlock, Message, MockProvider, MockResponse, ModelProvider, ModelRequest, ModelResponse,
     ReasonerError, StopReason, StreamContentType, StreamEvent, StreamEventStream, ToolDefinition,
     ToolResultContent, Usage,
