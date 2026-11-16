@@ -1,23 +1,7 @@
-//! # aura-core-protocol
+//! Wire protocol version.
 //!
-//! Layer: core
-//!
-//! Wire protocol primitives. Phase 1 ships only [`ProtocolVersion`];
-//! the rich wire shapes currently live in `aura-protocol` and migrate
-//! here in a later phase along with the surface-layer split.
-//!
-//! ## Invariants
-//!
-//! - Major bumps to [`ProtocolVersion`] require a migration shim in
-//!   the consuming crate; minor bumps add fields with defaults.
-//!
-//! ## Failure modes
-//!
-//! - None at this layer — version negotiation lives in the surface
-//!   crates.
-
-#![forbid(unsafe_code)]
-#![warn(clippy::all)]
+//! Major bumps require a migration shim in the consuming crate; minor bumps
+//! add fields with defaults.
 
 use serde::{Deserialize, Serialize};
 

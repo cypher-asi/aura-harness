@@ -6,9 +6,9 @@
 //! agent. The parent runtime request receives the resulting path; child agents
 //! continue to inherit that same parent workspace without any protocol change.
 //!
-//! This module is a declared invariant §1 infrastructure exception, analogous
-//! to `aura-exec-isolation`: it may run local-only Git lifecycle commands for
-//! worktree isolation and checkpoints. [`local_git_command`] enforces a closed
+//! This module is a declared invariant §1 infrastructure exception: it may
+//! run local-only Git lifecycle commands for worktree isolation and
+//! checkpoints. [`local_git_command`] enforces a closed
 //! subcommand allowlist and disables terminal prompting; network-capable Git
 //! operations such as clone, fetch, pull, push, and remote are not permitted.
 

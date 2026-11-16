@@ -56,12 +56,8 @@ const KNOWN_CRATES: &[(&str, &str)] = &[
     ("aura-store-record", "store"),
     ("aura-store-snapshot", "store"),
     // Exec layer: aura-tools holds the Tool impls, catalog and
-    // executor; the aura-exec-* crates are its primitives.
-    //   aura-exec-isolation — worktree + copy isolation (no aura-* deps)
-    //   aura-exec-sandbox   — FsSandbox + ProcessSandbox primitives (no aura-* deps)
+    // executor.
     ("aura-tools", "exec"),
-    ("aura-exec-isolation", "exec"),
-    ("aura-exec-sandbox", "exec"),
     // Phase 1 refactor: low-level executor/spawn traits relocated out
     // of aura-agent-kernel so aura-tools no longer depends upward.
     ("aura-exec-traits", "exec"),

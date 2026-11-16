@@ -29,6 +29,7 @@
 //!   definitions.
 //! - [`conversions`]: wire ↔ core helpers consumed by the harness's
 //!   `aura-runtime` gateway.
+//! - [`version`]: [`ProtocolVersion`] and the current [`PROTOCOL_VERSION`].
 //!
 //! Every public type is re-exported at the crate root so existing
 //! call sites continue to resolve.
@@ -52,6 +53,7 @@ pub mod installed;
 pub mod permissions;
 pub mod runtime_request;
 pub mod server;
+pub mod version;
 
 pub use agent_identity::AgentPersona;
 pub use chat_project_info::ChatProjectInfoWire;
@@ -87,6 +89,7 @@ pub use server::{
     ThinkingDelta, ToolApprovalPrompt, ToolCallSnapshot, ToolInfo, ToolPolicyDecision,
     ToolResultMsg, ToolUseStart,
 };
+pub use version::{ProtocolVersion, PROTOCOL_VERSION};
 
 #[cfg(all(test, feature = "typescript"))]
 mod ts_export {

@@ -34,7 +34,6 @@ members = [
     "crates/aura-core-modes",
     "crates/aura-core-permissions",
     "crates/aura-core-types",
-    "crates/aura-core-protocol",
     "crates/aura-core-auth",
     "crates/aura-config",
     # Phase 3 context layer crates
@@ -47,12 +46,6 @@ members = [
     "crates/aura-store-record",
     "crates/aura-store-snapshot",
     "crates/aura-tools",
-    # Exec layer primitives (aura-tools above holds the Tool impls,
-    # catalog and executor):
-    #   aura-exec-isolation — worktree / copy isolation primitives
-    #   aura-exec-sandbox   — FsSandbox + ProcessSandbox primitives
-    "crates/aura-exec-isolation",
-    "crates/aura-exec-sandbox",
     # Phase 1 refactor: exec-layer executor/spawn traits relocated out
     # of aura-agent-kernel so aura-tools no longer depends upward.
     "crates/aura-exec-traits",
@@ -253,7 +246,6 @@ aura-automaton = { path = "crates/aura-automaton" }
 aura-tools = { path = "crates/aura-tools" }
 aura-protocol = { path = "crates/aura-protocol" }
 aura-core-modes = { path = "crates/aura-core-modes" }
-aura-core-protocol = { path = "crates/aura-core-protocol" }
 aura-store-record = { path = "crates/aura-store-record" }
 aura-core-types = { path = "crates/aura-core-types" }
 aura-core-permissions = { path = "crates/aura-core-permissions" }

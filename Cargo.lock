@@ -368,7 +368,6 @@ dependencies = [
  "aura-config",
  "aura-core-modes",
  "aura-core-permissions",
- "aura-core-protocol",
  "aura-core-types",
  "aura-desktop",
  "aura-model-reasoner",
@@ -731,15 +730,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aura-core-protocol"
-version = "0.1.0"
-dependencies = [
- "aura-core-types",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "aura-core-types"
 version = "0.1.0"
 dependencies = [
@@ -822,25 +812,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "aura-exec-isolation"
-version = "0.1.0"
-dependencies = [
- "tempfile",
- "thiserror 1.0.69",
- "tracing",
- "which",
-]
-
-[[package]]
-name = "aura-exec-sandbox"
-version = "0.1.0"
-dependencies = [
- "tempfile",
- "thiserror 1.0.69",
  "tracing",
 ]
 
