@@ -75,8 +75,18 @@ fn unit(metrics: &Metrics) -> f32 {
 pub struct Layout {
     tabs: Vec<Rectangle>,
     plus: Rectangle,
-    /// The wide box and its text, cut to fit, when there is room for it.
-    title: Option<(Rectangle, String)>,
+    /// The wide box, when there is room for it.
+    title: Option<Title>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Title {
+    rect: Rectangle,
+    /// What the tab in front shows, cut to fit
+    text: String,
+    /// Middle of the text: the middle of the bar, unless the text would
+    /// then cross the box's left edge
+    center: f32,
 }
 
 impl Layout {
@@ -103,8 +113,13 @@ impl Layout {
 
         let room = model.x + model.width - x;
         let title = (room >= MIN_TITLE * unit).then(|| {
-            let cells = cells_in(room - 2.0 * SIDE * unit, unit);
-            (boxed(x, room), fit(&model.title, cells))
+            let rect = boxed(x, room);
+            let text = fit(&model.title, cells_in(room - 2.0 * SIDE * unit, unit));
+            let half = text.width() as f32 * unit / 2.0;
+            let lowest = rect.x + SIDE * unit + half;
+            let highest = (rect.x + rect.width - SIDE * unit - half).max(lowest);
+            let center = (model.x + model.width / 2.0).clamp(lowest, highest).round();
+            Title { rect, text, center }
         });
         Self { tabs, plus, title }
     }
@@ -186,7 +201,7 @@ impl Bar {
     /// The text in the wide box, as drawn.
     #[cfg(test)]
     pub fn title(&self) -> Option<&str> {
-        self.layout.title.as_ref().map(|(_, text)| text.as_str())
+        self.layout.title.as_ref().map(|title| title.text.as_str())
     }
 }
 
@@ -297,11 +312,14 @@ fn paint(frame: &mut Frame, model: &Model, layout: &Layout, hover: Option<Hit>) 
         ink,
     );
 
-    if let Some((rect, text)) = &layout.title {
-        outline(frame, *rect, idle, line);
-        if !text.is_empty() {
+    if let Some(title) = &layout.title {
+        outline(frame, title.rect, idle, line);
+        if !title.text.is_empty() {
             let ink = mix(palette.fg, palette.muted, 0.4);
-            frame.fill_text(label(text, *rect, ink, false));
+            frame.fill_text(canvas::Text {
+                position: Point::new(title.center, title.rect.center_y()),
+                ..label(&title.text, title.rect, ink, false)
+            });
         }
     }
 }
@@ -361,10 +379,10 @@ mod tests {
         }
         let last = layout.tabs[2];
         assert!(layout.plus.x > last.x + last.width);
-        let (title, text) = layout.title.clone().expect("room for a title");
-        assert!(title.x > layout.plus.x + layout.plus.width);
-        assert!((title.x + title.width - (model.x + model.width)).abs() <= 1.0);
-        assert_eq!(text, "AURA-HARNESS");
+        let title = layout.title.clone().expect("room for a title");
+        assert!(title.rect.x > layout.plus.x + layout.plus.width);
+        assert!((title.rect.x + title.rect.width - (model.x + model.width)).abs() <= 1.0);
+        assert_eq!(title.text, "AURA-HARNESS");
         let bottom = layout.plus.y + layout.plus.height;
         assert!((bottom - height(&model.metrics)).abs() < f32::EPSILON);
     }
@@ -381,20 +399,36 @@ mod tests {
         );
         assert_eq!(layout.hit(between), None);
         assert_eq!(layout.hit(Point::new(10.0, 2.0)), None, "above the boxes");
-        let title = layout.title.clone().expect("room for a title").0;
+        let title = layout.title.clone().expect("room for a title").rect;
         assert_eq!(layout.hit(middle(title)), None, "the title is no button");
     }
 
     #[test]
     fn the_title_is_cut_to_its_box_and_left_out_when_there_is_no_room() {
         let layout = Layout::of(&model(2, "A RATHER LONG PROJECT NAME / AGENT", 220.0));
-        let (_, text) = layout.title.expect("room for a short title");
+        let text = layout.title.expect("room for a short title").text;
         assert!(text.ends_with(".."), "{text:?}");
         assert!(text.starts_with("A RATHER"), "{text:?}");
 
         let layout = Layout::of(&model(9, "AURA-HARNESS", 260.0));
         assert_eq!(layout.title, None);
         assert_eq!(layout.tabs.len(), 9);
+    }
+
+    #[test]
+    fn the_title_sits_in_the_middle_of_the_bar_when_it_fits() {
+        let wide = model(3, "ZODE-WEBSITE / AGENT", 1300.0);
+        let title = Layout::of(&wide).title.expect("room for a title");
+        let middle = wide.x + wide.width / 2.0;
+        assert!((title.center - middle).abs() <= 0.5, "{title:?}");
+
+        let narrow = model(3, "A RATHER LONG PROJECT NAME / AGENT", 300.0);
+        let title = Layout::of(&narrow).title.expect("room for a title");
+        let half = title.text.width() as f32 * unit(&narrow.metrics) / 2.0;
+        assert!(
+            title.center - half >= title.rect.x,
+            "kept inside its box: {title:?}"
+        );
     }
 
     #[test]
