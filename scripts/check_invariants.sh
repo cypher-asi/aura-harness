@@ -122,6 +122,11 @@ run_band "§2" "append_entry_* used outside the kernel / store crates / tests" \
 #     `worktree remove` for parallel-safe subagent workspaces. Sandbox /
 #     isolation infrastructure, not a mutating commit/push. Declared
 #     exception in docs/invariants.md.
+#   * `crates/aura-exec-isolation/src/changes.rs` — local-only `diff` /
+#     `apply` / `ls-files` / `add` / `write-tree` / `diff-index` / `init`
+#     to carry uncommitted work into an isolated copy, diff it against
+#     its baseline, and apply a chosen copy's patch back (`/compare`).
+#     No commit, fetch or push. Declared exception in docs/invariants.md.
 #   * `crates/aura-runtime/src/gateway/handlers/safe_workspace.rs` —
 #     local-only worktree, imported-project baseline, checkpoint, restore, and
 #     apply lifecycle for explicitly selected hosted Safe Workspaces. A closed
@@ -130,7 +135,7 @@ run_band "§2" "append_entry_* used outside the kernel / store crates / tests" \
 #   * Test files.
 run_band "§1" "Command::new(\"git\") outside the GitExecutor / declared exceptions" \
     'Command::new\("git"\)' \
-    '^(crates/aura-tools/src/git_tool/|crates/aura-agent/src/git\.rs|crates/aura-exec-isolation/src/lib\.rs|crates/aura-runtime/src/gateway/handlers/safe_workspace\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/aura-tools/src/git_tool/|crates/aura-agent/src/git\.rs|crates/aura-exec-isolation/src/lib\.rs|crates/aura-exec-isolation/src/changes\.rs|crates/aura-runtime/src/gateway/handlers/safe_workspace\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §10 — non-kernel, non-store crates must bind to `Arc<dyn ReadStore>`.
 #

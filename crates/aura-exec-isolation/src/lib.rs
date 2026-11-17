@@ -43,6 +43,8 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::all)]
 
+pub mod changes;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -251,6 +253,9 @@ impl Isolation for WorktreeIsolation {
 pub struct CopyIsolation {
     /// Parent directory under which per-isolation copies are created.
     pub workspace_root: PathBuf,
+    /// Names of files and directories left out of the copy wherever
+    /// they appear, such as build output ([`changes::BUILD_OUTPUT`]).
+    pub skip: Vec<String>,
 }
 
 impl CopyIsolation {
@@ -259,7 +264,15 @@ impl CopyIsolation {
     pub fn new(workspace_root: impl Into<PathBuf>) -> Self {
         Self {
             workspace_root: workspace_root.into(),
+            skip: Vec::new(),
         }
+    }
+
+    /// Leave entries named any of `names` out of copies.
+    #[must_use]
+    pub fn skipping<S: Into<String>>(mut self, names: impl IntoIterator<Item = S>) -> Self {
+        self.skip.extend(names.into_iter().map(Into::into));
+        self
     }
 }
 
@@ -279,7 +292,7 @@ impl Isolation for CopyIsolation {
                 strategy: IsolationStrategy::Copy,
             });
         }
-        copy_dir_recursive(source, &target)?;
+        copy_dir_recursive(source, &target, &self.skip)?;
         Ok(IsolatedWorkspace {
             root: target,
             strategy: IsolationStrategy::Copy,
@@ -319,11 +332,14 @@ fn strip_unc_prefix(path: &Path) -> PathBuf {
 
 /// Recursive `cp -r` style copy. Symlinks are followed and their
 /// targets copied as plain files / directories (matches the plan's
-/// "symlinks → real files" rule).
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+/// "symlinks → real files" rule). Entries named in `skip` are left out.
+fn copy_dir_recursive(src: &Path, dst: &Path, skip: &[String]) -> std::io::Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
+        if skip.iter().any(|name| entry.file_name() == name.as_str()) {
+            continue;
+        }
         let from = entry.path();
         let to = dst.join(entry.file_name());
         // `metadata()` follows symlinks; `symlink_metadata()` does not.
@@ -331,7 +347,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
         // resolve to their targets.
         let meta = std::fs::metadata(&from)?;
         if meta.is_dir() {
-            copy_dir_recursive(&from, &to)?;
+            copy_dir_recursive(&from, &to, skip)?;
         } else {
             std::fs::copy(&from, &to)?;
         }
@@ -379,6 +395,23 @@ mod tests {
 
         iso.teardown(&ws).expect("teardown must succeed");
         assert!(!ws.root.exists());
+    }
+
+    #[test]
+    fn copy_isolation_leaves_out_skipped_names() {
+        let src = TempDir::new().unwrap();
+        let parent = TempDir::new().unwrap();
+        std::fs::write(src.path().join("main.rs"), b"fn main() {}").unwrap();
+        for dir in ["target", "nested/node_modules"] {
+            std::fs::create_dir_all(src.path().join(dir)).unwrap();
+            std::fs::write(src.path().join(dir).join("big"), b"x").unwrap();
+        }
+        let iso = CopyIsolation::new(parent.path()).skipping(changes::BUILD_OUTPUT.iter().copied());
+        let ws = iso.provision(src.path(), "copy").unwrap();
+        assert!(ws.root.join("main.rs").exists());
+        assert!(ws.root.join("nested").is_dir());
+        assert!(!ws.root.join("target").exists());
+        assert!(!ws.root.join("nested/node_modules").exists());
     }
 
     #[test]
