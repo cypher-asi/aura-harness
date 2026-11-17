@@ -546,6 +546,7 @@ mod tests {
         let settings = Settings {
             verbose: false,
             alerts: AlertSettings::from_env(),
+            measure: crate::grid::prose_cells,
         };
         let restore = restore
             .iter()

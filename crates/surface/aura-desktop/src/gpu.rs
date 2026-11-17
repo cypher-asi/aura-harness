@@ -470,14 +470,20 @@ impl Gpu {
         self.surface.configure(&self.renderer.device, &self.config);
     }
 
-    /// Draw `scene` and show it. `false` when the window gave no frame
-    /// to draw into this time; the next one will.
+    /// Draw `scene` and show it, calling `before_showing` once it is
+    /// drawn. `false` when the window gave no frame to draw into this
+    /// time; the next one will.
     ///
     /// # Errors
     ///
     /// Fails when the surface is gone for good (out of memory, or the
     /// device was lost).
-    pub fn render(&mut self, scene: &Scene, atlas: &mut Atlas) -> anyhow::Result<bool> {
+    pub fn render(
+        &mut self,
+        scene: &Scene,
+        atlas: &mut Atlas,
+        before_showing: impl FnOnce(),
+    ) -> anyhow::Result<bool> {
         let frame = match self.surface.get_current_texture() {
             Ok(frame) => frame,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
@@ -499,6 +505,7 @@ impl Gpu {
         });
         self.renderer.draw(scene, atlas, &view, self.size());
         let stale = frame.suboptimal;
+        before_showing();
         frame.present();
         if stale {
             self.configure();

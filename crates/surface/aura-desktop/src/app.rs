@@ -33,27 +33,27 @@ use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::mpsc;
 
 /// Most commands applied in one update.
-const MAX_BATCH: usize = 1024;
+pub(crate) const MAX_BATCH: usize = 1024;
 /// How long commands are gathered into one update after the first
 /// arrives. Every update renders the UI, so agents streaming at once
 /// would otherwise cost a render per command and starve input.
 const BATCH_WINDOW: Duration = Duration::from_millis(16);
 /// The terminal UI's tick; its spinners advance one frame per tick.
-const TICK: Duration = Duration::from_millis(50);
+pub(crate) const TICK: Duration = Duration::from_millis(50);
 /// While no agent works, ticks redraw only this often, for the few things
 /// that change with time alone (notices expiring).
-const IDLE_REDRAW_TICKS: u32 = 20;
+pub(crate) const IDLE_REDRAW_TICKS: u32 = 20;
 /// Half a cursor blink.
-const BLINK: Duration = Duration::from_millis(530);
+pub(crate) const BLINK: Duration = Duration::from_millis(530);
 /// How often a file opened in an external editor is checked for a save.
 const EDIT_POLL: Duration = Duration::from_secs(1);
-const WINDOW: Size = Size::new(1320.0, 860.0);
+pub(crate) const WINDOW: Size = Size::new(1320.0, 860.0);
 /// Width of the band along the window's sides that resizes it.
-const EDGE: f32 = 6.0;
+pub(crate) const EDGE: f32 = 6.0;
 /// How far along a side from a corner the band resizes both ways.
-const CORNER: f32 = 16.0;
+pub(crate) const CORNER: f32 = 16.0;
 /// Two presses on empty tab bar space this close together maximize.
-const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+pub(crate) const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
 /// The channel pair connecting the UI to an agent session.
 pub struct Handles {
@@ -156,6 +156,7 @@ impl App {
         let settings = Settings {
             verbose: options.verbose,
             alerts: aura_ui_terminal::AlertSettings::from_env(),
+            measure: crate::grid::prose_cells,
         };
         let tui_theme = aura_ui_terminal::Theme::by_name(&options.theme);
         let now = Instant::now();
@@ -820,7 +821,7 @@ fn open_editor(tab: &mut crate::tab::Tab, path: PathBuf, now: Instant) -> Task<M
 }
 
 /// Tell `tab`'s UI the file it is waiting on was saved, once it was.
-fn poll_watch(tab: &mut crate::tab::Tab, now: Instant) {
+pub(crate) fn poll_watch(tab: &mut crate::tab::Tab, now: Instant) {
     let Some(watch) = tab.watch.as_mut() else {
         return;
     };
@@ -881,7 +882,7 @@ fn mouse_button(button: mouse::Button) -> Option<MouseButton> {
     }
 }
 
-fn modified(path: &std::path::Path) -> Option<SystemTime> {
+pub(crate) fn modified(path: &std::path::Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
@@ -922,7 +923,7 @@ fn window_event(event: iced::Event, _status: event::Status, _id: window::Id) -> 
 
 /// Editors that need a terminal of their own, which a desktop window
 /// doesn't have.
-fn is_terminal_editor(editor: &str) -> bool {
+pub(crate) fn is_terminal_editor(editor: &str) -> bool {
     let program = editor.split_whitespace().next().unwrap_or_default();
     let name = std::path::Path::new(program)
         .file_name()
@@ -945,7 +946,7 @@ fn is_terminal_editor(editor: &str) -> bool {
 }
 
 /// Open a URL or file with the platform's default handler.
-fn open_external(target: &str) {
+pub(crate) fn open_external(target: &str) {
     #[cfg(target_os = "macos")]
     let result = std::process::Command::new("open").arg(target).spawn();
     #[cfg(target_os = "windows")]

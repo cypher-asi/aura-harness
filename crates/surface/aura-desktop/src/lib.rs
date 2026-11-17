@@ -29,6 +29,8 @@ mod router;
 mod scene;
 #[allow(dead_code)] // until the bare shell draws with it
 mod shapes;
+#[allow(dead_code, unused_imports)] // until it can be asked for
+mod shell;
 #[cfg(test)]
 mod snapshot;
 mod tab;
