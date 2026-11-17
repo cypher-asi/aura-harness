@@ -61,7 +61,24 @@ fn window_chord() -> Modifiers {
     }
 }
 
-fn agent(id: &str, name: &str, depth: usize, project: Option<&str>) -> AgentSummary {
+/// A window the fixtures can set a scene in, whichever shell it is.
+pub(crate) trait Driven {
+    fn apply(&mut self, commands: impl IntoIterator<Item = UiCommand>);
+    /// Type `text` and press Enter.
+    fn submit(&mut self, text: &str);
+}
+
+impl Driven for Harness {
+    fn apply(&mut self, commands: impl IntoIterator<Item = UiCommand>) {
+        Harness::apply(self, commands);
+    }
+
+    fn submit(&mut self, text: &str) {
+        Harness::submit(self, text);
+    }
+}
+
+pub(crate) fn agent(id: &str, name: &str, depth: usize, project: Option<&str>) -> AgentSummary {
     AgentSummary {
         id: id.into(),
         name: name.into(),
@@ -173,7 +190,7 @@ impl Harness {
 }
 
 /// Models, agents, processes and earlier conversation.
-fn seed(h: &mut Harness) {
+pub(crate) fn seed(h: &mut impl Driven) {
     let model =
         |id: &str, label: &str, group: &str, provider: Option<&str>, available| ModelOptionView {
             id: id.into(),
@@ -267,7 +284,7 @@ fn seed(h: &mut Harness) {
 }
 
 /// A typed request and the agent's thinking and tool calls.
-fn steps(h: &mut Harness) {
+pub(crate) fn steps(h: &mut impl Driven) {
     h.submit("Summarise the crates and fix the README");
     let tool = |id: &str, name: &str, args: &str, result: &str| {
         [
@@ -738,7 +755,7 @@ fn swarm_timings() {
     }
 }
 
-fn report(label: &str, samples: &mut [std::time::Duration]) {
+pub(crate) fn report(label: &str, samples: &mut [std::time::Duration]) {
     samples.sort();
     let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
     let total: std::time::Duration = samples.iter().sum();

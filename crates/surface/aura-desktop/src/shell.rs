@@ -15,6 +15,8 @@
 //! wakes once a second to catch the ticks up, and at the edges of the
 //! cursor's blink.
 
+#[cfg(test)]
+mod bench;
 mod keys;
 mod pointer;
 mod screen;
