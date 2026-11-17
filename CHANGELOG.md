@@ -63,7 +63,10 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   kinds) take the work. `task` gains a `check` command and returns a
   compact result. Read-only agents run in parallel and the rest one at
   a time. A routed subtask that fails its check is retried once on the
-  next tier up with its file changes undone.
+  next tier up with its file changes undone. In a git repository that
+  includes changes made by shell commands: the workspace folder goes
+  back to a snapshot taken before the attempt, leaving ignored files,
+  the index, `HEAD` and stash alone.
 - `/compare [prompt | --plan f] [--against m | gate:nodelegate]
   [--repeats N] [--check cmd] [--budget $]` runs a task with Gate and
   another model in copies under `AURA_HOME/compare/`, judges each pair

@@ -6,6 +6,9 @@
 //! - [`baseline`] records the copy as it is before an agent works in it,
 //!   as a git tree; [`diff_since`] is then exactly what the agent changed.
 //! - [`apply_patch`] puts such a diff into the user's workspace.
+//! - [`snapshot`] records a folder of the user's own git working tree, and
+//!   [`Snapshot::restore`] puts its files back as they were then (a failed
+//!   subtask's changes, before it is retried).
 //!
 //! A plain copy (the workspace is not a git repository) gets a git
 //! directory *beside* it rather than inside, so the agent working in the
@@ -14,11 +17,17 @@
 //! ## Invariants
 //!
 //! - Only local subcommands run (`rev-parse`, `diff`, `apply`,
-//!   `ls-files`, `init`, `add`, `write-tree`, `diff-index`); nothing here
-//!   commits, fetches or pushes, and terminal prompts are off.
-//! - Nothing writes to the user's repository except [`apply_patch`],
-//!   and only to the working tree it is given; the baseline trees are
-//!   unreferenced objects that `git gc` drops in time.
+//!   `ls-files`, `init`, `add`, `write-tree`, `diff-index`, `diff-tree`,
+//!   `read-tree`, `checkout-index`); nothing here commits, fetches or
+//!   pushes, and terminal prompts are off.
+//! - Nothing writes to the user's repository except [`apply_patch`] and
+//!   [`Snapshot::restore`], and only to the working tree; the baseline
+//!   and snapshot trees are unreferenced objects that `git gc` drops in
+//!   time.
+//! - A snapshot stages into a scratch copy of the index
+//!   (`GIT_INDEX_FILE`), so the user's index, `HEAD`, branches and stash
+//!   are never changed. A restore never touches files git ignored when
+//!   the snapshot was taken, nor anything under `.git`.
 //!
 //! ## Failure modes
 //!
@@ -247,6 +256,252 @@ pub fn apply_patch(dest: &Path, patch: &str) -> Result<(), IsolationError> {
     with_input(apply, patch.as_bytes(), "apply")
 }
 
+/// Mode git gives a nested repository (a submodule or an embedded clone);
+/// a restore leaves those alone.
+const GITLINK: &str = "160000";
+
+/// A folder of a git working tree as it was at one moment: its tracked
+/// and untracked files git does not ignore. See [`snapshot`].
+#[derive(Debug, Clone)]
+pub struct Snapshot {
+    /// Root of the working tree
+    root: PathBuf,
+    /// The folder recorded, relative to `root` (`.` for all of it)
+    scope: PathBuf,
+    /// Its files, as a git tree
+    tree: String,
+    /// Untracked files and folders (ending in `/`) git ignored then,
+    /// relative to `root`
+    ignored: Vec<String>,
+}
+
+/// What [`Snapshot::restore`] did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Restored {
+    /// Files written back as they were
+    pub written: Vec<PathBuf>,
+    /// Files the snapshot did not have, removed
+    pub removed: Vec<PathBuf>,
+    /// Files not written back because a folder that still holds files
+    /// (ignored ones, or a nested repository) stands where they go
+    pub blocked: Vec<PathBuf>,
+}
+
+/// An index file of its own, in a temporary folder, so staging never
+/// changes the user's index.
+struct ScratchIndex {
+    dir: tempfile::TempDir,
+}
+
+impl ScratchIndex {
+    /// An index with nothing in it yet.
+    fn empty() -> Result<Self, IsolationError> {
+        let dir = tempfile::Builder::new().prefix("aura-index-").tempdir()?;
+        Ok(Self { dir })
+    }
+
+    /// A copy of the index of the repository at `root`. Staging into a
+    /// copy keeps files the repository tracks even where an ignore rule
+    /// matches them, and reuses the index's file stats.
+    fn copy_of(root: &Path) -> Result<Self, IsolationError> {
+        let scratch = Self::empty()?;
+        let mut git_path = git(root, None);
+        git_path.args(["rev-parse", "--git-path", "index"]);
+        let index = output(git_path, "rev-parse --git-path")?;
+        let index = root.join(String::from_utf8_lossy(&index).trim());
+        if index.is_file() {
+            std::fs::copy(&index, scratch.path())?;
+        }
+        Ok(scratch)
+    }
+
+    fn path(&self) -> PathBuf {
+        self.dir.path().join("index")
+    }
+
+    /// A `git` command for the working tree `root` using this index.
+    fn git(&self, root: &Path) -> Command {
+        let mut command = literal_git(root);
+        command.env("GIT_INDEX_FILE", self.path());
+        command
+    }
+}
+
+/// A `git` command for the working tree `root` that takes pathspecs as
+/// plain paths.
+fn literal_git(root: &Path) -> Command {
+    let mut command = git(root, None);
+    command.env("GIT_LITERAL_PATHSPECS", "1");
+    command
+}
+
+/// The tracked and untracked, non-ignored files under `scope` in the
+/// working tree `root` as they are now, as a git tree.
+fn worktree_tree(root: &Path, scope: &Path) -> Result<String, IsolationError> {
+    let index = ScratchIndex::copy_of(root)?;
+    let mut add = index.git(root);
+    add.args(["add", "--all", "--"]).arg(scope);
+    output(add, "add")?;
+    let mut write_tree = index.git(root);
+    write_tree.arg("write-tree");
+    let tree = output(write_tree, "write-tree")?;
+    Ok(String::from_utf8_lossy(&tree).trim().to_string())
+}
+
+/// The NUL-separated names in `listed`.
+fn names(listed: &[u8]) -> impl Iterator<Item = String> + '_ {
+    listed
+        .split(|b| *b == 0)
+        .filter(|name| !name.is_empty())
+        .map(|name| String::from_utf8_lossy(name).into_owned())
+}
+
+/// Record the files under `workspace` in the git working tree it is in:
+/// tracked files and untracked ones git does not ignore, as they are now,
+/// uncommitted changes included. `None` when `workspace` is in no git
+/// working tree.
+///
+/// Only objects are written to the repository; its index, `HEAD`,
+/// branches and stash stay as they are.
+///
+/// # Errors
+/// Fails when git can't stage, write the tree or list ignored files.
+pub fn snapshot(workspace: &Path) -> Result<Option<Snapshot>, IsolationError> {
+    let Some(root) = repo_root(workspace) else {
+        return Ok(None);
+    };
+    let workspace = workspace.canonicalize()?;
+    let Ok(relative) = workspace.strip_prefix(&root) else {
+        return Ok(None);
+    };
+    let scope = if relative.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        relative.to_path_buf()
+    };
+    let tree = worktree_tree(&root, &scope)?;
+    let mut ls = literal_git(&root);
+    ls.args([
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--directory",
+        "-z",
+        "--",
+    ])
+    .arg(&scope);
+    let ignored = names(&output(ls, "ls-files")?).collect();
+    Ok(Some(Snapshot {
+        root,
+        scope,
+        tree,
+        ignored,
+    }))
+}
+
+impl Snapshot {
+    /// Whether `path` (relative to the root) was an ignored file, or in
+    /// an ignored folder, when the snapshot was taken.
+    fn was_ignored(&self, path: &str) -> bool {
+        self.ignored.iter().any(|entry| {
+            if entry.ends_with('/') {
+                path.starts_with(entry.as_str())
+            } else {
+                path == entry
+            }
+        })
+    }
+
+    /// Put the recorded folder back as it was when the snapshot was taken:
+    /// files changed or deleted since are written back from the snapshot,
+    /// and files created since are removed. Files git ignored at the
+    /// snapshot, nested repositories and `.git` are left alone, and
+    /// folders emptied by a removal stay. A file replaced by a folder
+    /// that still holds such files is not written back (see
+    /// [`Restored::blocked`]).
+    ///
+    /// # Errors
+    /// Fails when git can't stage or compare the files, or a file can't be
+    /// removed or written back; what was done before the failure stays.
+    pub fn restore(&self) -> Result<Restored, IsolationError> {
+        let now = worktree_tree(&self.root, &self.scope)?;
+        let mut diff = literal_git(&self.root);
+        diff.args([
+            "diff-tree",
+            "-r",
+            "-z",
+            "--raw",
+            "--no-renames",
+            self.tree.as_str(),
+            now.as_str(),
+            "--",
+        ])
+        .arg(&self.scope);
+        let raw = output(diff, "diff-tree")?;
+        let mut back = Vec::new();
+        let mut created = Vec::new();
+        let mut fields = names(&raw);
+        while let (Some(meta), Some(path)) = (fields.next(), fields.next()) {
+            let parts: Vec<&str> = meta.trim_start_matches(':').split(' ').collect();
+            let [old_mode, new_mode, _, _, status] = parts[..] else {
+                return Err(IsolationError::Git(format!(
+                    "git diff-tree: unexpected line `{meta}`"
+                )));
+            };
+            if old_mode == GITLINK || new_mode == GITLINK {
+                continue;
+            }
+            if status == "A" {
+                if !self.was_ignored(&path) {
+                    created.push(path);
+                }
+            } else {
+                back.push(path);
+            }
+        }
+
+        let mut restored = Restored::default();
+        for path in created {
+            let full = self.root.join(&path);
+            match std::fs::remove_file(&full) {
+                Ok(()) => restored.removed.push(full),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        // `checkout-index --force` deletes a whole folder standing where a
+        // file goes back, ignored files in it included; only an empty one
+        // may go.
+        back.retain(|path| {
+            let full = self.root.join(path);
+            let folder = full.symlink_metadata().is_ok_and(|meta| meta.is_dir());
+            if folder && std::fs::remove_dir(&full).is_err() {
+                restored.blocked.push(full);
+                return false;
+            }
+            true
+        });
+        if !back.is_empty() {
+            let index = ScratchIndex::empty()?;
+            let mut read_tree = index.git(&self.root);
+            read_tree.args(["read-tree", self.tree.as_str()]);
+            output(read_tree, "read-tree")?;
+            let mut checkout = index.git(&self.root);
+            checkout.args(["checkout-index", "--force", "-z", "--stdin"]);
+            let listed: Vec<u8> = back
+                .iter()
+                .flat_map(|path| path.bytes().chain(std::iter::once(0)))
+                .collect();
+            with_input(checkout, &listed, "checkout-index")?;
+            restored
+                .written
+                .extend(back.iter().map(|path| self.root.join(path)));
+        }
+        Ok(restored)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,5 +628,145 @@ mod tests {
         }
         let dir = TempDir::new().unwrap();
         assert_eq!(repo_root(dir.path()), None);
+        assert!(snapshot(dir.path()).unwrap().is_none());
+    }
+
+    fn stdout(cwd: &Path, args: &[&str]) -> String {
+        let out = git(cwd, None).args(args).output().unwrap();
+        assert!(out.status.success(), "git {args:?} failed in {cwd:?}");
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    fn read(path: PathBuf) -> String {
+        std::fs::read_to_string(path).unwrap()
+    }
+
+    /// `HEAD`, refs, stash list and the index file's bytes of `root`.
+    fn repository_state(root: &Path) -> (String, String, String, Vec<u8>) {
+        (
+            stdout(root, &["rev-parse", "HEAD"]),
+            stdout(root, &["for-each-ref"]),
+            stdout(root, &["stash", "list"]),
+            std::fs::read(root.join(".git/index")).unwrap(),
+        )
+    }
+
+    #[test]
+    fn a_restore_undoes_every_change_since_the_snapshot_and_nothing_before_it() {
+        if !git_available() {
+            return;
+        }
+        let repo = repo();
+        let root = repo.path().canonicalize().unwrap();
+        std::fs::write(root.join("gone.rs"), "fn gone() {}\n").unwrap();
+        std::fs::write(root.join("wip.rs"), "fn wip() {}\n").unwrap();
+        run(&root, &["add", "gone.rs", "wip.rs"]);
+        run(&root, &["commit", "--quiet", "-m", "more"]);
+        std::fs::write(root.join("wip.rs"), "fn wip() { started() }\n").unwrap();
+        std::fs::write(root.join("staged.rs"), "fn staged() {}\n").unwrap();
+        run(&root, &["add", "staged.rs"]);
+        std::fs::write(root.join("notes.md"), "mine\n").unwrap();
+        std::fs::create_dir(root.join("target")).unwrap();
+        std::fs::write(root.join("target/out"), "build\n").unwrap();
+        let before = repository_state(&root);
+
+        let snapshot = snapshot(&root).unwrap().expect("a git working tree");
+        assert_eq!(
+            repository_state(&root),
+            before,
+            "a snapshot changes nothing"
+        );
+
+        std::fs::write(root.join("lib.rs"), "fn a() { broken }\n").unwrap();
+        std::fs::write(root.join("wip.rs"), "fn wip() { worse }\n").unwrap();
+        std::fs::remove_file(root.join("gone.rs")).unwrap();
+        std::fs::remove_file(root.join("notes.md")).unwrap();
+        std::fs::create_dir_all(root.join("gen/deep")).unwrap();
+        std::fs::write(root.join("gen/deep/made.rs"), "fn made() {}\n").unwrap();
+        std::fs::write(root.join("target/out"), "rebuilt\n").unwrap();
+        std::fs::write(root.join("target/new"), "build\n").unwrap();
+        std::fs::write(root.join(".gitignore"), "").unwrap();
+
+        let restored = snapshot.restore().unwrap();
+        assert_eq!(restored.removed, [root.join("gen/deep/made.rs")]);
+        assert_eq!(restored.written.len(), 5, "{restored:?}");
+        assert_eq!(read(root.join("lib.rs")), "fn a() {}\n");
+        assert_eq!(read(root.join("gone.rs")), "fn gone() {}\n");
+        assert_eq!(
+            read(root.join("wip.rs")),
+            "fn wip() { started() }\n",
+            "uncommitted work from before stays"
+        );
+        assert_eq!(read(root.join("notes.md")), "mine\n");
+        assert_eq!(read(root.join(".gitignore")), "target/\n");
+        assert!(!root.join("gen/deep/made.rs").exists());
+        assert_eq!(
+            read(root.join("target/out")),
+            "rebuilt\n",
+            "ignored files are never touched"
+        );
+        assert!(root.join("target/new").exists());
+        assert!(root.join(".git/HEAD").exists());
+        assert_eq!(repository_state(&root), before);
+
+        assert_eq!(snapshot.restore().unwrap(), Restored::default());
+    }
+
+    #[test]
+    fn a_snapshot_of_a_folder_restores_only_that_folder() {
+        if !git_available() {
+            return;
+        }
+        let repo = repo();
+        let root = repo.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("app")).unwrap();
+        std::fs::write(root.join("app/main.rs"), "fn main() {}\n").unwrap();
+        run(&root, &["add", "app"]);
+        run(&root, &["commit", "--quiet", "-m", "app"]);
+
+        let snapshot = snapshot(&root.join("app")).unwrap().unwrap();
+        std::fs::write(root.join("app/main.rs"), "fn main() { x }\n").unwrap();
+        std::fs::write(root.join("app/new.rs"), "\n").unwrap();
+        std::fs::write(root.join("lib.rs"), "fn a() { elsewhere }\n").unwrap();
+        std::fs::write(root.join("outside.rs"), "\n").unwrap();
+
+        let restored = snapshot.restore().unwrap();
+        assert_eq!(restored.removed, [root.join("app/new.rs")]);
+        assert_eq!(restored.written, [root.join("app/main.rs")]);
+        assert_eq!(read(root.join("app/main.rs")), "fn main() {}\n");
+        assert_eq!(read(root.join("lib.rs")), "fn a() { elsewhere }\n");
+        assert!(root.join("outside.rs").exists());
+    }
+
+    #[test]
+    fn a_file_replaced_by_a_folder_comes_back_unless_ignored_files_are_in_it() {
+        if !git_available() {
+            return;
+        }
+        let repo = repo();
+        let root = repo.path().canonicalize().unwrap();
+        std::fs::write(root.join("plain"), "plain\n").unwrap();
+        std::fs::write(root.join("cfg"), "cfg\n").unwrap();
+        run(&root, &["add", "plain", "cfg"]);
+        run(&root, &["commit", "--quiet", "-m", "files"]);
+
+        let snapshot = snapshot(&root).unwrap().unwrap();
+        std::fs::remove_file(root.join("plain")).unwrap();
+        std::fs::create_dir(root.join("plain")).unwrap();
+        std::fs::write(root.join("plain/made.rs"), "\n").unwrap();
+        std::fs::remove_file(root.join("cfg")).unwrap();
+        std::fs::create_dir_all(root.join("cfg/target")).unwrap();
+        std::fs::write(root.join("cfg/target/out"), "build\n").unwrap();
+
+        let restored = snapshot.restore().unwrap();
+        assert_eq!(restored.removed, [root.join("plain/made.rs")]);
+        assert_eq!(restored.written, [root.join("plain")]);
+        assert_eq!(restored.blocked, [root.join("cfg")]);
+        assert_eq!(read(root.join("plain")), "plain\n");
+        assert_eq!(
+            read(root.join("cfg/target/out")),
+            "build\n",
+            "an ignored file in the way is kept"
+        );
     }
 }

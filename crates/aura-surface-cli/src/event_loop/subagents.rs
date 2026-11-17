@@ -10,8 +10,9 @@
 //! pins, and every subtask records its prompt and how it went (see
 //! [`super::gate_subtask`]); a routed subtask whose check fails or that
 //! errors has its file changes undone and is retried once on the next
-//! stronger model. The instance stays in the agents list so the user can
-//! open it and keep talking to it.
+//! stronger model (`AgentHub::run_subtask` says which changes are
+//! undone). The instance stays in the agents list so the user can open
+//! it and keep talking to it.
 //!
 //! Instances of permanent agents that only read (their tools change no
 //! file) run side by side; the others run one at a time per workspace,
@@ -55,6 +56,7 @@ use aura_core_types::{
     AgentId, Hash, ModelTokens, OutcomePayload, OutcomeSignal, PromptCategory, RecordEntry,
     SpawnMode, SubagentDispatchRequest, SubagentExit, SubagentResult,
 };
+use aura_exec_isolation::changes;
 use aura_model_reasoner::{Message, ToolDefinition};
 use aura_terminal::events::{
     AgentDefinitionSummary, AgentSummary, ProcessKind, ProcessStatus, ProcessSummary,
@@ -832,22 +834,38 @@ impl AgentHub {
     /// there, run its first attempt and, when Gate routed it and the
     /// attempt failed, put back the files it changed and retry it once on
     /// a stronger model.
+    ///
+    /// The files its file tools changed are always put back. Changes by
+    /// its shell commands are too when the workspace is in a git
+    /// repository and the attempt had the workspace to itself: it took
+    /// the write lock (so it is no read-only or nested subtask) and its
+    /// caller waits for it rather than working on beside it.
     async fn run_subtask(&self, subtask: Subtask) -> TaskReport {
         let Subtask {
             request,
             definition,
             first,
         } = subtask;
+        let workspace = first.session.kernel.agent_workspace();
         let mut slot = if reads_only(&definition) {
             None
         } else {
-            let workspace = first.session.kernel.agent_workspace();
-            Some(self.write_slot(&request, workspace, &first.cancel).await)
+            Some(
+                self.write_slot(&request, workspace.clone(), &first.cancel)
+                    .await,
+            )
         };
         if let Some(slot) = &mut slot {
             slot.hold(first.session.agent_id());
         }
         let candidates = first.gate.candidates.clone();
+        let alone = slot.as_ref().is_some_and(WriteSlot::exclusive)
+            && request.spawn_mode != Some(SpawnMode::Detached);
+        let snapshot = if alone && candidates.is_some() {
+            snapshot_workspace(workspace).await
+        } else {
+            None
+        };
         let first = self.finish_task(first).await;
         let Some(why) = first.attempted().failure().filter(|_| !first.cancelled) else {
             return TaskReport { first, retry: None };
@@ -865,6 +883,9 @@ impl AgentHub {
             for (path, problem) in &report.failed {
                 warn!(path = %path.display(), %problem, "Could not undo a failed subtask's change");
             }
+        }
+        if let Some(snapshot) = snapshot {
+            restore_workspace(snapshot).await;
         }
         let prompt = task_check::retry_prompt(&request.prompt, &first.model, &why);
         let retry = match self
@@ -913,7 +934,7 @@ impl AgentHub {
         };
         WriteSlot {
             hub: self,
-            _guard: guard,
+            guard,
             holders: Vec::new(),
         }
     }
@@ -1255,7 +1276,9 @@ impl TaskReport {
 /// when it is dropped.
 struct WriteSlot<'a> {
     hub: &'a AgentHub,
-    _guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+    /// The workspace's lock; `None` for a subtask of one that holds it,
+    /// or when the wait was cancelled
+    guard: Option<tokio::sync::OwnedMutexGuard<()>>,
     /// Agents working in the slot, whose own write subtasks need not wait
     holders: Vec<AgentId>,
 }
@@ -1264,6 +1287,48 @@ impl WriteSlot<'_> {
     fn hold(&mut self, agent: AgentId) {
         lock(&self.hub.writing).insert(agent);
         self.holders.push(agent);
+    }
+
+    /// Whether this slot took the workspace's lock itself.
+    fn exclusive(&self) -> bool {
+        self.guard.is_some()
+    }
+}
+
+/// What `workspace` holds now, when it is in a git repository, so a
+/// failed attempt's changes (shell commands' included) can be undone.
+async fn snapshot_workspace(workspace: PathBuf) -> Option<changes::Snapshot> {
+    let taken = tokio::task::spawn_blocking(move || changes::snapshot(&workspace)).await;
+    match taken {
+        Ok(Ok(snapshot)) => snapshot,
+        Ok(Err(e)) => {
+            warn!(error = %e, "Could not snapshot the workspace; only file tool changes will be undone");
+            None
+        }
+        Err(e) => {
+            warn!(error = %e, "Workspace snapshot task failed");
+            None
+        }
+    }
+}
+
+/// Put the workspace back as `snapshot` recorded it.
+async fn restore_workspace(snapshot: changes::Snapshot) {
+    match tokio::task::spawn_blocking(move || snapshot.restore()).await {
+        Ok(Ok(restored)) => {
+            for path in &restored.blocked {
+                warn!(path = %path.display(), "Could not undo a failed subtask's change: a folder with ignored files is in the way");
+            }
+            info!(
+                written = restored.written.len(),
+                removed = restored.removed.len(),
+                "Undid a failed subtask's changes to the workspace"
+            );
+        }
+        Ok(Err(e)) => {
+            warn!(error = %e, "Could not undo a failed subtask's changes to the workspace");
+        }
+        Err(e) => warn!(error = %e, "Workspace restore task failed"),
     }
 }
 

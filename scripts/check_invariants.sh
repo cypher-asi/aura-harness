@@ -125,8 +125,12 @@ run_band "§2" "append_entry_* used outside the kernel / store crates / tests" \
 #   * `crates/aura-exec-isolation/src/changes.rs` — local-only `diff` /
 #     `apply` / `ls-files` / `add` / `write-tree` / `diff-index` / `init`
 #     to carry uncommitted work into an isolated copy, diff it against
-#     its baseline, and apply a chosen copy's patch back (`/compare`).
-#     No commit, fetch or push. Declared exception in docs/invariants.md.
+#     its baseline, and apply a chosen copy's patch back (`/compare`);
+#     plus `rev-parse` / `diff-tree` / `read-tree` / `checkout-index` on a
+#     scratch `GIT_INDEX_FILE` to snapshot a workspace before an escalated
+#     subtask and restore it before the retry. No commit, fetch or push.
+#     Declared exception in docs/invariants.md; its subcommands are pinned
+#     by the check after this band.
 #   * `crates/aura-runtime/src/gateway/handlers/safe_workspace.rs` —
 #     local-only worktree, imported-project baseline, checkpoint, restore, and
 #     apply lifecycle for explicitly selected hosted Safe Workspaces. A closed
@@ -136,6 +140,23 @@ run_band "§2" "append_entry_* used outside the kernel / store crates / tests" \
 run_band "§1" "Command::new(\"git\") outside the GitExecutor / declared exceptions" \
     'Command::new\("git"\)' \
     '^(crates/aura-tools/src/git_tool/|crates/aura-agent/src/git\.rs|crates/aura-exec-isolation/src/lib\.rs|crates/aura-exec-isolation/src/changes\.rs|crates/aura-runtime/src/gateway/handlers/safe_workspace\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+
+# §1 — the git subcommands `changes.rs` runs outside its tests (the first
+# literal of each `.arg(` / `.args([`) stay in the local-only set its row in
+# docs/invariants.md lists.
+changes_file='crates/aura-exec-isolation/src/changes.rs'
+changes_allowed='^(rev-parse|diff|apply|ls-files|init|add|write-tree|diff-index|diff-tree|read-tree|checkout-index)$'
+changes_subcommands=$(sed '/^#\[cfg(test)\]/,$d' "$changes_file" \
+    | rg -U -o -r '$1' '\.args?\(\[?\s*"([^"]+)"' || true)
+if [[ -z "$changes_subcommands" ]]; then
+    report "§1" "no git subcommands found to check in ${changes_file}" "$changes_file"
+fi
+while IFS= read -r subcommand; do
+    [[ -z "$subcommand" ]] && continue
+    if [[ ! "$subcommand" =~ $changes_allowed ]]; then
+        report "§1" "git ${subcommand} is not in the changes.rs subcommand allowlist" "$changes_file"
+    fi
+done <<<"$changes_subcommands"
 
 # §10 — non-kernel, non-store crates must bind to `Arc<dyn ReadStore>`.
 #

@@ -128,8 +128,10 @@ impl ModelProvider for GatedProvider {
 
 /// The one tool call a turn whose last message is `last` makes, for the
 /// delegation tests: "write a note" writes `notes/<model>.txt`, "touch a
-/// file" runs `touch touched.txt`, and "read the big file" reads
-/// `big.txt`.
+/// file" runs `touch touched.txt`, "read the big file" reads `big.txt`,
+/// and "change files by shell" appends the model to `tracked.txt` and
+/// `target/out` and writes `shell-<model>.txt` with a shell command, which
+/// on a first attempt also deletes `gone.txt`.
 fn scripted(last: &str, request: &ModelRequest) -> Option<MockResponse> {
     let call = |name: &str, input: serde_json::Value| {
         Some(MockResponse::tool_use(format!("toolu_{name}"), name, input))
@@ -149,6 +151,20 @@ fn scripted(last: &str, request: &ModelRequest) -> Option<MockResponse> {
     }
     if last.contains("read the big file") {
         return call("read_file", serde_json::json!({ "path": "big.txt" }));
+    }
+    if last.contains("change files by shell") {
+        let model = request.model.as_str();
+        let mut script = format!(
+            "echo {model} >> tracked.txt && echo {model} > shell-{model}.txt \
+             && echo {model} >> target/out"
+        );
+        if !last.contains("A first attempt") {
+            script.push_str(" && rm gone.txt");
+        }
+        return call(
+            "run_command",
+            serde_json::json!({ "program": "sh", "args": ["-c", script] }),
+        );
     }
     None
 }
