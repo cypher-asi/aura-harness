@@ -3,6 +3,7 @@
 use super::agent_events::{AgentUi, CostCap, ForwarderState, TurnPlan};
 use super::agents::AgentSession;
 use super::hud::{context_view, send_session, todo_views};
+use super::lead::LeadExecutor;
 use super::processes::{now_ms, warn_kill_failed};
 use super::record_ui::create_response_transaction;
 use super::steering::Steering;
@@ -12,7 +13,7 @@ use crate::long_run::LongRunSettings;
 use crate::project_instructions::agents_md_in;
 use crate::record_loader::chat_from_messages;
 use crate::session_checkpoint::SessionListing;
-use aura_agent::{AgentLoopEvent, RunOptions, WithPostEditCheck};
+use aura_agent::{AgentLoopEvent, AgentToolExecutor, RunOptions, WithPostEditCheck};
 use aura_context_prompts::model_messages::init_project::init_project_prompt;
 use aura_core_types::AgentId;
 use aura_core_types::{RecordEntry, Transaction};
@@ -101,8 +102,9 @@ pub(super) async fn run_agent_turn(
 /// Run one turn of `session` on `agent_loop` with `tools`, sending its
 /// events to `events`. `turn_cancel` stops it early and `steering` feeds
 /// it messages while it runs. A session with a post-edit check runs it
-/// after each step that edits files. Returns `None`, after cancelling
-/// `turn_cancel`, when it runs longer than `timeout`.
+/// after each step that edits files, and a lead's calls stay within the
+/// lead's limits. Returns `None`, after cancelling `turn_cancel`, when it
+/// runs longer than `timeout`.
 pub(crate) async fn drive_turn(
     session: &AgentSession,
     agent_loop: &aura_agent::AgentLoop,
@@ -112,7 +114,13 @@ pub(crate) async fn drive_turn(
     steering: &Steering,
     timeout: Option<std::time::Duration>,
 ) -> Option<Result<aura_agent::AgentLoopResult, aura_agent::AgentError>> {
-    let executor = WithPostEditCheck::new(&session.tool_gateway, session.post_edit_check.as_ref());
+    let lead = LeadExecutor::new(&session.tool_gateway);
+    let tool_gateway: &dyn AgentToolExecutor = if session.lead {
+        &lead
+    } else {
+        &session.tool_gateway
+    };
+    let executor = WithPostEditCheck::new(tool_gateway, session.post_edit_check.as_ref());
     let run = agent_loop.run_with_session(
         &session.model_gateway,
         &executor,

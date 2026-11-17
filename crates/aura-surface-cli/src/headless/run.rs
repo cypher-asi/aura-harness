@@ -279,7 +279,14 @@ impl Headless {
 
     fn announce(&self, output: &Output, session: &AgentSession, session_id: &str, resumed: bool) {
         let workspace = session.kernel.agent_workspace();
-        let (_, tools) = self.hub.turn(session.definition.as_deref(), &workspace);
+        let (_, mut tools) = self.hub.turn(session.definition.as_deref(), &workspace);
+        if self
+            .hub
+            .leads(session.agent_id(), session.definition.as_deref())
+            == Some(true)
+        {
+            tools = crate::event_loop::lead::lead_tools(tools);
+        }
         let tools = self.tool_filter.filter(tools);
         let agent_hex = session.agent_id().to_hex();
         let cwd = self.workspace_root.display().to_string();
@@ -312,11 +319,7 @@ impl Headless {
         drain_stale_inbox(session).await;
         let started = Instant::now();
         let workspace = session.kernel.agent_workspace();
-        let (mut config, tools) = self.hub.agent_turn(
-            session.agent_id(),
-            session.definition.as_deref(),
-            &workspace,
-        );
+        let (mut config, tools) = self.hub.lead_turn(session);
         let (payload, routed) = self.route_turn(session, &mut config, &text).await;
         let prompt_tx = match record_prompt(session, &payload).await {
             Ok((tx, _)) => tx.hash,

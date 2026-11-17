@@ -93,7 +93,7 @@ fn git(dir: &std::path::Path, args: &[&str]) {
 
 #[tokio::test]
 async fn both_arms_run_repeatedly_in_separate_copies_and_their_checks_feed_gate() {
-    let (fixture, mut commands) = fixture();
+    let (fixture, mut commands) = fixture_with_gate(steady_gate_without_delegation());
     let mut b = borrowed(&fixture);
     let links = b.links.clone();
     let mut state = loop_state(&fixture, &mut b);
@@ -227,7 +227,7 @@ async fn pick_rates_both_arms_and_apply_brings_the_chosen_run_home() {
     if !git_available() {
         return;
     }
-    let (fixture, mut commands) = fixture();
+    let (fixture, mut commands) = fixture_with_gate(steady_gate_without_delegation());
     let mut b = borrowed(&fixture);
     let links = b.links.clone();
     let mut state = loop_state(&fixture, &mut b);
@@ -387,9 +387,13 @@ async fn subtasks_of_a_run_follow_its_arm_not_the_users_selection() {
         "the other arm's subtasks run on its model"
     );
 
-    fixture
-        .hub
-        .begin_compare_run(first, subagents::ArmRouting::Gate(candidates));
+    fixture.hub.begin_compare_run(
+        first,
+        subagents::ArmRouting::Gate {
+            candidates,
+            delegate: true,
+        },
+    );
     let routed = dispatch(first).await;
     assert_eq!(
         route_of(routed),
@@ -433,4 +437,87 @@ async fn a_comparison_needs_a_prompt_and_waits_to_be_confirmed() {
     compare(&mut state, &links, "cancel").await;
     assert!(system_texts(&drain(&mut commands)).contains("Dropped the comparison"));
     assert!(subagents::lock(&state.hub.registry).compares().is_empty());
+}
+
+#[tokio::test]
+async fn gate_is_compared_with_itself_without_enforced_delegation() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+    state.sync_turn_base();
+
+    compare(
+        &mut state,
+        &links,
+        "write the answer --repeats 1 --against gate:nodelegate",
+    )
+    .await;
+    let estimate = system_texts(&drain(&mut commands));
+    assert!(
+        estimate.contains("vs gate without enforced delegation (gate:nodelegate), 1 run each"),
+        "{estimate}"
+    );
+    compare(&mut state, &links, "go").await;
+    tokio::time::timeout(Duration::from_secs(60), state.compare.finished())
+        .await
+        .expect("the comparison did not end");
+    let payload = latest(&state);
+
+    assert_eq!(payload.against, "gate:nodelegate");
+    let gate = payload.run("gate-1").unwrap();
+    let other = payload.run("other-1").unwrap();
+    for run in [gate, other] {
+        assert_eq!(run.error, None, "{}", run.name);
+        assert_eq!(run.model, SONNET, "both arms are routed by Gate");
+        let prompts: Vec<PromptPayload> = entries(&state, run.agent_id)
+            .iter()
+            .filter_map(|e| e.tx.prompt_payload())
+            .collect();
+        assert_eq!(prompts[0].route, Route::turn(SONNET, RouteReason::Compare));
+    }
+    assert_eq!(gate.files_changed, 0, "the enforced lead may not write");
+    assert!(!gate.copy.workdir.join("answer.txt").exists());
+    assert_eq!(other.files_changed, 1, "the other lead writes itself");
+    assert_eq!(
+        std::fs::read_to_string(other.copy.workdir.join("answer.txt")).unwrap(),
+        SONNET
+    );
+    let shown = system_texts(&drain(&mut commands));
+    assert!(
+        shown.contains("gate vs gate without enforced delegation"),
+        "{shown}"
+    );
+}
+
+#[tokio::test]
+async fn a_runs_arm_decides_whether_its_lead_delegates() {
+    let (fixture, _commands) = fixture();
+    let first = fixture.first;
+    let candidates = gate_on_zos(&fixture).gate_candidates();
+    assert_eq!(
+        fixture.hub.leads(first, None),
+        None,
+        "the user pinned a model"
+    );
+    for (delegate, leads) in [(true, Some(true)), (false, Some(false))] {
+        fixture.hub.begin_compare_run(
+            first,
+            subagents::ArmRouting::Gate {
+                candidates: candidates.clone(),
+                delegate,
+            },
+        );
+        assert_eq!(fixture.hub.leads(first, None), leads);
+        assert_eq!(
+            fixture.hub.leads(first, Some("implement")),
+            None,
+            "an instance of a permanent agent never leads"
+        );
+    }
+    fixture
+        .hub
+        .begin_compare_run(first, subagents::ArmRouting::Pinned(OPUS.to_string()));
+    assert_eq!(fixture.hub.leads(first, None), None);
 }

@@ -21,6 +21,7 @@ use tempfile::TempDir;
 use tokio::sync::Semaphore;
 
 mod compare_runs;
+mod delegation;
 mod subtasks;
 
 /// Model whose route refuses the sign-in, for Gate's re-routing.
@@ -65,6 +66,16 @@ impl ModelProvider for GatedProvider {
         let slow = last.as_deref().is_some_and(|text| text.contains("slow"));
         if slow {
             self.gate.acquire().await.unwrap().forget();
+        }
+        if let Some(response) = scripted(last.as_deref().unwrap_or_default(), &request) {
+            let model = request.model.as_str().to_string();
+            let mut response = MockProvider::new()
+                .with_response(response)
+                .complete(request)
+                .await?;
+            response.trace.model.clone_from(&model);
+            response.model_used = model;
+            return Ok(response);
         }
         if last.as_deref().is_some_and(|text| text.contains("run ls")) {
             return MockProvider::new()
@@ -113,6 +124,33 @@ impl ModelProvider for GatedProvider {
     async fn health_check(&self) -> bool {
         true
     }
+}
+
+/// The one tool call a turn whose last message is `last` makes, for the
+/// delegation tests: "write a note" writes `notes/<model>.txt`, "touch a
+/// file" runs `touch touched.txt`, and "read the big file" reads
+/// `big.txt`.
+fn scripted(last: &str, request: &ModelRequest) -> Option<MockResponse> {
+    let call = |name: &str, input: serde_json::Value| {
+        Some(MockResponse::tool_use(format!("toolu_{name}"), name, input))
+    };
+    if last.contains("write a note") {
+        let path = format!("notes/{}.txt", request.model.as_str());
+        return call(
+            "write_file",
+            serde_json::json!({ "path": path, "content": "note" }),
+        );
+    }
+    if last.contains("touch a file") {
+        return call(
+            "run_command",
+            serde_json::json!({ "program": "touch", "args": ["touched.txt"] }),
+        );
+    }
+    if last.contains("read the big file") {
+        return call("read_file", serde_json::json!({ "path": "big.txt" }));
+    }
+    None
 }
 
 /// A turn told to "write the answer": it writes `answer.txt` naming the
@@ -175,6 +213,16 @@ fn steady_gate() -> GateLive {
     })
 }
 
+/// [`steady_gate`] whose lead keeps its own file tools and commands, as
+/// with `AURA_GATE_DELEGATE=off`.
+fn steady_gate_without_delegation() -> GateLive {
+    GateLive::new(aura_config::GateConfig {
+        explore_rate: 0.0,
+        delegate: false,
+        ..aura_config::GateConfig::defaults()
+    })
+}
+
 fn fixture() -> (Fixture, mpsc::Receiver<UiCommand>) {
     fixture_with_gate(steady_gate())
 }
@@ -233,23 +281,29 @@ fn fixture_with_gate(gate: GateLive) -> (Fixture, mpsc::Receiver<UiCommand>) {
     let prompter = Arc::clone(&approvals);
     let files = crate::file_checkpoints::FileCheckpoints::new(data.path());
     let factory_files = files.clone();
+    let hook_files = files.clone();
     let mut captured = None;
     let hub = AgentHub::new(parts, |dispatcher| {
         captured = Some(dispatcher);
         let kernel_store = Arc::clone(&store);
         KernelFactory::new(
             store,
-            Box::new(move |agent_id, _parent_chain, folder| {
+            Box::new(move |agent_id, parent_chain, folder| {
                 let provider: Arc<dyn ModelProvider + Send + Sync> = Arc::new(GatedProvider {
                     inner: MockProvider::simple_response("Done."),
                     gate: Arc::clone(&provider_gate),
                 });
                 let workspace_base = folder.unwrap_or_else(|| workspace_root.clone());
                 prompter.set_folder(agent_id, workspace_base.clone());
+                let chain = std::iter::once(agent_id).chain(parent_chain).collect();
+                let executor = aura_tools::ToolExecutor::new(ToolConfig::for_autonomous_dev_loop())
+                    .with_file_change_hook(hook_files.hook(chain, None));
+                let mut executors = aura_agent_kernel::ExecutorRouter::new();
+                executors.add_executor(Arc::new(executor));
                 Ok(Kernel::new(
                     Arc::clone(&kernel_store) as Arc<dyn aura_store_db::Store>,
                     provider,
-                    build_executor_router_with_config(&ToolConfig::for_autonomous_dev_loop()).0,
+                    executors,
                     KernelConfig {
                         workspace_base,
                         use_workspace_base_as_root: true,

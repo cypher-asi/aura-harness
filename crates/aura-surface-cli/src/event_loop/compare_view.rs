@@ -2,7 +2,9 @@
 //! per-arm view once it ends, the list of past comparisons, and run
 //! diffs split per file for the diff view.
 
-use aura_agent_gate::compare::{judge_cost_usd, summarize, too_close, ArmSummary, Estimate};
+use aura_agent_gate::compare::{
+    judge_cost_usd, summarize, too_close, ArmSummary, Estimate, NO_DELEGATE,
+};
 use aura_core_types::{CompareArm, ComparePayload, CompareRun, CompareStatus, ModelTokens};
 use aura_model_reasoner::model_catalog::route_label;
 use aura_terminal::events::FileDiffData;
@@ -61,6 +63,16 @@ pub(super) fn headline(text: &str, max: usize) -> String {
     format!("{cut}…")
 }
 
+/// How the other arm, `against` as the comparison records it, reads:
+/// its model and route, or Gate with delegation off.
+fn arm_label(against: &str) -> String {
+    if against == NO_DELEGATE {
+        format!("gate without enforced delegation ({NO_DELEGATE})")
+    } else {
+        route_label(against)
+    }
+}
+
 /// What the user is asked to confirm before a comparison starts.
 pub(super) struct EstimateView<'a> {
     pub task: &'a str,
@@ -85,7 +97,7 @@ impl EstimateView<'_> {
         let _ = write!(
             out,
             "\n  {gate} vs {}, {} run{} each, up to {} at a time, each in its own copy of the workspace",
-            route_label(self.against),
+            arm_label(self.against),
             self.repeats,
             if self.repeats == 1 { "" } else { "s" },
             self.concurrency,
@@ -148,7 +160,7 @@ pub(super) fn list(comparisons: &[(String, Option<ComparePayload>)]) -> String {
             name,
             crate::record_loader::format_local_time(payload.started_ms),
             headline(&payload.task, 48),
-            route_label(&payload.against),
+            arm_label(&payload.against),
             status(&payload.status),
             arm_line(&gate),
             arm_line(&other),
@@ -184,7 +196,7 @@ fn status(status: &CompareStatus) -> String {
 pub(super) fn render(name: &str, payload: &ComparePayload) -> String {
     let gate = summarize(payload, CompareArm::Gate);
     let other = summarize(payload, CompareArm::Other);
-    let against = route_label(&payload.against);
+    let against = arm_label(&payload.against);
     let mut out = format!(
         "{name} · \"{}\" · {}",
         headline(&payload.task, 72),

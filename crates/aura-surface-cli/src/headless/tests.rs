@@ -654,6 +654,17 @@ async fn gate_routes_headless_turns_and_records_how_they_went() {
         .map(|r| r.model.to_string())
         .collect();
     assert_eq!(models, [HAIKU, SONNET], "classified, then routed");
+    {
+        let requests = requests.lock().unwrap();
+        let lead = &requests[1];
+        let tools: Vec<&str> = lead.tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(tools.contains(&"read_file") && tools.contains(&"run_command"));
+        assert!(
+            !tools.contains(&"write_file") && !tools.contains(&"edit_file"),
+            "the headless lead delegates its edits: {tools:?}"
+        );
+        assert!(lead.system.contains("<gate_lead>"));
+    }
     let (agent, _) = parse_session_id(&report.session_id, AgentId::generate()).unwrap();
     let entries = h.hub.factory.store.scan_record(agent, 1, 1_000).unwrap();
     let prompts: Vec<_> = entries

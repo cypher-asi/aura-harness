@@ -24,6 +24,7 @@ mod gate_view;
 pub(crate) mod handlers;
 pub(crate) mod host;
 pub(crate) mod hud;
+pub(crate) mod lead;
 pub(crate) mod modes;
 pub(crate) mod notices;
 pub(crate) mod os_processes;
@@ -34,6 +35,7 @@ mod rewind;
 pub(crate) mod run_command;
 pub(crate) mod steering;
 pub(crate) mod subagents;
+mod task_check;
 pub(crate) mod trace;
 pub(crate) mod turns;
 
@@ -618,7 +620,7 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
                 prompt: (!shown).then(|| prompt.text.clone()),
             })
             .await;
-            let (agent_loop, tools, recorder) = prepare_turn(state, &session).await;
+            let (agent_loop, tools, recorder) = prepare_turn(state, &mut session).await;
             let gate = gate_turn(state, &agent_loop).map(Box::new);
             let routing = Box::new(routing(state, &agent_loop));
             if let Some(rec) = &recorder {
@@ -680,7 +682,7 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
 /// its conversation's run when tracing is on.
 async fn prepare_turn(
     state: &mut LoopState<'_>,
-    session: &AgentSession,
+    session: &mut AgentSession,
 ) -> (AgentLoop, Vec<ToolDefinition>, Option<Arc<RunRecorder>>) {
     for problem in subagents::lock(&state.hub.definitions).reload() {
         warn!(%problem, "Skipping agent definition");
@@ -689,10 +691,7 @@ async fn prepare_turn(
     state.sync_turn_base();
     let workspace = session.kernel.agent_workspace();
     let agent_id = session.agent_id();
-    let (mut config, tools) =
-        state
-            .hub
-            .agent_turn(agent_id, session.definition.as_deref(), &workspace);
+    let (mut config, tools) = state.hub.lead_turn(session);
     state.hub.send_instructions(agent_id, &workspace).await;
     state
         .hub

@@ -8,6 +8,12 @@
 //!
 //! Only the file tools are seen (through [`FileChangeHook`]); files changed
 //! by shell commands are neither checkpointed nor restored.
+//!
+//! Separately, one subtask's attempt can be watched
+//! ([`FileCheckpoints::begin_attempt`]): what each file held before the
+//! attempt (or a subagent of it) first changed it is kept in memory, so
+//! the attempt's changes can be put back ([`AttemptFiles::restore`])
+//! before it is retried.
 
 use crate::event_loop::agent_events::AgentUi;
 use async_trait::async_trait;
@@ -108,6 +114,47 @@ struct Inner {
     root: PathBuf,
     /// The turn each agent is running, if any
     open: Mutex<HashMap<AgentId, TurnManifest>>,
+    /// The files each watched attempt changed, with what they held before
+    attempts: Mutex<HashMap<AgentId, AttemptFiles>>,
+}
+
+/// The files one attempt changed, each with what it held before (`None`
+/// when it did not exist), in the order they were first changed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AttemptFiles(Vec<(PathBuf, Option<Vec<u8>>)>);
+
+impl AttemptFiles {
+    /// The files, in the order they were first changed.
+    pub fn paths(&self) -> impl Iterator<Item = &Path> {
+        self.0.iter().map(|(path, _)| path.as_path())
+    }
+
+    /// Whether the attempt changed no file.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Put every file back as it was before the attempt: written back, or
+    /// removed if it didn't exist.
+    #[must_use]
+    pub fn restore(&self) -> RestoreReport {
+        let mut report = RestoreReport::default();
+        for (path, before) in &self.0 {
+            let restored = match before {
+                Some(bytes) => write_file(path, bytes),
+                None => match std::fs::remove_file(path) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+                    _ => Ok(()),
+                },
+            };
+            match restored {
+                Ok(()) => report.restored.push(path.clone()),
+                Err(e) => report.failed.push((path.clone(), e.to_string())),
+            }
+        }
+        report
+    }
 }
 
 impl FileCheckpoints {
@@ -118,6 +165,7 @@ impl FileCheckpoints {
             inner: Arc::new(Inner {
                 root: data_dir.join("checkpoints"),
                 open: Mutex::new(HashMap::new()),
+                attempts: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -182,6 +230,20 @@ impl FileCheckpoints {
         lock(&self.inner.open).remove(&agent);
     }
 
+    /// Keep what each file held before `agent`, or an agent it spawns,
+    /// first changes it, until [`Self::take_attempt`].
+    pub fn begin_attempt(&self, agent: AgentId) {
+        lock(&self.inner.attempts).insert(agent, AttemptFiles::default());
+    }
+
+    /// Stop watching `agent`'s attempt and return the files it changed.
+    #[must_use]
+    pub fn take_attempt(&self, agent: AgentId) -> AttemptFiles {
+        lock(&self.inner.attempts)
+            .remove(&agent)
+            .unwrap_or_default()
+    }
+
     /// The session of the turn `agent` is running, if it is running one.
     #[must_use]
     pub fn open_session(&self, agent: AgentId) -> Option<u64> {
@@ -213,6 +275,15 @@ impl FileCheckpoints {
     /// turn of the first agent in `chain` that has one, unless that turn
     /// already saved it.
     pub fn note_before(&self, chain: &[AgentId], path: &Path, content: Option<&[u8]>) {
+        for agent in chain {
+            if let Some(files) = lock(&self.inner.attempts).get_mut(agent) {
+                if !files.0.iter().any(|(seen, _)| seen == path) {
+                    files
+                        .0
+                        .push((path.to_path_buf(), content.map(<[u8]>::to_vec)));
+                }
+            }
+        }
         let owner = {
             let open = lock(&self.inner.open);
             let Some(owner) = chain.iter().copied().find(|a| open.contains_key(a)) else {
@@ -592,6 +663,45 @@ mod tests {
         let report = files.restore(agent, &turns);
         assert!(report.failed.is_empty(), "{report:?}");
         assert_eq!(std::fs::read_to_string(&kept).unwrap(), "original\n");
+    }
+
+    #[tokio::test]
+    async fn an_attempt_and_its_subagents_changes_can_be_put_back() {
+        let (_dir, files, attempt, ws) = setup();
+        let nested = AgentId::generate();
+        let outsider = files.hook(vec![AgentId::generate()], None);
+        let kept = ws.join("kept.txt");
+        let created = ws.join("created.txt");
+        let other = ws.join("other.txt");
+        std::fs::write(&kept, "original\n").unwrap();
+
+        files.begin_attempt(attempt);
+        change(&files.hook(vec![attempt], None), &kept, Some("one\n")).await;
+        change(
+            &files.hook(vec![nested, attempt], None),
+            &kept,
+            Some("two\n"),
+        )
+        .await;
+        change(
+            &files.hook(vec![nested, attempt], None),
+            &created,
+            Some("new\n"),
+        )
+        .await;
+        change(&outsider, &other, Some("not ours\n")).await;
+        let changed = files.take_attempt(attempt);
+        assert_eq!(
+            changed.paths().collect::<Vec<_>>(),
+            [kept.as_path(), created.as_path()]
+        );
+
+        let report = changed.restore();
+        assert!(report.failed.is_empty(), "{report:?}");
+        assert_eq!(std::fs::read_to_string(&kept).unwrap(), "original\n");
+        assert!(!created.exists());
+        assert!(other.exists(), "files of other work are left alone");
+        assert!(files.take_attempt(attempt).is_empty());
     }
 
     #[test]

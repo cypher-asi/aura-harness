@@ -28,7 +28,7 @@ use super::subagents::{lock, AgentHub, ArmRouting};
 use super::turns::{ended_signal, record_prompt};
 use crate::agent_registry::RegisteredAgent;
 use aura_agent::AgentLoop;
-use aura_agent_gate::compare::{list_price, run_name, tally, Schedule};
+use aura_agent_gate::compare::{list_price, run_name, tally, Opponent, Schedule};
 use aura_agent_gate::{judge, Candidate};
 use aura_agent_kernel::Kernel;
 use aura_core_types::{
@@ -73,8 +73,10 @@ pub(super) struct ComparePlan {
     pub task: String,
     /// Plan file each run builds, relative to the workspace
     pub plan: Option<String>,
-    /// Model the other arm is pinned to
-    pub against: String,
+    /// What the other arm runs on
+    pub against: Opponent,
+    /// Whether the Gate arm's lead must delegate
+    pub delegate: bool,
     /// Model that judges
     pub judge: String,
     pub repeats: u32,
@@ -172,7 +174,7 @@ pub(super) async fn run(
         system_kind: SystemKind::Compare,
         task: plan.task.clone(),
         plan: plan.plan.clone(),
-        against: plan.against.clone(),
+        against: plan.against.label().to_string(),
         repeats: plan.repeats,
         check: plan.check.clone(),
         budget_usd: plan.budget_usd,
@@ -457,15 +459,18 @@ async fn run_turn(
         PermissionMode::Unrestricted,
         &hub.tool_names(),
     );
-    hub.begin_compare_run(
-        agent_id,
-        match arm {
-            CompareArm::Gate => ArmRouting::Gate(plan.candidates.clone()),
-            CompareArm::Other => ArmRouting::Pinned(plan.against.clone()),
-        },
-    );
+    let gate_routed = |delegate| ArmRouting::Gate {
+        candidates: plan.candidates.clone(),
+        delegate,
+    };
+    let routing = match (arm, &plan.against) {
+        (CompareArm::Gate, _) => gate_routed(plan.delegate),
+        (CompareArm::Other, Opponent::GateNoDelegate) => gate_routed(false),
+        (CompareArm::Other, Opponent::Model(model)) => ArmRouting::Pinned(model.clone()),
+    };
+    hub.begin_compare_run(agent_id, routing.clone());
     let workdir = session.kernel.agent_workspace();
-    let (mut config, tools) = hub.agent_turn(agent_id, None, &workdir);
+    let (mut config, tools) = hub.lead_turn(&mut session);
     config.observers.clear();
     if let Some(path) = plan.plan.as_deref().filter(|path| is_plan_path(path)) {
         if let Ok(plan_file) = PlanFile::load(&workdir.join(path)) {
@@ -489,12 +494,12 @@ async fn run_turn(
         )
         .await
     };
-    let routed_to = match arm {
-        CompareArm::Gate => hub
+    let routed_to = match routing {
+        ArmRouting::Gate { .. } => hub
             .gate
             .redecide(RouteLevel::Turn, category, &plan.candidates)
             .map(|decision| decision.model.id),
-        CompareArm::Other => Some(plan.against.clone()),
+        ArmRouting::Pinned(model) => Some(model),
     };
     if let Some(model) = routed_to.filter(|model| *model != config.model) {
         hub.model_limits().configure(&mut config, &model);

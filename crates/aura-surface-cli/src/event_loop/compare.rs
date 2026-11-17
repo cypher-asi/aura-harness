@@ -16,7 +16,7 @@ use super::handlers::system_message;
 use super::subagents::lock;
 use super::LoopState;
 use aura_agent_gate::compare::{
-    default_against, estimate, parse, resolve_against, CompareCommand, CompareRequest,
+    default_against, estimate, parse, resolve_opponent, CompareCommand, CompareRequest, Opponent,
     DEFAULT_CONCURRENCY,
 };
 use aura_agent_kernel::Kernel;
@@ -247,12 +247,20 @@ async fn prepare(
         );
     }
     let against = match request.against.as_deref() {
-        Some(query) => resolve_against(query, &candidates)?,
-        None => default_against(&candidates).ok_or("No model to compare Gate with")?,
-    }
-    .id
-    .clone();
-    let judge = default_against(&candidates).map_or_else(|| against.clone(), |c| c.id.clone());
+        Some(query) => resolve_opponent(query, &candidates)?,
+        None => Opponent::Model(
+            default_against(&candidates)
+                .ok_or("No model to compare Gate with")?
+                .id
+                .clone(),
+        ),
+    };
+    let judge =
+        default_against(&candidates).map_or_else(|| against.label().to_string(), |c| c.id.clone());
+    // Against Gate without enforced delegation, Gate's arm always enforces
+    // it, whatever AURA_GATE_DELEGATE says, so the comparison measures
+    // delegation itself.
+    let delegate = against == Opponent::GateNoDelegate || state.hub.gate.settings().delegate;
     let check = request.check.clone().or_else(|| {
         crate::runner::post_edit_check_from_env()
             .resolve(&workspace)
@@ -271,10 +279,15 @@ async fn prepare(
         &mut || 1.0,
     )
     .map(|decision| decision.model.id);
+    let other_model = match &against {
+        Opponent::Model(model) => model.clone(),
+        Opponent::GateNoDelegate => expected.clone().unwrap_or_else(|| judge.clone()),
+    };
     let plan = ComparePlan {
         task,
         plan: request.plan,
         against,
+        delegate,
         judge,
         repeats: request.repeats,
         check,
@@ -289,15 +302,15 @@ async fn prepare(
     let text = EstimateView {
         task: &plan.task,
         gate_model: expected.as_deref(),
-        against: &plan.against,
+        against: plan.against.label(),
         judge: &plan.judge,
         repeats: plan.repeats,
         check: plan.check.as_deref(),
         budget_usd: plan.budget_usd,
         concurrency: plan.concurrency,
         estimate: estimate(
-            expected.as_deref().unwrap_or(&plan.against),
-            &plan.against,
+            expected.as_deref().unwrap_or(&other_model),
+            &other_model,
             &plan.judge,
             plan.repeats,
         ),
@@ -328,7 +341,7 @@ async fn start(state: &mut LoopState<'_>) -> Result<String, String> {
             .map_err(|e| format!("Could not register the comparison: {e:#}"))?
     };
     state.hub.send_agent_list().await;
-    info!(compare = %host.name, repeats = plan.repeats, against = %plan.against, "Starting a comparison");
+    info!(compare = %host.name, repeats = plan.repeats, against = %plan.against.label(), "Starting a comparison");
     let text = format!(
         "{} started: {} run{} per arm, up to {} at a time; they show in the Agents panel. \
          /compare cancel stops it.",

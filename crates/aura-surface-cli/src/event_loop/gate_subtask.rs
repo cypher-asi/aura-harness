@@ -7,6 +7,10 @@
 //! The model stays pinned (still classified and recorded) for a permanent
 //! agent that names its own model, a council member, a model given in the
 //! `task` call, and every subtask when the user pinned the main model.
+//!
+//! A subtask Gate routed whose attempt failed is retried once on the next
+//! stronger model; the retry is recorded with route reason `escalate`,
+//! which Gate's table does not count.
 
 use super::agents::AgentSession;
 use super::gate_live::GateLive;
@@ -66,6 +70,9 @@ pub(super) struct SubtaskGate {
     pub live: Arc<GateLive>,
     /// Whether Gate may explore; off under the Gate arm of `/compare`
     pub explore: bool,
+    /// Set for the retry of a failed attempt: where it goes, and the
+    /// first attempt's category
+    pub escalation: Option<(Decision, PromptCategory)>,
 }
 
 impl SubtaskGate {
@@ -89,6 +96,16 @@ impl SubtaskGate {
             category: None,
             shown: None,
         };
+        if let Some((decision, category)) = &self.escalation {
+            info!(kind = %self.kind, model = %decision.model.id, %category, "Gate retries the subtask on a stronger model");
+            if config.model != decision.model.id {
+                self.limits.configure(config, &decision.model.id);
+            }
+            label.category = Some(*category);
+            label.shown = Some(route_line(decision, *category));
+            label.route = decision.route(RouteLevel::Subtask);
+            return label;
+        }
         let Some(candidates) = &self.candidates else {
             return label;
         };

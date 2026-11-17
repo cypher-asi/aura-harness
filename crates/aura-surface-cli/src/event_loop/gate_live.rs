@@ -133,6 +133,30 @@ impl GateLive {
         Some(decision)
     }
 
+    /// Where a subtask asking for `category`, whose attempt on `failed`
+    /// failed, is retried among `candidates` (see
+    /// [`aura_agent_gate::escalate`]), remembered for `/gate`. `None`
+    /// when no candidate is stronger.
+    pub(crate) fn escalate(
+        &self,
+        category: PromptCategory,
+        failed: &str,
+        candidates: &[Candidate],
+    ) -> Option<Decision> {
+        let decision = {
+            let stats = lock(&self.stats);
+            aura_agent_gate::escalate(&stats, RouteLevel::Subtask, failed, candidates)?
+        };
+        self.remember(RecentRoute {
+            ts_ms: super::processes::now_ms(),
+            level: RouteLevel::Subtask,
+            category,
+            model: decision.model.route_label(),
+            reason: decision.reason,
+        });
+        Some(decision)
+    }
+
     fn remember(&self, route: RecentRoute) {
         let mut recent = lock(&self.recent);
         if recent.len() == RECENT_DECISIONS {
