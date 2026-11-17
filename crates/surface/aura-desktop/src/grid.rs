@@ -367,6 +367,8 @@ pub struct Screen {
     backdrop: Cache,
     /// Each row's drawing, by row
     lines: Vec<Cache>,
+    /// What the rows' drawings share on the GPU
+    group: Option<canvas::Group>,
 }
 
 impl Screen {
@@ -380,7 +382,12 @@ impl Screen {
         let changed = if cols != self.cols || rows != self.rows {
             self.cols = cols;
             self.rows = rows;
-            self.lines = (0..rows).map(|_| Cache::new()).collect();
+            // In one group, so the GPU renderer keeps one glyph atlas for
+            // all the rows. A cache on its own has its own, built anew
+            // whenever its row changes: every row's, on a frame that
+            // scrolls.
+            let group = *self.group.get_or_insert_with(canvas::Group::unique);
+            self.lines = (0..rows).map(|_| Cache::with_group(group)).collect();
             self.backdrop.clear();
             self.lines.len()
         } else {
