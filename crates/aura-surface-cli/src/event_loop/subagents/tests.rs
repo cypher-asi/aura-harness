@@ -114,9 +114,11 @@ fn task_tool_lists_permanent_agents() {
             "engineer",
             "explorer",
             "frontend-engineer",
+            "implement",
             "product-manager",
             "reviewer",
             "rust-engineer",
+            "tests",
             "ui-designer",
             "web-designer"
         ])
