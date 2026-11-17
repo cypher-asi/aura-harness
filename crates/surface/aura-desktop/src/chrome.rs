@@ -11,6 +11,9 @@
 // Cell coordinates become pixel positions.
 #![allow(clippy::cast_precision_loss)]
 
+#[allow(dead_code)] // until the bare shell draws with it
+mod quads;
+
 use crate::grid::{self, Metrics, Palette};
 use crate::tab_bar::{label_size, outline, unit};
 use crate::theme;

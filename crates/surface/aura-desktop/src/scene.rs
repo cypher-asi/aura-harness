@@ -9,6 +9,7 @@
 //! holds. A row that scrolled is the same quads at another height, and
 //! a row that comes back is not shaped again.
 
+use crate::geom::{rgba, Color};
 use aura_ui_terminal::ProseRow;
 use ratatui::buffer::Cell;
 use std::collections::HashMap;
@@ -59,12 +60,27 @@ impl Quad {
         })
     }
 
+    /// The first column right of the quad.
+    pub const fn right(&self) -> i32 {
+        self.x.saturating_add_unsigned(self.w)
+    }
+
+    /// The first row below the quad.
+    pub const fn bottom(&self) -> i32 {
+        self.y.saturating_add_unsigned(self.h)
+    }
+
     /// The quad `rows` pixels lower.
     #[must_use]
     pub const fn lowered(mut self, rows: i32) -> Self {
         self.y += rows;
         self
     }
+}
+
+/// A rectangle from its corner and its size, in `color`.
+pub fn fill(out: &mut Vec<Quad>, x: f32, y: f32, width: f32, height: f32, color: Color) {
+    out.extend(Quad::solid(x, y, x + width, y + height, rgba(color)));
 }
 
 /// The first pixel whose center is at or after `edge`.
@@ -119,11 +135,36 @@ impl Flow {
     }
 }
 
+/// The quads of one thing drawn, in two layers: every `under` quad on
+/// screen is painted before any `over` quad, so text is never covered by
+/// the background of the row below or the fill of a box drawn after it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Layers {
+    /// Backgrounds, lines and drawn shapes
+    pub under: Vec<Quad>,
+    /// Glyphs
+    pub over: Vec<Quad>,
+}
+
+impl Layers {
+    pub fn clear(&mut self) {
+        self.under.clear();
+        self.over.clear();
+    }
+
+    /// Add `other`, `rows` pixels lower.
+    pub fn extend_lowered(&mut self, other: &Self, rows: i32) {
+        let lowered = |quad: &Quad| quad.lowered(rows);
+        self.under.extend(other.under.iter().map(lowered));
+        self.over.extend(other.over.iter().map(lowered));
+    }
+}
+
 struct CachedRow {
     cells: Vec<Cell>,
     flow: Option<Flow>,
     /// With the row's top at 0
-    quads: Vec<Quad>,
+    quads: Layers,
     /// The frame that last drew the row
     used: u64,
 }
@@ -173,8 +214,8 @@ impl RowCache {
         &mut self,
         cells: &[Cell],
         prose: Option<&ProseRow>,
-        build: impl FnOnce(&mut Vec<Quad>),
-    ) -> &[Quad] {
+        build: impl FnOnce(&mut Layers),
+    ) -> &Layers {
         let mut hasher = DefaultHasher::new();
         cells.hash(&mut hasher);
         if let Some(prose) = prose {
@@ -188,7 +229,7 @@ impl RowCache {
             .get(&key)
             .is_some_and(|row| row.holds(cells, prose));
         if !hit {
-            let mut quads = Vec::new();
+            let mut quads = Layers::default();
             build(&mut quads);
             self.built += 1;
             self.rows.insert(
@@ -258,6 +299,12 @@ mod tests {
         assert!(Quad::solid(1.6, 0.0, 2.4, 1.0, RED).is_none(), "no center");
         assert!(Quad::solid(0.0, 0.0, 4.0, 4.0, [1, 2, 3, 0]).is_none());
         assert_eq!(quad.lowered(18).y, 21);
+
+        let mut layers = Layers::default();
+        layers.over.push(quad);
+        let mut frame = Layers::default();
+        frame.extend_lowered(&layers, 10);
+        assert_eq!((frame.under.len(), frame.over[0].y), (0, 13));
     }
 
     #[test]
@@ -268,9 +315,10 @@ mod tests {
         for cells in [&a, &b, &a, &a] {
             let quads = cache.row(cells, None, |out| {
                 builds += 1;
-                out.push(mark(7));
+                out.under.push(mark(7));
             });
-            assert_eq!(quads, [mark(7)]);
+            assert_eq!(quads.under, [mark(7)]);
+            assert!(quads.over.is_empty());
         }
         assert_eq!(builds, 2);
         assert_eq!(cache.finish_frame(), 2);

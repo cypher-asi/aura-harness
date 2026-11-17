@@ -9,6 +9,9 @@
 // Label lengths become pixel widths.
 #![allow(clippy::cast_precision_loss)]
 
+#[allow(dead_code)] // until the bare shell draws with it
+pub(crate) mod quads;
+
 use crate::grid::{Metrics, Palette};
 use crate::theme;
 use iced::alignment::Vertical;

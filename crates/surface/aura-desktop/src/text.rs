@@ -8,6 +8,8 @@
 //! show it. Each glyph is rasterized once per size and sub-pixel position
 //! into the [`Atlas`], which drawn shapes share.
 
+use crate::geom::Point;
+use crate::scene::{Fill, Quad};
 use crate::theme;
 use cosmic_text::{
     fontdb, Attrs, Buffer, CacheKey, Family as FontFamily, FontSystem, LayoutGlyph, Metrics, Style,
@@ -25,8 +27,12 @@ pub use cosmic_text::Shaping;
 const MAX_RUNS: usize = 4096;
 /// Measured widths kept.
 const MAX_WIDTHS: usize = 8192;
-/// Line height of text that doesn't name one, in ems.
-pub const LINE_EM: f32 = 1.3;
+/// Line height prose is measured at, in ems. A width doesn't depend on
+/// it; it is the one iced measures with.
+const LINE_EM: f32 = 1.3;
+/// Line height of a label on a title bar or the tab bar, in ems: what
+/// text drawn on an iced canvas gets unless it names another.
+pub const LABEL_LINE_EM: f32 = 1.2;
 
 /// Which of the two families a run is set in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -79,6 +85,31 @@ impl Face {
         };
         Attrs::new().family(family).weight(weight).style(style)
     }
+}
+
+/// Where the point a label is written at is on its line, sideways.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Align {
+    Left,
+    Center,
+    Right,
+}
+
+/// A line of text to write.
+#[derive(Debug, Clone, Copy)]
+pub struct Label<'a> {
+    pub text: &'a str,
+    pub face: Face,
+    pub size: f32,
+    pub line_height: f32,
+    pub shaping: Shaping,
+    pub align: Align,
+    /// Whether the point is the middle of the line's height, not its top
+    pub middle: bool,
+    pub color: [u8; 4],
+    /// Whether the line is on a grid row painted with its top at 0, to
+    /// be lowered to where the row is
+    pub on_row: bool,
 }
 
 /// One line of shaped text.
@@ -491,6 +522,56 @@ impl TextSystem {
         buffer
     }
 
+    /// The glyphs of `label` as quads, written at `at`.
+    ///
+    /// Glyphs land on the pixels iced puts them on. Each is placed by
+    /// cutting its height down to a whole pixel, which for a height
+    /// below 0 rounds the other way; a row's text is at 0 here and far
+    /// below it on screen, so it is placed that far down and moved back.
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn write(&mut self, out: &mut Vec<Quad>, label: &Label<'_>, at: Point) {
+        /// How far down a row's text is placed, in whole pixels
+        const LIFT: u16 = 4096;
+        if label.color[3] == 0 || label.text.is_empty() {
+            return;
+        }
+        let run = self.shape(
+            label.text,
+            label.face,
+            label.size,
+            label.line_height,
+            label.shaping,
+        );
+        let x = match label.align {
+            Align::Left => at.x,
+            Align::Center => at.x - run.width / 2.0,
+            Align::Right => at.x - run.width,
+        };
+        let y = if label.middle {
+            at.y - run.height / 2.0
+        } else {
+            at.y
+        };
+        let lift = if label.on_row { LIFT } else { 0 };
+        let line = run.baseline.round() as i32 - i32::from(lift);
+        for glyph in &run.glyphs {
+            let placed = glyph.physical((x, y + f32::from(lift)), 1.0);
+            let Some(slot) = self.glyph(placed.cache_key) else {
+                continue;
+            };
+            out.push(Quad {
+                x: placed.x + slot.dx,
+                y: placed.y + slot.dy + line,
+                w: slot.w,
+                h: slot.h,
+                color: label.color,
+                fill: if slot.image { Fill::Image } else { Fill::Mask },
+                u: slot.u,
+                v: slot.v,
+            });
+        }
+    }
+
     /// The slot of a glyph, rasterized the first time. `None` for glyphs
     /// without pixels, like a space.
     pub fn glyph(&mut self, key: CacheKey) -> Option<Slot> {
@@ -665,6 +746,56 @@ mod tests {
         assert_eq!(text.glyph(glyph.cache_key), Some(slot));
         let space = run.glyphs[2].physical((0.0, 0.0), 1.0);
         assert_eq!(text.glyph(space.cache_key), None);
+    }
+
+    #[test]
+    fn a_label_is_written_the_same_on_a_row_and_on_the_screen() {
+        let mut text = TextSystem::new();
+        let label = Label {
+            text: "Agé",
+            face: Face::mono(false),
+            size: 14.0,
+            line_height: 18.0,
+            shaping: Shaping::Advanced,
+            align: Align::Left,
+            middle: false,
+            color: [1, 2, 3, 255],
+            on_row: false,
+        };
+        let (mut screen, mut row) = (Vec::new(), Vec::new());
+        text.write(&mut screen, &label, Point::new(16.8, 90.0));
+        let on_row = Label {
+            on_row: true,
+            ..label
+        };
+        text.write(&mut row, &on_row, Point::new(16.8, 0.0));
+        assert_eq!(screen.len(), 3);
+        let lowered: Vec<Quad> = row.iter().map(|quad| quad.lowered(90)).collect();
+        assert_eq!(screen, lowered);
+        assert!(screen.iter().all(|q| q.fill == Fill::Mask));
+        assert!(screen.iter().all(|q| q.y >= 90 && q.y < 108), "{screen:?}");
+        assert!(screen[0].x >= 16 && screen[2].x >= 33, "{screen:?}");
+
+        // Centered both ways: around the point.
+        let mut centered = Vec::new();
+        let middle = Label {
+            align: Align::Center,
+            middle: true,
+            ..label
+        };
+        text.write(&mut centered, &middle, Point::new(100.0, 100.0));
+        let left = centered.iter().map(|q| q.x).min().expect("glyphs");
+        let right = centered.iter().map(Quad::right).max().expect("glyphs");
+        assert!((left + right - 200).abs() <= 3, "{left}..{right}");
+        assert!(centered.iter().all(|q| q.y > 90 && q.y < 110));
+
+        let mut none = Vec::new();
+        let clear = Label {
+            color: [0; 4],
+            ..label
+        };
+        text.write(&mut none, &clear, Point::new(0.0, 0.0));
+        assert!(none.is_empty());
     }
 
     #[test]
