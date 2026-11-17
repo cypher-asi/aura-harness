@@ -34,7 +34,7 @@ use std::ops::Range;
 use std::sync::{LazyLock, Mutex, PoisonError};
 use unicode_width::UnicodeWidthStr;
 
-/// Space kept clear around the grid, in pixels.
+/// Space kept clear around the grid, in pixels of a plain display.
 pub const PAD: f32 = 6.0;
 /// Prose runs whose widths are kept before the measurements start over.
 const MAX_MEASURED: usize = 4096;
@@ -149,13 +149,23 @@ impl Backend for GridBackend {
 pub struct Metrics {
     pub font_size: f32,
     pub cell: Size,
+    /// Space kept clear around the grid and above the tab bar
+    pub pad: f32,
 }
 
 impl Metrics {
     pub fn new(font_size: f32) -> Self {
+        Self::on_display(font_size, 1.0)
+    }
+
+    /// Sizes at `font_size` in the pixels of a display that has `scale`
+    /// of them to a plain display's one.
+    pub fn on_display(font_size: f32, scale: f32) -> Self {
+        let font_size = font_size * scale;
         Self {
             font_size,
             cell: theme::cell_size(font_size),
+            pad: (PAD * scale).round(),
         }
     }
 
@@ -163,7 +173,7 @@ impl Metrics {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn grid(&self, window: Size) -> (u16, u16) {
         let fit = |space: f32, cell: f32| {
-            ((space - 2.0 * PAD) / cell)
+            ((space - 2.0 * self.pad) / cell)
                 .floor()
                 .clamp(1.0, f32::from(u16::MAX)) as u16
         };

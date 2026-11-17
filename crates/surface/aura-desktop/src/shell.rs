@@ -203,7 +203,7 @@ impl Shell {
         };
         if (scale - self.scale).abs() > f32::EPSILON {
             self.scale = scale;
-            self.metrics = Metrics::new(self.font_size * scale);
+            self.metrics = Metrics::on_display(self.font_size, scale);
         }
         if size != self.window {
             self.window = size;
@@ -715,6 +715,7 @@ mod tests {
         let scene = stage.shell.frame(stage.now).clone();
         assert_eq!((scene.width, scene.height), (2640, 1720));
         assert_eq!(stage.shell.metrics.cell.height, cell.height * 2.0);
+        assert_eq!(stage.shell.metrics.pad, 12.0, "and the space around it");
         let (cols, rows) = (stage.shell.cols, stage.shell.rows);
         assert!(cols.abs_diff(grid.0) <= 1 && rows.abs_diff(grid.1) <= 1);
     }

@@ -20,8 +20,6 @@ use iced::widget::text::{Alignment, Shaping};
 use iced::{mouse, Color, Pixels, Point, Rectangle, Renderer, Size, Theme};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-/// Space above the boxes, the same as around the grid.
-const TOP: f32 = 6.0;
 /// Label characters of padding on each side of a label.
 const SIDE: f32 = 1.0;
 /// Narrowest title box worth drawing, in label characters.
@@ -65,7 +63,8 @@ pub struct Model {
 
 /// Height of the bar at this font size, in whole pixels.
 pub fn height(metrics: &Metrics) -> f32 {
-    TOP + box_height(metrics)
+    // The same space above the boxes as around the grid.
+    metrics.pad + box_height(metrics)
 }
 
 fn box_height(metrics: &Metrics) -> f32 {
@@ -110,7 +109,8 @@ impl Layout {
         let gap = (unit * 0.4).round().max(2.0);
         let boxed = |x: f32, width: f32| {
             let (left, right) = (x.round(), (x + width).round());
-            Rectangle::new(Point::new(left, TOP), Size::new(right - left, height))
+            let top = model.metrics.pad;
+            Rectangle::new(Point::new(left, top), Size::new(right - left, height))
         };
 
         let mut x = model.x;

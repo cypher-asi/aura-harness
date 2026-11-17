@@ -221,7 +221,7 @@ impl Shell {
         };
         if (new_size - size).abs() > f32::EPSILON {
             self.font_size = new_size;
-            self.metrics = Metrics::new(new_size * self.scale);
+            self.metrics = Metrics::on_display(new_size, self.scale);
             self.clear_selections();
         }
         true
