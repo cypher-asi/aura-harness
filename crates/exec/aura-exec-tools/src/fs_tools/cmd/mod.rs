@@ -1120,7 +1120,6 @@ fn parse_run_args(args: &serde_json::Value, ctx: &ToolContext) -> RunArgs {
         .or_else(|| args["command"].as_str())
         .map(String::from);
 
-    let program = args["program"].as_str().map(String::from);
     let cmd_args: Vec<String> = args["args"]
         .as_array()
         .map(|arr| {
@@ -1129,6 +1128,12 @@ fn parse_run_args(args: &serde_json::Value, ctx: &ToolContext) -> RunArgs {
                 .collect()
         })
         .unwrap_or_default();
+    // The script already runs in a shell, so a bare shell `program` next
+    // to it adds nothing.
+    let program = args["program"]
+        .as_str()
+        .filter(|p| !(shell_script.is_some() && cmd_args.is_empty() && is_shell_program(p)))
+        .map(String::from);
 
     let tty_cols = args["tty_cols"]
         .as_u64()
@@ -1171,6 +1176,11 @@ fn enforce_command_policy(args: &RunArgs, ctx: &ToolContext) -> Result<(), ToolE
         ));
     }
 
+    // A command confined to writing in the workspace (the `yolo` approval
+    // level) is already bounded by the confinement, not by which binary
+    // it starts with.
+    let bypass_allowlists = ctx.config.command.bypass_allowlists || ctx.confine_writes;
+
     if let Some(script) = &args.shell_script {
         if !args.allow_shell {
             return Err(ToolError::InvalidArguments(
@@ -1189,7 +1199,7 @@ fn enforce_command_policy(args: &RunArgs, ctx: &ToolContext) -> Result<(), ToolE
         // non-empty list switches back to strict verbatim-match
         // enforcement so operators who pin specific scripts keep
         // the original behavior.
-        if !ctx.config.command.bypass_allowlists
+        if !bypass_allowlists
             && !ctx.config.command.allowed_shell_scripts.is_empty()
             && !ctx
                 .config
@@ -1206,14 +1216,14 @@ fn enforce_command_policy(args: &RunArgs, ctx: &ToolContext) -> Result<(), ToolE
         }
         check_command_allowlist(
             script,
-            ctx.config.command.bypass_allowlists,
+            bypass_allowlists,
             &ctx.config.command.command_allowlist,
         )?;
-        if let Some(first) = script.split_whitespace().next() {
+        if let Some(first) = script_program(script) {
             check_binary_allowlist(
                 first,
                 ctx.config.command.enabled,
-                ctx.config.command.bypass_allowlists,
+                bypass_allowlists,
                 &ctx.config.command.binary_allowlist,
             )?;
         }
@@ -1234,17 +1244,60 @@ fn enforce_command_policy(args: &RunArgs, ctx: &ToolContext) -> Result<(), ToolE
 
     check_command_allowlist(
         program,
-        ctx.config.command.bypass_allowlists,
+        bypass_allowlists,
         &ctx.config.command.command_allowlist,
     )?;
     check_binary_allowlist(
         program,
         ctx.config.command.enabled,
-        ctx.config.command.bypass_allowlists,
+        bypass_allowlists,
         &ctx.config.command.binary_allowlist,
     )?;
 
     Ok(())
+}
+
+/// Shell builtins and keywords a script may start with; they run inside
+/// the shell, so there is no binary to allowlist.
+const SHELL_BUILTINS: &[&str] = &[
+    "!", ".", ":", "[", "alias", "case", "cd", "command", "echo", "eval", "exec", "exit", "export",
+    "false", "for", "if", "local", "popd", "printf", "pushd", "pwd", "read", "set", "shift",
+    "source", "test", "time", "trap", "true", "type", "ulimit", "umask", "unset", "until", "wait",
+    "while", "{",
+];
+
+/// The binary a shell script starts with, for the binary allowlist:
+/// leading `NAME=value` assignments and subshell parentheses are skipped,
+/// and a script starting with a shell builtin has none.
+fn script_program(script: &str) -> Option<&str> {
+    let word = script
+        .split_whitespace()
+        .map(|word| word.trim_start_matches('('))
+        .find(|word| !word.is_empty() && !is_env_assignment(word))?;
+    (!SHELL_BUILTINS.contains(&word)).then_some(word)
+}
+
+fn is_env_assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        let mut chars = name.chars();
+        chars
+            .next()
+            .is_some_and(|c| c == '_' || c.is_ascii_alphabetic())
+            && chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
+    })
+}
+
+/// Whether `program` names a shell interpreter, as models sometimes pass
+/// alongside a `shell_script`.
+fn is_shell_program(program: &str) -> bool {
+    let name = Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(program);
+    matches!(
+        strip_windows_executable_suffix(name),
+        "sh" | "bash" | "zsh" | "dash" | "cmd" | "powershell" | "pwsh"
+    )
 }
 
 /// Spawn the actual process via `spawn_blocking_tool`, dispatching to

@@ -911,6 +911,73 @@ async fn test_cmd_run_tool_shell_script_mutually_exclusive_with_program() {
     }
 }
 
+#[test]
+fn test_script_program_skips_assignments_subshells_and_builtins() {
+    assert_eq!(script_program("cargo test"), Some("cargo"));
+    assert_eq!(
+        script_program("CARGO_TARGET_DIR=/tmp/t RUST_LOG=1 cargo test"),
+        Some("cargo")
+    );
+    assert_eq!(script_program("(git status)"), Some("git"));
+    assert_eq!(script_program("cd crates && find . -name '*.rs'"), None);
+    assert_eq!(script_program("FOO=bar export FOO"), None);
+    assert_eq!(script_program("   "), None);
+}
+
+#[test]
+fn test_is_shell_program() {
+    assert!(is_shell_program("sh"));
+    assert!(is_shell_program("/usr/bin/bash"));
+    assert!(!is_shell_program("cargo"));
+}
+
+#[cfg(not(windows))]
+#[tokio::test]
+async fn test_cmd_run_tool_shell_script_ignores_bare_shell_program() {
+    let config = command_config(crate::CommandPolicy {
+        enabled: true,
+        allow_shell: true,
+        binary_allowlist: vec!["echo".to_string()],
+        ..Default::default()
+    });
+    let (ctx, _dir) = tool_ctx(config);
+
+    let result = CmdRunTool
+        .execute(
+            &ctx,
+            serde_json::json!({ "program": "sh", "shell_script": "echo bare_shell_ok" }),
+        )
+        .await
+        .expect("a bare shell program next to shell_script must be ignored");
+
+    assert!(result.ok, "expected success, got {result:?}");
+    assert!(String::from_utf8_lossy(&result.stdout).contains("bare_shell_ok"));
+}
+
+#[cfg(not(windows))]
+#[tokio::test]
+async fn test_cmd_run_tool_shell_script_starting_with_builtin_or_assignment_runs() {
+    let config = command_config(crate::CommandPolicy {
+        enabled: true,
+        allow_shell: true,
+        binary_allowlist: vec!["sh".to_string()],
+        ..Default::default()
+    });
+    let (ctx, _dir) = tool_ctx(config);
+
+    for (script, expected) in [
+        ("cd . && echo builtin_ok", "builtin_ok"),
+        ("GREETING=assign_ok sh -c 'echo $GREETING'", "assign_ok"),
+    ] {
+        let result = CmdRunTool
+            .execute(&ctx, serde_json::json!({ "shell_script": script }))
+            .await
+            .unwrap_or_else(|e| panic!("{script} must run: {e:?}"));
+        assert!(result.ok, "{script}: {result:?}");
+        assert!(String::from_utf8_lossy(&result.stdout).contains(expected));
+    }
+}
+
 #[tokio::test]
 async fn test_cmd_run_tool_shell_script_runs_when_allowlisted() {
     // Use a first-token that both PATH lookups can resolve:
@@ -1343,7 +1410,27 @@ async fn test_confined_run_command_cannot_write_above_the_workspace() {
     }
     assert!(!parent.path().join("outside").exists());
 
+    // The confinement, not the binary allowlist, bounds confined commands.
+    let result = CmdRunTool
+        .execute(
+            &ctx,
+            serde_json::json!({ "program": "mkdir", "args": ["unlisted"] }),
+        )
+        .await
+        .unwrap();
+    assert!(result.ok, "{result:?}");
+    assert!(workspace.join("unlisted").is_dir());
+
     ctx.confine_writes = false;
+    let err = CmdRunTool
+        .execute(
+            &ctx,
+            serde_json::json!({ "program": "mkdir", "args": ["x"] }),
+        )
+        .await
+        .expect_err("unconfined commands keep the binary allowlist");
+    assert!(matches!(err, ToolError::Forbidden(_)), "{err:?}");
+
     let result = CmdRunTool
         .execute(
             &ctx,
