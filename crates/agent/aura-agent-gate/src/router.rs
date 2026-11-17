@@ -217,12 +217,28 @@ impl Random for SplitMix64 {
     }
 }
 
+/// How far apart two tiers are, in tiers.
+const fn tiers_apart(a: ModelTier, b: ModelTier) -> u8 {
+    const fn rank(tier: ModelTier) -> u8 {
+        match tier {
+            ModelTier::Local => 0,
+            ModelTier::Fast => 1,
+            ModelTier::Standard => 2,
+            ModelTier::Frontier => 3,
+        }
+    }
+    rank(a).abs_diff(rank(b))
+}
+
 /// `candidates` ordered by what work at `level` is expected to cost on
 /// each: local models first (they cost nothing), then by the mean cost
 /// observed at `level`, or for a model not tried there yet, its list
 /// price scaled by how observed costs compare with list prices for the
-/// models that were. Models with no price known come last; ties keep the
-/// order of `candidates`.
+/// tried models of its tier, or of the nearest tiers when none of its own
+/// was tried. Heavier work goes to stronger models, so what one tier's
+/// work costs says less about another's the further apart they are.
+/// Models with no price known come last; ties keep the order of
+/// `candidates`.
 #[must_use]
 pub fn by_expected_cost<'a>(
     stats: &GateStats,
@@ -230,21 +246,31 @@ pub fn by_expected_cost<'a>(
     candidates: &'a [Candidate],
 ) -> Vec<&'a Candidate> {
     let observed = |c: &Candidate| stats.mean_cost_usd(level, &c.id);
-    let (seen, listed) = candidates
+    // Tier, observed cost and list price of every tried model.
+    let tried: Vec<(ModelTier, f64, f64)> = candidates
         .iter()
         .filter(|c| c.backend != ModelBackend::Local)
-        .filter_map(|c| Some((observed(c)?, c.cost_usd.filter(|&p| p > 0.0)?)))
-        .fold((0.0, 0.0), |(seen, listed), (o, l)| (seen + o, listed + l));
-    let scale = if seen > 0.0 && listed > 0.0 {
-        seen / listed
-    } else {
-        1.0
+        .filter_map(|c| Some((c.tier, observed(c)?, c.cost_usd.filter(|&p| p > 0.0)?)))
+        .collect();
+    let scale = |tier: ModelTier| {
+        let nearest = tried.iter().map(|(t, ..)| tiers_apart(*t, tier)).min();
+        let (seen, listed) = tried
+            .iter()
+            .filter(|(t, ..)| Some(tiers_apart(*t, tier)) == nearest)
+            .fold((0.0, 0.0), |(seen, listed), (_, o, l)| {
+                (seen + o, listed + l)
+            });
+        if seen > 0.0 && listed > 0.0 {
+            seen / listed
+        } else {
+            1.0
+        }
     };
     let expected = |c: &Candidate| {
         if c.backend == ModelBackend::Local {
             Some(0.0)
         } else {
-            observed(c).or_else(|| c.cost_usd.map(|p| p * scale))
+            observed(c).or_else(|| c.cost_usd.map(|p| p * scale(c.tier)))
         }
     };
     let mut order: Vec<(&Candidate, Option<f64>)> =
@@ -336,6 +362,34 @@ pub fn escalate(
         explored: false,
         propensity: 1.0,
     })
+}
+
+/// What a subtask is first routed among when the agent dispatching it
+/// works on `lead`: the `candidates` below the frontier tier when `lead`
+/// is a frontier model and a standard one is among them, so the most
+/// expensive model plans the work and a cheaper one does it. Every
+/// candidate otherwise: a lead on a cheaper model already costs little,
+/// and with nothing between frontier and fast the work would drop two
+/// tiers. A failed attempt still escalates among all `candidates`.
+#[must_use]
+pub fn below_lead(candidates: &[Candidate], lead: Option<&str>) -> Vec<Candidate> {
+    let frontier = lead.is_some_and(|lead| {
+        candidates
+            .iter()
+            .find(|c| c.id == lead)
+            .map_or_else(|| infer_tier(lead), |c| c.tier)
+            == ModelTier::Frontier
+    });
+    let standard = candidates.iter().any(|c| c.tier == ModelTier::Standard);
+    if frontier && standard {
+        candidates
+            .iter()
+            .filter(|c| c.tier < ModelTier::Frontier)
+            .cloned()
+            .collect()
+    } else {
+        candidates.to_vec()
+    }
 }
 
 /// Position in `order` of the default model for `category`.
@@ -784,6 +838,98 @@ mod tests {
                 .iter()
                 .map(|c| c.id.as_str())
                 .eq([LOCAL, HAIKU, SONNET, OPUS]));
+        }
+
+        #[test]
+        fn an_untried_model_is_priced_from_the_tried_models_of_its_tier() {
+            const SONNET_5: &str = "claude/claude-sonnet-5-5";
+            const OPUS_5: &str = "claude/claude-opus-5-5";
+            let live: Vec<ModelOption> = [
+                (HAIKU, ModelTier::Fast),
+                (SONNET, ModelTier::Standard),
+                (SONNET_5, ModelTier::Standard),
+                (OPUS, ModelTier::Frontier),
+                (OPUS_5, ModelTier::Frontier),
+            ]
+            .into_iter()
+            .map(|(id, tier)| ModelOption {
+                id: id.to_string(),
+                label: id.to_string(),
+                backend: ModelBackend::Claude,
+                installed: true,
+                tier,
+            })
+            .collect();
+            let options = catalog_with_plans(LOCAL, &[], &live);
+            let plan = candidates(&options, signed_in(&[ProviderKind::Claude]), |_| false);
+
+            // Sonnet 4.6 took the light work and Opus 4.7 the heavy, so
+            // Sonnet's turns cost far less against list price than Opus's.
+            let mut log = Log::default();
+            let signal = OutcomeSignal::ChecksPassed;
+            log.turn(PromptCategory::SmallChange, SONNET, signal, 0.02);
+            log.turn(PromptCategory::Debugging, OPUS, signal, 0.60);
+            let stats = log.stats();
+            let order: Vec<&str> = by_expected_cost(&stats, RouteLevel::Turn, &plan)
+                .into_iter()
+                .map(|c| c.id.as_str())
+                .collect();
+            assert_eq!(
+                order,
+                [HAIKU, SONNET_5, SONNET, OPUS_5, OPUS],
+                "the untried fast model is priced from the standard tier's turns"
+            );
+            assert_eq!(
+                chosen(&stats, PromptCategory::SmallChange, &plan).0,
+                SONNET_5,
+                "the cheaper standard model stays the default"
+            );
+            assert_eq!(chosen(&stats, PromptCategory::Debugging, &plan).0, OPUS_5);
+        }
+
+        #[test]
+        fn a_frontier_lead_keeps_its_subtasks_below_its_tier() {
+            let ids = |among: Vec<Candidate>| -> Vec<String> {
+                among.into_iter().map(|c| c.id).collect()
+            };
+            let claude = claude();
+            assert_eq!(
+                ids(below_lead(&claude, Some(OPUS))),
+                [LOCAL, HAIKU, SONNET],
+                "nothing of the lead's tier"
+            );
+            let among = below_lead(&claude, Some(OPUS));
+            let empty = GateStats::default();
+            assert_eq!(
+                chosen(&empty, PromptCategory::Debugging, &among).0,
+                SONNET,
+                "heavy subtasks go to the strongest model left"
+            );
+            assert_eq!(
+                escalate(&empty, RouteLevel::Subtask, SONNET, &claude).map(|d| d.model.id),
+                Some(OPUS.to_string()),
+                "a failed attempt may still go up to the lead's tier"
+            );
+
+            assert_eq!(below_lead(&claude, Some(SONNET)), claude);
+            assert_eq!(below_lead(&claude, Some(HAIKU)), claude);
+            assert_eq!(below_lead(&claude, None), claude, "an unknown lead");
+            assert_eq!(
+                below_lead(&claude, Some("claude/claude-opus-5-5")).len(),
+                3,
+                "a lead outside the candidates is placed by its name"
+            );
+
+            let no_standard: Vec<Candidate> = claude
+                .iter()
+                .filter(|c| c.tier != ModelTier::Standard)
+                .cloned()
+                .collect();
+            assert_eq!(
+                below_lead(&no_standard, Some(OPUS)),
+                no_standard,
+                "without a standard model the work stays where it was"
+            );
         }
 
         #[test]

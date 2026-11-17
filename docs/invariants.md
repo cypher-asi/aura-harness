@@ -747,8 +747,9 @@ already ran before the verdict reached this seam.
 
 ### 4.c Gate: the lead's tools and routed subtasks
 
-Under `gate`, with `AURA_GATE_DELEGATE` on, the user's own agent leads and
-its tools only narrow:
+Under `gate`, with `AURA_GATE_DELEGATE` on, the user's own agent leads the
+turns classified `multi_file_change` or `planning`
+(`aura_agent_gate::lead::leads`), and on those turns its tools only narrow:
 
 - `write_file`, `edit_file`, `delete_file`, `apply_patch`, `git_commit` and
   `git_commit_push` are dropped from the turn's tool list
@@ -765,8 +766,9 @@ Nothing here widens a permission. The mode gate, the approval level, the
 policy and the command guardrails run unchanged beneath the lead's limits:
 the command allowlist only narrows what the approval level lets run, so a
 refused call is still policy-checked (and may ask at `ask` or `strict`)
-before its refusal is recorded. Permanent-agent instances, agents on a
-pinned model and `AURA_GATE_DELEGATE=off` get no lead profile.
+before its refusal is recorded. Turns of any other category,
+permanent-agent instances, agents on a pinned model and
+`AURA_GATE_DELEGATE=off` get no lead limits.
 
 Routing a subtask only sets the model of the child's turn before it
 starts. The child is an ordinary permanent-agent instance with its own

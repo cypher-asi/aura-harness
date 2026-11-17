@@ -643,8 +643,8 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
                 prompt: (!shown).then(|| prompt.text.clone()),
             })
             .await;
-            let (agent_loop, tools, recorder) = prepare_turn(state, &mut session).await;
-            let gate = gate_turn(state, &agent_loop).map(Box::new);
+            let (agent_loop, tools, recorder, lead) = prepare_turn(state, &mut session).await;
+            let gate = gate_turn(state, &agent_loop, lead).map(Box::new);
             let routing = Box::new(routing(state, &agent_loop));
             if let Some(rec) = &recorder {
                 rec.begin_turn(&prompt.text);
@@ -707,12 +707,18 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
     agents::send_agent_list(state).await;
 }
 
-/// The agent loop and tools for a turn of `session`, and the recorder of
-/// its conversation's run when tracing is on.
+/// The agent loop and tools for a turn of `session`, the recorder of its
+/// conversation's run when tracing is on, and how the turn leads when
+/// its prompt asks for work a lead takes.
 async fn prepare_turn(
     state: &mut LoopState<'_>,
     session: &mut AgentSession,
-) -> (AgentLoop, Vec<ToolDefinition>, Option<Arc<RunRecorder>>) {
+) -> (
+    AgentLoop,
+    Vec<ToolDefinition>,
+    Option<Arc<RunRecorder>>,
+    Option<subagents::LeadProfile>,
+) {
     for problem in subagents::lock(&state.hub.definitions).reload() {
         warn!(%problem, "Skipping agent definition");
     }
@@ -720,7 +726,7 @@ async fn prepare_turn(
     state.sync_turn_base();
     let workspace = session.kernel.agent_workspace();
     let agent_id = session.agent_id();
-    let (mut config, tools) = state.hub.lead_turn(session);
+    let (mut config, tools, lead) = state.hub.user_turn(session);
     state.hub.send_instructions(agent_id, &workspace).await;
     state
         .hub
@@ -744,14 +750,18 @@ async fn prepare_turn(
     if let Some(rec) = &recorder {
         config.trace_blobs = rec.blob_store();
     }
-    (AgentLoop::new(config), tools, recorder)
+    (AgentLoop::new(config), tools, recorder, lead)
 }
 
 /// When Gate routes the turn `agent_loop` is set up for (Gate is selected
 /// and no permanent agent names its own model), what it routes among once
 /// the prompt is classified. The turn shows Gate's choice when it makes
-/// it.
-fn gate_turn(state: &LoopState<'_>, agent_loop: &AgentLoop) -> Option<GateTurn> {
+/// it, and leads as `lead` says when the prompt calls for a lead.
+fn gate_turn(
+    state: &LoopState<'_>,
+    agent_loop: &AgentLoop,
+    lead: Option<subagents::LeadProfile>,
+) -> Option<GateTurn> {
     state
         .models
         .route()
@@ -761,6 +771,7 @@ fn gate_turn(state: &LoopState<'_>, agent_loop: &AgentLoop) -> Option<GateTurn> 
         limits: state.models.limits(),
         live: Arc::clone(&state.hub.gate),
         models: state.models.ui_command(),
+        lead,
     })
 }
 

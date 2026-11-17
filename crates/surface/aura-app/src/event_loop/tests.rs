@@ -193,13 +193,16 @@ async fn answer(request: ModelRequest, last: Option<&str>) -> Result<ModelRespon
 }
 
 /// The classifier's answer to `request`, asking about `prompt`: prompts
-/// that say "fix" are debugging, "classifier down" fails the call, and the
+/// that say "across files" are changes across several files, those that
+/// say "fix" are debugging, "classifier down" fails the call, and the
 /// rest are questions.
 async fn classify(request: &ModelRequest, prompt: &str) -> Result<ModelResponse, ReasonerError> {
     if prompt.contains("classifier down") {
         return Err(ReasonerError::Internal("classifier offline".to_string()));
     }
-    let label = if prompt.contains("fix") {
+    let label = if prompt.contains("across files") {
+        "multi_file_change"
+    } else if prompt.contains("fix") {
         "debugging"
     } else {
         "question"

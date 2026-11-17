@@ -16,9 +16,11 @@
 //!
 //! Instances of permanent agents that only read (their tools change no
 //! file) run side by side; the others run one at a time per workspace,
-//! so their edits never collide. Under Gate the user's own agent is a
-//! lead: [`AgentHub::lead_turn`] gives it the lead's prompt and, while
-//! delegation is enforced, the lead's tools (see [`super::lead`]).
+//! so their edits never collide. Under Gate the user's own agent leads
+//! the turns that ask for a change across several files or for planning:
+//! [`LeadProfile::apply`] gives such a turn the lead's prompt and, while
+//! delegation is enforced, the lead's tools (see [`super::lead`]). It
+//! does every other turn itself, on the model Gate routes it to.
 //!
 //! Spawns run inside the parent's tool call, on the parent's turn task, so
 //! the event loop keeps running beside them and the user can open a spawn
@@ -139,6 +141,44 @@ pub(crate) enum ArmRouting {
     },
     /// Every subtask nothing else pins runs on this model.
     Pinned(String),
+}
+
+/// How a turn of one of the user's agents leads under Gate once its
+/// prompt asks for work a lead takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LeadProfile {
+    /// Whether the lead must delegate, rather than being advised to
+    enforced: bool,
+}
+
+impl LeadProfile {
+    /// Make the turn set up with `config` and `tools` a lead's when its
+    /// prompt asks for `category` ([`aura_agent_gate::lead::leads`]): the
+    /// prompt says how to lead and, with delegation enforced, the lead's
+    /// tools replace the file tools. Any other turn is left as it is, for
+    /// the model Gate routes it to to do the work itself. Returns whether
+    /// the turn's calls must stay within the lead's limits
+    /// ([`AgentSession::lead`]).
+    pub(crate) fn apply(
+        self,
+        category: PromptCategory,
+        config: &mut AgentLoopConfig,
+        tools: &mut Vec<ToolDefinition>,
+    ) -> bool {
+        if !aura_agent_gate::lead::leads(category) {
+            return false;
+        }
+        config.system_prompt.push_str("\n\n");
+        config
+            .system_prompt
+            .push_str(&aura_context_prompts::system::sections::gate_lead::render(
+                self.enforced,
+            ));
+        if self.enforced {
+            *tools = lead_tools(std::mem::take(tools));
+        }
+        self.enforced
+    }
 }
 
 /// What every turn starts from before a permanent agent's settings apply.
@@ -387,11 +427,12 @@ impl AgentHub {
         (config, tools)
     }
 
-    /// Whether the turns of the agent `agent_id`, an instance of the
-    /// permanent agent `definition` if any, lead under Gate: `Some(true)`
-    /// with delegation enforced, `Some(false)` with it only recommended
+    /// Whether the agent `agent_id`, an instance of the permanent agent
+    /// `definition` if any, leads under Gate the turns that call for a
+    /// lead ([`aura_agent_gate::lead::leads`]): `Some(true)` with
+    /// delegation enforced, `Some(false)` with it only recommended
     /// (`AURA_GATE_DELEGATE=off`, or the `gate:nodelegate` arm of
-    /// `/compare`), `None` when they don't lead. Only the user's own
+    /// `/compare`), `None` when it never leads. Only the user's own
     /// agents lead, and only when Gate routes their work: never an
     /// instance of a permanent agent, a pinned main model or a pinned
     /// `/compare` arm.
@@ -411,29 +452,23 @@ impl AgentHub {
     }
 
     /// [`Self::agent_turn`] for a turn `session` runs for the user (or a
-    /// `/compare` run). When it leads under Gate the prompt says how to
-    /// lead and, with delegation enforced, the lead's tools replace the
-    /// file tools and `session` keeps its calls within the lead's limits.
-    pub(crate) fn lead_turn(
+    /// `/compare` run), and how the turn leads when its prompt turns out
+    /// to ask for work a lead takes ([`LeadProfile::apply`]); `None` when
+    /// it never leads (see [`Self::leads`]). `session` starts the turn
+    /// without the lead's limits.
+    pub(crate) fn user_turn(
         &self,
         session: &mut AgentSession,
-    ) -> (AgentLoopConfig, Vec<ToolDefinition>) {
+    ) -> (AgentLoopConfig, Vec<ToolDefinition>, Option<LeadProfile>) {
         let workspace = session.kernel.agent_workspace();
         let agent_id = session.agent_id();
         let definition = session.definition.clone();
-        let (mut config, mut tools) = self.agent_turn(agent_id, definition.as_deref(), &workspace);
-        let leads = self.leads(agent_id, definition.as_deref());
-        session.lead = leads == Some(true);
-        if let Some(enforced) = leads {
-            config.system_prompt.push_str("\n\n");
-            config.system_prompt.push_str(
-                &aura_context_prompts::system::sections::gate_lead::render(enforced),
-            );
-            if enforced {
-                tools = lead_tools(tools);
-            }
-        }
-        (config, tools)
+        let (config, tools) = self.agent_turn(agent_id, definition.as_deref(), &workspace);
+        session.lead = false;
+        let lead = self
+            .leads(agent_id, definition.as_deref())
+            .map(|enforced| LeadProfile { enforced });
+        (config, tools, lead)
     }
 
     /// [`Self::turn`] for `agent_id`, with the plan-mode instructions when
@@ -697,6 +732,7 @@ impl AgentHub {
     /// Note that `agent_id` has no work in flight any more. Returns
     /// whether that work was cancelled.
     pub(crate) fn stop_running(&self, agent_id: AgentId) -> bool {
+        self.gate.forget_model(agent_id);
         lock(&self.running)
             .remove(&agent_id)
             .is_some_and(|running| running.cancel.is_cancelled())
@@ -1035,6 +1071,7 @@ impl AgentHub {
             kind: definition.name.clone(),
             classifier: base.gate.classifier.clone(),
             candidates: if pinned { None } else { candidates },
+            lead_model: self.gate.model_of(request.parent_agent_id),
             limits: base.limits,
             live: Arc::clone(&self.gate),
             explore,

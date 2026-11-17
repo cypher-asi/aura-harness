@@ -151,9 +151,10 @@ pub enum EvalRunner {
 }
 
 /// Runs tasks under `gate` as `aura -p` turns: classified and routed with
-/// Gate's table, the agent leading and its subtasks routed, the prompts,
-/// `Outcome`s and verify verdicts recorded in the data directory's agent
-/// records, so they count in that table.
+/// Gate's table, the agent leading where the category calls for it and
+/// its subtasks routed, the prompts, `Outcome`s and verify verdicts
+/// recorded in the data directory's agent records, so they count in that
+/// table.
 pub struct EvalGate {
     turns: tokio::sync::Mutex<aura_app::headless::EvalTurns>,
 }
@@ -167,7 +168,12 @@ impl EvalGate {
     /// terminal has the data directory open.
     pub(crate) async fn start(provider: &str) -> anyhow::Result<Self> {
         let headless = aura_app::headless::eval_harness(provider).await?;
-        Ok(Self::on(aura_app::headless::EvalTurns::new(headless)))
+        let turns = aura_app::headless::EvalTurns::new(headless);
+        // On stderr like the runs' progress, so stdout stays the table.
+        for line in turns.setup_lines() {
+            eprintln!("{line}");
+        }
+        Ok(Self::on(turns))
     }
 
     pub(crate) fn on(turns: aura_app::headless::EvalTurns) -> Self {
@@ -225,26 +231,61 @@ impl EvalResult {
     }
 }
 
-/// Run every task `opts.repeat` times.
+/// Run every task `opts.repeat` times, reporting each run on stderr as it
+/// starts and ends so stdout stays the results table.
 ///
 /// # Errors
 ///
 /// Fails when a workspace can't be prepared or a run can't be recorded.
 pub async fn run_suite(tasks: &[EvalTask], opts: &EvalOptions) -> anyhow::Result<Vec<EvalResult>> {
+    let repeat = opts.repeat.max(1);
+    let total = tasks.len() * repeat;
     let mut results = Vec::new();
     let mut spent = 0.0;
     for task in tasks {
-        for _ in 0..opts.repeat.max(1) {
+        for _ in 0..repeat {
             if opts.budget_usd.is_some_and(|budget| spent >= budget) {
                 tracing::warn!(spent, "Eval budget reached; skipping the remaining runs");
+                eprintln!(
+                    "budget reached (${spent:.4} spent); skipping the remaining {} of {total} runs",
+                    total - results.len()
+                );
                 return Ok(results);
             }
+            let n = results.len() + 1;
+            eprintln!("[{n}/{total}] {} ...", task.id);
             let result = run_task(task, opts).await?;
             spent += result.cost_usd();
+            eprintln!("{}", progress_line(n, total, &result, spent));
             results.push(result);
         }
     }
     Ok(results)
+}
+
+/// One finished run of a suite: its place, verdict, cost and time, what
+/// the suite has cost so far and, under Gate, the models it was routed
+/// to.
+#[allow(clippy::cast_precision_loss)]
+fn progress_line(n: usize, total: usize, result: &EvalResult, spent: f64) -> String {
+    let routed = result
+        .gate
+        .as_ref()
+        .filter(|gate| !gate.routed.is_empty())
+        .map(|gate| format!("  on {}", gate.routed.join(", ")))
+        .unwrap_or_default();
+    format!(
+        "[{n}/{total}] {} {} ${:.4} {:.1}s (${spent:.4} so far){routed}{}",
+        result.task,
+        if result.passed { "pass" } else { "FAIL" },
+        result.cost_usd(),
+        result.scorecard.wall_ms as f64 / 1000.0,
+        result
+            .error
+            .as_deref()
+            .map(|e| format!("  ({e})"))
+            .unwrap_or_default(),
+    )
 }
 
 /// Category of each task id (`<suite>/<task>`) in `tasks`.

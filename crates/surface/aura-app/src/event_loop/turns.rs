@@ -14,6 +14,7 @@ use super::gate_record;
 use super::handlers::{handle_agent_success, run_agent_turn, system_message};
 use super::run_command::run_user_command;
 use super::steering::{SteerSource, Steering};
+use super::subagents::LeadProfile;
 use crate::long_run::LongRunSettings;
 use crate::model_selection::ModelLimits;
 use aura_agent::{AgentLoop, CompactHistoryError};
@@ -117,6 +118,9 @@ pub(super) struct GateTurn {
     /// The model selector and status line as they stand, for showing the
     /// turn's route
     pub models: UiCommand,
+    /// How the turn leads when its prompt asks for work a lead takes;
+    /// `None` when the agent never leads
+    pub lead: Option<LeadProfile>,
 }
 
 impl GateTurn {
@@ -138,14 +142,36 @@ impl GateTurn {
         self.live.redecide(RouteLevel::Turn, category, &left)
     }
 
-    /// Point `agent_loop` at `decision`'s model.
-    fn point(&self, agent_loop: &mut AgentLoop, decision: &Decision) {
+    /// Point `agent_loop`, running `agent`'s turn, at `decision`'s model.
+    fn point(&self, agent: AgentId, agent_loop: &mut AgentLoop, decision: &Decision) {
+        self.live.note_model(agent, &decision.model.id);
         if agent_loop.config().model == decision.model.id {
             return;
         }
         let mut config = agent_loop.config().clone();
         self.limits.configure(&mut config, &decision.model.id);
         *agent_loop = AgentLoop::new(config);
+    }
+
+    /// Make the turn on `agent_loop` with `tools` a lead's when its
+    /// prompt asks for `category` (see [`LeadProfile::apply`]). Returns
+    /// whether its calls must stay within the lead's limits.
+    fn lead(
+        &self,
+        category: PromptCategory,
+        agent_loop: &mut AgentLoop,
+        tools: &mut Vec<ToolDefinition>,
+    ) -> bool {
+        let Some(lead) = self.lead else {
+            return false;
+        };
+        let mut config = agent_loop.config().clone();
+        let before = config.system_prompt.len();
+        let enforced = lead.apply(category, &mut config, tools);
+        if config.system_prompt.len() != before {
+            *agent_loop = AgentLoop::new(config);
+        }
+        enforced
     }
 
     /// Show the model and route of `decision` in the status line.
@@ -380,7 +406,10 @@ async fn run_prompt(
         } else {
             let category = label.classify(session).await;
             if let Some(gate) = turn.gate.as_deref() {
-                route_turn(gate, &mut turn.agent_loop, &mut label, category, ui).await;
+                let agent = session.agent_id();
+                if route_turn(gate, agent, &mut turn.agent_loop, &mut label, category, ui).await {
+                    session.lead = gate.lead(category, &mut turn.agent_loop, &mut turn.tools);
+                }
             }
             let recorded = match label.record(session, category).await {
                 Ok(recorded) => recorded,
@@ -476,18 +505,19 @@ async fn run_prompt(
     }
 }
 
-/// Have Gate pick the model of a turn asking for `category`, point
-/// `agent_loop` at it, show the choice, and make it the route `label`
-/// records.
+/// Have Gate pick the model of `agent`'s turn asking for `category`,
+/// point `agent_loop` at it, show the choice, and make it the route
+/// `label` records. Returns whether Gate had a model to pick.
 async fn route_turn(
     gate: &GateTurn,
+    agent: AgentId,
     agent_loop: &mut AgentLoop,
     label: &mut Label,
     category: PromptCategory,
     ui: &AgentUi,
-) {
+) -> bool {
     let Some(decision) = gate.decide(category, &[]) else {
-        return;
+        return false;
     };
     info!(
         model = %decision.model.id,
@@ -495,11 +525,12 @@ async fn route_turn(
         reason = %decision.reason,
         "Gate routed the turn"
     );
-    gate.point(agent_loop, &decision);
+    gate.point(agent, agent_loop, &decision);
     ui.send(system_message(route_line(&decision, category)))
         .await;
     gate.show(ui, &decision).await;
     label.route = decision.route(RouteLevel::Turn);
+    true
 }
 
 /// What a turn's prompt is recorded with besides its category.
@@ -641,7 +672,7 @@ async fn run_attempts(
             route_line(&next, category)
         )))
         .await;
-        gate.point(&mut turn.agent_loop, &next);
+        gate.point(session.agent_id(), &mut turn.agent_loop, &next);
         gate.show(ui, &next).await;
     }
 }

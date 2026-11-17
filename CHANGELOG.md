@@ -56,8 +56,10 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
 - Subtasks under `gate` are classified and routed with their own table
   rows. Models named by the call, the permanent agent or a council seat
   stay pinned.
-- Under `gate` the main agent leads. It gets the `gate_lead` prompt
-  section and, unless `AURA_GATE_DELEGATE=off`, no file-changing tools,
+- Under `gate` the main agent leads the turns classified
+  `multi_file_change` or `planning`, and does the rest itself on the
+  model Gate routes it to. On a turn it leads it gets the `gate_lead`
+  prompt section and, unless `AURA_GATE_DELEGATE=off`, no file-changing tools,
   capped reads and searches, and a `run_command` limited to checks and
   inspection. New `implement` and `tests` permanent agents (and bundled
   kinds) take the work. `task` gains a `check` command and returns a
@@ -87,13 +89,33 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   run's cost and takes `--budget-usd`. `evals/gate_hard` adds eight
   tasks with traps a careless fix falls into.
 - `aura eval run --model gate` runs each task as `aura -p` turns: Gate
-  classifies and routes them, the agent leads and delegates, and the
+  classifies and routes them, the agent leads and delegates where the
+  category calls for it, and the
   verify command runs as a `run_command` call through the run's agent's
   kernel, its verdict recorded as a later outcome so eval results count
   in Gate's table. The results table shows the models Gate routed each
   task to. `EvalOptions` takes an `EvalRunner` instead of `config`,
   `tool_config` and `provider`. The runs' agents work at `yolo`, like
   `aura -p` in `agent` mode.
+- Gate prices a model it has not tried from its list price scaled by how
+  the tried models of its tier (else the nearest tier) cost against
+  theirs, so newer, cheaper models are no longer ranked behind older
+  ones with history. When the lead is on a frontier model, its subtasks
+  are first routed below the frontier tier; an escalated retry may still
+  reach it.
+- A `task`, `run_command` or plugin tool call drops the caller's cached
+  tool results, so the next read shows what is on disk
+  (`aura_config::FILE_NEUTRAL_TOOLS` lists the uncached tools that keep
+  the cache).
+- On Claude models the thinking effort stays at medium for the whole
+  run. Lowering it after the first write made Anthropic rewrite the
+  conversation's prompt cache.
+- `aura eval run` prints one line per task on stderr as it starts and
+  ends (verdict, cost, time, spend so far, routed models), and with
+  `--model gate` the classifier and the models Gate routes among.
+- The Claude plan's live model list is saved as `plan_models.json`
+  beside the model preferences and used when a later fetch fails, with
+  a note saying so.
 - Under any approval level, the lead's `run_command` limit only narrows
   what the level lets run, and a `task` `check` runs through the
   subtask's kernel at the level the subtask inherited from its parent.

@@ -1,7 +1,8 @@
-//! Delegation under Gate: the lead's tools, a task's check and compact
-//! result, read-only tasks side by side and write tasks one at a time,
-//! the one escalation of a failed subtask, and `/gate`'s delegation
-//! figures.
+//! Delegation under Gate: which turns are led, the lead's tools, a
+//! task's check and compact result, read-only tasks side by side and
+//! write tasks one at a time, the tier a frontier lead's subtasks stay
+//! under, the one escalation of a failed subtask, and `/gate`'s
+//! delegation figures.
 
 use super::*;
 use aura_core_types::{SubagentDispatchRequest, SubagentExit, SubagentResult};
@@ -98,8 +99,11 @@ async fn under_gate_the_lead_has_no_file_tools_and_a_limited_run_command() {
         .factory
         .open(&lock_registry_agent(&fixture, first), Vec::new(), None)
         .unwrap();
-    let (config, tools) = fixture.hub.lead_turn(&mut session);
-    assert!(session.lead);
+    session.lead = true;
+    let (mut config, mut tools, lead) = fixture.hub.user_turn(&mut session);
+    assert!(!session.lead, "a turn starts without the lead's limits");
+    let lead = lead.expect("the user's agent leads under Gate");
+    assert!(lead.apply(PromptCategory::MultiFileChange, &mut config, &mut tools));
     let names = names(&tools);
     for tool in ["write_file", "edit_file", "delete_file"] {
         assert!(!names.contains(&tool), "{tool} in {names:?}");
@@ -133,6 +137,74 @@ async fn under_gate_the_lead_has_no_file_tools_and_a_limited_run_command() {
 }
 
 #[tokio::test]
+async fn only_multi_file_changes_and_planning_are_led() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let first = fixture.first;
+    let mut state = loop_state(&fixture, &mut b);
+    select_gate(&fixture, &mut state);
+    let mut session = fixture
+        .hub
+        .factory
+        .open(&lock_registry_agent(&fixture, first), Vec::new(), None)
+        .unwrap();
+
+    for category in [
+        PromptCategory::Question,
+        PromptCategory::SmallChange,
+        PromptCategory::Debugging,
+        PromptCategory::Research,
+        PromptCategory::Writing,
+        PromptCategory::Other,
+        PromptCategory::Unclassified,
+    ] {
+        let (mut config, mut tools, lead) = fixture.hub.user_turn(&mut session);
+        let before = (config.system_prompt.clone(), tools.len());
+        assert!(
+            !lead.unwrap().apply(category, &mut config, &mut tools),
+            "{category}"
+        );
+        assert_eq!((config.system_prompt, tools.len()), before, "{category}");
+        assert!(names(&tools).contains(&"write_file"), "{category}");
+    }
+    for category in [PromptCategory::MultiFileChange, PromptCategory::Planning] {
+        let (mut config, mut tools, lead) = fixture.hub.user_turn(&mut session);
+        assert!(
+            lead.unwrap().apply(category, &mut config, &mut tools),
+            "{category}"
+        );
+        assert!(!names(&tools).contains(&"write_file"), "{category}");
+    }
+}
+
+#[tokio::test]
+async fn a_small_turn_under_gate_does_its_own_work() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    select_gate(&fixture, &mut state);
+    fixture.hub.set_permissions(first, yolo());
+
+    turn(&mut state, &mut done, &links, first, "write a note").await;
+
+    let results = tool_results(&state, first);
+    assert_eq!(results.len(), 1, "{results:?}");
+    assert!(!results[0].1, "nothing refused the write: {}", results[0].0);
+    assert!(fixture
+        .workspace
+        .join(format!("notes/{SONNET}.txt"))
+        .exists());
+    assert!(!state.idle[&first].lead);
+    assert!(
+        children(&fixture, first, "implement").is_empty(),
+        "nothing was delegated"
+    );
+}
+
+#[tokio::test]
 async fn the_lead_is_held_to_its_limits_when_it_tries_anyway() {
     let (fixture, _commands) = fixture();
     let mut b = borrowed(&fixture);
@@ -145,10 +217,16 @@ async fn the_lead_is_held_to_its_limits_when_it_tries_anyway() {
     let big: String = (1..=300).map(|n| format!("line {n}\n")).collect();
     std::fs::write(fixture.workspace.join("big.txt"), big).unwrap();
 
-    turn(&mut state, &mut done, &links, first, "write a note").await;
-    turn(&mut state, &mut done, &links, first, "touch a file").await;
-    turn(&mut state, &mut done, &links, first, "run ls").await;
-    turn(&mut state, &mut done, &links, first, "read the big file").await;
+    for prompt in [
+        "write a note",
+        "touch a file",
+        "run ls",
+        "read the big file",
+    ] {
+        let across_files = format!("across files: {prompt}");
+        turn(&mut state, &mut done, &links, first, &across_files).await;
+    }
+    assert!(state.idle[&first].lead);
 
     let results = tool_results(&state, first);
     assert_eq!(results.len(), 4, "{results:?}");
@@ -193,8 +271,9 @@ async fn with_delegation_off_or_a_pinned_model_the_lead_keeps_its_tools() {
         .factory
         .open(&lock_registry_agent(&off, off.first), Vec::new(), None)
         .unwrap();
-    let (config, tools) = off.hub.lead_turn(&mut session);
-    assert!(!session.lead);
+    let (mut config, mut tools, lead) = off.hub.user_turn(&mut session);
+    let lead = lead.expect("it still leads, without the limits");
+    assert!(!lead.apply(PromptCategory::MultiFileChange, &mut config, &mut tools));
     assert!(names(&tools).contains(&"write_file"));
     assert!(config.system_prompt.contains("Delegating is recommended"));
 
@@ -211,7 +290,8 @@ async fn with_delegation_off_or_a_pinned_model_the_lead_keeps_its_tools() {
             None,
         )
         .unwrap();
-    let (config, tools) = pinned.hub.lead_turn(&mut session);
+    let (config, tools, lead) = pinned.hub.user_turn(&mut session);
+    assert_eq!(lead, None);
     assert!(!session.lead);
     assert!(names(&tools).contains(&"write_file"));
     assert!(
@@ -445,6 +525,61 @@ async fn a_failed_check_undoes_the_attempt_and_retries_once_on_a_stronger_model(
         ),
         "{text}"
     );
+}
+
+#[tokio::test]
+async fn a_frontier_leads_subtasks_start_below_its_tier_and_may_escalate_to_it() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let first = fixture.first;
+    let mut state = loop_state(&fixture, &mut b);
+    select_gate(&fixture, &mut state);
+    fixture.hub.set_permissions(first, yolo());
+    // Debugging goes to the strongest model, so on its own this subtask
+    // would run on the lead's.
+    fixture.hub.gate.note_model(first, GPT);
+
+    let check = format!("ls notes/{GPT}.txt");
+    let result = dispatch(
+        &fixture,
+        task(first, "implement", "fix: write a note", Some(&check)),
+    )
+    .await;
+
+    let attempts = children(&fixture, first, "implement");
+    assert_eq!(attempts.len(), 2, "{}", result.final_message);
+    let (prompts, outcomes) = record(&fixture, attempts[0]);
+    assert_eq!(prompts[0].category, PromptCategory::Debugging);
+    assert_eq!(
+        prompts[0].route,
+        Route::subtask(SONNET, RouteReason::Default),
+        "the strongest model below the lead's tier"
+    );
+    assert_eq!(outcomes[0].signal, OutcomeSignal::ChecksFailed);
+    let (prompts, _) = record(&fixture, attempts[1]);
+    assert_eq!(
+        prompts[0].route,
+        Route::subtask(GPT, RouteReason::Escalate),
+        "the retry may go up to the lead's tier"
+    );
+    assert!(result
+        .final_message
+        .contains(&format!("Check `{check}`: passed")));
+
+    fixture.hub.stop_running(first);
+    assert_eq!(
+        fixture.hub.gate.model_of(first),
+        None,
+        "forgotten once the lead's work ends"
+    );
+    dispatch(
+        &fixture,
+        task(first, "implement", "fix: write a note", None),
+    )
+    .await;
+    let attempts = children(&fixture, first, "implement");
+    let (prompts, _) = record(&fixture, attempts[2]);
+    assert_eq!(prompts[0].route, Route::subtask(GPT, RouteReason::Default));
 }
 
 /// Run git with `args` in `dir` and return its output.

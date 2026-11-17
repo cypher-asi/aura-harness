@@ -7,14 +7,16 @@
 //! Startup scan and live entries may overlap; [`GateStats`] counts each
 //! prompt once whatever the order.
 //!
-//! It also keeps the latest routing decisions for `/gate`.
+//! It also keeps the latest routing decisions for `/gate`, and the model
+//! each agent's routed work is on, which decides what the subtasks it
+//! dispatches are routed among ([`aura_agent_gate::below_lead`]).
 
 use aura_agent_gate::{Candidate, Decision, GateStats, SplitMix64};
 use aura_agent_kernel::RecordObserver;
 use aura_config::GateConfig;
 use aura_core_types::{AgentId, PromptCategory, RecordEntry, RouteLevel, RouteReason};
 use aura_store_db::ReadStore;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tracing::{info, warn};
 
@@ -44,6 +46,8 @@ pub struct GateLive {
     stats: Mutex<GateStats>,
     rng: Mutex<SplitMix64>,
     recent: Mutex<VecDeque<RecentRoute>>,
+    /// The model Gate sent each agent's work in flight to
+    working_on: Mutex<HashMap<AgentId, String>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -71,7 +75,24 @@ impl GateLive {
             stats: Mutex::new(GateStats::default()),
             rng: Mutex::new(rng),
             recent: Mutex::new(VecDeque::with_capacity(RECENT_DECISIONS)),
+            working_on: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Note that Gate sent the work `agent` is starting to `model`.
+    pub(crate) fn note_model(&self, agent: AgentId, model: &str) {
+        lock(&self.working_on).insert(agent, model.to_string());
+    }
+
+    /// The model Gate sent `agent`'s work in flight to; `None` when it
+    /// has none or Gate did not route it.
+    pub(crate) fn model_of(&self, agent: AgentId) -> Option<String> {
+        lock(&self.working_on).get(&agent).cloned()
+    }
+
+    /// The work of `agent` ended.
+    pub(crate) fn forget_model(&self, agent: AgentId) {
+        lock(&self.working_on).remove(&agent);
     }
 
     /// The settings Gate routes with.

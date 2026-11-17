@@ -172,6 +172,7 @@ fn harness(
         tool_filter: filter,
         job_wait: Duration::from_secs(5),
         trace: None,
+        notes: Vec::new(),
     };
     (headless, requests)
 }
@@ -658,15 +659,21 @@ async fn gate_routes_headless_turns_and_records_how_they_went() {
     assert_eq!(models, [HAIKU, SONNET], "classified, then routed");
     {
         let requests = requests.lock().unwrap();
-        let lead = &requests[1];
-        let tools: Vec<&str> = lead.tools.iter().map(|t| t.name.as_str()).collect();
-        assert!(tools.contains(&"read_file") && tools.contains(&"run_command"));
+        let turn = &requests[1];
+        let tools: Vec<&str> = turn.tools.iter().map(|t| t.name.as_str()).collect();
         assert!(
-            !tools.contains(&"write_file") && !tools.contains(&"edit_file"),
-            "the headless lead delegates its edits: {tools:?}"
+            tools.contains(&"write_file") && tools.contains(&"edit_file"),
+            "a question is answered by the model it is routed to: {tools:?}"
         );
-        assert!(lead.system.contains("<gate_lead>"));
+        assert!(!turn.system.contains("<gate_lead>"));
     }
+    assert_eq!(
+        h.setup_lines(),
+        [
+            format!("gate: prompts classified by {HAIKU} (cloud)"),
+            format!("gate: routing among {SONNET} (cloud)"),
+        ]
+    );
     let (agent, _) = parse_session_id(&report.session_id, AgentId::generate()).unwrap();
     let entries = h.hub.factory.store.scan_record(agent, 1, 1_000).unwrap();
     let prompts: Vec<_> = entries
@@ -685,6 +692,51 @@ async fn gate_routes_headless_turns_and_records_how_they_went() {
     assert_eq!(outcomes[0].model, SONNET);
     assert_eq!(outcomes[0].signal, OutcomeSignal::None);
     assert_eq!(h.hub.gate.recent().len(), 1);
+}
+
+#[tokio::test]
+async fn a_headless_turn_changing_several_files_is_led() {
+    use aura_agent_gate::Candidate;
+    use aura_model::model_catalog::{ModelBackend, ModelTier};
+    const HAIKU: &str = "aura-claude-haiku-4-5";
+    const SONNET: &str = "aura-claude-sonnet-4-6";
+    let gate = GateBase {
+        classifier: HAIKU.to_string(),
+        candidates: Some(vec![Candidate {
+            id: SONNET.to_string(),
+            label: SONNET.to_string(),
+            backend: ModelBackend::Router,
+            tier: ModelTier::Standard,
+            cost_usd: Some(0.1),
+        }]),
+    };
+    let dirs = dirs();
+    let permissions = super::permissions(aura_core_modes::AgentMode::Agent, None);
+    let (mut h, requests) = harness(
+        &dirs,
+        MockProvider::simple_response("multi_file_change"),
+        ToolFilter::default(),
+        permissions,
+        gate,
+    );
+
+    let (report, _) = execute(
+        &mut h,
+        request("rename the crate everywhere", SessionChoice::New),
+        OutputFormat::Json,
+    )
+    .await;
+
+    assert_eq!(report.exit_reason, ExitReason::Success);
+    let requests = requests.lock().unwrap();
+    let lead = &requests[1];
+    let tools: Vec<&str> = lead.tools.iter().map(|t| t.name.as_str()).collect();
+    assert!(tools.contains(&"read_file") && tools.contains(&"task"));
+    assert!(
+        !tools.contains(&"write_file") && !tools.contains(&"edit_file"),
+        "the headless lead delegates its edits: {tools:?}"
+    );
+    assert!(lead.system.contains("<gate_lead>"));
 }
 
 #[tokio::test]

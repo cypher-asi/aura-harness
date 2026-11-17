@@ -124,11 +124,34 @@ fn cached_tool_result(call: &ToolCallInfo, content: String) -> ToolCallResult {
     }
 }
 
+/// Whether `name` may have changed files this loop can't name: a command,
+/// a subtask, a background job, a plugin's tool. Its own file tools report
+/// the path they wrote, and read-only tools change nothing.
+fn changes_unknown_files(name: &str) -> bool {
+    !is_cacheable(name)
+        && !helpers::is_write_tool(name)
+        && !aura_config::FILE_NEUTRAL_TOOLS.contains(&name)
+}
+
 pub(super) fn update_cache(
     cache: &mut ToolResultCache,
     uncached: &[ToolCallInfo],
     executed: &[ToolCallResult],
 ) {
+    // A failed command or subtask may still have changed files, so this
+    // does not look at the result. Reads from the same batch are not kept
+    // either: they may have run before the change.
+    let ran = |tc: &&ToolCallInfo| executed.iter().any(|r| r.tool_use_id == tc.id);
+    if let Some(tc) = uncached
+        .iter()
+        .filter(ran)
+        .find(|tc| changes_unknown_files(&tc.name))
+    {
+        debug!(tool_name = %tc.name, "Dropping cached tool results: files may have changed");
+        *cache = ToolResultCache::default();
+        return;
+    }
+
     let mut write_paths: Vec<String> = Vec::new();
     for tc in uncached {
         if !helpers::is_write_tool(&tc.name) {
