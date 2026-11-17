@@ -33,5 +33,7 @@ pub mod outcome;
 pub mod router;
 pub mod stats;
 
-pub use router::{candidates, escalate, fixed_pick, pick, Candidate, Decision, Random, SplitMix64};
+pub use router::{
+    below_lead, candidates, escalate, fixed_pick, pick, Candidate, Decision, Random, SplitMix64,
+};
 pub use stats::GateStats;

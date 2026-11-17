@@ -86,6 +86,9 @@ pub struct Headless {
     pub(crate) job_wait: Duration,
     /// Run trace the turns are recorded to, for an eval task's run
     pub(crate) trace: Option<Arc<RunRecorder>>,
+    /// Problems found while setting up that change what the run does,
+    /// such as a plan's model list that would not load
+    pub(crate) notes: Vec<String>,
 }
 
 /// `<agent hex>:<session start ms>`: names one saved session.
@@ -144,6 +147,30 @@ struct Totals {
 }
 
 impl Headless {
+    /// What a caller should show before the first turn: the problems
+    /// found while setting up, then, when Gate routes the turns, the
+    /// model that classifies prompts and the models it routes among,
+    /// cheapest first.
+    #[must_use]
+    pub fn setup_lines(&self) -> Vec<String> {
+        let mut lines = self.notes.clone();
+        if let Some(candidates) = self.hub.gate_candidates(None) {
+            let label = |id: &str| aura_model::model_catalog::route_label(id);
+            let classifier = self.hub.classifier();
+            lines.push(format!(
+                "gate: prompts classified by {}",
+                if classifier.is_empty() {
+                    "nothing".to_string()
+                } else {
+                    label(&classifier)
+                }
+            ));
+            let models: Vec<String> = candidates.iter().map(|c| label(&c.id)).collect();
+            lines.push(format!("gate: routing among {}", models.join(", ")));
+        }
+        lines
+    }
+
     /// Run `request` to the end, streaming to `output`. `interrupt` stops
     /// the run (Ctrl+C).
     pub(crate) async fn execute(
@@ -316,14 +343,9 @@ impl Headless {
 
     fn announce(&self, output: &Output, session: &AgentSession, session_id: &str, resumed: bool) {
         let workspace = session.kernel.agent_workspace();
-        let (_, mut tools) = self.hub.turn(session.definition.as_deref(), &workspace);
-        if self
-            .hub
-            .leads(session.agent_id(), session.definition.as_deref())
-            == Some(true)
-        {
-            tools = crate::event_loop::lead::lead_tools(tools);
-        }
+        // A turn that leads has fewer tools; which turns do is only known
+        // once their prompt is classified.
+        let (_, tools) = self.hub.turn(session.definition.as_deref(), &workspace);
         let tools = self.tool_filter.filter(tools);
         let agent_hex = session.agent_id().to_hex();
         let cwd = self.workspace_root.display().to_string();
@@ -356,11 +378,14 @@ impl Headless {
         drain_stale_inbox(session).await;
         let started = Instant::now();
         let workspace = session.kernel.agent_workspace();
-        let (mut config, tools) = self.hub.lead_turn(session);
+        let (mut config, mut tools, lead) = self.hub.user_turn(session);
         if let Some(max) = limits.max_iterations {
             config.max_iterations = max;
         }
         let (payload, routed) = self.route_turn(session, &mut config, &text).await;
+        if let Some(lead) = lead.filter(|_| routed) {
+            session.lead = lead.apply(payload.category, &mut config, &mut tools);
+        }
         let prompt_tx = match record_prompt(session, &payload).await {
             Ok((tx, _)) => tx.hash,
             Err(problem) => {
@@ -545,7 +570,8 @@ impl Headless {
     /// whether Gate routed it. Gate routes the turn when the user selected
     /// gate, the agent names no model of its own and there is a model to
     /// route to: the prompt is classified and `config` pointed at Gate's
-    /// pick. Otherwise the prompt is recorded as it is.
+    /// pick, which the subtasks the turn dispatches are routed by.
+    /// Otherwise the prompt is recorded as it is.
     async fn route_turn(
         &mut self,
         session: &AgentSession,
@@ -589,6 +615,9 @@ impl Headless {
                         .configure(config, &decision.model.id);
                 }
                 self.model.clone_from(&decision.model.id);
+                self.hub
+                    .gate
+                    .note_model(session.agent_id(), &decision.model.id);
                 decision.route(RouteLevel::Turn)
             }
             None => Route::turn(config.model.clone(), RouteReason::Default),

@@ -42,6 +42,19 @@ pub const WRITE_TOOLS: &[&str] = &["write_file", "edit_file", "delete_file"];
 /// Tools that run commands.
 pub const COMMAND_TOOLS: &[&str] = &["run_command"];
 
+/// Tools, besides [`CACHEABLE_TOOLS`], that leave the workspace's files as
+/// they are. Any other tool that is not one of [`WRITE_TOOLS`] may have
+/// changed files the caller can't name (a command, a subtask, a background
+/// job, a plugin's tool), so cached reads are dropped once it has run.
+/// Consumed by `aura_agent::agent_loop::tool_execution::update_cache`.
+pub const FILE_NEUTRAL_TOOLS: &[&str] = &[
+    "todo_write",
+    "web_search",
+    "web_fetch",
+    "list_agents",
+    "get_agent_state",
+];
+
 // ---------------------------------------------------------------------------
 // Tool-result caching helper
 // ---------------------------------------------------------------------------

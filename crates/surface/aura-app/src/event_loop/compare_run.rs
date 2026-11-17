@@ -481,7 +481,7 @@ async fn run_turn(
     };
     hub.begin_compare_run(agent_id, routing.clone());
     let workdir = session.kernel.agent_workspace();
-    let (mut config, tools) = hub.lead_turn(&mut session);
+    let (mut config, mut tools, lead) = hub.user_turn(&mut session);
     config.observers.clear();
     if let Some(path) = plan.plan.as_deref().filter(|path| is_plan_path(path)) {
         if let Ok(plan_file) = PlanFile::load(&workdir.join(path)) {
@@ -516,6 +516,10 @@ async fn run_turn(
         hub.model_limits().configure(&mut config, &model);
     }
     let model = config.model.clone();
+    if let Some(lead) = lead {
+        hub.gate.note_model(agent_id, &model);
+        session.lead = lead.apply(category, &mut config, &mut tools);
+    }
     let prompt = PromptPayload {
         category,
         classifier: plan.classifier.clone(),

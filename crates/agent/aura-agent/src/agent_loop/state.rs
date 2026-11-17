@@ -307,12 +307,17 @@ impl LoopState {
     /// Resolution order for non-dev-loop callers (first match wins):
     ///
     /// 1. Iteration 0 → `Medium` (analysis turn).
-    /// 2. `had_any_file_write` → `Low` (forward motion has happened,
+    /// 2. A model whose prompt cache is reset by a change of effort
+    ///    (Claude) → `Medium` for the whole run. Dropping to `Low` after
+    ///    the first write made the next request write the whole
+    ///    conversation to the cache again, which costs more than the
+    ///    lower effort saves.
+    /// 3. `had_any_file_write` → `Low` (forward motion has happened,
     ///    cap the deliberation budget).
-    /// 3. `submit_plan_called` → `Low` (the plan exists; codex drops
+    /// 4. `submit_plan_called` → `Low` (the plan exists; codex drops
     ///    to low effort once the agent is committed to an
     ///    implementation phase).
-    /// 4. Otherwise → `Medium`.
+    /// 5. Otherwise → `Medium`.
     pub(crate) fn compute_thinking_effort(
         &self,
         config: &AgentLoopConfig,
@@ -322,6 +327,9 @@ impl LoopState {
             return ThinkingEffort::Medium;
         }
         if iteration == 0 {
+            return ThinkingEffort::Medium;
+        }
+        if aura_model::model_catalog::effort_change_resets_prompt_cache(&config.model) {
             return ThinkingEffort::Medium;
         }
         if self.had_any_file_write || self.submit_plan_called {

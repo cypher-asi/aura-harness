@@ -9,9 +9,22 @@
 //! inspection commands ([`allows_command`]). Subagents are never
 //! restricted this way.
 
+use aura_core_types::PromptCategory;
 use serde_json::Value;
 
 use crate::checks::is_check_part;
+
+/// Whether a turn asking for `category` is led: work to split up and
+/// plan. Anything smaller costs less done by the model it is routed to
+/// than handed on, since a subtask starts from nothing and reads the
+/// files again.
+#[must_use]
+pub const fn leads(category: PromptCategory) -> bool {
+    matches!(
+        category,
+        PromptCategory::MultiFileChange | PromptCategory::Planning
+    )
+}
 
 /// Lines of one `read_file` result the lead sees.
 pub const READ_LINES: usize = 200;

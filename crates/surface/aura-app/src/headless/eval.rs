@@ -1,9 +1,9 @@
 //! `aura eval run --model gate`: each run of a task is an agent of its
 //! own under the Headless agent, working in the task's workspace, and its
 //! prompts are `aura -p` turns. Gate classifies and routes them with the
-//! table as configured (exploration included), the agent leads and its
-//! `task` subtasks are routed and escalated, and every prompt ends with
-//! its `Outcome`. The task's verify command then runs as a `run_command`
+//! table as configured (exploration included), the agent leads the turns
+//! that call for a lead and its `task` subtasks are routed and escalated,
+//! and every prompt ends with its `Outcome`. The task's verify command then runs as a `run_command`
 //! call through the agent's kernel, and its verdict is recorded as a
 //! later `Outcome` of the last prompt, so eval results count in the Gate
 //! table of the data directory.
@@ -65,6 +65,12 @@ impl EvalTurns {
             headless,
             output: Output::new(OutputFormat::Text, Box::new(std::io::sink())),
         }
+    }
+
+    /// What to show before the first run (see [`Headless::setup_lines`]).
+    #[must_use]
+    pub fn setup_lines(&self) -> Vec<String> {
+        self.headless.setup_lines()
     }
 
     /// Run `turn`'s prompts, then its verify command.

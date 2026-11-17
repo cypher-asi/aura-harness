@@ -249,6 +249,92 @@ fn failed_write_does_not_clear_caches() {
     );
 }
 
+fn ok_result(id: &str, content: &str) -> ToolCallResult {
+    ToolCallResult {
+        tool_use_id: id.to_string(),
+        content: content.to_string(),
+        is_error: false,
+        kind: aura_core_types::ToolResultKind::Ok,
+        stop_loop: false,
+        file_changes: Vec::new(),
+        image: None,
+    }
+}
+
+fn call(id: &str, name: &str, input: serde_json::Value) -> ToolCallInfo {
+    ToolCallInfo {
+        id: id.to_string(),
+        name: name.to_string(),
+        input,
+    }
+}
+
+/// A cache holding one read of `src/lib.rs` and one search.
+fn cache_with_a_read_and_a_search() -> (ToolResultCache, ToolCallInfo, ToolCallInfo) {
+    let read = call("r", "read_file", serde_json::json!({"path": "src/lib.rs"}));
+    let search = call("s", "search_code", serde_json::json!({"pattern": "greet"}));
+    let mut cache = ToolResultCache::default();
+    update_cache(
+        &mut cache,
+        &[read.clone(), search.clone()],
+        &[ok_result("r", "before"), ok_result("s", "hits")],
+    );
+    (cache, read, search)
+}
+
+#[test]
+fn a_subtask_or_a_command_drops_every_cached_read() {
+    let ran = [
+        ("task", serde_json::json!({"prompt": "edit src/lib.rs"})),
+        ("run_command", serde_json::json!({"command": "make fmt"})),
+        ("mcp_some_tool", serde_json::json!({})),
+    ];
+    for (name, input) in ran {
+        let (mut cache, read, search) = cache_with_a_read_and_a_search();
+        assert!(split_cached(&[read.clone(), search.clone()], &cache)
+            .1
+            .is_empty());
+
+        let mut failed = ok_result("t", "exit code 1");
+        failed.is_error = true;
+        update_cache(&mut cache, &[call("t", name, input)], &[failed]);
+
+        let (cached, uncached) = split_cached(&[read, search], &cache);
+        assert!(cached.is_empty(), "{name} left {} cached", cached.len());
+        assert_eq!(uncached.len(), 2, "both are read again after {name}");
+        assert!(cache.read_file_by_path.is_empty());
+    }
+}
+
+#[test]
+fn a_read_beside_a_subtask_is_not_cached() {
+    let mut cache = ToolResultCache::default();
+    let read = call("r", "read_file", serde_json::json!({"path": "src/lib.rs"}));
+    update_cache(
+        &mut cache,
+        &[
+            read.clone(),
+            call("t", "task", serde_json::json!({"prompt": "edit"})),
+        ],
+        &[ok_result("r", "maybe before"), ok_result("t", "Done.")],
+    );
+    assert_eq!(split_cached(&[read], &cache).1.len(), 1);
+}
+
+#[test]
+fn tools_that_change_no_files_keep_the_cache() {
+    let (mut cache, read, search) = cache_with_a_read_and_a_search();
+    for name in aura_config::FILE_NEUTRAL_TOOLS {
+        update_cache(
+            &mut cache,
+            &[call("n", name, serde_json::json!({}))],
+            &[ok_result("n", "ok")],
+        );
+    }
+    let (cached, uncached) = split_cached(&[read, search], &cache);
+    assert_eq!((cached.len(), uncached.len()), (2, 0));
+}
+
 #[test]
 fn split_cached_prefers_exact_over_fuzzy_when_both_match() {
     // Regression guard for the "exact-match stays primary" rule.
