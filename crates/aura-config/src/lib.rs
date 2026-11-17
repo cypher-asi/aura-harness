@@ -69,6 +69,9 @@
 //! | `AURA_CONFLICT_ENABLED` | bool | `true` | [`ConflictConfig::enabled`] |
 //! | `AURA_CONFLICT_DEFAULT_WAIT_MS` | u64 | `30_000` | [`ConflictConfig::default_wait_ms`] |
 //! | `AURA_TRACE` | `off`/`decisions`/`full` | `decisions` | [`TraceConfig::level`] |
+//! | `AURA_GATE_TARGET` | f64 (0..=1) | `0.85` | [`GateConfig::target`] |
+//! | `AURA_GATE_MIN_TRIES` | u32 (>= 1) | `10` | [`GateConfig::min_tries`] |
+//! | `AURA_GATE_EXPLORE` | f64 (0..=1) | `0.05` | [`GateConfig::explore_rate`] |
 //! | `AURA_HOME` | path | `~/.aura` | [`AuraHome::resolve`] (read-only `CODEX_HOME` compat alias also honoured during V1 transition) |
 //!
 //! Tool-sandbox knobs (`file_ops::SKIP_DIRS`, `INCLUDE_EXTENSIONS`),
@@ -124,6 +127,7 @@ pub mod automaton;
 pub mod compaction;
 pub mod conflict;
 pub mod env;
+pub mod gate;
 pub mod plugins;
 pub mod prompts;
 pub mod reasoner;
@@ -142,6 +146,7 @@ pub use automaton::AutomatonConfig;
 pub use compaction::CompactionConfig;
 pub use conflict::ConflictConfig;
 pub use env::{ConfigError, ENV_VAR_NAMES};
+pub use gate::GateConfig;
 pub use plugins::{PluginConfig, PluginsConfig, PluginsTable};
 pub use prompts::PromptsConfig;
 pub use reasoner::{LlmRetryConfig, ReasonerConfig, ReasonerThinkingConfig};
@@ -220,6 +225,8 @@ pub struct AuraConfig {
     pub plugins: PluginsConfig,
     /// Run-trace capture level.
     pub trace: TraceConfig,
+    /// How Gate routes work across models.
+    pub gate: GateConfig,
 }
 
 impl AuraConfig {
@@ -233,6 +240,7 @@ impl AuraConfig {
             conflict: ConflictConfig::defaults(),
             plugins: PluginsConfig::defaults(),
             trace: TraceConfig::defaults(),
+            gate: GateConfig::defaults(),
         }
     }
 
@@ -254,6 +262,7 @@ impl AuraConfig {
             // (no plugins active), which matches V1 behaviour.
             plugins: PluginsConfig::defaults(),
             trace: TraceConfig::from_env(),
+            gate: GateConfig::from_env()?,
         })
     }
 }
@@ -329,6 +338,12 @@ pub fn reasoner() -> ReasonerConfig {
 #[must_use]
 pub fn trace() -> TraceConfig {
     current().trace
+}
+
+/// Shortcut for `loaded().gate`.
+#[must_use]
+pub fn gate() -> GateConfig {
+    current().gate
 }
 
 /// Replace the process-wide config. For process-start overrides such
