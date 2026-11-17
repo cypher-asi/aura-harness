@@ -16,6 +16,7 @@ mod attachments;
 pub(crate) mod auth;
 pub(crate) mod gate_live;
 pub(crate) mod gate_record;
+pub(crate) mod gate_subtask;
 mod gate_view;
 pub(crate) mod handlers;
 pub(crate) mod host;
@@ -37,6 +38,7 @@ pub(crate) use agent_events::forward_agent_events;
 pub use agents::{AgentSession, KernelBuilder, KernelFactory};
 pub use approvals::TerminalApprovals;
 pub use gate_live::GateLive;
+pub use gate_subtask::GateBase;
 pub use host::{TerminalAgents, TerminalChildKernels};
 pub use processes::{BackgroundCommands, ProcessTable};
 pub use record_ui::{FanoutObserver, RecordPanelAgent, UiRecordObserver};
@@ -147,6 +149,7 @@ impl LoopState<'_> {
         let mut base = subagents::lock(&self.hub.base);
         base.config = config;
         base.limits = self.models.limits();
+        base.gate = GateBase::of(&self.models);
     }
 
     /// The agent named by hex id `agent_hex`, or the active agent when the

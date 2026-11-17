@@ -4,7 +4,7 @@ use super::tools::ToolFilter;
 use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
 use crate::cli::OutputFormat;
-use crate::event_loop::TurnBase;
+use crate::event_loop::{GateBase, TurnBase};
 use crate::long_run::LongRunSettings;
 use crate::runner::{
     agent_tools, background_process_manager, build_hub, mode_policy, policy_tool_names, Harness,
@@ -106,6 +106,17 @@ fn headless_in(
     filter: ToolFilter,
     mode: PermissionMode,
 ) -> (Headless, Arc<Mutex<Vec<ModelRequest>>>) {
+    harness(dirs, provider, filter, mode, GateBase::default())
+}
+
+/// [`headless_in`] with Gate classifying and routing as `gate` says.
+fn harness(
+    dirs: &Dirs,
+    provider: MockProvider,
+    filter: ToolFilter,
+    mode: PermissionMode,
+    gate: GateBase,
+) -> (Headless, Arc<Mutex<Vec<ModelRequest>>>) {
     let data = dirs.data.path();
     let workspace = dirs.workspace.path().to_path_buf();
     let requests = Arc::new(Mutex::new(Vec::new()));
@@ -131,6 +142,7 @@ fn headless_in(
             limits: crate::model_selection::ModelLimits::of(&config),
             config,
             tools,
+            gate,
         },
         policy: filter.apply(mode_policy(mode, &tool_names), &tool_names),
         record_observer: None,

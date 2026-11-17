@@ -20,6 +20,8 @@ use aura_tools::ToolConfig;
 use tempfile::TempDir;
 use tokio::sync::Semaphore;
 
+mod subtasks;
+
 /// Model whose route refuses the sign-in, for Gate's re-routing.
 const REFUSING_MODEL: &str = "claude/claude-sonnet-4-6";
 
@@ -119,6 +121,8 @@ async fn classify(request: &ModelRequest, prompt: &str) -> Result<ModelResponse,
 
 struct Fixture {
     hub: Arc<AgentHub>,
+    /// Runs the `task` calls of the hub's kernels
+    dispatcher: Arc<dyn aura_tools::SubagentDispatchHook>,
     config: AgentLoopConfig,
     gate: Arc<Semaphore>,
     commands_tx: mpsc::Sender<UiCommand>,
@@ -169,6 +173,7 @@ fn fixture_with_gate(gate: GateLive) -> (Fixture, mpsc::Receiver<UiCommand>) {
             limits: crate::model_selection::ModelLimits::of(&config),
             config: config.clone(),
             tools,
+            gate: GateBase::default(),
         },
         commands: commands_tx.clone(),
         long_run: crate::long_run::LongRunSettings::default(),
@@ -195,7 +200,9 @@ fn fixture_with_gate(gate: GateLive) -> (Fixture, mpsc::Receiver<UiCommand>) {
     let prompter = Arc::clone(&approvals);
     let files = crate::file_checkpoints::FileCheckpoints::new(data.path());
     let factory_files = files.clone();
-    let hub = AgentHub::new(parts, |_dispatcher| {
+    let mut captured = None;
+    let hub = AgentHub::new(parts, |dispatcher| {
+        captured = Some(dispatcher);
         let kernel_store = Arc::clone(&store);
         KernelFactory::new(
             store,
@@ -227,6 +234,7 @@ fn fixture_with_gate(gate: GateLive) -> (Fixture, mpsc::Receiver<UiCommand>) {
     });
     let fixture = Fixture {
         hub,
+        dispatcher: captured.unwrap(),
         config,
         gate,
         commands_tx,

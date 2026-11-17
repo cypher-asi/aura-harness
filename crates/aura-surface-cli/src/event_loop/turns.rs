@@ -517,6 +517,7 @@ impl Label {
             category,
             classifier: self.classifier.clone(),
             route: self.route.clone(),
+            kind: None,
         };
         let (tx, _) = record_prompt(session, &payload).await?;
         if let Some(files) = &session.file_checkpoints {
@@ -540,7 +541,7 @@ fn begin_files(session: &AgentSession, text: &str) {
 
 /// The signal of a turn that ran to its end with `result`, whose messages
 /// from `turn_start` on are the turn's own.
-fn ended_signal(
+pub(crate) fn ended_signal(
     result: &Result<aura_agent::AgentLoopResult, aura_agent::AgentError>,
     turn_start: usize,
 ) -> OutcomeSignal {

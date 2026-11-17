@@ -172,6 +172,15 @@ impl Route {
             propensity: 1.0,
         }
     }
+
+    /// A subtask on `model`, chosen for `reason` without exploring.
+    #[must_use]
+    pub fn subtask(model: impl Into<String>, reason: RouteReason) -> Self {
+        Self {
+            level: RouteLevel::Subtask,
+            ..Self::turn(model, reason)
+        }
+    }
 }
 
 impl Default for Route {
@@ -191,6 +200,10 @@ pub struct PromptPayload {
     pub classifier: String,
     /// Where the prompt's work runs.
     pub route: Route,
+    /// The kind of agent a subtask went to (the permanent agent the
+    /// `task` call named); `None` for a turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 impl PromptPayload {
@@ -202,6 +215,7 @@ impl PromptPayload {
             category: PromptCategory::Unclassified,
             classifier: String::new(),
             route: Route::default(),
+            kind: None,
         }
     }
 
@@ -240,6 +254,8 @@ pub enum OutcomeSignal {
     Good,
     /// The user rated the turn bad (`/bad`).
     Bad,
+    /// The parent dispatched the same subtask again in the same turn.
+    Redone,
 }
 
 impl OutcomeSignal {
@@ -249,9 +265,12 @@ impl OutcomeSignal {
     pub const fn success(self) -> Option<bool> {
         match self {
             Self::ChecksPassed | Self::Good => Some(true),
-            Self::Error | Self::ChecksFailed | Self::Rewind | Self::RetryStronger | Self::Bad => {
-                Some(false)
-            }
+            Self::Error
+            | Self::ChecksFailed
+            | Self::Rewind
+            | Self::RetryStronger
+            | Self::Bad
+            | Self::Redone => Some(false),
             Self::None => None,
         }
     }
@@ -284,6 +303,7 @@ impl OutcomeSignal {
             Self::RetryStronger => "retry_stronger",
             Self::Good => "good",
             Self::Bad => "bad",
+            Self::Redone => "redone",
         }
     }
 }
@@ -359,6 +379,7 @@ mod tests {
             category: PromptCategory::Debugging,
             classifier: "claude/claude-haiku-4-5".to_string(),
             route: Route::turn("claude/claude-sonnet-4-6", RouteReason::Default),
+            kind: None,
         };
         let bytes = payload.to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
@@ -366,6 +387,22 @@ mod tests {
         assert_eq!(json["route"]["level"], "turn");
         assert_eq!(json["route"]["reason"], "default");
         assert_eq!(json["route"]["propensity"], 1.0);
+        assert!(json.get("kind").is_none(), "a turn names no kind");
+        assert_eq!(PromptPayload::from_bytes(&bytes).unwrap(), payload);
+    }
+
+    #[test]
+    fn subtask_prompt_payload_records_its_kind_and_level() {
+        let payload = PromptPayload {
+            category: PromptCategory::Research,
+            route: Route::subtask("claude/claude-haiku-4-5", RouteReason::Proven),
+            kind: Some("explorer".to_string()),
+            ..PromptPayload::new("find the parser")
+        };
+        let bytes = payload.to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["route"]["level"], "subtask");
+        assert_eq!(json["kind"], "explorer");
         assert_eq!(PromptPayload::from_bytes(&bytes).unwrap(), payload);
     }
 
@@ -402,10 +439,16 @@ mod tests {
             OutcomeSignal::Rewind,
             OutcomeSignal::RetryStronger,
             OutcomeSignal::Bad,
+            OutcomeSignal::Redone,
         ] {
             assert_eq!(failure.success(), Some(false), "{failure}");
         }
         assert_eq!(OutcomeSignal::None.success(), None);
+        assert!(!OutcomeSignal::Redone.is_turn_end());
+        assert_eq!(
+            serde_json::to_value(OutcomeSignal::Redone).unwrap(),
+            OutcomeSignal::Redone.as_str()
+        );
     }
 
     #[test]

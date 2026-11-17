@@ -287,6 +287,7 @@ async fn build(
             config,
             tools,
             limits: models.limits(),
+            gate: crate::event_loop::GateBase::of(&models),
         },
         policy: tool_filter.apply(mode_policy(permission_mode, &tool_names), &tool_names),
         record_observer: None,

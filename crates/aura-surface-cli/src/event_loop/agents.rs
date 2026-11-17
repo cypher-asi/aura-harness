@@ -138,7 +138,7 @@ pub type KernelBuilder =
 
 /// Opens per-agent sessions and reads agent records for the UI.
 pub struct KernelFactory {
-    pub(super) store: Arc<dyn ReadStore>,
+    pub(crate) store: Arc<dyn ReadStore>,
     build_kernel: KernelBuilder,
     pub(super) checkpoints: Option<Checkpoints>,
     pub(super) file_checkpoints: Option<FileCheckpoints>,

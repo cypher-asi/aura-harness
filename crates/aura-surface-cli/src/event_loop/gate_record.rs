@@ -28,7 +28,7 @@ const SCAN_LIMIT: usize = 2_000;
 
 /// Label `text` with its category by asking `model` through `kernel`, so
 /// the call is recorded. Any failure leaves it unclassified.
-pub(super) async fn classify_prompt(
+pub(crate) async fn classify_prompt(
     kernel: &Kernel,
     model: &str,
     text: &str,
@@ -60,7 +60,7 @@ pub(super) async fn classify_prompt(
 
 /// Write `outcome` to the record of `agent_id` through `kernel`. A failure
 /// is logged.
-pub(super) async fn record(kernel: &Kernel, agent_id: AgentId, outcome: &OutcomePayload) -> bool {
+pub(crate) async fn record(kernel: &Kernel, agent_id: AgentId, outcome: &OutcomePayload) -> bool {
     match kernel
         .process_direct(Transaction::outcome(agent_id, outcome))
         .await
