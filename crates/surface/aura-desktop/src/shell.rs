@@ -621,6 +621,54 @@ mod tests {
         assert!(stage.shell.take_effects().is_empty());
     }
 
+    /// What `shell` last drew, painted again with nothing kept.
+    fn afresh(shell: &Shell) -> Vec<u8> {
+        let view = View {
+            size: shell.window,
+            cells: &shell.cells,
+            cols: shell.cols,
+            rows: shell.rows,
+            prose: &shell.prose,
+            cursor: shell.cursor.filter(|_| shell.cursor_shown),
+            metrics: shell.metrics,
+            palette: shell.palette,
+            bar: &shell.bar,
+            chrome: &shell.chrome,
+        };
+        let mut pixels = Vec::new();
+        text::with(|text| {
+            let mut painter = Painter::default();
+            let scene = painter.paint_with(&view, text);
+            raster::paint(scene, text.atlas(), &mut pixels);
+        });
+        pixels
+    }
+
+    #[test]
+    fn a_streaming_reply_is_drawn_from_kept_rows_as_it_would_be_afresh() {
+        let mut stage = stage();
+        // A small window: every frame is rasterized twice.
+        stage.shell.resized(Size::new(700.0, 420.0), 1.0);
+        stage.seed(true);
+        stage.shell.commands([UiCommand::StartStreaming]);
+        let reply = "The **kernel** records every step, then `cargo test` runs.\n\n\
+                     - one thing that wraps over more than a single line of the chat\n\
+                     - another\n\n```rust\nfn main() {}\n```\n\n";
+        let text: Vec<char> = reply.repeat(6).chars().collect();
+        let mut kept = 0;
+        for (i, chunk) in text.chunks(9).enumerate() {
+            stage
+                .shell
+                .commands([UiCommand::AppendText(chunk.iter().collect())]);
+            // Spinners turn and the cursor blinks as it streams.
+            stage.pass(Duration::from_millis(50));
+            let drawn = stage.pixels();
+            kept += usize::from(stage.shell.painter.built() < usize::from(stage.shell.rows));
+            assert!(drawn == afresh(&stage.shell), "chunk {i} left a stale row");
+        }
+        assert!(kept > 50, "rows were kept from frame to frame: {kept}");
+    }
+
     #[test]
     fn an_idle_window_wakes_once_a_second_and_looks_the_same() {
         let mut stage = stage();

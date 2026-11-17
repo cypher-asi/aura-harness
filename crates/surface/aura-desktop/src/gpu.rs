@@ -519,6 +519,7 @@ impl Gpu {
 pub struct Offscreen {
     renderer: Renderer,
     name: String,
+    software: bool,
 }
 
 #[cfg(test)]
@@ -535,11 +536,17 @@ impl Offscreen {
         Ok(Self {
             renderer: Renderer::new(device, queue, Self::FORMAT),
             name: format!("{} ({:?})", info.name, info.backend),
+            software: info.device_type == wgpu::DeviceType::Cpu,
         })
     }
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Whether the adapter is the CPU running a software rasterizer.
+    pub const fn is_software(&self) -> bool {
+        self.software
     }
 
     pub fn atlas_limit(&self) -> u32 {
@@ -638,7 +645,10 @@ mod tests {
         let gap = |(a, b): (&[u8], &[u8])| a.iter().zip(b).map(|(a, b)| a.abs_diff(*b)).max();
         let pixels = || drawn.chunks_exact(4).zip(cpu.chunks_exact(4));
         let worst = pixels().filter_map(gap).max().unwrap_or(0);
-        let apart = pixels().filter(|pair| gap(*pair) > Some(CLOSE)).count();
+        // A software rasterizer blends in eight bits, and stacked
+        // translucent quads can add up to one level more.
+        let close = CLOSE + u8::from(gpu.is_software());
+        let apart = pixels().filter(|pair| gap(*pair) > Some(close)).count();
         let off = pixels().filter(|pair| gap(*pair) > Some(0)).count();
         println!(
             "{what} on {}: {} quads, {off} pixels off by a level, worst {worst}",
