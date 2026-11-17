@@ -159,14 +159,7 @@ impl App {
                     });
                 }
             }
-            "good" | "bad" => {
-                if let Some(tx) = &self.event_tx {
-                    let _ = tx.try_send(UiEvent::RateTurn {
-                        agent_id: self.active_agent_id.clone(),
-                        good: cmd == "good",
-                    });
-                }
-            }
+            "good" | "bad" => self.handle_rate_command(cmd == "good", arg),
             "new" | "n" => {
                 self.messages.clear();
                 self.scroll_offset = 0;
@@ -523,6 +516,32 @@ impl App {
                 agent_id: self.active_agent_id.clone(),
                 turn,
                 scope,
+            });
+        }
+    }
+
+    /// `/good [n]` or `/bad [n]`: rate the agent's finished turn `n` back
+    /// (1, the default, is the last). The event loop rejects an `n` beyond
+    /// the turns it has.
+    fn handle_rate_command(&mut self, good: bool, arg: &str) {
+        let turns_back = if arg.is_empty() {
+            Some(1)
+        } else {
+            arg.parse::<usize>().ok().filter(|n| *n > 0)
+        };
+        let Some(turns_back) = turns_back else {
+            let name = if good { "good" } else { "bad" };
+            self.notification = Some((
+                format!("Usage: /{name} [n] (n turns back, 1 = the last finished turn)"),
+                NotificationType::Warning,
+            ));
+            return;
+        };
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::RateTurn {
+                agent_id: self.active_agent_id.clone(),
+                good,
+                turns_back,
             });
         }
     }

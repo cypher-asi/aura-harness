@@ -1736,6 +1736,7 @@ async fn good_and_bad_override_the_turns_own_signal() {
     let rate = |good| UiEvent::RateTurn {
         agent_id: first.to_hex(),
         good,
+        turns_back: 1,
     };
 
     handle_ui_event(&mut state, rate(true), &links).await;
@@ -1765,6 +1766,82 @@ async fn good_and_bad_override_the_turns_own_signal() {
         .collect();
     let counted = aura_agent_gate::outcome::effective(&outcomes).unwrap();
     assert_eq!(counted.signal, OutcomeSignal::Bad);
+}
+
+#[tokio::test]
+async fn good_and_bad_rate_an_earlier_turn_by_how_many_turns_back() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    let rate = |good, turns_back| UiEvent::RateTurn {
+        agent_id: first.to_hex(),
+        good,
+        turns_back,
+    };
+
+    unrestricted(&mut state, &links, first).await;
+    turn(&mut state, &mut done, &links, first, "run failing check").await;
+    turn(&mut state, &mut done, &links, first, "run passing check").await;
+    turn(&mut state, &mut done, &links, first, "third turn").await;
+    let prompts: Vec<Hash> = prompts_of(&state, first)
+        .into_iter()
+        .map(|(_, hash, _)| hash)
+        .collect();
+    drain(&mut commands);
+
+    let ratings_of = |state: &LoopState<'_>, prompt: Hash| -> Vec<OutcomePayload> {
+        outcomes_of(state, first)
+            .into_iter()
+            .map(|(_, o)| o)
+            .filter(|o| o.prompt_tx == prompt)
+            .collect()
+    };
+
+    handle_ui_event(&mut state, rate(true, 3), &links).await;
+    assert!(system_texts(&drain(&mut commands)).contains("Rated the turn 3 back good"));
+    let rated = ratings_of(&state, prompts[0]);
+    let signals: Vec<OutcomeSignal> = rated.iter().map(|o| o.signal).collect();
+    assert_eq!(signals, [OutcomeSignal::ChecksFailed, OutcomeSignal::Good]);
+    assert_eq!(rated[1].model, rated[0].model);
+    assert_eq!(rated[1].category, rated[0].category);
+    for later in &prompts[1..] {
+        assert!(
+            ratings_of(&state, *later)
+                .iter()
+                .all(|o| o.signal.is_turn_end()),
+            "only the first turn is rated"
+        );
+    }
+
+    handle_ui_event(&mut state, rate(false, 3), &links).await;
+    let rated = ratings_of(&state, prompts[0]);
+    let counted = aura_agent_gate::outcome::effective(&rated).unwrap();
+    assert_eq!(counted.signal, OutcomeSignal::Bad, "the latest rating wins");
+    assert_eq!(counted.success, Some(false));
+
+    handle_ui_event(&mut state, rate(false, 2), &links).await;
+    let second = ratings_of(&state, prompts[1]);
+    assert_eq!(
+        aura_agent_gate::outcome::effective(&second).unwrap().signal,
+        OutcomeSignal::Bad,
+        "/bad 2 overrides the second turn's passing check"
+    );
+    drain(&mut commands);
+
+    let before = outcomes_of(&state, first).len();
+    handle_ui_event(&mut state, rate(true, 4), &links).await;
+    assert!(system_texts(&drain(&mut commands))
+        .contains("No turn 4 back to rate: there are 3 finished turns"));
+    handle_ui_event(&mut state, rate(true, 0), &links).await;
+    assert!(system_texts(&drain(&mut commands)).contains("Turns back start at 1"));
+    assert_eq!(
+        outcomes_of(&state, first).len(),
+        before,
+        "a rejected rating writes nothing"
+    );
 }
 
 #[tokio::test]
@@ -1987,6 +2064,7 @@ async fn the_next_turn_uses_what_the_last_outcome_taught_gate() {
     let rate = |good| UiEvent::RateTurn {
         agent_id: first.to_hex(),
         good,
+        turns_back: 1,
     };
     let reasons = |state: &LoopState<'_>| -> Vec<RouteReason> {
         prompts_of(state, first)

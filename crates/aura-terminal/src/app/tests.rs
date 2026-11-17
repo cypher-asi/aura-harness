@@ -256,13 +256,55 @@ fn test_good_and_bad_rate_the_active_agents_last_turn() {
     app.handle_command("/good");
     assert!(matches!(
         rx.try_recv(),
-        Ok(UiEvent::RateTurn { ref agent_id, good: true }) if agent_id == "abc"
+        Ok(UiEvent::RateTurn { ref agent_id, good: true, turns_back: 1 }) if agent_id == "abc"
     ));
     app.handle_command("/bad");
     assert!(matches!(
         rx.try_recv(),
-        Ok(UiEvent::RateTurn { good: false, .. })
+        Ok(UiEvent::RateTurn {
+            good: false,
+            turns_back: 1,
+            ..
+        })
     ));
+}
+
+#[test]
+fn test_good_and_bad_take_how_many_turns_back() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+
+    app.handle_command("/good 3");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::RateTurn {
+            good: true,
+            turns_back: 3,
+            ..
+        })
+    ));
+    app.handle_command("/bad  2 ");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::RateTurn {
+            good: false,
+            turns_back: 2,
+            ..
+        })
+    ));
+
+    for bad in ["/good 0", "/bad -1", "/good two", "/bad 2 3"] {
+        app.notification = None;
+        app.handle_command(bad);
+        assert!(rx.try_recv().is_err(), "{bad} should not be sent");
+        assert!(
+            matches!(
+                app.notification(),
+                Some((text, NotificationType::Warning)) if text.starts_with("Usage: /")
+            ),
+            "{bad}"
+        );
+    }
 }
 
 #[test]

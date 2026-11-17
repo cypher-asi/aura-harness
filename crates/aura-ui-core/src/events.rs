@@ -220,13 +220,15 @@ pub enum UiEvent {
         session: bool,
     },
 
-    /// User rated the agent's last turn (`/good` or `/bad`), overriding
-    /// what Gate inferred about how it went
+    /// User rated one of the agent's finished turns (`/good [n]` or
+    /// `/bad [n]`), overriding what Gate inferred about how it went
     RateTurn {
         /// Agent the chat showed (hex id)
         agent_id: String,
         /// `/good` rather than `/bad`
         good: bool,
+        /// How many finished turns back: 1 is the last
+        turns_back: usize,
     },
 
     /// User ran `/compare` (Gate against another model on their own task)

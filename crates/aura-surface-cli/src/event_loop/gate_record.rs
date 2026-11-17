@@ -107,6 +107,27 @@ pub(crate) fn last_turn<S: ReadStore + ?Sized>(store: &S, agent_id: AgentId) -> 
     Some(LastTurn { outcome, prompt })
 }
 
+/// The outcome written when each of `agent_id`'s finished turns ended,
+/// newest turn first, for the turns the scan reaches. A turn whose end
+/// was written twice (a `/compare` run and its check) appears once, with
+/// its newest end.
+pub(crate) fn finished_turns<S: ReadStore + ?Sized>(
+    store: &S,
+    agent_id: AgentId,
+) -> Vec<OutcomePayload> {
+    let mut turns: Vec<OutcomePayload> = Vec::new();
+    for outcome in newest_first(store, agent_id)
+        .iter()
+        .filter_map(|entry| entry.tx.outcome_payload())
+        .filter(|outcome| outcome.signal.is_turn_end())
+    {
+        if !turns.iter().any(|t| t.prompt_tx == outcome.prompt_tx) {
+            turns.push(outcome);
+        }
+    }
+    turns
+}
+
 /// The outcome written when the turn of each prompt in `prompts` ended,
 /// for those the scan reaches, in the order of `prompts`.
 pub(crate) fn turn_outcomes<S: ReadStore + ?Sized>(
@@ -181,20 +202,36 @@ pub(super) async fn note_rewind(session: &AgentSession, prompts: &[Hash]) {
     }
 }
 
-/// `/good` or `/bad`: the user's rating of `agent_id`'s last turn, which
-/// overrides what the turn's own signals said.
-pub(super) async fn handle_rate(state: &LoopState<'_>, agent_id: AgentId, good: bool) {
+/// `/good [n]` or `/bad [n]`: the user's rating of `agent_id`'s finished
+/// turn `turns_back` back (1 is the last), which overrides what the turn's
+/// own signals said. Rating a turn again replaces the earlier rating.
+pub(super) async fn handle_rate(
+    state: &LoopState<'_>,
+    agent_id: AgentId,
+    good: bool,
+    turns_back: usize,
+) {
     let ui = AgentUi::new(state.commands.clone(), agent_id);
+    if turns_back == 0 {
+        ui.send(UiCommand::ShowWarning(
+            "Turns back start at 1, the last finished turn".to_string(),
+        ))
+        .await;
+        return;
+    }
     let Some(kernel) = state.kernel_for(agent_id) else {
         ui.send(UiCommand::ShowWarning("No turn to rate yet".to_string()))
             .await;
         return;
     };
-    let Some(last) = last_turn(kernel.store().as_ref(), agent_id) else {
-        ui.send(UiCommand::ShowWarning(
-            "No finished turn to rate yet".to_string(),
-        ))
-        .await;
+    let turns = finished_turns(kernel.store().as_ref(), agent_id);
+    let Some(turn) = turns.get(turns_back - 1) else {
+        let warning = match turns.len() {
+            0 => "No finished turn to rate yet".to_string(),
+            1 => format!("No turn {turns_back} back to rate: there is 1 finished turn"),
+            n => format!("No turn {turns_back} back to rate: there are {n} finished turns"),
+        };
+        ui.send(UiCommand::ShowWarning(warning)).await;
         return;
     };
     let signal = if good {
@@ -202,10 +239,14 @@ pub(super) async fn handle_rate(state: &LoopState<'_>, agent_id: AgentId, good: 
     } else {
         OutcomeSignal::Bad
     };
-    let rated = last.outcome.with_signal(signal);
+    let rated = turn.with_signal(signal);
     if record(&kernel, agent_id, &rated).await {
+        let which = match turns_back {
+            1 => "the last turn".to_string(),
+            n => format!("the turn {n} back"),
+        };
         ui.send(UiCommand::ShowSuccess(format!(
-            "Rated the last turn {signal} ({} on {})",
+            "Rated {which} {signal} ({} on {})",
             rated.category, rated.model
         )))
         .await;
