@@ -298,10 +298,10 @@ mod tests {
         let raw = server.await.unwrap();
         assert!(raw.contains(r#""model":"claude-opus-4-7""#), "{raw}");
         assert!(!raw.contains("reasoning_effort"), "{raw}");
-        assert!(
-            raw.contains(r#""system":[{"type":"text","text":"You are Claude Code."},{"type":"text","text":"system""#),
-            "{raw}"
-        );
+        let body: serde_json::Value =
+            serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body["system"][0]["text"], "You are Claude Code.", "{raw}");
+        assert_eq!(body["system"][1]["text"], "system", "{raw}");
     }
 
     #[test]
