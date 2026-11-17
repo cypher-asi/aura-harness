@@ -666,7 +666,7 @@ mod tests {
         let tx = Transaction::new_chained(
             agent_id,
             TransactionType::UserPrompt,
-            Bytes::from(prompt.to_owned()),
+            aura_core_types::PromptPayload::new(prompt).to_bytes(),
             None,
         );
         store.enqueue_tx(&tx).unwrap();

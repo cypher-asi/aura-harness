@@ -11,7 +11,7 @@ use aura_store_record::{RecordLog, RecordLogError};
 use tempfile::TempDir;
 
 fn make_entry(agent_id: AgentId, seq: u64) -> RecordEntry {
-    let tx = Transaction::user_prompt(agent_id, format!("entry {seq}").into_bytes());
+    let tx = Transaction::user_prompt(agent_id, format!("entry {seq}"));
     RecordEntry::builder(seq, tx)
         .context_hash([0u8; 32])
         .proposals(ProposalSet::new())

@@ -1750,10 +1750,10 @@ mod tests {
 
         let entries = ctx.store.scan_record(agent_id, 1, 10).unwrap();
         assert!(
-            entries
-                .iter()
-                .any(|e| e.tx.tx_type == TransactionType::UserPrompt
-                    && e.tx.payload.as_ref() == b"hello kernel"),
+            entries.iter().any(|e| e
+                .tx
+                .prompt_payload()
+                .is_some_and(|p| p.text == "hello kernel")),
             "expected UserPrompt entry with payload 'hello kernel', got: {:?}",
             entries.iter().map(|e| e.tx.tx_type).collect::<Vec<_>>(),
         );

@@ -5,6 +5,7 @@
 mod action;
 mod context_hash;
 mod effect;
+mod gate;
 mod identity;
 mod process;
 mod proposal;
@@ -19,6 +20,9 @@ mod transaction;
 pub use action::{Action, ActionKind};
 pub use context_hash::ContextHash;
 pub use effect::{Effect, EffectKind, EffectStatus};
+pub use gate::{
+    OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, Route, RouteLevel, RouteReason,
+};
 pub use identity::Identity;
 pub use process::{ActionResultPayload, ProcessPending};
 pub use proposal::{Decision, Proposal, ProposalSet, RejectedProposal, Trace};
@@ -96,6 +100,7 @@ mod tests {
             Just(TransactionType::ProcessComplete),
             Just(TransactionType::Reasoning),
             Just(TransactionType::SubagentSpawn),
+            Just(TransactionType::Outcome),
         ]
     }
 
@@ -179,16 +184,48 @@ mod tests {
 
     #[test]
     fn transaction_roundtrip() {
-        let tx = Transaction::user_prompt(AgentId::generate(), b"Hello, agent!".to_vec());
+        let tx = Transaction::user_prompt(AgentId::generate(), "Hello, agent!");
         let json = serde_json::to_string(&tx).unwrap();
         let parsed: Transaction = serde_json::from_str(&json).unwrap();
         assert_eq!(tx, parsed);
     }
 
     #[test]
+    fn prompt_and_outcome_transactions_carry_their_payloads() {
+        let agent_id = AgentId::generate();
+        let prompt = PromptPayload {
+            category: PromptCategory::Research,
+            ..PromptPayload::new("how does replay work?")
+        };
+        let prompt_tx = Transaction::user_prompt_with(agent_id, &prompt);
+        assert_eq!(prompt_tx.tx_type, TransactionType::UserPrompt);
+        assert_eq!(prompt_tx.prompt_payload(), Some(prompt));
+        assert_eq!(prompt_tx.outcome_payload(), None);
+
+        let outcome = OutcomePayload {
+            prompt_tx: prompt_tx.hash,
+            category: PromptCategory::Research,
+            model: "aura-claude-haiku-4-5".to_string(),
+            success: None,
+            signal: OutcomeSignal::None,
+            cost_usd: 0.0,
+            latency_ms: 900,
+        };
+        let outcome_tx = Transaction::outcome(agent_id, &outcome);
+        assert_eq!(outcome_tx.tx_type, TransactionType::Outcome);
+        assert_eq!(outcome_tx.reference_tx_hash, Some(prompt_tx.hash));
+        assert_eq!(outcome_tx.outcome_payload(), Some(outcome));
+        assert_eq!(outcome_tx.prompt_payload(), None);
+
+        let json = serde_json::to_string(&outcome_tx).unwrap();
+        let parsed: Transaction = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, outcome_tx);
+    }
+
+    #[test]
     fn transaction_with_reference() {
         let agent_id = AgentId::generate();
-        let orig_tx = Transaction::user_prompt(agent_id, b"start process".to_vec());
+        let orig_tx = Transaction::user_prompt(agent_id, "start process");
         let result_payload = ActionResultPayload::success(
             ActionId::generate(),
             ProcessId::generate(),
@@ -216,13 +253,13 @@ mod tests {
     fn transaction_chaining() {
         let agent_id = AgentId::generate();
 
-        let tx1 = Transaction::user_prompt(agent_id, b"first".to_vec());
-        let tx2 = Transaction::user_prompt_chained(agent_id, b"second".to_vec(), &tx1.hash);
+        let tx1 = Transaction::user_prompt(agent_id, "first");
+        let tx2 = Transaction::user_prompt_chained(agent_id, "second", &tx1.hash);
 
-        let tx3 = Transaction::user_prompt(agent_id, b"second".to_vec());
+        let tx3 = Transaction::user_prompt(agent_id, "second");
         assert_ne!(tx2.hash, tx3.hash);
 
-        let tx4 = Transaction::user_prompt_chained(agent_id, b"second".to_vec(), &tx1.hash);
+        let tx4 = Transaction::user_prompt_chained(agent_id, "second", &tx1.hash);
         assert_eq!(tx2.hash, tx4.hash);
     }
 
@@ -248,7 +285,7 @@ mod tests {
 
     #[test]
     fn record_entry_roundtrip() {
-        let tx = Transaction::user_prompt(AgentId::generate(), b"test".to_vec());
+        let tx = Transaction::user_prompt(AgentId::generate(), "test");
         let entry = RecordEntry::builder(1, tx)
             .context_hash([1u8; 32])
             .proposals(ProposalSet::new())
@@ -391,6 +428,7 @@ mod tests {
             TransactionType::ProcessComplete,
             TransactionType::Reasoning,
             TransactionType::SubagentSpawn,
+            TransactionType::Outcome,
         ];
 
         for tx_type in types {

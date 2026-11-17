@@ -58,13 +58,14 @@ pub use types::{
     InstalledIntegrationDefinition, InstalledToolCapability, InstalledToolDefinition,
     InstalledToolIntegrationRequirement, InstalledToolRuntimeAuth, InstalledToolRuntimeExecution,
     InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution, LineDiff,
-    ModeChangePayload, PolicyApproval, PolicyApprover, PolicyCheck, PolicyCheckOutcome,
-    PolicyDecision, PolicyRule, PolicySource, ProcessPending, Proposal, ProposalSet, RecordEntry,
-    RecordEntryBuilder, RejectedProposal, RuntimeCapabilityInstall, SubagentBudget,
-    SubagentDispatchRequest, SubagentExit, SubagentKindSpec, SubagentResult, SystemKind, ToolAuth,
-    ToolCall, ToolCallContext, ToolDefinition, ToolExecution, ToolGateVerdict, ToolProposal,
-    ToolResult, ToolResultContent, ToolResultImage, ToolResultKind, Trace, Transaction,
-    TransactionType, DEFAULT_SUBAGENT_TIMEOUT_MS, KERNEL_VERSION, MAX_TURNS,
+    ModeChangePayload, OutcomePayload, OutcomeSignal, PolicyApproval, PolicyApprover, PolicyCheck,
+    PolicyCheckOutcome, PolicyDecision, PolicyRule, PolicySource, ProcessPending, PromptCategory,
+    PromptPayload, Proposal, ProposalSet, RecordEntry, RecordEntryBuilder, RejectedProposal, Route,
+    RouteLevel, RouteReason, RuntimeCapabilityInstall, SubagentBudget, SubagentDispatchRequest,
+    SubagentExit, SubagentKindSpec, SubagentResult, SystemKind, ToolAuth, ToolCall,
+    ToolCallContext, ToolDefinition, ToolExecution, ToolGateVerdict, ToolProposal, ToolResult,
+    ToolResultContent, ToolResultImage, ToolResultKind, Trace, Transaction, TransactionType,
+    DEFAULT_SUBAGENT_TIMEOUT_MS, KERNEL_VERSION, MAX_TURNS,
 };
 
 // Convenience re-exports of mode/permission primitives so downstream
