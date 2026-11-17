@@ -14,9 +14,17 @@ pub(crate) mod agents;
 pub(crate) mod approvals;
 mod attachments;
 pub mod auth;
+mod compare;
+mod compare_run;
+mod compare_view;
+pub(crate) mod gate_live;
+pub(crate) mod gate_record;
+pub(crate) mod gate_subtask;
+mod gate_view;
 pub(crate) mod handlers;
 pub(crate) mod host;
 pub(crate) mod hud;
+pub(crate) mod lead;
 pub(crate) mod modes;
 pub(crate) use modes::Permissions;
 pub(crate) mod notices;
@@ -28,6 +36,7 @@ mod rewind;
 pub(crate) mod run_command;
 pub(crate) mod steering;
 pub(crate) mod subagents;
+pub(crate) mod task_check;
 mod titles;
 pub(crate) mod trace;
 pub(crate) mod turns;
@@ -35,6 +44,8 @@ pub(crate) mod turns;
 pub(crate) use agent_events::forward_agent_events;
 pub use agents::{AgentSession, KernelBuilder, KernelFactory};
 pub use approvals::TerminalApprovals;
+pub use gate_live::GateLive;
+pub use gate_subtask::GateBase;
 pub use host::{TerminalAgents, TerminalChildKernels};
 pub use processes::{BackgroundCommands, ProcessTable};
 pub use record_ui::{FanoutObserver, RecordPanelAgent, UiRecordObserver};
@@ -49,7 +60,7 @@ use aura_agent::AgentLoop;
 use aura_agent_kernel::Kernel;
 use aura_agent_trace::RunRecorder;
 use aura_auth::{AuthManager, PendingLink};
-use aura_core_types::{AgentId, Transaction};
+use aura_core_types::{AgentId, RouteReason, Transaction};
 use aura_model::model_catalog::local_model_name;
 use aura_model::ToolDefinition;
 use aura_ui_terminal::events::{ImageAttachment, ProcessStatus};
@@ -61,7 +72,7 @@ use steering::{SteerSource, Steering};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
-use turns::{Prompt, Task, Work, WorkDone};
+use turns::{GateTurn, Prompt, Routing, Task, Work, WorkDone};
 
 /// How long quitting waits for cancelled turns to record how they ended.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
@@ -111,6 +122,8 @@ pub(super) struct LoopState<'a> {
     /// Plan sign-in waiting for a pasted code.
     pub(super) pending_link: Option<PendingLink>,
     pub(super) approvals: Arc<TerminalApprovals>,
+    /// The comparison waiting for `/compare go`, and the one running.
+    pub(super) compare: compare::CompareState,
 }
 
 impl LoopState<'_> {
@@ -133,12 +146,16 @@ impl LoopState<'_> {
         }
     }
 
-    /// Publish the terminal's current config as the base for spawned agents.
+    /// Point the terminal's config at the model the next turn runs on
+    /// (Gate's pick when Gate is selected) and publish it as the base for
+    /// turns and spawned agents.
     fn sync_turn_base(&mut self) {
+        self.models.refresh_route(self.agent_loop.config_mut());
         let config = self.agent_loop.config_mut().clone();
         let mut base = subagents::lock(&self.hub.base);
         base.config = config;
         base.limits = self.models.limits();
+        base.gate = GateBase::of(&self.models);
     }
 
     /// The agent named by hex id `agent_hex`, or the active agent when the
@@ -186,6 +203,11 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         auth,
         pending_link: None,
         approvals,
+        compare: compare::CompareState::in_aura_home(
+            &std::env::current_dir()
+                .unwrap_or_default()
+                .join("aura_data"),
+        ),
     };
     let mut notice_rx = state.hub.take_notices();
     state.hub.name_agents();
@@ -436,6 +458,7 @@ async fn handle_ui_event(
             }
         }
         UiEvent::ShowStatus => trace::status_report(state).await,
+        UiEvent::ShowGate => gate_view::show(state).await,
         UiEvent::OpenGraph(id) => trace::open_graph(state, id).await,
         UiEvent::ListRuns => trace::list(state).await,
         UiEvent::LabelStep { run_id, seq, value } => {
@@ -507,6 +530,18 @@ async fn handle_ui_event(
         UiEvent::Diff { agent_id, session } => {
             let agent_id = state.agent_or_active(&agent_id);
             rewind::handle_diff(state, agent_id, session).await;
+        }
+        UiEvent::RateTurn {
+            agent_id,
+            good,
+            turns_back,
+        } => {
+            let agent_id = state.agent_or_active(&agent_id);
+            gate_record::handle_rate(state, agent_id, good, turns_back).await;
+        }
+        UiEvent::Compare { agent_id, args } => {
+            let agent_id = state.agent_or_active(&agent_id);
+            compare::handle(state, agent_id, &args).await;
         }
         UiEvent::KillProcess(id) => handlers::handle_kill_process(state, &id).await,
         UiEvent::BuildPlan { agent_id, path } => {
@@ -608,7 +643,9 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
                 prompt: (!shown).then(|| prompt.text.clone()),
             })
             .await;
-            let (agent_loop, tools, recorder) = prepare_turn(state, &session).await;
+            let (agent_loop, tools, recorder) = prepare_turn(state, &mut session).await;
+            let gate = gate_turn(state, &agent_loop).map(Box::new);
+            let routing = Box::new(routing(state, &agent_loop));
             if let Some(rec) = &recorder {
                 rec.begin_turn(&prompt.text);
             }
@@ -631,6 +668,8 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
                 steering: turn_steering,
                 limits: state.hub.long_run,
                 recorder,
+                gate,
+                routing,
                 title_model,
             }
         }
@@ -672,7 +711,7 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
 /// its conversation's run when tracing is on.
 async fn prepare_turn(
     state: &mut LoopState<'_>,
-    session: &AgentSession,
+    session: &mut AgentSession,
 ) -> (AgentLoop, Vec<ToolDefinition>, Option<Arc<RunRecorder>>) {
     for problem in subagents::lock(&state.hub.definitions).reload() {
         warn!(%problem, "Skipping agent definition");
@@ -681,10 +720,7 @@ async fn prepare_turn(
     state.sync_turn_base();
     let workspace = session.kernel.agent_workspace();
     let agent_id = session.agent_id();
-    let (mut config, tools) =
-        state
-            .hub
-            .agent_turn(agent_id, session.definition.as_deref(), &workspace);
+    let (mut config, tools) = state.hub.lead_turn(session);
     state.hub.send_instructions(agent_id, &workspace).await;
     state
         .hub
@@ -711,6 +747,39 @@ async fn prepare_turn(
     (AgentLoop::new(config), tools, recorder)
 }
 
+/// When Gate routes the turn `agent_loop` is set up for (Gate is selected
+/// and no permanent agent names its own model), what it routes among once
+/// the prompt is classified. The turn shows Gate's choice when it makes
+/// it.
+fn gate_turn(state: &LoopState<'_>, agent_loop: &AgentLoop) -> Option<GateTurn> {
+    state
+        .models
+        .route()
+        .filter(|preview| preview.id == agent_loop.config().model)?;
+    Some(GateTurn {
+        candidates: state.models.gate_candidates(),
+        limits: state.models.limits(),
+        live: Arc::clone(&state.hub.gate),
+        models: state.models.ui_command(),
+    })
+}
+
+/// How Gate records the prompt of a turn on `agent_loop`: the turn's model
+/// is Gate's default when Gate is selected and the agent doesn't name its
+/// own model (Gate's pick, or the local default when nothing else can
+/// run), else pinned.
+fn routing(state: &LoopState<'_>, agent_loop: &AgentLoop) -> Routing {
+    let gated = state.models.is_gate() && agent_loop.config().model == state.models.turn_model();
+    Routing {
+        classifier: state.models.classifier_model(),
+        reason: if gated {
+            RouteReason::Default
+        } else {
+            RouteReason::Pinned
+        },
+    }
+}
+
 /// Take back the session of work that ended, report a failure, and start
 /// what was waiting for the agent: first any messages sent into the turn
 /// too late for the model to see, then the queue.
@@ -720,8 +789,15 @@ async fn handle_work_done(state: &mut LoopState<'_>, done: WorkDone) {
         session,
         failure,
         unseen,
+        refused_models,
         title,
     } = done;
+    if !refused_models.is_empty() {
+        for model in &refused_models {
+            state.models.drop_model(model);
+        }
+        let _ = state.commands.send(state.models.ui_command()).await;
+    }
     if let Some(title) = title {
         if let Err(e) = subagents::lock(&state.hub.registry).set_title(agent_id, &title) {
             warn!(%agent_id, error = %e, "Could not save the chat title");
@@ -766,7 +842,7 @@ async fn handle_work_done(state: &mut LoopState<'_>, done: WorkDone) {
 /// Re-probe Ollama when the selected model is local. Returns `true` after
 /// telling `ui` why it can't run and ending its turn.
 async fn local_model_unavailable(state: &mut LoopState<'_>, ui: &AgentUi) -> bool {
-    if local_model_name(state.models.current()).is_none() {
+    if local_model_name(&state.models.turn_model()).is_none() {
         return false;
     }
     state.models.refresh_local().await;

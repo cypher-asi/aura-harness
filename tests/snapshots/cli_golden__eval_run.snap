@@ -41,8 +41,11 @@ Options:
       --work-dir <WORK_DIR>
           Where task workspaces are created (default `AURA_HOME/evals/work`)
 
+      --budget-usd <BUDGET_USD>
+          Stop starting runs once the suite's runs cost this many USD
+
       --model <MODEL>
-          Model id (default: the recorded run's model, or the terminal default)
+          Model id, or `gate` for Gate's pick (default: the recorded run's model, or the terminal default)
 
       --provider <PROVIDER>
           `routed` (default) or `mock`

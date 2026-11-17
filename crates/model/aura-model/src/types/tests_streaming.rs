@@ -313,6 +313,7 @@ fn test_stream_accumulator_captures_provider_request_id_from_http_meta() {
     let mut acc = StreamAccumulator::new();
     acc.process(&StreamEvent::HttpMeta {
         request_id: Some("req_01XYZ".to_string()),
+        plan_usage: Vec::new(),
     });
     acc.process(&StreamEvent::MessageStart {
         message_id: "msg_01ABC".to_string(),
@@ -331,7 +332,10 @@ fn test_stream_accumulator_http_meta_with_none_is_noop() {
     // header was captured. A `None` value must not overwrite a later
     // body-level fallback.
     let mut acc = StreamAccumulator::new();
-    acc.process(&StreamEvent::HttpMeta { request_id: None });
+    acc.process(&StreamEvent::HttpMeta {
+        request_id: None,
+        plan_usage: Vec::new(),
+    });
     acc.process(&StreamEvent::Error {
         message: "api_error: Internal server error".to_string(),
         request_id: Some("req_01FALLBACK".to_string()),
@@ -351,6 +355,7 @@ fn test_stream_accumulator_http_meta_wins_over_body_fallback() {
     let mut acc = StreamAccumulator::new();
     acc.process(&StreamEvent::HttpMeta {
         request_id: Some("req_01HEADER".to_string()),
+        plan_usage: Vec::new(),
     });
     acc.process(&StreamEvent::Error {
         message: "api_error: Internal server error".to_string(),
@@ -409,6 +414,7 @@ fn test_stream_accumulator_into_response_error_includes_request_id() {
     let mut acc = StreamAccumulator::new();
     acc.process(&StreamEvent::HttpMeta {
         request_id: Some("req_01XYZ".to_string()),
+        plan_usage: Vec::new(),
     });
     acc.process(&StreamEvent::MessageStart {
         message_id: "msg_01ABC".to_string(),
@@ -444,6 +450,7 @@ fn test_stream_accumulator_into_response_populates_trace_split_ids() {
     let mut acc = StreamAccumulator::new();
     acc.process(&StreamEvent::HttpMeta {
         request_id: Some("req_01HAPPY".to_string()),
+        plan_usage: Vec::new(),
     });
     acc.process(&StreamEvent::MessageStart {
         message_id: "msg_01HAPPY".to_string(),

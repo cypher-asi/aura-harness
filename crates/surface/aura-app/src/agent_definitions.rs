@@ -31,6 +31,8 @@ const SEEDED_FILE: &str = ".seeded";
 const SEED_DEFINITIONS: &[(&str, &str)] = &[
     ("explorer", include_str!("agent_definitions/explorer.md")),
     ("reviewer", include_str!("agent_definitions/reviewer.md")),
+    ("implement", include_str!("agent_definitions/implement.md")),
+    ("tests", include_str!("agent_definitions/tests.md")),
     ("engineer", include_str!("agent_definitions/engineer.md")),
     (
         "rust-engineer",
@@ -436,13 +438,15 @@ mod tests {
         assert!(validate_name(&"a".repeat(MAX_NAME_LEN + 1)).is_err());
     }
 
-    const SEEDED_NAMES: [&str; 8] = [
+    const SEEDED_NAMES: [&str; 10] = [
         "engineer",
         "explorer",
         "frontend-engineer",
+        "implement",
         "product-manager",
         "reviewer",
         "rust-engineer",
+        "tests",
         "ui-designer",
         "web-designer",
     ];
@@ -507,6 +511,8 @@ mod tests {
             "frontend-engineer",
             "ui-designer",
             "product-manager",
+            "implement",
+            "tests",
         ] {
             assert!(defs.get(name).is_some(), "missing {name}");
         }

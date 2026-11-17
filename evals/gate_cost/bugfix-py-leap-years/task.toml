@@ -1,0 +1,6 @@
+title = "Fix Gregorian leap years"
+category = "bugfix"
+tags = ["python"]
+prompt = "Users report February 1900 has 29 days in our calendar. Fix calendar_utils.py so leap years follow the Gregorian rules."
+verify = "PYTHONPATH=. python3 .gate_checks/check.py"
+max_iterations = 15

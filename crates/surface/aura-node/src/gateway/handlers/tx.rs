@@ -62,6 +62,19 @@ pub(in crate::gateway) async fn submit_tx_handler(
         ));
     }
 
+    // A submitted prompt is its text; the record keeps it as a prompt
+    // payload like every other prompt.
+    let payload = if tx_type == TransactionType::UserPrompt {
+        let text = String::from_utf8(payload).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("Prompt payload is not UTF-8 text: {e}"),
+            )
+        })?;
+        aura_core_types::PromptPayload::new(text).to_bytes()
+    } else {
+        payload
+    };
     let tx = Transaction::new_chained(agent_id, tx_type, Bytes::from(payload), None);
 
     state.store.enqueue_tx(&tx).map_err(|e| {

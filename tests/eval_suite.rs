@@ -8,7 +8,7 @@ use std::sync::Arc;
 use aura_agent::AgentLoopConfig;
 use aura_agent_trace::{RunBundle, RunSource, RunTrace};
 use aura_app::recorded_runs::{self, HeadlessRun};
-use aura_cli::evals::{self, EvalOptions};
+use aura_cli::evals::{self, EvalOptions, EvalRunner};
 use aura_config::TraceLevel;
 use aura_core_types::trace::StepAction;
 use aura_exec_tools::ToolConfig;
@@ -16,6 +16,8 @@ use aura_model::{MockProvider, MockResponse, ModelProvider};
 use serde_json::json;
 
 const SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/evals/coding");
+const GATE_SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/evals/gate_cost");
+const GATE_HARD_SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/evals/gate_hard");
 
 fn write_greeting() -> MockProvider {
     MockProvider::new().with_responses(vec![
@@ -35,10 +37,13 @@ fn options(home: &Path, arm: &str, provider: fn() -> MockProvider) -> EvalOption
         arm: Some(arm.into()),
         repeat: 1,
         level: TraceLevel::Full,
-        config: AgentLoopConfig::for_agent("mock-model"),
-        tool_config: ToolConfig::for_autonomous_dev_loop(),
+        runner: EvalRunner::Model {
+            config: Box::new(AgentLoopConfig::for_agent("mock-model")),
+            tool_config: ToolConfig::for_autonomous_dev_loop(),
+            provider: Box::new(move |_| Arc::new(provider())),
+        },
         work_root: home.join("work"),
-        provider: Box::new(move |_| Arc::new(provider())),
+        budget_usd: None,
     }
 }
 
@@ -56,10 +61,18 @@ async fn eval_runs_are_verified_scored_and_compared() {
     assert!(good[0].passed, "{good:?}");
     assert_eq!(good[0].scorecard.outcome, Some(1.0));
     assert_eq!(good[0].scorecard.writes, 1);
+    assert_eq!(good[0].gate, None, "a pinned model is not routed");
+    assert_eq!(good[0].cost_usd(), good[0].scorecard.cost_usd);
+    assert!(!evals::results_table(&good).contains("gate routed"));
 
     let bundle = RunBundle::find(home.path(), &good[0].run_id).unwrap();
     let trace = RunTrace::load(&bundle).unwrap();
     assert_eq!(trace.meta.source, RunSource::Eval);
+    assert_eq!(trace.meta.model, "mock-model");
+    let verified = trace.rewards();
+    let verify = verified.iter().find(|r| r.name == "verify").unwrap();
+    assert_eq!(verify.source, "eval");
+    assert!(verify.evidence.get("stdout_tail").is_some(), "{verify:?}");
     assert_eq!(trace.meta.task_id.as_deref(), Some("coding/write-file"));
     assert_eq!(trace.meta.arm.as_deref(), Some("good"));
     assert!(bundle.dir().join("record").is_dir());
@@ -180,4 +193,63 @@ async fn branch_replays_the_prefix_then_runs_live() {
         })
         .unwrap();
     assert!(last_text.contains("different ending"), "{last_text}");
+}
+
+/// Every gate-cost task must fail as shipped and pass once its reference
+/// `solution/` is applied, with the hidden checks in place both times.
+#[test]
+fn gate_cost_tasks_fail_as_shipped_and_pass_when_solved() {
+    let tasks = evals::load_suite(Path::new(GATE_SUITE)).unwrap();
+    assert!(tasks.len() >= 20, "suite has {} tasks", tasks.len());
+    let categories: std::collections::BTreeSet<&str> =
+        tasks.iter().map(|t| t.category.as_str()).collect();
+    for protected in [
+        "reasoning",
+        "unfamiliar",
+        "long-session",
+        "ambiguous",
+        "recovery",
+    ] {
+        assert!(categories.contains(protected), "no {protected} task");
+    }
+    assert_fail_as_shipped_and_pass_when_solved(&tasks);
+}
+
+/// Same for the hard tasks, which have traps a careless fix falls into.
+#[test]
+fn gate_hard_tasks_fail_as_shipped_and_pass_when_solved() {
+    let tasks = evals::load_suite(Path::new(GATE_HARD_SUITE)).unwrap();
+    assert!(tasks.len() >= 8, "suite has {} tasks", tasks.len());
+    assert_fail_as_shipped_and_pass_when_solved(&tasks);
+}
+
+fn assert_fail_as_shipped_and_pass_when_solved(tasks: &[evals::EvalTask]) {
+    let mut wrong = Vec::new();
+    for task in tasks {
+        for (solved, layers) in [
+            (false, &["workspace", "checks"][..]),
+            (true, &["workspace", "solution", "checks"][..]),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            for layer in layers {
+                let from = task.dir.join(layer);
+                if from.is_dir() {
+                    evals::copy_dir(&from, dir.path()).unwrap();
+                }
+            }
+            let (passed, _) = evals::verify(&task.verify, dir.path(), "test").unwrap();
+            if passed != solved {
+                wrong.push(format!(
+                    "{} {}",
+                    task.id,
+                    if solved {
+                        "solved fails"
+                    } else {
+                        "passes as shipped"
+                    }
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }

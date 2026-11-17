@@ -119,7 +119,8 @@ pub struct HeadlessArgs {
     #[arg(short = 'd', long = "cwd", value_name = "DIR", requires = "print")]
     pub cwd: Option<PathBuf>,
 
-    /// Model for this run. Not saved as the `/model` choice.
+    /// Model for this run, or `gate` to let Gate pick one from what you
+    /// are signed in to. Not saved as the `/model` choice.
     #[arg(long, value_name = "MODEL", requires = "print")]
     pub model: Option<String>,
 
@@ -330,7 +331,8 @@ pub enum RunsSubcommand {
 /// Model and harness settings for headless runs.
 #[derive(Args, Debug, Clone, Default)]
 pub struct HarnessArgs {
-    /// Model id (default: the recorded run's model, or the terminal default).
+    /// Model id, or `gate` for Gate's pick (default: the recorded run's
+    /// model, or the terminal default).
     #[arg(long)]
     pub model: Option<String>,
     /// `routed` (default) or `mock`.
@@ -369,6 +371,9 @@ pub enum EvalSubcommand {
         /// Where task workspaces are created (default `AURA_HOME/evals/work`).
         #[arg(long)]
         work_dir: Option<PathBuf>,
+        /// Stop starting runs once the suite's runs cost this many USD.
+        #[arg(long)]
+        budget_usd: Option<f64>,
         #[command(flatten)]
         harness: HarnessArgs,
     },

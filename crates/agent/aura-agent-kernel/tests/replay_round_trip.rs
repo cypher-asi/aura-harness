@@ -199,10 +199,7 @@ async fn replay_reproduces_recorded_decisions_and_state_hash() {
     // policy decision (seq=3), execution (seq=4).
     fixture
         .kernel
-        .process_direct(Transaction::user_prompt(
-            fixture.agent_id,
-            "hello world".as_bytes().to_vec(),
-        ))
+        .process_direct(Transaction::user_prompt(fixture.agent_id, "hello world"))
         .await
         .expect("process user prompt");
 
@@ -280,20 +277,14 @@ async fn replay_aborts_on_context_divergence() {
     // Genuine entry at seq=1 — context_hash is correct.
     fixture
         .kernel
-        .process_direct(Transaction::user_prompt(
-            fixture.agent_id,
-            "first".as_bytes().to_vec(),
-        ))
+        .process_direct(Transaction::user_prompt(fixture.agent_id, "first"))
         .await
         .expect("process first user prompt");
 
     // Genuine entry at seq=2 — context_hash is correct.
     fixture
         .kernel
-        .process_direct(Transaction::user_prompt(
-            fixture.agent_id,
-            "second".as_bytes().to_vec(),
-        ))
+        .process_direct(Transaction::user_prompt(fixture.agent_id, "second"))
         .await
         .expect("process second user prompt");
 
@@ -305,7 +296,7 @@ async fn replay_aborts_on_context_divergence() {
         .store
         .scan_record(fixture.agent_id, 1, 10)
         .expect("scan prior window");
-    let bogus_tx = Transaction::user_prompt(fixture.agent_id, "diverging".as_bytes().to_vec());
+    let bogus_tx = Transaction::user_prompt(fixture.agent_id, "diverging");
     let recomputed =
         hash_tx_with_window(&bogus_tx, &prior_window).expect("recompute prior window hash");
     let bogus_hash = ContextHash::from([0xFFu8; 32]);
@@ -458,10 +449,7 @@ async fn replay_from_past_head_returns_empty_report() {
 
     fixture
         .kernel
-        .process_direct(Transaction::user_prompt(
-            fixture.agent_id,
-            "only entry".as_bytes().to_vec(),
-        ))
+        .process_direct(Transaction::user_prompt(fixture.agent_id, "only entry"))
         .await
         .expect("process user prompt");
 
@@ -486,6 +474,6 @@ fn user_prompt_tx_type_is_user_prompt() {
     // this so the kernel's `process_tx` default-arm path records
     // them with the same shape every time.
     let agent = AgentId::generate();
-    let tx = Transaction::user_prompt(agent, b"x".to_vec());
+    let tx = Transaction::user_prompt(agent, "x");
     assert_eq!(tx.tx_type, TransactionType::UserPrompt);
 }

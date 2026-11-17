@@ -7,7 +7,10 @@ use aura_core_modes::AgentMode;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-use super::{ActionResultPayload, PolicyDecision, ToolExecution, ToolProposal};
+use super::{
+    ActionResultPayload, ComparePayload, OutcomePayload, PolicyDecision, PromptPayload,
+    ToolExecution, ToolProposal,
+};
 
 /// The type of transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -44,6 +47,10 @@ pub enum TransactionType {
     /// `"kind"` field — the discriminator now lives in the
     /// transaction header itself).
     SubagentSpawn,
+    /// How the work of a prompt went (an [`OutcomePayload`]);
+    /// `reference_tx_hash` points at the prompt. A prompt can have
+    /// several: the one written when its turn ends and later signals.
+    Outcome,
 }
 
 /// Sub-categorization for System transactions.
@@ -70,6 +77,9 @@ pub enum SystemKind {
     /// and `Kernel::switch_permissions`, never accepted from external
     /// submitters.
     ModeChange,
+    /// A `/compare` of Gate with another model (a
+    /// [`ComparePayload`](super::compare::ComparePayload))
+    Compare,
 }
 
 /// Payload of a [`SystemKind::ModeChange`] transaction.
@@ -165,25 +175,81 @@ impl Transaction {
         }
     }
 
-    /// Create a user prompt transaction.
+    /// Create a user prompt transaction for `text`, not classified and
+    /// with no route recorded.
     #[must_use]
-    pub fn user_prompt(agent_id: AgentId, payload: impl Into<Bytes>) -> Self {
-        Self::new_chained(agent_id, TransactionType::UserPrompt, payload, None)
+    pub fn user_prompt(agent_id: AgentId, text: impl Into<String>) -> Self {
+        Self::user_prompt_with(agent_id, &PromptPayload::new(text))
     }
 
-    /// Create a user prompt transaction chained to a previous transaction.
+    /// Create a user prompt transaction carrying `prompt`.
+    #[must_use]
+    pub fn user_prompt_with(agent_id: AgentId, prompt: &PromptPayload) -> Self {
+        Self::new_chained(
+            agent_id,
+            TransactionType::UserPrompt,
+            prompt.to_bytes(),
+            None,
+        )
+    }
+
+    /// Create a user prompt transaction for `text` chained to a previous
+    /// transaction.
     #[must_use]
     pub fn user_prompt_chained(
         agent_id: AgentId,
-        payload: impl Into<Bytes>,
+        text: impl Into<String>,
         prev_hash: &Hash,
     ) -> Self {
         Self::new_chained(
             agent_id,
             TransactionType::UserPrompt,
-            payload,
+            PromptPayload::new(text).to_bytes(),
             Some(prev_hash),
         )
+    }
+
+    /// The prompt this transaction records, if it is a user prompt.
+    #[must_use]
+    pub fn prompt_payload(&self) -> Option<PromptPayload> {
+        if self.tx_type != TransactionType::UserPrompt {
+            return None;
+        }
+        PromptPayload::from_bytes(&self.payload).ok()
+    }
+
+    /// Create a [`TransactionType::Outcome`] transaction referring to
+    /// the prompt `outcome` judges.
+    #[must_use]
+    pub fn outcome(agent_id: AgentId, outcome: &OutcomePayload) -> Self {
+        let mut tx =
+            Self::new_chained(agent_id, TransactionType::Outcome, outcome.to_bytes(), None);
+        tx.reference_tx_hash = Some(outcome.prompt_tx);
+        tx
+    }
+
+    /// The outcome this transaction records, if it is one.
+    #[must_use]
+    pub fn outcome_payload(&self) -> Option<OutcomePayload> {
+        if self.tx_type != TransactionType::Outcome {
+            return None;
+        }
+        OutcomePayload::from_bytes(&self.payload).ok()
+    }
+
+    /// Create a [`SystemKind::Compare`] transaction recording `compare`.
+    #[must_use]
+    pub fn compare(agent_id: AgentId, compare: &ComparePayload) -> Self {
+        Self::new_chained(agent_id, TransactionType::System, compare.to_bytes(), None)
+    }
+
+    /// The comparison this transaction records, if it is one.
+    #[must_use]
+    pub fn compare_payload(&self) -> Option<ComparePayload> {
+        if self.tx_type != TransactionType::System {
+            return None;
+        }
+        ComparePayload::from_bytes(&self.payload)
     }
 
     /// Create an action result transaction.

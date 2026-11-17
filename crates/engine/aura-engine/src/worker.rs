@@ -3,7 +3,7 @@
 use aura_agent::{AgentLoop, AgentLoopEvent, AgentLoopResult};
 use aura_agent::{KernelModelGateway, KernelToolGateway};
 use aura_agent_kernel::Kernel;
-use aura_core_types::AgentId;
+use aura_core_types::{AgentId, PromptPayload, TransactionType};
 use aura_model::{Message, ToolDefinition};
 use std::sync::Arc;
 use std::time::Duration;
@@ -91,8 +91,14 @@ pub(crate) async fn process_agent_with_timeout(
             .await
             .map_err(|e| anyhow::anyhow!("kernel process_dequeued failed: {e}"))?;
 
-        let prompt = String::from_utf8(tx.payload.to_vec())
-            .map_err(|e| anyhow::anyhow!("Transaction payload is not valid UTF-8: {e}"))?;
+        let prompt = if tx.tx_type == TransactionType::UserPrompt {
+            PromptPayload::from_bytes(&tx.payload)
+                .map_err(|e| anyhow::anyhow!("Prompt payload is not a prompt record: {e}"))?
+                .text
+        } else {
+            String::from_utf8(tx.payload.to_vec())
+                .map_err(|e| anyhow::anyhow!("Transaction payload is not valid UTF-8: {e}"))?
+        };
         let mut messages = std::mem::take(&mut history);
         messages.push(Message::user(prompt));
 
@@ -148,7 +154,6 @@ mod tests {
     use aura_core_types::{Transaction, TransactionType};
     use aura_model::MockProvider;
     use aura_store_db::{RocksStore, Store};
-    use bytes::Bytes;
 
     fn create_test_kernel(dir: &std::path::Path, agent_id: AgentId) -> Arc<Kernel> {
         let store: Arc<dyn Store> = Arc::new(RocksStore::open(dir.join("db"), false).unwrap());
@@ -193,7 +198,7 @@ mod tests {
         let tx = Transaction::new_chained(
             agent_id,
             TransactionType::UserPrompt,
-            Bytes::from("test prompt"),
+            PromptPayload::new("test prompt").to_bytes(),
             None,
         );
         store.enqueue_tx(&tx).unwrap();
@@ -228,7 +233,7 @@ mod tests {
         let tx = Transaction::new_chained(
             agent_id,
             TransactionType::UserPrompt,
-            Bytes::from("work"),
+            PromptPayload::new("work").to_bytes(),
             None,
         );
         store.enqueue_tx(&tx).unwrap();

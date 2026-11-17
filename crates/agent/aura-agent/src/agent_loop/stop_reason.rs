@@ -190,6 +190,7 @@ impl AgentLoop {
 fn summary_error_for_log(error: &iteration::LlmCallError) -> &'static str {
     match error {
         iteration::LlmCallError::InsufficientCredits(_) => "insufficient_credits",
+        iteration::LlmCallError::Unauthorized(_) => "unauthorized",
         iteration::LlmCallError::PromptTooLong(_) => "prompt_too_long",
         iteration::LlmCallError::RateLimited(_) => "rate_limited",
         iteration::LlmCallError::Fatal(_) => "fatal",

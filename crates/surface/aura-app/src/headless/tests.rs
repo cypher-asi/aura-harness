@@ -4,7 +4,7 @@ use super::tools::ToolFilter;
 use super::OutputFormat;
 use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
-use crate::event_loop::TurnBase;
+use crate::event_loop::{GateBase, TurnBase};
 use crate::harness::{
     agent_tools, background_process_manager, build_hub, mode_policy, policy_tool_names, Harness,
     HubSetup,
@@ -106,6 +106,17 @@ fn headless_in(
     filter: ToolFilter,
     permissions: crate::event_loop::Permissions,
 ) -> (Headless, Arc<Mutex<Vec<ModelRequest>>>) {
+    harness(dirs, provider, filter, permissions, GateBase::default())
+}
+
+/// [`headless_in`] with Gate classifying and routing as `gate` says.
+fn harness(
+    dirs: &Dirs,
+    provider: MockProvider,
+    filter: ToolFilter,
+    permissions: crate::event_loop::Permissions,
+    gate: GateBase,
+) -> (Headless, Arc<Mutex<Vec<ModelRequest>>>) {
     let data = dirs.data.path();
     let workspace = dirs.workspace.path().to_path_buf();
     let requests = Arc::new(Mutex::new(Vec::new()));
@@ -131,6 +142,7 @@ fn headless_in(
             limits: crate::model_selection::ModelLimits::of(&config),
             config,
             tools,
+            gate,
         },
         policy: filter.apply(mode_policy(permissions, &tool_names), &tool_names),
         record_observer: None,
@@ -159,6 +171,7 @@ fn headless_in(
         workspace_root: workspace,
         tool_filter: filter,
         job_wait: Duration::from_secs(5),
+        trace: None,
     };
     (headless, requests)
 }
@@ -596,4 +609,227 @@ fn session_ids_round_trip() {
     assert_eq!(parse_session_id(" 12 ", other), Ok((other, 12)));
     assert!(parse_session_id("nope", other).is_err());
     assert!(parse_session_id("zz:12", other).is_err());
+}
+
+#[tokio::test]
+async fn gate_routes_headless_turns_and_records_how_they_went() {
+    use aura_agent_gate::Candidate;
+    use aura_core_types::{OutcomeSignal, PromptCategory, Route, RouteReason};
+    use aura_model::model_catalog::{ModelBackend, ModelTier};
+    const HAIKU: &str = "aura-claude-haiku-4-5";
+    const SONNET: &str = "aura-claude-sonnet-4-6";
+    let candidate = |id: &str, tier, cost_usd| Candidate {
+        id: id.to_string(),
+        label: id.to_string(),
+        backend: ModelBackend::Router,
+        tier,
+        cost_usd: Some(cost_usd),
+    };
+    // One candidate, so the run never explores.
+    let gate = GateBase {
+        classifier: HAIKU.to_string(),
+        candidates: Some(vec![candidate(SONNET, ModelTier::Standard, 0.1)]),
+    };
+    let dirs = dirs();
+    let permissions = super::permissions(aura_core_modes::AgentMode::Agent, None);
+    let (mut h, requests) = harness(
+        &dirs,
+        MockProvider::simple_response("question"),
+        ToolFilter::default(),
+        permissions,
+        gate,
+    );
+
+    let (report, _) = execute(
+        &mut h,
+        request("what is a monad?", SessionChoice::New),
+        OutputFormat::Json,
+    )
+    .await;
+
+    assert_eq!(report.exit_reason, ExitReason::Success);
+    assert_eq!(report.model, SONNET);
+    let models: Vec<String> = requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| r.model.to_string())
+        .collect();
+    assert_eq!(models, [HAIKU, SONNET], "classified, then routed");
+    {
+        let requests = requests.lock().unwrap();
+        let lead = &requests[1];
+        let tools: Vec<&str> = lead.tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(tools.contains(&"read_file") && tools.contains(&"run_command"));
+        assert!(
+            !tools.contains(&"write_file") && !tools.contains(&"edit_file"),
+            "the headless lead delegates its edits: {tools:?}"
+        );
+        assert!(lead.system.contains("<gate_lead>"));
+    }
+    let (agent, _) = parse_session_id(&report.session_id, AgentId::generate()).unwrap();
+    let entries = h.hub.factory.store.scan_record(agent, 1, 1_000).unwrap();
+    let prompts: Vec<_> = entries
+        .iter()
+        .filter_map(|e| e.tx.prompt_payload())
+        .collect();
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].category, PromptCategory::Question);
+    assert_eq!(prompts[0].classifier, HAIKU);
+    assert_eq!(prompts[0].route, Route::turn(SONNET, RouteReason::Default),);
+    let outcomes: Vec<_> = entries
+        .iter()
+        .filter_map(|e| e.tx.outcome_payload())
+        .collect();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].model, SONNET);
+    assert_eq!(outcomes[0].signal, OutcomeSignal::None);
+    assert_eq!(h.hub.gate.recent().len(), 1);
+}
+
+#[tokio::test]
+async fn an_eval_run_under_gate_is_routed_and_its_verdict_feeds_the_table() {
+    use super::{EvalTurn, EvalTurns};
+    use crate::event_loop::subagents::lock;
+    use aura_agent_gate::Candidate;
+    use aura_agent_trace::{RunBundle, RunMeta, RunRecorder, RunSource, RunTrace};
+    use aura_core_types::{
+        OutcomeSignal, PromptCategory, Route, RouteLevel, RouteReason, ToolProposal,
+        TransactionType,
+    };
+    use aura_model::model_catalog::{ModelBackend, ModelTier};
+    const HAIKU: &str = "aura-claude-haiku-4-5";
+    const SONNET: &str = "aura-claude-sonnet-4-6";
+    // One candidate, so the runs never explore.
+    let gate = GateBase {
+        classifier: HAIKU.to_string(),
+        candidates: Some(vec![Candidate {
+            id: SONNET.to_string(),
+            label: SONNET.to_string(),
+            backend: ModelBackend::Router,
+            tier: ModelTier::Standard,
+            cost_usd: Some(0.1),
+        }]),
+    };
+    let dirs = dirs();
+    let permissions = super::permissions(aura_core_modes::AgentMode::Agent, None);
+    let (h, requests) = harness(
+        &dirs,
+        MockProvider::new().with_default_response(MockResponse::text("question")),
+        ToolFilter::default(),
+        permissions,
+        gate,
+    );
+    let hub = Arc::clone(&h.hub);
+    let mut turns = EvalTurns::new(h);
+    let home = TempDir::new().unwrap();
+    let work = TempDir::new().unwrap();
+    let tasks = [
+        ("fails", "is there a missing.txt?", "test -f missing.txt"),
+        (
+            "passes",
+            "what does note.txt say?",
+            "[ \"$(cat note.txt)\" = 'hi' ]",
+        ),
+    ];
+
+    let mut runs = Vec::new();
+    for (id, prompt, verify) in tasks {
+        let workspace = work.path().join(id);
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("note.txt"), "hi\n").unwrap();
+        let workspace = workspace.canonicalize().unwrap();
+        let mut meta = RunMeta::new("gate", RunSource::Eval);
+        meta.task_id = Some(format!("s/{id}"));
+        let trace = RunRecorder::start(home.path(), meta, aura_config::trace::TraceLevel::Full)
+            .unwrap()
+            .unwrap();
+        let ran = tokio::time::timeout(
+            Duration::from_secs(60),
+            turns.run(EvalTurn {
+                name: &format!("Eval s/{id}"),
+                workspace: &workspace,
+                prompts: &[prompt.to_string()],
+                max_iterations: None,
+                checks: None,
+                verify,
+                trace: Arc::clone(&trace),
+            }),
+        )
+        .await
+        .expect("the eval run did not finish")
+        .unwrap();
+        let card = trace.finish().unwrap();
+        runs.push((ran, trace.run_id(), card));
+    }
+
+    let passed: Vec<Option<bool>> = runs.iter().map(|(ran, _, _)| ran.check.passed).collect();
+    assert_eq!(passed, [Some(false), Some(true)]);
+    let models: Vec<String> = requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| r.model.to_string())
+        .collect();
+    assert_eq!(
+        models,
+        [HAIKU, SONNET, HAIKU, SONNET],
+        "each task classified, then routed"
+    );
+    for (ran, _, _) in &runs {
+        assert_eq!(ran.gate.routed, [SONNET]);
+        let calls: u32 = ran.gate.tokens.iter().map(|m| m.calls).sum();
+        assert_eq!(calls, 2, "the classifier call and the turn");
+        assert!(ran.error.is_none(), "{:?}", ran.error);
+    }
+
+    let agents: Vec<_> = lock(&hub.registry)
+        .agents()
+        .iter()
+        .filter(|a| a.name.starts_with("Eval s/"))
+        .cloned()
+        .collect();
+    assert_eq!(agents.len(), 2);
+    for (agent, verdict) in agents
+        .iter()
+        .zip([OutcomeSignal::ChecksFailed, OutcomeSignal::ChecksPassed])
+    {
+        let entries = hub
+            .factory
+            .store
+            .scan_record(agent.agent_id(), 1, 1_000)
+            .unwrap();
+        let prompts: Vec<_> = entries
+            .iter()
+            .filter_map(|e| e.tx.prompt_payload())
+            .collect();
+        assert_eq!(prompts.len(), 1, "{}", agent.name);
+        assert_eq!(prompts[0].category, PromptCategory::Question);
+        assert_eq!(prompts[0].route, Route::turn(SONNET, RouteReason::Default));
+        let signals: Vec<OutcomeSignal> = entries
+            .iter()
+            .filter_map(|e| e.tx.outcome_payload())
+            .map(|o| o.signal)
+            .collect();
+        assert_eq!(signals, [OutcomeSignal::None, verdict], "{}", agent.name);
+        let verify = entries
+            .iter()
+            .filter(|e| e.tx.tx_type == TransactionType::ToolProposal)
+            .filter_map(|e| serde_json::from_slice::<ToolProposal>(&e.tx.payload).ok())
+            .find(|p| p.source.as_deref() == Some("eval_verify"))
+            .expect("the verify command went through the agent's kernel");
+        assert_eq!(verify.tool, "run_command");
+    }
+    let row = hub
+        .gate
+        .stats()
+        .row(RouteLevel::Turn, PromptCategory::Question, SONNET)
+        .cloned()
+        .expect("the eval runs count in Gate's table");
+    assert_eq!((row.tries, row.successes), (2, 1));
+
+    let (_, run_id, card) = &runs[1];
+    let trace = RunTrace::load(&RunBundle::find(home.path(), run_id).unwrap()).unwrap();
+    assert_eq!(trace.meta.model, "gate");
+    assert_eq!(card.model_calls, 1, "the routed turn is in the run's trace");
 }

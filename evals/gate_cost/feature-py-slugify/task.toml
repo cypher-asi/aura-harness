@@ -1,0 +1,6 @@
+title = "Implement slugify"
+category = "feature"
+tags = ["python"]
+prompt = "Implement slugify() in text.py as its docstring describes."
+verify = "PYTHONPATH=. python3 .gate_checks/check.py"
+max_iterations = 15

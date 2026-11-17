@@ -46,6 +46,9 @@ pub(in crate::anthropic) struct SseStream<S> {
     /// [`SseStream::with_request_id`]. `None` means the caller didn't
     /// capture one (or the upstream didn't send one).
     request_id: Option<String>,
+    /// Plan usage from the HTTP response headers, set by
+    /// [`SseStream::with_plan_usage`].
+    plan_usage: Vec<aura_core_types::PlanUsage>,
     /// Whether the synthetic `HttpMeta` event has already been
     /// emitted. Ensures we only surface it once, before any provider
     /// event.
@@ -65,6 +68,7 @@ impl<S> SseStream<S> {
             buffer: String::new(),
             finished: false,
             request_id: None,
+            plan_usage: Vec::new(),
             emitted_http_meta: false,
             idle_timer: None,
         }
@@ -82,9 +86,19 @@ impl<S> SseStream<S> {
             buffer: String::new(),
             finished: false,
             request_id,
+            plan_usage: Vec::new(),
             emitted_http_meta: false,
             idle_timer: None,
         }
+    }
+
+    /// Carry `plan_usage` on the synthetic [`StreamEvent::HttpMeta`].
+    pub(in crate::anthropic) fn with_plan_usage(
+        mut self,
+        plan_usage: Vec<aura_core_types::PlanUsage>,
+    ) -> Self {
+        self.plan_usage = plan_usage;
+        self
     }
 
     /// Reset the deadline on every received chunk, including provider pings.
@@ -115,7 +129,11 @@ where
         if !self.emitted_http_meta {
             self.emitted_http_meta = true;
             let request_id = self.request_id.clone();
-            return Poll::Ready(Some(Ok(StreamEvent::HttpMeta { request_id })));
+            let plan_usage = std::mem::take(&mut self.plan_usage);
+            return Poll::Ready(Some(Ok(StreamEvent::HttpMeta {
+                request_id,
+                plan_usage,
+            })));
         }
 
         loop {

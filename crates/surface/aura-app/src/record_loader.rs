@@ -5,8 +5,9 @@ use crate::event_loop::agent_events::call_usage;
 use crate::event_loop::run_command::is_user_tool_use;
 use aura_agent_kernel::decode_tool_effect;
 use aura_core_types::{
-    ActionResultPayload, AgentId, EffectStatus, PolicyApprover, PolicyCheckOutcome, PolicyDecision,
-    RecordEntry, ToolExecution, ToolGateVerdict, ToolProposal, Transaction, TransactionType,
+    ActionResultPayload, AgentId, EffectStatus, PlanUsage, PolicyApprover, PolicyCheckOutcome,
+    PolicyDecision, RecordEntry, ToolExecution, ToolGateVerdict, ToolProposal, Transaction,
+    TransactionType,
 };
 use aura_exec_tools::plan_tools::{plan_path_from_output, CREATE_PLAN_TOOL_NAME};
 use aura_exec_tools::todo::TODO_WRITE_TOOL_NAME;
@@ -145,7 +146,7 @@ fn push_model_message(messages: &mut Vec<Message>, tx: &Transaction) {
     match tx.tx_type {
         TransactionType::SessionStart => messages.clear(),
         TransactionType::UserPrompt => {
-            let text = text();
+            let text = prompt_text(tx).trim().to_string();
             if !text.is_empty() {
                 messages.push(Message::user(text));
             }
@@ -309,15 +310,39 @@ fn reasoning_model(tx: &Transaction) -> Option<String> {
 
 /// Tokens and cost of the call a `Reasoning` entry records, answered by `model`.
 fn reasoning_usage(tx: &Transaction, model: &str) -> Option<CallUsage> {
+    call_usage(model, &call_tokens(tx)?)
+}
+
+fn call_tokens(tx: &Transaction) -> Option<Usage> {
     let payload = json_payload(tx)?;
     let tokens = |key: &str| payload.get(key).and_then(Value::as_u64);
-    let usage = Usage {
+    Some(Usage {
         input_tokens: tokens("input_tokens").unwrap_or(0),
         output_tokens: tokens("output_tokens").unwrap_or(0),
         cache_creation_input_tokens: tokens("cache_creation_input_tokens"),
         cache_read_input_tokens: tokens("cache_read_input_tokens"),
-    };
-    call_usage(model, &usage)
+    })
+}
+
+/// The model and tokens of the call `tx` records, when it is a model
+/// call that got an answer.
+pub(crate) fn model_call(tx: &Transaction) -> Option<(String, Usage)> {
+    if tx.tx_type != TransactionType::Reasoning {
+        return None;
+    }
+    Some((reasoning_model(tx)?, call_tokens(tx)?))
+}
+
+/// The plan usage the call `tx` records, when it is a model call whose
+/// provider reported any; a payload that does not read is none.
+pub(crate) fn plan_usage(tx: &Transaction) -> Vec<PlanUsage> {
+    if tx.tx_type != TransactionType::Reasoning {
+        return Vec::new();
+    }
+    json_payload(tx)
+        .and_then(|payload| payload.get("plan_usage").cloned())
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default()
 }
 
 /// The model's thinking from a `Reasoning` entry, when it thought.
@@ -527,10 +552,7 @@ fn history_message(tx: &Transaction) -> Option<MessageData> {
         });
     }
     let (role, content) = match tx.tx_type {
-        TransactionType::UserPrompt => (
-            MessageRole::User,
-            String::from_utf8_lossy(&tx.payload).into_owned(),
-        ),
+        TransactionType::UserPrompt => (MessageRole::User, prompt_text(tx)),
         TransactionType::AgentMsg => (
             MessageRole::Assistant,
             String::from_utf8_lossy(&tx.payload).into_owned(),
@@ -776,8 +798,17 @@ impl RecordColumns {
 /// payload doesn't parse, so the panel falls back to the summary.
 fn record_columns(tx: &Transaction, entry: &RecordEntry, sender: &str) -> Option<RecordColumns> {
     let columns = match tx.tx_type {
-        TransactionType::UserPrompt | TransactionType::AgentMsg | TransactionType::Trigger => {
+        TransactionType::UserPrompt => RecordColumns::new(sender, "text", prompt_text(tx)),
+        TransactionType::AgentMsg | TransactionType::Trigger => {
             RecordColumns::new(sender, "text", payload_text(tx))
+        }
+        TransactionType::Outcome => {
+            let outcome = tx.outcome_payload()?;
+            RecordColumns::new(
+                outcome.signal.as_str(),
+                outcome_verdict(outcome.success),
+                outcome_detail(&outcome).join(" · "),
+            )
         }
         TransactionType::ToolProposal => {
             let proposal = serde_json::from_slice::<ToolProposal>(&tx.payload).ok()?;
@@ -963,15 +994,21 @@ pub fn tx_type_label(tx_type: TransactionType) -> (&'static str, &'static str) {
         TransactionType::ProcessComplete => ("Complete", "SYSTEM"),
         TransactionType::Reasoning => ("LLM", "KERNEL"),
         TransactionType::SubagentSpawn => ("Spawn", "AGENT"),
+        TransactionType::Outcome => ("Outcome", "GATE"),
     }
 }
 
 /// One-line, human-readable summary of what a transaction contains.
 pub fn summarize_record(tx: &Transaction) -> String {
     let summary = match tx.tx_type {
-        TransactionType::UserPrompt | TransactionType::AgentMsg | TransactionType::Trigger => {
-            payload_text(tx)
-        }
+        TransactionType::UserPrompt => prompt_text(tx),
+        TransactionType::AgentMsg | TransactionType::Trigger => payload_text(tx),
+        TransactionType::Outcome => tx.outcome_payload().map_or_else(String::new, |outcome| {
+            std::iter::once(outcome.signal.as_str().to_string())
+                .chain(outcome_detail(&outcome))
+                .collect::<Vec<_>>()
+                .join(" · ")
+        }),
         TransactionType::ToolProposal => serde_json::from_slice::<ToolProposal>(&tx.payload)
             .map_or_else(
                 |_| payload_text(tx),
@@ -1240,6 +1277,32 @@ fn json_payload(tx: &Transaction) -> Option<Value> {
     serde_json::from_slice::<Value>(&tx.payload)
         .ok()
         .filter(Value::is_object)
+}
+
+/// The text of a prompt entry; empty when its payload is not a prompt.
+fn prompt_text(tx: &Transaction) -> String {
+    tx.prompt_payload()
+        .map(|prompt| prompt.text)
+        .unwrap_or_default()
+}
+
+/// `ok`, `failed`, or `-` when an outcome says neither.
+const fn outcome_verdict(success: Option<bool>) -> &'static str {
+    match success {
+        Some(true) => "ok",
+        Some(false) => "failed",
+        None => "-",
+    }
+}
+
+/// Category, model, cost and wall time of an outcome's work.
+fn outcome_detail(outcome: &aura_core_types::OutcomePayload) -> Vec<String> {
+    vec![
+        outcome.category.to_string(),
+        outcome.model.clone(),
+        format!("${:.4}", outcome.cost_usd),
+        format_duration_ms(outcome.latency_ms),
+    ]
 }
 
 fn payload_text(tx: &Transaction) -> String {

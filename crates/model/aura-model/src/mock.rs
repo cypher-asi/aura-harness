@@ -31,6 +31,8 @@ pub struct MockProvider {
     latency_ms: u64,
     /// Whether to fail
     should_fail: bool,
+    /// Plan usage every response reports
+    plan_usage: Vec<crate::PlanUsage>,
 }
 
 /// A mock response configuration.
@@ -115,7 +117,16 @@ impl MockProvider {
             default_response: MockResponse::default(),
             latency_ms: 0,
             should_fail: false,
+            plan_usage: Vec::new(),
         }
+    }
+
+    /// Report `plan_usage` on every response, as a plan provider's
+    /// headers would.
+    #[must_use]
+    pub fn with_plan_usage(mut self, plan_usage: Vec<crate::PlanUsage>) -> Self {
+        self.plan_usage = plan_usage;
+        self
     }
 
     /// Add a response to return on the next call.
@@ -234,7 +245,10 @@ impl ModelProvider for MockProvider {
                 content: response.content,
             },
             usage: response.usage,
-            trace: ProviderTrace::new("mock-model", self.latency_ms),
+            trace: ProviderTrace {
+                plan_usage: self.plan_usage.clone(),
+                ..ProviderTrace::new("mock-model", self.latency_ms)
+            },
             model_used: "mock-model".to_string(),
         })
     }

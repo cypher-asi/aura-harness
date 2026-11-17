@@ -170,15 +170,14 @@ fn test_chain_verification() {
     let agent_id = AgentId::generate();
 
     // Create a chain of transactions
-    let tx1 = Transaction::user_prompt(agent_id, b"first message".to_vec());
-    let tx2 = Transaction::user_prompt_chained(agent_id, b"second message".to_vec(), &tx1.hash);
-    let _tx3 = Transaction::user_prompt_chained(agent_id, b"third message".to_vec(), &tx2.hash);
+    let tx1 = Transaction::user_prompt(agent_id, "first message");
+    let tx2 = Transaction::user_prompt_chained(agent_id, "second message", &tx1.hash);
+    let _tx3 = Transaction::user_prompt_chained(agent_id, "third message", &tx2.hash);
 
     // Note: Transaction::new_chained includes more than just payload in hash
     // but for transactions with same content and prev_hash, should get same hash
-    let tx1_clone = Transaction::user_prompt(agent_id, b"first message".to_vec());
-    let tx2_clone =
-        Transaction::user_prompt_chained(agent_id, b"second message".to_vec(), &tx1_clone.hash);
+    let tx1_clone = Transaction::user_prompt(agent_id, "first message");
+    let tx2_clone = Transaction::user_prompt_chained(agent_id, "second message", &tx1_clone.hash);
 
     assert_eq!(tx1.hash, tx1_clone.hash);
     assert_eq!(tx2.hash, tx2_clone.hash);
@@ -189,19 +188,18 @@ fn test_tampered_chain_detection() {
     let agent_id = AgentId::generate();
 
     // Create original chain
-    let tx1 = Transaction::user_prompt(agent_id, b"first".to_vec());
-    let tx2 = Transaction::user_prompt_chained(agent_id, b"second".to_vec(), &tx1.hash);
+    let tx1 = Transaction::user_prompt(agent_id, "first");
+    let tx2 = Transaction::user_prompt_chained(agent_id, "second", &tx1.hash);
 
     // Create a "tampered" chain where middle transaction has different content
     // but someone tries to use the same hash
-    let tampered_tx1 = Transaction::user_prompt(agent_id, b"TAMPERED".to_vec());
+    let tampered_tx1 = Transaction::user_prompt(agent_id, "TAMPERED");
 
     // The tampered transaction would have a different hash
     assert_ne!(tx1.hash, tampered_tx1.hash);
 
     // If someone built on the tampered version, the chain would differ
-    let tx2_on_tampered =
-        Transaction::user_prompt_chained(agent_id, b"second".to_vec(), &tampered_tx1.hash);
+    let tx2_on_tampered = Transaction::user_prompt_chained(agent_id, "second", &tampered_tx1.hash);
     assert_ne!(tx2.hash, tx2_on_tampered.hash);
 }
 
@@ -210,7 +208,7 @@ fn test_replay_produces_same_hashes() {
     let agent_id = AgentId::generate();
 
     // Original sequence
-    let messages = vec![b"msg1".to_vec(), b"msg2".to_vec(), b"msg3".to_vec()];
+    let messages = vec!["msg1".to_string(), "msg2".to_string(), "msg3".to_string()];
 
     // First pass
     let mut hashes1 = Vec::new();
@@ -250,7 +248,7 @@ async fn test_async_completion_references_original() {
     let action_id = ActionId::generate();
 
     // Create the "originating" transaction
-    let orig_tx = Transaction::user_prompt(agent_id, b"run a slow command".to_vec());
+    let orig_tx = Transaction::user_prompt(agent_id, "run a slow command");
 
     // Spawn a process
     #[cfg(windows)]

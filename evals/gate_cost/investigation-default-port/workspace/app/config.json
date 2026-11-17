@@ -1,0 +1,4 @@
+{
+  "port": 8080,
+  "server": {"port": 9443, "tls": true}
+}

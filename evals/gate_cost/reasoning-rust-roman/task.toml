@@ -1,0 +1,6 @@
+title = "Roman numerals both ways, canonical only"
+category = "reasoning"
+tags = ["rust", "protected"]
+prompt = "Implement `to_roman` and `from_roman` in src/lib.rs as their doc comments describe, and make `cargo test` pass."
+verify = "cargo test --offline --quiet"
+max_iterations = 25

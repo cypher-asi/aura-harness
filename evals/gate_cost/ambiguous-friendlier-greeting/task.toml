@@ -1,0 +1,6 @@
+title = "Make a greeting friendlier"
+category = "ambiguous"
+tags = ["python", "protected"]
+prompt = "The greeting in greet.py feels cold. Make it friendlier."
+verify = "PYTHONPATH=. python3 .gate_checks/check.py"
+max_iterations = 10

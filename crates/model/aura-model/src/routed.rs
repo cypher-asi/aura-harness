@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::model_catalog::{backend_for, local_model_name, ModelBackend};
+use crate::model_catalog::{backend_for, local_model_name, ModelBackend, GATE_MODEL_ID};
 use crate::{
     ModelName, ModelProvider, ModelRequest, ModelResponse, ReasonerError, ResponseEventStream,
     StreamEventStream,
@@ -56,6 +56,11 @@ impl RoutedProvider {
         &self,
         mut request: ModelRequest,
     ) -> Result<(&dyn ModelProvider, ModelRequest), ReasonerError> {
+        if request.model.as_str() == GATE_MODEL_ID {
+            return Err(ReasonerError::Internal(
+                "`gate` must be resolved to a model before a request is sent".to_string(),
+            ));
+        }
         let backend = backend_for(request.model.as_str());
         let subscription = match backend {
             ModelBackend::Local => {
@@ -145,6 +150,12 @@ mod tests {
         ));
         assert_eq!(rewritten.model.as_str(), "qwen3:4b");
         assert_eq!(rewritten.auth_token, None);
+    }
+
+    #[test]
+    fn unresolved_gate_is_refused() {
+        let err = routed().route(request(GATE_MODEL_ID)).err().unwrap();
+        assert!(matches!(err, ReasonerError::Internal(_)), "{err}");
     }
 
     #[tokio::test]
@@ -258,7 +269,11 @@ mod tests {
             socket
                 .write_all(
                     format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{body}",
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+                         anthropic-ratelimit-unified-5h-utilization: 0.07\r\n\
+                         anthropic-ratelimit-unified-5h-reset: 1774933200\r\n\
+                         anthropic-ratelimit-unified-7d-utilization: 0.53\r\n\
+                         Content-Length: {}\r\n\r\n{body}",
                         body.len()
                     )
                     .as_bytes(),
@@ -280,17 +295,30 @@ mod tests {
         req.thinking_effort = Some(ThinkingEffort::Medium);
         req.system_preamble = Some("You are Claude Code.".to_string());
         let mut stream = claude.complete_streaming(req).await.unwrap();
+        let mut accumulator = crate::StreamAccumulator::new();
         while let Some(event) = stream.next().await {
-            event.unwrap();
+            accumulator.process(&event.unwrap());
         }
+        let windows: Vec<(crate::Plan, &str, f64, Option<u64>)> = accumulator
+            .plan_usage
+            .iter()
+            .map(|w| (w.plan, w.window.as_str(), w.used, w.resets_at))
+            .collect();
+        assert_eq!(
+            windows,
+            [
+                (crate::Plan::Claude, "5h", 0.07, Some(1_774_933_200)),
+                (crate::Plan::Claude, "7d", 0.53, None),
+            ]
+        );
 
         let raw = server.await.unwrap();
         assert!(raw.contains(r#""model":"claude-opus-4-7""#), "{raw}");
         assert!(!raw.contains("reasoning_effort"), "{raw}");
-        assert!(
-            raw.contains(r#""system":[{"type":"text","text":"You are Claude Code."},{"type":"text","text":"system""#),
-            "{raw}"
-        );
+        let body: serde_json::Value =
+            serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body["system"][0]["text"], "You are Claude Code.", "{raw}");
+        assert_eq!(body["system"][1]["text"], "system", "{raw}");
     }
 
     #[test]

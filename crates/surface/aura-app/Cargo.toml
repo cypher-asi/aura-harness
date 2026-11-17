@@ -20,6 +20,7 @@ aura-exec-tools = { path = "../../exec/aura-exec-tools" }
 aura-agent = { path = "../../agent/aura-agent" }
 aura-context-compaction = { path = "../../context/aura-context-compaction" }
 aura-agent-trace = { path = "../../agent/aura-agent-trace" }
+aura-agent-gate = { path = "../../agent/aura-agent-gate" }
 aura-context-memory = { path = "../../context/aura-context-memory" }
 aura-context-prompts = { path = "../../context/aura-context-prompts" }
 aura-context-skills = { path = "../../context/aura-context-skills" }
@@ -45,10 +46,11 @@ dirs = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
 similar = "2"
+tempfile = { workspace = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
 tower = { workspace = true }
+which = { workspace = true }
 
 [lints]
 workspace = true

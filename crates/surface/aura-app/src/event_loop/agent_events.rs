@@ -12,8 +12,8 @@ use super::record_ui::RecordPanelAgent;
 use crate::session_checkpoint::SessionUsage;
 use async_trait::async_trait;
 use aura_agent::{
-    map_agent_loop_event, AgentLoopEvent, DebugEvent, TurnEventSink, PROGRESS_CONTEXT_SUMMARIZED,
-    PROGRESS_TODOS_UPDATED,
+    map_agent_loop_event, AgentLoopEvent, DebugEvent, TurnEventSink, ERROR_INSUFFICIENT_CREDITS,
+    ERROR_UNAUTHORIZED, PROGRESS_CONTEXT_SUMMARIZED, PROGRESS_TODOS_UPDATED,
 };
 use aura_core_types::AgentId;
 use aura_exec_tools::plan_tools::{plan_path_from_output, sync_todo_list, CREATE_PLAN_TOOL_NAME};
@@ -69,6 +69,12 @@ impl AgentUi {
         }
     }
 
+    /// Send `command` for the whole app (the model selector and status
+    /// line), not this agent's chat.
+    pub(crate) async fn send_app(&self, command: UiCommand) {
+        let _ = self.commands.send(command).await;
+    }
+
     /// Send `command` to this agent's chat.
     pub(crate) async fn send(&self, command: UiCommand) {
         let _ = self
@@ -99,6 +105,8 @@ pub(crate) struct ForwarderState {
     pub usage: SessionUsage,
     /// Plan the turn last wrote with `create_plan`
     pub plan_path: Option<String>,
+    /// Whether the model's route refused the user's sign-in or plan
+    pub credentials_rejected: bool,
 }
 
 /// Stops a turn once its model calls cost more than `limit_usd`.
@@ -397,7 +405,10 @@ impl TurnEventSink for UiCommandSink {
         self.ui.send(UiCommand::ShowWarning(message)).await;
     }
 
-    async fn on_error(&mut self, _code: String, message: String, _recoverable: bool) {
+    async fn on_error(&mut self, code: String, message: String, _recoverable: bool) {
+        if code == ERROR_UNAUTHORIZED || code == ERROR_INSUFFICIENT_CREDITS {
+            self.state.credentials_rejected = true;
+        }
         self.ui.send(UiCommand::ShowWarning(message)).await;
     }
 

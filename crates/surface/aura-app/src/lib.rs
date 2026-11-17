@@ -32,6 +32,7 @@ pub mod event_loop;
 pub mod file_checkpoints;
 mod harness;
 pub mod headless;
+pub mod isolation;
 mod long_run;
 pub mod model_selection;
 pub mod project_instructions;

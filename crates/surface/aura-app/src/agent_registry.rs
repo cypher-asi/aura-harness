@@ -20,6 +20,8 @@ const DEFAULT_PROJECT_AGENT: &str = "Agent";
 /// a data directory finds the same agent and its saved sessions.
 const HEADLESS_ZNS_ID: &str = "0://terminal/headless";
 const HEADLESS_AGENT_NAME: &str = "Headless";
+/// ZNS id prefix of the agents that hold a `/compare` and its runs.
+const COMPARE_ZNS_PREFIX: &str = "0://terminal/compare/";
 
 /// One agent known to the terminal UI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +67,12 @@ impl RegisteredAgent {
     #[must_use]
     pub fn agent_id(&self) -> AgentId {
         self.identity().agent_id
+    }
+
+    /// Whether this agent holds a `/compare` (its record and runs).
+    #[must_use]
+    pub fn is_compare(&self) -> bool {
+        self.zns_id.starts_with(COMPARE_ZNS_PREFIX)
     }
 
     /// What the UI calls the agent: its title once it has one.
@@ -258,10 +266,118 @@ impl AgentRegistry {
         })
     }
 
-    /// Folder of the project that contains `agent_id`, if it has one.
+    /// Folder `agent_id` works in: its own, else the nearest agent's
+    /// above it that has one (normally its project's root).
     #[must_use]
     pub fn project_folder(&self, agent_id: AgentId) -> Option<PathBuf> {
-        self.project_root(agent_id)?.folder.clone()
+        let mut index = self
+            .file
+            .agents
+            .iter()
+            .position(|agent| agent.agent_id() == agent_id)?;
+        for _ in 0..self.file.agents.len() {
+            let agent = &self.file.agents[index];
+            if let Some(folder) = &agent.folder {
+                return Some(folder.clone());
+            }
+            index = self.up_index(agent)?;
+        }
+        None
+    }
+
+    fn parent_index(&self, index: usize) -> Option<usize> {
+        let parent = self.file.agents[index].parent.as_deref()?;
+        self.file
+            .agents
+            .iter()
+            .position(|agent| agent.zns_id == parent)
+    }
+
+    /// Every agent below `agent_id`: those it spawned, theirs, and so on.
+    #[must_use]
+    pub fn descendants(&self, agent_id: AgentId) -> Vec<AgentId> {
+        let Some(agent) = self.find(agent_id) else {
+            return Vec::new();
+        };
+        let mut found: Vec<&str> = vec![agent.zns_id.as_str()];
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < found.len() {
+            let parent = found[i];
+            for child in self
+                .file
+                .agents
+                .iter()
+                .filter(|a| a.parent.as_deref() == Some(parent))
+            {
+                if !found.contains(&child.zns_id.as_str()) {
+                    found.push(&child.zns_id);
+                    out.push(child.agent_id());
+                }
+            }
+            i += 1;
+        }
+        out
+    }
+
+    /// `agent_id` and the agents above it, nearest first.
+    #[must_use]
+    pub fn ancestry(&self, agent_id: AgentId) -> Vec<AgentId> {
+        let Some(mut index) = self
+            .file
+            .agents
+            .iter()
+            .position(|agent| agent.agent_id() == agent_id)
+        else {
+            return Vec::new();
+        };
+        let mut out = vec![agent_id];
+        for _ in 0..self.file.agents.len() {
+            let Some(parent) = self.parent_index(index) else {
+                break;
+            };
+            index = parent;
+            out.push(self.file.agents[index].agent_id());
+        }
+        out
+    }
+
+    /// Register an agent named `name` under the agent with ZNS id
+    /// `parent`, working in `folder` when given.
+    ///
+    /// # Errors
+    /// Returns an error if the registry cannot be written.
+    pub fn create_child(
+        &mut self,
+        name: &str,
+        parent: &str,
+        folder: Option<PathBuf>,
+    ) -> anyhow::Result<RegisteredAgent> {
+        self.push(RegisteredAgent {
+            parent: Some(parent.to_string()),
+            folder,
+            ..Self::new_agent(name.to_string())
+        })
+    }
+
+    /// Register the agent that holds a new `/compare` asked for by the
+    /// agent with ZNS id `parent`, named `Compare #<n>`.
+    ///
+    /// # Errors
+    /// Returns an error if the registry cannot be written.
+    pub fn create_compare(&mut self, parent: &str) -> anyhow::Result<RegisteredAgent> {
+        let n = self.compares().len() + 1;
+        self.push(RegisteredAgent {
+            zns_id: format!("{COMPARE_ZNS_PREFIX}{}", uuid::Uuid::new_v4()),
+            parent: Some(parent.to_string()),
+            ..Self::new_agent(format!("Compare #{n}"))
+        })
+    }
+
+    /// The agents holding comparisons, oldest first.
+    #[must_use]
+    pub fn compares(&self) -> Vec<&RegisteredAgent> {
+        self.file.agents.iter().filter(|a| a.is_compare()).collect()
     }
 
     /// Root agent heading the project that contains `agent_id`.
@@ -1031,6 +1147,55 @@ mod tests {
         assert!(!stored.needs_title());
         let unknown = Identity::new("0://terminal/unknown", "Unknown").agent_id;
         assert!(registry.set_title(unknown, "Title").is_err());
+    }
+
+    #[test]
+    fn compare_runs_work_in_their_own_folder_under_the_comparison() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let copy = tempfile::tempdir().unwrap();
+        let mut registry = AgentRegistry::load_or_init(dir.path()).unwrap();
+        let root = registry.create_project("Site", project.path()).unwrap();
+        let compare = registry.create_compare(&root.zns_id).unwrap();
+        let second = registry.create_compare(&root.zns_id).unwrap();
+        let run = registry
+            .create_child("gate-1", &compare.zns_id, Some(copy.path().to_path_buf()))
+            .unwrap();
+        let subtask = registry
+            .create_instance("explorer", Some(run.zns_id.clone()))
+            .unwrap();
+
+        assert_eq!(compare.name, "Compare #1");
+        assert_eq!(second.name, "Compare #2");
+        assert!(compare.is_compare() && !run.is_compare());
+        let canonical = project.path().canonicalize().unwrap();
+        assert_eq!(registry.project_folder(compare.agent_id()), Some(canonical));
+        assert_eq!(
+            registry.project_folder(subtask.agent_id()).as_deref(),
+            Some(copy.path()),
+            "a run's subtasks work in its copy"
+        );
+        assert_eq!(
+            registry.descendants(compare.agent_id()),
+            [run.agent_id(), subtask.agent_id()]
+        );
+        assert_eq!(
+            registry.ancestry(subtask.agent_id()),
+            [
+                subtask.agent_id(),
+                run.agent_id(),
+                compare.agent_id(),
+                root.agent_id()
+            ]
+        );
+
+        let reloaded = AgentRegistry::load_or_init(dir.path()).unwrap();
+        let names: Vec<&str> = reloaded
+            .compares()
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert_eq!(names, ["Compare #1", "Compare #2"]);
     }
 
     #[test]

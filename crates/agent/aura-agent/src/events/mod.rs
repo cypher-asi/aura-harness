@@ -42,6 +42,12 @@ pub const PROGRESS_TODOS_UPDATED: &str = "todos_updated";
 /// context; `message` is a short human-readable description.
 pub const PROGRESS_CONTEXT_SUMMARIZED: &str = "context_summarized";
 
+/// `Error` code sent when the model's route refused the sign-in or plan
+/// behind the request (401 or 403); a 402 is `insufficient_credits`.
+pub const ERROR_UNAUTHORIZED: &str = "unauthorized";
+/// `Error` code sent when the route has no credits left (402).
+pub const ERROR_INSUFFICIENT_CREDITS: &str = "insufficient_credits";
+
 pub use mapper::{map_agent_loop_event, TurnEventSink};
 pub use types::{AgentLoopEvent, TurnEvent};
 pub use wire::DebugEvent;

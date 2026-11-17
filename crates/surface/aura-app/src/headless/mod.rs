@@ -7,6 +7,7 @@
 //! resumed with `--resume` / `--continue` and opened in the terminal.
 //! stdout carries only the chosen output format; logs go to stderr.
 
+mod eval;
 mod output;
 mod run;
 mod sink;
@@ -15,8 +16,11 @@ mod tools;
 #[cfg(test)]
 mod tests;
 
+pub use crate::event_loop::task_check::CheckRun;
+pub use eval::{copy_dir, EvalRan, EvalTurn, EvalTurns, GateUse};
 pub(crate) use output::{ExitReason, Output, RunReport};
-pub(crate) use run::{Headless, Request, RunLimits, SessionChoice};
+pub use run::Headless;
+pub(crate) use run::{Request, RunLimits, SessionChoice};
 pub(crate) use tools::ToolFilter;
 
 use crate::agent_definitions::AgentDefinitions;
@@ -39,7 +43,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{info, warn};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 /// Default longest wait for background jobs after the agent's last turn
@@ -178,15 +182,14 @@ async fn prepare(
         max_turns: args.max_turns,
         max_time: args.max_time.or(long_run.turn_timeout),
         max_cost_usd: args.max_cost_usd.or(long_run.max_turn_cost_usd),
+        max_iterations: None,
     };
     let session = match (&args.resume, args.continue_session) {
         (Some(id), _) => SessionChoice::Resume(id.clone()),
         (None, true) => SessionChoice::Continue,
         (None, false) => SessionChoice::New,
     };
-    let data_dir = std::env::var("AURA_DATA_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| workspace_root.join("aura_data"));
+    let data_dir = data_dir(&workspace_root);
     let headless = build(args, requested_mode, workspace_root, &data_dir, long_run).await?;
     Ok((
         headless,
@@ -196,6 +199,41 @@ async fn prepare(
             limits,
         },
     ))
+}
+
+/// Where the terminal started in `workspace_root` keeps its agents and
+/// records: `AURA_DATA_DIR`, else `aura_data` there.
+fn data_dir(workspace_root: &std::path::Path) -> PathBuf {
+    std::env::var("AURA_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| workspace_root.join("aura_data"))
+}
+
+/// The harness `aura eval run` runs tasks on under `gate`: `aura -p`'s
+/// with `provider`, its agents in `agent` mode at `yolo` (nobody answers
+/// a prompt in an unattended run; commands stay confined to the task's
+/// workspace), on the agents and records of the terminal started in the
+/// current directory, so the runs count in that Gate table.
+///
+/// # Errors
+/// When the directory, sign-in state or data directory can't be read.
+pub async fn eval_harness(provider: &str) -> anyhow::Result<Headless> {
+    let workspace_root = std::env::current_dir().context("resolving working directory")?;
+    let data_dir = data_dir(&workspace_root);
+    let args = HeadlessOptions {
+        model: Some(aura_model::model_catalog::GATE_MODEL_ID.to_string()),
+        provider: Some(provider.to_string()),
+        approval: Some(ApprovalLevel::Yolo),
+        ..HeadlessOptions::default()
+    };
+    build(
+        &args,
+        Some(AgentMode::Agent),
+        workspace_root,
+        &data_dir,
+        LongRunSettings::from_env(),
+    )
+    .await
 }
 
 /// The prompt from `arg`, or from stdin for `-`. Piped stdin is appended
@@ -266,19 +304,20 @@ async fn build(
     } else {
         session_helpers::default_agent_config(aura_model::ENV_FALLBACK_MODEL)
     };
-    let (selection, summary) = if mock {
+    let (selection, auth) = if mock {
         // No sign-in state is needed, so tests and offline runs never
         // touch the keyring.
-        (
-            aura_model::mock_provider(),
-            aura_auth::AuthSummary::default(),
-        )
+        (aura_model::mock_provider(), None)
     } else {
         let auth =
             std::sync::Arc::new(aura_auth::AuthManager::new().context("loading sign-in state")?);
-        let summary = crate::event_loop::auth::auth_summary(&auth, config.auth_token.as_deref());
-        (build_provider(provider_name, &auth)?, summary)
+        (build_provider(provider_name, &auth)?, Some(auth))
     };
+    let summary = auth
+        .as_ref()
+        .map_or_else(aura_auth::AuthSummary::default, |auth| {
+            crate::event_loop::auth::auth_summary(auth, config.auth_token.as_deref())
+        });
     let mut models = ModelSelection::init(&mut config, summary);
     if let Some(model) = &args.model {
         if let Err(problem) = models.use_for_run(&mut config, model) {
@@ -287,12 +326,27 @@ async fn build(
             }
         }
     }
-    if !mock && aura_model::model_catalog::local_model_name(models.current()).is_some() {
-        models.refresh_local().await;
-        if let Some(hint) = models.local_hint() {
-            anyhow::bail!("{hint}");
+    if let Some(auth) = &auth {
+        let local = |config: &aura_agent::AgentLoopConfig| {
+            aura_model::model_catalog::local_model_name(&config.model).is_some()
+        };
+        if models.is_gate() || local(&config) {
+            models.refresh_local().await;
+        }
+        if models.is_gate() {
+            if let Some(note) = models.refresh_plans(auth.as_ref()).await {
+                warn!("{note}");
+            }
+            models.refresh_route(&mut config);
+            info!(model = %config.model, "{}", models.display());
+        }
+        if local(&config) {
+            if let Some(hint) = models.local_hint() {
+                anyhow::bail!("{hint}");
+            }
         }
     }
+    let model = config.model.clone();
 
     let mode = aura_config::session_mode(requested_mode);
     let permissions = permissions(mode, args.approval);
@@ -313,6 +367,7 @@ async fn build(
             config,
             tools,
             limits: models.limits(),
+            gate: crate::event_loop::GateBase::of(&models),
         },
         policy: tool_filter.apply(mode_policy(permissions, &tool_names), &tool_names),
         record_observer: None,
@@ -336,11 +391,12 @@ async fn build(
         background,
         completions,
         notices,
-        model: models.current().to_string(),
+        model,
         mode,
         workspace_root,
         tool_filter,
         job_wait: job_wait_from_env(),
+        trace: None,
     })
 }
 

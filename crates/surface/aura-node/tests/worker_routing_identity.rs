@@ -43,7 +43,6 @@ use aura_model::{
 };
 use aura_node::scheduler::{AgentIdentity, AgentIdentityRegistry, Scheduler, SchedulerError};
 use aura_store_db::{RocksStore, Store};
-use bytes::Bytes;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
@@ -183,7 +182,7 @@ fn enqueue_user_prompt(store: &Arc<dyn Store>, agent_id: AgentId, prompt: &str) 
     let tx = Transaction::new_chained(
         agent_id,
         TransactionType::UserPrompt,
-        Bytes::from(prompt.to_owned()),
+        aura_core_types::PromptPayload::new(prompt).to_bytes(),
         None,
     );
     store.enqueue_tx(&tx).expect("enqueue user prompt");

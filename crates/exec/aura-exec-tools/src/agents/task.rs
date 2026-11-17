@@ -73,6 +73,11 @@ pub struct TaskInput {
     /// the child runs as an independently observable thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spawn_mode: Option<aura_core_types::SpawnMode>,
+    /// Optional command the dispatcher runs in the workspace after the
+    /// subagent finishes; its exit status decides whether the subtask
+    /// passed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
 }
 
 pub struct TaskTool;
@@ -89,7 +94,7 @@ impl TaskTool {
                 "properties": {
                     "subagent_type": {
                         "type": "string",
-                        "description": "Bundled subagent type, for example general_purpose, explore, shell, or code_reviewer."
+                        "description": "Bundled subagent type, for example general_purpose, explore, implement, tests, shell, or code_reviewer."
                     },
                     "prompt": {
                         "type": "string",
@@ -136,6 +141,10 @@ impl TaskTool {
                         "type": "string",
                         "enum": ["wait", "detached"],
                         "description": "Optional spawn mode. 'wait' (default) blocks until the subagent finishes and returns its summary inline. 'detached' runs it in the background as an observable thread."
+                    },
+                    "check": {
+                        "type": "string",
+                        "description": "Optional command run in the workspace after the subagent finishes, such as `cargo test -p foo`. Exit status 0 means the subtask passed."
                     }
                 },
                 "required": ["subagent_type", "prompt"]
@@ -228,6 +237,12 @@ impl TaskTool {
             // Ordinary `task` spawns are never council members.
             council_index: None,
             council_parent_tool_use_id: None,
+            check: input
+                .check
+                .as_deref()
+                .map(str::trim)
+                .filter(|check| !check.is_empty())
+                .map(str::to_string),
         })
     }
 }
@@ -321,6 +336,7 @@ mod tests {
             tool_subset: None,
             tool_call_id: None,
             spawn_mode: None,
+            check: None,
         }
     }
 
@@ -363,6 +379,23 @@ mod tests {
         input.tool_call_id = Some("model_supplied_dedupe".into());
         let request = TaskTool::build_request(&ctx, &input).unwrap();
         assert_eq!(request.tool_call_id.as_deref(), Some("toolu_real_123"));
+    }
+
+    #[test]
+    fn task_passes_its_check_to_the_dispatcher() {
+        let ctx = ctx(AgentPermissions {
+            scope: AgentScope::default(),
+            capabilities: vec![Capability::SpawnAgent],
+        });
+        let mut input = minimal_input();
+        input.check = Some("  cargo test -p parser ".into());
+        let request = TaskTool::build_request(&ctx, &input).unwrap();
+        assert_eq!(request.check.as_deref(), Some("cargo test -p parser"));
+
+        input.check = Some("   ".into());
+        let request = TaskTool::build_request(&ctx, &input).unwrap();
+        assert_eq!(request.check, None, "a blank check is no check");
+        assert!(TaskTool::definition().input_schema["properties"]["check"].is_object());
     }
 
     #[test]

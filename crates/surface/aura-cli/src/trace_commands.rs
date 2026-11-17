@@ -11,6 +11,7 @@ use aura_agent_trace::{health, report, scorecard, RunTrace};
 use aura_config::HarnessParams;
 use aura_core_types::trace::{Reward, RewardKind, RewardTarget};
 use aura_exec_tools::ToolConfig;
+use aura_model::model_catalog::GATE_MODEL_ID;
 use aura_model::ModelProvider;
 use serde_json::json;
 
@@ -18,7 +19,7 @@ use crate::cli::{
     DatasetCommand, DatasetSubcommand, EvalCommand, EvalSubcommand, HarnessArgs, RunsCommand,
     RunsSubcommand,
 };
-use crate::evals::{self, EvalOptions};
+use crate::evals::{self, EvalGate, EvalOptions, EvalRunner};
 use aura_app::model_selection::ModelSelection;
 use aura_app::recorded_runs::{self, HeadlessRun};
 use aura_app::{event_loop, session_helpers};
@@ -172,7 +173,7 @@ pub async fn cmd_runs(args: RunsCommand) -> anyhow::Result<()> {
                 .model
                 .clone()
                 .unwrap_or_else(|| source.meta.model.clone());
-            let (config, live) = loop_setup(&harness.provider, Some(&model))?;
+            let (config, live) = loop_setup(&harness.provider, Some(&model)).await?;
             let plan = recorded_runs::plan_branch(&source, from_step)?;
             let mut meta = plan.meta;
             meta.arm = arm;
@@ -257,6 +258,7 @@ pub async fn cmd_eval(args: EvalCommand) -> anyhow::Result<()> {
             task,
             repeat,
             work_dir,
+            budget_usd,
             harness,
         } => {
             let mut tasks = evals::load_suite(&suite)?;
@@ -267,17 +269,26 @@ pub async fn cmd_eval(args: EvalCommand) -> anyhow::Result<()> {
                 }
             }
             let arm = install_params(&harness)?;
-            let (config, provider) = loop_setup(&harness.provider, harness.model.as_deref())?;
+            let runner = if harness.model.as_deref() == Some(GATE_MODEL_ID) {
+                EvalRunner::Gate(EvalGate::start(&harness.provider).await?)
+            } else {
+                let (config, provider) =
+                    loop_setup(&harness.provider, harness.model.as_deref()).await?;
+                EvalRunner::Model {
+                    config: Box::new(config),
+                    tool_config: ToolConfig::for_autonomous_dev_loop(),
+                    provider: Box::new(move |_| Arc::clone(&provider)),
+                }
+            };
             let opts = EvalOptions {
                 home: home.clone(),
                 suite: evals::suite_name(&suite),
                 arm,
                 repeat,
                 level: aura_config::trace().level,
-                config,
-                tool_config: ToolConfig::for_autonomous_dev_loop(),
+                runner,
                 work_root: work_dir.unwrap_or_else(|| home.join("evals").join("work")),
-                provider: Box::new(move |_| Arc::clone(&provider)),
+                budget_usd,
             };
             let results = evals::run_suite(&tasks, &opts).await?;
             print!("{}", evals::results_table(&results));
@@ -355,7 +366,9 @@ fn install_params(args: &HarnessArgs) -> anyhow::Result<Option<String>> {
 
 /// Loop configuration and provider for a headless run. The model is
 /// `model` or the terminal's startup model; the choice is not persisted.
-fn loop_setup(
+/// `gate` runs every run on Gate's default pick for the current sign-ins
+/// (`aura runs branch`; `aura eval run` routes each task with Gate).
+async fn loop_setup(
     provider: &str,
     model: Option<&str>,
 ) -> anyhow::Result<(AgentLoopConfig, Arc<dyn ModelProvider + Send + Sync>)> {
@@ -368,12 +381,19 @@ fn loop_setup(
     }
     let auth = Arc::new(aura_auth::AuthManager::new().context("loading sign-in state")?);
     let summary = event_loop::auth::auth_summary(&auth, config.auth_token.as_deref());
-    let models = ModelSelection::init(&mut config, summary);
+    let mut models = ModelSelection::init(&mut config, summary);
     if let Some(model) = model {
-        if !models.usable(model) {
-            bail!("model `{model}` is not usable with the current sign-in");
+        models
+            .use_for_run(&mut config, model)
+            .map_err(|problem| anyhow::anyhow!("--model {model}: {problem}"))?;
+    }
+    if models.is_gate() {
+        models.refresh_local().await;
+        if let Some(note) = models.refresh_plans(auth.as_ref()).await {
+            eprintln!("{note}");
         }
-        models.limits().configure(&mut config, model);
+        models.refresh_route(&mut config);
+        eprintln!("{}", models.display());
     }
     let resolver: Arc<dyn aura_auth::CredentialResolver> = auth;
     let selection =

@@ -1,0 +1,6 @@
+title = "Merge integer intervals with edge cases"
+category = "reasoning"
+tags = ["python", "protected"]
+prompt = "Implement merge() in intervals.py exactly as its docstring specifies."
+verify = "PYTHONPATH=. python3 .gate_checks/check.py"
+max_iterations = 20

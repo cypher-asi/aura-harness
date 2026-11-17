@@ -84,7 +84,7 @@ Options for -p:
           Work in this directory instead of the current one
 
       --model <MODEL>
-          Model for this run. Not saved as the `/model` choice
+          Model for this run, or `gate` to let Gate pick one from what you are signed in to. Not saved as the `/model` choice
 
       --provider <PROVIDER>
           Model provider: `anthropic` (default; local, plan and aura-router models) or `mock`

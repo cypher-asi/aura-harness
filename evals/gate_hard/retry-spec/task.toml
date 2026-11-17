@@ -1,0 +1,6 @@
+title = "Implement retry with backoff from a spec"
+category = "feature"
+tags = ["hard", "python"]
+prompt = "Implement retry() in retry.py following the rules in README.md exactly."
+verify = "PYTHONPATH=. python3 .gate_checks/check.py"
+max_iterations = 25

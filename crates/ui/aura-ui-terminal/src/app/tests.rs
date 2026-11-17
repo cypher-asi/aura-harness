@@ -247,6 +247,92 @@ fn test_diff_command_picks_turn_or_session() {
     assert!(rx.try_recv().is_err());
 }
 
+#[test]
+fn test_good_and_bad_rate_the_active_agents_last_turn() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    app.active_agent_id = "abc".to_string();
+
+    app.handle_command("/good");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::RateTurn { ref agent_id, good: true, turns_back: 1 }) if agent_id == "abc"
+    ));
+    app.handle_command("/bad");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::RateTurn {
+            good: false,
+            turns_back: 1,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn test_good_and_bad_take_how_many_turns_back() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+
+    app.handle_command("/good 3");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::RateTurn {
+            good: true,
+            turns_back: 3,
+            ..
+        })
+    ));
+    app.handle_command("/bad  2 ");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::RateTurn {
+            good: false,
+            turns_back: 2,
+            ..
+        })
+    ));
+
+    for bad in ["/good 0", "/bad -1", "/good two", "/bad 2 3"] {
+        app.notification = None;
+        app.handle_command(bad);
+        assert!(rx.try_recv().is_err(), "{bad} should not be sent");
+        assert!(
+            matches!(
+                app.notification(),
+                Some((text, NotificationType::Warning)) if text.starts_with("Usage: /")
+            ),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn test_compare_passes_its_arguments_as_typed() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    app.active_agent_id = "abc".to_string();
+    app.handle_command("/compare fix the \"flaky\" test --repeats 2");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::Compare { ref agent_id, ref args })
+            if agent_id == "abc" && args == "fix the \"flaky\" test --repeats 2"
+    ));
+    app.handle_command("/compare");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::Compare { ref args, .. }) if args.is_empty()
+    ));
+}
+
+#[test]
+fn test_gate_asks_for_the_gate_view() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    app.handle_command("/gate");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::ShowGate)));
+}
+
 fn submit(app: &mut App, text: &str) {
     for c in text.chars() {
         app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()));
@@ -1936,6 +2022,7 @@ fn app_with_models(user: Option<&str>) -> (App, mpsc::Receiver<UiEvent>) {
             },
         ],
         current: "local/qwen3:4b".to_string(),
+        route: None,
         user: user.map(str::to_string),
         plans: Vec::new(),
     });
@@ -1965,6 +2052,7 @@ fn test_unlinked_plan_pick_starts_link_then_selects() {
     app.process_command(UiCommand::SetModels {
         options: available(app.models()),
         current: "local/qwen3:4b".to_string(),
+        route: None,
         user: Some("alice".to_string()),
         plans: Vec::new(),
     });
@@ -1989,6 +2077,7 @@ fn test_failed_link_drops_pending_model() {
     app.process_command(UiCommand::SetModels {
         options: available(app.models()),
         current: "local/qwen3:4b".to_string(),
+        route: None,
         user: Some("alice".to_string()),
         plans: Vec::new(),
     });
@@ -2049,6 +2138,7 @@ fn test_guest_cloud_pick_starts_login_then_selects() {
     app.process_command(UiCommand::SetModels {
         options: available(app.models()),
         current: "local/qwen3:4b".to_string(),
+        route: None,
         user: Some("alice".to_string()),
         plans: Vec::new(),
     });
@@ -2068,6 +2158,7 @@ fn test_cancelled_login_drops_pending_model() {
     app.process_command(UiCommand::SetModels {
         options: available(app.models()),
         current: "local/qwen3:4b".to_string(),
+        route: None,
         user: Some("alice".to_string()),
         plans: Vec::new(),
     });

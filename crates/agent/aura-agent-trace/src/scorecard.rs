@@ -8,7 +8,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use aura_core_types::trace::{
-    Actor, HarnessAction, Reward, RewardKind, RewardTarget, Step, StepAction, ToolIntent,
+    Actor, HarnessAction, Reward, RewardKind, RewardTarget, Step, StepAction, TokenUsage,
+    ToolIntent,
 };
 use serde::{Deserialize, Serialize};
 
@@ -58,6 +59,10 @@ pub struct RunScorecard {
     pub cache_read_tokens: u64,
     /// Prompt tokens written to the provider cache.
     pub cache_write_tokens: u64,
+    /// List price of the run's own model calls, in USD.
+    pub cost_usd: f64,
+    /// Model calls to models without a known price (not in `cost_usd`).
+    pub unpriced_calls: usize,
     /// Wall time from first to last step.
     pub wall_ms: u64,
     /// Time spent waiting on the model.
@@ -159,6 +164,10 @@ impl RunScorecard {
                         card.cache_read_tokens += u.cache_read;
                         card.cache_write_tokens += u.cache_write;
                         tokens_so_far += u.input + u.output + u.cache_read + u.cache_write;
+                        match step_cost_usd(&step.policy.id, u) {
+                            Some(cost) => card.cost_usd += cost,
+                            None => card.unpriced_calls += 1,
+                        }
                     }
                 }
                 StepAction::ToolResult {
@@ -276,6 +285,20 @@ impl RunScorecard {
     }
 }
 
+/// List price of one model call, `None` when `model` has no known price.
+#[must_use]
+pub fn step_cost_usd(model: &str, usage: TokenUsage) -> Option<f64> {
+    aura_model::model_catalog::estimate_cost_usd(
+        model,
+        &aura_model::Usage {
+            input_tokens: usage.input,
+            output_tokens: usage.output,
+            cache_creation_input_tokens: Some(usage.cache_write),
+            cache_read_input_tokens: Some(usage.cache_read),
+        },
+    )
+}
+
 /// One metric that differs between two scorecards.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MetricDelta {
@@ -294,6 +317,7 @@ pub struct MetricDelta {
 fn headline(card: &RunScorecard) -> Vec<(&'static str, f64, bool)> {
     vec![
         ("outcome", card.outcome.unwrap_or_default(), true),
+        ("cost_usd", card.cost_usd, false),
         ("total_tokens", card.total_tokens() as f64, false),
         ("model_calls", card.model_calls as f64, false),
         ("wall_ms", card.wall_ms as f64, false),
@@ -400,6 +424,22 @@ mod tests {
         assert_eq!(card.tokens_to_first_edit, Some(3300));
         assert_eq!(card.decisions.get("steering/implement_now"), Some(&1));
         assert_eq!(card.effects["implement_now"].rate(), Some(1.0));
+    }
+
+    #[test]
+    fn prices_each_call_by_its_model() {
+        let mut opus = model(1, &[]);
+        opus.policy.id = "claude-opus-5-5".into();
+        let mut haiku = model(2, &[]);
+        haiku.policy.id = "claude-haiku-5-5".into();
+        let mut local = model(3, &[]);
+        local.policy.id = "local/qwen3:4b".into();
+        let steps = vec![opus, haiku, local];
+        let card = RunScorecard::compute(&RunMeta::new("m", RunSource::Test), &steps, &[]);
+        // 1000 in + 100 out: opus $0.006, haiku $0.00015.
+        assert!((card.cost_usd - 0.006_15).abs() < 1e-9, "{}", card.cost_usd);
+        assert_eq!(card.unpriced_calls, 1);
+        assert!(mean(&[card])["cost_usd"] > 0.006);
     }
 
     #[test]

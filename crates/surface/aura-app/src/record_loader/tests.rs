@@ -8,7 +8,12 @@ fn append(store: &RocksStore, seq: u64, tx: Transaction) {
 }
 
 fn text_tx(agent_id: AgentId, tx_type: TransactionType, text: &str) -> Transaction {
-    Transaction::new_chained(agent_id, tx_type, text.as_bytes().to_vec(), None)
+    let payload = if tx_type == TransactionType::UserPrompt {
+        aura_core_types::PromptPayload::new(text).to_bytes()
+    } else {
+        text.as_bytes().to_vec()
+    };
+    Transaction::new_chained(agent_id, tx_type, payload, None)
 }
 
 #[test]
@@ -143,6 +148,7 @@ fn labels_fit_kind_column() {
         TransactionType::ToolProposal,
         TransactionType::ToolExecution,
         TransactionType::PolicyDecision,
+        TransactionType::Outcome,
         TransactionType::ProcessComplete,
         TransactionType::Reasoning,
         TransactionType::SubagentSpawn,
@@ -153,8 +159,8 @@ fn labels_fit_kind_column() {
 
 #[test]
 fn prompt_collapses_to_one_line() {
-    let t = tx(
-        TransactionType::UserPrompt,
+    let t = Transaction::user_prompt(
+        AgentId::generate(),
         "fix the login\n\n  redirect bug\tplease",
     );
     assert_eq!(summarize_record(&t), "fix the login redirect bug please");
@@ -162,7 +168,7 @@ fn prompt_collapses_to_one_line() {
 
 #[test]
 fn long_prompt_is_capped_char_safely() {
-    let t = tx(TransactionType::UserPrompt, "修".repeat(500));
+    let t = Transaction::user_prompt(AgentId::generate(), "修".repeat(500));
     let out = summarize_record(&t);
     assert_eq!(out.chars().count(), MAX_INFO_CHARS);
     assert!(out.ends_with("..."));
@@ -236,8 +242,50 @@ fn json_payload_message_is_pretty_printed_in_full() {
 }
 
 #[test]
+fn an_outcome_shows_its_signal_verdict_and_work() {
+    let outcome = aura_core_types::OutcomePayload {
+        prompt_tx: aura_core_types::Hash::from_content(b"prompt"),
+        category: aura_core_types::PromptCategory::Debugging,
+        model: "claude/claude-sonnet-4-6".to_string(),
+        success: Some(false),
+        signal: aura_core_types::OutcomeSignal::ChecksFailed,
+        cost_usd: 0.0123,
+        latency_ms: 12_300,
+    };
+    let t = Transaction::outcome(AgentId::generate(), &outcome);
+    let entry = RecordEntry::builder(1, t.clone()).build();
+
+    assert_eq!(
+        summarize_record(&t),
+        "checks_failed · debugging · claude/claude-sonnet-4-6 · $0.0123 · 12.3s"
+    );
+    let columns = record_columns(&t, &entry, "GATE").unwrap();
+    assert_eq!(columns.what, "checks_failed");
+    assert_eq!(columns.group, "failed");
+    assert!(
+        conversation_history_of(&[t]).is_empty(),
+        "not shown in the chat"
+    );
+}
+
+/// The chat rebuilt from a record holding `txs`.
+fn conversation_history_of(txs: &[Transaction]) -> Vec<MessageData> {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RocksStore::open(dir.path(), false).unwrap();
+    let agent = txs[0].agent_id;
+    for (i, t) in txs.iter().enumerate() {
+        append(&store, i as u64 + 1, t.clone());
+    }
+    conversation_history(&store, agent).unwrap()
+}
+
+#[test]
 fn text_payload_message_is_truncated() {
-    let t = Transaction::user_prompt(AgentId::generate(), "y".repeat(300));
+    let t = text_tx(
+        AgentId::generate(),
+        TransactionType::AgentMsg,
+        &"y".repeat(300),
+    );
     let entry = RecordEntry::builder(1, t.clone()).build();
 
     let summary = build_record_summary(1, &t, &entry, "12:00:00".into());
@@ -769,4 +817,31 @@ fn group_labels_fit_group_column() {
     }
     assert_eq!(model_family("claude-sonnet-4-5-20250929"), "sonnet");
     assert_eq!(model_family("openrouter/mistral-large"), "mistral");
+}
+
+#[test]
+fn plan_usage_is_read_from_model_calls_only() {
+    let agent = AgentId::generate();
+    let call = text_tx(
+        agent,
+        TransactionType::Reasoning,
+        r#"{"model":"claude-sonnet-4-6","input_tokens":3,"output_tokens":1,
+            "plan_usage":[{"plan":"claude","window":"5h","used":0.25,"resets_at":1764554400}]}"#,
+    );
+    let readings = plan_usage(&call);
+    assert_eq!(readings.len(), 1);
+    assert_eq!(readings[0].plan, aura_core_types::Plan::Claude);
+    assert_eq!(readings[0].window, "5h");
+    assert_eq!(readings[0].resets_at, Some(1_764_554_400));
+
+    let without = text_tx(agent, TransactionType::Reasoning, r#"{"model":"m"}"#);
+    assert!(plan_usage(&without).is_empty());
+    let unreadable = text_tx(
+        agent,
+        TransactionType::Reasoning,
+        r#"{"model":"m","plan_usage":[{"plan":"mystery"}]}"#,
+    );
+    assert!(plan_usage(&unreadable).is_empty());
+    let prompt = text_tx(agent, TransactionType::UserPrompt, "plan_usage");
+    assert!(plan_usage(&prompt).is_empty());
 }

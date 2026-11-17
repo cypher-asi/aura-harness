@@ -33,6 +33,10 @@ use tracing::{debug, warn};
 /// Keyring service identifier used for every credential entry.
 pub(crate) const KEYRING_SERVICE: &str = "aura";
 
+/// Extra keyring reads after a failed one, before falling back to the file.
+const KEYRING_READ_RETRIES: u32 = 3;
+const KEYRING_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// A named secret: keyring entry `aura/<user>` plus a fallback file.
 #[derive(Debug, Clone)]
 pub(crate) struct SecretSlot {
@@ -90,7 +94,19 @@ impl SecretSlot {
         let Some(user) = &self.keyring_user else {
             return load_from_path(&self.path);
         };
-        match keyring_entry(user).and_then(|e| e.get_password()) {
+        // Another process replacing the entry (a token refresh) can leave
+        // it briefly missing, and Secret Service calls fail transiently.
+        let mut read = keyring_entry(user).and_then(|e| e.get_password());
+        for _ in 0..KEYRING_READ_RETRIES {
+            match &read {
+                Err(e) if !is_no_storage_access(e) && !self.path.exists() => {
+                    std::thread::sleep(KEYRING_RETRY_DELAY);
+                    read = keyring_entry(user).and_then(|e| e.get_password());
+                }
+                _ => break,
+            }
+        }
+        match read {
             Ok(secret) => Some(secret),
             Err(e) if is_no_entry(&e) => load_from_path(&self.path),
             Err(e) if is_no_storage_access(&e) => {

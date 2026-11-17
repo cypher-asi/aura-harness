@@ -1,0 +1,6 @@
+title = "Get a broken crate building and passing"
+category = "recovery"
+tags = ["rust", "protected"]
+prompt = "This crate doesn't build and its tests fail. Get `cargo test` passing without changing the tests, keeping each function's documented behavior."
+verify = "cargo test --offline --quiet"
+max_iterations = 30

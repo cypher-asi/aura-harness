@@ -11,7 +11,8 @@
 //!   to the user's linked ChatGPT plan.
 //! - anything else: an aura-router alias that needs a zOS JWT from `/login`.
 //!
-//! There is no automatic fallback between routes.
+//! [`GATE_MODEL_ID`] is not a model: the surface resolves it to one of
+//! these before a request is built.
 
 use std::time::Duration;
 
@@ -29,6 +30,10 @@ pub const CLAUDE_PREFIX: &str = "claude/";
 
 /// Prefix that marks a model as served directly with a ChatGPT subscription.
 pub const CHATGPT_PREFIX: &str = "chatgpt/";
+
+/// Model id of Gate, the router that picks a model for each turn from
+/// what the user's sign-ins allow.
+pub const GATE_MODEL_ID: &str = "gate";
 
 /// Lightweight local model used when nothing else is configured: small
 /// enough for CPU-only laptops and supports native tool calling.
@@ -86,6 +91,52 @@ impl ModelBackend {
     }
 }
 
+/// How capable a model is, weakest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ModelTier {
+    /// Served by the local model server.
+    Local,
+    /// Small and cheap cloud models (Haiku, GPT mini).
+    Fast,
+    /// Mid-size cloud models (Sonnet).
+    Standard,
+    /// The strongest cloud models (Opus, GPT-5).
+    Frontier,
+}
+
+impl ModelTier {
+    /// Short label for status displays.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Fast => "fast",
+            Self::Standard => "standard",
+            Self::Frontier => "frontier",
+        }
+    }
+}
+
+/// Tier of `model`, inferred from its name for models outside the curated
+/// lists. Unknown cloud models count as standard.
+#[must_use]
+pub fn infer_tier(model: &str) -> ModelTier {
+    if backend_for(model) == ModelBackend::Local {
+        return ModelTier::Local;
+    }
+    let key = model_key(model);
+    let has = |words: &[&str]| words.iter().any(|w| key.contains(w));
+    if has(&["haiku", "mini", "nano", "luna"]) {
+        ModelTier::Fast
+    } else if has(&["sonnet", "terra"]) {
+        ModelTier::Standard
+    } else if has(&["opus", "fable", "mythos"]) || key.starts_with("gpt-") {
+        ModelTier::Frontier
+    } else {
+        ModelTier::Standard
+    }
+}
+
 /// One selectable model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelOption {
@@ -97,6 +148,8 @@ pub struct ModelOption {
     pub backend: ModelBackend,
     /// For local models: whether the model is installed on the local server.
     pub installed: bool,
+    /// How capable the model is.
+    pub tier: ModelTier,
 }
 
 impl ModelOption {
@@ -114,22 +167,43 @@ impl ModelOption {
 }
 
 /// Curated aura-router aliases offered in the selector.
-const ROUTER_MODELS: &[(&str, &str)] = &[
-    ("aura-claude-opus-4-7", "Claude Opus 4.7"),
-    ("aura-claude-sonnet-4-6", "Claude Sonnet 4.6"),
-    ("aura-claude-haiku-4-5", "Claude Haiku 4.5"),
-    ("aura-gpt-5-4", "GPT-5.4"),
+const ROUTER_MODELS: &[(&str, &str, ModelTier)] = &[
+    (
+        "aura-claude-opus-4-7",
+        "Claude Opus 4.7",
+        ModelTier::Frontier,
+    ),
+    (
+        "aura-claude-sonnet-4-6",
+        "Claude Sonnet 4.6",
+        ModelTier::Standard,
+    ),
+    ("aura-claude-haiku-4-5", "Claude Haiku 4.5", ModelTier::Fast),
+    ("aura-gpt-5-4", "GPT-5.4", ModelTier::Frontier),
 ];
 
 /// Curated models offered with a linked Claude plan.
-const CLAUDE_MODELS: &[(&str, &str)] = &[
-    ("claude/claude-opus-4-7", "Claude Opus 4.7"),
-    ("claude/claude-sonnet-4-6", "Claude Sonnet 4.6"),
-    ("claude/claude-haiku-4-5", "Claude Haiku 4.5"),
+const CLAUDE_MODELS: &[(&str, &str, ModelTier)] = &[
+    (
+        "claude/claude-opus-4-7",
+        "Claude Opus 4.7",
+        ModelTier::Frontier,
+    ),
+    (
+        "claude/claude-sonnet-4-6",
+        "Claude Sonnet 4.6",
+        ModelTier::Standard,
+    ),
+    (
+        "claude/claude-haiku-4-5",
+        "Claude Haiku 4.5",
+        ModelTier::Fast,
+    ),
 ];
 
 /// Curated models offered with a linked ChatGPT plan.
-const CHATGPT_MODELS: &[(&str, &str)] = &[("chatgpt/gpt-5.4", "GPT-5.4")];
+const CHATGPT_MODELS: &[(&str, &str, ModelTier)] =
+    &[("chatgpt/gpt-5.4", "GPT-5.4", ModelTier::Frontier)];
 
 /// Backend serving `model`.
 #[must_use]
@@ -154,6 +228,16 @@ pub fn upstream_model_name(model: &str) -> &str {
         .find_map(|prefix| model.strip_prefix(prefix))
         .filter(|name| !name.trim().is_empty())
         .unwrap_or(model)
+}
+
+/// The model and who serves it: `claude-sonnet-4-6 (claude plan)`.
+#[must_use]
+pub fn route_label(model: &str) -> String {
+    format!(
+        "{} ({})",
+        upstream_model_name(model),
+        backend_for(model).label()
+    )
 }
 
 /// API list price of a model, in USD per million tokens.
@@ -221,9 +305,11 @@ const PRICES: &[(&str, Price)] = &[
     ("gpt-5", price(1.25, 10.0, 1.25, 0.125)),
 ];
 
-/// `model` without its route or router prefix, lowercased, `.` as `-`
-/// (`aura-gpt-5-4`, `chatgpt/gpt-5.4` -> `gpt-5-4`).
-fn price_key(model: &str) -> String {
+/// The upstream model `model` names on any route: without its route or
+/// router prefix, lowercased, `.` as `-` (`aura-gpt-5-4`,
+/// `chatgpt/gpt-5.4` -> `gpt-5-4`).
+#[must_use]
+pub fn model_key(model: &str) -> String {
     let name = upstream_model_name(model);
     let name = name.strip_prefix("aura-").unwrap_or(name);
     name.to_ascii_lowercase().replace('.', "-")
@@ -245,7 +331,7 @@ fn list_price(model: &str) -> Option<Price> {
     if backend_for(model) == ModelBackend::Local {
         return None;
     }
-    let key = price_key(model);
+    let key = model_key(model);
     PRICES
         .iter()
         .find(|(name, _)| is_snapshot_of(&key, name))
@@ -273,7 +359,7 @@ pub fn billed_tokens(model: &str, usage: &Usage) -> BilledTokens {
     // OpenAI counts cached tokens inside `input_tokens`; Anthropic-format
     // responses report them on top of it.
     let openai =
-        backend_for(model) == ModelBackend::Chatgpt || price_key(model).starts_with("gpt-");
+        backend_for(model) == ModelBackend::Chatgpt || model_key(model).starts_with("gpt-");
     let uncached_input = if openai {
         usage.input_tokens.saturating_sub(cache_read)
     } else {
@@ -378,6 +464,7 @@ pub fn catalog_with_plans(
         label: default_name.to_string(),
         backend: ModelBackend::Local,
         installed: is_installed(installed_local, default_name),
+        tier: ModelTier::Local,
     });
     for name in installed_local {
         if !is_installed(std::slice::from_ref(name), default_name) {
@@ -386,6 +473,7 @@ pub fn catalog_with_plans(
                 label: name.clone(),
                 backend: ModelBackend::Local,
                 installed: true,
+                tier: ModelTier::Local,
             });
         }
     }
@@ -402,12 +490,13 @@ pub fn catalog_with_plans(
             options.extend(live.into_iter().cloned());
             continue;
         }
-        for (id, label) in models {
+        for (id, label, tier) in models {
             options.push(ModelOption {
                 id: (*id).to_string(),
                 label: (*label).to_string(),
                 backend,
                 installed: true,
+                tier: *tier,
             });
         }
     }
@@ -530,6 +619,7 @@ mod tests {
             label: "Claude Opus 5.5".to_string(),
             backend: ModelBackend::Claude,
             installed: true,
+            tier: ModelTier::Frontier,
         }];
         let options = catalog_with_plans("local/qwen3:4b", &[], &live);
         let claude: Vec<&str> = options
@@ -540,6 +630,33 @@ mod tests {
         assert_eq!(claude, ["claude/claude-opus-5-5"]);
         assert!(options.iter().any(|o| o.backend == ModelBackend::Router));
         assert!(options.iter().any(|o| o.backend == ModelBackend::Chatgpt));
+    }
+
+    #[test]
+    fn tiers_are_inferred_from_the_model_name() {
+        assert_eq!(infer_tier("local/qwen3:4b"), ModelTier::Local);
+        assert_eq!(infer_tier("claude/claude-haiku-5-5"), ModelTier::Fast);
+        assert_eq!(infer_tier("chatgpt/gpt-5.4-mini"), ModelTier::Fast);
+        assert_eq!(infer_tier("claude/claude-sonnet-5-5"), ModelTier::Standard);
+        assert_eq!(infer_tier("claude/claude-opus-5-5"), ModelTier::Frontier);
+        assert_eq!(infer_tier("chatgpt/gpt-5.6"), ModelTier::Frontier);
+        assert_eq!(infer_tier("aura-gpt-5-4"), ModelTier::Frontier);
+        assert_eq!(infer_tier("some-new-model"), ModelTier::Standard);
+        assert!(ModelTier::Local < ModelTier::Fast && ModelTier::Standard < ModelTier::Frontier);
+    }
+
+    #[test]
+    fn curated_tiers_match_inference() {
+        for option in catalog("local/qwen3:4b", &[]) {
+            assert_eq!(option.tier, infer_tier(&option.id), "{}", option.id);
+        }
+    }
+
+    #[test]
+    fn model_key_is_the_same_on_every_route() {
+        assert_eq!(model_key("aura-claude-opus-4-7"), "claude-opus-4-7");
+        assert_eq!(model_key("claude/claude-opus-4-7"), "claude-opus-4-7");
+        assert_eq!(model_key("chatgpt/gpt-5.4"), model_key("aura-gpt-5-4"));
     }
 
     #[test]

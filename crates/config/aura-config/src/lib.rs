@@ -69,6 +69,10 @@
 //! | `AURA_CONFLICT_ENABLED` | bool | `true` | [`ConflictConfig::enabled`] |
 //! | `AURA_CONFLICT_DEFAULT_WAIT_MS` | u64 | `30_000` | [`ConflictConfig::default_wait_ms`] |
 //! | `AURA_TRACE` | `off`/`decisions`/`full` | `decisions` | [`TraceConfig::level`] |
+//! | `AURA_GATE_TARGET` | f64 (0..=1) | `0.85` | [`GateConfig::target`] |
+//! | `AURA_GATE_MIN_TRIES` | u32 (>= 1) | `10` | [`GateConfig::min_tries`] |
+//! | `AURA_GATE_EXPLORE` | f64 (0..=1) | `0.05` | [`GateConfig::explore_rate`] |
+//! | `AURA_GATE_DELEGATE` | `on` / `off` | `on` | [`GateConfig::delegate`] |
 //! | `AURA_HOME` | path | `~/.aura` | [`AuraHome::resolve`] (read-only `CODEX_HOME` compat alias also honoured during V1 transition) |
 //!
 //! Tool-sandbox knobs (`file_ops::SKIP_DIRS`, `INCLUDE_EXTENSIONS`),
@@ -124,6 +128,7 @@ pub mod automaton;
 pub mod compaction;
 pub mod conflict;
 pub mod env;
+pub mod gate;
 pub mod plugins;
 pub mod prompts;
 pub mod reasoner;
@@ -142,6 +147,7 @@ pub use automaton::AutomatonConfig;
 pub use compaction::CompactionConfig;
 pub use conflict::ConflictConfig;
 pub use env::{ConfigError, ENV_VAR_NAMES};
+pub use gate::GateConfig;
 pub use plugins::{PluginConfig, PluginsConfig, PluginsTable};
 pub use prompts::PromptsConfig;
 pub use reasoner::{LlmRetryConfig, ReasonerConfig, ReasonerThinkingConfig};
@@ -220,6 +226,8 @@ pub struct AuraConfig {
     pub plugins: PluginsConfig,
     /// Run-trace capture level.
     pub trace: TraceConfig,
+    /// How Gate routes work across models.
+    pub gate: GateConfig,
 }
 
 impl AuraConfig {
@@ -233,6 +241,7 @@ impl AuraConfig {
             conflict: ConflictConfig::defaults(),
             plugins: PluginsConfig::defaults(),
             trace: TraceConfig::defaults(),
+            gate: GateConfig::defaults(),
         }
     }
 
@@ -254,6 +263,7 @@ impl AuraConfig {
             // (no plugins active), which matches V1 behaviour.
             plugins: PluginsConfig::defaults(),
             trace: TraceConfig::from_env(),
+            gate: GateConfig::from_env(),
         })
     }
 }
@@ -331,6 +341,12 @@ pub fn trace() -> TraceConfig {
     current().trace
 }
 
+/// Shortcut for `loaded().gate`.
+#[must_use]
+pub fn gate() -> GateConfig {
+    current().gate
+}
+
 /// Replace the process-wide config. For process-start overrides such
 /// as eval arms; tests use [`install_for_test`] instead.
 pub fn install(cfg: AuraConfig) {
@@ -404,6 +420,22 @@ mod tests {
         // parse-error assertions don't race this happy-path probe.
         let _lock = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _ = AuraConfig::from_env().expect("from_env defaults must succeed");
+    }
+
+    #[test]
+    fn a_bad_gate_value_leaves_the_other_settings_in_place() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var(env::AURA_GATE_TARGET, "high");
+        std::env::set_var(env::AURA_GATE_EXPLORE, "0.2");
+        std::env::set_var(env::AURA_SUBAGENT_MAX_DEPTH, "3");
+        let cfg = AuraConfig::from_env();
+        std::env::remove_var(env::AURA_GATE_TARGET);
+        std::env::remove_var(env::AURA_GATE_EXPLORE);
+        std::env::remove_var(env::AURA_SUBAGENT_MAX_DEPTH);
+        let cfg = cfg.expect("a bad Gate value is not an error");
+        assert_eq!(cfg.gate.target, GateConfig::defaults().target);
+        assert_eq!(cfg.gate.explore_rate, 0.2);
+        assert_eq!(cfg.subagent.max_depth, 3);
     }
 
     #[test]

@@ -302,8 +302,9 @@ fn header_status_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
 }
 
 /// `ASK · qwen3:4b`: the approval level, then a `PLAN` / `READ-ONLY` /
-/// `DEBUG` badge outside agent mode, then the model. The level and the
-/// model are left out until the kernel reports them.
+/// `DEBUG` badge outside agent mode, then the model, or `Gate → <model>
+/// (<route>)` when Gate picks it. The level and the model are left out
+/// until the kernel reports them.
 pub(super) fn model_indicator_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
     let mut spans = Vec::new();
     let separator = || Span::styled(" · ", Style::default().fg(theme.colors.muted));
@@ -339,6 +340,10 @@ pub(super) fn model_indicator_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span
     let label = app
         .current_model_option()
         .map_or_else(|| app.current_model(), |m| m.label.as_str());
+    let label = match app.model_route() {
+        Some(route) => format!("{label} → {route}"),
+        None => label.to_string(),
+    };
     spans.push(Span::styled(label, Style::default().fg(theme.colors.muted)));
     spans
 }

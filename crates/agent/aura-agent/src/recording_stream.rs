@@ -79,6 +79,7 @@ impl RecordingStream {
             u64::try_from(last.duration_since(first).as_millis()).unwrap_or(u64::MAX)
         });
 
+        let handle = handle.with_plan_usage(self.accumulator.plan_usage.clone());
         if let Err(e) = handle.record_completed(
             &model,
             stop_reason,
@@ -505,5 +506,77 @@ mod tests {
             Some("Let me check.")
         );
         assert!(payload.get("thinking_ms").is_some(), "{payload}");
+    }
+
+    #[tokio::test]
+    async fn plan_usage_is_recorded_on_streamed_and_complete_calls() {
+        use aura_model::{Plan, PlanUsage};
+        let reading = PlanUsage {
+            plan: Plan::Claude,
+            window: "5h".to_string(),
+            used: 0.25,
+            resets_at: Some(1_764_554_400),
+        };
+        let provider: Arc<dyn ModelProvider + Send + Sync> = Arc::new(
+            MockProvider::new()
+                .with_default_response(aura_model::MockResponse::text("ok"))
+                .with_plan_usage(vec![reading.clone()]),
+        );
+        let (kernel, _db) = create_kernel(provider);
+        let request = || {
+            ModelRequest::builder("claude/claude-sonnet-4-6", "system")
+                .message(Message::user("hi"))
+                .try_build()
+                .unwrap()
+        };
+
+        let (handle, inner) = kernel.reason_streaming(request()).await.unwrap();
+        let mut stream = RecordingStream::new(inner, handle);
+        while stream.next().await.is_some() {}
+        drop(stream);
+        let result = kernel.reason(request()).await.unwrap();
+        assert_eq!(
+            result.response.trace.plan_usage,
+            std::slice::from_ref(&reading)
+        );
+
+        let entries = kernel
+            .store()
+            .scan_record(kernel.agent_id, 0, 64)
+            .expect("scan_record");
+        let recorded: Vec<Vec<PlanUsage>> = entries
+            .iter()
+            .filter(|e| e.tx.tx_type == TransactionType::Reasoning)
+            .map(|e| {
+                let payload: serde_json::Value = serde_json::from_slice(&e.tx.payload).unwrap();
+                serde_json::from_value(payload["plan_usage"].clone()).unwrap()
+            })
+            .collect();
+        assert_eq!(recorded, [vec![reading.clone()], vec![reading]]);
+    }
+
+    #[tokio::test]
+    async fn calls_without_plan_usage_record_none() {
+        let provider: Arc<dyn ModelProvider + Send + Sync> =
+            Arc::new(MockProvider::simple_response("hello"));
+        let (kernel, _db) = create_kernel(provider);
+        let request = ModelRequest::builder("test-model", "system")
+            .message(Message::user("hi"))
+            .try_build()
+            .unwrap();
+        let (handle, inner) = kernel.reason_streaming(request).await.unwrap();
+        let mut stream = RecordingStream::new(inner, handle);
+        while stream.next().await.is_some() {}
+        drop(stream);
+        let entries = kernel
+            .store()
+            .scan_record(kernel.agent_id, 0, 64)
+            .expect("scan_record");
+        let reasoning = entries
+            .iter()
+            .find(|e| e.tx.tx_type == TransactionType::Reasoning)
+            .expect("reasoning entry");
+        let payload: serde_json::Value = serde_json::from_slice(&reasoning.tx.payload).unwrap();
+        assert!(payload.get("plan_usage").is_none(), "{payload}");
     }
 }

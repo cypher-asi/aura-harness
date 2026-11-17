@@ -1,0 +1,6 @@
+title = "Extract a repeated tax rate"
+category = "refactor"
+tags = ["python"]
+prompt = "The sales tax rate 0.0725 is repeated across the shop package. Define it once as TAX_RATE in shop/config.py and use that constant everywhere instead. Behavior must not change."
+verify = "PYTHONPATH=. python3 .gate_checks/check.py"
+max_iterations = 20

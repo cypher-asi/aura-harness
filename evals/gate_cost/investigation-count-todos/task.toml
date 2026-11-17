@@ -1,0 +1,6 @@
+title = "Count TODO comments, not strings"
+category = "investigation"
+tags = ["python"]
+prompt = "How many TODO comments are there in src/ (not tests/)? Count comments only, not TODO inside strings. Write just the number to answer.txt."
+verify = "[ \"$(tr -d ' \\n' < answer.txt)\" = 4 ]"
+max_iterations = 15

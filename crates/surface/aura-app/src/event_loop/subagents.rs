@@ -3,9 +3,22 @@
 //!
 //! A `task` call names a permanent agent. The dispatcher registers a new
 //! instance under the calling agent, runs one turn of it with the
-//! definition's rules, tools and model, and returns its final reply as the
-//! tool result. The instance stays in the agents list so the user can open
+//! definition's rules, tools and model, runs the call's `check` if it has
+//! one, and returns a compact result: the instance's reply (capped), the
+//! files it changed and how the check went (see [`super::task_check`]).
+//! When the user selected gate, Gate picks the model of a subtask nothing
+//! pins, and every subtask records its prompt and how it went (see
+//! [`super::gate_subtask`]); a routed subtask whose check fails or that
+//! errors has its file changes undone and is retried once on the next
+//! stronger model (`AgentHub::run_subtask` says which changes are
+//! undone). The instance stays in the agents list so the user can open
 //! it and keep talking to it.
+//!
+//! Instances of permanent agents that only read (their tools change no
+//! file) run side by side; the others run one at a time per workspace,
+//! so their edits never collide. Under Gate the user's own agent is a
+//! lead: [`AgentHub::lead_turn`] gives it the lead's prompt and, while
+//! delegation is enforced, the lead's tools (see [`super::lead`]).
 //!
 //! Spawns run inside the parent's tool call, on the parent's turn task, so
 //! the event loop keeps running beside them and the user can open a spawn
@@ -15,27 +28,38 @@
 use super::agent_events::AgentUi;
 use super::agents::{AgentSession, KernelFactory};
 use super::approvals::TerminalApprovals;
-use super::handlers::{handle_agent_success, run_agent_turn};
+use super::gate_live::GateLive;
+use super::gate_record;
+use super::gate_subtask::{explicit_model, GateBase, SubtaskGate, SubtaskLabel};
+use super::handlers::{handle_agent_success, run_agent_turn, system_message};
 use super::host::{agent_tool_definitions, TerminalAgents};
+use super::lead::lead_tools;
 use super::modes::Permissions;
 use super::notices::{Notice, NoticeSender};
 use super::processes::{now_ms, task_id, ProcessTable};
 use super::record_ui::RecordPanelAgent;
 use super::steering::Steering;
+use super::task_check;
 use super::trace::Traces;
-use crate::agent_definitions::AgentDefinitions;
+use super::turns::ended_signal;
+use crate::agent_definitions::{AgentDefinition, AgentDefinitions};
 use crate::agent_registry::AgentRegistry;
+use crate::file_checkpoints::AttemptFiles;
+use crate::isolation::changes;
 use crate::long_run::LongRunSettings;
 use crate::model_selection::ModelLimits;
 use crate::project_instructions::ProjectInstructions;
 use crate::record_loader::agent_summaries;
 use async_trait::async_trait;
 use aura_agent::{AgentLoop, AgentLoopConfig};
+use aura_agent_gate::compare::{tally, PlanReading};
+use aura_agent_gate::{Candidate, Decision};
 use aura_agent_kernel::Kernel;
 use aura_agent_trace::{RunMeta, RunRecorder, RunSource};
 use aura_context_skills::SkillManager;
 use aura_core_types::{
-    AgentId, SpawnMode, SubagentDispatchRequest, SubagentExit, SubagentResult, Transaction,
+    AgentId, Hash, ModelTokens, OutcomePayload, OutcomeSignal, PromptCategory, RecordEntry,
+    SpawnMode, SubagentDispatchRequest, SubagentExit, SubagentResult,
 };
 use aura_exec_tools::agents::task::TASK_TOOL_NAME;
 use aura_exec_tools::jobs::{JOB_KILL_TOOL_NAME, JOB_OUTPUT_TOOL_NAME};
@@ -49,9 +73,13 @@ use aura_ui_terminal::{PermissionMode, UiCommand};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::time::Instant;
 use tokio::sync::{mpsc, Notify};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
+
+/// Record entries read per scan when adding up an agent's model calls.
+const SCAN_BATCH: usize = 500;
 
 /// An agent with work in flight.
 struct Running {
@@ -60,6 +88,57 @@ struct Running {
     /// Input for its turn; `None` while it runs a typed shell command or a
     /// task for its parent.
     steering: Option<Steering>,
+    /// Subtasks this work dispatched, oldest first
+    subtasks: Vec<Attempt>,
+}
+
+/// A subtask an agent's work dispatched, kept to tell when the same
+/// subtask is dispatched again.
+struct Attempt {
+    /// The permanent agent it went to
+    kind: String,
+    prompt: String,
+    child: AgentId,
+    kernel: Arc<Kernel>,
+    /// The outcome written when it ended, once it has
+    ended: Option<OutcomePayload>,
+    /// Whether a later dispatch redid it
+    redone: bool,
+}
+
+/// A subtask the parent dispatched again: its end outcome is to be
+/// followed by a `redone` failure.
+struct Redo {
+    kernel: Arc<Kernel>,
+    child: AgentId,
+    ended: OutcomePayload,
+}
+
+impl Redo {
+    async fn record(self) {
+        info!(child = %self.child, "Subtask dispatched again; its first attempt failed");
+        gate_record::record(
+            &self.kernel,
+            self.child,
+            &self.ended.with_signal(OutcomeSignal::Redone),
+        )
+        .await;
+    }
+}
+
+/// How the subtasks of a `/compare` run are routed, whatever the user
+/// selected: the Gate arm's by Gate without exploring, the other arm's
+/// on the model it is pinned to.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ArmRouting {
+    /// Gate routes among `candidates`; `delegate` says whether the run's
+    /// lead must delegate (see [`AgentHub::leads`]).
+    Gate {
+        candidates: Vec<Candidate>,
+        delegate: bool,
+    },
+    /// Every subtask nothing else pins runs on this model.
+    Pinned(String),
 }
 
 /// What every turn starts from before a permanent agent's settings apply.
@@ -70,6 +149,8 @@ pub struct TurnBase {
     pub tools: Vec<ToolDefinition>,
     /// For running a permanent agent on its own model.
     pub limits: ModelLimits,
+    /// How Gate classifies and routes the subtasks turns delegate.
+    pub gate: GateBase,
 }
 
 /// Agent state shared by the event loop and the subagent dispatcher.
@@ -112,6 +193,14 @@ pub struct AgentHub {
     pub(crate) record_panel: RecordPanelAgent,
     /// Every agent's run trace.
     pub(crate) traces: Arc<Traces>,
+    /// What Gate has learned, and its latest decisions.
+    pub(crate) gate: Arc<GateLive>,
+    /// How the subtasks of each running `/compare` run are routed.
+    compare_arms: Mutex<HashMap<AgentId, ArmRouting>>,
+    /// Per workspace, the lock that runs write subtasks one at a time
+    write_locks: Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
+    /// Agents doing a write subtask while holding their workspace's lock
+    writing: Mutex<HashSet<AgentId>>,
 }
 
 /// Parts of an [`AgentHub`] other than the kernel factory.
@@ -137,6 +226,9 @@ pub struct AgentHubParts {
     pub record_panel: RecordPanelAgent,
     /// Records each agent's runs.
     pub traces: Arc<Traces>,
+    /// Gate's table; the kernels' record observer must include it so it
+    /// sees every outcome.
+    pub gate: Arc<GateLive>,
 }
 
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -180,8 +272,42 @@ impl AgentHub {
                 agents: parts.agents,
                 record_panel: parts.record_panel,
                 traces: parts.traces,
+                gate: parts.gate,
+                compare_arms: Mutex::new(HashMap::new()),
+                write_locks: Mutex::new(HashMap::new()),
+                writing: Mutex::new(HashSet::new()),
             }
         })
+    }
+
+    /// Route the subtasks of the `/compare` run `agent` (and theirs) as
+    /// `routing` says, until [`Self::end_compare_run`].
+    pub(crate) fn begin_compare_run(&self, agent: AgentId, routing: ArmRouting) {
+        lock(&self.compare_arms).insert(agent, routing);
+    }
+
+    /// The `/compare` run `agent` ended.
+    pub(crate) fn end_compare_run(&self, agent: AgentId) {
+        lock(&self.compare_arms).remove(&agent);
+    }
+
+    /// How the subtasks of `agent` are routed when it works for a
+    /// `/compare` run, directly or through the agents between.
+    fn compare_routing(&self, agent: AgentId) -> Option<ArmRouting> {
+        let ancestry = lock(&self.registry).ancestry(agent);
+        let arms = lock(&self.compare_arms);
+        ancestry.iter().find_map(|id| arms.get(id).cloned())
+    }
+
+    /// Hand `session`, whose work ended, to the event loop to keep, and
+    /// note that it stopped running.
+    pub(crate) fn park(&self, session: AgentSession) {
+        let agent_id = session.agent_id();
+        // Parked before it stops running, so the event loop never sees the
+        // agent with neither a session nor work in flight.
+        lock(&self.finished).push(session);
+        self.stop_running(agent_id);
+        self.spawn_finished.notify_one();
     }
 
     /// Work mode of `agent_id`.
@@ -258,6 +384,55 @@ impl AgentHub {
         let instructions = self.instructions.for_workspace(workspace);
         let (mut config, tools) = self.definition_turn(definition, &instructions.text);
         self.long_run.apply(&mut config);
+        (config, tools)
+    }
+
+    /// Whether the turns of the agent `agent_id`, an instance of the
+    /// permanent agent `definition` if any, lead under Gate: `Some(true)`
+    /// with delegation enforced, `Some(false)` with it only recommended
+    /// (`AURA_GATE_DELEGATE=off`, or the `gate:nodelegate` arm of
+    /// `/compare`), `None` when they don't lead. Only the user's own
+    /// agents lead, and only when Gate routes their work: never an
+    /// instance of a permanent agent, a pinned main model or a pinned
+    /// `/compare` arm.
+    pub(crate) fn leads(&self, agent_id: AgentId, definition: Option<&str>) -> Option<bool> {
+        if definition.is_some() {
+            return None;
+        }
+        match self.compare_routing(agent_id) {
+            Some(ArmRouting::Gate { delegate, .. }) => Some(delegate),
+            Some(ArmRouting::Pinned(_)) => None,
+            None => lock(&self.base)
+                .gate
+                .candidates
+                .is_some()
+                .then(|| self.gate.settings().delegate),
+        }
+    }
+
+    /// [`Self::agent_turn`] for a turn `session` runs for the user (or a
+    /// `/compare` run). When it leads under Gate the prompt says how to
+    /// lead and, with delegation enforced, the lead's tools replace the
+    /// file tools and `session` keeps its calls within the lead's limits.
+    pub(crate) fn lead_turn(
+        &self,
+        session: &mut AgentSession,
+    ) -> (AgentLoopConfig, Vec<ToolDefinition>) {
+        let workspace = session.kernel.agent_workspace();
+        let agent_id = session.agent_id();
+        let definition = session.definition.clone();
+        let (mut config, mut tools) = self.agent_turn(agent_id, definition.as_deref(), &workspace);
+        let leads = self.leads(agent_id, definition.as_deref());
+        session.lead = leads == Some(true);
+        if let Some(enforced) = leads {
+            config.system_prompt.push_str("\n\n");
+            config.system_prompt.push_str(
+                &aura_context_prompts::system::sections::gate_lead::render(enforced),
+            );
+            if enforced {
+                tools = lead_tools(tools);
+            }
+        }
         (config, tools)
     }
 
@@ -440,7 +615,7 @@ impl AgentHub {
 
     /// Note that `agent_id` started work on `kernel` that `cancel` stops.
     /// `steering` takes messages for it while it runs.
-    pub(super) fn start_running(
+    pub(crate) fn start_running(
         &self,
         agent_id: AgentId,
         kernel: Arc<Kernel>,
@@ -453,8 +628,63 @@ impl AgentHub {
                 kernel,
                 cancel,
                 steering,
+                subtasks: Vec::new(),
             },
         );
+    }
+
+    /// Note that the work `parent` is doing dispatched `attempt`. Returns
+    /// the subtasks of the same kind and prompt it dispatched before that
+    /// have ended and not been redone yet; those still running are marked
+    /// to be redone when they end. Nothing is kept for an agent with no
+    /// work in flight.
+    fn begin_attempt(&self, parent: AgentId, attempt: Attempt) -> Vec<Redo> {
+        let mut running = lock(&self.running);
+        let Some(work) = running.get_mut(&parent) else {
+            return Vec::new();
+        };
+        let mut redos = Vec::new();
+        for earlier in &mut work.subtasks {
+            if earlier.redone
+                || earlier.kind != attempt.kind
+                || !aura_agent_gate::outcome::is_repeat(&earlier.prompt, &attempt.prompt)
+            {
+                continue;
+            }
+            earlier.redone = true;
+            if let Some(ended) = &earlier.ended {
+                redos.push(Redo {
+                    kernel: Arc::clone(&earlier.kernel),
+                    child: earlier.child,
+                    ended: ended.clone(),
+                });
+            }
+        }
+        work.subtasks.push(attempt);
+        redos
+    }
+
+    /// Note that `parent`'s subtask on `child` ended with `ended`. Returns
+    /// it as a [`Redo`] when the parent already dispatched it again.
+    fn end_attempt(
+        &self,
+        parent: AgentId,
+        child: AgentId,
+        ended: Option<OutcomePayload>,
+    ) -> Option<Redo> {
+        let mut running = lock(&self.running);
+        let attempt = running
+            .get_mut(&parent)?
+            .subtasks
+            .iter_mut()
+            .find(|attempt| attempt.child == child)?;
+        attempt.ended.clone_from(&ended);
+        let ended = ended.filter(|_| attempt.redone)?;
+        Some(Redo {
+            kernel: Arc::clone(&attempt.kernel),
+            child,
+            ended,
+        })
     }
 
     /// Input for the turn `agent_id` is running, if it is running one.
@@ -466,7 +696,7 @@ impl AgentHub {
 
     /// Note that `agent_id` has no work in flight any more. Returns
     /// whether that work was cancelled.
-    pub(super) fn stop_running(&self, agent_id: AgentId) -> bool {
+    pub(crate) fn stop_running(&self, agent_id: AgentId) -> bool {
         lock(&self.running)
             .remove(&agent_id)
             .is_some_and(|running| running.cancel.is_cancelled())
@@ -517,6 +747,69 @@ impl AgentHub {
             )));
         };
 
+        let first = self
+            .open_task(&request, &definition, request.prompt.clone(), None)
+            .await?;
+        let parent = request.parent_agent_id;
+        let child_id = first.session.agent_id();
+        let redos = self.begin_attempt(
+            parent,
+            Attempt {
+                kind: definition.name.clone(),
+                prompt: request.prompt.clone(),
+                child: child_id,
+                kernel: Arc::clone(&first.session.kernel),
+                ended: None,
+                redone: false,
+            },
+        );
+        for redo in redos {
+            redo.record().await;
+        }
+        let name = first.name.clone();
+        let detached = request.spawn_mode == Some(SpawnMode::Detached);
+        let subtask = Subtask {
+            request,
+            definition,
+            first,
+        };
+
+        if detached {
+            info!(child = %name, "Running permanent agent in the background");
+            let hub = Arc::clone(self);
+            let shown = name.clone();
+            tokio::spawn(async move {
+                let report = hub.run_subtask(subtask).await;
+                let _ = hub
+                    .notices
+                    .send(task_notice(parent, &shown, report.outcome()));
+            });
+            return Ok(SubagentResult::completed(
+                child_id,
+                format!(
+                    "{name} is working on this in the background. Its reply will arrive \
+                     as a message when it finishes; carry on meanwhile."
+                ),
+            ));
+        }
+
+        let report = self.run_subtask(subtask).await;
+        if let Err(reason) = &report.last().reply {
+            warn!(child = %report.last().name, %reason, "Permanent agent failed");
+        }
+        Ok(report.result())
+    }
+
+    /// Register and open an instance of `definition` for `request`, set up
+    /// to be asked `prompt`; `escalation` sends it where a failed first
+    /// attempt is retried.
+    async fn open_task(
+        &self,
+        request: &SubagentDispatchRequest,
+        definition: &AgentDefinition,
+        prompt: String,
+        escalation: Option<(Decision, PromptCategory)>,
+    ) -> Result<TaskRun, String> {
         let (instance, folder) = {
             let mut registry = lock(&self.registry);
             let parent = registry
@@ -539,7 +832,6 @@ impl AgentHub {
         self.set_permissions(child_id, permissions);
         super::modes::apply(&session.kernel, permissions, &self.tool_names());
 
-        let detached = request.spawn_mode == Some(SpawnMode::Detached);
         let cancel = CancellationToken::new();
         // Messages for a spawn wait for its task to end: steering it
         // mid-task would change the work its parent is waiting on.
@@ -560,100 +852,579 @@ impl AgentHub {
             config.system_prompt.push_str("\n\n");
             config.system_prompt.push_str(addendum);
         }
-        let mut meta = RunMeta::new(&config.model, RunSource::Tui);
-        meta.workspace = workspace.display().to_string();
-        meta.mode.clone_from(&definition.name);
-        meta.spawned_by = self.traces.run_id_of(request.parent_agent_id);
-        let recorder = self.traces.start(child_id, meta);
-        self.register_root(child_id, &instance.name, workspace, &config);
+        let mut trace = RunMeta::new(&config.model, RunSource::Tui);
+        trace.workspace = workspace.display().to_string();
+        trace.mode.clone_from(&definition.name);
+        trace.spawned_by = self.traces.run_id_of(request.parent_agent_id);
+        let mut gate = self.subtask_gate(request, definition, &mut config);
+        gate.escalation = escalation;
         let mut summary = task_summary(
-            &request,
+            request,
+            &prompt,
             &instance.name,
             &definition.name,
             child_id,
             &config.model,
         );
-        if detached {
+        if request.spawn_mode == Some(SpawnMode::Detached) {
             summary.kind = ProcessKind::Agent;
         }
-        self.processes.start(summary, Some(cancel.clone()));
-        let run = TaskRun {
+        Ok(TaskRun {
             session,
-            agent_loop: AgentLoop::new(config),
+            config,
             tools,
-            prompt: request.prompt,
+            prompt,
             cancel,
-            recorder,
-        };
-
-        if detached {
-            info!(child = %instance.name, "Running permanent agent in the background");
-            let hub = Arc::clone(self);
-            let parent = request.parent_agent_id;
-            let name = instance.name.clone();
-            tokio::spawn(async move {
-                let outcome = hub.finish_task(run).await;
-                let _ = hub.notices.send(task_notice(parent, &name, outcome));
-            });
-            return Ok(SubagentResult::completed(
-                child_id,
-                format!(
-                    "{} is working on this in the background. Its reply will arrive \
-                     as a message when it finishes; carry on meanwhile.",
-                    instance.name
-                ),
-            ));
-        }
-
-        Ok(match self.finish_task(run).await {
-            Ok(text) => SubagentResult::completed(child_id, text),
-            Err(reason) => {
-                warn!(child = %instance.name, %reason, "Permanent agent failed");
-                SubagentResult {
-                    child_agent_id: Some(child_id),
-                    final_message: String::new(),
-                    total_input_tokens: 0,
-                    total_output_tokens: 0,
-                    files_changed: Vec::new(),
-                    exit: SubagentExit::Failed { reason },
-                }
-            }
+            gate,
+            summary,
+            name: instance.name.clone(),
+            parent: request.parent_agent_id,
+            check: request.check.clone(),
+            trace,
         })
     }
 
-    /// Run `run`'s turn to the end, then hand its session back for the
-    /// event loop to keep.
-    async fn finish_task(&self, mut run: TaskRun) -> Result<String, String> {
-        let child_id = run.session.agent_id();
+    /// Run `subtask` to its end: wait for its workspace when it writes
+    /// there, run its first attempt and, when Gate routed it and the
+    /// attempt failed, put back the files it changed and retry it once on
+    /// a stronger model.
+    ///
+    /// The files its file tools changed are always put back. Changes by
+    /// its shell commands are too when the workspace is in a git
+    /// repository and the attempt had the workspace to itself: it took
+    /// the write lock (so it is no read-only or nested subtask) and its
+    /// caller waits for it rather than working on beside it.
+    async fn run_subtask(&self, subtask: Subtask) -> TaskReport {
+        let Subtask {
+            request,
+            definition,
+            first,
+        } = subtask;
+        let workspace = first.session.kernel.agent_workspace();
+        let mut slot = if reads_only(&definition) {
+            None
+        } else {
+            Some(
+                self.write_slot(&request, workspace.clone(), &first.cancel)
+                    .await,
+            )
+        };
+        if let Some(slot) = &mut slot {
+            slot.hold(first.session.agent_id());
+        }
+        let candidates = first.gate.candidates.clone();
+        let alone = slot.as_ref().is_some_and(WriteSlot::exclusive)
+            && request.spawn_mode != Some(SpawnMode::Detached);
+        let snapshot = if alone && candidates.is_some() {
+            snapshot_workspace(workspace).await
+        } else {
+            None
+        };
+        let first = self.finish_task(first).await;
+        let Some(why) = first.attempted().failure().filter(|_| !first.cancelled) else {
+            return TaskReport { first, retry: None };
+        };
+        let Some(candidates) = candidates else {
+            return TaskReport { first, retry: None };
+        };
+        let category = first.category.unwrap_or(PromptCategory::Unclassified);
+        let Some(decision) = self.gate.escalate(category, &first.model, &candidates) else {
+            info!(child = %first.name, "No stronger model to retry the subtask on");
+            return TaskReport { first, retry: None };
+        };
+        if let Some(files) = &first.files_before {
+            let report = files.restore();
+            for (path, problem) in &report.failed {
+                warn!(path = %path.display(), %problem, "Could not undo a failed subtask's change");
+            }
+        }
+        if let Some(snapshot) = snapshot {
+            restore_workspace(snapshot).await;
+        }
+        let prompt = task_check::retry_prompt(&request.prompt, &first.model, &why);
+        let retry = match self
+            .open_task(&request, &definition, prompt, Some((decision, category)))
+            .await
+        {
+            Ok(retry) => retry,
+            Err(problem) => {
+                warn!(%problem, "Could not retry the subtask");
+                return TaskReport { first, retry: None };
+            }
+        };
+        if let Some(slot) = &mut slot {
+            slot.hold(retry.session.agent_id());
+        }
+        let retry = self.finish_task(retry).await;
+        TaskReport {
+            first,
+            retry: Some((retry, why)),
+        }
+    }
+
+    /// The turn of a write subtask for `request` in `workspace`: write
+    /// subtasks in one workspace run one at a time, except those
+    /// dispatched by one that holds it. Cancelling stops the wait.
+    async fn write_slot(
+        &self,
+        request: &SubagentDispatchRequest,
+        workspace: PathBuf,
+        cancel: &CancellationToken,
+    ) -> WriteSlot<'_> {
+        let nested = {
+            let writing = lock(&self.writing);
+            std::iter::once(&request.parent_agent_id)
+                .chain(&request.parent_chain)
+                .any(|agent| writing.contains(agent))
+        };
+        let guard = if nested {
+            None
+        } else {
+            let mutex = Arc::clone(lock(&self.write_locks).entry(workspace).or_default());
+            tokio::select! {
+                guard = mutex.lock_owned() => Some(guard),
+                () = cancel.cancelled() => None,
+            }
+        };
+        WriteSlot {
+            hub: self,
+            guard,
+            holders: Vec::new(),
+        }
+    }
+
+    /// How Gate handles the subtask `request` gives the permanent agent
+    /// `definition`, set up with `config`. A model the call names is
+    /// applied to `config` here and pins the subtask, as do a council
+    /// seat, a definition naming its own model, and a pinned main model.
+    /// Under a `/compare` run, the run's arm decides instead of the
+    /// user's selection.
+    fn subtask_gate(
+        &self,
+        request: &SubagentDispatchRequest,
+        definition: &AgentDefinition,
+        config: &mut AgentLoopConfig,
+    ) -> SubtaskGate {
+        let arm = self.compare_routing(request.parent_agent_id);
+        let base = lock(&self.base);
+        let explicit = explicit_model(request);
+        if let Some(model) = explicit {
+            base.limits.configure(config, model);
+        }
+        let mut pinned =
+            explicit.is_some() || request.council_index.is_some() || definition.model.is_some();
+        let mut candidates = base.gate.candidates.clone();
+        let mut explore = true;
+        match arm {
+            Some(ArmRouting::Pinned(model)) => {
+                if !pinned {
+                    base.limits.configure(config, &model);
+                }
+                pinned = true;
+            }
+            Some(ArmRouting::Gate {
+                candidates: arm_candidates,
+                ..
+            }) => {
+                candidates = Some(arm_candidates);
+                explore = false;
+            }
+            None => {}
+        }
+        SubtaskGate {
+            kind: definition.name.clone(),
+            classifier: base.gate.classifier.clone(),
+            candidates: if pinned { None } else { candidates },
+            limits: base.limits,
+            live: Arc::clone(&self.gate),
+            explore,
+            escalation: None,
+        }
+    }
+
+    /// What Gate routes the work of an agent running the permanent agent
+    /// `definition` among: `None` when the user pinned the main model or
+    /// the definition names its own.
+    pub(crate) fn gate_candidates(&self, definition: Option<&str>) -> Option<Vec<Candidate>> {
+        let candidates = lock(&self.base).gate.candidates.clone()?;
+        let pinned = definition.is_some_and(|name| {
+            lock(&self.definitions)
+                .get(name)
+                .is_some_and(|d| d.model.is_some())
+        });
+        (!pinned).then_some(candidates)
+    }
+
+    /// The model that classifies prompts; empty when nothing does.
+    pub(crate) fn classifier(&self) -> String {
+        lock(&self.base).gate.classifier.clone()
+    }
+
+    /// For pointing an agent loop at a model other than the selected one.
+    pub(crate) fn model_limits(&self) -> ModelLimits {
+        lock(&self.base).limits
+    }
+
+    /// Tokens and cost per model of every model call `agent` and the
+    /// agents under it made, classifier calls included.
+    pub(crate) fn tokens_by_model(&self, agent: AgentId) -> Vec<ModelTokens> {
+        let mut calls = Vec::new();
+        self.each_entry(agent, |entry| {
+            calls.extend(crate::record_loader::model_call(&entry.tx));
+        });
+        tally(calls)
+    }
+
+    /// The plan usage every model call of `agent` and the agents under it
+    /// reported, with when each call was recorded.
+    pub(crate) fn plan_readings(&self, agent: AgentId) -> Vec<PlanReading> {
+        let mut readings = Vec::new();
+        self.each_entry(agent, |entry| {
+            let recorded_ms = entry.tx.ts_ms;
+            readings.extend(
+                crate::record_loader::plan_usage(&entry.tx)
+                    .into_iter()
+                    .map(|usage| PlanReading { recorded_ms, usage }),
+            );
+        });
+        readings
+    }
+
+    /// The models the prompts of `agent` and the agents under it were
+    /// routed to, first used first.
+    pub(crate) fn routed_models(&self, agent: AgentId) -> Vec<String> {
+        let mut models: Vec<String> = Vec::new();
+        self.each_entry(agent, |entry| {
+            if let Some(prompt) = entry.tx.prompt_payload() {
+                let model = prompt.route.model;
+                if !model.is_empty() && !models.contains(&model) {
+                    models.push(model);
+                }
+            }
+        });
+        models
+    }
+
+    /// Call `f` with every entry in the records of `agent` and the agents
+    /// under it, `agent`'s first.
+    fn each_entry(&self, agent: AgentId, mut f: impl FnMut(&RecordEntry)) {
+        let agents: Vec<AgentId> = std::iter::once(agent)
+            .chain(lock(&self.registry).descendants(agent))
+            .collect();
+        let store = self.factory.store.as_ref();
+        for agent in agents {
+            let mut from = 1;
+            loop {
+                let entries = match store.scan_record(agent, from, SCAN_BATCH) {
+                    Ok(entries) => entries,
+                    Err(e) => {
+                        warn!(%agent, error = %e, "Could not read an agent's record");
+                        break;
+                    }
+                };
+                entries.iter().for_each(&mut f);
+                match entries.last() {
+                    Some(last) if entries.len() == SCAN_BATCH => from = last.seq + 1,
+                    _ => break,
+                }
+            }
+        }
+    }
+
+    /// Route `run`'s subtask, run its turn to the end, run its check and
+    /// record how it went, then hand its session back for the event loop
+    /// to keep.
+    async fn finish_task(&self, run: TaskRun) -> TaskDone {
+        let TaskRun {
+            mut session,
+            mut config,
+            tools,
+            prompt,
+            cancel,
+            gate,
+            mut summary,
+            name,
+            parent,
+            check,
+            mut trace,
+        } = run;
+        let child_id = session.agent_id();
         let ui = AgentUi::new(self.commands.clone(), child_id);
-        let outcome = run_task_turn(&mut run, &ui, self.long_run).await;
+        let started = Instant::now();
+        let label = gate.label(&session, &mut config, &prompt, &cancel).await;
+        summary.model = Some(config.model.clone());
+        trace.model.clone_from(&config.model);
+        let recorder = self.traces.start(child_id, trace);
+        self.register_root(child_id, &name, session.kernel.agent_workspace(), &config);
+        self.processes.start(summary, Some(cancel.clone()));
+        let files = self
+            .factory
+            .file_checkpoints
+            .clone()
+            .filter(|_| gate.candidates.is_some() && gate.escalation.is_none());
+        if let Some(files) = &files {
+            files.begin_attempt(child_id);
+        }
+        let agent_loop = AgentLoop::new(config);
+        let mut end = run_task_turn(
+            &mut session,
+            &agent_loop,
+            tools,
+            &prompt,
+            label,
+            &ui,
+            &cancel,
+            self.long_run,
+            recorder,
+        )
+        .await;
+        let cancelled = cancel.is_cancelled();
+        let check = match check {
+            Some(command) if end.reply.is_ok() && !cancelled => {
+                let run = task_check::run_check(&session, &command).await;
+                ui.send(system_message(run.describe())).await;
+                if let Some(signal) = run.signal() {
+                    end.signal = signal;
+                }
+                Some(run)
+            }
+            _ => None,
+        };
+        let files_before = files.map(|files| files.take_attempt(child_id));
         self.processes.finish(
             &task_id(child_id),
-            if outcome.is_ok() {
+            if end.reply.is_ok() {
                 ProcessStatus::Exited
             } else {
                 ProcessStatus::Failed
             },
         );
+        let model = agent_loop.config().model.clone();
+        let category = end.prompt.map(|(_, category)| category);
+        let ended = end.prompt.map(|(prompt_tx, category)| OutcomePayload {
+            prompt_tx,
+            category,
+            model: model.clone(),
+            success: end.signal.success(),
+            signal: end.signal,
+            cost_usd: end.cost_usd,
+            latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        });
+        if let Some(ended) = &ended {
+            gate_record::record(&session.kernel, child_id, ended).await;
+        }
+        if let Some(redo) = self.end_attempt(parent, child_id, ended) {
+            redo.record().await;
+        }
 
-        // Parked before it stops running, so the event loop never sees the
-        // agent with neither a session nor work in flight.
-        lock(&self.finished).push(run.session);
-        self.stop_running(child_id);
-        self.spawn_finished.notify_one();
+        self.park(session);
         self.send_agent_list().await;
-        outcome
+        TaskDone {
+            child: child_id,
+            name,
+            model,
+            reply: end.reply,
+            category,
+            files: end.files,
+            check,
+            files_before,
+            cancelled,
+        }
     }
 }
 
 /// A spawned permanent agent's turn, ready to run.
 struct TaskRun {
     session: AgentSession,
-    agent_loop: AgentLoop,
+    /// Its agent loop's config, before Gate routes it
+    config: AgentLoopConfig,
     tools: Vec<ToolDefinition>,
     prompt: String,
     cancel: CancellationToken,
-    recorder: Option<Arc<RunRecorder>>,
+    gate: SubtaskGate,
+    /// Its Processes tab row
+    summary: ProcessSummary,
+    /// The instance's name
+    name: String,
+    /// The agent that dispatched it
+    parent: AgentId,
+    /// Command run after its turn, whose exit status is its verdict
+    check: Option<String>,
+    /// Its run trace, started once Gate has picked its model
+    trace: RunMeta,
+}
+
+/// A `task` call being worked on.
+struct Subtask {
+    request: SubagentDispatchRequest,
+    definition: AgentDefinition,
+    first: TaskRun,
+}
+
+/// How one attempt at a subtask ended.
+struct TaskDone {
+    child: AgentId,
+    /// The instance's name
+    name: String,
+    /// Model it ran on
+    model: String,
+    /// Its final reply, or why there is none
+    reply: Result<String, String>,
+    /// Its prompt's category, when the prompt was recorded
+    category: Option<PromptCategory>,
+    /// Files its file tools changed
+    files: Vec<String>,
+    /// How its check went, when it had one and got that far
+    check: Option<task_check::CheckRun>,
+    /// What the files it changed held before, when it may be retried
+    files_before: Option<AttemptFiles>,
+    cancelled: bool,
+}
+
+impl TaskDone {
+    fn attempted(&self) -> task_check::Attempted<'_> {
+        task_check::Attempted {
+            model: &self.model,
+            reply: &self.reply,
+            files: &self.files,
+            check: self.check.as_ref(),
+        }
+    }
+}
+
+/// How a subtask ended: its first attempt and, when that failed and
+/// Gate retried it, the retry and why the first attempt failed.
+struct TaskReport {
+    first: TaskDone,
+    retry: Option<(TaskDone, String)>,
+}
+
+impl TaskReport {
+    /// The attempt whose result the caller gets.
+    fn last(&self) -> &TaskDone {
+        self.retry.as_ref().map_or(&self.first, |(retry, _)| retry)
+    }
+
+    /// The compact result the caller gets.
+    fn text(&self) -> String {
+        let retried = self
+            .retry
+            .as_ref()
+            .map(|(_, why)| (self.first.model.as_str(), why.as_str()));
+        task_check::compact(&self.last().attempted(), retried)
+    }
+
+    /// The reply, or why there is none, for a background task's notice.
+    fn outcome(&self) -> Result<String, String> {
+        match &self.last().reply {
+            Ok(_) => Ok(self.text()),
+            Err(reason) => Err(reason.clone()),
+        }
+    }
+
+    /// The result of the `task` call.
+    fn result(self) -> SubagentResult {
+        let text = self.text();
+        let last = self.retry.map_or(self.first, |(retry, _)| retry);
+        let (final_message, exit) = match last.reply {
+            Ok(_) => (text, SubagentExit::Completed),
+            Err(reason) if text.is_empty() => (text, SubagentExit::Failed { reason }),
+            Err(reason) => (
+                String::new(),
+                SubagentExit::Failed {
+                    reason: format!("{reason}\n\n{text}"),
+                },
+            ),
+        };
+        SubagentResult {
+            child_agent_id: Some(last.child),
+            final_message,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            files_changed: last.files,
+            exit,
+        }
+    }
+}
+
+/// A write subtask's turn at its workspace; the next one there starts
+/// when it is dropped.
+struct WriteSlot<'a> {
+    hub: &'a AgentHub,
+    /// The workspace's lock; `None` for a subtask of one that holds it,
+    /// or when the wait was cancelled
+    guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+    /// Agents working in the slot, whose own write subtasks need not wait
+    holders: Vec<AgentId>,
+}
+
+impl WriteSlot<'_> {
+    fn hold(&mut self, agent: AgentId) {
+        lock(&self.hub.writing).insert(agent);
+        self.holders.push(agent);
+    }
+
+    /// Whether this slot took the workspace's lock itself.
+    fn exclusive(&self) -> bool {
+        self.guard.is_some()
+    }
+}
+
+/// What `workspace` holds now, when it is in a git repository, so a
+/// failed attempt's changes (shell commands' included) can be undone.
+async fn snapshot_workspace(workspace: PathBuf) -> Option<changes::Snapshot> {
+    let taken = tokio::task::spawn_blocking(move || changes::snapshot(&workspace)).await;
+    match taken {
+        Ok(Ok(snapshot)) => snapshot,
+        Ok(Err(e)) => {
+            warn!(error = %e, "Could not snapshot the workspace; only file tool changes will be undone");
+            None
+        }
+        Err(e) => {
+            warn!(error = %e, "Workspace snapshot task failed");
+            None
+        }
+    }
+}
+
+/// Put the workspace back as `snapshot` recorded it.
+async fn restore_workspace(snapshot: changes::Snapshot) {
+    match tokio::task::spawn_blocking(move || snapshot.restore()).await {
+        Ok(Ok(restored)) => {
+            for path in &restored.blocked {
+                warn!(path = %path.display(), "Could not undo a failed subtask's change: a folder with ignored files is in the way");
+            }
+            info!(
+                written = restored.written.len(),
+                removed = restored.removed.len(),
+                "Undid a failed subtask's changes to the workspace"
+            );
+        }
+        Ok(Err(e)) => {
+            warn!(error = %e, "Could not undo a failed subtask's changes to the workspace");
+        }
+        Err(e) => warn!(error = %e, "Workspace restore task failed"),
+    }
+}
+
+impl Drop for WriteSlot<'_> {
+    fn drop(&mut self) {
+        let mut writing = lock(&self.hub.writing);
+        for agent in &self.holders {
+            writing.remove(agent);
+        }
+    }
+}
+
+/// Whether subtasks of `definition` only read: it lists its tools and
+/// none of them changes files. They run side by side; the others run one
+/// at a time per workspace.
+fn reads_only(definition: &AgentDefinition) -> bool {
+    definition.tools.as_ref().is_some_and(|tools| {
+        tools
+            .iter()
+            .all(|tool| aura_agent_gate::lead::keeps_tool(tool))
+    })
 }
 
 /// What `parent` is told when its background agent `name` finishes.
@@ -697,7 +1468,11 @@ pub fn task_tool_definition(definitions: &AgentDefinitions) -> Option<ToolDefini
              context, so give it a complete, self-contained prompt. With \
              spawn_mode `detached` the call returns at once and the agent's \
              reply arrives later as a message, so you can keep working or \
-             start several agents side by side.\n\
+             start several agents side by side. Agents that only read run side by \
+             side; agents that edit files run one at a time. Give `check` a command \
+             (such as a focused test) to run when the agent finishes: its exit status \
+             says whether the task passed, and you get the agent's summary, the files \
+             it changed and the check's result back.\n\
              Permanent agents:\n{}",
             catalog.join("\n")
         ),
@@ -717,6 +1492,10 @@ pub fn task_tool_definition(definitions: &AgentDefinitions) -> Option<ToolDefini
                     "type": "string",
                     "enum": ["wait", "detached"],
                     "description": "`wait` (default) blocks until the agent replies; `detached` runs it in the background."
+                },
+                "check": {
+                    "type": "string",
+                    "description": "Command run in the workspace when the agent finishes, such as `cargo test -p parser`; exit status 0 means the task passed."
                 }
             },
             "required": ["subagent_type", "prompt"]
@@ -724,9 +1503,11 @@ pub fn task_tool_definition(definitions: &AgentDefinitions) -> Option<ToolDefini
     ))
 }
 
-/// Processes tab row for the `task` spawn running as `child`.
+/// Processes tab row for the `task` spawn running as `child`, asked
+/// `prompt`.
 fn task_summary(
     request: &SubagentDispatchRequest,
+    prompt: &str,
     name: &str,
     definition: &str,
     child: AgentId,
@@ -737,7 +1518,7 @@ fn task_summary(
         id: task_id(child),
         kind: ProcessKind::Task,
         label: format!("{name} ({definition})"),
-        detail: request.prompt.clone(),
+        detail: prompt.to_string(),
         status: ProcessStatus::Running,
         owner_agent_id: owner.to_hex(),
         owner_name: String::new(),
@@ -756,51 +1537,72 @@ fn task_summary(
     }
 }
 
-/// Record `run`'s prompt on its session and run one turn of it, streaming
-/// it into `ui`, and return the final reply.
+/// How a subtask's turn ended.
+struct TaskEnd {
+    /// The final reply, or why there is none
+    reply: Result<String, String>,
+    /// The recorded prompt and its category, when it was recorded
+    prompt: Option<(Hash, PromptCategory)>,
+    /// What the turn's end says about how it went
+    signal: OutcomeSignal,
+    /// List-price cost of the turn's model calls
+    cost_usd: f64,
+    /// Files the turn's file tools changed
+    files: Vec<String>,
+}
+
+impl TaskEnd {
+    const fn failed(reason: String) -> Self {
+        Self {
+            reply: Err(reason),
+            prompt: None,
+            signal: OutcomeSignal::Error,
+            cost_usd: 0.0,
+            files: Vec::new(),
+        }
+    }
+}
+
+/// Record `prompt` on `session` as `label` says and run one turn of it,
+/// streaming it into `ui`. A subtask Gate routed was classified already;
+/// a pinned one is classified beside its turn.
+#[allow(clippy::too_many_arguments)]
 async fn run_task_turn(
-    run: &mut TaskRun,
+    session: &mut AgentSession,
+    agent_loop: &AgentLoop,
+    tools: Vec<ToolDefinition>,
+    prompt: &str,
+    label: SubtaskLabel,
     ui: &AgentUi,
+    cancel: &CancellationToken,
     limits: LongRunSettings,
-) -> Result<String, String> {
-    let TaskRun {
-        session,
-        agent_loop,
-        tools,
-        prompt,
-        cancel,
-        recorder,
-    } = run;
-    let tools = std::mem::take(tools);
-    let prompt = prompt.as_str();
-    let recorder = recorder.clone();
-    let agent_id = session.agent_id();
-    let store = session.kernel.store();
-    store
-        .enqueue_tx(&Transaction::user_prompt(agent_id, prompt.to_string()))
-        .map_err(|e| format!("queueing prompt: {e}"))?;
-    let (token, tx) = store
-        .dequeue_tx(agent_id)
-        .map_err(|e| format!("dequeueing prompt: {e}"))?
-        .ok_or_else(|| "prompt was not queued".to_string())?;
-    session
-        .kernel
-        .process_dequeued(tx, token)
-        .await
-        .map_err(|e| format!("recording prompt: {e}"))?;
+    recorder: Option<Arc<RunRecorder>>,
+) -> TaskEnd {
+    let turn_start = session.messages.len();
+    let mut recorded = None;
+    if let Some(category) = label.category {
+        match label.record(session, category).await {
+            Ok(prompt) => recorded = Some(prompt),
+            Err(problem) => return TaskEnd::failed(format!("recording prompt: {problem}")),
+        }
+    }
     session.messages.push(Message::user(prompt));
     ui.send(UiCommand::TurnStarted {
         prompt: Some(prompt.to_string()),
     })
     .await;
+    if let Some(line) = &label.shown {
+        ui.send(system_message(line.clone())).await;
+    }
 
     if let Some(rec) = &recorder {
         rec.begin_turn(prompt);
     }
     // Nothing sends to a spawn mid-task, so its steering stays empty.
     let steering = Steering::new(cancel);
-    let (result, forwarded) = run_agent_turn(
-        session,
+    let shared: &AgentSession = session;
+    let turn = run_agent_turn(
+        shared,
         agent_loop,
         tools,
         ui,
@@ -808,33 +1610,62 @@ async fn run_task_turn(
         &steering,
         limits,
         recorder.clone(),
-    )
-    .await;
+    );
+    let (result, forwarded) = if recorded.is_some() {
+        turn.await
+    } else {
+        let (late, turn) = tokio::join!(label.classify_and_record(shared, cancel), turn);
+        match late {
+            Ok(prompt) => recorded = Some(prompt),
+            Err(problem) => warn!(%problem, "Failed to record the subtask's prompt"),
+        }
+        turn
+    };
     steering.finish(&[]);
     if let Some(rec) = &recorder {
         super::trace::end_turn(rec, &result, cancel.is_cancelled());
     }
+    let cancelled = cancel.is_cancelled();
+    let signal = if cancelled || forwarded.credentials_rejected {
+        OutcomeSignal::None
+    } else {
+        ended_signal(&result, turn_start)
+    };
+    let mut end = TaskEnd {
+        reply: Ok(String::new()),
+        prompt: recorded,
+        signal,
+        cost_usd: forwarded.usage.cost_usd,
+        files: Vec::new(),
+    };
     let result = match result {
         Ok(result) => result,
         Err(e) => {
-            let reason = if cancel.is_cancelled() {
+            let reason = if cancelled {
                 "cancelled by the user".to_string()
             } else {
                 e.to_string()
             };
             ui.send(UiCommand::ShowWarning(reason.clone())).await;
             ui.send(UiCommand::Complete).await;
-            return Err(reason);
+            end.reply = Err(reason);
+            return end;
         }
     };
     let text = result.total_text.clone();
     let llm_error = result.llm_error.as_ref().map(ToString::to_string);
+    end.files = result
+        .file_changes
+        .iter()
+        .map(|change| change.path.clone())
+        .collect();
     handle_agent_success(session, result, &forwarded, ui, &[]).await;
-    match llm_error {
+    end.reply = match llm_error {
         _ if cancel.is_cancelled() => Err("cancelled by the user".to_string()),
         Some(err) if text.trim().is_empty() => Err(err),
         _ => Ok(text),
-    }
+    };
+    end
 }
 
 /// Runs `task` calls by spawning permanent agents.

@@ -51,6 +51,25 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         needs_args: false,
     },
     SlashCommand {
+        name: "good",
+        args: "[n]",
+        description: "Rate the last turn, or the one n back, good (teaches Gate)",
+        needs_args: false,
+    },
+    SlashCommand {
+        name: "bad",
+        args: "[n]",
+        description: "Rate the last turn, or the one n back, bad (teaches Gate)",
+        needs_args: false,
+    },
+    command("gate", "What Gate learned and how it routed lately"),
+    SlashCommand {
+        name: "compare",
+        args: "[prompt | --plan f] [--against m] [--repeats n] [--check cmd] [--budget $]",
+        description: "Run a task with Gate and another model side by side",
+        needs_args: false,
+    },
+    SlashCommand {
         name: "name",
         args: "[name]",
         description: "Rename the current project",

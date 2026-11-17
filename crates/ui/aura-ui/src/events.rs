@@ -75,6 +75,9 @@ pub enum UiEvent {
     /// User requested status display
     ShowStatus,
 
+    /// User asked what Gate has learned and how it routed lately (`/gate`)
+    ShowGate,
+
     /// User requested help
     ShowHelp,
 
@@ -248,6 +251,26 @@ pub enum UiEvent {
         agent_id: String,
         /// Every change since the session started
         session: bool,
+    },
+
+    /// User rated one of the agent's finished turns (`/good [n]` or
+    /// `/bad [n]`), overriding what Gate inferred about how it went
+    RateTurn {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        /// `/good` rather than `/bad`
+        good: bool,
+        /// How many finished turns back: 1 is the last
+        turns_back: usize,
+    },
+
+    /// User ran `/compare` (Gate against another model on their own task)
+    /// with these arguments, as typed
+    Compare {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        /// Everything after `/compare`
+        args: String,
     },
 }
 
@@ -554,8 +577,11 @@ pub enum UiCommand {
     SetModels {
         /// Selectable models, in display order
         options: Vec<ModelOptionView>,
-        /// Id of the model used for the next turn
+        /// Id of the selected model (`gate` when Gate picks it)
         current: String,
+        /// The model and route Gate sends the next turn to, e.g.
+        /// `claude-sonnet-4-6 (claude plan)`; `None` for a pinned model
+        route: Option<String>,
         /// Display name of the logged-in user, `None` when browsing as guest
         user: Option<String>,
         /// Labels of the linked plans that can serve requests (e.g. "Claude")

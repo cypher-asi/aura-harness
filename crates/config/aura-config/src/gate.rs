@@ -1,0 +1,297 @@
+//! How Gate decides a model has proven itself, how often it tries a
+//! cheaper one, and whether the lead agent must delegate its work.
+//!
+//! ## Owned env vars
+//!
+//! | Var | Type | Default | Field |
+//! | --- | --- | --- | --- |
+//! | `AURA_GATE_TARGET` | f64 (0..=1) | `0.85` | [`GateConfig::target`] |
+//! | `AURA_GATE_MIN_TRIES` | u32 (>= 1) | `10` | [`GateConfig::min_tries`] |
+//! | `AURA_GATE_EXPLORE` | f64 (0..=1) | `0.05` | [`GateConfig::explore_rate`] |
+//! | `AURA_GATE_DELEGATE` | `on` / `off` | `on` | [`GateConfig::delegate`] |
+//!
+//! A value outside what a variable accepts keeps that setting's default
+//! and logs a warning naming the variable and its accepted values; the
+//! other settings, Gate's and the rest of `aura-config`'s, still apply.
+
+use std::fmt::Display;
+
+use serde::{Deserialize, Serialize};
+
+use crate::env::{
+    lookup_string, AURA_GATE_DELEGATE, AURA_GATE_EXPLORE, AURA_GATE_MIN_TRIES, AURA_GATE_TARGET,
+    FALSY_LITERALS, TRUTHY_LITERALS,
+};
+use crate::ConfigError;
+
+const DEFAULT_TARGET: f64 = 0.85;
+const DEFAULT_MIN_TRIES: u32 = 10;
+const DEFAULT_EXPLORE_RATE: f64 = 0.05;
+
+const RATE_ACCEPTS: &str = "a number from 0 to 1";
+const MIN_TRIES_ACCEPTS: &str = "a whole number of at least 1";
+const SWITCH_ACCEPTS: &str = "on or off (also 1/0, true/false, yes/no)";
+
+/// Gate's routing settings.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(default, rename_all = "snake_case")]
+pub struct GateConfig {
+    /// Success rate a model needs on a category to become its pick.
+    ///
+    /// env: `AURA_GATE_TARGET` (default: `0.85`)
+    pub target: f64,
+    /// Counted outcomes a model needs on a category before its success
+    /// rate is trusted.
+    ///
+    /// env: `AURA_GATE_MIN_TRIES` (default: `10`)
+    pub min_tries: u32,
+    /// Share of routed work sent to the next cheaper model instead of
+    /// the pick, to learn how it does.
+    ///
+    /// env: `AURA_GATE_EXPLORE` (default: `0.05`)
+    pub explore_rate: f64,
+    /// Whether the lead agent under Gate must delegate: no file edits and
+    /// only check and inspection commands of its own. When off it keeps
+    /// every tool and is only told to delegate.
+    ///
+    /// env: `AURA_GATE_DELEGATE` (default: `on`)
+    pub delegate: bool,
+}
+
+impl GateConfig {
+    /// Compile-time defaults. No env access.
+    #[must_use]
+    pub const fn defaults() -> Self {
+        Self {
+            target: DEFAULT_TARGET,
+            min_tries: DEFAULT_MIN_TRIES,
+            explore_rate: DEFAULT_EXPLORE_RATE,
+            delegate: true,
+        }
+    }
+
+    /// Apply env overrides. A variable set to a value it does not accept
+    /// keeps its default, with a warning naming it and what it accepts.
+    #[must_use]
+    pub fn from_env() -> Self {
+        let (cfg, rejected) = Self::read_env();
+        for err in &rejected {
+            tracing::warn!(error = %err, "aura-config: ignoring an invalid Gate setting");
+        }
+        cfg
+    }
+
+    /// The settings from the environment, and the variables whose value
+    /// was not accepted.
+    fn read_env() -> (Self, Vec<ConfigError>) {
+        let mut cfg = Self::defaults();
+        let mut rejected = Vec::new();
+        if let Some(v) = read(
+            AURA_GATE_TARGET,
+            RATE_ACCEPTS,
+            DEFAULT_TARGET,
+            parse_rate,
+            &mut rejected,
+        ) {
+            cfg.target = v;
+        }
+        if let Some(v) = read(
+            AURA_GATE_MIN_TRIES,
+            MIN_TRIES_ACCEPTS,
+            DEFAULT_MIN_TRIES,
+            parse_min_tries,
+            &mut rejected,
+        ) {
+            cfg.min_tries = v;
+        }
+        if let Some(v) = read(
+            AURA_GATE_EXPLORE,
+            RATE_ACCEPTS,
+            DEFAULT_EXPLORE_RATE,
+            parse_rate,
+            &mut rejected,
+        ) {
+            cfg.explore_rate = v;
+        }
+        if let Some(v) = read(
+            AURA_GATE_DELEGATE,
+            SWITCH_ACCEPTS,
+            "on",
+            parse_switch,
+            &mut rejected,
+        ) {
+            cfg.delegate = v;
+        }
+        (cfg, rejected)
+    }
+}
+
+impl Default for GateConfig {
+    fn default() -> Self {
+        Self::defaults()
+    }
+}
+
+/// The value of `name` when it is set and `parse` accepts it. A value it
+/// rejects is added to `rejected`, saying what `name` accepts and that
+/// `default` stays.
+fn read<T>(
+    name: &'static str,
+    accepts: &str,
+    default: impl Display,
+    parse: fn(&str) -> Option<T>,
+    rejected: &mut Vec<ConfigError>,
+) -> Option<T> {
+    let raw = lookup_string(name)?;
+    let value = parse(&raw);
+    if value.is_none() {
+        rejected.push(ConfigError::InvalidValue {
+            name,
+            raw,
+            message: format!("expected {accepts}; using the default {default}"),
+        });
+    }
+    value
+}
+
+fn parse_rate(raw: &str) -> Option<f64> {
+    raw.parse::<f64>().ok().filter(|v| (0.0..=1.0).contains(v))
+}
+
+fn parse_min_tries(raw: &str) -> Option<u32> {
+    raw.parse::<u32>().ok().filter(|v| *v >= 1)
+}
+
+fn parse_switch(raw: &str) -> Option<bool> {
+    let matches = |literals: &[&str]| literals.iter().any(|l| l.eq_ignore_ascii_case(raw));
+    if matches(TRUTHY_LITERALS) {
+        Some(true)
+    } else if matches(FALSY_LITERALS) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::env::ENV_TEST_LOCK;
+
+    fn clear_gate_env() {
+        std::env::remove_var(AURA_GATE_TARGET);
+        std::env::remove_var(AURA_GATE_MIN_TRIES);
+        std::env::remove_var(AURA_GATE_EXPLORE);
+        std::env::remove_var(AURA_GATE_DELEGATE);
+    }
+
+    #[test]
+    fn defaults_are_stable() {
+        let cfg = GateConfig::defaults();
+        assert_eq!(cfg.target, 0.85);
+        assert_eq!(cfg.min_tries, 10);
+        assert_eq!(cfg.explore_rate, 0.05);
+        assert!(cfg.delegate);
+    }
+
+    #[test]
+    fn unset_env_keeps_the_defaults() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_gate_env();
+        let (cfg, rejected) = GateConfig::read_env();
+        assert_eq!(cfg, GateConfig::defaults());
+        assert!(rejected.is_empty(), "{rejected:?}");
+    }
+
+    #[test]
+    fn env_overrides_apply() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_gate_env();
+        std::env::set_var(AURA_GATE_TARGET, "0.9");
+        std::env::set_var(AURA_GATE_MIN_TRIES, " 4 ");
+        std::env::set_var(AURA_GATE_EXPLORE, "0");
+        std::env::set_var(AURA_GATE_DELEGATE, "off");
+        let cfg = GateConfig::from_env();
+        clear_gate_env();
+        assert_eq!(
+            cfg,
+            GateConfig {
+                target: 0.9,
+                min_tries: 4,
+                explore_rate: 0.0,
+                delegate: false,
+            }
+        );
+    }
+
+    #[test]
+    fn delegation_stays_on_unless_turned_off() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for (raw, delegate) in [
+            ("off", false),
+            ("0", false),
+            ("No", false),
+            ("on", true),
+            ("TRUE", true),
+            ("maybe", true),
+        ] {
+            clear_gate_env();
+            std::env::set_var(AURA_GATE_DELEGATE, raw);
+            assert_eq!(GateConfig::from_env().delegate, delegate, "{raw}");
+        }
+        clear_gate_env();
+    }
+
+    #[test]
+    fn a_bad_value_is_reported_with_its_env_var_and_accepted_values() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for (name, raw, accepts) in [
+            (AURA_GATE_TARGET, "85%", RATE_ACCEPTS),
+            (AURA_GATE_TARGET, "1.5", RATE_ACCEPTS),
+            (AURA_GATE_TARGET, "NaN", RATE_ACCEPTS),
+            (AURA_GATE_EXPLORE, "-0.1", RATE_ACCEPTS),
+            (AURA_GATE_MIN_TRIES, "0", MIN_TRIES_ACCEPTS),
+            (AURA_GATE_MIN_TRIES, "ten", MIN_TRIES_ACCEPTS),
+            (AURA_GATE_MIN_TRIES, "2.5", MIN_TRIES_ACCEPTS),
+            (AURA_GATE_DELEGATE, "maybe", SWITCH_ACCEPTS),
+        ] {
+            clear_gate_env();
+            std::env::set_var(name, raw);
+            let (cfg, rejected) = GateConfig::read_env();
+            assert_eq!(cfg, GateConfig::defaults(), "{name}={raw}");
+            assert_eq!(rejected.len(), 1, "{name}={raw}: {rejected:?}");
+            let err = rejected[0].to_string();
+            assert!(err.contains(name), "{name}={raw}: {err}");
+            assert!(err.contains(&format!("`{raw}`")), "{name}={raw}: {err}");
+            assert!(err.contains(accepts), "{name}={raw}: {err}");
+            assert!(err.contains("using the default"), "{name}={raw}: {err}");
+        }
+        clear_gate_env();
+    }
+
+    #[test]
+    fn a_bad_value_keeps_only_its_own_default() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_gate_env();
+        std::env::set_var(AURA_GATE_TARGET, "0.9");
+        std::env::set_var(AURA_GATE_MIN_TRIES, "0");
+        std::env::set_var(AURA_GATE_EXPLORE, "lots");
+        std::env::set_var(AURA_GATE_DELEGATE, "off");
+        let (cfg, rejected) = GateConfig::read_env();
+        clear_gate_env();
+        assert_eq!(
+            cfg,
+            GateConfig {
+                target: 0.9,
+                min_tries: DEFAULT_MIN_TRIES,
+                explore_rate: DEFAULT_EXPLORE_RATE,
+                delegate: false,
+            }
+        );
+        let names: Vec<&str> = rejected
+            .iter()
+            .map(|ConfigError::InvalidValue { name, .. }| *name)
+            .collect();
+        assert_eq!(names, [AURA_GATE_MIN_TRIES, AURA_GATE_EXPLORE]);
+    }
+}

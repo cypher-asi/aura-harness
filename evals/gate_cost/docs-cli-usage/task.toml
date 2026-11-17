@@ -1,0 +1,6 @@
+title = "Document a command-line tool"
+category = "docs"
+tags = ["python"]
+prompt = "Document how to use cli.py in README.md: add a `## Usage` section that explains every command-line option and shows at least one example invocation."
+verify = "PYTHONPATH=. python3 .gate_checks/check.py"
+max_iterations = 15

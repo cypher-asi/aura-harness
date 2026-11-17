@@ -1,6 +1,7 @@
 //! `/rewind` and `/diff`: undo an agent's turns and review what they
 //! changed, from the file checkpoints taken before each turn changed a file
-//! (see [`crate::file_checkpoints`]).
+//! (see [`crate::file_checkpoints`]). A rewound turn counts as failed in
+//! Gate's record.
 
 use super::agent_events::AgentUi;
 use super::agents::todos_from_history;
@@ -9,7 +10,7 @@ use super::hud::send_session;
 use super::LoopState;
 use crate::file_checkpoints::{FileCheckpoints, RestoreReport, Turn, TurnManifest};
 use crate::record_loader::chat_from_messages;
-use aura_core_types::{AgentId, SystemKind, Transaction, TransactionType};
+use aura_core_types::{AgentId, Hash, SystemKind, Transaction, TransactionType};
 use aura_model::{Message, Role};
 use aura_ui_terminal::events::RewindScope;
 use aura_ui_terminal::UiCommand;
@@ -104,6 +105,12 @@ pub(super) async fn handle_rewind(
 
     info!(%agent_id, turn = number, scope = scope.as_str(), "Rewound agent");
     record_rewind(session, number, scope, &undone[0].manifest, report.as_ref()).await;
+    let prompts: Vec<Hash> = undone
+        .iter()
+        .filter_map(|turn| turn.manifest.prompt_tx.as_deref())
+        .filter_map(|hex| Hash::from_hex(hex).ok())
+        .collect();
+    super::gate_record::note_rewind(session, &prompts).await;
     if cut.is_some() {
         session.save_checkpoint().await;
         ui.send(UiCommand::LoadConversation(chat_from_messages(

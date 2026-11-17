@@ -7,7 +7,7 @@
 
 use super::RecordObserver;
 use crate::context::hash_tx_with_window;
-use aura_core_types::{AgentId, RecordEntry, Transaction, TransactionType};
+use aura_core_types::{AgentId, PlanUsage, RecordEntry, Transaction, TransactionType};
 use aura_model::{StopReason, Usage};
 use aura_store_db::Store;
 use std::sync::{Arc, Mutex};
@@ -34,9 +34,19 @@ pub struct ReasonStreamHandle {
     /// When the provider call started; the finalized entry records the
     /// elapsed time as `duration_ms`.
     pub(super) started: Instant,
+    /// Plan usage the stream's response headers reported, recorded with
+    /// the completed entry.
+    pub(super) plan_usage: Vec<PlanUsage>,
 }
 
 impl ReasonStreamHandle {
+    /// Record `plan_usage` with the completed entry.
+    #[must_use]
+    pub fn with_plan_usage(mut self, plan_usage: Vec<PlanUsage>) -> Self {
+        self.plan_usage = plan_usage;
+        self
+    }
+
     fn next_seq(&self) -> Result<u64, crate::KernelError> {
         let head_seq = self
             .kernel_store
@@ -103,6 +113,7 @@ impl ReasonStreamHandle {
             "duration_ms": elapsed_ms(self.started),
         });
         add_cache_usage(&mut reasoning_payload, usage);
+        add_plan_usage(&mut reasoning_payload, &self.plan_usage);
         add_thinking(&mut reasoning_payload, thinking, thinking_ms);
         let payload_bytes = serde_json::to_vec(&reasoning_payload)
             .map_err(|e| crate::KernelError::Serialization(e.to_string()))?;
@@ -156,6 +167,17 @@ pub(crate) fn add_cache_usage(payload: &mut serde_json::Value, usage: &Usage) {
     }
     if let Some(tokens) = usage.cache_read_input_tokens {
         payload["cache_read_input_tokens"] = serde_json::Value::from(tokens);
+    }
+}
+
+/// Add the plan usage the provider reported to a `Reasoning` payload,
+/// under `plan_usage`, when it reported any.
+pub(crate) fn add_plan_usage(payload: &mut serde_json::Value, plan_usage: &[PlanUsage]) {
+    if plan_usage.is_empty() {
+        return;
+    }
+    if let Ok(value) = serde_json::to_value(plan_usage) {
+        payload["plan_usage"] = value;
     }
 }
 

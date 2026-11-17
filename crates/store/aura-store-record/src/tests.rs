@@ -24,7 +24,7 @@ use crate::{
 
 fn build_entry(seq: u64) -> RecordEntry {
     let agent_id = AgentId::generate();
-    let tx = Transaction::user_prompt(agent_id, Bytes::from_static(b"hello"));
+    let tx = Transaction::user_prompt(agent_id, "hello");
     RecordEntry::builder(seq, tx)
         .context_hash([7u8; 32])
         .proposals(ProposalSet::new())

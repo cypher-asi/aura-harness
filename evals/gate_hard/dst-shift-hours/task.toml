@@ -1,0 +1,6 @@
+title = "Shift lengths across daylight-saving changes"
+category = "bugfix"
+tags = ["hard", "python"]
+prompt = "shift_hours() in shifts.py is wrong for shifts that cross a daylight-saving change. Fix it. A wall-clock time that happens twice (when clocks go back) means its first occurrence; a time that doesn't exist (skipped when clocks go forward) must raise ValueError."
+verify = "PYTHONPATH=. python3 .gate_checks/check.py"
+max_iterations = 25

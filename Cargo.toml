@@ -54,6 +54,7 @@ members = [
     "crates/agent/aura-agent-kernel",
     "crates/agent/aura-agent",
     "crates/agent/aura-agent-trace",
+    "crates/agent/aura-agent-gate",
     "crates/auth/aura-auth-kit",
     "crates/auth/aura-auth-zos",
     "crates/auth/aura-auth-chatgpt",

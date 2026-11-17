@@ -2039,6 +2039,7 @@ fn parse_complete_response(
         trace: ProviderTrace {
             message_id: Some(api_response.id),
             provider_request_id,
+            plan_usage: Vec::new(),
             latency_ms,
             model: api_response.model,
         },
@@ -2564,6 +2565,7 @@ impl ModelProvider for AnthropicProvider {
                     .or_else(|| response.headers().get("request-id"))
                     .and_then(|v| v.to_str().ok())
                     .map(str::to_string);
+                let plan_usage = crate::plan_usage::from_headers_now(response.headers());
                 let api_response: ApiResponse = match response.json().await {
                     Ok(value) => value,
                     Err(e) => {
@@ -2594,7 +2596,7 @@ impl ModelProvider for AnthropicProvider {
                         });
                     }
                 };
-                let parsed = parse_complete_response(
+                let mut parsed = parse_complete_response(
                     api_response,
                     ctx.model_idx,
                     request_ref.model.as_ref(),
@@ -2602,6 +2604,7 @@ impl ModelProvider for AnthropicProvider {
                     latency_ms,
                     provider_request_id,
                 );
+                parsed.trace.plan_usage = plan_usage;
                 crate::console::emit_response_block(&parsed, latency_ms, 200, "OK");
                 Ok(parsed)
             })
@@ -2754,8 +2757,10 @@ impl ModelProvider for AnthropicProvider {
                     .or_else(|| response.headers().get("request-id"))
                     .and_then(|v| v.to_str().ok())
                     .map(str::to_string);
+                let plan_usage = crate::plan_usage::from_headers_now(response.headers());
                 let byte_stream = response.bytes_stream();
                 let sse_stream = SseStream::with_request_id(byte_stream, provider_request_id)
+                    .with_plan_usage(plan_usage)
                     .with_idle_timeout(Duration::from_millis(self.config.timeout_ms));
                 Ok(Box::pin(sse_stream) as StreamEventStream)
             })

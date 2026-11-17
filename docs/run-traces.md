@@ -90,7 +90,7 @@ aura runs label <id> <value> [--step N] [--name human] [--note "..."]
 aura runs verify <id> --cmd "cargo test"
 aura runs branch <id> --from-step N --workspace <dir> [--model M] [--set key=value] [--arm A]
 
-aura eval run [SUITE] [--task T] [--repeat N] [--model M] [--set key=value] [--arm A]
+aura eval run [SUITE] [--task T] [--repeat N] [--model M] [--set key=value] [--arm A] [--budget-usd USD]
 aura eval compare [--suite S] [--arm A --arm B] [--tolerance 0.1] [--fail-on-regression]
                   [--baseline FILE] [--write-baseline FILE]
 
@@ -128,6 +128,8 @@ aura dataset build --format sft|preference|rl|harness-bandit [--filter EXPR] [--
 ## Evals
 
 [`evals/coding`](../evals/coding) is a suite of small coding tasks, each a `task.toml` (title, prompt, follow-ups, verify command, iteration cap) plus an optional `workspace/` fixture. `aura eval run` copies each fixture into a fresh directory, runs the task headless, runs the verify command, and stores the result as the run's outcome. See the [suite README](../evals/coding/README.md) for the task format.
+
+A task may set `category` (default `general`) and `tags`, and may keep a `checks/` folder next to `workspace/`: it is copied into the workspace only after the agent finishes, so verify commands can run tests the agent never saw. The results table shows each run's cost, and `--budget-usd` stops starting runs once the suite has spent that much. [`evals/gate_cost`](../evals/gate_cost/README.md) uses both to compare models with Gate (`--model gate`, which routes each task's prompts and subtasks and feeds the verify verdicts to Gate's table); `/compare` in the terminal compares Gate with another model side by side (see [Gate](cli.md#gate)).
 
 `aura eval compare` shows mean metrics per arm, per-task pass counts and regressions against the first arm, or against a baseline file with `--baseline`. `scripts/eval-live.sh` and the manually triggered `Live coding evals` workflow run the suite against a live model (`AURA_EVAL_MODEL`) and fail on regressions. `--provider mock` checks the mechanics offline; CI covers it in `tests/eval_suite.rs`.
 

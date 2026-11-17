@@ -200,6 +200,7 @@ pub async fn start(
             config: base_config,
             tools,
             limits: models.limits(),
+            gate: event_loop::GateBase::of(&models),
         },
         policy: mode_policy(permissions, &tool_names),
         record_observer: Some(record_observer),

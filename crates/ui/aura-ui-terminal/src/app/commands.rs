@@ -157,6 +157,20 @@ impl App {
             "resume" => self.handle_resume_command(arg),
             "rewind" => self.handle_rewind_command(arg),
             "diff" => self.handle_diff_command(arg),
+            "gate" => {
+                if let Some(tx) = &self.event_tx {
+                    let _ = tx.try_send(UiEvent::ShowGate);
+                }
+            }
+            "compare" => {
+                if let Some(tx) = &self.event_tx {
+                    let _ = tx.try_send(UiEvent::Compare {
+                        agent_id: self.active_agent_id.clone(),
+                        args: arg.to_string(),
+                    });
+                }
+            }
+            "good" | "bad" => self.handle_rate_command(cmd == "good", arg),
             "new" | "n" => {
                 self.messages.clear();
                 self.scroll_offset = 0;
@@ -284,11 +298,13 @@ impl App {
         &mut self,
         options: Vec<crate::events::ModelOptionView>,
         current: String,
+        route: Option<String>,
         user: Option<String>,
         plans: Vec<String>,
     ) {
         self.models = options;
         self.current_model = current;
+        self.model_route = route;
         self.user = user;
         self.plans = plans;
         if self.model_cursor >= self.models.len() {
@@ -566,6 +582,32 @@ impl App {
         }
     }
 
+    /// `/good [n]` or `/bad [n]`: rate the agent's finished turn `n` back
+    /// (1, the default, is the last). The event loop rejects an `n` beyond
+    /// the turns it has.
+    fn handle_rate_command(&mut self, good: bool, arg: &str) {
+        let turns_back = if arg.is_empty() {
+            Some(1)
+        } else {
+            arg.parse::<usize>().ok().filter(|n| *n > 0)
+        };
+        let Some(turns_back) = turns_back else {
+            let name = if good { "good" } else { "bad" };
+            self.notification = Some((
+                format!("Usage: /{name} [n] (n turns back, 1 = the last finished turn)"),
+                NotificationType::Warning,
+            ));
+            return;
+        };
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::RateTurn {
+                agent_id: self.active_agent_id.clone(),
+                good,
+                turns_back,
+            });
+        }
+    }
+
     /// `/diff [session]`: what the agent's latest turn, or its whole
     /// session, changed in files.
     fn handle_diff_command(&mut self, arg: &str) {
@@ -781,9 +823,10 @@ impl App {
             UiCommand::SetModels {
                 options,
                 current,
+                route,
                 user,
                 plans,
-            } => self.cmd_set_models(options, current, user, plans),
+            } => self.cmd_set_models(options, current, route, user, plans),
             UiCommand::PromptLinkCode { provider } => self.cmd_prompt_link_code(&provider),
             UiCommand::EndLink => self.cmd_end_link(),
             UiCommand::SetPlan(plan) => {

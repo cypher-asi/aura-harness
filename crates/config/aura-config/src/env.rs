@@ -60,6 +60,20 @@ pub const CODEX_HOME: &str = "CODEX_HOME";
 /// Consumed by [`crate::TraceConfig::level`].
 pub const AURA_TRACE: &str = "AURA_TRACE";
 
+/// Success rate (0..=1) a model needs on a category to become Gate's
+/// pick. Consumed by [`crate::GateConfig::target`].
+pub const AURA_GATE_TARGET: &str = "AURA_GATE_TARGET";
+/// Counted outcomes before Gate trusts a model's success rate. Consumed
+/// by [`crate::GateConfig::min_tries`].
+pub const AURA_GATE_MIN_TRIES: &str = "AURA_GATE_MIN_TRIES";
+/// Share (0..=1) of Gate's routes sent to the next cheaper model.
+/// Consumed by [`crate::GateConfig::explore_rate`].
+pub const AURA_GATE_EXPLORE: &str = "AURA_GATE_EXPLORE";
+/// `off` lets the lead agent under Gate edit files and run any command
+/// itself; delegating is then only recommended. Consumed by
+/// [`crate::GateConfig::delegate`].
+pub const AURA_GATE_DELEGATE: &str = "AURA_GATE_DELEGATE";
+
 /// The full list of env-var names this crate owns. Boundary tests use
 /// this to enforce that no other crate calls `std::env::var(...)` on
 /// any of these names.
@@ -90,6 +104,10 @@ pub const ENV_VAR_NAMES: &[&str] = &[
     AURA_HOME,
     CODEX_HOME,
     AURA_TRACE,
+    AURA_GATE_TARGET,
+    AURA_GATE_MIN_TRIES,
+    AURA_GATE_EXPLORE,
+    AURA_GATE_DELEGATE,
 ];
 
 // ---------------------------------------------------------------------------

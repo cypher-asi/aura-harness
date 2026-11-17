@@ -1,0 +1,6 @@
+title = "Fix a department report in awk"
+category = "unfamiliar"
+tags = ["awk", "protected"]
+prompt = "`awk -f report.awk data.csv` should print one line per department, `<dept> <total salary>`, sorted by department name, skipping the CSV header. It currently prints junk and is unsorted. Fix report.awk so awk alone produces the right output (no sort pipeline) and it works for any CSV of the same shape."
+verify = "sh .gate_checks/check.sh"
+max_iterations = 20

@@ -60,6 +60,10 @@ pub struct AgentSession {
     /// Whether the agent is building `active_plan` (after `/build`), so its
     /// todo list is mirrored into the plan file.
     pub building_plan: bool,
+    /// Whether its current turn runs as Gate's lead with delegation
+    /// enforced (see [`super::lead`]); set where the turn's tools are put
+    /// together.
+    pub lead: bool,
 }
 
 impl AgentSession {
@@ -148,7 +152,7 @@ pub type KernelBuilder =
 
 /// Opens per-agent sessions and reads agent records for the UI.
 pub struct KernelFactory {
-    pub(super) store: Arc<dyn ReadStore>,
+    pub(crate) store: Arc<dyn ReadStore>,
     build_kernel: KernelBuilder,
     pub(super) checkpoints: Option<Checkpoints>,
     pub(super) file_checkpoints: Option<FileCheckpoints>,
@@ -253,6 +257,7 @@ impl KernelFactory {
             post_edit_check,
             active_plan,
             building_plan: false,
+            lead: false,
         };
         if let Some(checkpoint) = self.restore(session.agent_id()) {
             info!(agent = %session.agent_id(), "Resuming session from checkpoint");

@@ -1,0 +1,6 @@
+title = "Find the port a service really uses"
+category = "investigation"
+tags = ["python", "unfamiliar", "protected"]
+prompt = "With no environment variables set, which TCP port does `python3 -m app.server` listen on? Work it out from the code without running the server, and write just the number to answer.txt."
+verify = "[ \"$(tr -d ' \\n' < answer.txt)\" = 9443 ]"
+max_iterations = 20

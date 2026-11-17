@@ -53,6 +53,7 @@ fn slow_fixture(reply: &str, latency_ms: u64) -> Fixture {
                 .into_iter()
                 .filter(|t| t.name != TASK_TOOL_NAME)
                 .collect(),
+            gate: GateBase::default(),
         },
         commands: tx,
         long_run: crate::long_run::LongRunSettings::default(),
@@ -63,6 +64,7 @@ fn slow_fixture(reply: &str, latency_ms: u64) -> Fixture {
         processes: ProcessTable::without_os_scan(None, None),
         agents: None,
         record_panel: Default::default(),
+        gate: Default::default(),
         traces,
     };
     let reply = reply.to_string();
@@ -124,9 +126,11 @@ fn task_tool_lists_permanent_agents() {
             "engineer",
             "explorer",
             "frontend-engineer",
+            "implement",
             "product-manager",
             "reviewer",
             "rust-engineer",
+            "tests",
             "ui-designer",
             "web-designer"
         ])
@@ -422,4 +426,92 @@ async fn spawned_instance_works_in_its_projects_folder() {
         finished[0].kernel.agent_workspace(),
         folder.path().canonicalize().unwrap()
     );
+}
+
+/// A registered instance of `definition`, opened.
+fn instance(fixture: &Fixture, definition: &str) -> AgentSession {
+    let agent = lock(&fixture.hub.registry)
+        .create_instance(definition, None)
+        .unwrap();
+    fixture.hub.factory.open(&agent, Vec::new(), None).unwrap()
+}
+
+fn attempt(session: &AgentSession, kind: &str, prompt: &str) -> Attempt {
+    Attempt {
+        kind: kind.to_string(),
+        prompt: prompt.to_string(),
+        child: session.agent_id(),
+        kernel: Arc::clone(&session.kernel),
+        ended: None,
+        redone: false,
+    }
+}
+
+#[tokio::test]
+async fn a_subtask_redone_while_still_running_fails_once_it_ends() {
+    let fixture = fixture("unused");
+    let parent = lock(&fixture.hub.registry).active().agent_id();
+    let parent_session = fixture
+        .hub
+        .factory
+        .open(
+            &lock(&fixture.hub.registry).active().clone(),
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+    let (first, second) = (
+        instance(&fixture, "explorer"),
+        instance(&fixture, "explorer"),
+    );
+    let prompt = "Find the config loader";
+    assert!(fixture
+        .hub
+        .begin_attempt(parent, attempt(&first, "explorer", prompt))
+        .is_empty());
+    fixture.hub.start_running(
+        parent,
+        Arc::clone(&parent_session.kernel),
+        CancellationToken::new(),
+        None,
+    );
+    assert!(fixture
+        .hub
+        .begin_attempt(parent, attempt(&first, "explorer", prompt))
+        .is_empty());
+    assert!(fixture
+        .hub
+        .begin_attempt(parent, attempt(&second, "explorer", prompt))
+        .is_empty());
+
+    let ended = OutcomePayload {
+        prompt_tx: Hash::from_content(b"prompt"),
+        category: PromptCategory::Research,
+        model: "m".to_string(),
+        success: None,
+        signal: OutcomeSignal::None,
+        cost_usd: 0.0,
+        latency_ms: 1,
+    };
+    let redo = fixture
+        .hub
+        .end_attempt(parent, first.agent_id(), Some(ended.clone()))
+        .expect("the first attempt was redone while it ran");
+    redo.record().await;
+    assert!(fixture
+        .hub
+        .end_attempt(parent, second.agent_id(), Some(ended))
+        .is_none());
+    let outcomes: Vec<OutcomePayload> = fixture
+        .hub
+        .factory
+        .store
+        .scan_record(first.agent_id(), 1, 100)
+        .unwrap()
+        .iter()
+        .filter_map(|e| e.tx.outcome_payload())
+        .collect();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].signal, OutcomeSignal::Redone);
+    assert_eq!(outcomes[0].success, Some(false));
 }

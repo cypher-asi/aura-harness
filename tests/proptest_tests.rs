@@ -500,10 +500,10 @@ mod transaction_chain_tests {
         /// Transaction chain is append-only: modifying middle tx changes downstream hashes.
         #[test]
         fn prop_chain_is_append_only(
-            msg1: Vec<u8>,
-            msg2: Vec<u8>,
-            msg3: Vec<u8>,
-            tampered_msg1: Vec<u8>
+            msg1: String,
+            msg2: String,
+            msg3: String,
+            tampered_msg1: String
         ) {
             prop_assume!(!msg1.is_empty() && !msg2.is_empty() && !msg3.is_empty());
             prop_assume!(msg1 != tampered_msg1);
@@ -528,7 +528,7 @@ mod transaction_chain_tests {
 
         /// Transactions with reference_tx_hash maintain the reference correctly.
         #[test]
-        fn prop_reference_tx_hash_preserved(payload: Vec<u8>) {
+        fn prop_reference_tx_hash_preserved(payload: String) {
             use aura_core_types::{ActionId, ActionResultPayload, ProcessId};
 
             let agent_id = AgentId::generate();
@@ -564,7 +564,7 @@ mod transaction_chain_tests {
 
         /// Same transaction content produces same hash (determinism).
         #[test]
-        fn prop_transaction_deterministic(payload: Vec<u8>) {
+        fn prop_transaction_deterministic(payload: String) {
             let agent_id = AgentId::generate();
 
             let tx1 = Transaction::user_prompt(agent_id, payload.clone());
@@ -575,7 +575,7 @@ mod transaction_chain_tests {
 
         /// Chained transactions produce different hashes than genesis.
         #[test]
-        fn prop_chained_differs_from_genesis(payload: Vec<u8>, prev_payload: Vec<u8>) {
+        fn prop_chained_differs_from_genesis(payload: String, prev_payload: String) {
             let agent_id = AgentId::generate();
 
             // Genesis transaction

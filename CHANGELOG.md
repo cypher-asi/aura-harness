@@ -7,6 +7,100 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Gate router (`aura-agent-gate`)
+
+Gate is now one learning router and the default model. The coordinator
+mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
+
+##### Breaking changes
+
+- The coordinator mode is removed: `gate/<model>` ids, `run_blocks`,
+  draft-first turns, the tier ladder, the ledger in `AURA_HOME/gate/`
+  and the `aura gate report|fit|bench|promote` subcommands.
+- `AURA_GATE_POLICY`, `AURA_GATE_EXPLORE_BUDGET_USD`, `AURA_GATE_TIERS`
+  and `AURA_GATE_LEDGER` are no longer read. `AURA_GATE_EXPLORE` now
+  sets Gate's exploration rate (default `0.05`).
+- The payload of a `UserPrompt` transaction is a JSON `PromptPayload`
+  (`text`, `category`, `classifier`, `route`, and `kind` for subtasks)
+  instead of raw text. There is no backward compatibility: prompts
+  recorded before this change read back as empty text. `POST /tx` wraps
+  submitted prompt text in a payload.
+- New `TransactionType::Outcome` and `SystemKind::Compare`. Consumers
+  that mirror these enums must add them.
+- The terminal starts on `gate` instead of the local default model, and
+  a pinned model that loses its sign-in switches to `gate`.
+  `AURA_DEFAULT_MODEL` and a model picked in `/model` still win.
+
+##### Added
+
+- `gate` model id, first in `/model`, accepted by `--model gate`. Gate
+  routes among the models your sign-ins allow: installed local models,
+  aura-router models when signed in to zOS, `claude/*` with a Claude
+  plan, and `chatgpt/*` with a ChatGPT plan. It keeps one route per
+  model (the plan first) and tiers them `local`, `fast`, `standard` and
+  `frontier`. A model whose route refuses the sign-in is dropped and the
+  turn carries on with the next pick. Each turn shows
+  `gate → <model> (<route>) · <category>, <reason>`.
+- Every prompt is classified into one of 8 categories by the cheapest
+  fast-tier model, through the agent's kernel. Every turn ends with an
+  `Outcome` (`error`, `checks_failed`, `checks_passed` or `none`), and
+  rewinds, stronger retries and the new `/good` and `/bad` commands
+  append later ones.
+- Gate routes each category to the cheapest model with
+  `AURA_GATE_MIN_TRIES` (10) counted outcomes at `AURA_GATE_TARGET`
+  (85%) success. Otherwise it uses the category's default, and it
+  explores the next cheaper model at `AURA_GATE_EXPLORE`. The table is
+  rebuilt from the record at startup and updated as each outcome is
+  committed. `/gate` shows it with the current picks, the delegation
+  figures and the last 20 routing decisions.
+- Subtasks under `gate` are classified and routed with their own table
+  rows. Models named by the call, the permanent agent or a council seat
+  stay pinned.
+- Under `gate` the main agent leads. It gets the `gate_lead` prompt
+  section and, unless `AURA_GATE_DELEGATE=off`, no file-changing tools,
+  capped reads and searches, and a `run_command` limited to checks and
+  inspection. New `implement` and `tests` permanent agents (and bundled
+  kinds) take the work. `task` gains a `check` command and returns a
+  compact result. Read-only agents run in parallel and the rest one at
+  a time. A routed subtask that fails its check is retried once on the
+  next tier up with its file changes undone. In a git repository that
+  includes changes made by shell commands: the workspace folder goes
+  back to a snapshot taken before the attempt, leaving ignored files,
+  the index, `HEAD` and stash alone.
+- `/compare [prompt | --plan f] [--against m | gate:nodelegate]
+  [--repeats N] [--check cmd] [--budget $]` runs a task with Gate and
+  another model in copies under `AURA_HOME/compare/`, judges each pair
+  blindly, and shows time, cost, tokens per model and check passes per
+  arm. Subcommands: `go`, `cancel`, `show [n]`, `diff [run]`,
+  `pick gate|other`, `apply <run>` and `dismiss`. On a Claude or ChatGPT
+  plan it also shows the share of each plan window each arm used, read
+  from the usage headers of each response and recorded with the model
+  call; each rise between readings goes to the run whose call saw it,
+  so parallel runs don't count it twice. Providers that send no such
+  headers show tokens per model instead.
+  The check runs as a `run_command` call through each run's kernel, so
+  it is in the run's record and under the same command policy. Each run
+  is unattended in its own copy and runs in `agent` mode at `yolo`.
+- `evals/gate_cost`: 20 tasks with hidden checks, categories and
+  reference solutions. Eval tasks can set `category`, `tags` and a
+  `checks/` folder copied in after the run; `aura eval run` reports each
+  run's cost and takes `--budget-usd`. `evals/gate_hard` adds eight
+  tasks with traps a careless fix falls into.
+- `aura eval run --model gate` runs each task as `aura -p` turns: Gate
+  classifies and routes them, the agent leads and delegates, and the
+  verify command runs as a `run_command` call through the run's agent's
+  kernel, its verdict recorded as a later outcome so eval results count
+  in Gate's table. The results table shows the models Gate routed each
+  task to. `EvalOptions` takes an `EvalRunner` instead of `config`,
+  `tool_config` and `provider`. The runs' agents work at `yolo`, like
+  `aura -p` in `agent` mode.
+- Under any approval level, the lead's `run_command` limit only narrows
+  what the level lets run, and a `task` `check` runs through the
+  subtask's kernel at the level the subtask inherited from its parent.
+- `aura-app`'s `isolation` module holds the worktree and copy helpers
+  `/compare` runs in and the change carrying, diffing and scratch-index
+  snapshots `/compare` and the escalation use.
+
 ### Many agents at once
 
 ##### Fixed
@@ -121,9 +215,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ##### Removed
 
-- `aura-exec-sandbox` and `aura-exec-isolation`, which nothing used.
-  The filesystem sandbox the tools use is `sandbox.rs` in
-  `aura-exec-tools`.
+- `aura-exec-sandbox` and `aura-exec-isolation`. The filesystem
+  sandbox the tools use is `sandbox.rs` in `aura-exec-tools`, and the
+  workspace copies Gate's `/compare` and escalation use are `aura-app`'s
+  `isolation` module.
 - The old `aura-core-protocol` placeholder, which only held
   `ProtocolVersion`. It was merged into the wire protocol crate, which
   now carries the `aura-core-protocol` name.

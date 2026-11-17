@@ -7,6 +7,7 @@
 use super::output::{ExitReason, Output, RunReport, StreamEvent, UsageReport};
 use super::sink::{CallLimits, HeadlessSink, TurnTally};
 use super::tools::ToolFilter;
+use crate::event_loop::gate_record;
 use crate::event_loop::handlers::{
     drive_turn, mark_session_start, record_response, resume_checkpoint,
 };
@@ -14,13 +15,17 @@ use crate::event_loop::notices::{completion_notice, record_completion, Notice};
 use crate::event_loop::processes::stop_background_commands;
 use crate::event_loop::steering::{SteerSource, Steering};
 use crate::event_loop::subagents::lock;
-use crate::event_loop::turns::{drain_stale_inbox, record_prompt};
+use crate::event_loop::turns::{drain_stale_inbox, ended_signal, record_prompt};
 use crate::event_loop::{AgentHub, AgentSession};
 use crate::session_checkpoint::SessionUsage;
-use aura_agent::{AgentLoop, AgentLoopResult};
+use aura_agent::{AgentLoop, AgentLoopConfig, AgentLoopResult};
 use aura_agent_kernel::Kernel;
+use aura_agent_trace::RunRecorder;
 use aura_core_modes::AgentMode;
-use aura_core_types::{AgentId, Transaction};
+use aura_core_types::{
+    AgentId, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, Route, RouteLevel,
+    RouteReason, Transaction,
+};
 use aura_exec_tools::BackgroundProcessHook;
 use aura_model::{Message, Role};
 use std::path::PathBuf;
@@ -52,6 +57,8 @@ pub(crate) struct RunLimits {
     pub max_turns: Option<u32>,
     pub max_time: Option<Duration>,
     pub max_cost_usd: Option<f64>,
+    /// Iteration cap of each turn, instead of the agent's own
+    pub max_iterations: Option<usize>,
 }
 
 pub(crate) struct Request {
@@ -61,22 +68,24 @@ pub(crate) struct Request {
 }
 
 /// The parts of a headless run that outlive one request.
-pub(crate) struct Headless {
-    pub hub: Arc<AgentHub>,
+pub struct Headless {
+    pub(crate) hub: Arc<AgentHub>,
     /// Every agent's background commands
-    pub background: Arc<dyn BackgroundProcessHook>,
+    pub(crate) background: Arc<dyn BackgroundProcessHook>,
     /// Background commands that ended
-    pub completions: mpsc::Receiver<Transaction>,
+    pub(crate) completions: mpsc::Receiver<Transaction>,
     /// Replies from `task` spawns and background agents
-    pub notices: mpsc::UnboundedReceiver<Notice>,
+    pub(crate) notices: mpsc::UnboundedReceiver<Notice>,
     /// Model the turns run on, for the report
-    pub model: String,
-    pub mode: AgentMode,
-    pub workspace_root: PathBuf,
-    pub tool_filter: ToolFilter,
+    pub(crate) model: String,
+    pub(crate) mode: AgentMode,
+    pub(crate) workspace_root: PathBuf,
+    pub(crate) tool_filter: ToolFilter,
     /// Longest wait for the agent's background work (commands, spawns)
     /// once it has nothing else to do
-    pub job_wait: Duration,
+    pub(crate) job_wait: Duration,
+    /// Run trace the turns are recorded to, for an eval task's run
+    pub(crate) trace: Option<Arc<RunRecorder>>,
 }
 
 /// `<agent hex>:<session start ms>`: names one saved session.
@@ -103,6 +112,8 @@ pub(crate) fn parse_session_id(id: &str, default_agent: AgentId) -> Result<(Agen
 
 /// How one agent turn ended.
 struct TurnOutcome {
+    /// The `Outcome` recorded for the turn, when Gate routed it
+    ended: Option<OutcomePayload>,
     result: Option<AgentLoopResult>,
     /// Model calls and tokens of the turn
     usage: SessionUsage,
@@ -142,31 +153,60 @@ impl Headless {
         interrupt: &CancellationToken,
     ) -> RunReport {
         let started = Instant::now();
-        let deadline = request.limits.max_time.map(|limit| started + limit);
         let (mut session, resumed) = match self.open(&request.session).await {
             Ok(opened) => opened,
             Err(problem) => return RunReport::failed(problem, self.model.clone()),
         };
-        let agent_id = session.agent_id();
-        let session_id = session_id(agent_id, session.started_ms);
+        let session_id = session_id(session.agent_id(), session.started_ms);
         self.announce(output, &session, &session_id, resumed);
+        let (report, _) = self
+            .drive(
+                &mut session,
+                request.prompt,
+                request.limits,
+                started,
+                output,
+                interrupt,
+            )
+            .await;
+        report
+    }
 
+    /// Run `prompt` on `session`, then the notices of the agent's
+    /// background work, until it has nothing left to do or a limit stops
+    /// it; `started` is when the run began. Also returns the `Outcome`
+    /// recorded for `prompt`'s turn, when Gate routed it.
+    pub(super) async fn drive(
+        &mut self,
+        session: &mut AgentSession,
+        prompt: String,
+        limits: RunLimits,
+        started: Instant,
+        output: &Output,
+        interrupt: &CancellationToken,
+    ) -> (RunReport, Option<OutcomePayload>) {
+        let deadline = limits.max_time.map(|limit| started + limit);
+        let session_id = session_id(session.agent_id(), session.started_ms);
         let mut totals = Totals::default();
-        let mut prompt = request.prompt;
+        let mut prompt = prompt;
+        let mut first_ended = None;
         let mut stop = None;
         loop {
             totals.agent_turns += 1;
             let outcome = self
                 .run_turn(
-                    &mut session,
+                    session,
                     prompt,
-                    request.limits,
+                    limits,
                     deadline,
                     totals.usage,
                     output,
                     interrupt,
                 )
                 .await;
+            if totals.agent_turns == 1 {
+                first_ended.clone_from(&outcome.ended);
+            }
             totals.usage.add(&outcome.usage);
             if let Some(result) = &outcome.result {
                 totals.compactions += result.summary_compactions;
@@ -205,7 +245,7 @@ impl Headless {
 
         let (exit_reason, error) = stop.unwrap_or((ExitReason::Success, None));
         let usage = UsageReport::from(&totals.usage);
-        RunReport {
+        let report = RunReport {
             kind: "result",
             exit_reason,
             is_error: exit_reason != ExitReason::Success,
@@ -221,7 +261,8 @@ impl Headless {
             todos: session.todos.clone(),
             files_changed: totals.files_changed,
             error,
-        }
+        };
+        (report, first_ended)
     }
 
     /// Open the session `choice` names. Returns it and whether it
@@ -275,7 +316,14 @@ impl Headless {
 
     fn announce(&self, output: &Output, session: &AgentSession, session_id: &str, resumed: bool) {
         let workspace = session.kernel.agent_workspace();
-        let (_, tools) = self.hub.turn(session.definition.as_deref(), &workspace);
+        let (_, mut tools) = self.hub.turn(session.definition.as_deref(), &workspace);
+        if self
+            .hub
+            .leads(session.agent_id(), session.definition.as_deref())
+            == Some(true)
+        {
+            tools = crate::event_loop::lead::lead_tools(tools);
+        }
         let tools = self.tool_filter.filter(tools);
         let agent_hex = session.agent_id().to_hex();
         let cwd = self.workspace_root.display().to_string();
@@ -292,7 +340,8 @@ impl Headless {
     }
 
     /// Record `text` as the prompt and run one agent turn on `session`,
-    /// with `before` the usage of the run's earlier turns.
+    /// with `before` the usage of the run's earlier turns. When Gate
+    /// routes the turn, it ends with an `Outcome` saying how it went.
     #[allow(clippy::too_many_arguments)]
     async fn run_turn(
         &mut self,
@@ -305,22 +354,31 @@ impl Headless {
         interrupt: &CancellationToken,
     ) -> TurnOutcome {
         drain_stale_inbox(session).await;
-        if let Err(problem) = record_prompt(session, text.clone()).await {
-            return TurnOutcome {
-                result: None,
-                usage: SessionUsage::default(),
-                stop: Some((ExitReason::Error, Some(problem))),
-                unseen: Vec::new(),
-            };
-        }
-        session.messages.push(Message::user(text));
-
+        let started = Instant::now();
         let workspace = session.kernel.agent_workspace();
-        let (mut config, tools) = self.hub.agent_turn(
-            session.agent_id(),
-            session.definition.as_deref(),
-            &workspace,
-        );
+        let (mut config, tools) = self.hub.lead_turn(session);
+        if let Some(max) = limits.max_iterations {
+            config.max_iterations = max;
+        }
+        let (payload, routed) = self.route_turn(session, &mut config, &text).await;
+        let prompt_tx = match record_prompt(session, &payload).await {
+            Ok((tx, _)) => tx.hash,
+            Err(problem) => {
+                return TurnOutcome {
+                    ended: None,
+                    result: None,
+                    usage: SessionUsage::default(),
+                    stop: Some((ExitReason::Error, Some(problem))),
+                    unseen: Vec::new(),
+                };
+            }
+        };
+        if let Some(trace) = &self.trace {
+            config.trace_blobs = trace.blob_store();
+            trace.begin_turn(&text);
+        }
+        let turn_start = session.messages.len();
+        session.messages.push(Message::user(text));
         self.hub.register_root(
             session.agent_id(),
             &session.identity.name,
@@ -344,7 +402,8 @@ impl Headless {
             },
             turn_cancel.clone(),
             context_limit,
-        );
+        )
+        .with_trace(self.trace.clone());
         let forwarder = tokio::spawn(sink.forward(event_rx));
 
         // Cancelling at the deadline lets the loop stop between steps and
@@ -362,6 +421,14 @@ impl Headless {
         let backstop = deadline.map(|d| d.saturating_duration_since(Instant::now()) + CANCEL_GRACE);
 
         let kernel = Arc::clone(&session.kernel);
+        // Listed as running so the subtasks the turn dispatches are told
+        // apart from those of the next turn.
+        self.hub.start_running(
+            kernel.agent_id,
+            Arc::clone(&kernel),
+            turn_cancel.clone(),
+            None,
+        );
         let mut late = Vec::new();
         let result = {
             let turn = drive_turn(
@@ -390,6 +457,7 @@ impl Headless {
                 }
             }
         };
+        self.hub.stop_running(kernel.agent_id);
         if let Some(watcher) = watcher {
             watcher.abort();
         }
@@ -398,6 +466,18 @@ impl Headless {
             TurnTally::default()
         });
         session.usage.add(&tally.usage);
+        if let Some(trace) = &self.trace {
+            match result.as_ref() {
+                Some(Ok(result)) => trace.end_turn(result),
+                failed => trace.end_turn(&AgentLoopResult {
+                    llm_error: Some(failed.and_then(|r| r.as_ref().err()).map_or_else(
+                        || "the turn did not stop in time".to_string(),
+                        ToString::to_string,
+                    )),
+                    ..AgentLoopResult::default()
+                }),
+            }
+        }
 
         let limit = if interrupt.is_cancelled() {
             Some(ExitReason::Interrupted)
@@ -413,8 +493,29 @@ impl Headless {
         let (seen, unseen) = steering.finish(messages);
         let mut unseen: Vec<String> = unseen.into_iter().map(|(_, text)| text).collect();
         unseen.append(&mut late);
+        let ended = if routed {
+            // A run stopped by its own limits says nothing about the model.
+            let signal = match (&result, limit) {
+                (Some(result), None) => ended_signal(result, turn_start),
+                _ => OutcomeSignal::None,
+            };
+            let outcome = OutcomePayload {
+                prompt_tx,
+                category: payload.category,
+                model: agent_loop.config().model.clone(),
+                success: signal.success(),
+                signal,
+                cost_usd: tally.usage.cost_usd,
+                latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            };
+            gate_record::record(&session.kernel, session.agent_id(), &outcome).await;
+            Some(outcome)
+        } else {
+            None
+        };
 
         let mut outcome = TurnOutcome {
+            ended,
             result: None,
             usage: tally.usage,
             stop: None,
@@ -438,6 +539,67 @@ impl Headless {
             }
         }
         outcome
+    }
+
+    /// The prompt record of a turn of `session` answering `text`, and
+    /// whether Gate routed it. Gate routes the turn when the user selected
+    /// gate, the agent names no model of its own and there is a model to
+    /// route to: the prompt is classified and `config` pointed at Gate's
+    /// pick. Otherwise the prompt is recorded as it is.
+    async fn route_turn(
+        &mut self,
+        session: &AgentSession,
+        config: &mut AgentLoopConfig,
+        text: &str,
+    ) -> (PromptPayload, bool) {
+        let Some(candidates) = self
+            .hub
+            .gate_candidates(session.definition.as_deref())
+            .filter(|candidates| !candidates.is_empty())
+        else {
+            return (PromptPayload::new(text), false);
+        };
+        let classifier = self.hub.classifier();
+        let category = if classifier.is_empty() {
+            PromptCategory::Unclassified
+        } else {
+            gate_record::classify_prompt(
+                &session.kernel,
+                &classifier,
+                text,
+                config.auth_token.clone(),
+            )
+            .await
+        };
+        let route = match self
+            .hub
+            .gate
+            .decide(RouteLevel::Turn, category, &candidates)
+        {
+            Some(decision) => {
+                info!(
+                    model = %decision.model.id,
+                    %category,
+                    reason = %decision.reason,
+                    "Gate routed the turn"
+                );
+                if config.model != decision.model.id {
+                    self.hub
+                        .model_limits()
+                        .configure(config, &decision.model.id);
+                }
+                self.model.clone_from(&decision.model.id);
+                decision.route(RouteLevel::Turn)
+            }
+            None => Route::turn(config.model.clone(), RouteReason::Default),
+        };
+        let payload = PromptPayload {
+            category,
+            classifier,
+            route,
+            ..PromptPayload::new(text)
+        };
+        (payload, true)
     }
 
     /// Wait for the next notice for `kernel`'s agent: a background
@@ -557,7 +719,7 @@ async fn commit(session: &mut AgentSession, result: &AgentLoopResult, seen: &[St
     session.messages.clone_from(&result.messages);
     session.todos.clone_from(&result.todos);
     for text in seen {
-        if let Err(problem) = record_prompt(session, text.clone()).await {
+        if let Err(problem) = record_prompt(session, &PromptPayload::new(text.clone())).await {
             warn!(%problem, "Failed to record a mid-turn notice");
         }
     }

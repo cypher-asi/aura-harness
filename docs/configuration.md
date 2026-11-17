@@ -13,7 +13,7 @@ All cloud LLM traffic goes through the AURA router (proxy) with a per-request JW
 | `AURA_LOCAL_CONTEXT_TOKENS` | `32768` | Context window assumed for local models. Start Ollama with a matching `OLLAMA_CONTEXT_LENGTH`. |
 | `AURA_ROUTER_URL` | `https://aura-router.onrender.com` | Proxy router endpoint. |
 | `AURA_ROUTER_JWT` | — | JWT for terminal/CLI sessions (or run `aura login`). WebSocket clients supply their own. |
-| `AURA_DEFAULT_MODEL` | `claude-opus-4-6` | Model sent to the router only when the request did not pin one. In the terminal UI, setting it overrides the local default and the saved `/model` choice. Legacy `AURA_ANTHROPIC_MODEL` is still read as a fallback. |
+| `AURA_DEFAULT_MODEL` | `claude-opus-4-6` | Model sent to the router only when the request did not pin one. In the terminal UI, setting it overrides `gate` and the saved `/model` choice. Legacy `AURA_ANTHROPIC_MODEL` is still read as a fallback. |
 | `AURA_MEMORY_MODEL` | `aura-claude-haiku-4-5` | Low-cost model for background memory extraction and consolidation, independent of the chat model. |
 | `AURA_TITLE_MODEL` | Haiku on the chat model's backend | Model that titles an agent's chat after its first turn, shown in the agents list instead of a placeholder name like `Agent 2`. Defaults to `aura-claude-haiku-4-5` for aura-router models and `claude/claude-haiku-4-5` with a linked Claude plan; local and ChatGPT-plan chats use their own model. |
 | `AURA_DEFAULT_FALLBACK_MODEL` | — | Optional secondary model used on 429/529 retries. |
@@ -87,6 +87,17 @@ Ctrl+G in the input, and editing a permanent agent, open the user's editor.
 | `AURA_HEADLESS_JOB_WAIT` | `10m` | Longest wait for the agent's background jobs after it ends its turn (`90s`, `45m`, `2h`, or a bare number of minutes). Jobs still running then are stopped. |
 | `RUST_LOG` | warnings only | Log filter. Logs go to stderr so stdout stays machine-readable. |
 | `AURA_EVALS_LIVE` | unset | Set to `1` to let [`evals/long_horizon/run.py`](../evals/long_horizon/README.md) call real models (same as its `--live` flag). |
+
+## Gate
+
+Read once at startup by `GateConfig::from_env` ([`crates/config/aura-config/src/gate.rs`](../crates/config/aura-config/src/gate.rs)), in the terminal, the desktop app and `aura -p`. A variable set to a value it does not accept (a target or exploration rate that is not a number from 0 to 1, a minimum that is not a whole number of at least 1, or a delegation switch that is not on or off) keeps its own default and logs a warning naming the variable, the value and what it accepts. The other Gate variables and every other `aura-config` setting still apply. See [Gate](cli.md#gate).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AURA_GATE_TARGET` | `0.85` | Success rate (0–1) a model needs in a category to become its pick. |
+| `AURA_GATE_MIN_TRIES` | `10` | Counted outcomes a model needs in a category before its success rate is trusted. At least 1. |
+| `AURA_GATE_EXPLORE` | `0.05` | Share of routed turns and subtasks (0–1) sent to the next cheaper model instead of the pick, to learn how it does. `/compare` always routes with `0`. |
+| `AURA_GATE_DELEGATE` | `on` | `off` (or `0`, `false`, `no`) lets the lead agent under Gate keep its file tools and every command, with delegating only recommended. `on` (or `1`, `true`, `yes`) enforces delegation. Any other value keeps delegation enforced, with a warning. |
 
 ## Node runtime
 

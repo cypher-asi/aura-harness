@@ -33,7 +33,14 @@ impl SubagentRegistry {
     #[must_use]
     pub fn bundled() -> Self {
         Self {
-            kinds: vec![general_purpose(), explore(), shell(), code_reviewer()],
+            kinds: vec![
+                general_purpose(),
+                explore(),
+                implement(),
+                tests(),
+                shell(),
+                code_reviewer(),
+            ],
         }
     }
 
@@ -154,6 +161,53 @@ fn code_reviewer() -> SubagentKindSpec {
     )
 }
 
+/// File tools plus `run_command`, for kinds that change the workspace.
+fn edit_tools() -> Vec<String> {
+    READ_TOOLS
+        .iter()
+        .copied()
+        .chain(["edit_file", "write_file", "delete_file", "run_command"])
+        .map(str::to_string)
+        .collect()
+}
+
+fn implement() -> SubagentKindSpec {
+    SubagentKindSpec {
+        name: "implement".into(),
+        description: "Makes one focused code change (goal, files, constraints given) and checks it."
+            .into(),
+        system_prompt: "Make the change the task describes, in the files it names, and nothing else.             Read before you edit and follow the project's conventions. Run only checks (tests, builds,             linters, type checks) and read-only inspection commands. Finish with the files you changed,             the checks you ran and their result, and anything left undone."
+            .into(),
+        allowed_tools: edit_tools(),
+        allowed_capabilities: vec![Capability::InvokeProcess],
+        readonly: false,
+        default_model: None,
+        budget: SubagentBudget {
+            max_iterations: aura_core_types::MAX_TURNS,
+            max_tokens: None,
+            timeout_ms: 300_000,
+        },
+    }
+}
+
+fn tests() -> SubagentKindSpec {
+    SubagentKindSpec {
+        name: "tests".into(),
+        description: "Writes or updates tests for the behavior it is given and runs them.".into(),
+        system_prompt: "Write or update the tests the task asks for, next to the existing tests and             in their style, then run them. Change production code only when the task says so.             Finish with the tests you added, the command you ran and its result."
+            .into(),
+        allowed_tools: edit_tools(),
+        allowed_capabilities: vec![Capability::InvokeProcess],
+        readonly: false,
+        default_model: None,
+        budget: SubagentBudget {
+            max_iterations: aura_core_types::MAX_TURNS,
+            max_tokens: None,
+            timeout_ms: 300_000,
+        },
+    }
+}
+
 fn shell() -> SubagentKindSpec {
     SubagentKindSpec {
         name: "shell".into(),
@@ -227,7 +281,14 @@ mod tests {
         let registry = SubagentRegistry::bundled();
         let segments = registry_segments(&registry);
         assert_eq!(segments.len(), registry.all().len());
-        for name in ["general_purpose", "explore", "shell", "code_reviewer"] {
+        for name in [
+            "general_purpose",
+            "explore",
+            "implement",
+            "tests",
+            "shell",
+            "code_reviewer",
+        ] {
             let seg = segments
                 .iter()
                 .find(|(label, _)| label == name)
@@ -245,10 +306,36 @@ mod tests {
     #[test]
     fn bundled_registry_contains_expected_kinds() {
         let registry = SubagentRegistry::bundled();
-        for name in ["general_purpose", "explore", "shell", "code_reviewer"] {
+        for name in [
+            "general_purpose",
+            "explore",
+            "implement",
+            "tests",
+            "shell",
+            "code_reviewer",
+        ] {
             assert!(registry.get(name).is_some(), "missing {name}");
         }
-        assert_eq!(registry.all().len(), 4);
+        assert_eq!(registry.all().len(), 6);
+    }
+
+    #[test]
+    fn write_kinds_can_edit_files_and_run_checks() {
+        let registry = SubagentRegistry::bundled();
+        for name in ["implement", "tests"] {
+            let kind = registry.get(name).unwrap();
+            assert!(!kind.readonly, "{name}");
+            for tool in ["edit_file", "write_file", "run_command"] {
+                assert!(
+                    kind.allowed_tools.iter().any(|t| t == tool),
+                    "{name} lacks {tool}"
+                );
+            }
+            assert!(
+                !kind.allowed_tools.iter().any(|t| t == "task"),
+                "{name} does not delegate further"
+            );
+        }
     }
 
     #[test]

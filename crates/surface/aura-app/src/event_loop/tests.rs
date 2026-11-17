@@ -7,6 +7,9 @@ use aura_agent::AgentLoopConfig;
 use aura_agent_kernel::KernelConfig;
 use aura_auth::{Vault, ZosIdentity};
 use aura_context_skills::{SkillLoader, SkillManager};
+use aura_core_types::{
+    Hash, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, Route, RouteLevel,
+};
 use aura_exec_tools::ToolConfig;
 use aura_model::{
     MockProvider, MockResponse, ModelProvider, ModelRequest, ModelResponse, ReasonerError,
@@ -17,9 +20,17 @@ use aura_ui_terminal::{ApprovalLevel, PermissionMode};
 use tempfile::TempDir;
 use tokio::sync::Semaphore;
 
+mod compare_runs;
+mod delegation;
+mod subtasks;
+
+/// Model whose route refuses the sign-in, for Gate's re-routing.
+const REFUSING_MODEL: &str = "claude/claude-sonnet-4-6";
+
 /// Answers like a mock model, but holds turn calls whose last message
-/// mentions "slow" until the test releases them. Auxiliary calls, like the
-/// chat title, quote the prompt and are answered at once.
+/// mentions "slow" until the test releases them, and refuses
+/// [`REFUSING_MODEL`]. Auxiliary calls, like the chat title, quote the
+/// prompt and are answered at once.
 struct GatedProvider {
     inner: MockProvider,
     gate: Arc<Semaphore>,
@@ -32,11 +43,42 @@ impl ModelProvider for GatedProvider {
     }
 
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ReasonerError> {
+        if request.model.as_str() == REFUSING_MODEL {
+            return Err(ReasonerError::Api {
+                status: 401,
+                message: "claude plan models are not available in this session".to_string(),
+            });
+        }
         let last = request.messages.last().map(|m| m.text_content());
+        if request.system == aura_agent_gate::classify::SYSTEM_PROMPT {
+            return classify(&request, last.as_deref().unwrap_or_default()).await;
+        }
+        if request.system == aura_agent_gate::judge::SYSTEM_PROMPT {
+            return MockProvider::simple_response("A is tidier.\nWINNER: A")
+                .complete(request)
+                .await;
+        }
+        if request
+            .messages
+            .iter()
+            .any(|m| m.text_content().contains("write the answer"))
+        {
+            return answer(request, last.as_deref()).await;
+        }
         let auxiliary = request.metadata.kind == Some(aura_model::ModelRequestKind::Auxiliary);
         let slow = !auxiliary && last.as_deref().is_some_and(|text| text.contains("slow"));
         if slow {
             self.gate.acquire().await.unwrap().forget();
+        }
+        if let Some(response) = scripted(last.as_deref().unwrap_or_default(), &request) {
+            let model = request.model.as_str().to_string();
+            let mut response = MockProvider::new()
+                .with_response(response)
+                .complete(request)
+                .await?;
+            response.trace.model.clone_from(&model);
+            response.model_used = model;
+            return Ok(response);
         }
         if last.as_deref().is_some_and(|text| text.contains("run ls")) {
             return MockProvider::new()
@@ -48,6 +90,37 @@ impl ModelProvider for GatedProvider {
                 .complete(request)
                 .await;
         }
+        let check = |args: &[&str]| {
+            MockResponse::tool_use(
+                "toolu_check",
+                "run_command",
+                serde_json::json!({ "program": "cargo", "args": args }),
+            )
+        };
+        if last
+            .as_deref()
+            .is_some_and(|text| text.contains("run passing check"))
+        {
+            return MockProvider::new()
+                .with_response(check(&["check", "--help"]))
+                .complete(request)
+                .await;
+        }
+        if last
+            .as_deref()
+            .is_some_and(|text| text.contains("run failing check"))
+        {
+            return MockProvider::new()
+                .with_response(check(&["test", "--no-such-flag"]))
+                .complete(request)
+                .await;
+        }
+        if last.as_deref().is_some_and(|text| text.contains("explode")) {
+            return Err(ReasonerError::Api {
+                status: 400,
+                message: "the model fell over".to_string(),
+            });
+        }
         self.inner.complete(request).await
     }
 
@@ -56,8 +129,90 @@ impl ModelProvider for GatedProvider {
     }
 }
 
+/// The one tool call a turn whose last message is `last` makes, for the
+/// delegation tests: "write a note" writes `notes/<model>.txt`, "touch a
+/// file" runs `touch touched.txt`, "read the big file" reads `big.txt`,
+/// and "change files by shell" appends the model to `tracked.txt` and
+/// `target/out` and writes `shell-<model>.txt` with a shell command, which
+/// on a first attempt also deletes `gone.txt`.
+fn scripted(last: &str, request: &ModelRequest) -> Option<MockResponse> {
+    let call = |name: &str, input: serde_json::Value| {
+        Some(MockResponse::tool_use(format!("toolu_{name}"), name, input))
+    };
+    if last.contains("write a note") {
+        let path = format!("notes/{}.txt", request.model.as_str());
+        return call(
+            "write_file",
+            serde_json::json!({ "path": path, "content": "note" }),
+        );
+    }
+    if last.contains("touch a file") {
+        return call(
+            "run_command",
+            serde_json::json!({ "program": "touch", "args": ["touched.txt"] }),
+        );
+    }
+    if last.contains("read the big file") {
+        return call("read_file", serde_json::json!({ "path": "big.txt" }));
+    }
+    if last.contains("change files by shell") {
+        let model = request.model.as_str();
+        let mut script = format!(
+            "echo {model} >> tracked.txt && echo {model} > shell-{model}.txt \
+             && echo {model} >> target/out"
+        );
+        if !last.contains("A first attempt") {
+            script.push_str(" && rm gone.txt");
+        }
+        return call(
+            "run_command",
+            serde_json::json!({ "program": "sh", "args": ["-c", script] }),
+        );
+    }
+    None
+}
+
+/// A turn told to "write the answer": it writes `answer.txt` naming the
+/// model that answered, then says it is done. Calls are billed as the
+/// model asked for, so they have a list price.
+async fn answer(request: ModelRequest, last: Option<&str>) -> Result<ModelResponse, ReasonerError> {
+    let model = request.model.as_str().to_string();
+    let provider = if last.is_some_and(|text| text.contains("write the answer")) {
+        MockProvider::new().with_response(MockResponse::tool_use(
+            "toolu_answer",
+            "write_file",
+            serde_json::json!({ "path": "answer.txt", "content": model }),
+        ))
+    } else {
+        MockProvider::simple_response(format!("Wrote the answer on {model}."))
+    };
+    let mut response = provider.complete(request).await?;
+    response.trace.model.clone_from(&model);
+    response.model_used = model;
+    Ok(response)
+}
+
+/// The classifier's answer to `request`, asking about `prompt`: prompts
+/// that say "fix" are debugging, "classifier down" fails the call, and the
+/// rest are questions.
+async fn classify(request: &ModelRequest, prompt: &str) -> Result<ModelResponse, ReasonerError> {
+    if prompt.contains("classifier down") {
+        return Err(ReasonerError::Internal("classifier offline".to_string()));
+    }
+    let label = if prompt.contains("fix") {
+        "debugging"
+    } else {
+        "question"
+    };
+    MockProvider::simple_response(label)
+        .complete(request.clone())
+        .await
+}
+
 struct Fixture {
     hub: Arc<AgentHub>,
+    /// Runs the `task` calls of the hub's kernels
+    dispatcher: Arc<dyn aura_exec_tools::SubagentDispatchHook>,
     config: AgentLoopConfig,
     gate: Arc<Semaphore>,
     commands_tx: mpsc::Sender<UiCommand>,
@@ -69,7 +224,31 @@ struct Fixture {
     _dirs: Vec<TempDir>,
 }
 
+/// Gate settings for tests: the defaults, without exploring.
+fn steady_gate() -> GateLive {
+    GateLive::new(aura_config::GateConfig {
+        explore_rate: 0.0,
+        ..aura_config::GateConfig::defaults()
+    })
+}
+
+/// [`steady_gate`] whose lead keeps its own file tools and commands, as
+/// with `AURA_GATE_DELEGATE=off`.
+fn steady_gate_without_delegation() -> GateLive {
+    GateLive::new(aura_config::GateConfig {
+        explore_rate: 0.0,
+        delegate: false,
+        ..aura_config::GateConfig::defaults()
+    })
+}
+
 fn fixture() -> (Fixture, mpsc::Receiver<UiCommand>) {
+    fixture_with_gate(steady_gate())
+}
+
+/// [`fixture`] whose kernels feed `gate`.
+fn fixture_with_gate(gate: GateLive) -> (Fixture, mpsc::Receiver<UiCommand>) {
+    let gate = Arc::new(gate);
     let data = TempDir::new().unwrap();
     let db = TempDir::new().unwrap();
     let workspace = TempDir::new().unwrap();
@@ -101,6 +280,7 @@ fn fixture() -> (Fixture, mpsc::Receiver<UiCommand>) {
             limits: crate::model_selection::ModelLimits::of(&config),
             config: config.clone(),
             tools,
+            gate: GateBase::default(),
         },
         commands: commands_tx.clone(),
         long_run: crate::long_run::LongRunSettings::default(),
@@ -111,11 +291,17 @@ fn fixture() -> (Fixture, mpsc::Receiver<UiCommand>) {
         processes: ProcessTable::without_os_scan(None, None),
         agents: None,
         record_panel: RecordPanelAgent::default(),
+        gate: Arc::clone(&gate),
         traces,
     };
-    let record_observer: Arc<dyn aura_agent_kernel::RecordObserver> = Arc::new(
-        UiRecordObserver::new(commands_tx.clone(), RecordPanelAgent::default()),
-    );
+    let record_observer: Arc<dyn aura_agent_kernel::RecordObserver> =
+        Arc::new(FanoutObserver(vec![
+            Arc::new(UiRecordObserver::new(
+                commands_tx.clone(),
+                RecordPanelAgent::default(),
+            )) as Arc<dyn aura_agent_kernel::RecordObserver>,
+            gate as Arc<dyn aura_agent_kernel::RecordObserver>,
+        ]));
     let gate = Arc::new(Semaphore::new(0));
     let provider_gate = Arc::clone(&gate);
     let workspace_root = workspace.path().to_path_buf();
@@ -123,21 +309,30 @@ fn fixture() -> (Fixture, mpsc::Receiver<UiCommand>) {
     let prompter = Arc::clone(&approvals);
     let files = crate::file_checkpoints::FileCheckpoints::new(data.path());
     let factory_files = files.clone();
-    let hub = AgentHub::new(parts, |_dispatcher| {
+    let hook_files = files.clone();
+    let mut captured = None;
+    let hub = AgentHub::new(parts, |dispatcher| {
+        captured = Some(dispatcher);
         let kernel_store = Arc::clone(&store);
         KernelFactory::new(
             store,
-            Box::new(move |agent_id, _parent_chain, folder| {
+            Box::new(move |agent_id, parent_chain, folder| {
                 let provider: Arc<dyn ModelProvider + Send + Sync> = Arc::new(GatedProvider {
                     inner: MockProvider::simple_response("Done."),
                     gate: Arc::clone(&provider_gate),
                 });
                 let workspace_base = folder.unwrap_or_else(|| workspace_root.clone());
                 prompter.set_folder(agent_id, workspace_base.clone());
+                let chain = std::iter::once(agent_id).chain(parent_chain).collect();
+                let executor =
+                    aura_exec_tools::ToolExecutor::new(ToolConfig::for_autonomous_dev_loop())
+                        .with_file_change_hook(hook_files.hook(chain, None));
+                let mut executors = aura_agent_kernel::ExecutorRouter::new();
+                executors.add_executor(Arc::new(executor));
                 Ok(Kernel::new(
                     Arc::clone(&kernel_store) as Arc<dyn aura_store_db::Store>,
                     provider,
-                    build_executor_router_with_config(&ToolConfig::for_autonomous_dev_loop()).0,
+                    executors,
                     KernelConfig {
                         workspace_base,
                         use_workspace_base_as_root: true,
@@ -155,6 +350,7 @@ fn fixture() -> (Fixture, mpsc::Receiver<UiCommand>) {
     });
     let fixture = Fixture {
         hub,
+        dispatcher: captured.unwrap(),
         config,
         gate,
         commands_tx,
@@ -218,6 +414,10 @@ fn loop_state<'a>(fixture: &'a Fixture, b: &'a mut Borrowed) -> LoopState<'a> {
         pending_link: None,
         processes: Arc::clone(&fixture.hub.processes),
         approvals: Arc::clone(&fixture.approvals),
+        compare: compare::CompareState::new(
+            fixture._dirs[0].path().join("compare"),
+            aura_agent_gate::compare::DEFAULT_CONCURRENCY,
+        ),
     }
 }
 
@@ -634,6 +834,56 @@ async fn a_command_its_agent_stopped_needs_no_reply() {
 }
 
 #[tokio::test]
+async fn gate_re_routes_a_turn_whose_route_refuses_the_sign_in() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = ModelSelection::signed_in(
+        &fixture.config,
+        aura_model::model_catalog::GATE_MODEL_ID,
+        aura_auth::AuthSummary {
+            subscriptions: vec![aura_auth::ProviderKind::Claude],
+            ..aura_auth::AuthSummary::default()
+        },
+    );
+    assert_eq!(state.models.turn_model(), REFUSING_MODEL);
+
+    handle_ui_event(&mut state, message(first, "hello", true), &links).await;
+    let finished = next_done(&mut done).await;
+    assert_eq!(
+        finished.failure, None,
+        "a refused route is not a failed turn"
+    );
+    assert_eq!(finished.refused_models, [REFUSING_MODEL]);
+    handle_work_done(&mut state, finished).await;
+
+    assert_eq!(
+        state.models.turn_model(),
+        "claude/claude-opus-4-7",
+        "the refused model stays out of the next turns"
+    );
+    let replies: Vec<String> = state.idle[&first]
+        .messages
+        .iter()
+        .map(|m| m.text_content())
+        .collect();
+    assert_eq!(replies, ["hello", "Done."]);
+    let shown: Vec<String> = drain(&mut commands)
+        .into_iter()
+        .filter_map(|(_, c)| match c {
+            UiCommand::ShowMessage(m) if m.content.contains("gate → ") => Some(m.content),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(shown.len(), 2, "{shown:?}");
+    assert!(shown[0].contains("gate → claude-sonnet-4-6 (claude plan)"));
+    assert!(shown[1].contains("gate → claude-opus-4-7 (claude plan)"));
+}
+
+#[tokio::test]
 async fn messages_the_turn_never_saw_run_next() {
     let (fixture, _commands) = fixture();
     let mut b = borrowed(&fixture);
@@ -649,6 +899,7 @@ async fn messages_the_turn_never_saw_run_next() {
             session: Some(session),
             failure: None,
             unseen: vec![(SteerSource::User, "late".to_string())],
+            refused_models: Vec::new(),
             title: None,
         },
     )
@@ -1389,6 +1640,619 @@ async fn diff_shows_the_latest_turn_or_the_whole_session() {
     let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(paths, ["a.txt", "b.txt"]);
     assert!(files[0].diff.contains("-a\n+A\n"), "{}", files[0].diff);
+}
+
+/// Every entry in `agent_id`'s record, oldest first.
+fn record_of(state: &LoopState<'_>, agent_id: AgentId) -> Vec<aura_core_types::RecordEntry> {
+    state
+        .kernel_for(agent_id)
+        .unwrap()
+        .store()
+        .scan_record(agent_id, 1, 10_000)
+        .unwrap()
+}
+
+/// The prompts in `agent_id`'s record, oldest first.
+fn prompts_of(state: &LoopState<'_>, agent_id: AgentId) -> Vec<(u64, Hash, PromptPayload)> {
+    record_of(state, agent_id)
+        .into_iter()
+        .filter_map(|e| e.tx.prompt_payload().map(|p| (e.seq, e.tx.hash, p)))
+        .collect()
+}
+
+/// The outcomes in `agent_id`'s record, oldest first.
+fn outcomes_of(state: &LoopState<'_>, agent_id: AgentId) -> Vec<(u64, OutcomePayload)> {
+    record_of(state, agent_id)
+        .into_iter()
+        .filter_map(|e| e.tx.outcome_payload().map(|o| (e.seq, o)))
+        .collect()
+}
+
+/// Run a turn answering `text` on `agent_id` to its end.
+async fn turn(
+    state: &mut LoopState<'_>,
+    done: &mut mpsc::Receiver<WorkDone>,
+    links: &mpsc::Sender<auth::LinkOutcome>,
+    agent_id: AgentId,
+    text: &str,
+) -> WorkDone {
+    handle_ui_event(state, message(agent_id, text, true), links).await;
+    let finished = next_done(done).await;
+    let reported = WorkDone {
+        agent_id: finished.agent_id,
+        session: None,
+        failure: finished.failure.clone(),
+        unseen: Vec::new(),
+        refused_models: finished.refused_models.clone(),
+        title: finished.title.clone(),
+    };
+    handle_work_done(state, finished).await;
+    reported
+}
+
+#[tokio::test]
+async fn a_pinned_turn_records_its_category_route_and_outcome() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    let classifier = state.models.classifier_model();
+
+    turn(&mut state, &mut done, &links, first, "fix the parser").await;
+
+    let prompts = prompts_of(&state, first);
+    assert_eq!(prompts.len(), 1);
+    let (prompt_seq, prompt_tx, prompt) = &prompts[0];
+    assert_eq!(prompt.text, "fix the parser");
+    assert_eq!(prompt.category, PromptCategory::Debugging);
+    assert_eq!(prompt.classifier, classifier);
+    assert_eq!(prompt.route, Route::turn("mock-model", RouteReason::Pinned));
+
+    let outcomes = outcomes_of(&state, first);
+    assert_eq!(outcomes.len(), 1);
+    let (outcome_seq, outcome) = &outcomes[0];
+    assert!(outcome_seq > prompt_seq);
+    assert_eq!(outcome.prompt_tx, *prompt_tx);
+    assert_eq!(outcome.category, PromptCategory::Debugging);
+    assert_eq!(outcome.model, "mock-model");
+    assert_eq!(outcome.signal, OutcomeSignal::None);
+    assert_eq!(outcome.success, None);
+    let reply_seq = record_of(&state, first)
+        .iter()
+        .find(|e| e.tx.tx_type == aura_core_types::TransactionType::AgentMsg)
+        .map(|e| e.seq)
+        .unwrap();
+    assert!(*outcome_seq > reply_seq, "the outcome follows the reply");
+}
+
+#[tokio::test]
+async fn gate_classifies_before_the_turn_and_records_its_default_route() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = ModelSelection::signed_in(
+        &fixture.config,
+        aura_model::model_catalog::GATE_MODEL_ID,
+        aura_auth::AuthSummary {
+            zos_user: Some("alice".to_string()),
+            ..aura_auth::AuthSummary::default()
+        },
+    );
+
+    turn(&mut state, &mut done, &links, first, "what does gate do?").await;
+
+    let (prompt_seq, _, prompt) = prompts_of(&state, first).remove(0);
+    assert_eq!(prompt.category, PromptCategory::Question);
+    assert_eq!(prompt.classifier, "aura-claude-haiku-4-5");
+    assert_eq!(
+        prompt.route,
+        Route::turn("aura-claude-sonnet-4-6", RouteReason::Default)
+    );
+    let calls: Vec<u64> = record_of(&state, first)
+        .iter()
+        .filter(|e| e.tx.tx_type == aura_core_types::TransactionType::Reasoning)
+        .map(|e| e.seq)
+        .collect();
+    assert_eq!(
+        calls.len(),
+        3,
+        "the classifier, the turn and the chat title"
+    );
+    assert!(calls[0] < prompt_seq && prompt_seq < calls[1]);
+    let (_, outcome) = outcomes_of(&state, first).remove(0);
+    assert_eq!(outcome.model, "aura-claude-sonnet-4-6");
+}
+
+#[tokio::test]
+async fn a_failing_classifier_leaves_the_prompt_unclassified() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+
+    let finished = turn(&mut state, &mut done, &links, first, "classifier down?").await;
+
+    assert_eq!(finished.failure, None, "the turn still runs");
+    let (_, _, prompt) = prompts_of(&state, first).remove(0);
+    assert_eq!(prompt.category, PromptCategory::Unclassified);
+    let (_, outcome) = outcomes_of(&state, first).remove(0);
+    assert_eq!(outcome.category, PromptCategory::Unclassified);
+}
+
+/// `agent` mode at `yolo`: nothing asks.
+fn yolo() -> Permissions {
+    Permissions::new(PermissionMode::Agent, ApprovalLevel::Yolo)
+}
+
+/// Let `agent_id` run commands without asking.
+async fn unrestricted(
+    state: &mut LoopState<'_>,
+    links: &mpsc::Sender<auth::LinkOutcome>,
+    agent_id: AgentId,
+) {
+    let event = UiEvent::SetApproval {
+        agent_id: agent_id.to_hex(),
+        level: ApprovalLevel::Yolo,
+    };
+    handle_ui_event(state, event, links).await;
+}
+
+#[tokio::test]
+async fn the_last_check_of_a_turn_decides_its_outcome() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    unrestricted(&mut state, &links, first).await;
+
+    turn(&mut state, &mut done, &links, first, "run failing check").await;
+    turn(&mut state, &mut done, &links, first, "run passing check").await;
+
+    let signals: Vec<(OutcomeSignal, Option<bool>)> = outcomes_of(&state, first)
+        .into_iter()
+        .map(|(_, o)| (o.signal, o.success))
+        .collect();
+    assert_eq!(
+        signals,
+        [
+            (OutcomeSignal::ChecksFailed, Some(false)),
+            (OutcomeSignal::ChecksPassed, Some(true)),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_turn_that_fails_records_an_error_outcome() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+
+    turn(&mut state, &mut done, &links, first, "explode").await;
+
+    let (_, outcome) = outcomes_of(&state, first).remove(0);
+    assert_eq!(outcome.signal, OutcomeSignal::Error);
+    assert_eq!(outcome.success, Some(false));
+}
+
+#[tokio::test]
+async fn good_and_bad_override_the_turns_own_signal() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    let rate = |good| UiEvent::RateTurn {
+        agent_id: first.to_hex(),
+        good,
+        turns_back: 1,
+    };
+
+    handle_ui_event(&mut state, rate(true), &links).await;
+    assert!(system_texts(&drain(&mut commands)).contains("No finished turn"));
+    assert!(outcomes_of(&state, first).is_empty());
+
+    unrestricted(&mut state, &links, first).await;
+    turn(&mut state, &mut done, &links, first, "run failing check").await;
+    handle_ui_event(&mut state, rate(true), &links).await;
+    assert!(system_texts(&drain(&mut commands)).contains("Rated the last turn good"));
+
+    let outcomes: Vec<OutcomePayload> = outcomes_of(&state, first)
+        .into_iter()
+        .map(|(_, o)| o)
+        .collect();
+    let signals: Vec<OutcomeSignal> = outcomes.iter().map(|o| o.signal).collect();
+    assert_eq!(signals, [OutcomeSignal::ChecksFailed, OutcomeSignal::Good]);
+    assert_eq!(outcomes[1].prompt_tx, outcomes[0].prompt_tx);
+    assert_eq!(outcomes[1].cost_usd, outcomes[0].cost_usd);
+    let counted = aura_agent_gate::outcome::effective(&outcomes).unwrap();
+    assert_eq!(counted.success, Some(true), "/good overrides checks_failed");
+
+    handle_ui_event(&mut state, rate(false), &links).await;
+    let outcomes: Vec<OutcomePayload> = outcomes_of(&state, first)
+        .into_iter()
+        .map(|(_, o)| o)
+        .collect();
+    let counted = aura_agent_gate::outcome::effective(&outcomes).unwrap();
+    assert_eq!(counted.signal, OutcomeSignal::Bad);
+}
+
+#[tokio::test]
+async fn good_and_bad_rate_an_earlier_turn_by_how_many_turns_back() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    let rate = |good, turns_back| UiEvent::RateTurn {
+        agent_id: first.to_hex(),
+        good,
+        turns_back,
+    };
+
+    unrestricted(&mut state, &links, first).await;
+    turn(&mut state, &mut done, &links, first, "run failing check").await;
+    turn(&mut state, &mut done, &links, first, "run passing check").await;
+    turn(&mut state, &mut done, &links, first, "third turn").await;
+    let prompts: Vec<Hash> = prompts_of(&state, first)
+        .into_iter()
+        .map(|(_, hash, _)| hash)
+        .collect();
+    drain(&mut commands);
+
+    let ratings_of = |state: &LoopState<'_>, prompt: Hash| -> Vec<OutcomePayload> {
+        outcomes_of(state, first)
+            .into_iter()
+            .map(|(_, o)| o)
+            .filter(|o| o.prompt_tx == prompt)
+            .collect()
+    };
+
+    handle_ui_event(&mut state, rate(true, 3), &links).await;
+    assert!(system_texts(&drain(&mut commands)).contains("Rated the turn 3 back good"));
+    let rated = ratings_of(&state, prompts[0]);
+    let signals: Vec<OutcomeSignal> = rated.iter().map(|o| o.signal).collect();
+    assert_eq!(signals, [OutcomeSignal::ChecksFailed, OutcomeSignal::Good]);
+    assert_eq!(rated[1].model, rated[0].model);
+    assert_eq!(rated[1].category, rated[0].category);
+    for later in &prompts[1..] {
+        assert!(
+            ratings_of(&state, *later)
+                .iter()
+                .all(|o| o.signal.is_turn_end()),
+            "only the first turn is rated"
+        );
+    }
+
+    handle_ui_event(&mut state, rate(false, 3), &links).await;
+    let rated = ratings_of(&state, prompts[0]);
+    let counted = aura_agent_gate::outcome::effective(&rated).unwrap();
+    assert_eq!(counted.signal, OutcomeSignal::Bad, "the latest rating wins");
+    assert_eq!(counted.success, Some(false));
+
+    handle_ui_event(&mut state, rate(false, 2), &links).await;
+    let second = ratings_of(&state, prompts[1]);
+    assert_eq!(
+        aura_agent_gate::outcome::effective(&second).unwrap().signal,
+        OutcomeSignal::Bad,
+        "/bad 2 overrides the second turn's passing check"
+    );
+    drain(&mut commands);
+
+    let before = outcomes_of(&state, first).len();
+    handle_ui_event(&mut state, rate(true, 4), &links).await;
+    assert!(system_texts(&drain(&mut commands))
+        .contains("No turn 4 back to rate: there are 3 finished turns"));
+    handle_ui_event(&mut state, rate(true, 0), &links).await;
+    assert!(system_texts(&drain(&mut commands)).contains("Turns back start at 1"));
+    assert_eq!(
+        outcomes_of(&state, first).len(),
+        before,
+        "a rejected rating writes nothing"
+    );
+}
+
+#[tokio::test]
+async fn rewinding_turns_fails_them() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+
+    turn(&mut state, &mut done, &links, first, "first turn").await;
+    turn(&mut state, &mut done, &links, first, "second turn").await;
+    turn(&mut state, &mut done, &links, first, "third turn").await;
+    let prompts: Vec<Hash> = prompts_of(&state, first)
+        .into_iter()
+        .map(|(_, hash, _)| hash)
+        .collect();
+    let event = UiEvent::Rewind {
+        agent_id: first.to_hex(),
+        turn: Some(2),
+        scope: RewindScope::Chat,
+    };
+    handle_ui_event(&mut state, event, &links).await;
+
+    let rewound: Vec<Hash> = outcomes_of(&state, first)
+        .into_iter()
+        .filter(|(_, o)| o.signal == OutcomeSignal::Rewind)
+        .map(|(_, o)| {
+            assert_eq!(o.success, Some(false));
+            o.prompt_tx
+        })
+        .collect();
+    assert_eq!(rewound, prompts[1..]);
+}
+
+#[tokio::test]
+async fn the_same_prompt_on_a_stronger_model_fails_the_earlier_turn() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    let ask = "add a --json flag to the status command";
+
+    state.models = ModelSelection::fixed(&fixture.config, "aura-claude-haiku-4-5");
+    turn(&mut state, &mut done, &links, first, ask).await;
+    turn(&mut state, &mut done, &links, first, ask).await;
+    assert!(
+        outcomes_of(&state, first)
+            .iter()
+            .all(|(_, o)| o.signal != OutcomeSignal::RetryStronger),
+        "the same model again is not a retry on a stronger one"
+    );
+
+    state.models = ModelSelection::fixed(&fixture.config, "aura-claude-opus-4-7");
+    turn(&mut state, &mut done, &links, first, &format!("{ask}.")).await;
+
+    let prompts = prompts_of(&state, first);
+    let outcomes = outcomes_of(&state, first);
+    let retried: Vec<&OutcomePayload> = outcomes
+        .iter()
+        .map(|(_, o)| o)
+        .filter(|o| o.signal == OutcomeSignal::RetryStronger)
+        .collect();
+    assert_eq!(retried.len(), 1);
+    assert_eq!(retried[0].prompt_tx, prompts[1].1, "the turn just before");
+    assert_eq!(retried[0].model, "aura-claude-haiku-4-5");
+    assert_eq!(retried[0].success, Some(false));
+    assert_eq!(prompts[2].2.route.model, "aura-claude-opus-4-7");
+}
+
+/// Gate selected with a zOS sign-in: the router's models, no local ones.
+fn gate_on_zos(fixture: &Fixture) -> ModelSelection {
+    ModelSelection::signed_in(
+        &fixture.config,
+        aura_model::model_catalog::GATE_MODEL_ID,
+        aura_auth::AuthSummary {
+            zos_user: Some("alice".to_string()),
+            ..aura_auth::AuthSummary::default()
+        },
+    )
+}
+
+/// Feed `live` `n` question turns on `model` that passed
+/// their checks, recorded by some other agent.
+fn learn_questions(live: &GateLive, model: &str, n: usize) {
+    use aura_agent_kernel::RecordObserver;
+    let agent = AgentId::generate();
+    for i in 0..n {
+        let mut prompt = PromptPayload::new(format!("earlier question {i}"));
+        prompt.category = PromptCategory::Question;
+        prompt.route = Route::turn(model, RouteReason::Default);
+        let prompt_tx = Transaction::user_prompt_with(agent, &prompt);
+        let outcome = OutcomePayload {
+            prompt_tx: prompt_tx.hash,
+            category: PromptCategory::Question,
+            model: model.to_string(),
+            success: Some(true),
+            signal: OutcomeSignal::ChecksPassed,
+            cost_usd: 0.001,
+            latency_ms: 10,
+        };
+        let seq = 2 * u64::try_from(i).unwrap();
+        live.on_entry(&aura_core_types::RecordEntry::builder(seq + 1, prompt_tx).build());
+        live.on_entry(
+            &aura_core_types::RecordEntry::builder(seq + 2, Transaction::outcome(agent, &outcome))
+                .build(),
+        );
+    }
+}
+
+/// The chat lines saying where Gate sent turns.
+fn route_lines(commands: &mut mpsc::Receiver<UiCommand>) -> Vec<String> {
+    drain(commands)
+        .into_iter()
+        .filter_map(|(_, c)| match c {
+            UiCommand::ShowMessage(m) if m.content.contains("gate → ") => Some(m.content),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn gate_routes_each_category_and_records_why() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+    learn_questions(&fixture.hub.gate, "aura-claude-haiku-4-5", 10);
+
+    turn(&mut state, &mut done, &links, first, "what does gate do?").await;
+    turn(&mut state, &mut done, &links, first, "fix the parser").await;
+
+    let prompts = prompts_of(&state, first);
+    assert_eq!(
+        prompts[0].2.route,
+        Route::turn("aura-claude-haiku-4-5", RouteReason::Proven),
+        "ten passing questions prove haiku on questions"
+    );
+    assert_eq!(prompts[1].2.category, PromptCategory::Debugging);
+    assert_eq!(
+        prompts[1].2.route,
+        Route::turn("aura-gpt-5-4", RouteReason::Default),
+        "debugging goes to the strongest model, the cheaper of the frontier ones"
+    );
+    let models: Vec<String> = outcomes_of(&state, first)
+        .into_iter()
+        .map(|(_, o)| o.model)
+        .collect();
+    assert_eq!(models, ["aura-claude-haiku-4-5", "aura-gpt-5-4"]);
+    let shown = route_lines(&mut commands);
+    assert_eq!(
+        shown,
+        [
+            "gate → aura-claude-haiku-4-5 (cloud) · question, proven",
+            "gate → aura-gpt-5-4 (cloud) · debugging, default",
+        ]
+    );
+    let recent = fixture.hub.gate.recent();
+    assert_eq!(recent.len(), 2);
+    assert_eq!(recent[1].reason, RouteReason::Default);
+}
+
+#[tokio::test]
+async fn gate_explores_the_next_cheaper_model_and_records_its_propensity() {
+    let gate = GateLive::with_rng(
+        aura_config::GateConfig {
+            explore_rate: 1.0,
+            ..aura_config::GateConfig::defaults()
+        },
+        aura_agent_gate::SplitMix64::seeded(3),
+    );
+    let (fixture, mut commands) = fixture_with_gate(gate);
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+
+    turn(&mut state, &mut done, &links, first, "what does gate do?").await;
+
+    let (_, _, prompt) = prompts_of(&state, first).remove(0);
+    assert_eq!(
+        prompt.route,
+        Route {
+            explored: true,
+            propensity: 1.0,
+            ..Route::turn("aura-gpt-5-4", RouteReason::Explore)
+        },
+        "the default for questions is sonnet; the next cheaper is gpt-5.4"
+    );
+    let (_, outcome) = outcomes_of(&state, first).remove(0);
+    assert_eq!(outcome.model, "aura-gpt-5-4");
+    assert_eq!(
+        route_lines(&mut commands),
+        ["gate → aura-gpt-5-4 (cloud) · question, explore"]
+    );
+}
+
+#[tokio::test]
+async fn the_next_turn_uses_what_the_last_outcome_taught_gate() {
+    let gate = GateLive::new(aura_config::GateConfig {
+        min_tries: 1,
+        explore_rate: 0.0,
+        ..aura_config::GateConfig::defaults()
+    });
+    let (fixture, _commands) = fixture_with_gate(gate);
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+    let rate = |good| UiEvent::RateTurn {
+        agent_id: first.to_hex(),
+        good,
+        turns_back: 1,
+    };
+    let reasons = |state: &LoopState<'_>| -> Vec<RouteReason> {
+        prompts_of(state, first)
+            .into_iter()
+            .map(|(_, _, p)| p.route.reason)
+            .collect()
+    };
+
+    turn(&mut state, &mut done, &links, first, "what is a monad?").await;
+    handle_ui_event(&mut state, rate(true), &links).await;
+    turn(&mut state, &mut done, &links, first, "what is a functor?").await;
+    assert_eq!(reasons(&state), [RouteReason::Default, RouteReason::Proven]);
+
+    handle_ui_event(&mut state, rate(false), &links).await;
+    let row = fixture
+        .hub
+        .gate
+        .stats()
+        .row(
+            RouteLevel::Turn,
+            PromptCategory::Question,
+            "aura-claude-sonnet-4-6",
+        )
+        .copied()
+        .unwrap();
+    assert_eq!(
+        (row.tries, row.successes),
+        (2, 1),
+        "each prompt counts once"
+    );
+    turn(
+        &mut state,
+        &mut done,
+        &links,
+        first,
+        "what is an applicative?",
+    )
+    .await;
+    assert_eq!(
+        reasons(&state),
+        [
+            RouteReason::Default,
+            RouteReason::Proven,
+            RouteReason::Default
+        ],
+        "one of two is below the target, so sonnet drops back to the default"
+    );
+}
+
+#[tokio::test]
+async fn slash_gate_shows_the_table() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+    learn_questions(&fixture.hub.gate, "aura-claude-haiku-4-5", 10);
+
+    handle_ui_event(&mut state, UiEvent::ShowGate, &links).await;
+
+    let text = system_texts(&drain(&mut commands));
+    assert!(text.contains("Turns"), "{text}");
+    assert!(
+        text.contains("question            → aura-claude-haiku-4-5 (cloud)"),
+        "{text}"
+    );
+    assert!(text.contains("pick (proven)"), "{text}");
 }
 
 #[tokio::test]
