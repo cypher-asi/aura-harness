@@ -210,14 +210,21 @@ impl SseState {
     }
 }
 
-fn sse_stream(response: reqwest::Response, model: &str) -> StreamEventStream {
+fn http_meta(response: &reqwest::Response) -> StreamEvent {
     let request_id = response
         .headers()
         .get("x-request-id")
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
+    StreamEvent::HttpMeta {
+        request_id,
+        plan_usage: crate::plan_usage::from_headers_now(response.headers()),
+    }
+}
+
+fn sse_stream(response: reqwest::Response, model: &str) -> StreamEventStream {
     let mut pending = VecDeque::new();
-    pending.push_back(StreamEvent::HttpMeta { request_id });
+    pending.push_back(http_meta(&response));
     let state = SseState {
         body: Box::pin(response.bytes_stream()),
         buffer: Vec::new(),
@@ -277,13 +284,14 @@ impl ModelProvider for OpenAiResponsesProvider {
         if !is_json {
             return Ok(sse_stream(response, request.model.as_str()));
         }
+        let meta = http_meta(&response);
         let body: Value = response
             .json()
             .await
             .map_err(|e| ReasonerError::Parse(format!("ChatGPT response: {e}")))?;
         let events = Decoder::new(request.model.as_str()).response_object(&body);
         Ok(Box::pin(futures_util::stream::iter(
-            events.into_iter().map(Ok),
+            std::iter::once(meta).chain(events).map(Ok),
         )))
     }
 

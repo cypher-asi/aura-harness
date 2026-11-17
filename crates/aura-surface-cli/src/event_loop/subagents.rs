@@ -48,7 +48,7 @@ use crate::project_instructions::ProjectInstructions;
 use crate::record_loader::agent_summaries;
 use async_trait::async_trait;
 use aura_agent::{AgentLoop, AgentLoopConfig};
-use aura_agent_gate::compare::tally;
+use aura_agent_gate::compare::{tally, PlanReading};
 use aura_agent_gate::{Candidate, Decision};
 use aura_agent_kernel::Kernel;
 use aura_context_skills::SkillManager;
@@ -1019,6 +1019,21 @@ impl AgentHub {
             calls.extend(crate::record_loader::model_call(&entry.tx));
         });
         tally(calls)
+    }
+
+    /// The plan usage every model call of `agent` and the agents under it
+    /// reported, with when each call was recorded.
+    pub(crate) fn plan_readings(&self, agent: AgentId) -> Vec<PlanReading> {
+        let mut readings = Vec::new();
+        self.each_entry(agent, |entry| {
+            let recorded_ms = entry.tx.ts_ms;
+            readings.extend(
+                crate::record_loader::plan_usage(&entry.tx)
+                    .into_iter()
+                    .map(|usage| PlanReading { recorded_ms, usage }),
+            );
+        });
+        readings
     }
 
     /// The models the prompts of `agent` and the agents under it were

@@ -100,6 +100,10 @@ pub struct ProviderTrace {
     /// and the right key for correlating with provider / router logs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_request_id: Option<String>,
+    /// Usage of the plan the call ran on, from the response headers;
+    /// empty when the provider reported none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plan_usage: Vec<aura_core_types::PlanUsage>,
     /// Latency in milliseconds
     pub latency_ms: u64,
     /// Model that was used
@@ -113,6 +117,7 @@ impl ProviderTrace {
         Self {
             message_id: None,
             provider_request_id: None,
+            plan_usage: Vec::new(),
             latency_ms,
             model: model.into(),
         }

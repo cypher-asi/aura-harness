@@ -72,8 +72,12 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   another model in copies under `AURA_HOME/compare/`, judges each pair
   blindly, and shows time, cost, tokens per model and check passes per
   arm. Subcommands: `go`, `cancel`, `show [n]`, `diff [run]`,
-  `pick gate|other`, `apply <run>` and `dismiss`. Plan usage shares are
-  not shown, since providers don't report them; tokens per model are.
+  `pick gate|other`, `apply <run>` and `dismiss`. On a Claude or ChatGPT
+  plan it also shows the share of each plan window each arm used, read
+  from the usage headers of each response and recorded with the model
+  call; each rise between readings goes to the run whose call saw it,
+  so parallel runs don't count it twice. Providers that send no such
+  headers show tokens per model instead.
   The check runs as a `run_command` call through each run's kernel, so
   it is in the run's record and under the same command policy.
 - `evals/gate_cost`: 20 tasks with hidden checks, categories and

@@ -269,7 +269,11 @@ mod tests {
             socket
                 .write_all(
                     format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{body}",
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+                         anthropic-ratelimit-unified-5h-utilization: 0.07\r\n\
+                         anthropic-ratelimit-unified-5h-reset: 1774933200\r\n\
+                         anthropic-ratelimit-unified-7d-utilization: 0.53\r\n\
+                         Content-Length: {}\r\n\r\n{body}",
                         body.len()
                     )
                     .as_bytes(),
@@ -291,9 +295,22 @@ mod tests {
         req.thinking_effort = Some(ThinkingEffort::Medium);
         req.system_preamble = Some("You are Claude Code.".to_string());
         let mut stream = claude.complete_streaming(req).await.unwrap();
+        let mut accumulator = crate::StreamAccumulator::new();
         while let Some(event) = stream.next().await {
-            event.unwrap();
+            accumulator.process(&event.unwrap());
         }
+        let windows: Vec<(crate::Plan, &str, f64, Option<u64>)> = accumulator
+            .plan_usage
+            .iter()
+            .map(|w| (w.plan, w.window.as_str(), w.used, w.resets_at))
+            .collect();
+        assert_eq!(
+            windows,
+            [
+                (crate::Plan::Claude, "5h", 0.07, Some(1_774_933_200)),
+                (crate::Plan::Claude, "7d", 0.53, None),
+            ]
+        );
 
         let raw = server.await.unwrap();
         assert!(raw.contains(r#""model":"claude-opus-4-7""#), "{raw}");

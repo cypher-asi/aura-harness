@@ -5,14 +5,21 @@
 use aura_agent_gate::compare::{
     judge_cost_usd, summarize, too_close, ArmSummary, Estimate, NO_DELEGATE,
 };
-use aura_core_types::{CompareArm, ComparePayload, CompareRun, CompareStatus, ModelTokens};
+use aura_core_types::{
+    CompareArm, ComparePayload, CompareRun, CompareStatus, ModelTokens, Plan, PlanShare,
+};
 use aura_model_reasoner::model_catalog::route_label;
 use aura_terminal::events::FileDiffData;
 use std::fmt::Write;
 
-/// Where plan usage would come from, and why it is not shown.
-const PLAN_USAGE_NOTE: &str = "Plan usage: providers don't report how much of a plan's \
-limit a call used yet, so tokens per model (what draws a plan down) are shown instead.";
+/// Why plan usage is not shown when no call reported it.
+const PLAN_USAGE_NOTE: &str = "Plan usage: no call reported a plan's usage (only Claude and \
+ChatGPT plans do), so tokens per model (what draws a plan down) are shown instead.";
+
+/// How the plan shares are worked out, shown with them.
+const PLAN_SHARE_NOTE: &str = "Plan readings cover the whole account: each rise between \
+readings goes to the run whose call saw it, so runs at the same time don't count it twice, \
+and use outside the comparison while it ran lands on the next run to read.";
 
 /// `$0.004`, `$1.25`, or `free` for nothing.
 pub(super) fn money(usd: f64) -> String {
@@ -269,7 +276,15 @@ pub(super) fn render(name: &str, payload: &ComparePayload) -> String {
     for (arm, summary) in [("gate", &gate), ("other", &other)] {
         let _ = write!(out, "\n    {arm}: {}", model_tokens(&summary.tokens));
     }
-    let _ = write!(out, "\n  {PLAN_USAGE_NOTE}");
+    if gate.plan_usage.is_empty() && other.plan_usage.is_empty() {
+        let _ = write!(out, "\n  {PLAN_USAGE_NOTE}");
+    } else {
+        out.push_str("\n\n  Plan usage, share of each window's limit");
+        for (arm, summary) in [("gate", &gate), ("other", &other)] {
+            let _ = write!(out, "\n    {arm}: {}", plan_shares(&summary.plan_usage));
+        }
+        let _ = write!(out, "\n  {PLAN_SHARE_NOTE}");
+    }
     let unparsed = payload.judgments.iter().filter(|j| !j.parsed).count();
     if let Some(judgment) = payload.judgments.first() {
         let _ = write!(
@@ -347,6 +362,30 @@ fn model_tokens(rows: &[ModelTokens]) -> String {
         .join("; ")
 }
 
+/// `Claude plan 5h window +3.1%, 7d window +0.4%`, one plan after another.
+fn plan_shares(rows: &[PlanShare]) -> String {
+    if rows.is_empty() {
+        return "no plan usage reported".to_string();
+    }
+    let mut plans: Vec<(Plan, Vec<String>)> = Vec::new();
+    for row in rows {
+        let window = format!(
+            "{} window +{:.1}%",
+            row.window.replace('_', " "),
+            row.used * 100.0
+        );
+        match plans.iter_mut().find(|(plan, _)| *plan == row.plan) {
+            Some((_, windows)) => windows.push(window),
+            None => plans.push((row.plan, vec![window])),
+        }
+    }
+    plans
+        .into_iter()
+        .map(|(plan, windows)| format!("{} {}", plan.label(), windows.join(", ")))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 /// `patch` (a `git diff`) as one entry per file, each with its hunks.
 pub(super) fn split_patch(patch: &str) -> Vec<FileDiffData> {
     let mut files: Vec<FileDiffData> = Vec::new();
@@ -417,6 +456,7 @@ mod tests {
                 cost_usd: cost,
                 ..ModelTokens::default()
             }],
+            plan_usage: Vec::new(),
             check_passed: Some(check),
             files_changed: 2,
             error: None,
@@ -493,7 +533,8 @@ mod tests {
             text.contains("gate: claude-sonnet-4-6 9 calls, 126k in / 5k out, $0.18"),
             "{text}"
         );
-        assert!(text.contains("Plan usage:"));
+        assert!(text.contains("Plan usage: no call reported a plan's usage"));
+        assert!(!text.contains("share of each window"));
         assert!(
             text.contains("Judge: 1 blind call on aura-claude-opus-4-7 (cloud), $0.03"),
             "{text}"
@@ -502,6 +543,46 @@ mod tests {
         assert!(text.contains("/compare pick gate|other"));
         let gate_3 = line(&text, "gate-3");
         assert!(gate_3.contains(&"check failed"), "{gate_3:?}");
+    }
+
+    fn share(plan: Plan, window: &str, used: f64) -> PlanShare {
+        PlanShare {
+            plan,
+            window: window.to_string(),
+            first: 0.1,
+            last: 0.1 + used,
+            used,
+        }
+    }
+
+    #[test]
+    fn plan_shares_per_arm_replace_the_note_when_a_plan_reported_usage() {
+        let mut with_plan = payload();
+        with_plan.runs[0].plan_usage = vec![
+            share(Plan::Claude, "5h", 0.021),
+            share(Plan::Claude, "7d_opus", 0.002),
+        ];
+        with_plan.runs[2].plan_usage = vec![share(Plan::Claude, "5h", 0.010)];
+        with_plan.runs[1].plan_usage = vec![
+            share(Plan::Claude, "5h", 0.090),
+            share(Plan::Chatgpt, "5h", 0.012),
+        ];
+        let text = render("Compare #1", &with_plan);
+        assert!(
+            text.contains("gate: Claude plan 5h window +3.1%, 7d opus window +0.2%"),
+            "{text}"
+        );
+        assert!(
+            text.contains("other: Claude plan 5h window +9.0%; ChatGPT plan 5h window +1.2%"),
+            "{text}"
+        );
+        assert!(text.contains("don't count it twice"), "{text}");
+        assert!(!text.contains("no call reported a plan's usage"), "{text}");
+
+        let mut one_arm = payload();
+        one_arm.runs[0].plan_usage = vec![share(Plan::Claude, "5h", 0.05)];
+        let text = render("Compare #1", &one_arm);
+        assert!(text.contains("other: no plan usage reported"), "{text}");
     }
 
     #[test]

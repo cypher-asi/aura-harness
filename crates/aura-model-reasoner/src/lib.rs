@@ -32,6 +32,7 @@ mod mock;
 pub mod model_catalog;
 pub mod openai_responses;
 pub mod plan_models;
+pub mod plan_usage;
 pub mod provider_factory;
 pub mod response_stream;
 mod routed;
@@ -105,6 +106,7 @@ tokio::task_local! {
 pub fn emit_retry(info: RetryInfo) {
     let _ = DEBUG_RETRY_OBSERVER.try_with(|obs| obs(info));
 }
+pub use aura_core_types::{Plan, PlanUsage};
 pub use kernel_propose::{ProposeLimits, ProposeRequest, RecordSummary};
 pub use mock::{MockProvider, MockResponse};
 pub use types::{
@@ -178,6 +180,7 @@ pub(crate) fn stream_from_response(response: ModelResponse) -> StreamEventStream
     let mut events: Vec<Result<StreamEvent, ReasonerError>> = vec![
         Ok(StreamEvent::HttpMeta {
             request_id: response.trace.provider_request_id.clone(),
+            plan_usage: response.trace.plan_usage.clone(),
         }),
         Ok(StreamEvent::MessageStart {
             message_id: response.trace.message_id.clone().unwrap_or_default(),

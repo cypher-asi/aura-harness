@@ -10,6 +10,7 @@
 
 use std::path::PathBuf;
 
+use super::plan_usage::PlanShare;
 use super::transaction::SystemKind;
 use crate::ids::{AgentId, Hash};
 use serde::{Deserialize, Serialize};
@@ -117,6 +118,10 @@ pub struct CompareRun {
     pub cost_usd: f64,
     /// Tokens and cost per model, most expensive first.
     pub tokens: Vec<ModelTokens>,
+    /// Share of each plan window the run used, when its calls ran on a
+    /// plan whose provider reports usage.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plan_usage: Vec<PlanShare>,
     /// Whether the check command passed in the copy; `None` without a
     /// check, or when it could not run.
     pub check_passed: Option<bool>,
@@ -283,6 +288,13 @@ mod tests {
                     cost_usd: 0.12,
                     ..ModelTokens::default()
                 }],
+                plan_usage: vec![PlanShare {
+                    plan: crate::Plan::Claude,
+                    window: "5h".to_string(),
+                    first: 0.10,
+                    last: 0.12,
+                    used: 0.03,
+                }],
                 check_passed: Some(true),
                 files_changed: 2,
                 error: None,
@@ -312,7 +324,19 @@ mod tests {
         assert_eq!(json["status"]["detail"], "gate");
         assert_eq!(json["runs"][0]["arm"], "gate");
         assert!(json["runs"][0].get("error").is_none());
-        assert_eq!(ComparePayload::from_bytes(&bytes), Some(payload));
+        assert_eq!(json["runs"][0]["plan_usage"][0]["plan"], "claude");
+        assert_eq!(ComparePayload::from_bytes(&bytes), Some(payload.clone()));
+
+        let mut without = serde_json::to_value(&payload).unwrap();
+        without["runs"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("plan_usage");
+        let older = ComparePayload::from_bytes(&serde_json::to_vec(&without).unwrap()).unwrap();
+        assert!(
+            older.runs[0].plan_usage.is_empty(),
+            "older records still load"
+        );
     }
 
     #[test]

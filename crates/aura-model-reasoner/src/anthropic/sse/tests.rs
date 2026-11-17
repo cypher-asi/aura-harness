@@ -230,7 +230,7 @@ where
     S: Stream<Item = Result<bytes::Bytes, std::io::Error>> + Unpin,
 {
     match stream.next().await {
-        Some(Ok(StreamEvent::HttpMeta { request_id })) => {
+        Some(Ok(StreamEvent::HttpMeta { request_id, .. })) => {
             assert_eq!(request_id.as_deref(), expected_request_id);
         }
         other => panic!("Expected HttpMeta preamble, got {other:?}"),
@@ -247,7 +247,7 @@ async fn test_sse_stream_emits_http_meta_first() {
     // provider event — otherwise `StreamAccumulator` can't seed
     // `provider_request_id` when `message_start` arrives.
     match stream.next().await {
-        Some(Ok(StreamEvent::HttpMeta { request_id })) => {
+        Some(Ok(StreamEvent::HttpMeta { request_id, .. })) => {
             assert_eq!(request_id.as_deref(), Some("req_01ABC"));
         }
         other => panic!("Expected HttpMeta first, got {other:?}"),
@@ -268,7 +268,7 @@ async fn test_sse_stream_emits_http_meta_with_none_when_no_header() {
     // `SseStream::new` leaves `request_id: None`; the preamble
     // still fires so consumers can pattern-match unconditionally.
     match stream.next().await {
-        Some(Ok(StreamEvent::HttpMeta { request_id })) => {
+        Some(Ok(StreamEvent::HttpMeta { request_id, .. })) => {
             assert!(request_id.is_none());
         }
         other => panic!("Expected HttpMeta first, got {other:?}"),

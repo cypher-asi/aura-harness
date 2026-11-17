@@ -79,6 +79,7 @@ impl Kernel {
             "duration_ms": super::stream::elapsed_ms(started),
         });
         super::stream::add_cache_usage(&mut reasoning_payload, &response.usage);
+        super::stream::add_plan_usage(&mut reasoning_payload, &response.trace.plan_usage);
         let thinking: String = response
             .message
             .content
@@ -202,6 +203,7 @@ impl Kernel {
             window,
             observer: self.config.record_observer.clone(),
             started,
+            plan_usage: Vec::new(),
         };
 
         Ok((handle, stream))

@@ -17,7 +17,9 @@
 //! and its verdict is recorded as a later `Outcome`, so it counts in the
 //! table.
 //! Cost and tokens per model come from the records of the run and its
-//! subtasks: every model call there, classifier calls included.
+//! subtasks: every model call there, classifier calls included. So do
+//! the plan readings those calls recorded; once every run has ended they
+//! are shared out between the runs with `plan_shares`.
 
 use super::agent_events::AgentUi;
 use super::agents::AgentSession;
@@ -31,7 +33,9 @@ use super::task_check;
 use super::turns::{ended_signal, record_prompt};
 use crate::agent_registry::RegisteredAgent;
 use aura_agent::AgentLoop;
-use aura_agent_gate::compare::{list_price, run_name, Opponent, Schedule};
+use aura_agent_gate::compare::{
+    list_price, plan_shares, run_name, Opponent, PlanReading, Schedule,
+};
 use aura_agent_gate::{judge, Candidate};
 use aura_agent_kernel::Kernel;
 use aura_core_types::{
@@ -116,6 +120,8 @@ struct Ran {
     reply: String,
     patch: String,
     note: Option<String>,
+    /// Plan usage its model calls reported
+    readings: Vec<PlanReading>,
 }
 
 /// Write `payload` to the record of the comparison's agent `agent_id`.
@@ -208,6 +214,11 @@ pub(super) async fn run(
     });
     let mut ran = run_all(&ctx, &session, &user_ui, &mut payload).await;
     ran.sort_by_key(|r| r.order);
+    let readings: Vec<&[PlanReading]> = ran.iter().map(|r| r.readings.as_slice()).collect();
+    let shares = plan_shares(&readings);
+    for (r, share) in ran.iter_mut().zip(shares) {
+        r.run.plan_usage = share;
+    }
     payload.runs = ran.iter().map(|r| r.run.clone()).collect();
     payload
         .notes
@@ -324,6 +335,7 @@ fn not_run(ctx: &Context, arm: CompareArm, n: u32, error: String) -> Ran {
             wall_ms: 0,
             cost_usd: 0.0,
             tokens: Vec::new(),
+            plan_usage: Vec::new(),
             check_passed: None,
             files_changed: 0,
             error: Some(error),
@@ -332,6 +344,7 @@ fn not_run(ctx: &Context, arm: CompareArm, n: u32, error: String) -> Ran {
         reply: String::new(),
         patch: String::new(),
         note: None,
+        readings: Vec::new(),
     }
 }
 
@@ -618,6 +631,7 @@ async fn run_turn(
     });
     let tokens = hub.tokens_by_model(agent_id);
     let cost_usd = tokens.iter().map(|row| row.cost_usd).sum();
+    let readings = hub.plan_readings(agent_id);
 
     hub.processes.finish(
         &turn_id(agent_id),
@@ -643,6 +657,7 @@ async fn run_turn(
             wall_ms,
             cost_usd,
             tokens,
+            plan_usage: Vec::new(),
             check_passed,
             error,
         },
@@ -650,6 +665,7 @@ async fn run_turn(
         reply,
         patch,
         note: None,
+        readings,
     }
 }
 

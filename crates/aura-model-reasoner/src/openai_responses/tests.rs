@@ -283,6 +283,63 @@ async fn streams_over_http_with_bearer() {
 }
 
 #[tokio::test]
+async fn plan_usage_headers_reach_the_response_trace() {
+    let body = sse(&tool_turn_events());
+    let (addr, _server) = serve_once(format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+         x-codex-primary-used-percent: 12.5\r\nx-codex-primary-window-minutes: 300\r\n\
+         x-codex-primary-reset-at: 1704069000\r\nx-codex-secondary-used-percent: 40\r\n\
+         x-codex-secondary-window-minutes: 10080\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    ))
+    .await;
+    let provider = OpenAiResponsesProvider::new(format!("http://{addr}/v1")).unwrap();
+    let response = provider
+        .complete(request(vec![Message::user("hi")]))
+        .await
+        .unwrap();
+    let windows: Vec<(&str, f64, Option<u64>)> = response
+        .trace
+        .plan_usage
+        .iter()
+        .map(|w| (w.window.as_str(), w.used, w.resets_at))
+        .collect();
+    assert_eq!(
+        windows,
+        [("5h", 0.125, Some(1_704_069_000)), ("7d", 0.4, None)]
+    );
+    assert!(response
+        .trace
+        .plan_usage
+        .iter()
+        .all(|w| w.plan == crate::Plan::Chatgpt));
+}
+
+#[tokio::test]
+async fn json_responses_carry_request_id_and_plan_usage() {
+    let body = json!({
+        "id": "resp_2", "model": "gpt-5.4",
+        "output": [{"type": "message", "content": [{"type": "output_text", "text": "hello"}]}],
+        "usage": {"input_tokens": 5, "output_tokens": 1},
+    })
+    .to_string();
+    let (addr, _server) = serve_once(format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nx-request-id: req_9\r\n\
+         x-codex-primary-used-percent: 1\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    ))
+    .await;
+    let provider = OpenAiResponsesProvider::new(format!("http://{addr}/v1")).unwrap();
+    let response = provider
+        .complete(request(vec![Message::user("hi")]))
+        .await
+        .unwrap();
+    assert_eq!(response.trace.provider_request_id.as_deref(), Some("req_9"));
+    assert_eq!(response.trace.plan_usage.len(), 1);
+    assert_eq!(response.trace.plan_usage[0].window, "primary");
+}
+
+#[tokio::test]
 async fn http_errors_are_classified() {
     let body = r#"{"error":{"message":"token expired"}}"#;
     let (addr, _server) = serve_once(format!(

@@ -4,13 +4,14 @@
 //! This module holds the parts that need no I/O: reading the command's
 //! arguments, choosing the model Gate is compared with, the cost
 //! estimate shown before anything runs, the order runs start in and when
-//! the budget stops them, the tokens and cost per model of a run, and
-//! the per-arm medians, pass counts and judge tallies the view shows.
+//! the budget stops them, the tokens and cost per model of a run, the
+//! share of each plan window the runs used, and the per-arm medians,
+//! pass counts and judge tallies the view shows.
 //! Running the arms, the check command and the judge live with the app.
 
 use std::collections::{BTreeMap, VecDeque};
 
-use aura_core_types::{CompareArm, ComparePayload, ModelTokens};
+use aura_core_types::{CompareArm, ComparePayload, ModelTokens, Plan, PlanShare, PlanUsage};
 use aura_model_reasoner::model_catalog::{
     backend_for, estimate_cost_usd, model_key, ModelBackend, ModelTier,
 };
@@ -589,6 +590,123 @@ fn sorted(mut rows: Vec<ModelTokens>) -> Vec<ModelTokens> {
     rows
 }
 
+/// A plan reading one model call of a run got.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanReading {
+    /// When the call was recorded, in Unix milliseconds.
+    pub recorded_ms: u64,
+    /// What the provider reported.
+    pub usage: PlanUsage,
+}
+
+/// How far a window's reset time must move for a lower reading to mean
+/// the window restarted, rather than a reading recorded late. Covers
+/// resets computed from a relative `reset-after-seconds`.
+const RESET_SLACK_SECS: u64 = 60;
+
+/// The share of each plan window each run used, from the plan readings
+/// of every run's model calls (`readings[i]` for run `i`).
+///
+/// A reading is of the whole account, so runs working at the same time
+/// on the same plan see each other's usage, and a run's first and last
+/// readings would count that usage once per run. Instead, every rise of
+/// a window from its highest reading so far, across all runs in the
+/// order their calls were recorded, goes to the run whose call saw it:
+/// nothing is counted twice, and the shares add up to how far the window
+/// moved during the comparison. The first reading of a window is where
+/// it started and adds nothing. A lower reading is one recorded late and
+/// adds nothing, unless the window's reset time moved on, when the
+/// window restarted and the reading counts from zero. Usage from outside
+/// the comparison while it ran (another session on the same plan) goes
+/// to whichever run read the window next.
+#[must_use]
+pub fn plan_shares(readings: &[&[PlanReading]]) -> Vec<Vec<PlanShare>> {
+    let mut ordered: Vec<(u64, usize, usize, &PlanUsage)> = readings
+        .iter()
+        .enumerate()
+        .flat_map(|(run, calls)| {
+            calls
+                .iter()
+                .enumerate()
+                .map(move |(i, call)| (call.recorded_ms, run, i, &call.usage))
+        })
+        .collect();
+    ordered.sort_by_key(|&(ms, run, i, _)| (ms, run, i));
+
+    let mut highest: BTreeMap<(Plan, &str), (f64, Option<u64>)> = BTreeMap::new();
+    let mut shares: Vec<Vec<PlanShare>> = vec![Vec::new(); readings.len()];
+    for (_, run, _, usage) in ordered {
+        let key = (usage.plan, usage.window.as_str());
+        let added = match highest.get(&key).copied() {
+            None => {
+                highest.insert(key, (usage.used, usage.resets_at));
+                0.0
+            }
+            Some((top, reset)) => {
+                let restarted = matches!(
+                    (reset, usage.resets_at),
+                    (Some(old), Some(new)) if new > old.saturating_add(RESET_SLACK_SECS)
+                );
+                if restarted {
+                    highest.insert(key, (usage.used, usage.resets_at));
+                    usage.used
+                } else if usage.used > top {
+                    highest.insert(key, (usage.used, usage.resets_at.or(reset)));
+                    usage.used - top
+                } else {
+                    0.0
+                }
+            }
+        };
+        let row = &mut shares[run];
+        match row
+            .iter_mut()
+            .find(|share| share.plan == usage.plan && share.window == usage.window)
+        {
+            Some(share) => {
+                share.last = usage.used;
+                share.used += added;
+            }
+            None => row.push(PlanShare {
+                plan: usage.plan,
+                window: usage.window.clone(),
+                first: usage.used,
+                last: usage.used,
+                used: added,
+            }),
+        }
+    }
+    for row in &mut shares {
+        sort_shares(row);
+    }
+    shares
+}
+
+/// `rows` added up per plan window: the first `first`, the last `last`,
+/// and every `used`.
+#[must_use]
+pub fn merge_plan_shares<'a>(rows: impl IntoIterator<Item = &'a PlanShare>) -> Vec<PlanShare> {
+    let mut merged: Vec<PlanShare> = Vec::new();
+    for row in rows {
+        match merged
+            .iter_mut()
+            .find(|sum| sum.plan == row.plan && sum.window == row.window)
+        {
+            Some(sum) => {
+                sum.last = row.last;
+                sum.used += row.used;
+            }
+            None => merged.push(row.clone()),
+        }
+    }
+    sort_shares(&mut merged);
+    merged
+}
+
+fn sort_shares(rows: &mut [PlanShare]) {
+    rows.sort_by(|a, b| a.plan.cmp(&b.plan).then_with(|| a.window.cmp(&b.window)));
+}
+
 /// The median of `values`; the mean of the middle two for an even count.
 #[must_use]
 pub fn median(values: &[f64]) -> Option<f64> {
@@ -621,6 +739,8 @@ pub struct ArmSummary {
     pub median_cost_usd: Option<f64>,
     /// Tokens per model over every run, most expensive first.
     pub tokens: Vec<ModelTokens>,
+    /// Share of each plan window the arm's runs used.
+    pub plan_usage: Vec<PlanShare>,
     /// Runs whose check passed.
     pub checks_passed: usize,
     /// Runs whose check ran.
@@ -651,6 +771,7 @@ pub fn summarize(payload: &ComparePayload, arm: CompareArm) -> ArmSummary {
         total_cost_usd: runs.iter().map(|run| run.cost_usd).sum(),
         median_cost_usd: median(&costs),
         tokens: merge_tokens(runs.iter().flat_map(|run| run.tokens.iter())),
+        plan_usage: merge_plan_shares(runs.iter().flat_map(|run| run.plan_usage.iter())),
         checks_passed: runs.iter().filter(|r| r.check_passed == Some(true)).count(),
         checks_run: runs.iter().filter(|r| r.check_passed.is_some()).count(),
         judge_wins: judged.iter().filter(|j| j.winner == Some(arm)).count(),
@@ -1006,10 +1127,130 @@ mod tests {
                 cost_usd: cost,
                 ..ModelTokens::default()
             }],
+            plan_usage: Vec::new(),
             check_passed: check,
             files_changed: 1,
             error: None,
         }
+    }
+
+    fn reading(ms: u64, plan: Plan, window: &str, used: f64, reset: Option<u64>) -> PlanReading {
+        PlanReading {
+            recorded_ms: ms,
+            usage: PlanUsage {
+                plan,
+                window: window.to_string(),
+                used,
+                resets_at: reset,
+            },
+        }
+    }
+
+    fn used(shares: &[PlanShare], window: &str) -> f64 {
+        shares
+            .iter()
+            .find(|s| s.window == window)
+            .map_or(f64::NAN, |s| s.used)
+    }
+
+    #[test]
+    fn a_run_alone_on_a_plan_gets_each_rise_after_the_first_reading() {
+        let calls = [
+            reading(1, Plan::Claude, "5h", 0.10, Some(5_000)),
+            reading(1, Plan::Claude, "7d", 0.50, Some(9_000)),
+            reading(2, Plan::Claude, "5h", 0.12, Some(5_000)),
+            reading(3, Plan::Claude, "5h", 0.15, Some(5_000)),
+            reading(3, Plan::Claude, "7d", 0.51, Some(9_000)),
+        ];
+        let shares = plan_shares(&[&calls]);
+        assert_eq!(shares.len(), 1);
+        let five = &shares[0][0];
+        assert_eq!(
+            (five.window.as_str(), five.first, five.last),
+            ("5h", 0.10, 0.15)
+        );
+        assert!((five.used - 0.05).abs() < 1e-9);
+        assert!((used(&shares[0], "7d") - 0.01).abs() < 1e-9);
+        assert!(plan_shares(&[&[]])[0].is_empty(), "no readings, no shares");
+    }
+
+    #[test]
+    fn runs_at_the_same_time_split_the_rises_instead_of_each_counting_them() {
+        // gate-1 and other-1 work at once on one Claude plan, which goes
+        // from 10% to 20% while they run.
+        let gate = [
+            reading(10, Plan::Claude, "5h", 0.10, Some(5_000)),
+            reading(30, Plan::Claude, "5h", 0.14, Some(5_000)),
+            reading(50, Plan::Claude, "5h", 0.20, Some(5_000)),
+        ];
+        let other = [
+            reading(20, Plan::Claude, "5h", 0.12, Some(5_000)),
+            reading(40, Plan::Claude, "5h", 0.13, Some(5_000)),
+            reading(45, Plan::Claude, "5h", 0.17, Some(5_000)),
+        ];
+        let shares = plan_shares(&[&gate, &other]);
+        let (g, o) = (used(&shares[0], "5h"), used(&shares[1], "5h"));
+        assert!(
+            (g - 0.05).abs() < 1e-9,
+            "gate saw 0.14-0.12 and 0.20-0.17: {g}"
+        );
+        assert!(
+            (o - 0.05).abs() < 1e-9,
+            "other saw 0.12-0.10 and 0.17-0.14: {o}"
+        );
+        assert!(
+            (g + o - 0.10).abs() < 1e-9,
+            "the shares add up to how far the window moved"
+        );
+        let naive = (0.20 - 0.10) + (0.17 - 0.12);
+        assert!(
+            g + o < naive,
+            "first-to-last per run would count overlap twice"
+        );
+        assert_eq!((shares[1][0].first, shares[1][0].last), (0.12, 0.17));
+    }
+
+    #[test]
+    fn late_readings_add_nothing_and_a_restarted_window_counts_from_zero() {
+        let calls = [
+            reading(1, Plan::Chatgpt, "5h", 0.30, Some(10_000)),
+            reading(2, Plan::Chatgpt, "5h", 0.35, Some(10_030)),
+            reading(3, Plan::Chatgpt, "5h", 0.33, Some(10_010)),
+            reading(4, Plan::Chatgpt, "5h", 0.36, None),
+            reading(5, Plan::Chatgpt, "5h", 0.02, Some(28_000)),
+            reading(6, Plan::Chatgpt, "5h", 0.04, Some(28_000)),
+        ];
+        let shares = plan_shares(&[&calls]);
+        let share = &shares[0][0];
+        assert!(
+            (share.used - (0.05 + 0.01 + 0.02 + 0.02)).abs() < 1e-9,
+            "{share:?}"
+        );
+        assert_eq!(share.last, 0.04);
+    }
+
+    #[test]
+    fn plans_and_windows_are_kept_apart_and_merged_per_arm() {
+        let one = [
+            reading(1, Plan::Claude, "5h", 0.10, None),
+            reading(2, Plan::Claude, "5h", 0.20, None),
+        ];
+        let two = [
+            reading(3, Plan::Chatgpt, "5h", 0.50, None),
+            reading(4, Plan::Chatgpt, "5h", 0.60, None),
+            reading(5, Plan::Claude, "5h", 0.25, None),
+        ];
+        let shares = plan_shares(&[&one, &two]);
+        assert_eq!(shares[1].len(), 2);
+        assert_eq!(shares[1][0].plan, Plan::Claude, "sorted by plan");
+        assert!((shares[1][0].used - 0.05).abs() < 1e-9);
+        assert!((shares[1][1].used - 0.10).abs() < 1e-9);
+
+        let merged = merge_plan_shares(shares.iter().flatten());
+        assert_eq!(merged.len(), 2);
+        let claude = &merged[0];
+        assert_eq!((claude.first, claude.last), (0.10, 0.25));
+        assert!((claude.used - 0.15).abs() < 1e-9);
     }
 
     fn judged(gate_run: &str, winner: Option<CompareArm>, parsed: bool) -> CompareJudgment {
@@ -1070,6 +1311,7 @@ mod tests {
         );
         assert_eq!(gate.tokens.len(), 1);
         assert_eq!(gate.tokens[0].calls, 6);
+        assert!(gate.plan_usage.is_empty());
 
         let other = summarize(&payload, CompareArm::Other);
         assert_eq!((other.runs, other.finished), (3, 2));

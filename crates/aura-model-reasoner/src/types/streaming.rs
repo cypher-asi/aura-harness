@@ -99,6 +99,9 @@ pub enum StreamEvent {
         /// The `x-request-id` (or `request-id`) header value captured
         /// from the streaming response, if the upstream provided one.
         request_id: Option<String>,
+        /// Usage of the plan the call ran on, read from the response
+        /// headers ([`crate::plan_usage`]); empty when there was none.
+        plan_usage: Vec<aura_core_types::PlanUsage>,
     },
 }
 
@@ -161,6 +164,8 @@ pub struct StreamAccumulator {
     /// provider / router logs — it is distinct from
     /// [`Self::message_id`], which is the Anthropic message id.
     pub provider_request_id: Option<String>,
+    /// Plan usage from the [`StreamEvent::HttpMeta`] preamble.
+    pub plan_usage: Vec<aura_core_types::PlanUsage>,
 }
 
 /// Snapshot of an in-flight `tool_use` block at the moment a mid-stream
@@ -280,9 +285,15 @@ impl StreamAccumulator {
                     }
                 }
             }
-            StreamEvent::HttpMeta { request_id } => {
+            StreamEvent::HttpMeta {
+                request_id,
+                plan_usage,
+            } => {
                 if let Some(id) = request_id {
                     self.provider_request_id = Some(id.clone());
+                }
+                if !plan_usage.is_empty() {
+                    self.plan_usage.clone_from(plan_usage);
                 }
             }
         }
@@ -453,6 +464,7 @@ impl StreamAccumulator {
                     Some(self.message_id)
                 },
                 provider_request_id: self.provider_request_id,
+                plan_usage: self.plan_usage,
                 latency_ms,
                 model: self.model,
             },

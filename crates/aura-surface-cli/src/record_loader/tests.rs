@@ -818,3 +818,30 @@ fn group_labels_fit_group_column() {
     assert_eq!(model_family("claude-sonnet-4-5-20250929"), "sonnet");
     assert_eq!(model_family("openrouter/mistral-large"), "mistral");
 }
+
+#[test]
+fn plan_usage_is_read_from_model_calls_only() {
+    let agent = AgentId::generate();
+    let call = text_tx(
+        agent,
+        TransactionType::Reasoning,
+        r#"{"model":"claude-sonnet-4-6","input_tokens":3,"output_tokens":1,
+            "plan_usage":[{"plan":"claude","window":"5h","used":0.25,"resets_at":1764554400}]}"#,
+    );
+    let readings = plan_usage(&call);
+    assert_eq!(readings.len(), 1);
+    assert_eq!(readings[0].plan, aura_core_types::Plan::Claude);
+    assert_eq!(readings[0].window, "5h");
+    assert_eq!(readings[0].resets_at, Some(1_764_554_400));
+
+    let without = text_tx(agent, TransactionType::Reasoning, r#"{"model":"m"}"#);
+    assert!(plan_usage(&without).is_empty());
+    let unreadable = text_tx(
+        agent,
+        TransactionType::Reasoning,
+        r#"{"model":"m","plan_usage":[{"plan":"mystery"}]}"#,
+    );
+    assert!(plan_usage(&unreadable).is_empty());
+    let prompt = text_tx(agent, TransactionType::UserPrompt, "plan_usage");
+    assert!(plan_usage(&prompt).is_empty());
+}

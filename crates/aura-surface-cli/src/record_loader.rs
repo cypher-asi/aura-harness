@@ -5,8 +5,9 @@ use crate::event_loop::agent_events::call_usage;
 use crate::event_loop::run_command::is_user_tool_use;
 use aura_agent_kernel::decode_tool_effect;
 use aura_core_types::{
-    ActionResultPayload, AgentId, EffectStatus, PolicyApprover, PolicyCheckOutcome, PolicyDecision,
-    RecordEntry, ToolExecution, ToolGateVerdict, ToolProposal, Transaction, TransactionType,
+    ActionResultPayload, AgentId, EffectStatus, PlanUsage, PolicyApprover, PolicyCheckOutcome,
+    PolicyDecision, RecordEntry, ToolExecution, ToolGateVerdict, ToolProposal, Transaction,
+    TransactionType,
 };
 use aura_model_reasoner::{Message, Usage};
 use aura_store_db::{ReadStore, StoreError};
@@ -330,6 +331,18 @@ pub(crate) fn model_call(tx: &Transaction) -> Option<(String, Usage)> {
         return None;
     }
     Some((reasoning_model(tx)?, call_tokens(tx)?))
+}
+
+/// The plan usage the call `tx` records, when it is a model call whose
+/// provider reported any; a payload that does not read is none.
+pub(crate) fn plan_usage(tx: &Transaction) -> Vec<PlanUsage> {
+    if tx.tx_type != TransactionType::Reasoning {
+        return Vec::new();
+    }
+    json_payload(tx)
+        .and_then(|payload| payload.get("plan_usage").cloned())
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default()
 }
 
 /// The model's thinking from a `Reasoning` entry, when it thought.

@@ -8,6 +8,7 @@ mod context_hash;
 mod effect;
 mod gate;
 mod identity;
+mod plan_usage;
 mod process;
 mod proposal;
 mod reasoner_types;
@@ -29,6 +30,7 @@ pub use gate::{
     OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, Route, RouteLevel, RouteReason,
 };
 pub use identity::Identity;
+pub use plan_usage::{Plan, PlanShare, PlanUsage};
 pub use process::{ActionResultPayload, ProcessPending};
 pub use proposal::{Decision, Proposal, ProposalSet, RejectedProposal, Trace};
 pub use reasoner_types::{CacheControl, ToolDefinition, ToolResultContent};
