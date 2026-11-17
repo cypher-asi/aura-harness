@@ -15,6 +15,8 @@
 //! wakes once a second to catch the ticks up, and at the edges of the
 //! cursor's blink.
 
+mod keys;
+mod pointer;
 mod stats;
 mod window;
 
@@ -32,12 +34,15 @@ use crate::tab_bar::{self, Bar};
 use crate::{text, theme};
 use aura_ui::events::{UiCommand, UiEvent};
 use aura_ui_terminal::ProseRow;
+use pointer::Pointer;
 use ratatui::buffer::Cell;
 use ratatui::layout::Position;
 use stats::Stats;
 use std::path::PathBuf;
 use std::time::Instant;
 use tokio::sync::mpsc;
+use winit::keyboard::ModifiersState;
+use winit::window::ResizeDirection;
 
 /// Most ticks made up for at once: after the machine slept, the UI's
 /// animations pick up where they were instead of spinning through the
@@ -61,6 +66,13 @@ pub enum Effect {
     },
     /// Ask for the user's attention, as a terminal's bell does.
     Attention,
+    /// Move the window with the pointer until its button comes up.
+    Drag,
+    /// Resize the window by this side or corner the same way.
+    Resize(ResizeDirection),
+    Minimize,
+    /// Fill the screen, or go back to the size before.
+    ToggleMaximize,
 }
 
 pub struct Shell {
@@ -88,6 +100,9 @@ pub struct Shell {
     chrome: Chrome,
     bar: Bar,
     painter: Painter,
+    /// The modifier keys held
+    modifiers: ModifiersState,
+    pointer: Pointer,
     focused: bool,
     blink_from: Instant,
     /// Whether the last frame showed the cursor
@@ -135,6 +150,8 @@ impl Shell {
             chrome: Chrome::default(),
             bar: Bar::default(),
             painter: Painter::default(),
+            modifiers: ModifiersState::empty(),
+            pointer: Pointer::default(),
             focused: true,
             blink_from: now,
             cursor_shown: true,
@@ -395,7 +412,7 @@ impl Shell {
                     self.palette,
                 );
                 let model = chrome::Model::new(tui.pane_chrome(), frame.buffer, at);
-                self.chrome.update(model, None);
+                self.chrome.update(model, self.pointer.on_grid);
             }
             Err(e) => tracing::warn!(error = %e, "render failed"),
         }
@@ -426,7 +443,7 @@ impl Shell {
             metrics: self.metrics,
             palette: self.palette,
         };
-        self.bar.update(model, None);
+        self.bar.update(model, self.pointer.on_bar);
         self.save_tabs();
     }
 
@@ -539,6 +556,25 @@ mod tests {
             self.shell.commands([
                 UiCommand::SetAgents(vec![agent("a1", "agent01", running)]),
                 UiCommand::SetActiveAgent("a1".into()),
+            ]);
+        }
+
+        /// What the window asked of the session since the last call.
+        pub fn asked(&mut self) -> Vec<String> {
+            let mut out = Vec::new();
+            while let Ok(event) = self.events.try_recv() {
+                out.push(format!("{event:?}"));
+            }
+            out
+        }
+
+        /// The session's answer to creating the agent `id`, beside the
+        /// one [`Self::seed`] lists.
+        pub fn created(&mut self, id: &str, name: &str) {
+            self.shell.commands([
+                UiCommand::SetActiveAgent(id.into()),
+                UiCommand::SetAgents(vec![agent("a1", "agent01", false), agent(id, name, false)]),
+                UiCommand::SetActiveAgent(id.into()),
             ]);
         }
 

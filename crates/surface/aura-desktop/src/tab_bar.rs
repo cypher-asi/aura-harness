@@ -215,6 +215,11 @@ impl Bar {
             self.model = Some(model);
             self.cache.clear();
         }
+        self.point(pointer);
+    }
+
+    /// The pointer is at `pointer`, when it is over the bar.
+    pub fn point(&mut self, pointer: Option<Point>) {
         let hover = pointer.and_then(|at| self.layout.hit(at));
         if hover != self.hover {
             self.hover = hover;

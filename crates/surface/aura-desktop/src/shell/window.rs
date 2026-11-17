@@ -10,9 +10,10 @@
 //! Commands come from the session's thread. They are left in an inbox
 //! and the loop is woken once for however many are waiting.
 
+use super::keys::Press;
 use super::{Effect, Shell};
 use crate::app::{Handles, Options, MAX_BATCH, WINDOW};
-use crate::geom::Size;
+use crate::geom::{Point, Size};
 use crate::gpu::Gpu;
 use crate::scene::Scene;
 use crate::text;
@@ -27,7 +28,9 @@ use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
-use winit::window::{UserAttentionType, Window, WindowId};
+use winit::keyboard::SmolStr;
+use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+use winit::window::{CursorIcon, UserAttentionType, Window, WindowId};
 
 /// Commands the inbox holds before the session is made to wait for the
 /// window to take them.
@@ -116,6 +119,8 @@ struct Handler {
     clipboard: Option<arboard::Clipboard>,
     /// The frame on screen
     shown: Scene,
+    /// The pointer's shape as the window was last told
+    icon: CursorIcon,
     /// Whether a frame was asked for and has not come
     asked: bool,
     /// Whether the next frame is shown even when it is the one on screen
@@ -150,6 +155,7 @@ pub fn run(handles: Handles, options: &Options, launched: Instant) -> anyhow::Re
         gpu: None,
         clipboard: None,
         shown: Scene::default(),
+        icon: CursorIcon::Default,
         asked: false,
         stale: true,
         failure: None,
@@ -243,18 +249,32 @@ impl Handler {
         for effect in self.shell.take_effects() {
             match effect {
                 Effect::Exit => event_loop.exit(),
-                Effect::Attention => {
-                    if let Some(window) = &self.window {
-                        window.request_user_attention(Some(UserAttentionType::Informational));
-                    }
-                }
+                Effect::Attention => self.on_window(|window| {
+                    window.request_user_attention(Some(UserAttentionType::Informational));
+                }),
                 Effect::Copy(text) => {
                     let chars = text.chars().count();
                     let result = self.copy(text);
                     self.shell.copied(chars, result);
                 }
                 Effect::Edit { tab, editor, path } => self.edit(tab, &editor, path),
+                Effect::Drag => self.on_window(|window| {
+                    let _ = window.drag_window();
+                }),
+                Effect::Resize(direction) => self.on_window(|window| {
+                    let _ = window.drag_resize_window(direction);
+                }),
+                Effect::Minimize => self.on_window(|window| window.set_minimized(true)),
+                Effect::ToggleMaximize => {
+                    self.on_window(|window| window.set_maximized(!window.is_maximized()));
+                }
             }
+        }
+    }
+
+    fn on_window(&self, act: impl FnOnce(&Window)) {
+        if let Some(window) = &self.window {
+            act(window);
         }
     }
 
@@ -328,6 +348,34 @@ impl ApplicationHandler<Wake> for Handler {
                 }
             }
             WindowEvent::RedrawRequested => self.redraw(event_loop),
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.shell.modifiers_changed(modifiers.state());
+            }
+            // Not the keys that were down when the window got the
+            // keyboard, which the system makes up presses for.
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic: false,
+                ..
+            } if event.state.is_pressed() => {
+                let press = Press {
+                    plain: event.key_without_modifiers(),
+                    text: event.text_with_all_modifiers().map(SmolStr::new),
+                    key: event.logical_key,
+                };
+                self.shell.key_pressed(&press, Instant::now());
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            WindowEvent::CursorMoved { position, .. } => {
+                self.shell
+                    .pointer_moved(Point::new(position.x as f32, position.y as f32));
+            }
+            WindowEvent::CursorLeft { .. } => self.shell.pointer_left(),
+            WindowEvent::MouseInput { state, button, .. } => {
+                self.shell
+                    .button(button, state.is_pressed(), Instant::now());
+            }
+            WindowEvent::MouseWheel { delta, .. } => self.shell.wheel(delta),
             _ => {}
         }
     }
@@ -336,8 +384,13 @@ impl ApplicationHandler<Wake> for Handler {
         let now = Instant::now();
         self.shell.advance(now);
         self.act(event_loop);
-        if self.shell.dirty() && !self.asked {
-            if let Some(window) = &self.window {
+        if let Some(window) = &self.window {
+            let icon = self.shell.cursor_icon();
+            if icon != self.icon {
+                window.set_cursor(icon);
+                self.icon = icon;
+            }
+            if self.shell.dirty() && !self.asked {
                 window.request_redraw();
                 self.asked = true;
             }
