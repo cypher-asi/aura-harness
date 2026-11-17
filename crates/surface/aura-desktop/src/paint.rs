@@ -116,6 +116,11 @@ impl Painter {
         let bar = tab_bar::height(&metrics);
         let area = Size::new(view.size.width, (view.size.height - bar).max(0.0));
         let origin = metrics.origin(area, view.cols, view.rows);
+        if self.basis.is_some_and(|basis| basis.metrics != metrics) {
+            // Zoomed: nothing in the atlas is the size of anything drawn
+            // from here on.
+            text.atlas_mut().clear();
+        }
         let basis = Basis {
             metrics,
             palette,
@@ -539,6 +544,40 @@ mod tests {
                 chrome: &self.chrome,
             }
         }
+    }
+
+    #[test]
+    fn zooming_starts_the_atlas_over() {
+        let mut text = TextSystem::new();
+        let mut stage = Stage::new();
+        stage
+            .buffer
+            .set_string(0, 0, "zoom \u{256d}\u{2500}\u{256e}", Style::default());
+        let mut painter = Painter::default();
+        painter.paint_with(&stage.view(), &mut text);
+        let small = text.atlas().generation();
+        painter.paint_with(&stage.view(), &mut text);
+        assert_eq!(text.atlas().generation(), small, "the same size again");
+
+        let view = View {
+            metrics: Metrics::new(20.0),
+            ..stage.view()
+        };
+        let scene = painter.paint_with(&view, &mut text).clone();
+        assert_ne!(
+            text.atlas().generation(),
+            small,
+            "the old size's glyphs went"
+        );
+        let mut zoomed = Vec::new();
+        raster::paint(&scene, text.atlas(), &mut zoomed);
+
+        // What a painter that never saw the old size paints.
+        let mut fresh = TextSystem::new();
+        let mut direct = Vec::new();
+        let scene = Painter::default().paint_with(&view, &mut fresh).clone();
+        raster::paint(&scene, fresh.atlas(), &mut direct);
+        assert!(zoomed == direct, "the picture after zooming");
     }
 
     #[test]
