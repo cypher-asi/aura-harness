@@ -7,33 +7,75 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Cost gate (`aura-agent-gate`)
+### Gate router (`aura-agent-gate`)
+
+Gate is now one learning router and the default model. The coordinator
+mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
+
+##### Breaking changes
+
+- The coordinator mode is removed: `gate/<model>` ids, `run_blocks`,
+  draft-first turns, the tier ladder, the ledger in `AURA_HOME/gate/`
+  and the `aura gate report|fit|bench|promote` subcommands.
+- `AURA_GATE_POLICY`, `AURA_GATE_EXPLORE_BUDGET_USD`, `AURA_GATE_TIERS`
+  and `AURA_GATE_LEDGER` are no longer read. `AURA_GATE_EXPLORE` now
+  sets Gate's exploration rate (default `0.05`).
+- The payload of a `UserPrompt` transaction is a JSON `PromptPayload`
+  (`text`, `category`, `classifier`, `route`, and `kind` for subtasks)
+  instead of raw text. There is no backward compatibility: prompts
+  recorded before this change read back as empty text. `POST /tx` wraps
+  submitted prompt text in a payload.
+- New `TransactionType::Outcome` and `SystemKind::Compare`. Consumers
+  that mirror these enums must add them.
+- The terminal starts on `gate` instead of the local default model, and
+  a pinned model that loses its sign-in switches to `gate`.
+  `AURA_DEFAULT_MODEL` and a model picked in `/model` still win.
 
 ##### Added
 
-- `gate/<model>` model ids (for example `gate/claude/claude-opus-5-5`,
-  "Gate · …" in `/model`). The frontier model coordinates and hands
-  blocks of work to `run_blocks`, which runs each block on the cheapest
-  tier likely to pass (Haiku, Sonnet, Opus for Claude), verifies it with
-  visible and hidden checks, fixes once in place, then escalates from
-  the pre-block files. Works in the terminal, `aura -p` and
-  `aura eval run`. See [Gate models](docs/cli.md#gate-models).
-- Gate turns start with a draft: the request goes unchanged to the fast
-  tier, and the coordinator reviews the draft's diff, answering or fixing
-  it with blocks. Block results carry the diff of what they changed.
-- A block that fails only the coordinator's acceptance checks goes back
-  to the coordinator instead of being retried on the frontier tier.
-- Every attempt is appended to `AURA_HOME/gate/ledger.jsonl`.
-  `aura gate report`, `fit`, `bench` and `promote` turn it into a
-  versioned policy and make a policy active only when a paired benchmark
-  shows lower cost without a significant pass-rate loss, overall and per
-  category. Settings: `AURA_GATE_POLICY`, `AURA_GATE_EXPLORE`,
-  `AURA_GATE_EXPLORE_BUDGET_USD`, `AURA_GATE_TIERS`, `AURA_GATE_LEDGER`.
+- `gate` model id, first in `/model`, accepted by `--model gate`. Gate
+  routes among the models your sign-ins allow: installed local models,
+  aura-router models when signed in to zOS, `claude/*` with a Claude
+  plan, and `chatgpt/*` with a ChatGPT plan. It keeps one route per
+  model (the plan first) and tiers them `local`, `fast`, `standard` and
+  `frontier`. A model whose route refuses the sign-in is dropped and the
+  turn carries on with the next pick. Each turn shows
+  `gate → <model> (<route>) · <category>, <reason>`.
+- Every prompt is classified into one of 8 categories by the cheapest
+  fast-tier model, through the agent's kernel. Every turn ends with an
+  `Outcome` (`error`, `checks_failed`, `checks_passed` or `none`), and
+  rewinds, stronger retries and the new `/good` and `/bad` commands
+  append later ones.
+- Gate routes each category to the cheapest model with
+  `AURA_GATE_MIN_TRIES` (10) counted outcomes at `AURA_GATE_TARGET`
+  (85%) success. Otherwise it uses the category's default, and it
+  explores the next cheaper model at `AURA_GATE_EXPLORE`. The table is
+  rebuilt from the record at startup and updated as each outcome is
+  committed. `/gate` shows it with the current picks, the delegation
+  figures and the last 20 routing decisions.
+- Subtasks under `gate` are classified and routed with their own table
+  rows. Models named by the call, the permanent agent or a council seat
+  stay pinned.
+- Under `gate` the main agent leads. It gets the `gate_lead` prompt
+  section and, unless `AURA_GATE_DELEGATE=off`, no file-changing tools,
+  capped reads and searches, and a `run_command` limited to checks and
+  inspection. New `implement` and `tests` permanent agents (and bundled
+  kinds) take the work. `task` gains a `check` command and returns a
+  compact result. Read-only agents run in parallel and the rest one at
+  a time. A routed subtask that fails its check is retried once on the
+  next tier up with its file changes undone.
+- `/compare [prompt | --plan f] [--against m | gate:nodelegate]
+  [--repeats N] [--check cmd] [--budget $]` runs a task with Gate and
+  another model in copies under `AURA_HOME/compare/`, judges each pair
+  blindly, and shows time, cost, tokens per model and check passes per
+  arm. Subcommands: `go`, `cancel`, `show [n]`, `diff [run]`,
+  `pick gate|other`, `apply <run>` and `dismiss`. Plan usage shares are
+  not shown, since providers don't report them; tokens per model are.
 - `evals/gate_cost`: 20 tasks with hidden checks, categories and
   reference solutions. Eval tasks can set `category`, `tags` and a
   `checks/` folder copied in after the run; `aura eval run` reports each
-  run's cost (gate workers included) and takes `--budget-usd`.
-  `evals/gate_hard` adds eight tasks with traps a careless fix falls into.
+  run's cost and takes `--budget-usd`. `evals/gate_hard` adds eight
+  tasks with traps a careless fix falls into.
 
 ### Run traces (`aura-agent-trace`)
 

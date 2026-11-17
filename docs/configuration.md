@@ -85,6 +85,17 @@ Ctrl+G in the input, and editing a permanent agent, open the user's editor.
 | `RUST_LOG` | warnings only | Log filter. Logs go to stderr so stdout stays machine-readable. |
 | `AURA_EVALS_LIVE` | unset | Set to `1` to let [`evals/long_horizon/run.py`](../evals/long_horizon/README.md) call real models (same as its `--live` flag). |
 
+## Gate
+
+Read once at startup by `GateConfig::from_env` ([`crates/aura-config/src/gate.rs`](../crates/aura-config/src/gate.rs)), in the terminal, the desktop app and `aura -p`. A target or exploration rate that is not a number from 0 to 1, or a minimum of 0, is logged as a warning and every `aura-config` setting falls back to its default. See [Gate](cli.md#gate).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AURA_GATE_TARGET` | `0.85` | Success rate (0–1) a model needs in a category to become its pick. |
+| `AURA_GATE_MIN_TRIES` | `10` | Counted outcomes a model needs in a category before its success rate is trusted. At least 1. |
+| `AURA_GATE_EXPLORE` | `0.05` | Share of routed turns and subtasks (0–1) sent to the next cheaper model instead of the pick, to learn how it does. `/compare` always routes with `0`. |
+| `AURA_GATE_DELEGATE` | `on` | `off` (or `0`, `false`, `no`) lets the lead agent under Gate keep its file tools and every command, with delegating only recommended. Any other value keeps delegation enforced. |
+
 ## Node runtime
 
 | Variable | Default | Description |

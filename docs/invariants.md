@@ -462,6 +462,7 @@ Sanctioned `Command::new(...)` call sites:
 | [`crates/aura-agent/src/git.rs`](../crates/aura-agent/src/git.rs) | Read-only `git log` / `git status` helpers (`is_git_repo`, `list_unpushed_commits`) | No external side effect; declared exception. |
 | [`crates/aura-exec-isolation/src/lib.rs`](../crates/aura-exec-isolation/src/lib.rs) | `git worktree add` / `worktree remove` for parallel-safe subagent workspaces | Sandbox/isolation infrastructure, not a mutating commit/push; declared exception. |
 | [`crates/aura-exec-isolation/src/changes.rs`](../crates/aura-exec-isolation/src/changes.rs) | `/compare` workspace copies: carry uncommitted work into a worktree (`diff`, `apply`, `ls-files`), record a baseline tree (`init`, `add`, `write-tree`), diff a run (`diff-index`), apply the chosen run's patch back (`apply`) | Isolation infrastructure, local subcommands only, terminal prompting disabled; no commit/fetch/push; declared exception. |
+| [`crates/aura-surface-cli/src/event_loop/compare_run.rs`](../crates/aura-surface-cli/src/event_loop/compare_run.rs) (`run_check`) | `/compare`'s check command (`sh -c`) in a finished run's copy | Grades the run after its agent ended; verdict recorded as an `Outcome` through the run's kernel; declared exception. |
 | [`crates/aura-runtime/src/gateway/handlers/safe_workspace.rs`](../crates/aura-runtime/src/gateway/handlers/safe_workspace.rs) | Local worktree, imported-project baseline, shadow checkpoint, restore, and apply lifecycle for explicitly selected hosted Safe Workspaces | Control-plane isolation infrastructure. A closed local subcommand allowlist rejects clone/fetch/pull/push/remote operations and terminal prompting is disabled; declared exception. |
 | [`crates/aura-plugin-hooks/src/engine.rs`](../crates/aura-plugin-hooks/src/engine.rs) | Lifecycle hook scripts (PreToolUse, PostToolUse, PermissionRequest, …) | Scrubbed env per §14; never touches `append_entry_*` or `ModelProvider`. |
 | [`crates/aura-plugin-mcp/src/client.rs`](../crates/aura-plugin-mcp/src/client.rs) | MCP server stdio JSON-RPC clients | Scrubbed env per §14; tool calls reaching models must still route through the kernel gateway. |
@@ -476,7 +477,11 @@ Sanctioned `Command::new(...)` call sites:
 
 State changes include:
 
-- User message arrives (`TransactionType::UserPrompt`).
+- User message arrives (`TransactionType::UserPrompt`). Its payload is a
+  JSON `PromptPayload` (text, Gate's category, classifier and route), never
+  raw text; `POST /tx` wraps submitted text in one.
+- How a prompt's work went (`TransactionType::Outcome`, referring to the
+  prompt). Later signals append more outcomes; none is ever rewritten.
 - Agent produces a response (`AgentMsg`).
 - LLM suggests a tool call (`ToolProposal`).
 - Tool execution completes (`ToolExecution`).
@@ -531,6 +536,18 @@ early-drop termination paths.
 [`crates/aura-agent-kernel/src/kernel/tests.rs`](../crates/aura-agent-kernel/src/kernel/tests.rs)
 covers the sync (`reason_sync_error_records_failed`) and handshake-error
 (`reason_streaming_handshake_error_records_failed`) paths.
+
+Gate ([`aura-agent-gate`](../crates/aura-agent-gate)) never calls a model
+and never holds a `ModelProvider`; it depends only on the core, config and
+model layers. It builds the classifier's and the `/compare` judge's
+requests, and the surface sends them through an agent's `Kernel::reason`.
+A classifier call is an `Auxiliary` `Reasoning` record in the classified
+agent's log, and a judge call is one in the comparison agent's log. Gate's
+pick only sets the model of the turn's or subtask's own kernel-mediated
+calls. A pinned model's route never changes. Under `gate` the model, and so
+who pays, may change between turns and between subtasks. Each choice is
+shown in the chat (`gate → <model> (<route>) · <category>, <reason>`) and
+recorded as the prompt's `route`, so it is never silent.
 
 ---
 
@@ -720,6 +737,38 @@ The hook may return `Approve` (→ `PolicyVerdict::Allow`) or `Deny`
 bypass the upstream deny / capability / scope / integration layers — those
 already ran before the verdict reached this seam.
 
+### 4.c Gate: the lead's tools and routed subtasks
+
+Under `gate`, with `AURA_GATE_DELEGATE` on, the user's own agent leads and
+its tools only narrow:
+
+- `write_file`, `edit_file`, `delete_file`, `apply_patch`, `git_commit` and
+  `git_commit_push` are dropped from the turn's tool list
+  ([`event_loop/lead.rs`](../crates/aura-surface-cli/src/event_loop/lead.rs)).
+- `LeadExecutor` wraps the turn's executor. A call to a dropped tool, or a
+  `run_command` line outside the allowlist of checks and inspection
+  commands (`aura_agent_gate::lead::allows_command`), is not executed. It is
+  still recorded through the kernel as a preset result with source
+  `gate_lead`, after passing the policy gate like any other call.
+- `read_file` results are cut to 200 lines and `search_code` / `find_files`
+  results to 50 hits, after the kernel has recorded the full result.
+
+Nothing here widens a permission. The mode gate, the policy and the
+command guardrails run unchanged beneath the lead's limits. Permanent-agent
+instances, agents on a pinned model and `AURA_GATE_DELEGATE=off` get no
+lead profile.
+
+Routing a subtask only sets the model of the child's turn before it
+starts. The child is an ordinary permanent-agent instance with its own
+kernel and log, and its prompt (level `subtask`) and `Outcome`s are in that
+log. A model named by the `task` call, the permanent agent or a council
+seat, or a pinned main model, is never overridden. A `task` `check` is a
+`run_command` proposal through the child's kernel (source `task_check`), so
+it is policy-checked and recorded like the child's own commands. The one
+escalation of a failed routed subtask runs as a new child, with route
+reason `escalate`. It restores only the files the first attempt's file
+tools changed, from the terminal's in-memory attempt checkpoint.
+
 **Enforcement:** [`crates/aura-core-permissions/src/tests.rs`](../crates/aura-core-permissions/src/tests.rs)
 covers the resolver truth table, full-access detection, and wire spelling.
 [`crates/aura-agent-kernel/src/policy/check/tests.rs`](../crates/aura-agent-kernel/src/policy/check/tests.rs)
@@ -734,6 +783,10 @@ proves a mode switch is recorded before it is enforced, a no-op switch
 writes nothing, and a submitted `mode_change` is rejected.
 [`crates/aura-engine/tests/mode_gate_catalog.rs`](../crates/aura-engine/tests/mode_gate_catalog.rs)
 fails if a catalog tool has no explicit mode classification.
+[`crates/aura-surface-cli/src/event_loop/tests/delegation.rs`](../crates/aura-surface-cli/src/event_loop/tests/delegation.rs)
+and [`tests/subtasks.rs`](../crates/aura-surface-cli/src/event_loop/tests/subtasks.rs)
+cover §4.c: the lead's tool list and refusals, full tools when delegation is
+off or the model is pinned, checks, escalation, and pinned subtasks.
 [`crates/aura-runtime/src/gateway/session/helpers.rs`](../crates/aura-runtime/src/gateway/session/helpers.rs)
 covers operator-plus-agent composition into session-scoped tool config.
 [`crates/aura-tools/src/fs_tools/cmd/tests.rs`](../crates/aura-tools/src/fs_tools/cmd/tests.rs)
@@ -969,6 +1022,7 @@ The following operations intentionally do NOT route through `Kernel::process_*`:
 | Read-only `git` operations in [`crates/aura-agent/src/git.rs`](../crates/aura-agent/src/git.rs) (`git diff`, `git status`, `git log`) | No external side effect. `is_git_repo` filesystem probe and `list_unpushed_commits` (`git log` scan) stay in `aura-agent` as read-only helpers. Every mutating `git` subprocess (`add`, `commit`, `push`) lives behind the `GitExecutor` in [`crates/aura-tools/src/git_tool/`](../crates/aura-tools/src/git_tool/) and routes through the kernel's `ToolExecutor`. Pinned by the `Command::new("git")` band in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh). |
 | `git worktree add` / `worktree remove` in [`crates/aura-exec-isolation/src/lib.rs`](../crates/aura-exec-isolation/src/lib.rs) (`WorktreeIsolation::provision` / `teardown`) | Workspace-isolation primitive for parallel-safe subagent dispatch. No remote, no commit/push mutation; analogous to sandbox directory creation. Allowlisted in the `Command::new("git")` band in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh). |
 | `/compare` copy lifecycle in [`crates/aura-exec-isolation/src/changes.rs`](../crates/aura-exec-isolation/src/changes.rs) (`carry_changes`, `baseline`, `diff_since`, `apply_patch`) | Brings the user's uncommitted work into an isolated copy, records the copy's baseline as an unreferenced git tree, diffs what a run changed, and applies the run the user chose back to their working tree. A plain (non-git) copy gets its git directory beside the copy, not inside it. Local subcommands only, `GIT_TERMINAL_PROMPT=0`; no commit, fetch or push. Allowlisted in the `Command::new("git")` band in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh). |
+| `/compare` check command in [`crates/aura-surface-cli/src/event_loop/compare_run.rs`](../crates/aura-surface-cli/src/event_loop/compare_run.rs) (`run_check`) | The comparison's verdict on a finished run: `sh -c` in that run's disposable copy, with a 20-minute timeout, after the run's agent has ended, the same way `aura eval run` runs a task's `verify` command. It is the harness grading the run, not an action of the graded agent, so it does not go through that agent's mode, policy or record. Its verdict is recorded as an `Outcome` on the run's kernel. A `task` `check` is different: it runs through the subagent's kernel (§4.c). |
 | Hosted Safe Workspace Git lifecycle in [`crates/aura-runtime/src/gateway/handlers/safe_workspace.rs`](../crates/aura-runtime/src/gateway/handlers/safe_workspace.rs) | Control-plane isolation for an explicitly user-selected hosted rollback boundary. It may initialize an imported local project, create/remove a detached worktree, create local shadow checkpoints, restore one, or apply its patch back to the source workspace. It never contacts a Git remote: the module's closed subcommand allowlist rejects clone/fetch/pull/push/remote operations and sets `GIT_TERMINAL_PROMPT=0`. Pinned by the exact-file §1 exception plus unit coverage for the local-only allowlist. |
 | HTTP-driven `write_system_record` in [`crates/aura-runtime/src/tool_permissions.rs`](../crates/aura-runtime/src/tool_permissions.rs) | Tool-permissions PUT handler appends a `System` record entry via `aura_agent_kernel::write_system_record` so the operator's UI write is durable on the response. Acquires the scheduler's per-agent processing claim first (§12.a) so it interleaves correctly with the kernel's own writes for the same agent. Pinned by the §2 allowlist in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh); any other non-kernel/non-store `append_entry_*` call is a CI failure. |
 | Agent-host `write_system_record` callers in [`crates/aura-engine/src/agents/host.rs`](../crates/aura-engine/src/agents/host.rs) (`SubagentSpawn` audit rows, undelivered-message fallback records on a root) | Spawning writes audit rows directly via `aura_agent_kernel::write_system_record`. Spawn rows hold the per-parent spawn lock (§12.b) so sibling spawns of the same parent linearise. Not a raw `append_entry_*` call — the entry is built by the kernel helper and committed via the sealed `WriteStore` surface. |

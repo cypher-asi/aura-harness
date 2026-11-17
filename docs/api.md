@@ -61,7 +61,7 @@ Per-session Git worktrees with recoverable checkpoints, managed beside the runti
 | GET  | `/agents/:agent_id/record` | Paginated record scan. |
 | GET  | `/agents/:agent_id/tool_calls/:tool_use_id/audit` | The proposal → policy decision → execution chain for one tool call (`{ proposal, policy_decision, decision, execution }`). `decision` is the decoded `PolicyDecision` (verdict, `decided_by` rule, gate `trace`, live `approval`, `mode`, `policy_hash`); `execution` is `null` for denied or pending calls. 404 if no decision is recorded within the last 10,000 entries. |
 
-`POST /tx` accepts only `user_prompt`, `agent_msg`, `trigger`, `action_result`, and `system`. Tool proposals, `policy_decision`, and `tool_execution` entries are written by the kernel itself.
+`POST /tx` accepts only `user_prompt`, `agent_msg`, `trigger`, `action_result`, and `system`. A `user_prompt` payload must be UTF-8 text; it is recorded as a prompt payload with that text, unclassified. Tool proposals, `policy_decision`, and `tool_execution` entries are written by the kernel itself, and `outcome` entries by the terminal and `aura -p`.
 
 During a chat run, the session WebSocket also emits a `tool_policy_decision` frame as soon as each decision is persisted (before the tool runs). It carries the same decision fields plus `seq`, `tx_hash`, and `proposal_tx_hash`.
 

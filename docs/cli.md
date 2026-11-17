@@ -50,7 +50,53 @@ The Claude link uses the OAuth client that Claude Code uses. Anthropic does not 
 
 ## Gate
 
-`gate` is the default model and the first entry in `/model`; `--model gate` does the same for `aura -p` and `aura eval run`. `AURA_DEFAULT_MODEL` and a model you pick in `/model` still win. Gate routes each turn to a model you can use right now: installed local models, aura-router models when signed in to zOS, and `claude/*` or `chatgpt/*` models when that plan is linked, with one route per model (your plan before the router). For now every turn goes to the cheapest standard-tier model (Sonnet class), else the strongest one available. If the route refuses your sign-in mid-turn, Gate skips that model until your sign-ins change and carries on with its next pick.
+`gate` is the default model and the first entry in `/model` ("Gate"); `--model gate` selects it for `aura -p`. `AURA_DEFAULT_MODEL` and a model you pick in `/model` still win, and a pinned model that loses its sign-in switches back to `gate`. Gate routes the turns of the terminal, the desktop app and `aura -p`, and learns which model is good enough for each kind of work.
+
+- **Candidates.** Gate routes among the models you can use right now: installed local models, aura-router models when signed in to zOS, `claude/*` models with a Claude plan linked and `chatgpt/*` models with a ChatGPT plan linked. A model reachable on two routes is kept once, on your plan, since the plan is already paid for. Each model has a tier: `local`, `fast` (Haiku, GPT mini), `standard` (Sonnet) or `frontier` (Opus, GPT-5). The list follows your logins, logouts, links, unlinks and local installs. If a model's route refuses your sign-in mid-turn, Gate drops that model until your sign-ins change and carries on with its next pick; the refusal counts against no model.
+- **Visible routes.** Each turn starts with a line such as `gate → claude-sonnet-4-6 (claude plan) · question, default`: the model, who pays for it, the prompt's category, and why Gate chose it (`default`, `proven` or `explore`). The status line shows the current turn's model and route. A routed subtask shows `gate → <model> (<route>) · subtask, <category>, <reason>`.
+- **Classifying.** One short call to the cheapest fast-tier model you can use (the local default when there is none) labels each prompt `question`, `small_change`, `multi_file_change`, `debugging`, `research`, `planning`, `writing` or `other`. If the call fails, gives no label or takes more than 20 seconds, the prompt is `unclassified`. Under `gate` the turn waits for the label; on a pinned model the classifier runs beside the turn, so the turn still adds evidence without waiting.
+- **Routing.** Candidates are ordered by expected cost: local models first, then the mean cost Gate has seen per turn, or the list price for a model not tried yet. Gate picks the cheapest model with at least `AURA_GATE_MIN_TRIES` counted outcomes in the category and a success rate of at least `AURA_GATE_TARGET`. Until a model qualifies, it uses the category's default: the strongest model for `multi_file_change`, `debugging` and `planning`, and the cheapest standard-tier model for the rest (else the strongest). With probability `AURA_GATE_EXPLORE` it tries the next cheaper model instead. See [Gate](configuration.md#gate) for the settings.
+- **Outcomes.** A turn ends with `error` (the turn failed), `checks_failed` or `checks_passed` (the last test, build or type-check command it ran), or `none`. Later signals can judge it again: `/rewind` of the turn and the same prompt sent again (at least 90% alike) on a stronger tier are failures, and **`/good`** or **`/bad`** rates your last turn. Your latest rating counts over everything else; otherwise the latest outcome with a result counts, and `none` counts for nothing. Gate rebuilds its table from the record at startup and updates it as each outcome is written, so the next turn already uses it.
+- **Subtasks.** Under `gate` each `task` call is classified and routed the same way, from subtask rows that learn separately from turn rows. A subtask keeps its model when the call or the permanent agent names one, when it is a council seat, or when you pinned the main model. Its outcome comes from the task's `check` if it has one, else from the last test or build command the subagent ran. An error is a failure, and so is the first attempt of a subtask the parent dispatches again in the same turn (`redone`). `/good`, `/bad` and rewinds rate the turn only, not its subtasks.
+- **`/gate`** shows the table per level (turns, subtasks), category and model, with tries, success rate, average cost and the current pick. It also shows how much of the active agent's cost and model calls went to subtasks (overall and for its last 5 turns), subtasks per turn, the escalation rate, and the last 20 routing decisions.
+
+`aura eval run --model gate` runs every task on Gate's default pick for your sign-ins (the cheapest standard-tier model, else the strongest), without classifying, learning or delegating. Use `/compare` to measure Gate itself.
+
+### Delegation under Gate
+
+Under `gate`, your agent is a lead. It decides and integrates, and hands the work to subtasks that Gate routes to cheaper models. Its system prompt tells it to split the work into self-contained tasks. Each task gets a goal, files, constraints, a `check` command and what to report. The lead sends independent tasks together and delegates even small edits. With `AURA_GATE_DELEGATE` on (the default) this is enforced:
+
+- the lead has no `write_file`, `edit_file`, `delete_file`, `apply_patch`, `git_commit` or `git_commit_push`;
+- it sees at most 200 lines per `read_file` and 50 hits per `search_code` or `find_files`;
+- `run_command` runs only checks (tests, builds, type checks, linters in check mode) and inspection commands (`git status`, `diff`, `log`, `show`, `ls`, `pwd`), optionally piped into filters such as `tail` or `grep`; command substitution, file redirection and background jobs are refused.
+
+A refused call is recorded with the refusal as its result. `AURA_GATE_DELEGATE=off` gives the lead its full tools, and its prompt only recommends delegating. Instances of permanent agents never lead, and neither does an agent on a pinned model.
+
+- **Agents to delegate to.** `implement` (one focused change) and `tests` (writes and runs tests) are seeded next to `explorer` and `reviewer`. The bundled subagent kinds used by `aura-node` gain `implement` and `tests` too.
+- **`check`.** A `task` call can name a command that the app runs in the workspace after the subagent finishes, as a `run_command` call through the subagent's kernel. Its exit status is the subtask's verdict.
+- **Compact results.** The caller gets back the subagent's reply (up to 4,000 characters), the files it changed, and the check with the last 20 lines of output when it failed, not the transcript.
+- **One at a time.** Permanent agents whose tool lists change no files (such as `explorer` and `reviewer`) run side by side. The others run one at a time per workspace, so their edits never collide.
+- **One escalation.** If a subtask Gate routed fails its check or errors, the files its file tools changed are put back and the subtask runs once more on the next tier up (the cheapest model there), with the failure output. The caller is told about the retry. Only the first attempt counts in Gate's table; the retry is recorded with route reason `escalate`. Changes made by shell commands are not seen, so they are not put back.
+
+### `/compare`: Gate against another model
+
+`/compare` runs a task with Gate and with another model, several times each, in copies of your workspace. It then shows each arm's time, cost and quality.
+
+| Command | What it does |
+|---------|--------------|
+| `/compare [prompt \| --plan <file>] [--against <model> \| gate:nodelegate] [--repeats N] [--check <cmd>] [--budget $]` | Prepare a comparison and show its estimated cost at list prices. With no prompt it uses your last prompt; `--plan` runs `/build` on that plan in each copy. `--against` defaults to the strongest Opus you can use (else the strongest frontier model) and takes a model id or part of one, such as `sonnet`. `gate:nodelegate` compares Gate with Gate whose lead keeps its tools; the Gate arm then always enforces delegation. `--repeats` sets the runs per arm (default 3, at most 10). `--check` defaults to the project's check command (`AURA_CHECK_COMMAND` or `AGENTS.md`). `--budget` stops starting runs once the finished ones cost that much. |
+| `/compare go` | Start the prepared comparison. |
+| `/compare cancel` | Drop the prepared comparison, or stop the running one; runs under way end where they are. |
+| `/compare` | List past comparisons. `/compare show [n]` shows one, by default the latest. |
+| `/compare diff [run]` | Show a run's changes (`gate-1`, `other-2`, …), or the first run of each arm. |
+| `/compare pick gate\|other` | Rate every run of that arm `/good` and every run of the other `/bad`. |
+| `/compare apply <run>` | Apply that run's changes to your workspace and remove the copies. |
+| `/compare dismiss` | Remove the copies without applying anything. |
+
+- **Runs.** Each run is an agent under a `Compare #n` agent in the Agents panel. It works in its own copy under `AURA_HOME/compare/`: a detached git worktree with your uncommitted changes carried over, or a copy without build output for a folder that is not a git repository. Up to 4 runs work at once, alternating between the arms. Both Gate arms route with exploration off. A model arm runs its turn and its subtasks on that model.
+- **Quality.** The check runs in each copy after its run. Then a blind judge, the strongest Opus (or frontier) model, pairs the finished Gate runs with the other arm's finished runs, in order, and judges each pair. It sees the task, both diffs and both final replies, in random order and without arm or model names, and picks one or calls a tie.
+- **View.** For each arm: median wall time, total and median cost at list prices (subtasks and classifier calls included), tokens per model, check passes, and the judge's wins, losses and ties. The judge's cost is shown separately. The view says so when the arms are within one check pass of each other. Plan usage is not shown, because providers don't report how much of a plan's limit a call used; tokens per model, which is what draws a plan down, are shown instead.
+- **Feeds Gate.** Each run records its prompt with route reason `compare` and its turn's outcome, and the check's verdict as a later outcome, so comparisons count in Gate's table.
 
 ## Long tasks in the terminal
 

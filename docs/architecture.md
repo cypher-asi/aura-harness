@@ -160,6 +160,19 @@ The gateway holds one node-wide `AgentHost` on `RouterState`. Each chat session 
 
 The interactive terminal holds its own `AgentHost` ([`event_loop/host.rs`](../crates/aura-surface-cli/src/event_loop/host.rs)). Each terminal agent, and each permanent-agent instance it starts with `task`, registers as a root before its turn, and every terminal kernel gets that agent's `AgentHooks`, so `spawn_agent`, `send_to_agent`, `agent_lifecycle`, `get_agent_state` and `list_agents` work there too (`task` still goes to the terminal's permanent agents). A message for a terminal agent becomes a notice ([`event_loop/notices.rs`](../crates/aura-surface-cli/src/event_loop/notices.rs)). Terminal agents work in parallel, each turn on its own task, so a notice is delivered like any other message: into the agent's running turn through its steering handle if it has one, else as the start of a new turn, whether or not the agent is on screen. Background `task` spawns (`spawn_mode: "detached"`) and background `run_command` calls report back the same way. `aura -p` builds the same hub (`runner::build_hub`) and feeds the notices for its agent into its turns, waiting for outstanding background work before it ends.
 
+### Gate
+
+`gate` is a model id that the surface resolves to a real model per turn and per subtask ([`aura-agent-gate`](../crates/aura-agent-gate)). The crate holds the pure parts: candidates, routing, the classifier and judge requests, outcome rules, the table, the lead's limits and the `/compare` arithmetic. The surfaces (`event_loop/` and `headless/` in `aura-surface-cli`) run them. Gate never calls a model itself.
+
+- **Candidates.** `ModelSelection::gate_candidates` filters `model_catalog::catalog_with_plans` by `AuthSummary::can_use` and the installed local models. It keeps one route per upstream model (plan before router) and leaves out models whose route refused the user's sign-in until the sign-ins change. `ModelOption::tier` (`local`, `fast`, `standard`, `frontier`) is set in the curated lists and inferred from the name for models fetched live.
+- **A turn** (`event_loop/turns.rs`, `run_prompt`): the prompt is classified by one `Auxiliary` request to the cheapest fast-tier candidate through the agent's `Kernel::reason`. `router::pick` chooses the model from `GateStats`, and the turn's `AgentLoopConfig` is pointed at it. The `UserPrompt` transaction carries a `PromptPayload` (text, category, classifier, route `{level, model, reason, explored, propensity}`, and for a subtask the permanent agent's name as `kind`). When the turn ends, an `Outcome` transaction refers back to the prompt with its category, model, signal, success, cost and latency. Rewinds, stronger retries, `/good`, `/bad` and `/compare` checks append further `Outcome`s for the same prompt. On a pinned model the classifier runs beside the turn and the route reason is `pinned`.
+- **The table.** `GateLive` ([`event_loop/gate_live.rs`](../crates/aura-surface-cli/src/event_loop/gate_live.rs)) rebuilds `GateStats` from the records of the registered agents in the background at startup. It is also the `RecordObserver` of every kernel `runner::build_hub` builds (terminal and `aura -p`), so each committed prompt and `Outcome` updates the table before the next decision. Rows are keyed by level (turn or subtask), category and model. Each prompt counts once, with the user's latest rating, else its latest outcome with a known result, so replayed or duplicated entries change nothing. Escalated retries are not counted.
+- **Subtasks** ([`event_loop/gate_subtask.rs`](../crates/aura-surface-cli/src/event_loop/gate_subtask.rs)): the terminal's `SubagentDispatchHook` (shared by `aura -p`) classifies the `task` prompt and routes it unless the call, the permanent agent or a council seat names a model, or the user pinned the main model. The child records the prompt at level `subtask` and its own `Outcome`s. A `task` `check` runs after the child's turn as a `run_command` proposal through the child's kernel ([`event_loop/task_check.rs`](../crates/aura-surface-cli/src/event_loop/task_check.rs)). A routed subtask that fails its check or errors is put back from the in-memory attempt checkpoint (`FileCheckpoints::begin_attempt`) and retried once with route reason `escalate` (`router::escalate`). Instances whose tool lists change no files run concurrently; the rest hold a per-workspace write lock.
+- **The lead.** `AgentHub::lead_turn` adds the `gate_lead` system-prompt section ([`aura-context-prompts`](../crates/aura-context-prompts/src/system/sections/gate_lead.rs)) to the user's own agents under Gate. With delegation enforced, it also drops the file-changing tools from the turn's tool list and wraps the executor in `LeadExecutor` ([`event_loop/lead.rs`](../crates/aura-surface-cli/src/event_loop/lead.rs)). The wrapper refuses those tools and disallowed `run_command` lines, recording the refusal with source `gate_lead`, and caps `read_file` and search results (`aura_agent_gate::lead`).
+- **`/compare`** ([`event_loop/compare.rs`](../crates/aura-surface-cli/src/event_loop/compare.rs), `compare_run.rs`, `compare_view.rs`): each run is an agent registered under a `Compare #n` agent, working in an `aura-exec-isolation` copy under `AURA_HOME/compare/` (a `WorktreeIsolation` worktree plus `changes::carry_changes`, or a `CopyIsolation` copy). `AgentHub::begin_compare_run` sets the run's routing: Gate without exploration, or pinned to the other model. The judge's requests go through the comparison agent's kernel. The comparison's state is a `System` transaction (`SystemKind::Compare`, `ComparePayload`) on that agent's record, which is also where `/compare` lists past comparisons from.
+
+`aura -p` routes its turns and subtasks the same way through the same hub; `aura eval run --model gate` only resolves `gate` to the default pick before the run.
+
 ### Processes
 
 The terminal's PROCESSES tab lists the work running for its agents. `ProcessTable` ([`event_loop/processes.rs`](../crates/aura-surface-cli/src/event_loop/processes.rs)) merges four sources into one tree:
@@ -189,7 +202,7 @@ The foundation. Behavior-free crates that define the IDs, domain types, capabili
 
 #### [`aura-core-types`](../crates/aura-core-types)
 
-Strongly-typed identifier newtypes (`TurnId`, `RunId`, `ToolCallId`, `SessionId`) plus the shared domain types (`Transaction`, `TransactionType`, `Action`, `Effect`, `RecordEntry`, `ToolCall`, `ToolResult`, `SubagentDispatchRequest`). Re-exports `AgentMode` and `Capability` for crates that want a single import surface.
+Strongly-typed identifier newtypes (`TurnId`, `RunId`, `ToolCallId`, `SessionId`) plus the shared domain types (`Transaction`, `TransactionType`, `Action`, `Effect`, `RecordEntry`, `ToolCall`, `ToolResult`, `SubagentDispatchRequest`), Gate's record payloads (`PromptPayload`, the payload of every `UserPrompt`; `OutcomePayload` for `TransactionType::Outcome`; `ComparePayload` for `SystemKind::Compare`). Re-exports `AgentMode` and `Capability` for crates that want a single import surface.
 
 #### [`aura-core-modes`](../crates/aura-core-modes)
 
@@ -270,7 +283,7 @@ Read-only context assembly. Everything that pulls signal *into* the prompt witho
 
 #### [`aura-context-prompts`](../crates/aura-context-prompts)
 
-Render-only construction of every model-facing string: system prompts, bootstrap blocks, steering injections, error-recovery fix prompts. Notable types: `SystemPromptBuilder`, `bootstrap`, `SteeringRenderer`, `descriptors`. Has no provider or store deps.
+Render-only construction of every model-facing string: system prompts (including the `plan_mode` and `gate_lead` sections), bootstrap blocks, steering injections, error-recovery fix prompts. Notable types: `SystemPromptBuilder`, `bootstrap`, `SteeringRenderer`, `descriptors`. Has no provider or store deps.
 
 #### [`aura-context-memory`](../crates/aura-context-memory)
 
@@ -326,7 +339,7 @@ Tool execution surface: the tool catalog and executor (`aura-tools`), the execut
 
 #### [`aura-exec-isolation`](../crates/aura-exec-isolation)
 
-Subagent workspace isolation. `WorktreeIsolation` (git worktree) is the preferred path; `CopyIsolation` is the fallback when git is unavailable or the workspace is not a git repo. Returns an `IsolatedWorkspace` handle that the spawner mounts before scheduling the child.
+Subagent workspace isolation. `WorktreeIsolation` (git worktree) is the preferred path; `CopyIsolation` is the fallback when git is unavailable or the workspace is not a git repo. Returns an `IsolatedWorkspace` handle that the spawner mounts before scheduling the child. `changes.rs` carries uncommitted work into a worktree, records a copy's starting point, diffs what a run changed and applies a chosen run's patch back, for `/compare`.
 
 #### [`aura-exec-sandbox`](../crates/aura-exec-sandbox)
 
@@ -377,7 +390,7 @@ The `SubagentDispatchHook` trait stays at the **exec layer** in `aura-tools` (un
 
 #### [`aura-agent-gate`](../crates/aura-agent-gate)
 
-Gate, the router behind the `gate` model id (`router.rs`): the catalog models the user's sign-ins allow, one route per upstream model, ordered by list price, and the model a turn goes to. It never calls a model; the surface resolves `gate` to the pick before the turn's requests are built.
+Gate, the router behind the `gate` model id. `router.rs` holds the candidates the user's sign-ins allow (one route per upstream model), `pick` (the cheapest proven model, else the category default, with exploration) and `escalate`. `stats.rs` holds `GateStats`, the per level, category and model table built from record entries. `classify.rs` and `judge.rs` build the classifier's and the `/compare` judge's requests and read their replies. `outcome.rs` decides turn signals, retries on a stronger model and which outcome counts, and `checks.rs` finds a turn's last test or build command. `lead.rs` holds what the lead may run and read, `delegation.rs` the `/gate` delegation figures, and `compare.rs` the `/compare` arguments, schedule, estimate and per-arm summary. It depends on the core, config and model layers, does no I/O and never calls a model; the surfaces send its requests through an agent's kernel. See [Gate](#gate).
 
 #### [`aura-agent`](../crates/aura-agent)
 
@@ -504,7 +517,7 @@ Here **MP** is the `RoutedProvider`, which picks a backend from the model id pre
 
 For the two plan routes, a `CredentialedProvider` asks `AuthManager` for the plan credential on each request. It strips the route prefix, adds the provider's headers and system prompt opening, and removes the Aura billing headers. There is no fallback between routes.
 
-The session starts on `gate`, which sends turns to the local default model (`local/qwen3:4b`) while nothing is signed in, so no login is required. `/model` sends `UiEvent::SelectModel`, and the EL rewrites `AgentLoopConfig.model` together with its context and output limits. `/login` unlocks the aura-router models, and `/login claude` or `/login chatgpt` links a plan. Browser sign-ins finish in a background task that reports back to the EL. Paste sign-ins prompt for the code.
+The session starts on `gate`, which sends turns to the local default model (`local/qwen3:4b`) while nothing is signed in, so no login is required. Under `gate` the EL classifies each prompt and points the turn's `AgentLoopConfig` at Gate's pick before the turn starts (see [Gate](#gate)). `/model` sends `UiEvent::SelectModel`, and the EL rewrites `AgentLoopConfig.model` together with its context and output limits. `/login` unlocks the aura-router models, and `/login claude` or `/login chatgpt` links a plan. Browser sign-ins finish in a background task that reports back to the EL. Paste sign-ins prompt for the code.
 
 The session mode belongs to the terminal (`LoopState.mode`, starting from `--mode`). `UiEvent::SetMode` switches the active agent's kernel through `Kernel::switch_mode`, and an agent opened later is switched when it becomes active. In `Plan` mode each turn's system prompt gets the `plan_mode` section, which tells the model to research and save a plan with `create_plan` (`.aura/plans/<slug>_<id>.plan.md`, YAML frontmatter with todos, then Markdown). The forwarder reloads the plan after each successful `create_plan` or `todo_write` and sends `UiCommand::SetPlan`; the session keeps the latest plan path and restores it from the record when the agent is reopened. `/build` (`UiEvent::BuildPlan`) switches to `Agent` mode and sends the `build_plan` prompt, so the model works through the todos and reports progress with `todo_write`.
 
