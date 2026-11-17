@@ -98,6 +98,7 @@ fn blend(pixel: &mut [u8], color: [u8; 3], alpha: u32) {
 }
 
 /// An RGBA image as a PNG file, stored without compressing.
+#[cfg(test)]
 pub fn png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
     let mut raw = Vec::with_capacity(rgba.len() + height as usize);
     for row in rgba.chunks(width as usize * 4) {
@@ -138,6 +139,7 @@ pub fn png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
     out
 }
 
+#[cfg(test)]
 fn crc32(bytes: &[u8]) -> u32 {
     let mut crc = !0u32;
     for byte in bytes {

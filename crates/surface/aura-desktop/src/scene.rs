@@ -61,11 +61,13 @@ impl Quad {
     }
 
     /// The first column right of the quad.
+    #[cfg(test)]
     pub const fn right(&self) -> i32 {
         self.x.saturating_add_unsigned(self.w)
     }
 
     /// The first row below the quad.
+    #[cfg(test)]
     pub const fn bottom(&self) -> i32 {
         self.y.saturating_add_unsigned(self.h)
     }

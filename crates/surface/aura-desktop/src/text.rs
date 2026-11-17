@@ -161,6 +161,7 @@ impl<K, V> Lru<K, V> {
         self.entries.insert(hash, (key, value, self.clock));
     }
 
+    #[cfg(test)]
     fn len(&self) -> usize {
         self.entries.len()
     }

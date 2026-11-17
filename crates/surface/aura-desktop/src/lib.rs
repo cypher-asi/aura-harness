@@ -10,32 +10,24 @@
 mod app;
 mod chrome;
 mod demo;
-#[allow(dead_code, unused_imports)] // until the bare shell draws with it
 mod geom;
 mod glyphs;
-#[allow(dead_code)] // until the bare shell draws with it
 mod gpu;
 mod grid;
 mod input;
-#[allow(dead_code)] // until the bare shell draws with it
 mod paint;
 #[cfg(test)]
 mod parity;
 mod perf;
-#[allow(dead_code)] // until the bare shell draws with it
 mod raster;
 mod router;
-#[allow(dead_code)] // until the bare shell draws with it
 mod scene;
-#[allow(dead_code)] // until the bare shell draws with it
 mod shapes;
-#[allow(dead_code, unused_imports)] // until it can be asked for
 mod shell;
 #[cfg(test)]
 mod snapshot;
 mod tab;
 mod tab_bar;
-#[allow(dead_code)] // until the bare shell draws with it
 mod text;
 mod theme;
 
@@ -133,11 +125,21 @@ pub fn run(args: DesktopOptions, mode: Option<AgentMode>) -> anyhow::Result<()> 
         verbose: args.verbose,
         tabs_file,
     };
-    let result = app::run(handles, options, launched);
+    let result = if bare_shell() {
+        shell::run(handles, &options, launched)
+    } else {
+        app::run(handles, options, launched).map_err(anyhow::Error::from)
+    };
     if let Some(task) = task {
         runtime.block_on(task.finish())?;
     }
     result.context("desktop window failed")
+}
+
+/// Whether the window is the bare one, drawn without a toolkit, which
+/// `AURA_DESKTOP_SHELL=bare` asks for while the two are compared.
+fn bare_shell() -> bool {
+    std::env::var("AURA_DESKTOP_SHELL").is_ok_and(|shell| shell.trim() == "bare")
 }
 
 fn init_tracing(verbose: bool) {
