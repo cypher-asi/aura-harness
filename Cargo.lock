@@ -851,6 +851,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-width",
+ "wgpu",
 ]
 
 [[package]]

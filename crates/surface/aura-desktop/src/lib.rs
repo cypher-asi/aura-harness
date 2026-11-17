@@ -13,6 +13,8 @@ mod demo;
 #[allow(dead_code, unused_imports)] // until the bare shell draws with it
 mod geom;
 mod glyphs;
+#[allow(dead_code)] // until the bare shell draws with it
+mod gpu;
 mod grid;
 mod input;
 #[allow(dead_code)] // until the bare shell draws with it
