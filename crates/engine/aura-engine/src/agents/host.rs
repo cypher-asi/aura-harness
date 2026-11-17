@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use aura_agent::{AgentLoopConfig, AgentLoopEvent};
+use aura_agent::{AgentLoopConfig, AgentLoopEvent, AgentLoopResult};
 use aura_agent_kernel::{
     write_system_entry, ExecutorRouter, KernelSpawnHook, PolicyConfig, RecordObserver,
 };
@@ -32,6 +32,7 @@ use tracing::{info, warn};
 use super::factory::{ChildKernelFactory, ChildKernelRequest};
 use super::hooks::AgentHooks;
 use super::inbox::{InboxMessage, MessageKind, ParentInbox};
+use super::observer::{HostedTurn, TurnObserver};
 use super::setup;
 use crate::scheduler::{ScheduleOverrides, Scheduler};
 
@@ -331,6 +332,7 @@ pub(super) struct HostInner {
     agents: Mutex<HashMap<AgentId, AgentEntry>>,
     /// Serialises writes to one parent's record log from parallel spawns.
     parent_locks: DashMap<AgentId, Arc<tokio::sync::Mutex<()>>>,
+    observer: Mutex<Option<Arc<dyn TurnObserver>>>,
 }
 
 impl AgentHost {
@@ -349,8 +351,14 @@ impl AgentHost {
                 config,
                 agents: Mutex::new(HashMap::new()),
                 parent_locks: DashMap::new(),
+                observer: Mutex::new(None),
             }),
         }
+    }
+
+    /// Tell `observer` about every hosted agent's turns from now on.
+    pub fn set_turn_observer(&self, observer: Arc<dyn TurnObserver>) {
+        *self.inner.observer.lock() = Some(observer);
     }
 
     /// Register or refresh a top-level agent. Its existing children are
@@ -1066,6 +1074,9 @@ impl HostInner {
                 setup: setup.clone(),
                 workspace: entry.env.workspace.clone(),
                 stop: entry.stop.clone(),
+                name: entry.name.clone(),
+                model: entry.model.clone(),
+                parent,
             }
         };
         let host = self.clone();
@@ -1080,6 +1091,9 @@ impl HostInner {
             setup,
             workspace,
             stop,
+            name,
+            model,
+            parent,
         } = turn;
         let Envelope {
             from,
@@ -1089,11 +1103,44 @@ impl HostInner {
             cancel,
             ..
         } = envelope;
-        let (result, messages) = self
+        let observer = self.observer.lock().clone();
+        let (events, relay) = match &observer {
+            Some(observer) => {
+                observer.turn_started(&HostedTurn {
+                    agent_id,
+                    parent,
+                    name: &name,
+                    model: &model,
+                    prompt: &prompt,
+                });
+                let (tx, relay) = relay_events(Arc::clone(observer), agent_id, events);
+                (Some(tx), Some(relay))
+            }
+            None => (events, None),
+        };
+        let ran = self
             .execute(
                 agent_id, &prompt, history, &setup, workspace, events, cancel, &stop,
             )
             .await;
+        if let Some(relay) = relay {
+            let _ = tokio::time::timeout(RELAY_DRAIN, relay).await;
+        }
+        let (result, messages) = match ran {
+            Ok(loop_result) => {
+                let exit = exit_of(&loop_result);
+                if let Some(observer) = &observer {
+                    observer.turn_ended(agent_id, Some(&loop_result), &exit);
+                }
+                finished(agent_id, loop_result, exit)
+            }
+            Err(early) => {
+                if let Some(observer) = &observer {
+                    observer.turn_ended(agent_id, None, &early.exit);
+                }
+                (early, None)
+            }
+        };
 
         // Stopped while the turn ran: the entry is gone and nobody but a
         // waiter should hear about it.
@@ -1168,6 +1215,7 @@ impl HostInner {
             .filter(|(id, e)| (include_target && **id == target) || e.chain.contains(&target))
             .map(|(id, _)| *id)
             .collect();
+        let observer = self.observer.lock().clone();
         let mut dropped = Vec::new();
         for id in ids {
             let Some(entry) = agents.remove(&id) else {
@@ -1178,12 +1226,16 @@ impl HostInner {
             if let Body::Hosted { queue, .. } = entry.body {
                 dropped.extend(queue.into_iter().map(|env| (id, env)));
                 self.scheduler.identity_registry().unregister(id);
+                if let Some(observer) = &observer {
+                    observer.agent_removed(id);
+                }
             }
         }
         dropped
     }
 
-    /// Run one turn of a hosted agent through the scheduler.
+    /// Run one turn of a hosted agent through the scheduler. `Err` is how
+    /// a turn that produced no loop result ended.
     #[allow(clippy::too_many_arguments)]
     async fn execute(
         &self,
@@ -1195,13 +1247,13 @@ impl HostInner {
         events: Option<mpsc::Sender<AgentLoopEvent>>,
         cancel: Option<CancellationToken>,
         stop: &CancellationToken,
-    ) -> (SubagentResult, Option<Vec<Message>>) {
+    ) -> Result<AgentLoopResult, SubagentResult> {
         if setup.timeout == Some(Duration::ZERO) {
-            return (ended(agent_id, SubagentExit::Timeout), None);
+            return Err(ended(agent_id, SubagentExit::Timeout));
         }
         let tx = Transaction::user_prompt(agent_id, prompt.to_string());
         if let Err(err) = self.store.enqueue_tx(&tx) {
-            return (failed(agent_id, format!("enqueue prompt: {err}")), None);
+            return Err(failed(agent_id, format!("enqueue prompt: {err}")));
         }
         let schedule = self.scheduler.schedule_agent_with_options(
             agent_id,
@@ -1225,44 +1277,17 @@ impl HostInner {
         let cancel = cancel.unwrap_or_default();
         let processed = tokio::select! {
             biased;
-            () = stop.cancelled() => return (cancelled(agent_id), None),
-            () = cancel.cancelled() => return (cancelled(agent_id), None),
+            () = stop.cancelled() => return Err(cancelled(agent_id)),
+            () = cancel.cancelled() => return Err(cancelled(agent_id)),
             outcome = bounded => match outcome {
-                None => return (ended(agent_id, SubagentExit::Timeout), None),
-                Some(Err(err)) => return (failed(agent_id, format!("schedule: {err}")), None),
+                None => return Err(ended(agent_id, SubagentExit::Timeout)),
+                Some(Err(err)) => return Err(failed(agent_id, format!("schedule: {err}"))),
                 Some(Ok(processed)) => processed,
             },
         };
-        let Some(result) = processed.last_result else {
-            return (failed(agent_id, "the turn produced no result".into()), None);
-        };
-        let exit = if result.output_truncated || result.insufficient_credits || result.stalled {
-            SubagentExit::Failed {
-                reason: "child execution stopped before completion".into(),
-            }
-        } else if result.timed_out {
-            SubagentExit::Timeout
-        } else {
-            result
-                .llm_error
-                .as_ref()
-                .map_or(SubagentExit::Completed, |reason| SubagentExit::Failed {
-                    reason: reason.clone(),
-                })
-        };
-        let outcome = SubagentResult {
-            child_agent_id: Some(agent_id),
-            final_message: result.total_text,
-            total_input_tokens: result.total_input_tokens,
-            total_output_tokens: result.total_output_tokens,
-            files_changed: result
-                .file_changes
-                .into_iter()
-                .map(|change| change.path)
-                .collect(),
-            exit,
-        };
-        (outcome, Some(result.messages))
+        processed
+            .last_result
+            .ok_or_else(|| failed(agent_id, "the turn produced no result".into()))
     }
 
     // ------------------------------------------------------------------
@@ -1350,6 +1375,9 @@ struct Turn {
     setup: Arc<RunSetup>,
     workspace: Option<(PathBuf, bool)>,
     stop: CancellationToken,
+    name: String,
+    model: String,
+    parent: Option<AgentId>,
 }
 
 /// The prompt a hosted agent sees for `envelope`. Its parent talks to it
@@ -1421,6 +1449,70 @@ fn write_observed(
         observer.on_entry(&entry);
     }
     Ok(entry.seq)
+}
+
+/// How a turn that produced `result` ended.
+fn exit_of(result: &AgentLoopResult) -> SubagentExit {
+    if result.output_truncated || result.insufficient_credits || result.stalled {
+        SubagentExit::Failed {
+            reason: "child execution stopped before completion".into(),
+        }
+    } else if result.timed_out {
+        SubagentExit::Timeout
+    } else {
+        result
+            .llm_error
+            .as_ref()
+            .map_or(SubagentExit::Completed, |reason| SubagentExit::Failed {
+                reason: reason.clone(),
+            })
+    }
+}
+
+/// The outcome of a turn that produced `result`, and the history it
+/// leaves.
+fn finished(
+    agent_id: AgentId,
+    result: AgentLoopResult,
+    exit: SubagentExit,
+) -> (SubagentResult, Option<Vec<Message>>) {
+    let outcome = SubagentResult {
+        child_agent_id: Some(agent_id),
+        final_message: result.total_text,
+        total_input_tokens: result.total_input_tokens,
+        total_output_tokens: result.total_output_tokens,
+        files_changed: result
+            .file_changes
+            .into_iter()
+            .map(|change| change.path)
+            .collect(),
+        exit,
+    };
+    (outcome, Some(result.messages))
+}
+
+/// How long the end of a turn waits for its events to reach the
+/// observer.
+const RELAY_DRAIN: Duration = Duration::from_secs(5);
+
+/// A sender for a turn's events that shows each to `observer`, in order,
+/// then passes it on to `downstream`. The task ends once every sender is
+/// gone.
+fn relay_events(
+    observer: Arc<dyn TurnObserver>,
+    agent_id: AgentId,
+    downstream: Option<mpsc::Sender<AgentLoopEvent>>,
+) -> (mpsc::Sender<AgentLoopEvent>, tokio::task::JoinHandle<()>) {
+    let (tx, mut rx) = mpsc::channel::<AgentLoopEvent>(1024);
+    let relay = tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            observer.on_event(agent_id, &event);
+            if let Some(downstream) = &downstream {
+                let _ = downstream.send(event).await;
+            }
+        }
+    });
+    (tx, relay)
 }
 
 fn ended(agent_id: AgentId, exit: SubagentExit) -> SubagentResult {

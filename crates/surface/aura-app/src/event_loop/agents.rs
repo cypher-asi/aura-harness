@@ -81,6 +81,15 @@ impl AgentSession {
         self.building_plan = false;
     }
 
+    /// Pick the plan build back up after the session was reopened or
+    /// restored: the in-memory flag is gone, but a todo list that is still
+    /// the active plan's means `/build` is under way.
+    pub fn resume_plan_build(&mut self) {
+        self.building_plan = self.active_plan.as_deref().is_some_and(|path| {
+            super::plan_mode::is_plan_todo_list(&self.kernel.agent_workspace(), path, &self.todos)
+        });
+    }
+
     /// Continue the session saved in `checkpoint`.
     pub fn restore(&mut self, checkpoint: SessionCheckpoint) {
         self.messages = checkpoint.messages;
@@ -90,6 +99,7 @@ impl AgentSession {
         self.todos = checkpoint.todos;
         self.usage = checkpoint.usage;
         self.started_ms = checkpoint.started_ms;
+        self.resume_plan_build();
     }
 
     /// Checkpoint the session as of the head of its record. A failure is
@@ -261,6 +271,7 @@ impl KernelFactory {
                     });
             session.todos = todos_from_history(&messages);
             session.messages = messages;
+            session.resume_plan_build();
         }
         Ok(session)
     }
@@ -389,11 +400,176 @@ pub(super) async fn handle_create_agent(state: &mut LoopState<'_>, name: Option<
     }
 }
 
+/// Add a new agent to the project headed by the agent with hex id
+/// `root_hex`, and switch to it.
+pub(super) async fn handle_add_agent_to_project(state: &mut LoopState<'_>, root_hex: &str) {
+    let root_id = match AgentId::from_hex(root_hex) {
+        Ok(agent_id) => agent_id,
+        Err(e) => {
+            warn!(agent = root_hex, error = %e, "Invalid agent id from UI");
+            show_error(state, format!("Invalid agent id: {e}")).await;
+            return;
+        }
+    };
+    let created = lock(&state.hub.registry).create_in_project(root_id);
+    match created {
+        Ok(agent) => {
+            info!(zns_id = %agent.zns_id, name = %agent.name, "Added agent to project");
+            activate_agent(state, agent.agent_id(), Chat::Reload).await;
+            show_success(state, format!("Created agent {}", agent.name)).await;
+        }
+        Err(e) => show_error(state, format!("Could not create agent: {e}")).await,
+    }
+}
+
+/// Parse a hex agent id from the UI, reporting a bad one.
+async fn parse_agent(state: &LoopState<'_>, agent_hex: &str) -> Option<AgentId> {
+    match AgentId::from_hex(agent_hex) {
+        Ok(agent_id) => Some(agent_id),
+        Err(e) => {
+            warn!(agent = agent_hex, error = %e, "Invalid agent id from UI");
+            show_error(state, format!("Invalid agent id: {e}")).await;
+            None
+        }
+    }
+}
+
+/// Name of the first agent in `agents` with work in flight.
+fn busy_agent(state: &LoopState<'_>, agents: &[AgentId]) -> Option<String> {
+    let busy = agents.iter().find(|&&id| state.hub.is_running(id))?;
+    Some(
+        lock(&state.hub.registry)
+            .find(*busy)
+            .map_or_else(|| "an agent".to_string(), |a| a.display_name().to_string()),
+    )
+}
+
+/// After agents left the list, show the one the registry opens now if the
+/// active agent was among them; otherwise just refresh the list.
+async fn after_list_shrank(state: &mut LoopState<'_>, gone: &[AgentId]) {
+    if gone.contains(&state.active) {
+        let next = lock(&state.hub.registry).active().agent_id();
+        activate_agent(state, next, Chat::Reload).await;
+    } else {
+        state.hub.send_agent_list().await;
+    }
+}
+
+/// Move an agent, and the agents under it, to the Archive.
+pub(super) async fn handle_archive_agent(state: &mut LoopState<'_>, agent_hex: &str) {
+    let Some(agent_id) = parse_agent(state, agent_hex).await else {
+        return;
+    };
+    let (subtree, name) = {
+        let registry = lock(&state.hub.registry);
+        (
+            registry.subtree(agent_id),
+            registry
+                .find(agent_id)
+                .map(|a| a.display_name().to_string()),
+        )
+    };
+    let Some(name) = name else {
+        show_error(state, "Unknown agent".to_string()).await;
+        return;
+    };
+    if let Some(busy) = busy_agent(state, &subtree) {
+        show_error(
+            state,
+            format!("Cannot archive {name}: {busy} is still working"),
+        )
+        .await;
+        return;
+    }
+    let archived = lock(&state.hub.registry).archive(agent_id);
+    match archived {
+        Ok(()) => {
+            info!(%agent_id, %name, "Archived agent");
+            after_list_shrank(state, &subtree).await;
+            show_success(state, format!("Archived {name}")).await;
+        }
+        Err(e) => show_error(state, format!("Could not archive {name}: {e}")).await,
+    }
+}
+
+/// Bring an agent back from the Archive and switch to it.
+pub(super) async fn handle_restore_agent(state: &mut LoopState<'_>, agent_hex: &str) {
+    let Some(agent_id) = parse_agent(state, agent_hex).await else {
+        return;
+    };
+    let restored = lock(&state.hub.registry).restore(agent_id);
+    match restored {
+        Ok(()) => {
+            let name = lock(&state.hub.registry)
+                .find(agent_id)
+                .map(|a| a.display_name().to_string())
+                .unwrap_or_default();
+            info!(%agent_id, %name, "Restored agent");
+            activate_agent(state, agent_id, Chat::Reload).await;
+            show_success(state, format!("Restored {name}")).await;
+        }
+        Err(e) => show_error(state, format!("Could not restore agent: {e}")).await,
+    }
+}
+
+/// Remove the project containing an agent from the list. Its records and
+/// folder stay on disk.
+pub(super) async fn handle_remove_project(state: &mut LoopState<'_>, agent_hex: &str) {
+    let Some(agent_id) = parse_agent(state, agent_hex).await else {
+        return;
+    };
+    let found = {
+        let registry = lock(&state.hub.registry);
+        registry.project_root(agent_id).map(|root| {
+            let label = root
+                .project
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .unwrap_or(root.display_name())
+                .to_string();
+            (registry.subtree(root.agent_id()), label)
+        })
+    };
+    let Some((subtree, project)) = found else {
+        show_error(state, "Unknown agent".to_string()).await;
+        return;
+    };
+    if let Some(busy) = busy_agent(state, &subtree) {
+        show_error(
+            state,
+            format!("Cannot remove {project}: {busy} is still working"),
+        )
+        .await;
+        return;
+    }
+    let removed = lock(&state.hub.registry).remove_project(agent_id);
+    match removed {
+        Ok(removed) => {
+            for id in &removed {
+                state.idle.remove(id);
+            }
+            info!(%project, agents = removed.len(), "Removed project");
+            after_list_shrank(state, &removed).await;
+            show_success(state, format!("Removed project {project}")).await;
+        }
+        Err(e) => show_error(state, format!("Could not remove {project}: {e}")).await,
+    }
+}
+
 /// Start an instance of a permanent agent and switch to it.
 pub(super) async fn handle_instantiate_definition(state: &mut LoopState<'_>, name: &str) {
-    if let Some(agent) = start_instance(state, name, None).await {
+    if let Some(agent) = start_instance(state, name, Placement::Alone).await {
         show_success(state, format!("Started {}", agent.name)).await;
     }
+}
+
+/// Where a new permanent-agent instance goes in the agents list.
+enum Placement {
+    /// Its own project.
+    Alone,
+    /// Beside the root agent with this ZNS id, in its project.
+    InProject(String),
 }
 
 /// Start an instance of a permanent agent inside the project that contains
@@ -406,23 +582,25 @@ pub(super) async fn handle_add_definition_to_project(state: &mut LoopState<'_>, 
         show_error(state, "Unknown agent".to_string()).await;
         return;
     };
-    if let Some(agent) = start_instance(state, name, Some(root.zns_id.clone())).await {
+    if let Some(agent) =
+        start_instance(state, name, Placement::InProject(root.zns_id.clone())).await
+    {
         let project = root
             .project
             .as_deref()
             .map(str::trim)
             .filter(|project| !project.is_empty())
-            .unwrap_or(&root.name);
+            .unwrap_or(root.display_name());
         show_success(state, format!("Added {} to {project}", agent.name)).await;
     }
 }
 
-/// Register an instance of the permanent agent `name` under `parent` and
+/// Register an instance of the permanent agent `name` at `placement` and
 /// switch to it. Reports failures itself and returns `None`.
 async fn start_instance(
     state: &mut LoopState<'_>,
     name: &str,
-    parent: Option<String>,
+    placement: Placement,
 ) -> Option<RegisteredAgent> {
     let definition = lock(&state.hub.definitions)
         .get(name)
@@ -431,7 +609,13 @@ async fn start_instance(
         show_error(state, format!("No permanent agent named {name}")).await;
         return None;
     };
-    let created = lock(&state.hub.registry).create_instance(&definition, parent);
+    let created = {
+        let mut registry = lock(&state.hub.registry);
+        match placement {
+            Placement::Alone => registry.create_instance(&definition, None),
+            Placement::InProject(root) => registry.add_instance_to_project(&definition, root),
+        }
+    };
     match created {
         Ok(agent) => {
             info!(name = %agent.name, %definition, "Started permanent agent instance");
@@ -592,6 +776,7 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
                 .await;
         }
     }
+    state.hub.traces.send_history(agent_id).await;
 
     if chat == Chat::Reload && !state.hub.is_running(agent_id) {
         let history = conversation_history(store, agent_id).unwrap_or_else(|e| {

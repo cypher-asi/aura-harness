@@ -9,20 +9,18 @@
 //! ```
 
 use super::panels::{cell_style, list_row, render_scrollbar, CellState, ScrollView, StatusIcon};
+use super::side_list::{render_empty, render_hint, split_hint, PLANS_HINT};
 use crate::app::plans::PlanRow;
 use crate::app::{HoverTarget, PanelFocus};
 use crate::events::TodoState;
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
-    style::{Modifier, Style},
-    text::{Line, Span},
+    style::{Color, Modifier, Style},
+    text::Line,
     widgets::Paragraph,
     Frame,
 };
-
-/// Hint shown at the bottom of the tab when the panel has focus.
-const PLANS_HINT: &str = "⏎ fold / open  ⇧←→ tabs";
 
 const fn marker(status: TodoState) -> &'static str {
     match status {
@@ -33,12 +31,21 @@ const fn marker(status: TodoState) -> &'static str {
     }
 }
 
-/// How a todo in `state` is drawn.
+/// Color of a todo's marker: the status color, as on every side-panel icon.
+const fn marker_color(state: TodoState, theme: &Theme) -> Color {
+    match state {
+        TodoState::InProgress => theme.colors.pending,
+        TodoState::Pending | TodoState::Cancelled => theme.colors.muted,
+        TodoState::Completed => theme.colors.success,
+    }
+}
+
+/// How a todo's text is drawn: `foreground` while open, `muted` once
+/// closed, and struck through when cancelled.
 fn todo_style(state: TodoState, theme: &Theme) -> Style {
     match state {
-        TodoState::InProgress => Style::default().fg(theme.colors.primary),
-        TodoState::Pending => Style::default().fg(theme.colors.foreground),
-        TodoState::Completed => Style::default().fg(theme.colors.success),
+        TodoState::InProgress | TodoState::Pending => Style::default().fg(theme.colors.foreground),
+        TodoState::Completed => Style::default().fg(theme.colors.muted),
         TodoState::Cancelled => Style::default()
             .fg(theme.colors.muted)
             .add_modifier(Modifier::CROSSED_OUT),
@@ -56,23 +63,12 @@ pub(super) fn render_plans(
 ) {
     let is_focused = app.focus() == PanelFocus::Sandbox;
     if app.plan_list().plans().is_empty() {
-        let lines: Vec<Line> = [
-            "  No plans yet.",
-            "  /plan asks the agent",
-            "  to write one.",
-        ]
-        .into_iter()
-        .map(|text| Line::from(Span::styled(text, Style::default().fg(theme.colors.muted))))
-        .collect();
-        frame.render_widget(Paragraph::new(lines), inner);
+        let message = ["No plans yet.", "/plan asks the agent", "to write one."];
+        render_empty(frame, inner, &message, theme);
         return;
     }
 
-    let show_hint = is_focused && inner.height >= 4;
-    let rows_area = Rect {
-        height: inner.height.saturating_sub(u16::from(show_hint)),
-        ..inner
-    };
+    let (rows_area, hint) = split_hint(inner, is_focused);
     let visible = rows_area.height as usize;
     let scroll = app.sync_plans_scroll(visible);
     app.set_plan_rows_area(rows_area, scroll);
@@ -93,13 +89,13 @@ pub(super) fn render_plans(
             let plan = &list.plans()[row.plan()];
             match row {
                 PlanRow::Plan { open, .. } => {
-                    let color = if list.is_current(plan) {
-                        theme.colors.warning
+                    let (closed, total) = plan.progress();
+                    let done = total > 0 && closed == total;
+                    let name = Style::default().fg(if done {
+                        theme.colors.muted
                     } else {
                         theme.colors.foreground
-                    };
-                    let name = Style::default().fg(color).add_modifier(Modifier::BOLD);
-                    let (closed, total) = plan.progress();
+                    });
                     let fold = if open { "▾" } else { "▸" };
                     list_row(
                         width,
@@ -112,18 +108,14 @@ pub(super) fn render_plans(
                 }
                 PlanRow::Todo { todo, .. } => {
                     let todo = &plan.todos[todo];
-                    let style = todo_style(todo.state, theme);
-                    let icon = StatusIcon::new(
-                        marker(todo.state),
-                        style.fg.unwrap_or(theme.colors.foreground),
-                    );
+                    let icon = StatusIcon::new(marker(todo.state), marker_color(todo.state, theme));
                     let content = todo.content.lines().next().unwrap_or("");
                     list_row(
                         width,
                         1,
                         icon,
                         content,
-                        cell_style(theme, state, style),
+                        cell_style(theme, state, todo_style(todo.state, theme)),
                         None,
                     )
                 }
@@ -137,19 +129,7 @@ pub(super) fn render_plans(
     };
     frame.render_widget(Paragraph::new(lines), rows_area);
     render_scrollbar(frame, area, rows_area, view, is_focused, theme);
-
-    if show_hint {
-        let hint = Rect {
-            y: inner.y + inner.height - 1,
-            height: 1,
-            ..inner
-        };
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                format!(" {PLANS_HINT}"),
-                Style::default().fg(theme.colors.muted),
-            )),
-            hint,
-        );
+    if let Some(hint) = hint {
+        render_hint(frame, hint, PLANS_HINT, theme);
     }
 }

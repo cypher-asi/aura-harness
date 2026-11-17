@@ -84,7 +84,7 @@ pub(super) fn shell_lines(
     lines
 }
 
-fn owned(spans: Vec<Span<'_>>) -> Vec<Span<'static>> {
+pub(super) fn owned(spans: Vec<Span<'_>>) -> Vec<Span<'static>> {
     spans
         .into_iter()
         .map(|span| Span::styled(span.content.into_owned(), span.style))
@@ -93,7 +93,7 @@ fn owned(spans: Vec<Span<'_>>) -> Vec<Span<'static>> {
 
 /// Break spans into rows exactly `width` columns wide, ignoring word
 /// boundaries, so a column count maps straight to a row and column.
-fn hard_wrap_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Vec<Span<'static>>> {
+pub(super) fn hard_wrap_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Vec<Span<'static>>> {
     if width == 0 {
         return vec![spans];
     }

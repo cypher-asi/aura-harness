@@ -4,22 +4,19 @@
 
 use super::header::{self, PanelHeader};
 use super::panels::{
-    hover_style, render_body_block, render_scrollbar, truncate_record_info, ScrollView,
+    cell_style, list_row, render_body_block, render_scrollbar, CellState, ScrollView, StatusIcon,
 };
-use super::text::display_width;
+use super::side_list::{render_empty, render_hint, split_hint, SANDBOX_HINT};
 use crate::app::sandbox::{SandboxEntryKind, SandboxRow};
 use crate::app::{HoverTarget, Pane, PanelFocus, SidePanelTab};
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
-    style::{Modifier, Style},
-    text::{Line, Span},
+    style::{Color, Style},
+    text::Line,
     widgets::Paragraph,
     Frame,
 };
-
-/// Hint shown at the bottom of the panel when it has focus.
-const SANDBOX_HINT: &str = "↑↓ move  ⏎ open  ← up";
 
 /// Render the panel: its header bar, then the open tab.
 pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
@@ -54,7 +51,9 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
         SidePanelTab::Processes => {
             super::processes::render_processes(frame, area, body, app, theme);
         }
-        SidePanelTab::Trace => super::trace_feed::render_trace_feed(frame, body, app, theme),
+        SidePanelTab::Trace => {
+            super::trace_feed::render_trace_feed(frame, area, body, app, theme);
+        }
         SidePanelTab::Plans => super::plans::render_plans(frame, area, body, app, theme),
     }
 }
@@ -64,28 +63,20 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
 fn render_tree(frame: &mut Frame, area: Rect, inner: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Sandbox;
     if app.sandbox().rows().is_empty() {
-        let message = if app.sandbox().root().is_some() {
-            [
-                "  Sandbox is empty.",
-                "  Files the agent creates",
-                "  will appear here.",
+        let message: &[&str] = if app.sandbox().root().is_some() {
+            &[
+                "Sandbox is empty.",
+                "Files the agent creates",
+                "will appear here.",
             ]
         } else {
-            ["  No sandbox yet.", "", ""]
+            &["No sandbox yet."]
         };
-        let lines: Vec<Line> = message
-            .into_iter()
-            .map(|text| Line::from(Span::styled(text, Style::default().fg(theme.colors.muted))))
-            .collect();
-        frame.render_widget(Paragraph::new(lines), inner);
+        render_empty(frame, inner, message, theme);
         return;
     }
 
-    let show_hint = is_focused && inner.height >= 4;
-    let rows_area = Rect {
-        height: inner.height.saturating_sub(u16::from(show_hint)),
-        ..inner
-    };
+    let (rows_area, hint) = split_hint(inner, is_focused);
     let visible = rows_area.height as usize;
     let scroll = app.sync_sandbox_scroll(visible);
     let hovered = match app.hover() {
@@ -94,6 +85,7 @@ fn render_tree(frame: &mut Frame, area: Rect, inner: Rect, app: &mut App, theme:
     };
     let tree = app.sandbox();
     let selected = tree.selected();
+    let width = inner.width as usize;
 
     let lines: Vec<Line> = tree
         .rows()
@@ -102,13 +94,8 @@ fn render_tree(frame: &mut Frame, area: Rect, inner: Rect, app: &mut App, theme:
         .skip(scroll)
         .take(visible)
         .map(|(i, row)| {
-            sandbox_line(
-                row,
-                is_focused && i == selected,
-                hovered == Some(i),
-                inner.width as usize,
-                theme,
-            )
+            let state = CellState::of(is_focused && i == selected, hovered == Some(i));
+            sandbox_line(row, state, width, theme)
         })
         .collect();
     let view = ScrollView {
@@ -119,69 +106,39 @@ fn render_tree(frame: &mut Frame, area: Rect, inner: Rect, app: &mut App, theme:
     app.set_sandbox_rows_area(rows_area, scroll);
     frame.render_widget(Paragraph::new(lines), rows_area);
     render_scrollbar(frame, area, rows_area, view, is_focused, theme);
-
-    if show_hint {
-        let hint_area = Rect {
-            y: inner.y + inner.height - 1,
-            height: 1,
-            ..inner
-        };
-        let hint = truncate_record_info(SANDBOX_HINT, (inner.width as usize).saturating_sub(1));
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                format!(" {hint}"),
-                Style::default().fg(theme.colors.muted),
-            ))),
-            hint_area,
-        );
+    if let Some(hint) = hint {
+        render_hint(frame, hint, SANDBOX_HINT, theme);
     }
 }
 
-fn sandbox_line<'a>(
-    row: &SandboxRow,
-    highlighted: bool,
-    hovered: bool,
-    width: usize,
-    theme: &Theme,
-) -> Line<'a> {
-    let prefix = " ";
-    let indent = "  ".repeat(row.depth);
-    let (marker, label, color) = match row.kind {
-        SandboxEntryKind::Dir => (
-            if row.expanded { "▾ " } else { "▸ " },
-            format!("{}/", row.name),
-            if row.name.starts_with('.') {
-                theme.colors.muted
-            } else {
-                theme.colors.foreground
-            },
-        ),
-        SandboxEntryKind::File => ("  ", row.name.clone(), theme.colors.muted),
-        SandboxEntryKind::Symlink => ("  ", format!("{}@", row.name), theme.colors.muted),
-        SandboxEntryKind::More(_) => ("  ", row.name.clone(), theme.colors.muted),
+/// A tree row: the fold glyph of a directory (none for files), then the
+/// name, `foreground` unless it is a dot entry or a "more" placeholder.
+fn sandbox_line<'a>(row: &SandboxRow, state: CellState, width: usize, theme: &Theme) -> Line<'a> {
+    let muted = theme.colors.muted;
+    let (glyph, name) = match row.kind {
+        SandboxEntryKind::Dir => (if row.expanded { "▾" } else { "▸" }, row.name.clone()),
+        SandboxEntryKind::File => (" ", row.name.clone()),
+        SandboxEntryKind::Symlink => (" ", format!("{}@", row.name)),
+        SandboxEntryKind::More(_) => (" ", row.name.clone()),
     };
-    let style = if highlighted {
-        Style::default()
-            .fg(theme.colors.primary)
-            .add_modifier(Modifier::BOLD)
-    } else if hovered {
-        hover_style(theme)
+    let color = name_color(row, theme);
+    list_row(
+        width,
+        row.depth,
+        StatusIcon::new(glyph, muted),
+        &name,
+        cell_style(theme, state, Style::default().fg(color)),
+        None,
+    )
+}
+
+fn name_color(row: &SandboxRow, theme: &Theme) -> Color {
+    let hidden = row.name.starts_with('.') || matches!(row.kind, SandboxEntryKind::More(_));
+    if hidden {
+        theme.colors.muted
     } else {
-        Style::default().fg(color)
-    };
-    let marker_style = if hovered && !highlighted {
-        hover_style(theme)
-    } else {
-        Style::default().fg(theme.colors.muted)
-    };
-    let used = display_width(prefix) + indent.len() + display_width(marker);
-    let label = truncate_record_info(&label, width.saturating_sub(used));
-    Line::from(vec![
-        Span::styled(prefix, style),
-        Span::raw(indent),
-        Span::styled(marker, marker_style),
-        Span::styled(label, style),
-    ])
+        theme.colors.foreground
+    }
 }
 
 #[cfg(test)]
@@ -189,30 +146,78 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn dir_row(name: &str) -> SandboxRow {
+    fn row(name: &str, kind: SandboxEntryKind) -> SandboxRow {
         SandboxRow {
             path: PathBuf::from(name),
             name: name.to_string(),
             depth: 0,
-            kind: SandboxEntryKind::Dir,
+            kind,
             expanded: false,
         }
     }
 
-    fn label_color(row: &SandboxRow, theme: &Theme) -> Option<ratatui::style::Color> {
-        sandbox_line(row, false, false, 40, theme).spans[3].style.fg
+    fn text(line: &Line) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    fn name_fg(row: &SandboxRow, state: CellState, theme: &Theme) -> Option<Color> {
+        let line = sandbox_line(row, state, 40, theme);
+        line.spans
+            .iter()
+            .find(|span| span.content.as_ref() == row.name)
+            .and_then(|span| span.style.fg)
     }
 
     #[test]
-    fn dot_folders_are_muted() {
+    fn dot_entries_are_muted_and_the_rest_foreground() {
         let theme = Theme::cyber();
+        let normal = CellState::Normal;
+        let fg = Some(theme.colors.foreground);
+        let muted = Some(theme.colors.muted);
         assert_eq!(
-            label_color(&dir_row("src"), &theme),
-            Some(theme.colors.foreground)
+            name_fg(&row("src", SandboxEntryKind::Dir), normal, &theme),
+            fg
         );
         assert_eq!(
-            label_color(&dir_row(".git"), &theme),
-            Some(theme.colors.muted)
+            name_fg(&row("main.rs", SandboxEntryKind::File), normal, &theme),
+            fg
         );
+        assert_eq!(
+            name_fg(&row(".git", SandboxEntryKind::Dir), normal, &theme),
+            muted
+        );
+        assert_eq!(
+            name_fg(&row(".env", SandboxEntryKind::File), normal, &theme),
+            muted
+        );
+    }
+
+    #[test]
+    fn rows_use_the_shared_selection_and_hover_cells() {
+        let theme = Theme::cyber();
+        let file = row("main.rs", SandboxEntryKind::File);
+        let selected = sandbox_line(&file, CellState::Selected, 40, &theme);
+        assert!(selected
+            .spans
+            .iter()
+            .all(|span| span.style.bg == Some(theme.colors.selection)));
+        assert_eq!(
+            name_fg(&file, CellState::Selected, &theme),
+            Some(theme.colors.on_selection)
+        );
+        let hovered = sandbox_line(&file, CellState::Hovered, 40, &theme);
+        assert!(hovered
+            .spans
+            .iter()
+            .all(|span| span.style.bg == Some(theme.colors.surface_hover)));
+    }
+
+    #[test]
+    fn directories_show_their_fold_state() {
+        let theme = Theme::cyber();
+        let mut dir = row("src", SandboxEntryKind::Dir);
+        assert!(text(&sandbox_line(&dir, CellState::Normal, 40, &theme)).starts_with(" ▸"));
+        dir.expanded = true;
+        assert!(text(&sandbox_line(&dir, CellState::Normal, 40, &theme)).starts_with(" ▾"));
     }
 }

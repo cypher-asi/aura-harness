@@ -1,5 +1,6 @@
 //! Key event handling for the App.
 
+use super::processes::SIDE_PAGE;
 use super::{
     line_edit::LineEdit, AgentsTab, App, AppState, ChatTab, NotificationType, PanelFocus,
     SidePanelTab,
@@ -47,7 +48,9 @@ impl App {
     fn handle_detail_key(&mut self, key: KeyEvent) {
         let screen = self.detail_screen();
         if let Some((file, scroll)) = self.file_view_mut() {
-            if file.handle_key(key, scroll, screen) == super::vim::Outcome::Close {
+            if file.handle_key(key, scroll, screen) == super::vim::Outcome::Close
+                && !self.return_to_graph()
+            {
                 self.close_detail();
             }
             return;
@@ -55,6 +58,14 @@ impl App {
         if self.detail == Some(super::DetailView::Graph) {
             if self.handle_graph_key(key) {
                 self.close_detail();
+            }
+            return;
+        }
+        if matches!(self.detail, Some(super::DetailView::Image(_))) {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.close_detail(),
+                KeyCode::Char('o') => self.open_image_externally(),
+                _ => {}
             }
             return;
         }
@@ -278,7 +289,10 @@ impl App {
 
     /// Handle key in normal mode.
     fn handle_normal_key(&mut self, key: KeyEvent) -> KeyResult {
-        if self.handle_pending_delete(key) || self.handle_pending_kill(key) {
+        if self.handle_pending_delete(key)
+            || self.handle_pending_remove_project(key)
+            || self.handle_pending_kill(key)
+        {
             return KeyResult::continue_running();
         }
         if let Some(result) = self.handle_mention_menu_key(key) {
@@ -350,6 +364,26 @@ impl App {
             self.toggle_selected_project();
             return KeyResult::continue_running();
         }
+        if self.focus == PanelFocus::Swarm
+            && self.agents_tab == AgentsTab::Projects
+            && self.input.is_empty()
+            && key.code == KeyCode::Delete
+        {
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                self.remove_selected_project();
+            } else {
+                self.archive_selected_agent();
+            }
+            return KeyResult::continue_running();
+        }
+        if self.focus == PanelFocus::Swarm
+            && self.agents_tab == AgentsTab::Archive
+            && self.input.is_empty()
+            && !word_motion
+            && self.handle_archive_key(key)
+        {
+            return KeyResult::continue_running();
+        }
         if self.focus == PanelFocus::Chat
             && self.input.is_empty()
             && key.modifiers.contains(KeyModifiers::SHIFT)
@@ -358,13 +392,12 @@ impl App {
             self.toggle_chat_tab();
             return KeyResult::continue_running();
         }
-        if self.focus == PanelFocus::Sandbox && self.input.is_empty() && !word_motion {
-            if self.handle_side_tab_key(key) {
-                return KeyResult::continue_running();
-            }
-            if self.side_tab == SidePanelTab::Processes && self.handle_processes_shortcut(key) {
-                return KeyResult::continue_running();
-            }
+        if self.focus == PanelFocus::Sandbox
+            && self.input.is_empty()
+            && !word_motion
+            && (self.handle_side_tab_key(key) || self.handle_side_list_shortcut(key))
+        {
+            return KeyResult::continue_running();
         }
         match key.code {
             KeyCode::Char(_)
@@ -392,6 +425,10 @@ impl App {
                 AgentsTab::Projects => self.handle_swarm_key(key),
                 AgentsTab::Roster => {
                     self.handle_definitions_key(key);
+                    KeyResult::continue_running()
+                }
+                AgentsTab::Archive => {
+                    self.handle_archive_key(key);
                     KeyResult::continue_running()
                 }
             },
@@ -578,18 +615,18 @@ impl App {
     }
 
     /// Handle key when sandbox panel is focused: arrows move through the
-    /// tree, Enter/Right toggles a directory or opens a file over the chat,
-    /// Left goes up a level.
+    /// tree, Enter opens a file over the chat (or folds a directory),
+    /// Right unfolds a directory and Left folds it or goes up a level.
     fn handle_sandbox_key(&mut self, key: KeyEvent) -> KeyResult {
         match key.code {
             KeyCode::Up => self.sandbox.move_by(-1),
             KeyCode::Down => self.sandbox.move_by(1),
-            KeyCode::PageUp => self.sandbox.move_by(-5),
-            KeyCode::PageDown => self.sandbox.move_by(5),
-            KeyCode::Enter | KeyCode::Right => {
-                self.sandbox.toggle_selected();
-                self.open_selected_sandbox_file();
-            }
+            KeyCode::PageUp => self.sandbox.move_by(-SIDE_PAGE),
+            KeyCode::PageDown => self.sandbox.move_by(SIDE_PAGE),
+            KeyCode::Home => self.sandbox.select_first(),
+            KeyCode::End => self.sandbox.select_last(),
+            KeyCode::Enter => self.activate_selected_sandbox_row(),
+            KeyCode::Right => self.expand_selected_sandbox_dir(),
             KeyCode::Left => self.sandbox.collapse_or_parent(),
             _ => {}
         }
@@ -602,7 +639,7 @@ impl App {
     /// project" creates one.
     fn handle_swarm_key(&mut self, key: KeyEvent) -> KeyResult {
         match key.code {
-            KeyCode::Left | KeyCode::Right => self.toggle_agents_tab(),
+            KeyCode::Left | KeyCode::Right => self.shift_agents_tab(key.code),
             KeyCode::Up => self.select_agent_row(self.selected_agent.saturating_sub(1)),
             KeyCode::Down => self.select_agent_row(self.selected_agent + 1),
             KeyCode::Enter => self.activate_agent_row(),
@@ -665,12 +702,13 @@ impl App {
         if text.starts_with('/') {
             return self.handle_command(&text);
         }
-        let images = self.take_images(&text);
+        let (images, previews) = self.take_images(&text);
 
         // A busy agent reads the message before its next step, or once its
         // current work ends; the chat shows it at that point, so it lands
         // in order with the reply still streaming.
         if busy && !images.is_empty() {
+            self.queue_image_previews(&text, previews);
             // A running turn only takes text, so images wait for the next.
             self.notification = Some((
                 "Queued: the agent gets the images when its current work ends".to_string(),
@@ -682,10 +720,10 @@ impl App {
                 NotificationType::Success,
             ));
         } else {
-            self.add_message(crate::components::Message::new(
-                crate::components::MessageRole::User,
-                &text,
-            ));
+            self.add_message(
+                crate::components::Message::new(crate::components::MessageRole::User, &text)
+                    .with_images(previews),
+            );
             self.state = AppState::Processing;
             self.status = "Thinking...".to_string();
         }

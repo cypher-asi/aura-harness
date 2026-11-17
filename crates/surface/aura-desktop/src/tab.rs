@@ -46,6 +46,7 @@ impl Tab {
             .with_event_sender(sender)
             .with_alert_settings(settings.alerts);
         tui.set_host_chrome(true);
+        tui.set_prose_measure(crate::grid::prose_cells);
         if settings.verbose {
             tui.set_verbose(true);
         }
@@ -81,7 +82,7 @@ impl Tab {
         };
         let root = agents[..=index]
             .iter()
-            .rfind(|agent| agent.depth == 0)
+            .rfind(|agent| agent.heads_project())
             .unwrap_or(&agents[index]);
         let named = |text: &str| Some(text.trim().to_uppercase()).filter(|text| !text.is_empty());
         let agent = named(&agents[index].name);

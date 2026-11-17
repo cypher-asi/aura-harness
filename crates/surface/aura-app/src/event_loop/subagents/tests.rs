@@ -12,6 +12,7 @@ struct Fixture {
     hub: Arc<AgentHub>,
     dispatcher: Arc<dyn SubagentDispatchHook>,
     commands: mpsc::Receiver<UiCommand>,
+    trace_store: Arc<aura_store_db::TraceStore>,
     _data: TempDir,
     _db: TempDir,
     workspace: TempDir,
@@ -31,6 +32,13 @@ fn slow_fixture(reply: &str, latency_ms: u64) -> Fixture {
     let (_, tools) = build_executor_router_with_config(&ToolConfig::for_autonomous_dev_loop());
     let config = default_agent_config_with_auth("mock-model", None);
     let (tx, commands) = mpsc::channel(64);
+    let trace_store = Arc::new(aura_store_db::TraceStore::for_store(&store));
+    let traces = Traces::new(
+        Some(data.path().join("home")),
+        Some(Arc::clone(&trace_store)),
+        None,
+        tx.clone(),
+    );
     let parts = AgentHubParts {
         registry: AgentRegistry::load_or_init(data.path()).unwrap(),
         definitions: AgentDefinitions::load_or_seed(data.path()).unwrap(),
@@ -57,6 +65,7 @@ fn slow_fixture(reply: &str, latency_ms: u64) -> Fixture {
         agents: None,
         record_panel: Default::default(),
         gate: Default::default(),
+        traces,
     };
     let reply = reply.to_string();
     let workspace_root = workspace.path().to_path_buf();
@@ -87,6 +96,7 @@ fn slow_fixture(reply: &str, latency_ms: u64) -> Fixture {
         hub,
         dispatcher: captured.unwrap(),
         commands,
+        trace_store,
         _data: data,
         _db: db,
         workspace,
@@ -208,6 +218,33 @@ async fn unknown_permanent_agent_is_rejected() {
         matches!(&result.exit, SubagentExit::Rejected { reason } if reason.contains("explorer, frontend-engineer"))
     );
     assert_eq!(lock(&fixture.hub.registry).agents().len(), 1);
+}
+
+#[tokio::test]
+async fn spawn_is_recorded_as_a_run_linked_to_its_parent() {
+    let fixture = fixture("Looks good.");
+    let parent = lock(&fixture.hub.registry).active().agent_id();
+    let parent_run = fixture
+        .hub
+        .traces
+        .start(parent, RunMeta::new("mock-model", RunSource::Tui))
+        .unwrap()
+        .run_id();
+
+    let result = fixture
+        .dispatcher
+        .dispatch(request(parent, "reviewer", "Review the diff"))
+        .await
+        .unwrap();
+
+    let child = result.child_agent_id.unwrap();
+    let trace = aura_agent_trace::db::latest_of(&fixture.trace_store, &child.to_hex())
+        .unwrap()
+        .expect("the spawn's run is in the database");
+    assert_eq!(trace.meta.spawned_by.as_deref(), Some(parent_run.as_str()));
+    assert_eq!(trace.meta.title, "Review the diff");
+    assert_eq!(trace.meta.mode, "reviewer");
+    assert!(trace.scorecard().turns >= 1);
 }
 
 #[tokio::test]

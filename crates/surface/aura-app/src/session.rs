@@ -27,6 +27,9 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
+/// Finished Processes tab rows from earlier sessions, in the data dir.
+const PROCESS_HISTORY_FILE: &str = "process_history.json";
+
 /// Settings for the agent session behind a UI.
 #[derive(Debug, Clone)]
 pub struct SessionOptions {
@@ -202,6 +205,8 @@ pub async fn start(
         policy: mode_policy(permissions, &tool_names),
         record_observer: Some(record_observer),
         record_panel: record_panel.clone(),
+        record_router: Some(record_router),
+        trace_home: aura_config::AuraHome::resolve().ok().map(|home| home.path),
         commands: cmd_tx.clone(),
         long_run: crate::long_run::LongRunSettings::from_env(),
         process_manager,
@@ -213,6 +218,8 @@ pub async fn start(
         post_edit_check: post_edit_check_from_env(),
         trace_snapshots: true,
     });
+    hub.processes
+        .keep_history(data_dir.join(PROCESS_HISTORY_FILE));
     let _ = cmd_tx.try_send(UiCommand::SetAgents(hub.agent_summaries()));
     let _ = cmd_tx.try_send(UiCommand::SetActiveAgent(identity.agent_id.to_hex()));
     let _ = cmd_tx.try_send(UiCommand::SetAgentDefinitions(hub.definition_summaries()));
@@ -234,7 +241,6 @@ pub async fn start(
             models,
             auth,
             approvals,
-            record_router,
         };
         event_loop::run_event_loop(ctx).await
     });

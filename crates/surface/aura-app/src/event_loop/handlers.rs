@@ -256,7 +256,7 @@ pub(super) async fn handle_new_session(state: &mut LoopState<'_>) -> bool {
 
     mark_session_start(session).await;
     session.reset();
-    super::trace::close(state, agent_id);
+    state.hub.traces.close(agent_id);
     let ui =
         AgentUi::new(state.commands.clone(), agent_id).with_shown(state.hub.record_panel.clone());
     ui.send(UiCommand::SetTodos(Vec::new())).await;

@@ -1,4 +1,6 @@
-//! Input line rendering.
+//! Input rendering: the prompt and what is being typed, wrapped inside the
+//! Chat panel's columns and growing upward as it gets longer, with the
+//! model and status on the right of its last row.
 
 use super::{text::display_width, EDGE_INSET};
 use crate::{app::AppState, App, Theme};
@@ -9,6 +11,7 @@ use ratatui::{
     widgets::Paragraph,
     Frame,
 };
+use unicode_width::UnicodeWidthChar;
 
 /// Columns between the model indicator and the status.
 const MODEL_GAP: u16 = 2;
@@ -16,21 +19,31 @@ const MODEL_GAP: u16 = 2;
 const MIN_INPUT_WIDTH: u16 = 20;
 /// Prompt before a chat message.
 const CHAT_PROMPT: &str = "> ";
+/// Most rows the input grows to; past this it scrolls with the cursor.
+const MAX_INPUT_ROWS: u16 = 8;
 
-/// Render input line with the current model and status on the right.
-/// `chat_left` is the Chat panel's left border, relative to `area`; typing
-/// starts there, with the prompt to its left.
-pub(super) fn render_input(
-    frame: &mut Frame,
-    area: Rect,
-    app: &App,
-    theme: &Theme,
-    chat_left: u16,
-) {
+/// Where the input goes on screen, worked out from the row's columns.
+struct Plan<'a> {
+    prompt: &'a str,
+    prompt_width: u16,
+    typing_x: u16,
+    /// Rows of typed text, each at most the typing width.
+    rows: Vec<Vec<Span<'static>>>,
+    /// Row and column of the cursor within `rows`.
+    cursor: (usize, usize),
+    status_text: String,
+    status_style: Style,
+    status_x: u16,
+    status_len: u16,
+    model: Option<(u16, Vec<Span<'a>>)>,
+    is_thinking: bool,
+}
+
+/// Lay out the input for a row spanning `area`'s columns. `chat_left` and
+/// `chat_right` are the Chat panel's border columns, relative to `area`.
+fn plan<'a>(area: Rect, app: &'a App, theme: &Theme, chat_left: u16, chat_right: u16) -> Plan<'a> {
     let input = app.input();
     let cursor_pos = app.cursor_pos();
-
-    let prompt_color = theme.colors.primary;
 
     let status = app.status();
     let is_ready = status == "Ready";
@@ -43,7 +56,6 @@ pub(super) fn render_input(
     } else {
         Style::default().fg(theme.colors.warning)
     };
-
     let status_text = if is_ready {
         format!("● {status}")
     } else if is_thinking {
@@ -51,11 +63,7 @@ pub(super) fn render_input(
     } else {
         format!("◐ {status}")
     };
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "status text is always short"
-    )]
-    let status_len = display_width(&status_text) as u16;
+    let status_len = u16::try_from(display_width(&status_text)).unwrap_or(u16::MAX);
 
     let model_spans = super::model_indicator_spans(app, theme);
     let model_len = u16::try_from(super::spans_width(&model_spans)).unwrap_or(u16::MAX);
@@ -69,89 +77,263 @@ pub(super) fn render_input(
         && usable_width.saturating_sub(status_len + 2 + chat_left + model_reserved)
             >= MIN_INPUT_WIDTH;
     let left_reserved = if show_model { model_reserved } else { 0 };
+    let model = show_model.then(|| {
+        (
+            area.x + usable_width.saturating_sub(status_len + model_reserved),
+            model_spans,
+        )
+    });
 
-    if show_model {
-        let model_area = Rect {
-            x: area.x + usable_width.saturating_sub(status_len + model_reserved),
-            y: area.y,
-            width: model_len,
-            height: 1,
-        };
-        frame.render_widget(Paragraph::new(Line::from(model_spans)), model_area);
-    }
-
-    let input_right = area.x + usable_width.saturating_sub(status_len + 2 + left_reserved);
-
-    let status_area = Rect {
-        x: area.x + usable_width.saturating_sub(status_len),
-        y: area.y,
-        width: status_len,
-        height: 1,
-    };
-    let status_line = Line::from(Span::styled(&status_text, status_style));
-    frame.render_widget(Paragraph::new(status_line), status_area);
+    // Typing stays left of the model and status, and inside the Chat
+    // panel so it never runs under the side columns.
+    let input_right = (area.x + usable_width.saturating_sub(status_len + 2 + left_reserved))
+        .min(area.x + chat_right.max(chat_left + 1));
 
     let command = app.input_is_command();
     let before_cursor = input.get(..cursor_pos).unwrap_or(input);
-    let (prompt_str, display_input, cursor_col) = match app.state() {
+    let (prompt, display_input, display_before) = match app.state() {
         _ if command => (
             app.shell_prompt(),
             input.to_string(),
-            display_width(before_cursor),
+            before_cursor.to_string(),
         ),
-        AppState::LoginEmail => ("Email: ", input.to_string(), display_width(before_cursor)),
-        AppState::ProjectName => ("Project: ", input.to_string(), display_width(before_cursor)),
+        AppState::LoginEmail => ("Email: ", input.to_string(), before_cursor.to_string()),
+        AppState::ProjectName => ("Project: ", input.to_string(), before_cursor.to_string()),
         AppState::LinkCode => (
             "Code: ",
             "•".repeat(input.chars().count()),
-            before_cursor.chars().count(),
+            "•".repeat(before_cursor.chars().count()),
         ),
         AppState::LoginPassword => (
             "Password: ",
             "•".repeat(input.chars().count()),
-            before_cursor.chars().count(),
+            "•".repeat(before_cursor.chars().count()),
         ),
-        _ => (
-            CHAT_PROMPT,
-            one_line(input),
-            display_width(&one_line(before_cursor)),
-        ),
+        _ => (CHAT_PROMPT, one_line(input), one_line(before_cursor)),
     };
-    let prompt_width = u16::try_from(display_width(prompt_str)).unwrap_or(u16::MAX);
+    let prompt_width = u16::try_from(display_width(prompt)).unwrap_or(u16::MAX);
 
     // Typing starts at the Chat panel's left border, inset one column like
     // the other outer text, with the prompt right-aligned under the Agents
     // column before it. Typing moves right only when the prompt is wider
     // than the space left of the chat.
     let typing_x = (area.x + chat_left + EDGE_INSET).max(area.x + EDGE_INSET + prompt_width);
-    let prompt_x = typing_x - prompt_width;
-    let prompt_area = Rect {
-        x: prompt_x,
-        y: area.y,
-        width: prompt_width.min(input_right.saturating_sub(prompt_x)),
-        height: 1,
-    };
-    let input_area = Rect {
-        x: typing_x,
-        y: area.y,
-        width: input_right.saturating_sub(typing_x),
-        height: 1,
-    };
+    let width = usize::from(input_right.saturating_sub(typing_x).max(1));
 
-    frame.render_widget(
-        Paragraph::new(Line::from(prompt_spans(prompt_str, prompt_color, theme))),
-        prompt_area,
-    );
-    let input_line = if command {
-        Line::from(super::command::command_spans(&display_input, theme))
+    let spans = if command {
+        super::command::command_spans(&display_input, theme)
     } else {
-        Line::from(prose_spans(&display_input, theme))
+        prose_spans(&display_input, theme)
     };
-    frame.render_widget(Paragraph::new(input_line), input_area);
+    let starts = row_starts(&display_input, width);
+    let mut rows = split_rows(super::command::owned(spans), &starts);
+    let cursor = wrapped_cursor(
+        &display_input,
+        &starts,
+        display_before.chars().count(),
+        width,
+    );
+    while rows.len() <= cursor.0 {
+        rows.push(Vec::new());
+    }
 
-    if !is_thinking {
-        let cursor_x = typing_x.saturating_add(u16::try_from(cursor_col).unwrap_or(u16::MAX));
-        frame.set_cursor_position((cursor_x, area.y));
+    Plan {
+        prompt,
+        prompt_width,
+        typing_x,
+        rows,
+        cursor,
+        status_text,
+        status_style,
+        status_x: area.x + usable_width.saturating_sub(status_len),
+        status_len,
+        model,
+        is_thinking,
+    }
+}
+
+/// Char indices where each row of `text` starts when wrapped at `width`;
+/// the first is always 0. A word that does not fit on the current row
+/// moves to the next one whole, and is only broken mid-word when it is
+/// wider than a full row. Every char, whitespace included, stays on some
+/// row, so a char offset maps straight to a row and column.
+fn row_starts(text: &str, width: usize) -> Vec<usize> {
+    let chars: Vec<(bool, usize)> = text
+        .chars()
+        .map(|c| (c.is_whitespace(), c.width().unwrap_or(0)))
+        .collect();
+    let mut starts = vec![0];
+    let mut used = 0;
+    let mut i = 0;
+    while i < chars.len() {
+        let (is_space, w) = chars[i];
+        if is_space {
+            if used + w > width && used > 0 {
+                starts.push(i);
+                used = 0;
+            }
+            used += w;
+            i += 1;
+            continue;
+        }
+        let end = i + chars[i..].iter().take_while(|(space, _)| !space).count();
+        let word: usize = chars[i..end].iter().map(|(_, w)| w).sum();
+        if used > 0 && used + word > width {
+            starts.push(i);
+            used = 0;
+        }
+        for (j, &(_, w)) in chars.iter().enumerate().take(end).skip(i) {
+            if used + w > width && used > 0 {
+                starts.push(j);
+                used = 0;
+            }
+            used += w;
+        }
+        i = end;
+    }
+    starts
+}
+
+/// Cut `spans` into rows at the char offsets in `starts`.
+fn split_rows(spans: Vec<Span<'static>>, starts: &[usize]) -> Vec<Vec<Span<'static>>> {
+    let mut rows: Vec<Vec<Span<'static>>> = vec![Vec::new()];
+    let mut next = starts.iter().skip(1).peekable();
+    let mut index = 0;
+    for span in spans {
+        for c in span.content.chars() {
+            if next.peek().is_some_and(|&&start| start == index) {
+                next.next();
+                rows.push(Vec::new());
+            }
+            if let Some(row) = rows.last_mut() {
+                match row.last_mut() {
+                    Some(last) if last.style == span.style => last.content.to_mut().push(c),
+                    _ => row.push(Span::styled(c.to_string(), span.style)),
+                }
+            }
+            index += 1;
+        }
+    }
+    rows
+}
+
+/// Row and column of the cursor `offset` chars into `text`, wrapped at
+/// the row `starts` from [`row_starts`]. A full last row puts the cursor
+/// at the start of the next one.
+fn wrapped_cursor(text: &str, starts: &[usize], offset: usize, width: usize) -> (usize, usize) {
+    let row = starts.iter().rposition(|&s| s <= offset).unwrap_or(0);
+    let start = starts.get(row).copied().unwrap_or(0);
+    let col: usize = text
+        .chars()
+        .skip(start)
+        .take(offset.saturating_sub(start))
+        .map(|c| c.width().unwrap_or(0))
+        .sum();
+    if col >= width {
+        (row + 1, 0)
+    } else {
+        (row, col)
+    }
+}
+
+/// Rows the input wants for a row spanning `area`'s columns, at most
+/// `max_rows` and never fewer than one.
+pub(super) fn input_rows(
+    area: Rect,
+    app: &App,
+    theme: &Theme,
+    chat_left: u16,
+    chat_right: u16,
+    max_rows: u16,
+) -> u16 {
+    let rows = plan(area, app, theme, chat_left, chat_right).rows.len();
+    u16::try_from(rows)
+        .unwrap_or(u16::MAX)
+        .min(MAX_INPUT_ROWS)
+        .min(max_rows)
+        .max(1)
+}
+
+/// Render the input into `area`, whose height is the rows it gets (see
+/// [`input_rows`]). `chat_left` and `chat_right` are the Chat panel's
+/// border columns, relative to `area`.
+pub(super) fn render_input(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    theme: &Theme,
+    chat_left: u16,
+    chat_right: u16,
+) {
+    if area.height == 0 {
+        return;
+    }
+    let plan = plan(area, app, theme, chat_left, chat_right);
+    let last_y = area.y + area.height - 1;
+
+    if let Some((x, spans)) = plan.model {
+        let width = u16::try_from(super::spans_width(&spans)).unwrap_or(u16::MAX);
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)),
+            Rect {
+                x,
+                y: last_y,
+                width,
+                height: 1,
+            },
+        );
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            &plan.status_text,
+            plan.status_style,
+        ))),
+        Rect {
+            x: plan.status_x,
+            y: last_y,
+            width: plan.status_len,
+            height: 1,
+        },
+    );
+
+    // Keep the cursor's row in view once the input outgrows its rows.
+    let visible = usize::from(area.height);
+    let first = (plan.cursor.0 + 1).saturating_sub(visible);
+    let prompt_x = plan.typing_x - plan.prompt_width;
+    frame.render_widget(
+        Paragraph::new(Line::from(prompt_spans(
+            plan.prompt,
+            theme.colors.primary,
+            theme,
+        ))),
+        Rect {
+            x: prompt_x,
+            y: area.y,
+            width: plan.prompt_width,
+            height: 1,
+        },
+    );
+    let typing_width = area.x + area.width - plan.typing_x.min(area.x + area.width);
+    for (i, row) in plan.rows.into_iter().skip(first).take(visible).enumerate() {
+        let y = area.y + u16::try_from(i).unwrap_or(u16::MAX);
+        frame.render_widget(
+            Paragraph::new(Line::from(row)),
+            Rect {
+                x: plan.typing_x,
+                y,
+                width: typing_width,
+                height: 1,
+            },
+        );
+    }
+
+    if !plan.is_thinking {
+        let (row, col) = plan.cursor;
+        let y = area.y + u16::try_from(row - first).unwrap_or(0);
+        let x = plan
+            .typing_x
+            .saturating_add(u16::try_from(col).unwrap_or(u16::MAX));
+        frame.set_cursor_position((x, y));
     }
 }
 
@@ -228,4 +410,44 @@ pub(super) fn prompt_spans<'a>(
         Span::styled(&body[at..host_end], Style::default().fg(theme.colors.muted)),
         Span::styled(&body[host_end..], Style::default().fg(color)),
     ]
+}
+#[cfg(test)]
+mod wrap_tests {
+    use super::{row_starts, split_rows, wrapped_cursor};
+    use ratatui::text::Span;
+
+    fn rows(text: &str, width: usize) -> Vec<String> {
+        let starts = row_starts(text, width);
+        split_rows(vec![Span::raw(text.to_string())], &starts)
+            .iter()
+            .map(|row| row.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn words_move_to_the_next_row_whole() {
+        assert_eq!(rows("hello world foo", 8), vec!["hello ", "world ", "foo"]);
+        assert_eq!(rows("ab cdefg", 5), vec!["ab ", "cdefg"]);
+    }
+
+    #[test]
+    fn words_wider_than_a_row_are_broken() {
+        assert_eq!(rows("ab abcdefghij", 5), vec!["ab ", "abcde", "fghij"]);
+    }
+
+    #[test]
+    fn cursor_follows_a_word_to_the_next_row() {
+        let text = "hello world";
+        let starts = row_starts(text, 8);
+        assert_eq!(wrapped_cursor(text, &starts, text.len(), 8), (1, 5));
+        assert_eq!(wrapped_cursor(text, &starts, 6, 8), (1, 0));
+        assert_eq!(wrapped_cursor(text, &starts, 3, 8), (0, 3));
+    }
+
+    #[test]
+    fn cursor_after_a_full_row_starts_the_next() {
+        let text = "abcde";
+        let starts = row_starts(text, 5);
+        assert_eq!(wrapped_cursor(text, &starts, 5, 5), (1, 0));
+    }
 }

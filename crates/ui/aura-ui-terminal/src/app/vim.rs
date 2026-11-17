@@ -193,6 +193,14 @@ impl Vim {
         self.align = Align::View;
     }
 
+    /// Put the cursor at the start of `line` (clamped to the file) and
+    /// show that line at the top of the next frame.
+    pub fn jump_to(&mut self, line: usize, lines: &[&str]) {
+        self.want_col = 0;
+        self.set_line(line, lines);
+        self.align = Align::Top;
+    }
+
     /// Move the cursor into lines `first..=last`, keeping its column goal.
     pub fn keep_within(&mut self, first: usize, last: usize, lines: &[&str]) {
         if self.line < first {

@@ -26,6 +26,7 @@ mod record_log_bridge;
 mod rocks_store;
 pub mod seal;
 mod store;
+pub mod traces;
 pub mod vault;
 
 pub use aura_core_types::AgentStatus;
@@ -41,6 +42,7 @@ pub use rocks_store::FaultAt;
 pub use rocks_store::RocksStore;
 pub use seal::{SealCipher, SealError, SEAL_MAGIC, SEAL_VERSION};
 pub use store::{DequeueToken, ReadStore, Store, WriteStore};
+pub use traces::{TraceStore, TraceStoreError};
 pub use vault::{SecretMetadata, SecretRecord, SecretsVault, VaultError};
 
 /// Column family names.
@@ -83,4 +85,15 @@ pub mod cf {
     /// at rest in sealed mode. Capped per process — see
     /// [`crate::processes::MAX_PROCESS_RUNS_KEPT`].
     pub const PROCESS_RUNS: &str = "process_runs";
+    /// Run trace metadata and scorecards. Keyed `meta/{run_id}` and
+    /// `summary/{run_id}`; values are JSON documents from
+    /// `aura-agent-trace`, sealed at rest in sealed mode. See
+    /// [`crate::traces`].
+    pub const TRACE_RUNS: &str = "trace_runs";
+    /// Run trace steps, rewards and kernel record rows. Keyed
+    /// `{run_id}/{kind}/{n:020}`; sealed at rest in sealed mode.
+    pub const TRACE_STEPS: &str = "trace_steps";
+    /// Runs of each owner (agent id in hex). Keyed `{owner}/{run_id}`
+    /// with an empty value; keys only, plaintext in both modes.
+    pub const TRACE_INDEX: &str = "trace_index";
 }

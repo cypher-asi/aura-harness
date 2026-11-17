@@ -79,6 +79,14 @@ impl App {
                 }
             }
             "spawn" => self.handle_spawn_command(arg),
+            "archive" => {
+                let id = self.active_agent_id.clone();
+                self.archive_agent(id);
+            }
+            "remove-project" => {
+                let id = self.active_agent_id.clone();
+                self.request_remove_project(id);
+            }
             "plan" => self.request_plan_toggle(),
             "build" => self.request_build(arg),
             "login" => self.handle_login_command(arg),
@@ -193,12 +201,10 @@ impl App {
         KeyResult::continue_running()
     }
 
-    /// Re-read the sandbox tree when the panel is on screen, so files the
-    /// agent writes show up.
+    /// Re-read the sandbox tree on the next tick, so files the agent
+    /// writes show up.
     fn refresh_sandbox(&mut self) {
-        if self.sandbox_panel_visible {
-            self.sandbox.refresh();
-        }
+        self.sandbox_stale = true;
     }
 
     /// `/login` (zOS), `/login zos`, or `/login <plan> [paste]`.
@@ -791,6 +797,7 @@ impl App {
             UiCommand::ClearConversation => self.cmd_clear_conversation(),
             UiCommand::NewRecord(record) => self.cmd_new_record(record),
             UiCommand::SetAgents(agents) => self.cmd_set_agents(agents),
+            UiCommand::SetArchivedAgents(agents) => self.set_archived(agents),
             UiCommand::SetActiveAgent(agent_id) => self.cmd_set_active_agent(&agent_id),
             UiCommand::SetAgentDefinitions(definitions) => self.set_definitions(definitions),
             UiCommand::OpenEditor(path) => self.editor_request = Some(path),
@@ -852,9 +859,16 @@ impl App {
     }
 
     fn cmd_append_text(&mut self, text: &str) {
+        let before = self.streaming_content.len();
         self.streaming_content.push_str(text);
         if let Some(last_msg) = self.messages.back_mut() {
-            if last_msg.is_streaming() {
+            if !last_msg.is_streaming() {
+                return;
+            }
+            // Copying the whole reply on every delta grows with its length.
+            if last_msg.content().len() == before {
+                last_msg.append(text);
+            } else {
                 last_msg.set_content(&self.streaming_content);
             }
         }
@@ -1039,7 +1053,8 @@ impl App {
 
     fn cmd_turn_started(&mut self, prompt: Option<String>) {
         if let Some(prompt) = prompt {
-            self.add_message(Message::new(MessageRole::User, &prompt));
+            let images = self.take_queued_previews(&prompt);
+            self.add_message(Message::new(MessageRole::User, &prompt).with_images(images));
         }
         // A turn the user did not start (a background completion notice)
         // must not hide a login prompt or an approval on screen.

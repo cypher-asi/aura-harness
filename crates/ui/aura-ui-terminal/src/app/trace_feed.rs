@@ -1,9 +1,13 @@
 //! The TRACE side tab: a live feed of recorded steps (model calls, tool
-//! calls, harness decisions, rewards), newest last. Enter opens the
-//! highlighted step in the run graph.
+//! calls, harness decisions, rewards), newest last. Enter or a click opens
+//! the highlighted step as JSON; `g` opens it in the run graph.
 
 use std::collections::VecDeque;
 
+use super::file_view::FileView;
+use super::graph::node_title;
+use super::processes::SIDE_PAGE;
+use super::trace_json::{node_json, NodeLink};
 use super::{follow_selection, App, DetailView};
 use crate::events::{TraceNode, TraceNodeStatus, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -144,20 +148,41 @@ impl App {
         match key.code {
             KeyCode::Up => self.trace_feed.move_by(-1),
             KeyCode::Down => self.trace_feed.move_by(1),
-            KeyCode::PageUp => self.trace_feed.move_by(-10),
-            KeyCode::PageDown => self.trace_feed.move_by(10),
+            KeyCode::PageUp => self.trace_feed.move_by(-SIDE_PAGE),
+            KeyCode::PageDown => self.trace_feed.move_by(SIDE_PAGE),
             KeyCode::Home => self.trace_feed.select(0),
             KeyCode::End => self.trace_feed.select(usize::MAX),
             KeyCode::Enter => self.open_selected_trace_entry(),
-            KeyCode::Left => self.show_side_tab(self.side_tab.prev()),
-            KeyCode::Right => self.show_side_tab(self.side_tab.next()),
             _ => {}
         }
     }
 
+    /// Open the highlighted step over the chat panel as JSON, the way the
+    /// run graph opens a node.
+    pub(super) fn open_selected_trace_entry(&mut self) {
+        let Some(entry) = self.trace_feed.selected_entry() else {
+            return;
+        };
+        let node = &entry.node;
+        let same_run = self.graph.run_id() == entry.run_id;
+        let links: Vec<NodeLink> = node
+            .links
+            .iter()
+            .map(|(kind, other)| {
+                let label = same_run
+                    .then(|| self.graph.node(other).map(|n| n.label.clone()))
+                    .flatten();
+                (kind.clone(), other.clone(), label)
+            })
+            .collect();
+        let json = node_json(node, &links);
+        let view = FileView::snapshot(&node_title(node), &json, "json", 1);
+        self.open_detail(DetailView::File(Box::new(view)));
+    }
+
     /// Open the highlighted entry's run in the graph with the entry
     /// selected.
-    pub(super) fn open_selected_trace_entry(&mut self) {
+    pub(super) fn open_selected_trace_in_graph(&mut self) {
         let Some(entry) = self.trace_feed.selected_entry().cloned() else {
             return;
         };

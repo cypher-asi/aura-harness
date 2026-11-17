@@ -228,7 +228,9 @@ pub const DEFAULT_AUTONOMOUS_DEV_LOOP_BINARIES: &[&str] = &[
 ];
 
 #[cfg(unix)]
-const PLATFORM_AUTONOMOUS_DEV_LOOP_BINARIES: &[&str] = &["ls"];
+const PLATFORM_AUTONOMOUS_DEV_LOOP_BINARIES: &[&str] = &[
+    "cat", "find", "grep", "head", "ls", "mkdir", "rg", "sort", "tail", "wc",
+];
 
 #[cfg(not(unix))]
 const PLATFORM_AUTONOMOUS_DEV_LOOP_BINARIES: &[&str] = &[];
@@ -438,11 +440,13 @@ mod default_tests {
 
     #[cfg(unix)]
     #[test]
-    fn dev_loop_binary_allowlist_includes_ls_on_unix() {
+    fn dev_loop_binary_allowlist_includes_search_tools_on_unix() {
         let cfg = ToolConfig::for_autonomous_dev_loop();
-        assert!(
-            cfg.command.binary_allowlist.contains(&"ls".to_string()),
-            "Unix dev-loop policy should retain ls"
-        );
+        for binary in ["find", "grep", "ls", "mkdir", "rg"] {
+            assert!(
+                cfg.command.binary_allowlist.contains(&binary.to_string()),
+                "Unix dev-loop policy should include {binary}"
+            );
+        }
     }
 }

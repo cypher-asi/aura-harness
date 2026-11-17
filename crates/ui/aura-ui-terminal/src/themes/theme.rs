@@ -156,7 +156,7 @@ impl Default for Theme {
 /// | Purple      | #cb01f4  | Pending states, secondary accent   |
 /// | Red         | #f4012a  | Errors, danger                     |
 /// | White       | #ffffff  | Primary text                       |
-/// | Light gray  | #d4d4d4  | Body text of chat replies          |
+/// | Light gray  | #e6e6e6  | Body text of chat replies          |
 /// | Gray        | #888888  | Muted text, secondary info         |
 /// | Black       | #0d0d0d  | Background, text on selection      |
 /// | Dark gray   | #1e1e1e  | List cell                          |
@@ -168,7 +168,7 @@ pub struct ThemeColors {
     /// Foreground/primary text color (#ffffff white)
     pub foreground: Color,
     /// Body text of chat replies, a step softer than `foreground` so bold
-    /// text and headings stand out (#d4d4d4 light gray)
+    /// text and headings stand out (#e6e6e6 light gray)
     pub text: Color,
     /// Primary accent color - blue (#01a4f4)
     pub primary: Color,

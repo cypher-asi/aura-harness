@@ -90,6 +90,27 @@ fn finished_rows_are_capped_newest_first() {
     assert_eq!(rows[0].id, turn_id(*agents.last().unwrap()));
 }
 
+#[test]
+fn finished_rows_outlive_the_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("process_history.json");
+    let agent = AgentId::generate();
+    let table = ProcessTable::without_os_scan(None, None);
+    table.keep_history(path.clone());
+    table.start(turn(agent, 1), None);
+    table.save();
+    assert!(!path.exists(), "running rows are not history");
+    table.finish(&turn_id(agent), ProcessStatus::Exited);
+    table.save();
+
+    let next = ProcessTable::without_os_scan(None, None);
+    next.keep_history(path);
+    let rows = next.snapshot();
+    assert_eq!(ids(&rows), vec![(turn_id(agent), 0)]);
+    assert_eq!(rows[0].status, ProcessStatus::Exited);
+    assert!(!rows[0].killable);
+}
+
 #[tokio::test]
 async fn background_commands_are_listed_killed_and_reported() {
     let (tx, mut completions) = mpsc::channel::<Transaction>(4);

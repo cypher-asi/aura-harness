@@ -37,6 +37,7 @@ pub(crate) mod run_command;
 pub(crate) mod steering;
 pub(crate) mod subagents;
 pub(crate) mod task_check;
+mod titles;
 pub(crate) mod trace;
 pub(crate) mod turns;
 
@@ -49,7 +50,9 @@ pub use host::{TerminalAgents, TerminalChildKernels};
 pub use processes::{BackgroundCommands, ProcessTable};
 pub use record_ui::{FanoutObserver, RecordPanelAgent, UiRecordObserver};
 pub use subagents::{AgentHub, AgentHubParts, TurnBase};
+pub use trace::Traces;
 
+use crate::agent_registry::RegisteredAgent;
 use crate::model_selection::ModelSelection;
 use agent_events::AgentUi;
 use approvals::Answer;
@@ -93,8 +96,6 @@ pub struct EventLoopContext<'a> {
     pub auth: Arc<AuthManager>,
     /// Tool calls waiting for the user's answer.
     pub approvals: Arc<TerminalApprovals>,
-    /// Routes kernel record entries to the run recording each agent.
-    pub record_router: Arc<aura_agent_trace::RecordRouter>,
 }
 
 /// Mutable state threaded through all event handlers.
@@ -121,9 +122,6 @@ pub(super) struct LoopState<'a> {
     /// Plan sign-in waiting for a pasted code.
     pub(super) pending_link: Option<PendingLink>,
     pub(super) approvals: Arc<TerminalApprovals>,
-    /// Open run traces, one per agent conversation.
-    pub(super) traces: HashMap<AgentId, trace::LiveRun>,
-    pub(super) record_router: Arc<aura_agent_trace::RecordRouter>,
     /// The comparison waiting for `/compare go`, and the one running.
     pub(super) compare: compare::CompareState,
 }
@@ -182,7 +180,6 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         models,
         auth,
         approvals,
-        record_router,
     } = ctx;
     let processes = Arc::clone(&hub.processes);
     let publisher = processes::spawn_publisher(Arc::clone(&processes), commands.clone());
@@ -206,8 +203,6 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         auth,
         pending_link: None,
         approvals,
-        traces: HashMap::new(),
-        record_router,
         compare: compare::CompareState::in_aura_home(
             &std::env::current_dir()
                 .unwrap_or_default()
@@ -224,6 +219,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
     modes::warn_if_unconfined(&state, active).await;
     hud::send_instructions_of(&state, active).await;
     plan_mode::send_plan_of(&state, active).await;
+    state.hub.traces.send_history(active).await;
     handlers::announce_models(&mut state).await;
 
     let hub = Arc::clone(&state.hub);
@@ -255,7 +251,8 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
     }
     shut_down(&mut state, &mut done_rx).await;
     publisher.abort();
-    trace::close_all(&mut state);
+    state.processes.save();
+    state.hub.traces.close_all();
     Ok(())
 }
 
@@ -483,6 +480,12 @@ async fn handle_ui_event(
             agents::handle_create_project(state, &name, &folder).await;
         }
         UiEvent::RenameProject(name) => agents::handle_rename_project(state, &name).await,
+        UiEvent::AddAgentToProject(root) => {
+            agents::handle_add_agent_to_project(state, &root).await;
+        }
+        UiEvent::ArchiveAgent(agent) => agents::handle_archive_agent(state, &agent).await,
+        UiEvent::RestoreAgent(agent) => agents::handle_restore_agent(state, &agent).await,
+        UiEvent::RemoveProject(agent) => agents::handle_remove_project(state, &agent).await,
         UiEvent::RefreshAgents => agents::handle_refresh_agents(state).await,
         UiEvent::InstantiateDefinition(name) => {
             agents::handle_instantiate_definition(state, &name).await;
@@ -653,6 +656,11 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
             ));
             let turn_steering = Steering::new(&cancel);
             steering = Some(turn_steering.clone());
+            let title_model = (prompt.mentions
+                && subagents::lock(&state.hub.registry)
+                    .find(agent_id)
+                    .is_some_and(RegisteredAgent::needs_title))
+            .then(|| titles::title_model(&agent_loop.config().model));
             Task::Turn {
                 prompt,
                 agent_loop: Box::new(agent_loop),
@@ -662,6 +670,7 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
                 recorder,
                 gate,
                 routing,
+                title_model,
             }
         }
         Work::Command { command, cols } => Task::Command { command, cols },
@@ -781,12 +790,18 @@ async fn handle_work_done(state: &mut LoopState<'_>, done: WorkDone) {
         failure,
         unseen,
         refused_models,
+        title,
     } = done;
     if !refused_models.is_empty() {
         for model in &refused_models {
             state.models.drop_model(model);
         }
         let _ = state.commands.send(state.models.ui_command()).await;
+    }
+    if let Some(title) = title {
+        if let Err(e) = subagents::lock(&state.hub.registry).set_title(agent_id, &title) {
+            warn!(%agent_id, error = %e, "Could not save the chat title");
+        }
     }
     if !unseen.is_empty() {
         let queue = state.queued.entry(agent_id).or_default();

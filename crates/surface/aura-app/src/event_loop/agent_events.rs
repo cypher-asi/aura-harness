@@ -24,6 +24,7 @@ use aura_ui_terminal::{
     UiCommand,
 };
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
@@ -133,12 +134,32 @@ pub(crate) fn call_usage(model: &str, usage: &Usage) -> Option<CallUsage> {
     })
 }
 
+/// How long streamed text may wait to be merged with the text after it.
+/// Every agent shares one command channel to the UI, so one command per
+/// token would crowd it as agents are added.
+const DELTA_FLUSH: Duration = Duration::from_millis(33);
+
+/// Which streamed block buffered text belongs to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DeltaKind {
+    Text,
+    Thinking,
+}
+
+/// Streamed text not yet sent to the UI.
+struct PendingDelta {
+    kind: DeltaKind,
+    text: String,
+    flush_at: Instant,
+}
+
 /// Sink implementation that drains [`AgentLoopEvent`]s from the agent
 /// loop and fans them out to the TUI as [`UiCommand`]s while maintaining
 /// the streaming / thinking state machine the Ratatui layer depends on.
 struct UiCommandSink {
     ui: AgentUi,
     state: ForwarderState,
+    pending: Option<PendingDelta>,
     /// Tool calls shown in the chat that have no result yet
     open_tools: Vec<String>,
     cost_cap: Option<CostCap>,
@@ -191,8 +212,38 @@ impl UiCommandSink {
         }
     }
 
+    /// Add streamed text to the buffer, sending what it held first when
+    /// that belongs to the other block.
+    async fn buffer_delta(&mut self, kind: DeltaKind, text: String) {
+        if self.pending.as_ref().is_some_and(|p| p.kind != kind) {
+            self.flush_delta().await;
+        }
+        match &mut self.pending {
+            Some(pending) => pending.text.push_str(&text),
+            None => {
+                self.pending = Some(PendingDelta {
+                    kind,
+                    text,
+                    flush_at: Instant::now() + DELTA_FLUSH,
+                });
+            }
+        }
+    }
+
+    async fn flush_delta(&mut self) {
+        let Some(pending) = self.pending.take() else {
+            return;
+        };
+        let command = match pending.kind {
+            DeltaKind::Text => UiCommand::AppendText(pending.text),
+            DeltaKind::Thinking => UiCommand::AppendThinking(pending.text),
+        };
+        self.ui.send(command).await;
+    }
+
     async fn finish_thinking_if_active(&mut self) {
         if self.state.thinking_active {
+            self.flush_delta().await;
             self.ui.send(UiCommand::FinishThinking).await;
             self.state.thinking_active = false;
         }
@@ -202,6 +253,7 @@ impl UiCommandSink {
     /// call or more thinking starts a new message below them.
     async fn finish_streaming_if_active(&mut self) {
         if self.state.streaming_active {
+            self.flush_delta().await;
             self.ui.send(UiCommand::FinishStreaming).await;
             self.state.streaming_active = false;
         }
@@ -232,7 +284,7 @@ impl TurnEventSink for UiCommandSink {
             self.ui.send(UiCommand::StartThinking).await;
             self.state.thinking_active = true;
         }
-        self.ui.send(UiCommand::AppendThinking(text)).await;
+        self.buffer_delta(DeltaKind::Thinking, text).await;
     }
 
     async fn on_thinking_complete(&mut self) {
@@ -246,7 +298,7 @@ impl TurnEventSink for UiCommandSink {
             self.state.streaming_active = true;
         }
         self.state.had_text = true;
-        self.ui.send(UiCommand::AppendText(text)).await;
+        self.buffer_delta(DeltaKind::Text, text).await;
     }
 
     async fn on_tool_start(&mut self, id: String, name: String) {
@@ -483,18 +535,39 @@ pub(crate) async fn forward_agent_events(
             context_limit,
             ..ForwarderState::default()
         },
+        pending: None,
         open_tools: Vec::new(),
         cost_cap,
         plan,
         turn_tokens: 0,
     };
 
-    while let Some(event) = rx.recv().await {
+    loop {
+        let event = match sink.pending.as_ref().map(|p| p.flush_at) {
+            Some(flush_at) => match tokio::time::timeout_at(flush_at.into(), rx.recv()).await {
+                Ok(event) => event,
+                Err(_) => {
+                    sink.flush_delta().await;
+                    continue;
+                }
+            },
+            None => rx.recv().await,
+        };
+        let Some(event) = event else {
+            break;
+        };
         if let Some(rec) = &recorder {
             rec.on_event(&event);
         }
+        if !matches!(
+            event,
+            AgentLoopEvent::TextDelta(_) | AgentLoopEvent::ThinkingDelta(_)
+        ) {
+            sink.flush_delta().await;
+        }
         map_agent_loop_event(event, &mut sink).await;
     }
+    sink.flush_delta().await;
 
     sink.state
 }

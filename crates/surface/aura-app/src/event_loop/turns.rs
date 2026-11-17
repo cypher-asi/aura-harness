@@ -93,6 +93,9 @@ pub(super) enum Task {
         gate: Option<Box<GateTurn>>,
         /// How Gate records the turn's prompt
         routing: Box<Routing>,
+        /// Model that titles the chat once the turn succeeds; `None` when
+        /// the agent needs no title.
+        title_model: Option<String>,
     },
     /// A typed shell command.
     Command { command: String, cols: u16 },
@@ -187,6 +190,8 @@ pub(super) struct WorkDone {
     pub unseen: Vec<(SteerSource, String)>,
     /// Models Gate picked whose route refused the user's sign-in or plan.
     pub refused_models: Vec<String>,
+    /// Title the turn gave the agent's chat.
+    pub title: Option<String>,
 }
 
 /// Run `task` on `session` in the background, reporting to `ui`, and send
@@ -221,6 +226,7 @@ pub(super) fn spawn(
                 failure: outcome.failure,
                 unseen: outcome.unseen,
                 refused_models: outcome.refused,
+                title: outcome.title,
             })
             .await;
     });
@@ -232,6 +238,7 @@ struct Outcome {
     failure: Option<String>,
     unseen: Vec<(SteerSource, String)>,
     refused: Vec<String>,
+    title: Option<String>,
 }
 
 async fn run(
@@ -250,6 +257,7 @@ async fn run(
             recorder,
             gate,
             routing,
+            title_model,
         } => {
             let turn = TurnParts {
                 agent_loop,
@@ -259,6 +267,7 @@ async fn run(
                 recorder,
                 gate,
                 routing,
+                title_model,
             };
             run_prompt(&mut session, prompt, turn, &ui, &cancel).await
         }
@@ -283,6 +292,7 @@ struct TurnParts<'a> {
     recorder: Option<Arc<RunRecorder>>,
     gate: Option<Box<GateTurn>>,
     routing: Box<Routing>,
+    title_model: Option<String>,
 }
 
 /// Record `text` on `session` as a prompt from the user, not classified:
@@ -338,6 +348,7 @@ async fn run_prompt(
     };
     let turn_start = session.messages.len();
 
+    let title_prompt = turn.title_model.is_some().then(|| prompt.text.clone());
     let (process_result, forwarded, attempts, recorded) =
         if turn.routing.reason == RouteReason::Pinned {
             begin_files(session, &prompt.text);
@@ -415,9 +426,24 @@ async fn run_prompt(
         ended_signal(&process_result, turn_start)
     };
 
+    let mut title = None;
     let failure = match process_result {
         Ok(result) => {
             handle_agent_success(session, result, &forwarded, ui, &seen).await;
+            if let (Some(model), Some(prompt), false) =
+                (&turn.title_model, &title_prompt, cancelled)
+            {
+                title = Some(
+                    super::titles::generate(
+                        &session.model_gateway,
+                        turn.agent_loop.config(),
+                        model,
+                        prompt,
+                        &session.messages,
+                    )
+                    .await,
+                );
+            }
             None
         }
         Err(e) if cancelled => {
@@ -446,6 +472,7 @@ async fn run_prompt(
         failure,
         unseen,
         refused: attempts.refused,
+        title,
     }
 }
 

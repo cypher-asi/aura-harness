@@ -4,6 +4,7 @@
 //! panels (Chat, Record and Sandbox), and coordinates between input handling and rendering.
 
 mod agent_views;
+mod archive;
 mod chat_tabs;
 mod commands;
 mod definitions;
@@ -12,6 +13,7 @@ pub mod folder_picker;
 pub(crate) use aura_ui::format;
 pub mod graph;
 pub mod hud;
+pub mod image_preview;
 pub mod images;
 mod input_editor;
 mod keys;
@@ -27,7 +29,9 @@ pub(crate) mod shell_input;
 mod shell_prompt;
 mod slash_menu;
 pub mod tab_bar;
+mod tool_view;
 pub mod trace_feed;
+mod trace_json;
 mod turn;
 pub mod vim;
 
@@ -204,6 +208,9 @@ pub struct App {
     pub(super) sandbox_panel_visible: bool,
     /// File tree of the active agent's sandbox
     pub(super) sandbox: SandboxTree,
+    /// Whether a tool may have changed files since the tree was read; the
+    /// next tick reads it again, once however many tools finished
+    pub(super) sandbox_stale: bool,
     /// Animation frame counter for spinners
     pub(super) animation_frame: usize,
     /// Kernel records list
@@ -295,6 +302,13 @@ pub struct App {
     pub(super) images: Vec<images::PendingImage>,
     /// Whether Ctrl+V asked for the clipboard before the next frame
     pub(super) paste_requested: bool,
+    /// Images of messages sent to a busy agent, by message text, until
+    /// the chat shows the message
+    pub(super) queued_images: VecDeque<(String, Vec<std::sync::Arc<image_preview::ImagePreview>>)>,
+    /// Image thumbnails in the chat in the last frame
+    pub(super) image_hits: Vec<ImageHit>,
+    /// Thumbnails of the images waiting in the input, in the last frame
+    pub(super) pending_image_areas: Vec<(Rect, usize)>,
     /// Text selected with the mouse, in screen cells
     pub(super) selection: Option<Selection>,
     /// Whether the left button is still held for `selection`
@@ -315,6 +329,14 @@ pub struct App {
     pub(super) input_editor_file: Option<PathBuf>,
     /// Permanent agent waiting for `y` to confirm its deletion
     pub(super) pending_delete: Option<String>,
+    /// Agent whose project waits for `y` to confirm removing it
+    pub(super) pending_remove_project: Option<String>,
+    /// Archived agents, each followed by the agents under it
+    pub(super) archived: Vec<AgentSummary>,
+    /// Highlighted row of the Archive
+    pub(super) selected_archived: usize,
+    /// First visible row of the Archive
+    pub(super) archived_scroll: usize,
     /// Folder browser for a new project, while it is open
     pub(super) folder_picker: Option<FolderPicker>,
     /// Usage, todos and jobs of the agent on screen
@@ -359,6 +381,8 @@ pub struct PanelAreas {
     pub definition_rows: Option<Rect>,
     /// "+ New agent", pinned to the bottom of the agents panel
     pub new_agent_row: Option<Rect>,
+    /// Rows of the Archive inside the agents panel
+    pub archived_rows: Option<Rect>,
     /// Chat panel (including border)
     pub chat: Option<Rect>,
     /// Header bar of the chat panel
@@ -402,6 +426,8 @@ pub enum DetailView {
     Process(Box<ProcessSummary>),
     /// The run graph (`/graph`).
     Graph,
+    /// A pasted image, as large as the panel allows.
+    Image(Box<image_preview::ImageView>),
 }
 
 /// Clickable item under the pointer.
@@ -413,8 +439,12 @@ pub(crate) enum HoverTarget {
     ChatTab(ChatTab),
     /// A row in the projects list, including "+ New project".
     ProjectRow(usize),
+    /// The "+" at the right end of a project's row in the projects list.
+    AddToProject(usize),
     /// A row in the roster, including "+ New agent".
     DefinitionRow(usize),
+    /// A row in the Archive.
+    ArchivedRow(usize),
     /// A row in the sandbox tree.
     SandboxRow(usize),
     /// A row in the Record panel.
@@ -423,10 +453,16 @@ pub(crate) enum HoverTarget {
     SideTab(SidePanelTab),
     /// A row in the Processes tab.
     ProcessRow(usize),
+    /// A row in the Trace tab.
+    TraceRow(usize),
     /// A row in the Plans tab.
     PlanRow(usize),
     /// A chat row that expands or collapses agent activity.
     Activity(ToggleTarget),
+    /// An image thumbnail in the chat: message id, which of its images.
+    ChatImage(u64, usize),
+    /// A thumbnail above the input, by its `[image N]` label.
+    PendingImage(usize),
 }
 
 /// What clicking an activity row in the chat expands or collapses.
@@ -438,6 +474,23 @@ pub(crate) enum ToggleTarget {
     Step(u64),
     /// The kernel records of a turn, by when its prompt was sent (Unix ms)
     TurnRecords(u64),
+}
+
+/// A thumbnail in the chat that opens its image when clicked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ImageHit {
+    /// Chat line of the thumbnail's first row
+    pub line: usize,
+    /// Rows the thumbnail takes
+    pub rows: usize,
+    /// First column, counted from the chat text's left edge
+    pub x: u16,
+    /// Columns the thumbnail takes
+    pub width: u16,
+    /// Id of the message holding the image
+    pub message: u64,
+    /// Which of the message's images
+    pub index: usize,
 }
 
 /// A chat row that expands or collapses `target` when clicked.
@@ -487,6 +540,10 @@ pub(super) fn follow_selection(
     };
     scroll.min(total.saturating_sub(visible))
 }
+
+/// Columns of the " + " at the right end of a project's row, which adds an
+/// agent to the project when clicked.
+pub(crate) const PROJECT_ADD_WIDTH: u16 = 3;
 
 /// One row of the projects list. A project is its own row; its first
 /// agent, and any agents that agent spawned, hang underneath while the
@@ -546,6 +603,7 @@ impl App {
             swarm_panel_visible: true,
             sandbox_panel_visible: true,
             sandbox: SandboxTree::default(),
+            sandbox_stale: false,
             animation_frame: 0,
             records: VecDeque::new(),
             selected_record: 0,
@@ -589,6 +647,9 @@ impl App {
             mentions: mentions::MentionMenu::default(),
             images: Vec::new(),
             paste_requested: false,
+            queued_images: VecDeque::new(),
+            image_hits: Vec::new(),
+            pending_image_areas: Vec::new(),
             selection: None,
             selecting: false,
             copy_requested: false,
@@ -599,6 +660,10 @@ impl App {
             editor_request: None,
             input_editor_file: None,
             pending_delete: None,
+            pending_remove_project: None,
+            archived: Vec::new(),
+            selected_archived: 0,
+            archived_scroll: 0,
             folder_picker: None,
             hud: Hud::default(),
             todos_open: false,
@@ -817,6 +882,9 @@ impl App {
                 self.group_open.insert(id, !toggle.open);
             }
             ToggleTarget::Step(id) => {
+                if self.open_tool_step(id) {
+                    return true;
+                }
                 let Some(message) = self.messages.iter_mut().find(|m| m.version().0 == id) else {
                     return false;
                 };
@@ -955,6 +1023,9 @@ impl App {
                 AgentsTab::Roster => {
                     self.select_definition_row(self.selected_definition.saturating_sub(lines));
                 }
+                AgentsTab::Archive => {
+                    self.select_archived_row(self.selected_archived.saturating_sub(lines));
+                }
             },
             PanelFocus::Sandbox => {
                 let delta = -isize::try_from(lines).unwrap_or(isize::MAX);
@@ -991,6 +1062,9 @@ impl App {
                 }
                 AgentsTab::Roster => {
                     self.select_definition_row(self.selected_definition.saturating_add(lines));
+                }
+                AgentsTab::Archive => {
+                    self.select_archived_row(self.selected_archived.saturating_add(lines));
                 }
             },
             PanelFocus::Sandbox => {
@@ -1360,6 +1434,11 @@ impl App {
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 self.focus = panel;
+                if panel == PanelFocus::Chat && self.open_image_at(mouse.column, mouse.row) {
+                    self.clear_selection();
+                    self.hover = None;
+                    return;
+                }
                 self.selection = self
                     .selectable_area(panel)
                     .map(|bounds| Selection::new(bounds, at));
@@ -1371,6 +1450,8 @@ impl App {
                     PanelFocus::Chat => {
                         if self.click_chat_tabs(mouse.column, mouse.row) {
                             self.clear_selection();
+                        } else if self.detail == Some(DetailView::Graph) {
+                            self.click_graph(mouse.column, mouse.row);
                         }
                     }
                 }
@@ -1391,6 +1472,9 @@ impl App {
         }
         if self.agents_tab == AgentsTab::Projects {
             if let Some(index) = self.project_row_at(column, row) {
+                if self.project_add_at(index, column).is_some() {
+                    return Some(HoverTarget::AddToProject(index));
+                }
                 return Some(HoverTarget::ProjectRow(index));
             }
         }
@@ -1399,15 +1483,19 @@ impl App {
                 return Some(HoverTarget::DefinitionRow(index));
             }
         }
+        if self.agents_tab == AgentsTab::Archive {
+            if let Some(index) = self.archived_row_at(column, row) {
+                return Some(HoverTarget::ArchivedRow(index));
+            }
+        }
         if let Some(index) = self.record_row_at(column, row) {
             return Some(HoverTarget::RecordRow(index));
         }
         if let Some(target) = self.hovered_side_panel(column, row) {
             return Some(target);
         }
-        if self.side_tab == SidePanelTab::Sandbox && contains(self.areas.sandbox_rows, column, row)
-        {
-            return self.hovered_sandbox_row(row);
+        if let Some(target) = self.image_at(column, row) {
+            return Some(target);
         }
         self.hovered_activity(column, row)
     }
@@ -1432,6 +1520,28 @@ impl App {
         .then_some(index)
     }
 
+    /// Root agent of the project whose "+" is at `column` on projects-list
+    /// row `index`.
+    fn project_add_at(&self, index: usize, column: u16) -> Option<usize> {
+        let list = self.areas.agent_rows?;
+        let ProjectListRow::Project { root, .. } = *self.project_rows().get(index)? else {
+            return None;
+        };
+        (column + PROJECT_ADD_WIDTH >= list.x + list.width).then_some(root)
+    }
+
+    /// Unfold the project headed by agent `root` and ask for a new agent in
+    /// it.
+    pub(super) fn add_agent_to_project(&mut self, root: usize) {
+        let Some(id) = self.agents.get(root).map(|agent| agent.id.clone()) else {
+            return;
+        };
+        self.collapsed_projects.remove(&id);
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::AddAgentToProject(id));
+        }
+    }
+
     fn record_row_at(&self, column: u16, row: u16) -> Option<usize> {
         let rows = self
             .areas
@@ -1447,12 +1557,6 @@ impl App {
             self.selected_record = index;
             self.open_detail(DetailView::Record);
         }
-    }
-
-    fn hovered_sandbox_row(&self, row: u16) -> Option<HoverTarget> {
-        let rows = self.areas.sandbox_rows?;
-        let index = self.areas.sandbox_scroll + usize::from(row.saturating_sub(rows.y));
-        (index < self.sandbox.rows().len()).then_some(HoverTarget::SandboxRow(index))
     }
 
     fn hovered_activity(&self, column: u16, row: u16) -> Option<HoverTarget> {
@@ -1542,29 +1646,15 @@ impl App {
             .map(|(message, kind, _)| (message.as_str(), *kind))
     }
 
-    pub(super) fn click_sandbox_row(&mut self, column: u16, row: u16) {
-        let Some(rows) = self.areas.sandbox_rows else {
-            return;
-        };
-        if !contains(Some(rows), column, row) {
-            return;
-        }
-        let index = self.areas.sandbox_scroll + usize::from(row - rows.y);
-        if index >= self.sandbox.rows().len() {
-            return;
-        }
-        self.sandbox.select(index);
-        self.sandbox.toggle_selected();
-        self.open_selected_sandbox_file();
-    }
-
     /// Clicking a project folds or opens it and leaves the highlight where
     /// it was; clicking an agent or "+ New project" highlights and acts on it.
     fn click_agent_row(&mut self, column: u16, row: u16) {
         let Some(index) = self.project_row_at(column, row) else {
             return;
         };
-        if let Some(ProjectListRow::Project { root, .. }) = self.project_rows().get(index) {
+        if let Some(root) = self.project_add_at(index, column) {
+            self.add_agent_to_project(root);
+        } else if let Some(ProjectListRow::Project { root, .. }) = self.project_rows().get(index) {
             self.toggle_project(*root);
         } else {
             self.selected_agent = index;
@@ -1627,14 +1717,14 @@ impl App {
     }
 
     /// Visible projects-list rows. Every project contributes a header and,
-    /// while expanded, its first agent plus the agents spawned under it.
+    /// while expanded, its agents with the agents they spawned.
     /// A gap row separates each project from the one above it.
     #[must_use]
     pub(crate) fn project_rows(&self) -> Vec<ProjectListRow> {
         let mut rows = Vec::new();
         let mut index = 0;
         while index < self.agents.len() {
-            if self.agents[index].depth == 0 {
+            if self.agents[index].heads_project() {
                 let root = index;
                 if !rows.is_empty() {
                     rows.push(ProjectListRow::Gap);
@@ -1662,13 +1752,13 @@ impl App {
         self.agents
             .iter()
             .skip(root + 1)
-            .position(|agent| agent.depth == 0)
+            .position(|agent| agent.heads_project())
             .map_or(self.agents.len(), |offset| root + 1 + offset)
     }
 
     /// Root agent of the project that contains `index`.
     fn project_root(&self, index: usize) -> Option<usize> {
-        (0..=index).rev().find(|&i| self.agents[i].depth == 0)
+        (0..=index).rev().find(|&i| self.agents[i].heads_project())
     }
 
     /// Open a folded project so `index` has a visible row.
@@ -1919,22 +2009,42 @@ impl App {
     pub(super) fn open_detail(&mut self, view: DetailView) {
         self.detail = Some(view);
         self.detail_scroll = 0;
+        self.graph.behind = false;
     }
 
     /// Close the view over the chat panel.
     pub(super) fn close_detail(&mut self) {
         self.detail = None;
         self.detail_scroll = 0;
+        self.graph.behind = false;
     }
 
-    /// Open the highlighted sandbox row when it is a file.
-    pub(super) fn open_selected_sandbox_file(&mut self) {
+    /// Open the highlighted sandbox row: a file over the chat panel; a
+    /// directory, which has nothing to show, folds or unfolds.
+    pub(super) fn activate_selected_sandbox_row(&mut self) {
         let Some(row) = self.sandbox.rows().get(self.sandbox.selected()) else {
             return;
         };
-        if matches!(row.kind, SandboxEntryKind::File | SandboxEntryKind::Symlink) {
-            let view = FileView::load(&row.path, self.sandbox.root());
-            self.open_detail(DetailView::File(Box::new(view)));
+        match row.kind {
+            SandboxEntryKind::File | SandboxEntryKind::Symlink => {
+                let view = FileView::load(&row.path, self.sandbox.root());
+                self.open_detail(DetailView::File(Box::new(view)));
+            }
+            SandboxEntryKind::Dir => self.sandbox.toggle_selected(),
+            SandboxEntryKind::More(_) => {}
+        }
+    }
+
+    /// Unfold the highlighted directory; on an open directory or a file,
+    /// do nothing.
+    pub(super) fn expand_selected_sandbox_dir(&mut self) {
+        let closed_dir = self
+            .sandbox
+            .rows()
+            .get(self.sandbox.selected())
+            .is_some_and(|row| row.kind == SandboxEntryKind::Dir && !row.expanded);
+        if closed_dir {
+            self.sandbox.toggle_selected();
         }
     }
 
@@ -1964,6 +2074,14 @@ impl App {
     pub(crate) fn file_view_mut(&mut self) -> Option<(&mut FileView, &mut usize)> {
         match self.detail.as_mut() {
             Some(DetailView::File(file)) => Some((file.as_mut(), &mut self.detail_scroll)),
+            _ => None,
+        }
+    }
+
+    /// The open image, to draw it.
+    pub(crate) fn image_view_mut(&mut self) -> Option<&mut image_preview::ImageView> {
+        match self.detail.as_mut() {
+            Some(DetailView::Image(view)) => Some(view.as_mut()),
             _ => None,
         }
     }
@@ -2051,11 +2169,9 @@ impl App {
         self.animation_frame = self.animation_frame.wrapping_add(1);
         self.expire_copy_notice();
 
-        if let Some(mut rx) = self.command_rx.take() {
-            while let Ok(cmd) = rx.try_recv() {
-                self.process_command(cmd);
-            }
-            self.command_rx = Some(rx);
+        self.receive_commands();
+        if std::mem::take(&mut self.sandbox_stale) && self.sandbox_panel_visible {
+            self.sandbox.refresh();
         }
 
         if matches!(
@@ -2065,6 +2181,18 @@ impl App {
             self.processing_since.get_or_insert_with(Instant::now);
         } else {
             self.processing_since = None;
+        }
+    }
+
+    /// Apply every command waiting in the command channel. Between frames
+    /// this keeps the channel from filling, which would hold up the agents
+    /// and the event loop sending to it.
+    pub fn receive_commands(&mut self) {
+        if let Some(mut rx) = self.command_rx.take() {
+            while let Ok(cmd) = rx.try_recv() {
+                self.process_command(cmd);
+            }
+            self.command_rx = Some(rx);
         }
     }
 }

@@ -40,6 +40,7 @@ use super::processes::{now_ms, task_id, ProcessTable};
 use super::record_ui::RecordPanelAgent;
 use super::steering::Steering;
 use super::task_check;
+use super::trace::Traces;
 use super::turns::ended_signal;
 use crate::agent_definitions::{AgentDefinition, AgentDefinitions};
 use crate::agent_registry::AgentRegistry;
@@ -54,6 +55,7 @@ use aura_agent::{AgentLoop, AgentLoopConfig};
 use aura_agent_gate::compare::{tally, PlanReading};
 use aura_agent_gate::{Candidate, Decision};
 use aura_agent_kernel::Kernel;
+use aura_agent_trace::{RunMeta, RunRecorder, RunSource};
 use aura_context_skills::SkillManager;
 use aura_core_types::{
     AgentId, Hash, ModelTokens, OutcomePayload, OutcomeSignal, PromptCategory, RecordEntry,
@@ -189,6 +191,8 @@ pub struct AgentHub {
     pub(crate) agents: Option<TerminalAgents>,
     /// The agent the RECORD panel follows.
     pub(crate) record_panel: RecordPanelAgent,
+    /// Every agent's run trace.
+    pub(crate) traces: Arc<Traces>,
     /// What Gate has learned, and its latest decisions.
     pub(crate) gate: Arc<GateLive>,
     /// How the subtasks of each running `/compare` run are routed.
@@ -220,6 +224,8 @@ pub struct AgentHubParts {
     pub agents: Option<TerminalAgents>,
     /// Shared with the kernels' [`super::UiRecordObserver`].
     pub record_panel: RecordPanelAgent,
+    /// Records each agent's runs.
+    pub traces: Arc<Traces>,
     /// Gate's table; the kernels' record observer must include it so it
     /// sees every outcome.
     pub gate: Arc<GateLive>,
@@ -265,6 +271,7 @@ impl AgentHub {
                 notice_rx: Mutex::new(Some(notice_rx)),
                 agents: parts.agents,
                 record_panel: parts.record_panel,
+                traces: parts.traces,
                 gate: parts.gate,
                 compare_arms: Mutex::new(HashMap::new()),
                 write_locks: Mutex::new(HashMap::new()),
@@ -543,8 +550,16 @@ impl AgentHub {
     pub async fn send_agent_list(&self) {
         self.name_agents();
         let summaries = self.agent_summaries();
+        let archived = crate::record_loader::archived_summaries(
+            &lock(&self.registry),
+            self.factory.store.as_ref(),
+        );
         let active = lock(&self.registry).active().agent_id();
         let _ = self.commands.send(UiCommand::SetAgents(summaries)).await;
+        let _ = self
+            .commands
+            .send(UiCommand::SetArchivedAgents(archived))
+            .await;
         let _ = self
             .commands
             .send(UiCommand::SetActiveAgent(active.to_hex()))
@@ -579,7 +594,8 @@ impl AgentHub {
     /// Tell the Processes tab what every agent is called.
     pub(crate) fn name_agents(&self) {
         for agent in lock(&self.registry).agents() {
-            self.processes.name_agent(agent.agent_id(), &agent.name);
+            self.processes
+                .name_agent(agent.agent_id(), agent.display_name());
         }
     }
 
@@ -836,6 +852,10 @@ impl AgentHub {
             config.system_prompt.push_str("\n\n");
             config.system_prompt.push_str(addendum);
         }
+        let mut trace = RunMeta::new(&config.model, RunSource::Tui);
+        trace.workspace = workspace.display().to_string();
+        trace.mode.clone_from(&definition.name);
+        trace.spawned_by = self.traces.run_id_of(request.parent_agent_id);
         let mut gate = self.subtask_gate(request, definition, &mut config);
         gate.escalation = escalation;
         let mut summary = task_summary(
@@ -860,6 +880,7 @@ impl AgentHub {
             name: instance.name.clone(),
             parent: request.parent_agent_id,
             check: request.check.clone(),
+            trace,
         })
     }
 
@@ -1125,12 +1146,15 @@ impl AgentHub {
             name,
             parent,
             check,
+            mut trace,
         } = run;
         let child_id = session.agent_id();
         let ui = AgentUi::new(self.commands.clone(), child_id);
         let started = Instant::now();
         let label = gate.label(&session, &mut config, &prompt, &cancel).await;
         summary.model = Some(config.model.clone());
+        trace.model.clone_from(&config.model);
+        let recorder = self.traces.start(child_id, trace);
         self.register_root(child_id, &name, session.kernel.agent_workspace(), &config);
         self.processes.start(summary, Some(cancel.clone()));
         let files = self
@@ -1151,6 +1175,7 @@ impl AgentHub {
             &ui,
             &cancel,
             self.long_run,
+            recorder,
         )
         .await;
         let cancelled = cancel.is_cancelled();
@@ -1225,6 +1250,8 @@ struct TaskRun {
     parent: AgentId,
     /// Command run after its turn, whose exit status is its verdict
     check: Option<String>,
+    /// Its run trace, started once Gate has picked its model
+    trace: RunMeta,
 }
 
 /// A `task` call being worked on.
@@ -1549,6 +1576,7 @@ async fn run_task_turn(
     ui: &AgentUi,
     cancel: &CancellationToken,
     limits: LongRunSettings,
+    recorder: Option<Arc<RunRecorder>>,
 ) -> TaskEnd {
     let turn_start = session.messages.len();
     let mut recorded = None;
@@ -1567,11 +1595,21 @@ async fn run_task_turn(
         ui.send(system_message(line.clone())).await;
     }
 
+    if let Some(rec) = &recorder {
+        rec.begin_turn(prompt);
+    }
     // Nothing sends to a spawn mid-task, so its steering stays empty.
     let steering = Steering::new(cancel);
     let shared: &AgentSession = session;
     let turn = run_agent_turn(
-        shared, agent_loop, tools, ui, cancel, &steering, limits, None,
+        shared,
+        agent_loop,
+        tools,
+        ui,
+        cancel,
+        &steering,
+        limits,
+        recorder.clone(),
     );
     let (result, forwarded) = if recorded.is_some() {
         turn.await
@@ -1584,6 +1622,9 @@ async fn run_task_turn(
         turn
     };
     steering.finish(&[]);
+    if let Some(rec) = &recorder {
+        super::trace::end_turn(rec, &result, cancel.is_cancelled());
+    }
     let cancelled = cancel.is_cancelled();
     let signal = if cancelled || forwarded.credentials_rejected {
         OutcomeSignal::None

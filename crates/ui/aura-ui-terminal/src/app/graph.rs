@@ -9,6 +9,12 @@ use super::file_view::FileView;
 use super::{follow_selection, App, DetailView, NotificationType, PanelFocus};
 use crate::events::{TraceNode, TraceNodeStatus, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::layout::Rect;
+
+/// Title of a step opened as JSON, from the graph or the TRACE tab.
+pub(super) fn node_title(node: &TraceNode) -> String {
+    format!("TRACE {} {}", node.kind.to_uppercase(), node.label)
+}
 
 /// One visible row of the tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +45,11 @@ pub struct GraphState {
     selected: Option<String>,
     scroll: usize,
     link_cursor: usize,
+    /// Whether the open file view came from the graph, so closing it
+    /// comes back here
+    pub(super) behind: bool,
+    /// Tree rows drawn in the last frame, for mouse hits
+    tree_area: Option<Rect>,
 }
 
 impl GraphState {
@@ -91,6 +102,21 @@ impl GraphState {
     #[must_use]
     pub fn selected_node(&self) -> Option<&TraceNode> {
         self.selected.as_deref().and_then(|id| self.node(id))
+    }
+
+    /// Remember where the tree rows were drawn.
+    pub fn set_tree_area(&mut self, tree: Option<Rect>) {
+        self.tree_area = tree;
+    }
+
+    /// Row index of the tree at a screen cell.
+    fn row_at(&self, column: u16, row: u16) -> Option<usize> {
+        let area = self.tree_area?;
+        let inside = column >= area.x
+            && column < area.x + area.width
+            && row >= area.y
+            && row < area.y + area.height;
+        inside.then(|| self.scroll + usize::from(row - area.y))
     }
 
     fn reset(&mut self, run_id: String) {
@@ -350,13 +376,14 @@ impl App {
     /// Keys of the graph view. Returns `true` when the view should close.
     pub(super) fn handle_graph_key(&mut self, key: KeyEvent) -> bool {
         let page = self.detail_page_rows().max(1);
+        let page = isize::try_from(page).unwrap_or(10);
         let g = &mut self.graph;
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => return true,
             KeyCode::Up | KeyCode::Char('k') => g.move_by(-1),
             KeyCode::Down | KeyCode::Char('j') => g.move_by(1),
-            KeyCode::PageUp => g.move_by(-isize::try_from(page).unwrap_or(10)),
-            KeyCode::PageDown => g.move_by(isize::try_from(page).unwrap_or(10)),
+            KeyCode::PageUp => g.move_by(-page),
+            KeyCode::PageDown => g.move_by(page),
             KeyCode::Home | KeyCode::Char('g') => {
                 let rows = g.rows();
                 g.select_row(&rows, 0);
@@ -367,7 +394,8 @@ impl App {
             }
             KeyCode::Left | KeyCode::Char('h') => g.collapse_or_parent(),
             KeyCode::Right | KeyCode::Char('l') => g.expand_or_child(),
-            KeyCode::Enter | KeyCode::Char(' ') => g.toggle(),
+            KeyCode::Enter => self.inspect_selected_node(),
+            KeyCode::Char(' ') => g.toggle(),
             KeyCode::Tab => g.follow_link(),
             KeyCode::Char('e') => g.issues_only = !g.issues_only,
             KeyCode::Char('+' | '=') => self.label_selected(1.0),
@@ -375,6 +403,51 @@ impl App {
             KeyCode::Char('r') => self.jump_to_record(),
             KeyCode::Char('o') => self.open_node_file(),
             _ => {}
+        }
+        false
+    }
+
+    /// A click on a tree row selects it and opens it full panel.
+    pub(crate) fn click_graph(&mut self, column: u16, row: u16) {
+        let g = &mut self.graph;
+        let Some(index) = g.row_at(column, row) else {
+            return;
+        };
+        let rows = g.rows();
+        if index < rows.len() {
+            g.select_row(&rows, index);
+            self.inspect_selected_node();
+        }
+    }
+
+    /// Show the selected node as highlighted JSON over the chat panel, the
+    /// way a file opens. Closing it comes back to the graph.
+    pub(super) fn inspect_selected_node(&mut self) {
+        let Some(node) = self.graph.selected_node() else {
+            return;
+        };
+        let links: Vec<super::trace_json::NodeLink> = self
+            .graph
+            .links_of(&node.id)
+            .iter()
+            .map(|(kind, other)| {
+                let label = self.graph.node(other).map(|n| n.label.clone());
+                (kind.clone(), other.clone(), label)
+            })
+            .collect();
+        let json = super::trace_json::node_json(node, &links);
+        let title = node_title(node);
+        let view = FileView::snapshot(&title, &json, "json", 1);
+        self.open_detail(DetailView::File(Box::new(view)));
+        self.graph.behind = true;
+    }
+
+    /// After a file view closes: back to the graph when it was opened
+    /// from there. Returns whether the graph came back.
+    pub(super) fn return_to_graph(&mut self) -> bool {
+        if std::mem::take(&mut self.graph.behind) {
+            self.open_detail(DetailView::Graph);
+            return true;
         }
         false
     }
@@ -461,6 +534,7 @@ impl App {
         };
         let view = FileView::load(&full, root.as_deref());
         self.open_detail(DetailView::File(Box::new(view)));
+        self.graph.behind = true;
     }
 }
 
@@ -591,7 +665,7 @@ mod tests {
     }
 
     #[test]
-    fn feed_entries_open_in_the_graph() {
+    fn feed_entries_open_as_json_and_g_opens_the_graph() {
         let mut app = loaded();
         app.process_command(UiCommand::GraphUpsert {
             run_id: "r".into(),
@@ -603,6 +677,16 @@ mod tests {
         assert_eq!(app.trace_feed().entries().len(), 1);
         app.close_detail();
         app.open_selected_trace_entry();
+        let Some(DetailView::File(view)) = app.detail_view() else {
+            panic!("the step opens as a file view");
+        };
+        assert!(view.title.starts_with("TRACE DECISION"), "{}", view.title);
+        assert!(
+            matches!(&view.body, crate::app::file_view::FileBody::Text(t) if t.contains("\"s2\""))
+        );
+
+        app.close_detail();
+        app.open_selected_trace_in_graph();
         assert_eq!(app.detail_view(), Some(&DetailView::Graph));
         assert_eq!(app.graph().selected_node().unwrap().id, "s2");
     }

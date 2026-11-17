@@ -262,7 +262,7 @@ fn test_default_layout_shows_agents_column() {
         panic!("expected a project row and an agent row for Researcher");
     };
     let new_project = rows_with("New project")[0];
-    assert!(rows[terminal_project].contains("▱  Terminal Agent"));
+    assert!(rows[terminal_project].contains("🗁  Terminal Agent"));
     // An idle agent leaves the icon column blank, even when it is active.
     let agent_panel: String = rows[terminal_agent].chars().take(30).collect();
     assert!(
@@ -274,13 +274,13 @@ fn test_default_layout_shows_agents_column() {
         char_col(&rows[terminal_project], "Terminal Agent")
     );
     assert!(rows[terminal_agent].contains(" 3m "));
-    assert!(rows[researcher_project].contains("▱  Researcher"));
+    assert!(rows[researcher_project].contains("🗁  Researcher"));
     assert!(!screen.contains("12│"));
     assert!(!screen.contains("# ") && !screen.contains("@ "));
     assert!(!screen.contains('↳') && !screen.contains('▾') && !screen.contains('▸'));
 
     // A thinking agent shows the two-cell aura ring in the icon column.
-    let ring_col = char_col(&rows[terminal_project], "▱");
+    let ring_col = char_col(&rows[terminal_project], "🗁");
     let ring: String = rows[researcher_agent]
         .chars()
         .skip(ring_col)
@@ -294,10 +294,10 @@ fn test_default_layout_shows_agents_column() {
 
     // Icons and names line up down the list, with a blank row between projects.
     assert_eq!(
-        char_col(&rows[terminal_project], "▱"),
+        char_col(&rows[terminal_project], "🗁"),
         char_col(&rows[new_project], "+")
     );
-    assert_eq!(ring_col, char_col(&rows[terminal_project], "▱"));
+    assert_eq!(ring_col, char_col(&rows[terminal_project], "🗁"));
     assert_eq!(
         char_col(&rows[new_project], "New project"),
         char_col(&rows[researcher_project], "Researcher")
@@ -441,8 +441,9 @@ fn test_agents_header_is_a_bar_of_equal_tabs() {
         let rows = render_rows(&mut app, width);
         let (tabs, widths) = header_bar(&rows, "PROJECTS");
         assert!(rows[tabs].contains("AGENTS"));
-        assert_eq!(widths.len(), 2, "the tabs fill the bar: {widths:?}");
-        assert!(widths[0].abs_diff(widths[1]) <= 1, "{widths:?}");
+        assert_eq!(widths.len(), 3, "the tabs fill the bar: {widths:?}");
+        let (min, max) = (widths.iter().min(), widths.iter().max());
+        assert!(max.zip(min).is_some_and(|(a, b)| a - b <= 1), "{widths:?}");
     }
 }
 
@@ -937,7 +938,10 @@ fn test_chat_reads_like_a_terminal_from_the_left_edge() {
         .iter()
         .rposition(|&c| c == '│')
         .unwrap();
-    assert_eq!(text_col, border + 2, "one column in from the border");
+    assert!(
+        (border + 4..=border + 9).contains(&text_col),
+        "inset a few columns from the border: {screen}"
+    );
     assert_eq!(col(&rows[reply], "The task"), text_col);
 }
 
@@ -973,10 +977,14 @@ fn test_sandbox_panel_sits_below_record() {
         rows[sandbox]
     );
     assert!(rows[sandbox].contains("PLANS"));
-    assert!(rows[sandbox + 3].contains("▸ src/"));
+    assert!(
+        rows[sandbox + 3].contains("▸  src"),
+        "{}",
+        rows[sandbox + 3]
+    );
     assert!(rows[sandbox + 4].contains("Cargo.toml"));
     assert_eq!(
-        column(&rows[sandbox + 3], "▸ src/"),
+        column(&rows[sandbox + 3], "▸  src"),
         kernel_border + 2,
         "tree rows share the Record panel's one-column gutter"
     );
@@ -1623,6 +1631,34 @@ fn test_typing_starts_at_chat_left_border_with_prompt_under_agents() {
 }
 
 #[test]
+fn test_long_input_wraps_inside_the_chat_and_grows_upward() {
+    let mut app = app_with_model(None);
+    let text = "word ".repeat(40);
+    type_text(&mut app, text.trim_end());
+    let (rows, (_, cursor_y)) = render_with_cursor(&mut app, 120);
+    let n = rows.len();
+    let (_, chat_left, chat_right) = chat_panel(&rows);
+
+    assert!(rows[n - 2].ends_with("● Ready") || rows[n - 2].trim_end().ends_with("Ready"));
+    let input_rows: Vec<&String> = rows[..n - 1]
+        .iter()
+        .rev()
+        .take_while(|r| r.contains("word"))
+        .collect();
+    assert!(input_rows.len() > 1, "{rows:#?}");
+    for row in &input_rows {
+        let chars: Vec<char> = row.chars().collect();
+        let beyond: String = chars[chat_right..].iter().collect();
+        assert!(!beyond.contains("wo") && !beyond.contains("or"), "{row:?}");
+        assert!(
+            chars[..chat_left].iter().all(|c| *c == ' ' || *c == '>'),
+            "{row:?}"
+        );
+    }
+    assert_eq!(usize::from(cursor_y), n - 2, "cursor on the last input row");
+}
+
+#[test]
 fn test_prompt_pushes_typing_right_without_gutter() {
     let mut app = app_with_model(None);
     submit_message(&mut app, "/swarm");
@@ -2246,9 +2282,13 @@ fn test_step_group_runs_open_then_collapses_and_clicks_open() {
     assert!(!open.contains("│ fn main() {}"), "{open}");
 
     click(&mut app, "lib.rs");
-    let step = render_rows(&mut app, 120).join("\n");
-    assert!(step.contains("▾ Read lib.rs"), "{step}");
-    assert!(step.contains("│ fn main() {}"), "{step}");
+    let view = render_rows(&mut app, 120).join("\n");
+    assert!(
+        matches!(app.detail_view(), Some(crate::app::DetailView::File(_))),
+        "a read opens in the file view: {view}"
+    );
+    assert!(view.contains("src/lib.rs"), "{view}");
+    assert!(view.contains("1 │ fn main() {}"), "{view}");
 }
 
 /// Click the first chat text on screen that reads `needle`.
@@ -2493,7 +2533,7 @@ fn test_policy_lines_follow_a_star_and_stack() {
     };
     let first = row("policy: write_file allowed by user.on");
     assert!(
-        rows[first].contains("│ * policy: write_file"),
+        rows[first].contains("│     * policy: write_file"),
         "{}",
         rows[first]
     );

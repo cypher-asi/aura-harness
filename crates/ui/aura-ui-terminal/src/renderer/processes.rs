@@ -2,9 +2,9 @@
 //! and the detail view of one of them.
 
 use super::panels::{
-    aura_icon, cell_style, list_row, now_ms, render_scrollbar, truncate_record_info, CellState,
-    ScrollView, StatusIcon,
+    aura_icon, cell_style, list_row, now_ms, render_scrollbar, CellState, ScrollView, StatusIcon,
 };
+use super::side_list::{render_empty, render_hint, split_hint, PROCESSES_HINT};
 use super::text::wrap_words;
 use crate::app::{HoverTarget, PanelFocus};
 use crate::events::{ProcessStatus, ProcessSummary};
@@ -17,9 +17,6 @@ use ratatui::{
     Frame,
 };
 
-/// Hint shown at the bottom of the tab when the panel has focus.
-const PROCESSES_HINT: &str = "⏎ details  o agent  k kill  l log  ⇧← files";
-
 /// Draw the Processes list into `inner`, the body below the tab bar of the
 /// panel bordered by `area`.
 pub(super) fn render_processes(
@@ -31,24 +28,17 @@ pub(super) fn render_processes(
 ) {
     let is_focused = app.focus() == PanelFocus::Sandbox;
     if app.processes().is_empty() {
-        let lines: Vec<Line> = [
-            "  Nothing running.",
-            "  Agent turns, spawned agents",
-            "  and background commands",
-            "  appear here.",
-        ]
-        .into_iter()
-        .map(|text| Line::from(Span::styled(text, Style::default().fg(theme.colors.muted))))
-        .collect();
-        frame.render_widget(Paragraph::new(lines), inner);
+        let message = [
+            "Nothing running.",
+            "Agent turns, spawned agents",
+            "and background commands",
+            "appear here.",
+        ];
+        render_empty(frame, inner, &message, theme);
         return;
     }
 
-    let show_hint = is_focused && inner.height >= 4;
-    let rows_area = Rect {
-        height: inner.height.saturating_sub(u16::from(show_hint)),
-        ..inner
-    };
+    let (rows_area, hint) = split_hint(inner, is_focused);
     let visible = rows_area.height as usize;
     let scroll = app.sync_processes_scroll(visible);
     let hovered = match app.hover() {
@@ -95,21 +85,8 @@ pub(super) fn render_processes(
     app.set_process_rows_area(rows_area, scroll);
     frame.render_widget(Paragraph::new(lines), rows_area);
     render_scrollbar(frame, area, rows_area, view, is_focused, theme);
-
-    if show_hint {
-        let hint_area = Rect {
-            y: inner.y + inner.height - 1,
-            height: 1,
-            ..inner
-        };
-        let hint = truncate_record_info(PROCESSES_HINT, width.saturating_sub(1));
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                format!(" {hint}"),
-                Style::default().fg(theme.colors.muted),
-            ))),
-            hint_area,
-        );
+    if let Some(hint) = hint {
+        render_hint(frame, hint, PROCESSES_HINT, theme);
     }
 }
 

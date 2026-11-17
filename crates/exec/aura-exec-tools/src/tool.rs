@@ -104,7 +104,8 @@ pub struct ToolContext {
     /// and backs the job tools. `None` makes such calls fail.
     pub background_processes: Option<Arc<dyn BackgroundProcessHook>>,
     /// Commands may only write inside the workspace (see
-    /// [`crate::confine`]); set under the `yolo` approval level.
+    /// [`crate::confine`]), and skip the command allowlists since the
+    /// confinement bounds them; set under the `yolo` approval level.
     pub confine_writes: bool,
 }
 

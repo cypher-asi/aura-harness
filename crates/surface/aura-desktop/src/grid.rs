@@ -5,29 +5,39 @@
 //! background color, one text draw per run of same-styled ASCII, and
 //! box, block, braille and status characters drawn as shapes
 //! ([`crate::glyphs`]) so borders join and symbols the font lacks still
-//! look right. The painted grid is cached until a cell changes; the block
-//! cursor is drawn on top every frame so it can blink.
+//! look right. The chat's prose rows are the exception: their text flows
+//! in a proportional face (Inter), each run as wide as it measures, with
+//! inline code and symbols still a cell per column. Each row's drawing is
+//! cached until one of its cells changes, so a streamed word or a ticking
+//! timer repaints its row rather than the screen; the block cursor is
+//! drawn on top every frame so it can blink.
 
 // Cell coordinates become pixel positions.
 #![allow(clippy::cast_precision_loss)]
 
 use crate::chrome::Chrome;
 use crate::{glyphs, theme};
+use aura_ui_terminal::ProseRow;
+use iced::advanced::text::Paragraph as _;
 use iced::alignment::Vertical;
 use iced::font::Style;
 use iced::widget::canvas::{self, Cache, Frame, Geometry};
-use iced::widget::text::{Alignment, LineHeight, Shaping};
+use iced::widget::text::{Alignment, LineHeight, Shaping, Wrapping};
 use iced::{mouse, Color, Font, Pixels, Point, Rectangle, Renderer, Size, Theme};
 use ratatui::backend::{Backend, ClearType, WindowSize};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Position, Rect, Size as GridSize};
 use ratatui::style::{Color as TermColor, Modifier};
+use std::collections::HashMap;
 use std::io;
 use std::ops::Range;
+use std::sync::{LazyLock, Mutex, PoisonError};
 use unicode_width::UnicodeWidthStr;
 
 /// Space kept clear around the grid, in pixels.
 pub const PAD: f32 = 6.0;
+/// Prose runs whose widths are kept before the measurements start over.
+const MAX_MEASURED: usize = 4096;
 
 /// A ratatui backend that records cells instead of writing escape codes.
 pub struct GridBackend {
@@ -244,7 +254,7 @@ fn indexed(i: u8) -> Color {
     const BASE: [(u8, u8, u8); 16] = [
         (0x00, 0x00, 0x00),
         (0xcd, 0x31, 0x31),
-        (0x0d, 0xbc, 0x79),
+        (0x00, 0xcd, 0x00),
         (0xe5, 0xe5, 0x10),
         (0x24, 0x72, 0xc8),
         (0xbc, 0x3f, 0xbc),
@@ -252,7 +262,7 @@ fn indexed(i: u8) -> Color {
         (0xcc, 0xcc, 0xcc),
         (0x76, 0x76, 0x76),
         (0xf1, 0x4c, 0x4c),
-        (0x23, 0xd1, 0x8b),
+        (0x00, 0xff, 0x00),
         (0xf5, 0xf5, 0x43),
         (0x3b, 0x8e, 0xea),
         (0xd6, 0x70, 0xd6),
@@ -314,19 +324,24 @@ impl Look {
     }
 
     fn font(&self) -> Font {
-        let font = if self.bold {
-            theme::mono_bold()
-        } else {
-            theme::mono()
-        };
-        if self.italic {
-            Font {
-                style: Style::Italic,
-                ..font
-            }
-        } else {
-            font
+        face((theme::mono(), theme::mono_bold()), self.bold, self.italic)
+    }
+
+    fn prose_font(&self) -> Font {
+        face((theme::sans(), theme::sans_bold()), self.bold, self.italic)
+    }
+}
+
+/// The regular or bold font of a family, upright or italic.
+fn face((regular, heavy): (Font, Font), bold: bool, italic: bool) -> Font {
+    let font = if bold { heavy } else { regular };
+    if italic {
+        Font {
+            style: Style::Italic,
+            ..font
         }
+    } else {
+        font
     }
 }
 
@@ -346,19 +361,47 @@ pub struct Screen {
     cols: u16,
     rows: u16,
     cursor: Option<Position>,
-    cache: Cache,
+    /// Rows of chat prose, set in the proportional face
+    prose: Vec<ProseRow>,
+    /// The background behind the rows
+    backdrop: Cache,
+    /// Each row's drawing, by row
+    lines: Vec<Cache>,
 }
 
 impl Screen {
-    /// Take the cells of a drawn frame; repaints only if any changed.
-    pub fn update(&mut self, buffer: &Buffer) {
+    /// Take the cells of a drawn frame and the UI's prose rows, and
+    /// return how many rows changed and will be repainted. The whole
+    /// frame, not the backend's copy: a prose cell can hold several
+    /// characters, which ratatui's diff takes for a wide glyph and skips
+    /// the cells after.
+    pub fn update(&mut self, buffer: &Buffer, prose: &[ProseRow]) -> usize {
         let (cols, rows) = (buffer.area.width, buffer.area.height);
-        if cols != self.cols || rows != self.rows || self.cells != buffer.content {
-            self.cells.clone_from(&buffer.content);
+        let changed = if cols != self.cols || rows != self.rows {
             self.cols = cols;
             self.rows = rows;
-            self.cache.clear();
+            self.lines = (0..rows).map(|_| Cache::new()).collect();
+            self.backdrop.clear();
+            self.lines.len()
+        } else {
+            let width = usize::from(cols);
+            let mut changed = 0;
+            for (y, line) in self.lines.iter().enumerate() {
+                let cells = y * width..(y + 1) * width;
+                if self.cells[cells.clone()] != buffer.content[cells]
+                    || prose_at(&self.prose, y) != prose_at(prose, y)
+                {
+                    line.clear();
+                    changed += 1;
+                }
+            }
+            changed
+        };
+        if changed > 0 {
+            self.cells.clone_from(&buffer.content);
+            prose.clone_into(&mut self.prose);
         }
+        changed
     }
 
     pub fn set_cursor(&mut self, cursor: Option<Position>) {
@@ -367,7 +410,10 @@ impl Screen {
 
     /// Drop the cached drawing (the font size or colors changed).
     pub fn invalidate(&self) {
-        self.cache.clear();
+        self.backdrop.clear();
+        for line in &self.lines {
+            line.clear();
+        }
     }
 
     pub fn size(&self) -> (u16, u16) {
@@ -412,11 +458,15 @@ impl<Message> canvas::Program<Message> for Grid<'_> {
         let size = bounds.size();
         let (cols, rows) = self.screen.size();
         let origin = self.metrics.origin(size, cols, rows);
-        let cells = self.screen.cache.draw(renderer, size, |frame| {
+        let backdrop = self.screen.backdrop.draw(renderer, size, |frame| {
             frame.fill_rectangle(Point::ORIGIN, size, self.palette.bg);
-            self.paint(frame, origin);
         });
-        let mut layers = vec![cells];
+        let mut layers = vec![backdrop];
+        layers.extend(
+            self.screen.lines.iter().enumerate().map(|(y, line)| {
+                line.draw(renderer, size, |frame| self.paint_row(frame, origin, y))
+            }),
+        );
         layers.extend(self.chrome.draw(renderer, size));
         if let Some(at) = self.screen.cursor.filter(|_| self.cursor_on) {
             if at.x < cols && at.y < rows {
@@ -430,29 +480,80 @@ impl<Message> canvas::Program<Message> for Grid<'_> {
 }
 
 impl Grid<'_> {
-    fn paint(&self, frame: &mut Frame, origin: Point) {
-        let (cols, rows) = self.screen.size();
-        if cols == 0 {
+    /// Row `index` of the screen.
+    fn paint_row(&self, frame: &mut Frame, origin: Point, index: usize) {
+        let width = usize::from(self.screen.cols);
+        let Some(cells) = self.screen.cells.get(index * width..(index + 1) * width) else {
             return;
+        };
+        let looks: Vec<Look> = cells.iter().map(|c| Look::of(c, self.palette)).collect();
+        let row = Row {
+            cells,
+            looks: &looks,
+            y: origin.y + index as f32 * self.metrics.cell.height,
+            origin: origin.x,
+        };
+        let prose = prose_at(&self.screen.prose, index);
+        let columns = prose.map_or(0..0, |p| {
+            let start = usize::from(p.x + p.indent).min(cells.len());
+            start..usize::from(p.x + p.width).clamp(start, cells.len())
+        });
+        for grid in [0..columns.start, columns.end..cells.len()] {
+            self.paint_backgrounds(frame, &row, grid.clone());
+            self.paint_cells(frame, &row, grid);
         }
+        if let Some(prose) = prose {
+            self.paint_prose(frame, &row, columns, &prose.code);
+        }
+    }
+
+    /// A prose row's `columns` after its indent, laid out in flow: runs
+    /// of text in the proportional face, as wide as they measure; inline
+    /// `code` a cell per column, in the monospace face.
+    fn paint_prose(
+        &self,
+        frame: &mut Frame,
+        row: &Row<'_>,
+        columns: Range<usize>,
+        code: &[Range<u16>],
+    ) {
+        let (cells, looks, y) = (row.cells, row.looks, row.y);
         let cell = self.metrics.cell;
-        for (index, cells) in self
-            .screen
-            .cells
-            .chunks(usize::from(cols))
-            .take(usize::from(rows))
-            .enumerate()
-        {
-            let y = origin.y + index as f32 * cell.height;
-            let looks: Vec<Look> = cells.iter().map(|c| Look::of(c, self.palette)).collect();
-            let row = Row {
-                cells,
-                looks: &looks,
-                y,
-                origin: origin.x,
+        let is_code =
+            |i: usize| u16::try_from(i).is_ok_and(|i| code.iter().any(|r| r.contains(&i)));
+        let mut x = self.x_at(row, columns.start);
+        let mut col = columns.start;
+        while col < columns.end {
+            let look = looks[col];
+            if cells[col].skip {
+                col += 1;
+                continue;
+            }
+            let code = is_code(col);
+            let end = (col..columns.end)
+                .find(|&i| looks[i] != look || cells[i].skip || is_code(i) != code)
+                .unwrap_or(columns.end);
+            let run: String = cells[col..end].iter().map(Cell::symbol).collect();
+            let (font, size, width) = if code {
+                let size = self.metrics.font_size;
+                (look.font(), size, (end - col) as f32 * cell.width)
+            } else {
+                let (font, size) = (look.prose_font(), theme::prose_size(self.metrics.font_size));
+                (font, size, run_width(&run, font, size))
             };
-            self.paint_backgrounds(frame, &row, 0..cells.len());
-            self.paint_cells(frame, &row, 0..cells.len());
+            self.fill_background(frame, look.bg, x.round(), (x + width).round(), y);
+            if !look.hidden {
+                self.run_text(
+                    frame,
+                    &run,
+                    Point::new(x, y),
+                    &look,
+                    (font, size, Shaping::Advanced),
+                );
+            }
+            self.decorate(frame, &look, x, x + width, y);
+            x += width;
+            col = end;
         }
     }
 
@@ -631,6 +732,11 @@ impl Grid<'_> {
     }
 }
 
+/// The prose on screen row `y`, if it holds any.
+fn prose_at(prose: &[ProseRow], y: usize) -> Option<&ProseRow> {
+    prose.iter().find(|p| usize::from(p.y) == y)
+}
+
 /// One row of the screen as it is painted.
 struct Row<'a> {
     cells: &'a [Cell],
@@ -639,6 +745,54 @@ struct Row<'a> {
     y: f32,
     /// Left edge of the grid, in pixels
     origin: f32,
+}
+
+/// How many cells `text` takes in the proportional face: what the
+/// terminal UI wraps chat prose to.
+pub fn prose_cells(text: &str, modifier: Modifier) -> f32 {
+    /// Size widths are measured at, large enough that rounding is lost
+    const SIZE: f32 = 100.0;
+    let font = face(
+        (theme::sans(), theme::sans_bold()),
+        modifier.contains(Modifier::BOLD),
+        modifier.contains(Modifier::ITALIC),
+    );
+    run_width(text, font, theme::prose_size(SIZE)) / theme::cell_size(SIZE).width
+}
+
+/// How wide a run of `text` is in `font` at `size`, trailing spaces
+/// included.
+fn run_width(text: &str, font: Font, size: f32) -> f32 {
+    /// Widths by text, font and font size
+    type Widths = HashMap<(String, Font, u32), f32>;
+    static WIDTHS: LazyLock<Mutex<Widths>> = LazyLock::new(Mutex::default);
+    let mut widths = WIDTHS.lock().unwrap_or_else(PoisonError::into_inner);
+    if widths.len() > MAX_MEASURED {
+        widths.clear();
+    }
+    let mut width = |text: &str| {
+        *widths
+            .entry((text.to_owned(), font, size.to_bits()))
+            .or_insert_with(|| text_width(text, font, size))
+    };
+    // A closing bar keeps trailing spaces in the measured line.
+    width(&format!("{text}|")) - width("|")
+}
+
+/// How wide `text` is laid out on one line in `font` at `size`.
+fn text_width(text: &str, font: Font, size: f32) -> f32 {
+    iced::advanced::graphics::text::Paragraph::with_text(iced::advanced::text::Text {
+        content: text,
+        bounds: Size::INFINITE,
+        size: Pixels(size),
+        line_height: LineHeight::default(),
+        font,
+        align_x: Alignment::Left,
+        align_y: Vertical::Top,
+        shaping: Shaping::Advanced,
+        wrapping: Wrapping::None,
+    })
+    .min_width()
 }
 
 /// One printable ASCII character, which every monospace font has at the
@@ -669,6 +823,30 @@ mod tests {
 
         terminal.draw(|_| {}).unwrap();
         assert_eq!(terminal.backend().cursor(), None);
+    }
+
+    #[test]
+    fn only_rows_whose_cells_changed_are_repainted() {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 10, 4));
+        let mut screen = Screen::default();
+        assert_eq!(
+            screen.update(&buffer, &[]),
+            4,
+            "a new size paints every row"
+        );
+        assert_eq!(screen.update(&buffer, &[]), 0);
+
+        buffer.set_string(2, 1, "hi", TermStyle::default());
+        assert_eq!(screen.update(&buffer, &[]), 1);
+        assert_eq!(screen.update(&buffer, &[]), 0);
+
+        buffer.set_string(0, 0, "x", TermStyle::default());
+        buffer.set_string(0, 3, "y", TermStyle::default());
+        assert_eq!(screen.update(&buffer, &[]), 2);
+        assert_eq!(screen.text().lines().nth(3), Some("y         "));
+
+        buffer.resize(Rect::new(0, 0, 12, 4));
+        assert_eq!(screen.update(&buffer, &[]), 4);
     }
 
     #[test]

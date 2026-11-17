@@ -68,6 +68,10 @@ fn thinking_mode_for_model(model: &str) -> Option<ThinkingMode> {
 
 pub(super) fn resolve_thinking(request: &ModelRequest, model: &str) -> Option<ApiThinkingConfig> {
     let mut thinking = resolve_thinking_unbounded(request, model)?;
+    // Opus 4.7+ and Claude 5 default `display` to "omitted", which streams
+    // empty thinking blocks. Always ask for the summary so the UI and the
+    // transcript have reasoning text to show.
+    thinking.display = Some("summarized");
     if let Some(budget) = thinking.budget_tokens {
         // Enabled thinking requires at least 1024 tokens and strictly less
         // than max_tokens. Small response caps must not produce invalid API requests.
@@ -115,6 +119,7 @@ fn resolve_thinking_unbounded(request: &ModelRequest, model: &str) -> Option<Api
             // field on the outgoing body.
             ThinkingEffort::Minimal => Some(ApiThinkingConfig {
                 thinking_type: thinking_mode_label(thinking_mode).to_string(),
+                display: None,
                 budget_tokens: match thinking_mode {
                     ThinkingMode::Adaptive => None,
                     ThinkingMode::Enabled => Some(1024),
@@ -122,6 +127,7 @@ fn resolve_thinking_unbounded(request: &ModelRequest, model: &str) -> Option<Api
             }),
             ThinkingEffort::Low => Some(ApiThinkingConfig {
                 thinking_type: thinking_mode_label(thinking_mode).to_string(),
+                display: None,
                 // Anthropic's `adaptive` thinking mode rejects
                 // `budget_tokens` outright (`thinking.adaptive.budget_tokens:
                 // Extra inputs are not permitted`); the model picks its
@@ -134,6 +140,7 @@ fn resolve_thinking_unbounded(request: &ModelRequest, model: &str) -> Option<Api
             }),
             ThinkingEffort::Medium => Some(ApiThinkingConfig {
                 thinking_type: thinking_mode_label(thinking_mode).to_string(),
+                display: None,
                 budget_tokens: match thinking_mode {
                     ThinkingMode::Adaptive => None,
                     ThinkingMode::Enabled => Some(4096),
@@ -141,6 +148,7 @@ fn resolve_thinking_unbounded(request: &ModelRequest, model: &str) -> Option<Api
             }),
             ThinkingEffort::High => Some(ApiThinkingConfig {
                 thinking_type: thinking_mode_label(thinking_mode).to_string(),
+                display: None,
                 budget_tokens: match thinking_mode {
                     ThinkingMode::Adaptive => None,
                     ThinkingMode::Enabled => {
@@ -150,6 +158,7 @@ fn resolve_thinking_unbounded(request: &ModelRequest, model: &str) -> Option<Api
             }),
             ThinkingEffort::XHigh => Some(ApiThinkingConfig {
                 thinking_type: thinking_mode_label(thinking_mode).to_string(),
+                display: None,
                 budget_tokens: match thinking_mode {
                     ThinkingMode::Adaptive => None,
                     ThinkingMode::Enabled => {
@@ -159,6 +168,7 @@ fn resolve_thinking_unbounded(request: &ModelRequest, model: &str) -> Option<Api
             }),
             ThinkingEffort::Max => Some(ApiThinkingConfig {
                 thinking_type: thinking_mode_label(thinking_mode).to_string(),
+                display: None,
                 budget_tokens: match thinking_mode {
                     ThinkingMode::Adaptive => None,
                     ThinkingMode::Enabled => Some(request.max_tokens.get().clamp(24000, 32000)),
@@ -170,6 +180,7 @@ fn resolve_thinking_unbounded(request: &ModelRequest, model: &str) -> Option<Api
     if let Some(ref cfg) = request.thinking {
         return Some(ApiThinkingConfig {
             thinking_type: thinking_mode_label(thinking_mode).to_string(),
+            display: None,
             budget_tokens: match thinking_mode {
                 ThinkingMode::Adaptive => None,
                 ThinkingMode::Enabled => Some(cfg.budget_tokens),
@@ -180,6 +191,7 @@ fn resolve_thinking_unbounded(request: &ModelRequest, model: &str) -> Option<Api
     if request.max_tokens.get() > 2048 {
         Some(ApiThinkingConfig {
             thinking_type: thinking_mode_label(thinking_mode).to_string(),
+            display: None,
             budget_tokens: match thinking_mode {
                 ThinkingMode::Adaptive => None,
                 ThinkingMode::Enabled => Some((request.max_tokens.get() / 2).clamp(1024, 16000)),

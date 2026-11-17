@@ -25,6 +25,7 @@ pub fn draw(frame: &mut Frame, c: char, cell: Rectangle, color: Color) -> bool {
         '═' | '║' | '╔' | '╗' | '╚' | '╝' => double(frame, c, cell, color),
         '\u{2580}'..='\u{259F}' => block(frame, c, cell, color),
         '\u{2800}'..='\u{28FF}' => braille(frame, c, cell, color),
+        '🗀' | '🗁' => folder(frame, c == '🗁', cell, color),
         _ => return shape(frame, c, cell, color),
     }
     true
@@ -305,6 +306,46 @@ fn braille(frame: &mut Frame, c: char, cell: Rectangle, color: Color) {
             frame.fill(&Path::circle(at, radius), color);
         }
     }
+}
+
+/// An outline folder, open or closed, on a 24-unit grid. A folder one cell
+/// wide reads as a sliver, so it spans this cell and the next, which must
+/// be blank: the projects list's two-cell icon column.
+fn folder(frame: &mut Frame, open: bool, cell: Rectangle, color: Color) {
+    let s = (cell.width * 1.7 / 20.0).min(cell.height * 0.66 / 17.0);
+    let (cx, cy) = (cell.x + cell.width, cell.y + cell.height / 2.0);
+    let q = |x: f32, y: f32| Point::new(cx + (x - 12.0) * s, cy + (y - 11.5) * s);
+    let path = Path::new(|b| {
+        if open {
+            b.move_to(q(6.0, 14.0));
+            b.arc_to(q(8.07, 10.0), q(22.58, 10.0), 2.0 * s);
+            b.arc_to(q(22.58, 10.0), q(20.0, 20.0), 2.0 * s);
+            b.arc_to(q(20.0, 20.0), q(2.0, 20.0), 2.0 * s);
+        } else {
+            b.move_to(q(12.0, 20.0));
+        }
+        b.arc_to(q(2.0, 20.0), q(2.0, 3.0), 2.0 * s);
+        b.arc_to(q(2.0, 3.0), q(9.0, 3.0), 2.0 * s);
+        b.arc_to(q(9.0, 3.0), q(11.0, 6.0), s);
+        if open {
+            b.arc_to(q(11.0, 6.0), q(20.0, 6.0), s);
+            b.arc_to(q(20.0, 6.0), q(20.0, 10.0), 2.0 * s);
+            b.line_to(q(20.0, 10.0));
+        } else {
+            b.arc_to(q(11.0, 6.0), q(22.0, 6.0), s);
+            b.arc_to(q(22.0, 6.0), q(22.0, 20.0), 2.0 * s);
+            b.arc_to(q(22.0, 20.0), q(12.0, 20.0), 2.0 * s);
+            b.close();
+        }
+    });
+    frame.stroke(
+        &path,
+        Stroke::default()
+            .with_color(color)
+            .with_width((1.8 * s).max(1.0))
+            .with_line_cap(LineCap::Round)
+            .with_line_join(LineJoin::Round),
+    );
 }
 
 fn shape(frame: &mut Frame, c: char, cell: Rectangle, color: Color) -> bool {

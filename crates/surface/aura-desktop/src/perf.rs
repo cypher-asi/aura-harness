@@ -2,7 +2,8 @@
 //!
 //! Every 240 ticks this reports the mean and worst time spent applying
 //! messages and rendering the terminal UI into the grid (`update`),
-//! building the view (`view`) and between ticks. The first view also reports how long after launch it was
+//! building the view (`view`) and between ticks, and how many grid rows
+//! were repainted. The first view also reports how long after launch it was
 //! built, which is the cold-start number to watch.
 
 use std::cell::Cell;
@@ -43,6 +44,8 @@ pub struct Perf {
     views: Window,
     frames: Window,
     last_frame: Option<Instant>,
+    /// Grid rows repainted since the last report
+    repainted: Cell<usize>,
 }
 
 impl Perf {
@@ -56,6 +59,14 @@ impl Perf {
             views: Window::default(),
             frames: Window::default(),
             last_frame: None,
+            repainted: Cell::new(0),
+        }
+    }
+
+    /// `rows` of the grid changed and will be repainted.
+    pub fn repaint(&self, rows: usize) {
+        if self.enabled {
+            self.repainted.set(self.repainted.get() + rows);
         }
     }
 
@@ -103,6 +114,7 @@ impl Perf {
                 view_worst_ms = ms(v.2),
                 frame_mean_ms = mean(f),
                 frame_worst_ms = ms(f.2),
+                rows_repainted = self.repainted.replace(0),
                 "frame timings"
             );
         }

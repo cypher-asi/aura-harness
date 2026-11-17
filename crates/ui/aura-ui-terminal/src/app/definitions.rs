@@ -15,16 +15,19 @@ pub enum AgentsTab {
     Projects,
     /// The roster of permanent agents that can be spawned by name.
     Roster,
+    /// Agents moved out of the projects list, until restored.
+    Archive,
 }
 
 impl AgentsTab {
-    pub const ALL: [Self; 2] = [Self::Projects, Self::Roster];
+    pub const ALL: [Self; 3] = [Self::Projects, Self::Roster, Self::Archive];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Projects => "PROJECTS",
             Self::Roster => "AGENTS",
+            Self::Archive => "ARCHIVE",
         }
     }
 
@@ -34,13 +37,16 @@ impl AgentsTab {
         match self {
             Self::Projects => "PRJ",
             Self::Roster => "AGT",
+            Self::Archive => "ARC",
         }
     }
 
-    const fn other(self) -> Self {
-        match self {
-            Self::Projects => Self::Roster,
-            Self::Roster => Self::Projects,
+    /// The next tab (`forward`) or the one before, wrapping, for Left / Right.
+    const fn shifted(self, forward: bool) -> Self {
+        match (self, forward) {
+            (Self::Projects, true) | (Self::Archive, false) => Self::Roster,
+            (Self::Roster, true) | (Self::Projects, false) => Self::Archive,
+            (Self::Archive, true) | (Self::Roster, false) => Self::Projects,
         }
     }
 
@@ -67,10 +73,12 @@ impl App {
     pub(super) fn show_agents_tab(&mut self, tab: AgentsTab) {
         self.agents_tab = tab;
         self.pending_delete = None;
+        self.pending_remove_project = None;
     }
 
-    pub(super) fn toggle_agents_tab(&mut self) {
-        self.show_agents_tab(self.agents_tab.other());
+    /// Left shows the tab before, Right the one after.
+    pub(super) fn shift_agents_tab(&mut self, key: KeyCode) {
+        self.show_agents_tab(self.agents_tab.shifted(key == KeyCode::Right));
     }
 
     /// Clicking a tab shows it; clicking a row acts on the visible list.
@@ -84,6 +92,7 @@ impl App {
         match self.agents_tab {
             AgentsTab::Projects => self.click_agent_row(column, row),
             AgentsTab::Roster => self.click_definition_row(column, row),
+            AgentsTab::Archive => self.click_archived_row(column, row),
         }
     }
     /// Permanent agents shown in the panel.
@@ -255,7 +264,7 @@ impl App {
             KeyCode::Home => self.select_definition_row(0),
             KeyCode::End => self.select_definition_row(last),
             KeyCode::Enter => self.activate_definition_row(),
-            KeyCode::Left | KeyCode::Right => self.toggle_agents_tab(),
+            KeyCode::Left | KeyCode::Right => self.shift_agents_tab(key.code),
             _ => {}
         }
     }

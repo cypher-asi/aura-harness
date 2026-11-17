@@ -75,6 +75,31 @@ fn search_truncation_marker(max_results: usize) -> String {
     )
 }
 
+/// Translate a file-name glob (`*`, `?`, `{a,b}`) into an anchored regex,
+/// escaping every other character literally.
+fn glob_to_regex(glob: &str) -> String {
+    let mut out = String::from("^");
+    let mut brace_depth = 0usize;
+    for c in glob.chars() {
+        match c {
+            '*' => out.push_str(".*"),
+            '?' => out.push('.'),
+            '{' => {
+                brace_depth += 1;
+                out.push_str("(?:");
+            }
+            '}' if brace_depth > 0 => {
+                brace_depth -= 1;
+                out.push(')');
+            }
+            ',' if brace_depth > 0 => out.push('|'),
+            _ => out.push_str(&regex::escape(c.encode_utf8(&mut [0; 4]))),
+        }
+    }
+    out.push('$');
+    out
+}
+
 /// Search for patterns in code.
 ///
 /// Supports a `context_lines` parameter (0-10) that, when > 0, includes
@@ -110,10 +135,7 @@ pub fn search_code(
     }
 
     let file_pattern_regex = file_pattern
-        .map(|p| {
-            let regex_pattern = p.replace('.', r"\.").replace('*', ".*").replace('?', ".");
-            Regex::new(&format!("^{regex_pattern}$"))
-        })
+        .map(|p| Regex::new(&glob_to_regex(p)))
         .transpose()
         .map_err(|e| ToolError::InvalidArguments(format!("Invalid file pattern: {e}")))?;
 

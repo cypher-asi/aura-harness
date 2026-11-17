@@ -74,10 +74,29 @@ pub fn writable_roots(workspace: &Path) -> Vec<PathBuf> {
             .filter_map(std::env::var_os)
             .map(PathBuf::from),
     );
+    roots.extend(cargo_target_dirs(workspace));
     if let Some(extra) = std::env::var_os(WRITABLE_PATHS_VAR) {
         roots.extend(std::env::split_paths(&extra).filter(|p| !p.as_os_str().is_empty()));
     }
     roots
+}
+
+/// Build folders named by `[build] target-dir` in the Cargo configs that
+/// apply to `workspace`. Without them a confined `cargo` can't use a
+/// shared target folder outside the workspace, and agents fall back to
+/// private folders that each rebuild every dependency from scratch.
+fn cargo_target_dirs(workspace: &Path) -> Vec<PathBuf> {
+    workspace
+        .ancestors()
+        .filter_map(|dir| {
+            let text = ["config.toml", "config"]
+                .iter()
+                .find_map(|name| std::fs::read_to_string(dir.join(".cargo").join(name)).ok())?;
+            let config = toml::from_str::<toml::Table>(&text).ok()?;
+            let target = config.get("build")?.get("target-dir")?.as_str()?;
+            Some(dir.join(target))
+        })
+        .collect()
 }
 
 /// Whether this system can confine commands. Checked once, by confining
@@ -227,5 +246,21 @@ mod tests {
         let roots = writable_roots(Path::new("/w"));
         assert_eq!(roots[0], PathBuf::from("/w"));
         assert!(roots.contains(&PathBuf::from("/dev/null")));
+    }
+
+    #[test]
+    fn writable_roots_include_the_configured_cargo_target_dir() {
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repo.path().join(".cargo")).unwrap();
+        std::fs::write(
+            repo.path().join(".cargo/config.toml"),
+            "[build]\ntarget-dir = \"../shared-target\"\n",
+        )
+        .unwrap();
+        let workspace = repo.path().join("crates/app");
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let roots = writable_roots(&workspace);
+        assert!(roots.contains(&repo.path().join("../shared-target")));
     }
 }

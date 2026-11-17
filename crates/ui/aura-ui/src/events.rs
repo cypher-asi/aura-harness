@@ -120,6 +120,21 @@ pub enum UiEvent {
     /// User renamed the project that contains the active agent.
     RenameProject(String),
 
+    /// User asked for a new agent in the project headed by the agent with
+    /// this hex id
+    AddAgentToProject(String),
+
+    /// User moved the agent with this hex id, and the agents under it, to
+    /// the Archive
+    ArchiveAgent(String),
+
+    /// User brought the agent with this hex id back from the Archive
+    RestoreAgent(String),
+
+    /// User confirmed removing the project that contains the agent with
+    /// this hex id from the projects list
+    RemoveProject(String),
+
     /// User started an instance of the named permanent agent
     InstantiateDefinition(String),
 
@@ -506,6 +521,11 @@ pub enum UiCommand {
     /// Update the list of agents in the swarm
     SetAgents(Vec<AgentSummary>),
 
+    /// Update the Archive: archived agents, each followed by the agents
+    /// under it. `depth` counts from the archived agent and `project`
+    /// names the project it came from.
+    SetArchivedAgents(Vec<AgentSummary>),
+
     /// Set the currently active agent
     SetActiveAgent(String),
 
@@ -536,7 +556,8 @@ pub enum UiCommand {
     },
 
     /// Add or update nodes of the run graph while the run is live.
-    /// Ignored when the graph shows a different run.
+    /// Ignored when the graph shows a different run. Sent inside
+    /// [`UiCommand::ForAgent`], it also feeds that agent's TRACE tab.
     GraphUpsert {
         /// Run the nodes belong to
         run_id: String,
@@ -1016,6 +1037,10 @@ pub struct AgentSummary {
     /// How many spawning agents it is nested under (0 for top-level agents)
     #[serde(default)]
     pub depth: usize,
+    /// Whether it was added to the project of the agent heading the
+    /// project listed before it, rather than heading one itself
+    #[serde(default)]
+    pub added_to_project: bool,
     /// Whether it is working right now: running a turn, a command, or a
     /// task for the agent that spawned it
     #[serde(default)]
@@ -1024,6 +1049,15 @@ pub struct AgentSummary {
     /// and the header should use [`Self::name`].
     #[serde(default)]
     pub project: Option<String>,
+}
+
+impl AgentSummary {
+    /// Whether it heads a project. The agents listed after it, up to the
+    /// next head, are in its project.
+    #[must_use]
+    pub const fn heads_project(&self) -> bool {
+        self.depth == 0 && !self.added_to_project
+    }
 }
 
 /// What a row in the Processes tab is running.

@@ -5,11 +5,25 @@
 
 use std::collections::HashMap;
 
+use super::processes::SIDE_PAGE;
 use super::{contains, follow_selection, App, DetailView};
 use crate::app::file_view::FileView;
 use crate::events::PlanView;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
+
+/// 0-based line of `view` that first mentions a todo's `content` (its
+/// first line), so opening a plan from a todo lands on it.
+fn todo_line(view: &FileView, content: &str) -> Option<usize> {
+    let needle = content.lines().next()?.trim();
+    if needle.is_empty() {
+        return None;
+    }
+    view.body
+        .lines()
+        .iter()
+        .position(|line| line.contains(needle))
+}
 
 /// One row of the tab.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,6 +134,18 @@ impl PlanList {
         self.rebuild(Some(keep));
     }
 
+    /// Open (`true`) or fold the plan of the highlighted row, when it is
+    /// not that way already. Folding from a todo moves the highlight to
+    /// its plan.
+    pub fn set_selected_open(&mut self, open: bool) {
+        let Some(&row) = self.rows.get(self.selected) else {
+            return;
+        };
+        if self.is_open(&self.plans[row.plan()]) != open {
+            self.toggle_selected();
+        }
+    }
+
     fn is_open(&self, plan: &PlanView) -> bool {
         self.folds
             .get(&plan.path)
@@ -184,51 +210,55 @@ impl App {
         self.areas.plans_scroll = scroll;
     }
 
-    /// Keys of the PLANS tab.
+    /// Keys of the PLANS tab: Enter opens the plan, Right unfolds it and
+    /// Left folds it.
     pub(super) fn handle_plans_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Up => self.plan_list.move_by(-1),
             KeyCode::Down => self.plan_list.move_by(1),
-            KeyCode::PageUp => self.plan_list.move_by(-10),
-            KeyCode::PageDown => self.plan_list.move_by(10),
+            KeyCode::PageUp => self.plan_list.move_by(-SIDE_PAGE),
+            KeyCode::PageDown => self.plan_list.move_by(SIDE_PAGE),
             KeyCode::Home => self.plan_list.select(0),
             KeyCode::End => self.plan_list.select(usize::MAX),
-            KeyCode::Enter => self.activate_selected_plan_row(),
-            KeyCode::Left => self.show_side_tab(self.side_tab.prev()),
-            KeyCode::Right => self.show_side_tab(self.side_tab.next()),
+            KeyCode::Enter => self.open_selected_plan(),
+            KeyCode::Right => self.plan_list.set_selected_open(true),
+            KeyCode::Left => self.plan_list.set_selected_open(false),
             _ => {}
         }
     }
 
-    /// A plan row folds or opens; a todo opens its plan's file.
-    fn activate_selected_plan_row(&mut self) {
-        match self.plan_list.rows.get(self.plan_list.selected) {
-            Some(PlanRow::Plan { .. }) => self.plan_list.toggle_selected(),
-            Some(PlanRow::Todo { .. }) => self.open_selected_plan(),
-            None => {}
-        }
-    }
-
-    fn open_selected_plan(&mut self) {
+    /// Open the highlighted row's plan file over the chat panel, with the
+    /// cursor on the highlighted todo when there is one.
+    pub(super) fn open_selected_plan(&mut self) {
         let (Some(plan), Some(root)) = (self.plan_list.selected_plan(), self.sandbox.root()) else {
             return;
         };
-        let view = FileView::load(&root.join(&plan.path), Some(root));
+        let todo = match self.plan_list.rows.get(self.plan_list.selected) {
+            Some(PlanRow::Todo { todo, .. }) => plan.todos.get(*todo),
+            _ => None,
+        };
+        let mut view = FileView::load(&root.join(&plan.path), Some(root));
+        if let Some(line) = todo.and_then(|todo| todo_line(&view, &todo.content)) {
+            view.jump_to(line);
+        }
         self.open_detail(DetailView::File(Box::new(view)));
     }
 
-    /// Clicking a plan folds or opens it; clicking a todo highlights it,
-    /// and clicking the highlighted todo opens its plan.
+    /// Clicking a plan's fold glyph folds or opens it; clicking anywhere
+    /// else on a row opens the plan, at the todo when one was clicked.
     pub(super) fn click_plan_row(&mut self, column: u16, row: u16) {
         let Some(index) = self.plan_row_at(column, row) else {
             return;
         };
-        let again = index == self.plan_list.selected;
         self.plan_list.select(index);
-        match self.plan_list.rows[index] {
-            PlanRow::Plan { .. } => self.plan_list.toggle_selected(),
-            PlanRow::Todo { .. } if again => self.open_selected_plan(),
-            PlanRow::Todo { .. } => {}
+        let on_fold = self.areas.plan_rows.is_some_and(|rows| {
+            matches!(self.plan_list.rows[index], PlanRow::Plan { .. })
+                && super::processes::on_row_icon(column, rows.x, 0)
+        });
+        if on_fold {
+            self.plan_list.toggle_selected();
+        } else {
+            self.open_selected_plan();
         }
     }
 
@@ -360,12 +390,12 @@ mod tests {
     }
 
     #[test]
-    fn enter_folds_plans_and_opens_the_plan_file_from_a_todo() {
+    fn enter_opens_the_plan_at_the_todo_and_arrows_fold() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(".aura/plans")).unwrap();
         std::fs::write(
             dir.path().join(".aura/plans/a.plan.md"),
-            "---\nname: a\n---\n",
+            "---\nname: a\ntodos:\n- content: a 0\n---\n",
         )
         .unwrap();
         let mut app = App::new();
@@ -376,11 +406,39 @@ mod tests {
 
         app.handle_key(KeyEvent::from(KeyCode::Down));
         app.handle_key(KeyEvent::from(KeyCode::Enter));
-        assert!(matches!(app.detail_view(), Some(DetailView::File(_))));
+        let Some(DetailView::File(view)) = app.detail_view() else {
+            panic!("the plan opens as a file");
+        };
+        assert_eq!(view.vim.line(), 3, "the cursor lands on the todo");
 
         app.close_detail();
-        app.handle_key(KeyEvent::from(KeyCode::Up));
-        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        app.handle_key(KeyEvent::from(KeyCode::Left));
         assert_eq!(shape(app.plan_list()), ["+a"]);
+        app.handle_key(KeyEvent::from(KeyCode::Left));
+        assert_eq!(shape(app.plan_list()), ["+a"], "Left keeps it folded");
+        app.handle_key(KeyEvent::from(KeyCode::Right));
+        assert_eq!(shape(app.plan_list()).len(), 2);
+        app.handle_key(KeyEvent::from(KeyCode::Char(' ')));
+        assert_eq!(shape(app.plan_list()), ["+a"], "Space folds");
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert!(matches!(app.detail_view(), Some(DetailView::File(_))));
+    }
+
+    #[test]
+    fn a_click_opens_a_plan_and_its_fold_glyph_folds_it() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".aura/plans")).unwrap();
+        std::fs::write(dir.path().join(".aura/plans/a.plan.md"), "a\n").unwrap();
+        let mut app = App::new();
+        app.process_command(UiCommand::SetSandboxRoot(dir.path().to_path_buf()));
+        app.process_command(UiCommand::SetPlans(vec![plan("a", &[P])]));
+        app.show_side_tab(super::super::SidePanelTab::Plans);
+        app.set_plan_rows_area(Rect::new(10, 5, 30, 8), 0);
+
+        app.click_plan_row(11, 5);
+        assert!(app.detail_view().is_none());
+        assert_eq!(shape(app.plan_list()), ["+a"]);
+        app.click_plan_row(20, 5);
+        assert!(matches!(app.detail_view(), Some(DetailView::File(_))));
     }
 }

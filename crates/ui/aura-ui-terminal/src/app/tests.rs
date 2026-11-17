@@ -692,6 +692,40 @@ fn test_switching_back_shows_a_turn_that_finished_meanwhile() {
 }
 
 #[test]
+fn test_each_agent_has_its_own_trace_feed() {
+    let (mut app, _rx) = app_with_agents();
+    let step = |agent_id: &str, id: &str| UiCommand::ForAgent {
+        agent_id: agent_id.to_string(),
+        command: Box::new(UiCommand::GraphUpsert {
+            run_id: format!("run-{agent_id}"),
+            nodes: vec![crate::events::TraceNode {
+                id: id.to_string(),
+                kind: "tool_call".to_string(),
+                ..Default::default()
+            }],
+        }),
+    };
+    let feed = |app: &App| -> Vec<String> {
+        app.trace_feed()
+            .entries()
+            .iter()
+            .map(|e| e.node.id.clone())
+            .collect()
+    };
+    app.process_command(step("aa", "a1"));
+    app.process_command(step("bb", "b1"));
+    app.process_command(step("bb", "b2"));
+
+    assert_eq!(feed(&app), ["a1"]);
+    assert!(!app.agent_busy("bb"));
+    assert!(app.notification().is_none());
+    app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
+    assert_eq!(feed(&app), ["b1", "b2"]);
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    assert_eq!(feed(&app), ["a1"]);
+}
+
+#[test]
 fn test_message_to_busy_agent_is_queued_not_shown() {
     let (mut app, mut rx) = app_with_agents();
     submit(&mut app, "first");
@@ -816,6 +850,49 @@ fn test_project_folds_its_first_agent() {
         .project_rows()
         .iter()
         .any(|row| matches!(row, ProjectListRow::Agent { index: 0 })));
+}
+
+#[test]
+fn test_agents_added_to_a_project_stay_in_it_unindented() {
+    use super::ProjectListRow;
+
+    let (mut app, _rx) = app_with_agents();
+    let added = |id: &str, name: &str| crate::events::AgentSummary {
+        added_to_project: true,
+        ..agent(id, name)
+    };
+    let spawned = crate::events::AgentSummary {
+        depth: 1,
+        ..agent("dd", "explorer #1")
+    };
+    app.process_command(UiCommand::SetAgents(vec![
+        agent("aa", "Agent"),
+        added("bb", "Agent 2"),
+        spawned,
+        added("cc", "reviewer #1"),
+        agent("ee", "Other"),
+    ]));
+
+    assert_eq!(
+        app.project_rows(),
+        vec![
+            ProjectListRow::Project {
+                root: 0,
+                expanded: true,
+            },
+            ProjectListRow::Agent { index: 0 },
+            ProjectListRow::Agent { index: 1 },
+            ProjectListRow::Agent { index: 2 },
+            ProjectListRow::Agent { index: 3 },
+            ProjectListRow::Gap,
+            ProjectListRow::Project {
+                root: 4,
+                expanded: true,
+            },
+            ProjectListRow::Agent { index: 4 },
+            ProjectListRow::NewProject,
+        ]
+    );
 }
 
 // ========================================================================
@@ -964,7 +1041,13 @@ fn test_arrows_toggle_agents_tabs_without_switching_agent() {
     app.handle_key(key(KeyCode::Left));
     assert_eq!(app.agents_tab(), AgentsTab::Projects);
     app.handle_key(key(KeyCode::Left));
+    assert_eq!(app.agents_tab(), AgentsTab::Archive);
+    app.handle_key(key(KeyCode::Left));
     assert_eq!(app.agents_tab(), AgentsTab::Roster);
+    app.handle_key(key(KeyCode::Right));
+    assert_eq!(app.agents_tab(), AgentsTab::Archive);
+    app.handle_key(key(KeyCode::Right));
+    assert_eq!(app.agents_tab(), AgentsTab::Projects);
 
     assert!(rx.try_recv().is_err());
 }
@@ -1270,6 +1353,38 @@ fn mouse(kind: crossterm::event::MouseEventKind, column: u16, row: u16) -> Mouse
         row,
         modifiers: KeyModifiers::empty(),
     }
+}
+
+#[test]
+fn test_clicking_a_projects_plus_adds_an_agent_to_it() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let (mut app, mut rx) = app_with_agent_areas();
+
+    // Rows span columns 1..19; the "+" takes the last three. Fold the
+    // second project (line 7) so adding to it opens it again.
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 7));
+    assert!(matches!(
+        app.project_rows()[3],
+        ProjectListRow::Project {
+            expanded: false,
+            ..
+        }
+    ));
+
+    app.handle_mouse(mouse(MouseEventKind::Moved, 15, 7));
+    assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(3)));
+    app.handle_mouse(mouse(MouseEventKind::Moved, 16, 7));
+    assert_eq!(app.hover(), Some(HoverTarget::AddToProject(3)));
+    app.handle_mouse(mouse(MouseEventKind::Moved, 17, 5));
+    assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(1)));
+
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 17, 7));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::AddAgentToProject(id)) if id == "bb"));
+    assert!(matches!(
+        app.project_rows()[3],
+        ProjectListRow::Project { expanded: true, .. }
+    ));
+    assert!(rx.try_recv().is_err());
 }
 
 fn app_with_agent_areas() -> (App, mpsc::Receiver<UiEvent>) {
@@ -1802,6 +1917,53 @@ fn test_clicking_a_group_summary_flips_what_it_shows() {
     assert!(app.group_open.is_empty());
 }
 
+#[test]
+fn test_clicking_a_long_tool_result_opens_it_in_the_file_view() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    let mut app = App::new();
+    for (id, output) in [("t1", "a\n".repeat(30)), ("t2", "short".to_string())] {
+        app.process_command(UiCommand::ShowTool(crate::events::ToolData {
+            id: id.to_string(),
+            name: "run_command".to_string(),
+            args: r#"{"program":"cargo","args":["test"]}"#.to_string(),
+        }));
+        app.process_command(UiCommand::CompleteTool {
+            id: id.to_string(),
+            result: output,
+            success: true,
+        });
+    }
+    let ids: Vec<u64> = app.messages().iter().map(|m| m.version().0).collect();
+    app.areas.chat = Some(Rect::new(0, 0, 60, 20));
+    app.set_chat_text_area(Rect::new(2, 1, 56, 18));
+    app.set_chat_layout(step_rows(&ids), 0);
+    let click = |app: &mut App, row| {
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            app.handle_mouse(MouseEvent {
+                kind,
+                column: 10,
+                row,
+                modifiers: KeyModifiers::empty(),
+            });
+        }
+    };
+
+    click(&mut app, 2);
+    assert!(app.detail_view().is_none(), "short output expands inline");
+    assert!(app.messages()[1].is_expanded());
+
+    click(&mut app, 1);
+    let Some(DetailView::File(view)) = app.detail_view() else {
+        panic!("long output opens in the file view");
+    };
+    assert_eq!(view.extension(), "log");
+    assert!(!app.messages()[0].is_expanded());
+}
+
 /// One collapsed step row per message id, on consecutive lines.
 fn step_rows(ids: &[u64]) -> Vec<ToggleRow> {
     ids.iter()
@@ -2152,6 +2314,8 @@ fn test_sandbox_refreshes_after_tool_completes() {
         result: String::new(),
         success: true,
     });
+    assert!(app.sandbox().rows().is_empty(), "read on the next tick");
+    app.tick();
     assert_eq!(app.sandbox().rows().len(), 1);
 }
 
@@ -2201,8 +2365,10 @@ fn test_slash_menu_lists_prefix_matches_first() {
     let mut app = App::new();
     type_chars(&mut app, "/a");
     let names = slash_names(&app);
-    assert_eq!(names[..2], ["agent", "agents"]);
-    assert!(names[2..].contains(&"clear"), "{names:?}");
+    let mut prefixed = names[..3].to_vec();
+    prefixed.sort_unstable();
+    assert_eq!(prefixed, ["agent", "agents", "archive"], "{names:?}");
+    assert!(names[3..].contains(&"clear"), "{names:?}");
 }
 
 #[test]
@@ -2272,7 +2438,7 @@ fn test_slash_menu_esc_dismisses_until_next_edit() {
     app.handle_key(key(KeyCode::Tab));
     assert_eq!(app.focus(), PanelFocus::Records);
     app.handle_key(key(KeyCode::Char('o')));
-    assert_eq!(slash_names(&app), ["model", "mode"]);
+    assert_eq!(slash_names(&app), ["model", "mode", "remove-project"]);
 }
 
 fn agent_pick_names(app: &App) -> Vec<&str> {

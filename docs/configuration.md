@@ -15,6 +15,7 @@ All cloud LLM traffic goes through the AURA router (proxy) with a per-request JW
 | `AURA_ROUTER_JWT` | — | JWT for terminal/CLI sessions (or run `aura login`). WebSocket clients supply their own. |
 | `AURA_DEFAULT_MODEL` | `claude-opus-4-6` | Model sent to the router only when the request did not pin one. In the terminal UI, setting it overrides `gate` and the saved `/model` choice. Legacy `AURA_ANTHROPIC_MODEL` is still read as a fallback. |
 | `AURA_MEMORY_MODEL` | `aura-claude-haiku-4-5` | Low-cost model for background memory extraction and consolidation, independent of the chat model. |
+| `AURA_TITLE_MODEL` | Haiku on the chat model's backend | Model that titles an agent's chat after its first turn, shown in the agents list instead of a placeholder name like `Agent 2`. Defaults to `aura-claude-haiku-4-5` for aura-router models and `claude/claude-haiku-4-5` with a linked Claude plan; local and ChatGPT-plan chats use their own model. |
 | `AURA_DEFAULT_FALLBACK_MODEL` | — | Optional secondary model used on 429/529 retries. |
 | `AURA_MODEL_TIMEOUT_MS` | `300000` | LLM request timeout. |
 | `AURA_GENERATION_STREAM_IDLE_TIMEOUT_SECS` | `300` | Maximum quiet window while proxying generation SSE from the router before emitting `STREAM_IDLE_TIMEOUT`. |

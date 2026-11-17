@@ -16,12 +16,16 @@ use ratatui::{backend::CrosstermBackend, Frame, Terminal as RatatuiTerminal};
 use std::io::{self, Stdout, Write};
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{error, warn};
 
 /// Most queued input events handled between two frames, so a flood of
 /// input still lets the screen update.
 const MAX_EVENTS_PER_FRAME: usize = 256;
+/// Time between frames without input; spinners advance once a frame.
+const FRAME: Duration = Duration::from_millis(50);
+/// Longest wait for input before taking the agents' commands again.
+const COMMAND_POLL: Duration = Duration::from_millis(5);
 
 /// Terminal wrapper providing high-level UI operations.
 pub struct Terminal {
@@ -135,10 +139,10 @@ impl Terminal {
                 app.notify_copied(text.chars().count(), &result);
             }
 
-            // Poll for events with timeout for animations, then take every
+            // Wait for input until the next animation frame, then take every
             // event already queued before drawing again, so a burst of wheel
             // ticks or key repeats costs one frame instead of one frame each.
-            if !event::poll(Duration::from_millis(50))? {
+            if !wait_for_input(app)? {
                 continue;
             }
             for _ in 0..MAX_EVENTS_PER_FRAME {
@@ -301,6 +305,22 @@ impl Drop for Terminal {
         ) {
             error!(error = %e, "Failed to leave alternate screen");
         }
+    }
+}
+
+/// Wait up to one [`FRAME`] for input, applying the agents' commands as
+/// they arrive. Returns whether input is waiting.
+fn wait_for_input(app: &mut App) -> io::Result<bool> {
+    let deadline = Instant::now() + FRAME;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Ok(false);
+        }
+        if event::poll(left.min(COMMAND_POLL))? {
+            return Ok(true);
+        }
+        app.receive_commands();
     }
 }
 

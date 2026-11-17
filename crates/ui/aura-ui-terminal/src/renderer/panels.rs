@@ -1,13 +1,14 @@
 //! Panel rendering: Chat, Swarm and Record.
 
+use super::detail::detail_header;
 use super::header::{self, HeaderInfo, PanelHeader};
 use super::markdown::is_inline_code;
 use super::text::{display_width, Measure};
 use crate::{
     animation::AURA_WIDTH,
     app::{
-        tab_bar::TabLayout, AgentsTab, ChatTab, HoverTarget, Pane, PanelFocus, ProjectListRow,
-        ProseRow, ToggleRow, ToggleTarget,
+        tab_bar::TabLayout, AgentsTab, ChatTab, HoverTarget, ImageHit, Pane, PanelFocus,
+        ProjectListRow, ProseRow, ToggleRow, ToggleTarget,
     },
     App, Theme,
 };
@@ -22,36 +23,50 @@ use ratatui::{
 use std::ops::Range;
 
 /// Render the Chat panel: a CHAT | TERMINAL header bar over the
-/// conversation or the shell commands run this session.
+/// conversation or the shell commands run this session. While a record,
+/// file, process or the run graph covers the body, the bar names it.
 pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Chat;
     let hosted = app.host_chrome();
     let panel = area;
     let (bar, area) = header::split(area, hosted);
-    if !hosted {
-        app.set_chat_tabs_area(bar);
+    if let Some((title, info)) = detail_header(app, theme) {
+        let header = PanelHeader::<()> {
+            layout: TabLayout::untabbed(bar.width),
+            active: None,
+            hovered: None,
+            title: Some(&title),
+            info,
+            focused: true,
+            hosted,
+        };
+        header::show(frame, app, (Pane::Chat, panel, bar), &header, theme);
+    } else {
+        if !hosted {
+            app.set_chat_tabs_area(bar);
+        }
+        let hovered = match app.hover() {
+            Some(HoverTarget::ChatTab(tab)) => Some(tab),
+            _ => None,
+        };
+        let header = PanelHeader {
+            layout: ChatTab::layout(bar.width),
+            active: Some(app.chat_tab()),
+            hovered,
+            title: None,
+            info: None,
+            focused: is_focused,
+            hosted,
+        };
+        header::show(frame, app, (Pane::Chat, panel, bar), &header, theme);
     }
-    let hovered = match app.hover() {
-        Some(HoverTarget::ChatTab(tab)) => Some(tab),
-        _ => None,
-    };
-    let header = PanelHeader {
-        layout: ChatTab::layout(bar.width),
-        active: Some(app.chat_tab()),
-        hovered,
-        title: None,
-        info: None,
-        focused: is_focused,
-        hosted,
-    };
-    header::show(frame, app, (Pane::Chat, panel, bar), &header, theme);
 
     let Some(body) = render_body_block(frame, area, (is_focused, hosted), theme) else {
         return;
     };
 
     let terminal = app.terminal_pane();
-    let padded = terminal_text_area(body);
+    let padded = terminal_text_area(body, terminal);
     app.set_chat_width(padded.width);
     app.set_chat_text_area(padded);
 
@@ -61,6 +76,7 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
         working_indicator_line(app, theme)
     };
     if app.pane_is_empty() && working_line.is_none() {
+        app.set_chat_images(Vec::new());
         render_welcome(frame, padded, terminal, theme);
         return;
     }
@@ -89,9 +105,17 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
 pub(super) fn render_body_block(
     frame: &mut Frame,
     area: Rect,
-    (is_focused, hosted): (bool, bool),
+    focus: (bool, bool),
     theme: &Theme,
 ) -> Option<Rect> {
+    let block = body_block(focus, theme);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    (inner.height > 0).then_some(inner)
+}
+
+/// The border of a panel's body, below its header bar.
+pub(super) fn body_block<'a>((is_focused, hosted): (bool, bool), theme: &Theme) -> Block<'a> {
     let border_color = if is_focused {
         theme.colors.primary
     } else {
@@ -106,13 +130,10 @@ pub(super) fn render_body_block(
     } else {
         ratatui::symbols::border::PLAIN
     };
-    let block = Block::default()
+    Block::default()
         .borders(Borders::ALL)
         .border_set(border_set)
-        .border_style(Style::default().fg(border_color));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    (inner.height > 0).then_some(inner)
+        .border_style(Style::default().fg(border_color))
 }
 
 /// How much of a panel's list is on screen.
@@ -192,6 +213,7 @@ fn render_chat_lines(
     let reflowed = cache.update(messages, (width, measure), theme, spinner, &groups);
     let gap = cache.block_gap();
     let mut toggle_rows = Vec::new();
+    let mut image_hits = Vec::new();
     let mut message_rows = 0;
     let mut last_prompt_row = None;
     for (i, block) in cache.blocks().enumerate() {
@@ -204,6 +226,10 @@ fn render_chat_lines(
         toggle_rows.extend(block.toggles.iter().map(|toggle| ToggleRow {
             line: message_rows + toggle.line,
             ..*toggle
+        }));
+        image_hits.extend(block.images.iter().map(|hit| ImageHit {
+            line: message_rows + hit.line,
+            ..*hit
         }));
         message_rows += block.lines.len();
     }
@@ -292,6 +318,27 @@ fn render_chat_lines(
         .collect();
     app.set_prose_rows(prose);
 
+    let hovered_image = match app.hover() {
+        Some(HoverTarget::ChatImage(message, index)) => Some((message, index)),
+        _ => None,
+    };
+    if let Some(hit) = image_hits
+        .iter()
+        .find(|hit| hovered_image == Some((hit.message, hit.index)))
+    {
+        let caption = hit.line + hit.rows - 1;
+        if (start..start + height).contains(&caption) {
+            let row = Rect {
+                x: padded.x + hit.x,
+                y: padded.y + u16::try_from(caption - start).unwrap_or(u16::MAX),
+                width: hit.width,
+                height: 1,
+            }
+            .intersection(padded);
+            super::images::highlight_caption(frame.buffer_mut(), row, theme);
+        }
+    }
+    app.set_chat_images(image_hits);
     ChatRows {
         total,
         first: start,
@@ -462,13 +509,26 @@ fn render_lines_below_hint(frame: &mut Frame, panel: Rect, below: usize, theme: 
     );
 }
 
-/// The text area of the chat and the terminal: all of `area` but a column
-/// on each side, so output starts at the top left like a terminal's.
-fn terminal_text_area(area: Rect) -> Rect {
+/// The text area of the chat and the terminal. The terminal keeps a single
+/// column on each side, so output starts at the top left like a terminal's;
+/// the chat is inset further so the conversation reads as a narrower column.
+fn terminal_text_area(area: Rect, terminal: bool) -> Rect {
+    let inset = if terminal { 1 } else { chat_inset(area.width) };
     Rect {
-        x: area.x.saturating_add(1),
-        width: area.width.saturating_sub(2),
+        x: area.x.saturating_add(inset),
+        width: area.width.saturating_sub(inset * 2),
         ..area
+    }
+}
+
+/// Columns of blank space on each side of the chat. Grows with the panel
+/// so wide panels get a narrower reading column, but stays at one column
+/// on narrow panels where every column of text counts.
+fn chat_inset(width: u16) -> u16 {
+    if width < 40 {
+        1
+    } else {
+        (width / 12).clamp(3, 8)
     }
 }
 
@@ -602,11 +662,70 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
             frame.render_widget(Paragraph::new(new_agent), bottom_row);
             render_scrollbar(frame, area, rows_area, view, is_focused, theme);
         }
+        AgentsTab::Archive => {
+            let visible = body.height as usize;
+            app.set_archived_rows_area(body);
+            app.sync_archived_scroll(visible);
+            let lines = build_archived_lines(app, body, theme);
+            let view = ScrollView {
+                total: lines.len(),
+                visible,
+                first: app.archived_scroll(),
+            };
+            let lines: Vec<Line> = lines.into_iter().skip(view.first).take(visible).collect();
+            frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), body);
+            render_scrollbar(frame, area, body, view, is_focused, theme);
+        }
     }
 }
 
-/// A project is its own row under a folder icon, with its first agent
-/// below it and agents that agent spawned indented further. Each agent
+/// Archive rows: each archived agent with the project it came from on the
+/// right, and the agents under it indented below. Empty, it says how
+/// agents get there.
+fn build_archived_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>> {
+    let archived = app.archived();
+    if archived.is_empty() {
+        return vec![Line::from(Span::styled(
+            " No archived agents. Delete on an agent in PROJECTS archives it.",
+            Style::default().fg(theme.colors.muted),
+        ))];
+    }
+    let is_focused = app.focus() == PanelFocus::Swarm;
+    let width = inner.width as usize;
+    let now_ms = now_ms();
+    archived
+        .iter()
+        .enumerate()
+        .map(|(index, agent)| {
+            let selected = is_focused && index == app.selected_archived();
+            let hovered = matches!(app.hover(), Some(HoverTarget::ArchivedRow(i)) if i == index);
+            let side = if agent.depth == 0 {
+                agent
+                    .project
+                    .as_deref()
+                    .map(|project| truncate_agent_name(project, (width / 3).max(4)))
+            } else {
+                agent.last_active_ms.map(|ms| format_ago(ms, now_ms))
+            };
+            list_row(
+                width,
+                agent.depth,
+                StatusIcon::new("", theme.colors.muted),
+                &agent.name,
+                cell_style(
+                    theme,
+                    CellState::of(selected, hovered),
+                    Style::default().fg(theme.colors.foreground),
+                ),
+                side.as_deref(),
+            )
+        })
+        .collect()
+}
+
+/// A project is its own row under a folder icon, with a "+" on the right
+/// that adds an agent to it, and its agents below it, each followed by
+/// the agents it spawned indented further. Each agent
 /// shows how long ago it was last active on the right. A ring spins in the
 /// folder's column beside agents that are thinking; idle agents leave it
 /// blank.
@@ -617,11 +736,12 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
 /// last line is "+ New project", which the panel pins to its bottom row:
 ///
 /// ```text
-///  ▱  Website
+///  🗁  Website            +
 ///  ⢎⡱ Agent              1m
 ///      reviewer          2d
+///     Agent 2            5m
 ///
-///  ▰  Research
+///  🗀  Research           +
 ///  …
 ///  +  New project
 /// ```
@@ -647,8 +767,10 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
             ProjectListRow::Agent { index } => app.agents()[index].id == active_id,
             ProjectListRow::NewProject => false,
         };
-        let is_hovered =
-            matches!(app.hover(), Some(HoverTarget::ProjectRow(index)) if index == row_index);
+        let add_hovered =
+            matches!(app.hover(), Some(HoverTarget::AddToProject(index)) if index == row_index);
+        let is_hovered = add_hovered
+            || matches!(app.hover(), Some(HoverTarget::ProjectRow(index)) if index == row_index);
         match row {
             ProjectListRow::Project { root, expanded } => {
                 let end = app_project_end(app, root);
@@ -656,17 +778,21 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
                 let icon = if !expanded && agents.iter().any(is_thinking) {
                     aura_icon(app)
                 } else {
-                    let folder = if expanded { "▱" } else { "▰" };
+                    let folder = if expanded { "🗁" } else { "🗀" };
                     StatusIcon::new(folder, theme.colors.muted)
                 };
-                let cell = cell_style(theme, CellState::of(is_selected, is_hovered), project_name);
+                let mut cell =
+                    cell_style(theme, CellState::of(is_selected, is_hovered), project_name);
+                if add_hovered {
+                    cell.time = theme.colors.foreground;
+                }
                 lines.push(list_row(
                     width,
                     0,
                     icon,
                     &project_label(&app.agents()[root]),
                     cell,
-                    None,
+                    Some("+"),
                 ));
             }
             ProjectListRow::Agent { index } => {
@@ -734,6 +860,20 @@ pub(super) fn list_row<'a>(
     cell: CellStyle,
     time: Option<&str>,
 ) -> Line<'a> {
+    list_row_with_detail(width, depth, icon, (name, None), cell, time)
+}
+
+/// [`list_row`] with an optional `detail` drawn muted after the name. The
+/// detail is cut first when the row is too narrow, and dropped when fewer
+/// than four columns are left for it.
+pub(super) fn list_row_with_detail<'a>(
+    width: usize,
+    depth: usize,
+    icon: StatusIcon,
+    (name, detail): (&str, Option<&str>),
+    cell: CellStyle,
+    time: Option<&str>,
+) -> Line<'a> {
     let fill = cell
         .bg
         .map_or_else(Style::default, |bg| Style::default().bg(bg));
@@ -746,13 +886,19 @@ pub(super) fn list_row<'a>(
         )
         .max(1);
     let name = truncate_agent_name(name, name_width);
-    let padding = name_width.saturating_sub(display_width(&name));
+    let rest = name_width.saturating_sub(display_width(&name));
+    let detail = detail
+        .filter(|detail| !detail.is_empty() && rest >= 4)
+        .map(|detail| format!("  {}", truncate_record_info(detail, rest - 2)))
+        .unwrap_or_default();
+    let padding = rest.saturating_sub(display_width(&detail));
     let icon_color = cell.icon.unwrap_or(icon.color);
     Line::from(vec![
         Span::styled(indent, fill),
         Span::styled(icon.glyph, fill.fg(icon_color)),
         Span::styled(" ".repeat(icon_pad), fill),
         Span::styled(name, fill.patch(cell.text)),
+        Span::styled(detail, fill.fg(cell.time)),
         Span::styled(" ".repeat(padding), fill),
         Span::styled(time, fill.fg(cell.time)),
     ])
@@ -844,7 +990,7 @@ fn app_project_end(app: &App, root: usize) -> usize {
     app.agents()
         .iter()
         .skip(root + 1)
-        .position(|agent| agent.depth == 0)
+        .position(|agent| agent.heads_project())
         .map_or(app.agents().len(), |offset| root + 1 + offset)
 }
 
@@ -855,11 +1001,6 @@ fn project_label(agent: &crate::events::AgentSummary) -> String {
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .map_or_else(|| agent.name.clone(), ToString::to_string)
-}
-
-/// Secondary color for a clickable item under the pointer.
-pub(super) fn hover_style(theme: &Theme) -> Style {
-    Style::default().fg(theme.colors.secondary)
 }
 
 /// Roster rows: a gray `@` and the name for each permanent agent, then
