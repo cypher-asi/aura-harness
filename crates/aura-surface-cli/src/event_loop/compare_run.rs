@@ -12,8 +12,10 @@
 //! - the other arm's turn and subtasks run on the model it is pinned to.
 //!
 //! The prompt is recorded with route reason `compare` and the turn ends
-//! with its `Outcome`; the check command then runs in the copy and its
-//! verdict is recorded as a later `Outcome`, so it counts in the table.
+//! with its `Outcome`; the check command then runs in the copy as a
+//! `run_command` call through the run's kernel, so it is in the run's log,
+//! and its verdict is recorded as a later `Outcome`, so it counts in the
+//! table.
 //! Cost and tokens per model come from the records of the run and its
 //! subtasks: every model call there, classifier calls included.
 
@@ -25,6 +27,7 @@ use super::handlers::{handle_agent_success, run_agent_turn, system_message, turn
 use super::processes::{now_ms, turn_id};
 use super::steering::Steering;
 use super::subagents::{lock, AgentHub, ArmRouting};
+use super::task_check;
 use super::turns::{ended_signal, record_prompt};
 use crate::agent_registry::RegisteredAgent;
 use aura_agent::AgentLoop;
@@ -54,8 +57,8 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-/// Longest a check command may run in a copy.
-const CHECK_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+/// `ToolProposal::source` of a run's check command.
+const CHECK_SOURCE: &str = "compare_check";
 
 /// Longest a judge call may take.
 const JUDGE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -592,17 +595,12 @@ async fn run_turn(
 
     let check_passed = match plan.check.as_deref() {
         Some(check) if !cancelled => {
-            let verdict = run_check(check, &workdir).await;
-            ui.send(system_message(verdict.line)).await;
-            if let (Some(passed), Some(ended)) = (verdict.passed, &ended) {
-                let signal = if passed {
-                    OutcomeSignal::ChecksPassed
-                } else {
-                    OutcomeSignal::ChecksFailed
-                };
+            let run = task_check::run_script(&session, check, CHECK_SOURCE).await;
+            ui.send(system_message(run.describe())).await;
+            if let (Some(signal), Some(ended)) = (run.signal(), &ended) {
                 gate_record::record(&session.kernel, agent_id, &ended.with_signal(signal)).await;
             }
-            verdict.passed
+            run.passed
         }
         _ => None,
     };
@@ -656,64 +654,6 @@ async fn run_turn(
         reply,
         patch,
         note: None,
-    }
-}
-
-/// How a check command went.
-struct CheckVerdict {
-    /// Whether it passed; `None` when it could not run
-    passed: Option<bool>,
-    /// What the run's chat says about it
-    line: String,
-}
-
-/// Run `cmd` with `sh -c` in `dir`. Cargo builds into `dir/target`, so
-/// copies never share build results.
-async fn run_check(cmd: &str, dir: &Path) -> CheckVerdict {
-    let mut command = tokio::process::Command::new("sh");
-    command
-        .arg("-c")
-        .arg(cmd)
-        .current_dir(dir)
-        .env("CARGO_TARGET_DIR", dir.join("target"))
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true);
-    match tokio::time::timeout(CHECK_TIMEOUT, command.output()).await {
-        Ok(Ok(out)) => {
-            let passed = out.status.success();
-            let tail = |bytes: &[u8]| {
-                let text = String::from_utf8_lossy(bytes);
-                let lines: Vec<&str> = text.lines().rev().take(5).collect();
-                lines.into_iter().rev().collect::<Vec<_>>().join("\n")
-            };
-            let mut shown = tail(&out.stderr);
-            if shown.trim().is_empty() {
-                shown = tail(&out.stdout);
-            }
-            CheckVerdict {
-                passed: Some(passed),
-                line: format!(
-                    "Check `{cmd}` {}{}",
-                    if passed { "passed" } else { "failed" },
-                    if passed || shown.trim().is_empty() {
-                        String::new()
-                    } else {
-                        format!(":\n{shown}")
-                    }
-                ),
-            }
-        }
-        Ok(Err(e)) => CheckVerdict {
-            passed: None,
-            line: format!("Check `{cmd}` could not run: {e}"),
-        },
-        Err(_) => CheckVerdict {
-            passed: Some(false),
-            line: format!(
-                "Check `{cmd}` timed out after {} minutes",
-                CHECK_TIMEOUT.as_secs() / 60
-            ),
-        },
     }
 }
 

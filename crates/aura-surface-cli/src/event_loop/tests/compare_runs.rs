@@ -66,6 +66,16 @@ fn signals_of(state: &LoopState<'_>, agent_id: AgentId) -> Vec<OutcomeSignal> {
         .collect()
 }
 
+/// The `/compare` check proposed in `entry`, if it is one.
+fn check_proposal(entry: &aura_core_types::RecordEntry) -> Option<aura_core_types::ToolProposal> {
+    if entry.tx.tx_type != aura_core_types::TransactionType::ToolProposal {
+        return None;
+    }
+    serde_json::from_slice::<aura_core_types::ToolProposal>(&entry.tx.payload)
+        .ok()
+        .filter(|p| p.source.as_deref() == Some("compare_check") && p.tool == "run_command")
+}
+
 fn turn_row(state: &LoopState<'_>, model: &str) -> Option<(u32, u32)> {
     state
         .hub
@@ -107,7 +117,7 @@ async fn both_arms_run_repeatedly_in_separate_copies_and_their_checks_feed_gate(
         &mut state,
         &links,
         &mut commands,
-        "write the answer --repeats 2 --check 'grep -q opus answer.txt'",
+        "write the answer --repeats 2 --check \"sh -c 'grep -q opus answer.txt'\"",
     )
     .await;
 
@@ -166,6 +176,27 @@ async fn both_arms_run_repeatedly_in_separate_copies_and_their_checks_feed_gate(
             [OutcomeSignal::None, checked],
             "the turn's outcome, then the check's"
         );
+        let log = entries(&state, run.agent_id);
+        let check_at = log
+            .iter()
+            .position(|e| check_proposal(e).is_some())
+            .expect("the check is in the run's log");
+        let proposal = check_proposal(&log[check_at]).unwrap();
+        assert_eq!(
+            proposal.args["shell_script"],
+            "sh -c 'grep -q opus answer.txt'"
+        );
+        assert!(
+            log[check_at..]
+                .iter()
+                .any(|e| e.tx.tx_type == aura_core_types::TransactionType::ToolExecution),
+            "and so is its result"
+        );
+        let verdict_at = log
+            .iter()
+            .rposition(|e| e.tx.outcome_payload().is_some())
+            .unwrap();
+        assert!(check_at < verdict_at, "the check runs before its verdict");
     }
     workdirs.dedup();
     assert_eq!(workdirs.len(), 4);

@@ -71,6 +71,8 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   arm. Subcommands: `go`, `cancel`, `show [n]`, `diff [run]`,
   `pick gate|other`, `apply <run>` and `dismiss`. Plan usage shares are
   not shown, since providers don't report them; tokens per model are.
+  The check runs as a `run_command` call through each run's kernel, so
+  it is in the run's record and under the same command policy.
 - `evals/gate_cost`: 20 tasks with hidden checks, categories and
   reference solutions. Eval tasks can set `category`, `tags` and a
   `checks/` folder copied in after the run; `aura eval run` reports each

@@ -7,6 +7,9 @@
 //! result instead of the transcript: the subagent's summary (capped),
 //! the files it changed, the check and how it went, and whether the
 //! subtask was retried on a stronger model.
+//!
+//! `/compare` runs its check on a finished run the same way, through the
+//! run's kernel.
 
 use super::agents::AgentSession;
 use super::run_command::{process_user_proposal, terminal_output, RUN_COMMAND_TOOL};
@@ -78,8 +81,20 @@ fn tail(text: &str) -> String {
     lines[lines.len().saturating_sub(TAIL_LINES)..].join("\n")
 }
 
+/// Whether a command's error text says it ran out of time; the tool
+/// reports a timeout only in its error text.
+fn timed_out(text: &str) -> bool {
+    text.contains("Command timed out")
+}
+
 /// Run `command` in `session`'s workspace through its kernel.
 pub(super) async fn run_check(session: &AgentSession, command: &str) -> CheckRun {
+    run_script(session, command, CHECK_SOURCE).await
+}
+
+/// Run the check `command` in `session`'s workspace through its kernel,
+/// proposed with `source`. A check that runs out of time failed.
+pub(super) async fn run_script(session: &AgentSession, command: &str, source: &str) -> CheckRun {
     drain_stale_inbox(session).await;
     let proposal = ToolProposal::new(
         format!("check_{}", uuid::Uuid::new_v4().simple()),
@@ -90,7 +105,7 @@ pub(super) async fn run_check(session: &AgentSession, command: &str) -> CheckRun
             "timeout_secs": CHECK_TIMEOUT_SECS,
         }),
     )
-    .with_source(CHECK_SOURCE);
+    .with_source(source);
     let unrun = |why: String| CheckRun {
         command: command.to_string(),
         passed: None,
@@ -107,7 +122,7 @@ pub(super) async fn run_check(session: &AgentSession, command: &str) -> CheckRun
     let (text, exit_code) = terminal_output(&output.content, output.is_error);
     let passed = if !output.is_error {
         Some(true)
-    } else if exit_code.is_some() {
+    } else if exit_code.is_some() || timed_out(&text) {
         Some(false)
     } else {
         None
@@ -218,6 +233,14 @@ mod tests {
         let unrun = check(None, None, "denied");
         assert!(unrun.describe().contains("could not run"));
         assert_eq!(unrun.signal(), None);
+    }
+
+    #[test]
+    fn a_timeout_is_told_apart_from_a_denial() {
+        assert!(timed_out(
+            "aura: Command failed: Command timed out: Process timed out\n"
+        ));
+        assert!(!timed_out("aura: Policy denied run_command\n"));
     }
 
     #[test]
