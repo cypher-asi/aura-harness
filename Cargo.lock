@@ -839,6 +839,7 @@ dependencies = [
  "aura-ui-terminal",
  "chrono",
  "clap",
+ "cosmic-text",
  "crossterm 0.28.1",
  "dotenvy",
  "futures",

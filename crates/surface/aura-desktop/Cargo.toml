@@ -22,6 +22,8 @@ iced = { version = "0.14", features = ["tokio", "canvas", "advanced"] }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 unicode-width = { workspace = true }
+# The bare renderer's text and shapes; the versions iced already brings in.
+cosmic-text = "0.15"
 
 anyhow = { workspace = true }
 chrono = { workspace = true }

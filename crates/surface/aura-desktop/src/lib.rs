@@ -23,6 +23,8 @@ mod scene;
 mod snapshot;
 mod tab;
 mod tab_bar;
+#[allow(dead_code)] // until the bare shell draws with it
+mod text;
 mod theme;
 
 use anyhow::Context;
