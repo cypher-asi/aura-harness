@@ -22,12 +22,13 @@ iced = { version = "0.14", features = ["tokio", "canvas", "advanced"] }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 unicode-width = { workspace = true }
-# The bare renderer's text, shapes, GPU and window; the versions iced
-# already brings in.
+# The bare renderer's text, shapes, GPU, window and the window's pixels
+# where there is no GPU; the versions iced already brings in.
 cosmic-text = "0.15"
 tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
 wgpu = { version = "27", default-features = false, features = ["std", "parking_lot", "wgsl", "vulkan", "gles", "metal", "dx12"] }
 winit = "0.30"
+softbuffer = { version = "0.4", default-features = false, features = ["x11", "x11-dlopen", "wayland", "wayland-dlopen"] }
 # The clipboard, which iced wrote to for us.
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 

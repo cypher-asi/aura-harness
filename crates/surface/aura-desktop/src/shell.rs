@@ -17,6 +17,7 @@
 
 mod keys;
 mod pointer;
+mod screen;
 mod stats;
 mod window;
 

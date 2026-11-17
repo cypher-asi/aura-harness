@@ -11,10 +11,10 @@
 //! and the loop is woken once for however many are waiting.
 
 use super::keys::Press;
+use super::screen::Screen;
 use super::{Effect, Shell};
 use crate::app::{Handles, Options, MAX_BATCH, WINDOW};
 use crate::geom::{Point, Size};
-use crate::gpu::Gpu;
 use crate::scene::Scene;
 use crate::text;
 use anyhow::Context;
@@ -115,7 +115,7 @@ struct Handler {
     proxy: EventLoopProxy<Wake>,
     runtime: tokio::runtime::Handle,
     window: Option<Arc<Window>>,
-    gpu: Option<Gpu>,
+    screen: Option<Screen>,
     clipboard: Option<arboard::Clipboard>,
     /// The frame on screen
     shown: Scene,
@@ -152,7 +152,7 @@ pub fn run(handles: Handles, options: &Options, launched: Instant) -> anyhow::Re
         proxy,
         runtime,
         window: None,
-        gpu: None,
+        screen: None,
         clipboard: None,
         shown: Scene::default(),
         icon: CursorIcon::Default,
@@ -176,13 +176,13 @@ impl Handler {
             .create_window(attributes)
             .context("opening the window")?;
         let window = Arc::new(window);
-        let size = window.inner_size();
-        let gpu = Gpu::new(Arc::clone(&window), size.width, size.height)?;
-        tracing::info!(adapter = gpu.name(), "drawing on the GPU");
-        let limit = gpu.atlas_limit().min(ATLAS_LIMIT);
+        let screen = Screen::new(&window)?;
+        let limit = screen
+            .atlas_limit()
+            .map_or(ATLAS_LIMIT, |most| most.min(ATLAS_LIMIT));
         text::with(|text| text.atlas_mut().set_limit(limit));
         self.window = Some(window);
-        self.gpu = Some(gpu);
+        self.screen = Some(screen);
         self.fit();
         Ok(())
     }
@@ -198,8 +198,8 @@ impl Handler {
             // Minimized on some systems: nothing to draw into.
             return;
         }
-        if let Some(gpu) = &mut self.gpu {
-            gpu.resize(size.width, size.height);
+        if let Some(screen) = &mut self.screen {
+            screen.resize(size.width, size.height);
         }
         self.shell.resized(
             Size::new(size.width as f32, size.height as f32),
@@ -211,7 +211,7 @@ impl Handler {
     /// Draw a frame, and show it unless it is the one on screen.
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
         let asked = std::mem::take(&mut self.asked);
-        let (Some(window), Some(gpu)) = (&self.window, &mut self.gpu) else {
+        let (Some(window), Some(screen)) = (&self.window, &mut self.screen) else {
             return;
         };
         let scene = self.shell.frame(Instant::now());
@@ -225,7 +225,7 @@ impl Handler {
         self.shown.clone_from(scene);
         let started = Instant::now();
         let drawn = text::with(|text| {
-            gpu.render(&self.shown, text.atlas_mut(), || {
+            screen.render(&self.shown, text, || {
                 window.pre_present_notify();
             })
         });

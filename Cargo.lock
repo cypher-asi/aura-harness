@@ -865,6 +865,7 @@ dependencies = [
  "iced",
  "iced_runtime",
  "ratatui",
+ "softbuffer",
  "tiny-skia",
  "tokio",
  "tracing",
