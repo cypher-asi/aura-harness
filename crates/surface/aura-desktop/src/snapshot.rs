@@ -384,6 +384,8 @@ fn snapshot(name: &str, h: &Harness) {
     let bg = palette().bg.into_rgba8();
     let drawn = pixels.chunks(4).filter(|p| p[..3] != bg[..3]).count();
     assert!(drawn > 10_000, "{name}: only {drawn} pixels drawn");
+    let size = (u32::from(WIDTH), u32::from(HEIGHT));
+    crate::parity::check(name, &h.app, size, &pixels);
     if let Some(dir) = std::env::var_os("AURA_DESKTOP_SNAPSHOTS") {
         let dir = std::path::PathBuf::from(dir);
         std::fs::create_dir_all(&dir).expect("snapshot dir");

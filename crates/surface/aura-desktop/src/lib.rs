@@ -17,6 +17,8 @@ mod grid;
 mod input;
 #[allow(dead_code)] // until the bare shell draws with it
 mod paint;
+#[cfg(test)]
+mod parity;
 mod perf;
 #[allow(dead_code)] // until the bare shell draws with it
 mod raster;

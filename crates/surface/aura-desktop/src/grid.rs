@@ -420,6 +420,13 @@ impl Screen {
         (self.cols, self.rows)
     }
 
+    /// The cells, the prose rows and the cursor, for the bare renderer's
+    /// painter to draw the same screen.
+    #[cfg(test)]
+    pub fn contents(&self) -> (&[Cell], &[ProseRow], Option<Position>) {
+        (&self.cells, &self.prose, self.cursor)
+    }
+
     #[cfg(test)]
     pub fn text(&self) -> String {
         let mut out = String::new();
