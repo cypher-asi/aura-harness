@@ -3,7 +3,8 @@
 //!
 //! One blend per quad pixel, the same the GPU does: the quad's color (or
 //! the atlas's, for color glyphs) over what is there, by the color's
-//! alpha times the atlas's coverage.
+//! alpha times the atlas's coverage. The sum is rounded once, at the
+//! end, as the GPU rounds what it worked out in floating point.
 
 use crate::scene::{Fill, Quad, Scene};
 use crate::text::Atlas;
@@ -57,7 +58,7 @@ fn paint_quad(quad: &Quad, scene: &Scene, atlas: &Atlas, out: &mut [u8]) {
                 }
             } else {
                 for pixel in row.chunks_exact_mut(4) {
-                    blend(pixel, [red, green, blue], alpha);
+                    blend(pixel, [red, green, blue], u32::from(alpha) * 255);
                 }
             }
             continue;
@@ -71,7 +72,7 @@ fn paint_quad(quad: &Quad, scene: &Scene, atlas: &Atlas, out: &mut [u8]) {
         let from = ((v * atlas_width + u) * 4) as usize;
         let texels = &atlas.pixels()[from..from + span];
         for (pixel, texel) in row.chunks_exact_mut(4).zip(texels.chunks_exact(4)) {
-            let coverage = scale(texel[3], alpha);
+            let coverage = u32::from(texel[3]) * u32::from(alpha);
             if coverage == 0 {
                 continue;
             }
@@ -84,16 +85,15 @@ fn paint_quad(quad: &Quad, scene: &Scene, atlas: &Atlas, out: &mut [u8]) {
     }
 }
 
-/// `a * b / 255`, rounded.
-#[allow(clippy::cast_possible_truncation)]
-const fn scale(a: u8, b: u8) -> u8 {
-    ((a as u32 * b as u32 + 127) / 255) as u8
-}
+/// The product of two alphas that are each 255 when opaque.
+const OPAQUE: u32 = 255 * 255;
 
-/// `color` over `pixel`, `alpha` of 255 strong.
-fn blend(pixel: &mut [u8], color: [u8; 3], alpha: u8) {
+/// `color` over `pixel`, `alpha` of [`OPAQUE`] strong.
+#[allow(clippy::cast_possible_truncation)] // a mix of two bytes is a byte
+fn blend(pixel: &mut [u8], color: [u8; 3], alpha: u32) {
     for (under, over) in pixel.iter_mut().zip(color) {
-        *under = scale(over, alpha) + scale(*under, 255 - alpha);
+        let mix = u32::from(over) * alpha + u32::from(*under) * (OPAQUE - alpha);
+        *under = ((mix + OPAQUE / 2) / OPAQUE) as u8;
     }
 }
 
