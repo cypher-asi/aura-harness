@@ -87,14 +87,14 @@ Ctrl+G in the input, and editing a permanent agent, open the user's editor.
 
 ## Gate
 
-Read once at startup by `GateConfig::from_env` ([`crates/aura-config/src/gate.rs`](../crates/aura-config/src/gate.rs)), in the terminal, the desktop app and `aura -p`. A target or exploration rate that is not a number from 0 to 1, or a minimum of 0, is logged as a warning and every `aura-config` setting falls back to its default. See [Gate](cli.md#gate).
+Read once at startup by `GateConfig::from_env` ([`crates/aura-config/src/gate.rs`](../crates/aura-config/src/gate.rs)), in the terminal, the desktop app and `aura -p`. A variable set to a value it does not accept (a target or exploration rate that is not a number from 0 to 1, a minimum that is not a whole number of at least 1, or a delegation switch that is not on or off) keeps its own default and logs a warning naming the variable, the value and what it accepts. The other Gate variables and every other `aura-config` setting still apply. See [Gate](cli.md#gate).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AURA_GATE_TARGET` | `0.85` | Success rate (0–1) a model needs in a category to become its pick. |
 | `AURA_GATE_MIN_TRIES` | `10` | Counted outcomes a model needs in a category before its success rate is trusted. At least 1. |
 | `AURA_GATE_EXPLORE` | `0.05` | Share of routed turns and subtasks (0–1) sent to the next cheaper model instead of the pick, to learn how it does. `/compare` always routes with `0`. |
-| `AURA_GATE_DELEGATE` | `on` | `off` (or `0`, `false`, `no`) lets the lead agent under Gate keep its file tools and every command, with delegating only recommended. Any other value keeps delegation enforced. |
+| `AURA_GATE_DELEGATE` | `on` | `off` (or `0`, `false`, `no`) lets the lead agent under Gate keep its file tools and every command, with delegating only recommended. `on` (or `1`, `true`, `yes`) enforces delegation. Any other value keeps delegation enforced, with a warning. |
 
 ## Node runtime
 

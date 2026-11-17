@@ -263,7 +263,7 @@ impl AuraConfig {
             // (no plugins active), which matches V1 behaviour.
             plugins: PluginsConfig::defaults(),
             trace: TraceConfig::from_env(),
-            gate: GateConfig::from_env()?,
+            gate: GateConfig::from_env(),
         })
     }
 }
@@ -420,6 +420,22 @@ mod tests {
         // parse-error assertions don't race this happy-path probe.
         let _lock = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _ = AuraConfig::from_env().expect("from_env defaults must succeed");
+    }
+
+    #[test]
+    fn a_bad_gate_value_leaves_the_other_settings_in_place() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var(env::AURA_GATE_TARGET, "high");
+        std::env::set_var(env::AURA_GATE_EXPLORE, "0.2");
+        std::env::set_var(env::AURA_SUBAGENT_MAX_DEPTH, "3");
+        let cfg = AuraConfig::from_env();
+        std::env::remove_var(env::AURA_GATE_TARGET);
+        std::env::remove_var(env::AURA_GATE_EXPLORE);
+        std::env::remove_var(env::AURA_SUBAGENT_MAX_DEPTH);
+        let cfg = cfg.expect("a bad Gate value is not an error");
+        assert_eq!(cfg.gate.target, GateConfig::defaults().target);
+        assert_eq!(cfg.gate.explore_rate, 0.2);
+        assert_eq!(cfg.subagent.max_depth, 3);
     }
 
     #[test]
