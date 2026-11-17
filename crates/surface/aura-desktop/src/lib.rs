@@ -16,6 +16,8 @@ mod glyphs;
 mod grid;
 mod input;
 mod perf;
+#[allow(dead_code)] // until the bare shell draws with it
+mod raster;
 mod router;
 #[allow(dead_code)] // until the bare shell draws with it
 mod scene;
