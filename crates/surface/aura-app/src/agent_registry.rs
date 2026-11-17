@@ -280,7 +280,7 @@ impl AgentRegistry {
             if let Some(folder) = &agent.folder {
                 return Some(folder.clone());
             }
-            index = self.parent_index(index)?;
+            index = self.up_index(agent)?;
         }
         None
     }

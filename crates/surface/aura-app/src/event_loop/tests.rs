@@ -1758,7 +1758,11 @@ async fn gate_classifies_before_the_turn_and_records_its_default_route() {
         .filter(|e| e.tx.tx_type == aura_core_types::TransactionType::Reasoning)
         .map(|e| e.seq)
         .collect();
-    assert_eq!(calls.len(), 2, "the classifier and the turn");
+    assert_eq!(
+        calls.len(),
+        3,
+        "the classifier, the turn and the chat title"
+    );
     assert!(calls[0] < prompt_seq && prompt_seq < calls[1]);
     let (_, outcome) = outcomes_of(&state, first).remove(0);
     assert_eq!(outcome.model, "aura-claude-sonnet-4-6");
