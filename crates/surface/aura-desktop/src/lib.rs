@@ -10,11 +10,15 @@
 mod app;
 mod chrome;
 mod demo;
+#[allow(dead_code, unused_imports)] // until the bare shell draws with it
+mod geom;
 mod glyphs;
 mod grid;
 mod input;
 mod perf;
 mod router;
+#[allow(dead_code)] // until the bare shell draws with it
+mod scene;
 #[cfg(test)]
 mod snapshot;
 mod tab;
