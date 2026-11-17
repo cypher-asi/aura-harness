@@ -34,6 +34,7 @@ use crate::project_instructions::ProjectInstructions;
 use crate::record_loader::agent_summaries;
 use async_trait::async_trait;
 use aura_agent::{AgentLoop, AgentLoopConfig};
+use aura_agent_gate::Candidate;
 use aura_agent_kernel::Kernel;
 use aura_context_skills::SkillManager;
 use aura_core_types::{
@@ -718,6 +719,29 @@ impl AgentHub {
             limits: base.limits,
             live: Arc::clone(&self.gate),
         }
+    }
+
+    /// What Gate routes the work of an agent running the permanent agent
+    /// `definition` among: `None` when the user pinned the main model or
+    /// the definition names its own.
+    pub(crate) fn gate_candidates(&self, definition: Option<&str>) -> Option<Vec<Candidate>> {
+        let candidates = lock(&self.base).gate.candidates.clone()?;
+        let pinned = definition.is_some_and(|name| {
+            lock(&self.definitions)
+                .get(name)
+                .is_some_and(|d| d.model.is_some())
+        });
+        (!pinned).then_some(candidates)
+    }
+
+    /// The model that classifies prompts; empty when nothing does.
+    pub(crate) fn classifier(&self) -> String {
+        lock(&self.base).gate.classifier.clone()
+    }
+
+    /// For pointing an agent loop at a model other than the selected one.
+    pub(crate) fn model_limits(&self) -> ModelLimits {
+        lock(&self.base).limits
     }
 
     /// Route `run`'s subtask, run its turn to the end and record how it

@@ -7,6 +7,7 @@
 use super::output::{ExitReason, Output, RunReport, StreamEvent, UsageReport};
 use super::sink::{CallLimits, HeadlessSink, TurnTally};
 use super::tools::ToolFilter;
+use crate::event_loop::gate_record;
 use crate::event_loop::handlers::{
     drive_turn, mark_session_start, record_response, resume_checkpoint,
 };
@@ -14,13 +15,16 @@ use crate::event_loop::notices::{completion_notice, record_completion, Notice};
 use crate::event_loop::processes::stop_background_commands;
 use crate::event_loop::steering::{SteerSource, Steering};
 use crate::event_loop::subagents::lock;
-use crate::event_loop::turns::{drain_stale_inbox, record_prompt};
+use crate::event_loop::turns::{drain_stale_inbox, ended_signal, record_prompt};
 use crate::event_loop::{AgentHub, AgentSession};
 use crate::session_checkpoint::SessionUsage;
-use aura_agent::{AgentLoop, AgentLoopResult};
+use aura_agent::{AgentLoop, AgentLoopConfig, AgentLoopResult};
 use aura_agent_kernel::Kernel;
 use aura_core_modes::AgentMode;
-use aura_core_types::{AgentId, PromptPayload, Transaction};
+use aura_core_types::{
+    AgentId, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, Route, RouteLevel,
+    RouteReason, Transaction,
+};
 use aura_model_reasoner::{Message, Role};
 use aura_tools::BackgroundProcessHook;
 use std::path::PathBuf;
@@ -292,7 +296,8 @@ impl Headless {
     }
 
     /// Record `text` as the prompt and run one agent turn on `session`,
-    /// with `before` the usage of the run's earlier turns.
+    /// with `before` the usage of the run's earlier turns. When Gate
+    /// routes the turn, it ends with an `Outcome` saying how it went.
     #[allow(clippy::too_many_arguments)]
     async fn run_turn(
         &mut self,
@@ -305,22 +310,27 @@ impl Headless {
         interrupt: &CancellationToken,
     ) -> TurnOutcome {
         drain_stale_inbox(session).await;
-        if let Err(problem) = record_prompt(session, &PromptPayload::new(text.clone())).await {
-            return TurnOutcome {
-                result: None,
-                usage: SessionUsage::default(),
-                stop: Some((ExitReason::Error, Some(problem))),
-                unseen: Vec::new(),
-            };
-        }
-        session.messages.push(Message::user(text));
-
+        let started = Instant::now();
         let workspace = session.kernel.agent_workspace();
         let (mut config, tools) = self.hub.agent_turn(
             session.agent_id(),
             session.definition.as_deref(),
             &workspace,
         );
+        let (payload, routed) = self.route_turn(session, &mut config, &text).await;
+        let prompt_tx = match record_prompt(session, &payload).await {
+            Ok((tx, _)) => tx.hash,
+            Err(problem) => {
+                return TurnOutcome {
+                    result: None,
+                    usage: SessionUsage::default(),
+                    stop: Some((ExitReason::Error, Some(problem))),
+                    unseen: Vec::new(),
+                };
+            }
+        };
+        let turn_start = session.messages.len();
+        session.messages.push(Message::user(text));
         self.hub.register_root(
             session.agent_id(),
             &session.identity.name,
@@ -362,6 +372,14 @@ impl Headless {
         let backstop = deadline.map(|d| d.saturating_duration_since(Instant::now()) + CANCEL_GRACE);
 
         let kernel = Arc::clone(&session.kernel);
+        // Listed as running so the subtasks the turn dispatches are told
+        // apart from those of the next turn.
+        self.hub.start_running(
+            kernel.agent_id,
+            Arc::clone(&kernel),
+            turn_cancel.clone(),
+            None,
+        );
         let mut late = Vec::new();
         let result = {
             let turn = drive_turn(
@@ -390,6 +408,7 @@ impl Headless {
                 }
             }
         };
+        self.hub.stop_running(kernel.agent_id);
         if let Some(watcher) = watcher {
             watcher.abort();
         }
@@ -413,6 +432,23 @@ impl Headless {
         let (seen, unseen) = steering.finish(messages);
         let mut unseen: Vec<String> = unseen.into_iter().map(|(_, text)| text).collect();
         unseen.append(&mut late);
+        if routed {
+            // A run stopped by its own limits says nothing about the model.
+            let signal = match (&result, limit) {
+                (Some(result), None) => ended_signal(result, turn_start),
+                _ => OutcomeSignal::None,
+            };
+            let outcome = OutcomePayload {
+                prompt_tx,
+                category: payload.category,
+                model: agent_loop.config().model.clone(),
+                success: signal.success(),
+                signal,
+                cost_usd: tally.usage.cost_usd,
+                latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            };
+            gate_record::record(&session.kernel, session.agent_id(), &outcome).await;
+        }
 
         let mut outcome = TurnOutcome {
             result: None,
@@ -438,6 +474,67 @@ impl Headless {
             }
         }
         outcome
+    }
+
+    /// The prompt record of a turn of `session` answering `text`, and
+    /// whether Gate routed it. Gate routes the turn when the user selected
+    /// gate, the agent names no model of its own and there is a model to
+    /// route to: the prompt is classified and `config` pointed at Gate's
+    /// pick. Otherwise the prompt is recorded as it is.
+    async fn route_turn(
+        &mut self,
+        session: &AgentSession,
+        config: &mut AgentLoopConfig,
+        text: &str,
+    ) -> (PromptPayload, bool) {
+        let Some(candidates) = self
+            .hub
+            .gate_candidates(session.definition.as_deref())
+            .filter(|candidates| !candidates.is_empty())
+        else {
+            return (PromptPayload::new(text), false);
+        };
+        let classifier = self.hub.classifier();
+        let category = if classifier.is_empty() {
+            PromptCategory::Unclassified
+        } else {
+            gate_record::classify_prompt(
+                &session.kernel,
+                &classifier,
+                text,
+                config.auth_token.clone(),
+            )
+            .await
+        };
+        let route = match self
+            .hub
+            .gate
+            .decide(RouteLevel::Turn, category, &candidates)
+        {
+            Some(decision) => {
+                info!(
+                    model = %decision.model.id,
+                    %category,
+                    reason = %decision.reason,
+                    "Gate routed the turn"
+                );
+                if config.model != decision.model.id {
+                    self.hub
+                        .model_limits()
+                        .configure(config, &decision.model.id);
+                }
+                self.model.clone_from(&decision.model.id);
+                decision.route(RouteLevel::Turn)
+            }
+            None => Route::turn(config.model.clone(), RouteReason::Default),
+        };
+        let payload = PromptPayload {
+            category,
+            classifier,
+            route,
+            ..PromptPayload::new(text)
+        };
+        (payload, true)
     }
 
     /// Wait for the next notice for `kernel`'s agent: a background

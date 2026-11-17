@@ -608,3 +608,68 @@ fn session_ids_round_trip() {
     assert!(parse_session_id("nope", other).is_err());
     assert!(parse_session_id("zz:12", other).is_err());
 }
+
+#[tokio::test]
+async fn gate_routes_headless_turns_and_records_how_they_went() {
+    use aura_agent_gate::Candidate;
+    use aura_core_types::{OutcomeSignal, PromptCategory, Route, RouteReason};
+    use aura_model_reasoner::model_catalog::{ModelBackend, ModelTier};
+    const HAIKU: &str = "aura-claude-haiku-4-5";
+    const SONNET: &str = "aura-claude-sonnet-4-6";
+    let candidate = |id: &str, tier, cost_usd| Candidate {
+        id: id.to_string(),
+        label: id.to_string(),
+        backend: ModelBackend::Router,
+        tier,
+        cost_usd: Some(cost_usd),
+    };
+    // One candidate, so the run never explores.
+    let gate = GateBase {
+        classifier: HAIKU.to_string(),
+        candidates: Some(vec![candidate(SONNET, ModelTier::Standard, 0.1)]),
+    };
+    let dirs = dirs();
+    let mode = super::permission_mode(aura_core_modes::AgentMode::Agent);
+    let (mut h, requests) = harness(
+        &dirs,
+        MockProvider::simple_response("question"),
+        ToolFilter::default(),
+        mode,
+        gate,
+    );
+
+    let (report, _) = execute(
+        &mut h,
+        request("what is a monad?", SessionChoice::New),
+        OutputFormat::Json,
+    )
+    .await;
+
+    assert_eq!(report.exit_reason, ExitReason::Success);
+    assert_eq!(report.model, SONNET);
+    let models: Vec<String> = requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| r.model.to_string())
+        .collect();
+    assert_eq!(models, [HAIKU, SONNET], "classified, then routed");
+    let (agent, _) = parse_session_id(&report.session_id, AgentId::generate()).unwrap();
+    let entries = h.hub.factory.store.scan_record(agent, 1, 1_000).unwrap();
+    let prompts: Vec<_> = entries
+        .iter()
+        .filter_map(|e| e.tx.prompt_payload())
+        .collect();
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].category, PromptCategory::Question);
+    assert_eq!(prompts[0].classifier, HAIKU);
+    assert_eq!(prompts[0].route, Route::turn(SONNET, RouteReason::Default),);
+    let outcomes: Vec<_> = entries
+        .iter()
+        .filter_map(|e| e.tx.outcome_payload())
+        .collect();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].model, SONNET);
+    assert_eq!(outcomes[0].signal, OutcomeSignal::None);
+    assert_eq!(h.hub.gate.recent().len(), 1);
+}
