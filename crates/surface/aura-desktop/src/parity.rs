@@ -7,9 +7,14 @@
 //! `<name>.png` from the canvas renderer, `<name>.bare.png` from this
 //! one, `<name>.pair.png` with the two side by side, and
 //! `<name>.diff.png` marking the pixels that differ.
+//!
+//! Set `AURA_DESKTOP_GPU=1` on a machine with a graphics adapter to draw
+//! each screen with [`crate::gpu`] as well, and check it against the CPU
+//! rasterizer's picture of the same quads.
 
 use crate::app::App;
 use crate::geom::Size;
+use crate::gpu::Offscreen;
 use crate::paint::{Painter, View};
 use crate::raster;
 use crate::text;
@@ -40,8 +45,13 @@ pub struct Difference {
     pub worst: u8,
 }
 
-/// Paint what `app` shows with the bare renderer, as RGBA rows.
-fn paint(app: &App, width: u32, height: u32) -> Vec<u8> {
+/// Channel levels the GPU may be off the CPU rasterizer by: both blend
+/// the same quads, and round differently.
+const GPU_CLOSE: u8 = 1;
+
+/// Paint what `app` shows with the bare renderer, as RGBA rows: on the
+/// CPU, and on the GPU when that was asked for.
+fn paint(app: &App, width: u32, height: u32) -> (Vec<u8>, Option<Vec<u8>>) {
     let grid = app.grid();
     let (cells, prose, cursor) = grid.screen.contents();
     let (cols, rows) = grid.screen.size();
@@ -59,12 +69,17 @@ fn paint(app: &App, width: u32, height: u32) -> Vec<u8> {
         chrome: grid.chrome,
     };
     let mut pixels = Vec::new();
-    text::with(|text| {
+    let on_gpu = std::env::var_os("AURA_DESKTOP_GPU").is_some();
+    let drawn = text::with(|text| {
         let mut painter = Painter::default();
         let scene = painter.paint_with(&view, text);
         raster::paint(scene, text.atlas(), &mut pixels);
+        on_gpu.then(|| {
+            let mut gpu = Offscreen::new().expect("AURA_DESKTOP_GPU needs a graphics adapter");
+            gpu.read(scene, text.atlas_mut())
+        })
     });
-    pixels
+    (pixels, drawn)
 }
 
 fn compare(canvas: &[u8], bare: &[u8]) -> Difference {
@@ -90,9 +105,16 @@ fn compare(canvas: &[u8], bare: &[u8]) -> Difference {
 /// Check the bare renderer draws `app` as `canvas`, the canvas
 /// renderer's pixels of it in a window of this size, does.
 pub fn check(name: &str, app: &App, (width, height): (u32, u32), canvas: &[u8]) {
-    let bare = paint(app, width, height);
+    let (bare, drawn) = paint(app, width, height);
     assert_eq!(bare.len(), canvas.len(), "{name}: another size");
     let difference = compare(canvas, &bare);
+    if let Some(drawn) = drawn {
+        assert_eq!(drawn.len(), bare.len(), "{name}: the GPU drew another size");
+        let gaps = drawn.iter().zip(&bare).map(|(a, b)| a.abs_diff(*b));
+        let worst = gaps.max().unwrap_or(0);
+        println!("parity {name}: the GPU is at most {worst} levels off the CPU");
+        assert!(worst <= GPU_CLOSE, "{name}: the GPU is {worst} levels off");
+    }
 
     if let Some(dir) = std::env::var_os("AURA_DESKTOP_SNAPSHOTS") {
         let dir = std::path::PathBuf::from(dir);
