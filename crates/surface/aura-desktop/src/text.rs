@@ -16,10 +16,11 @@ use cosmic_text::{
     SwashCache, SwashContent, Weight, Wrap,
 };
 use ratatui::style::Modifier;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;
-use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+use std::sync::Arc;
 
 pub use cosmic_text::Shaping;
 
@@ -611,10 +612,14 @@ fn hash_of(key: &impl Hash) -> u64 {
     hasher.finish()
 }
 
-/// Run `f` with the process's text system, made on first use.
+/// Run `f` with this thread's text system, made on first use. The
+/// window is drawn from one thread, so there is one; `f` must not ask
+/// for it again.
 pub fn with<R>(f: impl FnOnce(&mut TextSystem) -> R) -> R {
-    static TEXT: LazyLock<Mutex<TextSystem>> = LazyLock::new(|| Mutex::new(TextSystem::new()));
-    f(&mut TEXT.lock().unwrap_or_else(PoisonError::into_inner))
+    thread_local! {
+        static TEXT: RefCell<TextSystem> = RefCell::new(TextSystem::new());
+    }
+    TEXT.with_borrow_mut(f)
 }
 
 /// How many cells `text` takes in the proportional face: what the
