@@ -16,6 +16,7 @@ mod tools;
 #[cfg(test)]
 mod tests;
 
+pub use crate::event_loop::gate_record::Judged;
 pub use crate::event_loop::task_check::CheckRun;
 pub use eval::{copy_dir, EvalRan, EvalTurn, EvalTurns, GateUse};
 pub(crate) use output::{ExitReason, Output, RunReport};
@@ -400,6 +401,7 @@ async fn build(
         job_wait: job_wait_from_env(),
         trace: None,
         notes,
+        judged: Vec::new(),
     })
 }
 

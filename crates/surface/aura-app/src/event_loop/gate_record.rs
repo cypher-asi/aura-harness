@@ -1,30 +1,149 @@
 //! Gate's record of each turn: the category the classifier gives its
 //! prompt, the `Outcome` written when it ends, and the later signals that
-//! judge it again — a rewind, the same prompt sent again on a stronger
-//! model, the user's `/good` or `/bad`. Each later signal appends another
-//! `Outcome` for the same prompt; [`aura_agent_gate::outcome::effective`]
-//! says which one counts.
+//! judge it again — the judge's finding on a turn that failed, a rewind,
+//! the same prompt sent again on a stronger model. Each later signal
+//! appends another `Outcome` for the same prompt;
+//! [`aura_agent_gate::outcome::effective`] says which one counts.
 
-use super::agent_events::AgentUi;
 use super::agents::AgentSession;
-use super::LoopState;
-use aura_agent_gate::{classify, outcome::is_retry_stronger};
+use super::gate_live::GateLive;
+use aura_agent_gate::turn_judge::{self, Failed, Verdict};
+use aura_agent_gate::{classify, outcome::is_retry_stronger, Candidate};
 use aura_agent_kernel::Kernel;
 use aura_core_types::{
     AgentId, Hash, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, Transaction,
     TransactionType,
 };
 use aura_store_db::ReadStore;
-use aura_ui_terminal::UiCommand;
 use std::time::Duration;
 use tracing::{info, warn};
 
 /// How long the classifier may take before the prompt goes unclassified.
 const CLASSIFY_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// How long the judge of a failed turn may take before the turn keeps
+/// its own signal.
+const JUDGE_TIMEOUT: Duration = Duration::from_secs(90);
+
 /// Entries scanned back from the head of a record to find a turn's
 /// outcome.
 const SCAN_LIMIT: usize = 2_000;
+
+/// The judge's finding on work that failed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Judged {
+    /// Model whose work was judged
+    pub model: String,
+    /// Model that judged it
+    pub judge: String,
+    pub verdict: Verdict,
+    /// List-price cost of the judge's call in USD; 0 when the price is
+    /// unknown. Not part of the work's own cost: it is what Gate pays to
+    /// learn from the failure.
+    pub cost_usd: f64,
+}
+
+impl Judged {
+    /// One line saying what the judge found.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        let label = |id: &str| aura_model::model_catalog::route_label(id);
+        let found = if self.verdict.at_fault {
+            format!("the failure is {}'s", label(&self.model))
+        } else {
+            format!("the failure is not {}'s doing", label(&self.model))
+        };
+        let reasons = self.verdict.reasons.trim();
+        format!(
+            "Gate's judge ({}, ${:.4}): {found}{}",
+            label(&self.judge),
+            self.cost_usd,
+            if reasons.is_empty() {
+                String::new()
+            } else {
+                format!(". {reasons}")
+            }
+        )
+    }
+}
+
+/// The model that judges `ended`, the outcome of work Gate routed among
+/// `candidates`: the strongest Opus among them (see
+/// [`aura_agent_gate::compare::default_against`]). `None` when the work
+/// did not fail, the judge is switched off, or the work ran on a model
+/// as strong as the judge.
+pub(crate) fn judge_for(
+    live: &GateLive,
+    candidates: &[Candidate],
+    ended: &OutcomePayload,
+) -> Option<String> {
+    if !live.settings().judge
+        || !matches!(
+            ended.signal,
+            OutcomeSignal::Error | OutcomeSignal::ChecksFailed
+        )
+    {
+        return None;
+    }
+    let judge = aura_agent_gate::compare::default_against(candidates)?;
+    turn_judge::judges(&judge.id, &ended.model, candidates).then(|| judge.id.clone())
+}
+
+/// Ask `judge` through `kernel` whether the model was at fault in
+/// `ended`, the outcome of work that `failed`, and record the finding as
+/// a later `Outcome` of the same prompt: `judged_fail` when it was,
+/// `judged_excused` (which takes the failure back) when it was not.
+/// Returns that outcome and the finding; `None` when the judge gave no
+/// verdict, which leaves the work's own signal standing.
+pub(crate) async fn judge_failed(
+    kernel: &Kernel,
+    judge: &str,
+    ended: &OutcomePayload,
+    failed: &Failed<'_>,
+    auth_token: Option<String>,
+) -> Option<(OutcomePayload, Judged)> {
+    let request = match turn_judge::request(judge, failed, auth_token) {
+        Ok(request) => request,
+        Err(e) => {
+            warn!(%judge, error = %e, "Could not build the judge's request");
+            return None;
+        }
+    };
+    let response = match tokio::time::timeout(JUDGE_TIMEOUT, kernel.reason(request)).await {
+        Ok(Ok(result)) => result.response,
+        Ok(Err(e)) => {
+            warn!(%judge, error = %e, "The judge's call failed");
+            return None;
+        }
+        Err(_) => {
+            warn!(%judge, "The judge's call timed out");
+            return None;
+        }
+    };
+    let Some(verdict) = turn_judge::parse(&response.message.text_content()) else {
+        warn!(%judge, "The judge gave no verdict");
+        return None;
+    };
+    let cost_usd =
+        aura_model::model_catalog::estimate_cost_usd(judge, &response.usage).unwrap_or(0.0);
+    let signal = if verdict.at_fault {
+        OutcomeSignal::JudgedFail
+    } else {
+        OutcomeSignal::JudgedExcused
+    };
+    info!(%judge, model = %ended.model, %signal, cost_usd, "The judge reviewed failed work");
+    let outcome = ended.with_signal(signal);
+    record(kernel, kernel.agent_id, &outcome).await;
+    Some((
+        outcome,
+        Judged {
+            model: ended.model.clone(),
+            judge: judge.to_string(),
+            verdict,
+            cost_usd,
+        },
+    ))
+}
 
 /// Label `text` with its category by asking `model` through `kernel`, so
 /// the call is recorded. Any failure leaves it unclassified.
@@ -107,27 +226,6 @@ pub(crate) fn last_turn<S: ReadStore + ?Sized>(store: &S, agent_id: AgentId) -> 
     Some(LastTurn { outcome, prompt })
 }
 
-/// The outcome written when each of `agent_id`'s finished turns ended,
-/// newest turn first, for the turns the scan reaches. A turn whose end
-/// was written twice (a `/compare` run and its check) appears once, with
-/// its newest end.
-pub(crate) fn finished_turns<S: ReadStore + ?Sized>(
-    store: &S,
-    agent_id: AgentId,
-) -> Vec<OutcomePayload> {
-    let mut turns: Vec<OutcomePayload> = Vec::new();
-    for outcome in newest_first(store, agent_id)
-        .iter()
-        .filter_map(|entry| entry.tx.outcome_payload())
-        .filter(|outcome| outcome.signal.is_turn_end())
-    {
-        if !turns.iter().any(|t| t.prompt_tx == outcome.prompt_tx) {
-            turns.push(outcome);
-        }
-    }
-    turns
-}
-
 /// The outcome written when the turn of each prompt in `prompts` ended,
 /// for those the scan reaches, in the order of `prompts`.
 pub(crate) fn turn_outcomes<S: ReadStore + ?Sized>(
@@ -198,62 +296,6 @@ pub(super) async fn note_rewind(session: &AgentSession, prompts: &[Hash]) {
             agent_id,
             &outcome.with_signal(OutcomeSignal::Rewind),
         )
-        .await;
-    }
-}
-
-/// `/good [n]` or `/bad [n]`: the user's rating of `agent_id`'s finished
-/// turn `turns_back` back (1 is the last), which overrides what the turn's
-/// own signals said. Rating a turn again replaces the earlier rating.
-pub(super) async fn handle_rate(
-    state: &LoopState<'_>,
-    agent_id: AgentId,
-    good: bool,
-    turns_back: usize,
-) {
-    let ui = AgentUi::new(state.commands.clone(), agent_id);
-    if turns_back == 0 {
-        ui.send(UiCommand::ShowWarning(
-            "Turns back start at 1, the last finished turn".to_string(),
-        ))
-        .await;
-        return;
-    }
-    let Some(kernel) = state.kernel_for(agent_id) else {
-        ui.send(UiCommand::ShowWarning("No turn to rate yet".to_string()))
-            .await;
-        return;
-    };
-    let turns = finished_turns(kernel.store().as_ref(), agent_id);
-    let Some(turn) = turns.get(turns_back - 1) else {
-        let warning = match turns.len() {
-            0 => "No finished turn to rate yet".to_string(),
-            1 => format!("No turn {turns_back} back to rate: there is 1 finished turn"),
-            n => format!("No turn {turns_back} back to rate: there are {n} finished turns"),
-        };
-        ui.send(UiCommand::ShowWarning(warning)).await;
-        return;
-    };
-    let signal = if good {
-        OutcomeSignal::Good
-    } else {
-        OutcomeSignal::Bad
-    };
-    let rated = turn.with_signal(signal);
-    if record(&kernel, agent_id, &rated).await {
-        let which = match turns_back {
-            1 => "the last turn".to_string(),
-            n => format!("the turn {n} back"),
-        };
-        ui.send(UiCommand::ShowSuccess(format!(
-            "Rated {which} {signal} ({} on {})",
-            rated.category, rated.model
-        )))
-        .await;
-    } else {
-        ui.send(UiCommand::ShowWarning(
-            "Could not record the rating".to_string(),
-        ))
         .await;
     }
 }

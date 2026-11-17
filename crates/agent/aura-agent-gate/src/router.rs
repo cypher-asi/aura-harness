@@ -307,8 +307,11 @@ pub fn by_expected_cost<'a>(
 ///    the category starts on: the cheapest model of its [`start_tier`],
 ///    or of the next tier up while the category's outcomes on that model
 ///    rule it out ([`crate::stats::Row::can_still_reach`]), ending at the strongest;
-/// 3. with probability `explore_rate`, the next cheaper model than that
-///    instead, when there is one.
+/// 3. with probability `explore_rate`, a cheaper model than that
+///    instead, when there is one: the nearest the category's outcomes
+///    have not ruled out, else the nearest. So a model that was ruled
+///    out is tried again once nothing cheaper is more promising, and
+///    comes back when those tries prove it.
 ///
 /// Models are ordered by [`by_expected_cost`]. `None` when there are no
 /// candidates.
@@ -347,7 +350,12 @@ pub fn pick(
         return decide(index, reason, false, 1.0);
     }
     if rate > 0.0 && rng.unit() < rate {
-        return decide(index - 1, RouteReason::Explore, true, rate);
+        let open = (0..index).rev().find(|&cheaper| {
+            stats
+                .row(level, category, &order[cheaper].id)
+                .is_none_or(|row| row.can_still_reach(settings.target, settings.min_tries))
+        });
+        return decide(open.unwrap_or(index - 1), RouteReason::Explore, true, rate);
     }
     decide(index, reason, false, 1.0 - rate)
 }
@@ -1034,6 +1042,54 @@ mod tests {
                 below_lead(&no_standard, Some(OPUS)),
                 no_standard,
                 "without a standard model the work stays where it was"
+            );
+        }
+
+        #[test]
+        fn exploring_skips_ruled_out_models_until_nothing_else_is_cheaper() {
+            let settings = GateConfig::defaults();
+            let explored = |stats: &GateStats| {
+                let decision = pick(
+                    stats,
+                    RouteLevel::Turn,
+                    PromptCategory::Debugging,
+                    &claude(),
+                    &settings,
+                    &mut || 0.0,
+                )
+                .unwrap();
+                assert_eq!(decision.reason, RouteReason::Explore);
+                decision.model.id
+            };
+            let mut log = Log::default();
+            log.turns(2, PromptCategory::Debugging, SONNET, false);
+            assert_eq!(
+                chosen(&log.stats(), PromptCategory::Debugging, &claude()).0,
+                OPUS
+            );
+            assert_eq!(
+                explored(&log.stats()),
+                HAIKU,
+                "Sonnet is ruled out, Haiku is not"
+            );
+            log.turns(2, PromptCategory::Debugging, HAIKU, false);
+            let local = claude()
+                .into_iter()
+                .find(|c| c.tier == ModelTier::Local)
+                .unwrap()
+                .id;
+            assert_eq!(explored(&log.stats()), local);
+            log.turns(2, PromptCategory::Debugging, &local, false);
+            assert_eq!(
+                explored(&log.stats()),
+                SONNET,
+                "with every cheaper model ruled out, the nearest gets another try"
+            );
+            log.turns(12, PromptCategory::Debugging, SONNET, true);
+            assert_eq!(
+                chosen(&log.stats(), PromptCategory::Debugging, &claude()),
+                (SONNET.to_string(), RouteReason::Proven),
+                "and comes back once those tries prove it"
             );
         }
 

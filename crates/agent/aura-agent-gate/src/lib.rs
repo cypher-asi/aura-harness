@@ -15,6 +15,8 @@
 //!   per-arm summary it shows
 //! - [`judge`]: the blind judge of `/compare`, which picks the better of
 //!   two runs
+//! - [`turn_judge`]: the judge of a failed turn, which says whether the
+//!   model was at fault
 //! - [`lead`]: what the lead agent under Gate may do itself while
 //!   delegation is enforced
 //! - [`delegation`]: how much of a lead's work went to subtasks
@@ -32,6 +34,7 @@ pub mod lead;
 pub mod outcome;
 pub mod router;
 pub mod stats;
+pub mod turn_judge;
 
 pub use router::{
     below_lead, candidates, escalate, fixed_pick, pick, Candidate, Decision, Random, SplitMix64,

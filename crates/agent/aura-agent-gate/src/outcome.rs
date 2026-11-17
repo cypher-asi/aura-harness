@@ -31,10 +31,14 @@ pub const fn turn_signal(errored: bool, last_check: Option<bool>) -> OutcomeSign
 }
 
 /// Whether work that ended with `signal` goes on to a stronger model:
-/// it ended in an error, or its last check failed.
+/// it ended in an error, its last check failed, or the judge found it
+/// wrong.
 #[must_use]
 pub const fn calls_for_stronger(signal: OutcomeSignal) -> bool {
-    matches!(signal, OutcomeSignal::Error | OutcomeSignal::ChecksFailed)
+    matches!(
+        signal,
+        OutcomeSignal::Error | OutcomeSignal::ChecksFailed | OutcomeSignal::JudgedFail
+    )
 }
 
 /// The outcome that counts among those recorded for one prompt, oldest

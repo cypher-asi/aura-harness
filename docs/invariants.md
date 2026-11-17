@@ -770,6 +770,13 @@ before its refusal is recorded. Turns of any other category,
 permanent-agent instances, agents on a pinned model and
 `AURA_GATE_DELEGATE=off` get no lead limits.
 
+Gate's judge of failed work changes no permission either. Its one model
+call is an `Auxiliary` request with no tools, sent through the kernel of
+the agent whose work failed (`Kernel::reason`), so it is recorded in that
+agent's log like the classifier's call, and its finding is an `Outcome`
+transaction on the same log. A turn the judge sends on to a stronger
+model keeps its session, mode and approval level.
+
 Routing a subtask only sets the model of the child's turn before it
 starts. The child is an ordinary permanent-agent instance with its own
 kernel and log, and its prompt (level `subtask`) and `Outcome`s are in that

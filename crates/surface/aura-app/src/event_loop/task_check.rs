@@ -207,17 +207,23 @@ pub(super) fn retry_prompt(prompt: &str, model: &str, why: &str) -> String {
 }
 
 /// What the stronger model is told when it takes over a turn whose work
-/// on `model` ended with `signal`. The conversation and the files stay
-/// as that work left them.
-pub(crate) fn takeover_prompt(model: &str, signal: OutcomeSignal) -> String {
+/// on `model` ended with `signal`, with what the judge found wrong when
+/// it reviewed the work. The conversation and the files stay as that
+/// work left them.
+pub(crate) fn takeover_prompt(model: &str, signal: OutcomeSignal, review: Option<&str>) -> String {
     let how = match signal {
         OutcomeSignal::ChecksFailed => "with its last test or build command failing",
         _ => "in an error",
     };
+    let review = review
+        .map(str::trim)
+        .filter(|review| !review.is_empty())
+        .map(|review| format!(" A reviewer of that work found: {review}"))
+        .unwrap_or_default();
     format!(
-        "The work above was done on {model} and ended {how}. You are a stronger model taking \
-         over this turn. The files are as that work left them: check what it changed, find \
-         what is wrong and finish the request."
+        "The work above was done on {model} and ended {how}.{review} You are a stronger model \
+         taking over this turn. The files are as that work left them: check what it changed, \
+         find what is wrong and finish the request."
     )
 }
 

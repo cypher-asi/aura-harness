@@ -527,6 +527,81 @@ async fn a_failed_check_undoes_the_attempt_and_retries_once_on_a_stronger_model(
     );
 }
 
+/// Dispatch a subtask asking `prompt` whose check fails on its first
+/// attempt (on Sonnet), and return its attempts, oldest first.
+async fn failing_first_attempt(fixture: &Fixture, prompt: &str) -> (SubagentResult, Vec<AgentId>) {
+    let first = fixture.first;
+    let check = format!("ls notes/{GPT}.txt");
+    let result = dispatch(fixture, task(first, "implement", prompt, Some(&check))).await;
+    (result, children(fixture, first, "implement"))
+}
+
+#[tokio::test]
+async fn a_failed_subtask_the_judge_excuses_is_not_retried_or_counted() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let first = fixture.first;
+    let mut state = loop_state(&fixture, &mut b);
+    select_gate(&fixture, &mut state);
+    fixture.hub.set_permissions(first, yolo());
+
+    let (result, attempts) = failing_first_attempt(&fixture, "write a note (judge: excuse)").await;
+
+    assert!(matches!(result.exit, SubagentExit::Completed));
+    assert_eq!(attempts.len(), 1, "no retry on a stronger model");
+    let (_, outcomes) = record(&fixture, attempts[0]);
+    let signals: Vec<OutcomeSignal> = outcomes.iter().map(|o| o.signal).collect();
+    assert_eq!(
+        signals,
+        [OutcomeSignal::ChecksFailed, OutcomeSignal::JudgedExcused]
+    );
+    assert_eq!(
+        fixture
+            .hub
+            .gate
+            .stats()
+            .row(RouteLevel::Subtask, PromptCategory::Question, SONNET),
+        None,
+        "an excused failure counts for nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_subtask_the_judge_blames_is_retried_with_what_the_judge_found() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let first = fixture.first;
+    let mut state = loop_state(&fixture, &mut b);
+    select_gate(&fixture, &mut state);
+    fixture.hub.set_permissions(first, yolo());
+
+    let (_, attempts) = failing_first_attempt(&fixture, "write a note (judge: blame)").await;
+
+    assert_eq!(attempts.len(), 2, "one retry");
+    let (_, outcomes) = record(&fixture, attempts[0]);
+    let signals: Vec<OutcomeSignal> = outcomes.iter().map(|o| o.signal).collect();
+    assert_eq!(
+        signals,
+        [OutcomeSignal::ChecksFailed, OutcomeSignal::JudgedFail]
+    );
+    let (prompts, _) = record(&fixture, attempts[1]);
+    assert_eq!(prompts[0].route, Route::subtask(GPT, RouteReason::Escalate));
+    assert!(
+        prompts[0]
+            .text
+            .contains("A reviewer of that attempt found: The change is wrong."),
+        "{}",
+        prompts[0].text
+    );
+    let row = fixture
+        .hub
+        .gate
+        .stats()
+        .row(RouteLevel::Subtask, PromptCategory::Question, SONNET)
+        .map(|r| (r.tries, r.successes));
+    assert_eq!(row, Some((1, 0)), "the failure counts once");
+}
+
 #[tokio::test]
 async fn a_frontier_leads_subtasks_start_below_its_tier_and_may_escalate_to_it() {
     let (fixture, _commands) = fixture();

@@ -14,7 +14,10 @@
 //!
 //! A subtask Gate routed whose attempt failed is retried once on the next
 //! stronger model, the lead's tier included; the retry is recorded with
-//! route reason `escalate`, which Gate's table does not count.
+//! route reason `escalate`, which Gate's table does not count. Gate's
+//! judge reviews the failed attempt first (see
+//! [`aura_agent_gate::turn_judge`]): a failure it does not put down to
+//! the model is not retried and counts for nothing.
 
 use super::agents::AgentSession;
 use super::gate_live::GateLive;

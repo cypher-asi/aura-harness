@@ -7,7 +7,10 @@
 //! (the user's latest rating, else the latest outcome with a known
 //! result, as [`crate::outcome::effective`] says). An outcome that
 //! replaces an earlier one for the same prompt takes its place in the
-//! table instead of adding to it.
+//! table instead of adding to it, and one that takes the earlier ones
+//! back (the judge found the failure was not the model's doing, see
+//! [`aura_core_types::OutcomeSignal::voids`]) leaves the prompt out of
+//! the table.
 //!
 //! Entries may arrive in any order and more than once (a startup scan
 //! can overlap the live feed): which outcome counts depends only on the
@@ -65,15 +68,21 @@ impl Row {
     }
 
     fn add(&mut self, counted: &Counted) {
+        let Some(success) = counted.success else {
+            return;
+        };
         self.tries += 1;
-        self.successes += u32::from(counted.success);
+        self.successes += u32::from(success);
         self.cost_usd += counted.cost_usd;
         self.latency_ms = self.latency_ms.saturating_add(counted.latency_ms);
     }
 
     fn remove(&mut self, counted: &Counted) {
+        let Some(success) = counted.success else {
+            return;
+        };
         self.tries = self.tries.saturating_sub(1);
-        self.successes = self.successes.saturating_sub(u32::from(counted.success));
+        self.successes = self.successes.saturating_sub(u32::from(success));
         self.cost_usd = (self.cost_usd - counted.cost_usd).max(0.0);
         self.latency_ms = self.latency_ms.saturating_sub(counted.latency_ms);
     }
@@ -100,18 +109,23 @@ struct Counted {
     rating: bool,
     category: PromptCategory,
     model: String,
-    success: bool,
+    /// `None` when the outcome takes back what was said before: the
+    /// prompt then counts in no row.
+    success: Option<bool>,
     cost_usd: f64,
     latency_ms: u64,
 }
 
 impl Counted {
     fn from_outcome(seq: u64, outcome: OutcomePayload) -> Option<Self> {
+        if outcome.success.is_none() && !outcome.signal.voids() {
+            return None;
+        }
         Some(Self {
             seq,
             rating: outcome.signal.is_rating(),
             category: outcome.category,
-            success: outcome.success?,
+            success: outcome.success,
             model: outcome.model,
             cost_usd: outcome.cost_usd,
             latency_ms: outcome.latency_ms,
@@ -191,7 +205,7 @@ impl GateStats {
             return;
         }
         state.level = Some(level);
-        if let Some(counted) = &state.counted {
+        if let Some(counted) = state.counted.as_ref().filter(|c| c.success.is_some()) {
             self.rows
                 .entry(counted.key(level))
                 .or_default()
@@ -225,7 +239,9 @@ impl GateStats {
                     }
                 }
             }
-            self.rows.entry(new.key(level)).or_default().add(&new);
+            if new.success.is_some() {
+                self.rows.entry(new.key(level)).or_default().add(&new);
+            }
         }
         state.counted = Some(new);
     }
@@ -437,6 +453,36 @@ mod tests {
             assert_eq!(debugging(&stats, RouteLevel::Subtask, HAIKU), None);
             assert_eq!(stats.rows().len(), 1);
         }
+    }
+
+    #[test]
+    fn a_failure_the_judge_excuses_counts_for_nothing() {
+        let mut log = Log::new();
+        let excused = log.prompt("fix the build", RouteLevel::Turn);
+        log.outcome(excused, SONNET, OutcomeSignal::ChecksFailed);
+        log.outcome(excused, SONNET, OutcomeSignal::JudgedExcused);
+        let confirmed = log.prompt("fix the parser", RouteLevel::Turn);
+        log.outcome(confirmed, SONNET, OutcomeSignal::ChecksFailed);
+        log.outcome(confirmed, SONNET, OutcomeSignal::JudgedFail);
+        for stats in [
+            GateStats::from_entries(&log.entries),
+            GateStats::from_entries(log.entries.iter().rev()),
+        ] {
+            assert_eq!(debugging(&stats, RouteLevel::Turn, SONNET), Some((1, 0)));
+        }
+
+        // A later signal still has the last word.
+        log.outcome(excused, SONNET, OutcomeSignal::ChecksPassed);
+        let stats = GateStats::from_entries(&log.entries);
+        assert_eq!(debugging(&stats, RouteLevel::Turn, SONNET), Some((2, 1)));
+
+        let mut log = Log::new();
+        let only = log.prompt("fix the build", RouteLevel::Turn);
+        log.outcome(only, SONNET, OutcomeSignal::ChecksFailed);
+        log.outcome(only, SONNET, OutcomeSignal::JudgedExcused);
+        let stats = GateStats::from_entries(&log.entries);
+        assert_eq!(debugging(&stats, RouteLevel::Turn, SONNET), None);
+        assert!(stats.rows().is_empty(), "no row is left with zero tries");
     }
 
     #[test]

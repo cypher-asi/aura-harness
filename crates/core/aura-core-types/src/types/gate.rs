@@ -259,12 +259,20 @@ pub enum OutcomeSignal {
     Rewind,
     /// The user sent the same prompt again on a stronger model.
     RetryStronger,
-    /// The user rated the turn good (`/good`).
+    /// The user picked this run's arm in `/compare pick`.
     Good,
-    /// The user rated the turn bad (`/bad`).
+    /// The user picked the other arm in `/compare pick`.
     Bad,
     /// The parent dispatched the same subtask again in the same turn.
     Redone,
+    /// The judge model reviewed the failed work and found the model at
+    /// fault: its work was wrong or incomplete.
+    JudgedFail,
+    /// The judge model reviewed the failed work and found the failure was
+    /// not the model's doing (the environment, a check that already
+    /// failed, a request that can't be done). The work then counts neither
+    /// for nor against the model.
+    JudgedExcused,
 }
 
 impl OutcomeSignal {
@@ -279,8 +287,9 @@ impl OutcomeSignal {
             | Self::Rewind
             | Self::RetryStronger
             | Self::Bad
-            | Self::Redone => Some(false),
-            Self::None => None,
+            | Self::Redone
+            | Self::JudgedFail => Some(false),
+            Self::None | Self::JudgedExcused => None,
         }
     }
 
@@ -289,6 +298,13 @@ impl OutcomeSignal {
     #[must_use]
     pub const fn is_rating(self) -> bool {
         matches!(self, Self::Good | Self::Bad)
+    }
+
+    /// Whether the signal takes back what earlier signals said about the
+    /// work, so that it counts neither as a success nor as a failure.
+    #[must_use]
+    pub const fn voids(self) -> bool {
+        matches!(self, Self::JudgedExcused)
     }
 
     /// Whether this is written when the work ends, rather than later.
@@ -313,6 +329,8 @@ impl OutcomeSignal {
             Self::Good => "good",
             Self::Bad => "bad",
             Self::Redone => "redone",
+            Self::JudgedFail => "judged_fail",
+            Self::JudgedExcused => "judged_excused",
         }
     }
 }
@@ -442,6 +460,10 @@ mod tests {
     fn signals_say_success_failure_or_nothing() {
         assert_eq!(OutcomeSignal::ChecksPassed.success(), Some(true));
         assert_eq!(OutcomeSignal::Good.success(), Some(true));
+        assert_eq!(OutcomeSignal::JudgedExcused.success(), None);
+        assert!(OutcomeSignal::JudgedExcused.voids());
+        assert!(!OutcomeSignal::JudgedFail.voids());
+        assert!(!OutcomeSignal::JudgedExcused.is_turn_end());
         for failure in [
             OutcomeSignal::Error,
             OutcomeSignal::ChecksFailed,
@@ -449,6 +471,7 @@ mod tests {
             OutcomeSignal::RetryStronger,
             OutcomeSignal::Bad,
             OutcomeSignal::Redone,
+            OutcomeSignal::JudgedFail,
         ] {
             assert_eq!(failure.success(), Some(false), "{failure}");
         }
