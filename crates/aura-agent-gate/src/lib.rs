@@ -11,13 +11,19 @@
 //! - [`checks`]: whether the tests or build a turn ran last passed
 //! - [`outcome`]: the signals that say how a prompt's work went, and
 //!   which one counts
+//! - [`compare`]: `/compare`'s arguments, schedule, estimate and the
+//!   per-arm summary it shows
+//! - [`judge`]: the blind judge of `/compare`, which picks the better of
+//!   two runs
 //!
 //! Gate never calls a model itself: it chooses which model a turn runs
-//! on and builds the classifier's request, and the calls go through the
-//! agent's kernel as usual.
+//! on and builds the classifier's and judge's requests, and the calls go
+//! through the agent's kernel as usual.
 
 pub mod checks;
 pub mod classify;
+pub mod compare;
+pub mod judge;
 pub mod outcome;
 pub mod router;
 pub mod stats;

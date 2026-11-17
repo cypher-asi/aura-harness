@@ -3,6 +3,7 @@
 //! Includes Transaction, Action, Effect, `RecordEntry`, and related types.
 
 mod action;
+mod compare;
 mod context_hash;
 mod effect;
 mod gate;
@@ -18,6 +19,10 @@ pub mod trace;
 mod transaction;
 
 pub use action::{Action, ActionKind};
+pub use compare::{
+    CompareArm, CompareCopy, CompareJudgment, ComparePayload, CompareRun, CompareStatus,
+    ModelTokens,
+};
 pub use context_hash::ContextHash;
 pub use effect::{Effect, EffectKind, EffectStatus};
 pub use gate::{

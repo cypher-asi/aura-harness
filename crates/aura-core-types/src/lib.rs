@@ -54,18 +54,19 @@ pub use types::trace;
 pub use types::ToolDecision;
 pub use types::{
     installed_integrations_satisfy, integration_match, Action, ActionKind, ActionResultPayload,
-    AgentStatus, CacheControl, ContextHash, Decision, Effect, EffectKind, EffectStatus, Identity,
+    AgentStatus, CacheControl, CompareArm, CompareCopy, CompareJudgment, ComparePayload,
+    CompareRun, CompareStatus, ContextHash, Decision, Effect, EffectKind, EffectStatus, Identity,
     InstalledIntegrationDefinition, InstalledToolCapability, InstalledToolDefinition,
     InstalledToolIntegrationRequirement, InstalledToolRuntimeAuth, InstalledToolRuntimeExecution,
     InstalledToolRuntimeIntegration, InstalledToolRuntimeProviderExecution, LineDiff,
-    ModeChangePayload, OutcomePayload, OutcomeSignal, PolicyApproval, PolicyApprover, PolicyCheck,
-    PolicyCheckOutcome, PolicyDecision, PolicyRule, PolicySource, ProcessPending, PromptCategory,
-    PromptPayload, Proposal, ProposalSet, RecordEntry, RecordEntryBuilder, RejectedProposal, Route,
-    RouteLevel, RouteReason, RuntimeCapabilityInstall, SubagentBudget, SubagentDispatchRequest,
-    SubagentExit, SubagentKindSpec, SubagentResult, SystemKind, ToolAuth, ToolCall,
-    ToolCallContext, ToolDefinition, ToolExecution, ToolGateVerdict, ToolProposal, ToolResult,
-    ToolResultContent, ToolResultImage, ToolResultKind, Trace, Transaction, TransactionType,
-    DEFAULT_SUBAGENT_TIMEOUT_MS, KERNEL_VERSION, MAX_TURNS,
+    ModeChangePayload, ModelTokens, OutcomePayload, OutcomeSignal, PolicyApproval, PolicyApprover,
+    PolicyCheck, PolicyCheckOutcome, PolicyDecision, PolicyRule, PolicySource, ProcessPending,
+    PromptCategory, PromptPayload, Proposal, ProposalSet, RecordEntry, RecordEntryBuilder,
+    RejectedProposal, Route, RouteLevel, RouteReason, RuntimeCapabilityInstall, SubagentBudget,
+    SubagentDispatchRequest, SubagentExit, SubagentKindSpec, SubagentResult, SystemKind, ToolAuth,
+    ToolCall, ToolCallContext, ToolDefinition, ToolExecution, ToolGateVerdict, ToolProposal,
+    ToolResult, ToolResultContent, ToolResultImage, ToolResultKind, Trace, Transaction,
+    TransactionType, DEFAULT_SUBAGENT_TIMEOUT_MS, KERNEL_VERSION, MAX_TURNS,
 };
 
 // Convenience re-exports of mode/permission primitives so downstream

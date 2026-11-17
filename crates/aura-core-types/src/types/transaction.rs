@@ -8,7 +8,8 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ActionResultPayload, OutcomePayload, PolicyDecision, PromptPayload, ToolExecution, ToolProposal,
+    ActionResultPayload, ComparePayload, OutcomePayload, PolicyDecision, PromptPayload,
+    ToolExecution, ToolProposal,
 };
 
 /// The type of transaction.
@@ -76,6 +77,9 @@ pub enum SystemKind {
     /// and `Kernel::switch_permissions`, never accepted from external
     /// submitters.
     ModeChange,
+    /// A `/compare` of Gate with another model (a
+    /// [`ComparePayload`](super::compare::ComparePayload))
+    Compare,
 }
 
 /// Payload of a [`SystemKind::ModeChange`] transaction.
@@ -231,6 +235,21 @@ impl Transaction {
             return None;
         }
         OutcomePayload::from_bytes(&self.payload).ok()
+    }
+
+    /// Create a [`SystemKind::Compare`] transaction recording `compare`.
+    #[must_use]
+    pub fn compare(agent_id: AgentId, compare: &ComparePayload) -> Self {
+        Self::new_chained(agent_id, TransactionType::System, compare.to_bytes(), None)
+    }
+
+    /// The comparison this transaction records, if it is one.
+    #[must_use]
+    pub fn compare_payload(&self) -> Option<ComparePayload> {
+        if self.tx_type != TransactionType::System {
+            return None;
+        }
+        ComparePayload::from_bytes(&self.payload)
     }
 
     /// Create an action result transaction.

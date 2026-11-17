@@ -13,11 +13,14 @@
 //! can overlap the live feed): which outcome counts depends only on the
 //! record sequence numbers, and seeing an entry again changes nothing.
 //! A prompt's outcomes are in the same record as the prompt, so their
-//! sequence numbers compare.
+//! sequence numbers compare. A prompt is known by its agent and its
+//! transaction hash: the hash covers only the payload, so two agents
+//! given the same prompt (the repeats of a `/compare`) record the same
+//! hash for different work.
 
 use std::collections::HashMap;
 
-use aura_core_types::{Hash, OutcomePayload, PromptCategory, RecordEntry, RouteLevel};
+use aura_core_types::{AgentId, Hash, OutcomePayload, PromptCategory, RecordEntry, RouteLevel};
 
 /// One row of the table: the counted outcomes of one model on one
 /// category at one level.
@@ -132,7 +135,7 @@ struct PromptState {
 #[derive(Debug, Clone, Default)]
 pub struct GateStats {
     rows: HashMap<RowKey, Row>,
-    prompts: HashMap<Hash, PromptState>,
+    prompts: HashMap<(AgentId, Hash), PromptState>,
 }
 
 impl GateStats {
@@ -150,15 +153,16 @@ impl GateStats {
     /// and an outcome with a known result may become what its prompt
     /// counts with. Other entries are ignored.
     pub fn observe(&mut self, entry: &RecordEntry) {
+        let agent = entry.tx.agent_id;
         if let Some(prompt) = entry.tx.prompt_payload() {
-            self.observe_prompt(entry.tx.hash, prompt.route.level);
+            self.observe_prompt((agent, entry.tx.hash), prompt.route.level);
         } else if let Some(outcome) = entry.tx.outcome_payload() {
-            self.observe_outcome(entry.seq, outcome);
+            self.observe_outcome(agent, entry.seq, outcome);
         }
     }
 
-    fn observe_prompt(&mut self, prompt_tx: Hash, level: RouteLevel) {
-        let state = self.prompts.entry(prompt_tx).or_default();
+    fn observe_prompt(&mut self, prompt: (AgentId, Hash), level: RouteLevel) {
+        let state = self.prompts.entry(prompt).or_default();
         if state.level.is_some() {
             return;
         }
@@ -171,12 +175,12 @@ impl GateStats {
         }
     }
 
-    fn observe_outcome(&mut self, seq: u64, outcome: OutcomePayload) {
+    fn observe_outcome(&mut self, agent: AgentId, seq: u64, outcome: OutcomePayload) {
         let prompt_tx = outcome.prompt_tx;
         let Some(new) = Counted::from_outcome(seq, outcome) else {
             return;
         };
-        let state = self.prompts.entry(prompt_tx).or_default();
+        let state = self.prompts.entry((agent, prompt_tx)).or_default();
         if state
             .counted
             .as_ref()
@@ -372,6 +376,19 @@ mod tests {
             assert_eq!(stats.rows(), in_order.rows());
         }
         assert_eq!(debugging(&in_order, RouteLevel::Turn, SONNET), Some((3, 3)));
+    }
+
+    #[test]
+    fn the_same_prompt_in_two_agents_counts_twice() {
+        let mut first = Log::new();
+        let mut second = Log::new();
+        let a = first.prompt("fix it", RouteLevel::Turn);
+        let b = second.prompt("fix it", RouteLevel::Turn);
+        assert_eq!(a, b, "the hash covers only the payload");
+        first.outcome(a, SONNET, OutcomeSignal::ChecksPassed);
+        second.outcome(b, SONNET, OutcomeSignal::ChecksFailed);
+        let stats = GateStats::from_entries(first.entries.iter().chain(&second.entries));
+        assert_eq!(debugging(&stats, RouteLevel::Turn, SONNET), Some((2, 1)));
     }
 
     #[test]

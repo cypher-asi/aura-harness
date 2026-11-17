@@ -123,6 +123,9 @@ pub enum RouteReason {
     Proven,
     /// Gate tried a cheaper model to learn how it does.
     Explore,
+    /// A run of `/compare`: Gate's pick with exploration off, or the
+    /// model Gate is compared with.
+    Compare,
 }
 
 impl RouteReason {
@@ -134,6 +137,7 @@ impl RouteReason {
             Self::Default => "default",
             Self::Proven => "proven",
             Self::Explore => "explore",
+            Self::Compare => "compare",
         }
     }
 }
@@ -491,6 +495,7 @@ mod tests {
             RouteReason::Default,
             RouteReason::Proven,
             RouteReason::Explore,
+            RouteReason::Compare,
         ] {
             assert_eq!(serde_json::to_value(reason).unwrap(), reason.as_str());
         }
