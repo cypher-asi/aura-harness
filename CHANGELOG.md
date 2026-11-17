@@ -79,7 +79,8 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   so parallel runs don't count it twice. Providers that send no such
   headers show tokens per model instead.
   The check runs as a `run_command` call through each run's kernel, so
-  it is in the run's record and under the same command policy.
+  it is in the run's record and under the same command policy. Each run
+  is unattended in its own copy and runs in `agent` mode at `yolo`.
 - `evals/gate_cost`: 20 tasks with hidden checks, categories and
   reference solutions. Eval tasks can set `category`, `tags` and a
   `checks/` folder copied in after the run; `aura eval run` reports each
@@ -91,7 +92,14 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   kernel, its verdict recorded as a later outcome so eval results count
   in Gate's table. The results table shows the models Gate routed each
   task to. `EvalOptions` takes an `EvalRunner` instead of `config`,
-  `tool_config` and `provider`.
+  `tool_config` and `provider`. The runs' agents work at `yolo`, like
+  `aura -p` in `agent` mode.
+- Under any approval level, the lead's `run_command` limit only narrows
+  what the level lets run, and a `task` `check` runs through the
+  subtask's kernel at the level the subtask inherited from its parent.
+- `aura-app`'s `isolation` module holds the worktree and copy helpers
+  `/compare` runs in and the change carrying, diffing and scratch-index
+  snapshots `/compare` and the escalation use.
 
 ### Approval levels
 
@@ -163,9 +171,10 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
 
 ##### Removed
 
-- `aura-exec-sandbox` and `aura-exec-isolation`, which nothing used.
-  The filesystem sandbox the tools use is `sandbox.rs` in
-  `aura-exec-tools`.
+- `aura-exec-sandbox` and `aura-exec-isolation`. The filesystem
+  sandbox the tools use is `sandbox.rs` in `aura-exec-tools`, and the
+  workspace copies Gate's `/compare` and escalation use are `aura-app`'s
+  `isolation` module.
 - The old `aura-core-protocol` placeholder, which only held
   `ProtocolVersion`. It was merged into the wire protocol crate, which
   now carries the `aura-core-protocol` name.
