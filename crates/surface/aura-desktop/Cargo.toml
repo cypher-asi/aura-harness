@@ -24,6 +24,7 @@ crossterm = { workspace = true }
 unicode-width = { workspace = true }
 # The bare renderer's text and shapes; the versions iced already brings in.
 cosmic-text = "0.15"
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
 
 anyhow = { workspace = true }
 chrono = { workspace = true }

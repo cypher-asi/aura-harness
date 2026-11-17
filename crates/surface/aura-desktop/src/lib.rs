@@ -19,6 +19,8 @@ mod perf;
 mod router;
 #[allow(dead_code)] // until the bare shell draws with it
 mod scene;
+#[allow(dead_code)] // until the bare shell draws with it
+mod shapes;
 #[cfg(test)]
 mod snapshot;
 mod tab;

@@ -846,6 +846,7 @@ dependencies = [
  "iced",
  "iced_runtime",
  "ratatui",
+ "tiny-skia",
  "tokio",
  "tracing",
  "tracing-subscriber",
