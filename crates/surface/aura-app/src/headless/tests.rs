@@ -1103,7 +1103,7 @@ async fn an_eval_verdict_after_a_move_up_lands_on_the_uncounted_attempt() {
     let dirs = dirs();
     let permissions = super::permissions(aura_core_modes::AgentMode::Agent, None);
     let provider = failing_check_provider(&["It skips a token.\nVERDICT: MODEL", "Fixed it."]);
-    let (h, _requests) = harness(
+    let (h, requests) = harness(
         &dirs,
         provider,
         ToolFilter::default(),
@@ -1148,6 +1148,23 @@ async fn an_eval_verdict_after_a_move_up_lands_on_the_uncounted_attempt() {
     );
     assert!(judged.verdict.at_fault);
     assert_eq!(judged.verdict.reasons, "It skips a token.");
+    let asked: Vec<String> = requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| r.model.to_string())
+        .collect();
+    let recorded: u32 = ran.gate.tokens.iter().map(|m| m.calls).sum();
+    assert_eq!(
+        recorded as usize,
+        asked.len(),
+        "every model call is in the run's cost, the judge's included: {asked:?}"
+    );
+    assert_eq!(
+        asked.iter().filter(|model| *model == GATE_OPUS).count(),
+        2,
+        "the judge's call and the turn it sent on: {asked:?}"
+    );
 
     let agent = crate::event_loop::subagents::lock(&hub.registry)
         .agents()
