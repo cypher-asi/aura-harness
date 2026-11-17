@@ -14,6 +14,7 @@ pub(crate) mod agents;
 pub(crate) mod approvals;
 mod attachments;
 pub(crate) mod auth;
+pub(crate) mod gate_record;
 pub(crate) mod handlers;
 pub(crate) mod host;
 pub(crate) mod hud;
@@ -45,7 +46,7 @@ use aura_agent::AgentLoop;
 use aura_agent_kernel::Kernel;
 use aura_agent_trace::RunRecorder;
 use aura_auth::{AuthManager, PendingLink};
-use aura_core_types::{AgentId, Transaction};
+use aura_core_types::{AgentId, RouteReason, Transaction};
 use aura_model_reasoner::model_catalog::local_model_name;
 use aura_model_reasoner::ToolDefinition;
 use aura_terminal::events::{ImageAttachment, ProcessStatus};
@@ -57,7 +58,7 @@ use steering::{SteerSource, Steering};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
-use turns::{GateTurn, Prompt, Task, Work, WorkDone};
+use turns::{GateTurn, Prompt, Routing, Task, Work, WorkDone};
 
 /// How long quitting waits for cancelled turns to record how they ended.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
@@ -492,6 +493,10 @@ async fn handle_ui_event(
             let agent_id = state.agent_or_active(&agent_id);
             rewind::handle_diff(state, agent_id, session).await;
         }
+        UiEvent::RateTurn { agent_id, good } => {
+            let agent_id = state.agent_or_active(&agent_id);
+            gate_record::handle_rate(state, agent_id, good).await;
+        }
         UiEvent::KillProcess(id) => handlers::handle_kill_process(state, &id).await,
         UiEvent::BuildPlan { agent_id, path } => {
             let agent_id = state.agent_or_active(&agent_id);
@@ -594,6 +599,7 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
             .await;
             let (agent_loop, tools, recorder) = prepare_turn(state, &session).await;
             let gate = gate_turn(state, &agent_loop, &ui).await;
+            let routing = Box::new(routing(state, &agent_loop));
             if let Some(rec) = &recorder {
                 rec.begin_turn(&prompt.text);
             }
@@ -612,6 +618,7 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
                 limits: state.hub.long_run,
                 recorder,
                 gate,
+                routing,
             }
         }
         Work::Command { command, cols } => Task::Command { command, cols },
@@ -714,6 +721,22 @@ async fn gate_turn(
         fallbacks: state.models.fallbacks(),
         limits: state.models.limits(),
     })
+}
+
+/// How Gate records the prompt of a turn on `agent_loop`: the turn's model
+/// is Gate's default when Gate is selected and the agent doesn't name its
+/// own model (Gate's pick, or the local default when nothing else can
+/// run), else pinned.
+fn routing(state: &LoopState<'_>, agent_loop: &AgentLoop) -> Routing {
+    let gated = state.models.is_gate() && agent_loop.config().model == state.models.turn_model();
+    Routing {
+        classifier: state.models.classifier_model(),
+        reason: if gated {
+            RouteReason::Default
+        } else {
+            RouteReason::Pinned
+        },
+    }
 }
 
 /// Take back the session of work that ended, report a failure, and start

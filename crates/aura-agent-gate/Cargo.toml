@@ -8,7 +8,9 @@ license.workspace = true
 
 [dependencies]
 aura-core-auth = { path = "../aura-core-auth" }
+aura-core-types = { path = "../aura-core-types" }
 aura-model-reasoner = { path = "../aura-model-reasoner" }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

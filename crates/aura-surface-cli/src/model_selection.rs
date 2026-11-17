@@ -167,6 +167,13 @@ impl ModelSelection {
             .collect()
     }
 
+    /// The model that classifies prompts: the cheapest fast-tier model the
+    /// user can run, else the local default.
+    pub fn classifier_model(&self) -> String {
+        aura_agent_gate::classify::classifier(&self.gate_candidates())
+            .map_or_else(|| self.default_local.clone(), |c| c.id.clone())
+    }
+
     /// The model the next turn runs on: the selected one, or Gate's pick.
     pub fn turn_model(&self) -> String {
         if !self.is_gate() {
@@ -734,6 +741,14 @@ mod tests {
             config.model, "aura-claude-sonnet-4-6",
             "Gate routes across the sign-ins left"
         );
+    }
+
+    #[test]
+    fn the_cheapest_fast_model_classifies_else_the_local_default() {
+        let (claude, _) = selection_on(signed_in(None, &[ProviderKind::Claude]), LOCAL);
+        assert_eq!(claude.classifier_model(), "claude/claude-haiku-4-5");
+        let (guest, _) = selection_on(AuthSummary::default(), GATE_MODEL_ID);
+        assert_eq!(guest.classifier_model(), LOCAL);
     }
 
     #[test]

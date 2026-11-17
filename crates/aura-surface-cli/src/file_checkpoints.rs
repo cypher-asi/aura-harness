@@ -11,7 +11,7 @@
 
 use crate::event_loop::agent_events::AgentUi;
 use async_trait::async_trait;
-use aura_core_types::AgentId;
+use aura_core_types::{AgentId, Hash};
 use aura_store_snapshot::{DirSnapshotStore, SnapshotStore};
 use aura_terminal::events::FileDiffData;
 use aura_terminal::UiCommand;
@@ -67,6 +67,10 @@ pub struct TurnManifest {
     /// The conversation was rewound to before this turn
     #[serde(default)]
     pub rewound: bool,
+    /// Hex hash of the turn's prompt transaction in the agent's record,
+    /// once it is recorded
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_tx: Option<String>,
 }
 
 impl TurnManifest {
@@ -154,10 +158,23 @@ impl FileCheckpoints {
             prompt_hash: hash(prompt.as_bytes()),
             files: Vec::new(),
             rewound: false,
+            prompt_tx: None,
         };
         let mut open = lock(&self.inner.open);
         self.save_manifest(agent, &manifest);
         open.insert(agent, manifest);
+    }
+
+    /// Note that the prompt of the turn `agent` is running was recorded as
+    /// the transaction `prompt_tx`.
+    pub fn note_prompt_tx(&self, agent: AgentId, prompt_tx: Hash) {
+        let mut open = lock(&self.inner.open);
+        let Some(turn) = open.get_mut(&agent) else {
+            return;
+        };
+        turn.prompt_tx = Some(prompt_tx.to_hex());
+        let manifest = turn.clone();
+        self.save_manifest(agent, &manifest);
     }
 
     /// Stop attributing file changes to `agent`'s turn.
@@ -575,6 +592,21 @@ mod tests {
         let report = files.restore(agent, &turns);
         assert!(report.failed.is_empty(), "{report:?}");
         assert_eq!(std::fs::read_to_string(&kept).unwrap(), "original\n");
+    }
+
+    #[test]
+    fn a_turn_keeps_the_record_hash_of_its_prompt() {
+        let (_dir, files, agent, _ws) = setup();
+        let prompt_tx = Hash::from_content(b"prompt");
+        files.note_prompt_tx(agent, prompt_tx);
+        files.begin_turn(agent, 1, 0, "first");
+        files.note_prompt_tx(agent, prompt_tx);
+        files.end_turn(agent);
+        files.note_prompt_tx(agent, Hash::from_content(b"later"));
+
+        let turns = files.turns(agent, 1);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].manifest.prompt_tx, Some(prompt_tx.to_hex()));
     }
 
     #[tokio::test]

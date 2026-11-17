@@ -50,6 +50,8 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Show file changes of the last turn or session",
         needs_args: false,
     },
+    command("good", "Rate the last turn good (teaches Gate)"),
+    command("bad", "Rate the last turn bad (teaches Gate)"),
     SlashCommand {
         name: "name",
         args: "[name]",

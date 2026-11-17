@@ -247,6 +247,24 @@ fn test_diff_command_picks_turn_or_session() {
     assert!(rx.try_recv().is_err());
 }
 
+#[test]
+fn test_good_and_bad_rate_the_active_agents_last_turn() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    app.active_agent_id = "abc".to_string();
+
+    app.handle_command("/good");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::RateTurn { ref agent_id, good: true }) if agent_id == "abc"
+    ));
+    app.handle_command("/bad");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::RateTurn { good: false, .. })
+    ));
+}
+
 fn submit(app: &mut App, text: &str) {
     for c in text.chars() {
         app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()));

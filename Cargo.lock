@@ -439,7 +439,9 @@ name = "aura-agent-gate"
 version = "0.1.0"
 dependencies = [
  "aura-core-auth",
+ "aura-core-types",
  "aura-model-reasoner",
+ "serde_json",
 ]
 
 [[package]]

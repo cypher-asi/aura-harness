@@ -216,6 +216,15 @@ pub enum UiEvent {
         /// Every change since the session started
         session: bool,
     },
+
+    /// User rated the agent's last turn (`/good` or `/bad`), overriding
+    /// what Gate inferred about how it went
+    RateTurn {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        /// `/good` rather than `/bad`
+        good: bool,
+    },
 }
 
 /// What `/rewind` puts back.

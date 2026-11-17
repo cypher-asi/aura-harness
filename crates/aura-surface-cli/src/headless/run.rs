@@ -20,7 +20,7 @@ use crate::session_checkpoint::SessionUsage;
 use aura_agent::{AgentLoop, AgentLoopResult};
 use aura_agent_kernel::Kernel;
 use aura_core_modes::AgentMode;
-use aura_core_types::{AgentId, Transaction};
+use aura_core_types::{AgentId, PromptPayload, Transaction};
 use aura_model_reasoner::{Message, Role};
 use aura_tools::BackgroundProcessHook;
 use std::path::PathBuf;
@@ -305,7 +305,7 @@ impl Headless {
         interrupt: &CancellationToken,
     ) -> TurnOutcome {
         drain_stale_inbox(session).await;
-        if let Err(problem) = record_prompt(session, text.clone()).await {
+        if let Err(problem) = record_prompt(session, &PromptPayload::new(text.clone())).await {
             return TurnOutcome {
                 result: None,
                 usage: SessionUsage::default(),
@@ -557,7 +557,7 @@ async fn commit(session: &mut AgentSession, result: &AgentLoopResult, seen: &[St
     session.messages.clone_from(&result.messages);
     session.todos.clone_from(&result.todos);
     for text in seen {
-        if let Err(problem) = record_prompt(session, text.clone()).await {
+        if let Err(problem) = record_prompt(session, &PromptPayload::new(text.clone())).await {
             warn!(%problem, "Failed to record a mid-turn notice");
         }
     }
