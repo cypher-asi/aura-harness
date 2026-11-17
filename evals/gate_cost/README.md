@@ -12,10 +12,11 @@ Categories: `bugfix`, `feature`, `refactor`, `tests`, `docs`,
 
 ## Running the comparison
 
-Each arm is one model on the same tasks; `--model gate` runs every task
-on Gate's default pick for your sign-ins, without per-prompt routing or
-delegation (`/compare` in the terminal measures those). `--budget-usd`
-stops an arm once its runs have cost that much.
+Each arm is one model on the same tasks, except `--model gate`, which
+routes each task's prompts and subtasks with Gate's table, lets the
+agent lead and delegate, and records the verify verdicts in that table
+(see [Gate](../../docs/cli.md#gate)). `--budget-usd` stops an arm once
+its runs have cost that much.
 
 ```sh
 aura eval run evals/gate_cost --model claude/claude-opus-5-5 --arm opus --repeat 3 --budget-usd 20

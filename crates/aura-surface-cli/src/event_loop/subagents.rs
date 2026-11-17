@@ -47,12 +47,13 @@ use crate::project_instructions::ProjectInstructions;
 use crate::record_loader::agent_summaries;
 use async_trait::async_trait;
 use aura_agent::{AgentLoop, AgentLoopConfig};
+use aura_agent_gate::compare::tally;
 use aura_agent_gate::{Candidate, Decision};
 use aura_agent_kernel::Kernel;
 use aura_context_skills::SkillManager;
 use aura_core_types::{
-    AgentId, Hash, OutcomePayload, OutcomeSignal, PromptCategory, SpawnMode,
-    SubagentDispatchRequest, SubagentExit, SubagentResult,
+    AgentId, Hash, ModelTokens, OutcomePayload, OutcomeSignal, PromptCategory, RecordEntry,
+    SpawnMode, SubagentDispatchRequest, SubagentExit, SubagentResult,
 };
 use aura_model_reasoner::{Message, ToolDefinition};
 use aura_terminal::events::{
@@ -70,6 +71,9 @@ use std::time::Instant;
 use tokio::sync::{mpsc, Notify};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
+
+/// Record entries read per scan when adding up an agent's model calls.
+const SCAN_BATCH: usize = 500;
 
 /// An agent with work in flight.
 struct Running {
@@ -984,6 +988,57 @@ impl AgentHub {
     /// For pointing an agent loop at a model other than the selected one.
     pub(crate) fn model_limits(&self) -> ModelLimits {
         lock(&self.base).limits
+    }
+
+    /// Tokens and cost per model of every model call `agent` and the
+    /// agents under it made, classifier calls included.
+    pub(crate) fn tokens_by_model(&self, agent: AgentId) -> Vec<ModelTokens> {
+        let mut calls = Vec::new();
+        self.each_entry(agent, |entry| {
+            calls.extend(crate::record_loader::model_call(&entry.tx));
+        });
+        tally(calls)
+    }
+
+    /// The models the prompts of `agent` and the agents under it were
+    /// routed to, first used first.
+    pub(crate) fn routed_models(&self, agent: AgentId) -> Vec<String> {
+        let mut models: Vec<String> = Vec::new();
+        self.each_entry(agent, |entry| {
+            if let Some(prompt) = entry.tx.prompt_payload() {
+                let model = prompt.route.model;
+                if !model.is_empty() && !models.contains(&model) {
+                    models.push(model);
+                }
+            }
+        });
+        models
+    }
+
+    /// Call `f` with every entry in the records of `agent` and the agents
+    /// under it, `agent`'s first.
+    fn each_entry(&self, agent: AgentId, mut f: impl FnMut(&RecordEntry)) {
+        let agents: Vec<AgentId> = std::iter::once(agent)
+            .chain(lock(&self.registry).descendants(agent))
+            .collect();
+        let store = self.factory.store.as_ref();
+        for agent in agents {
+            let mut from = 1;
+            loop {
+                let entries = match store.scan_record(agent, from, SCAN_BATCH) {
+                    Ok(entries) => entries,
+                    Err(e) => {
+                        warn!(%agent, error = %e, "Could not read an agent's record");
+                        break;
+                    }
+                };
+                entries.iter().for_each(&mut f);
+                match entries.last() {
+                    Some(last) if entries.len() == SCAN_BATCH => from = last.seq + 1,
+                    _ => break,
+                }
+            }
+        }
     }
 
     /// Route `run`'s subtask, run its turn to the end, run its check and

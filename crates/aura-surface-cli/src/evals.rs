@@ -15,6 +15,13 @@
 //! verify = "cargo test --offline"
 //! max_iterations = 30
 //! ```
+//!
+//! On a model, each run is the plain agent loop with a kernel of its own
+//! whose record is kept in the run's bundle, and `verify` runs with
+//! `sh -c` after it. Under `gate` ([`EvalGate`]) each run is an agent in
+//! the data directory, its prompts are `aura -p` turns, and `verify` is a
+//! `run_command` call through that agent's kernel whose verdict feeds
+//! Gate's table.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -24,14 +31,17 @@ use std::sync::Arc;
 use anyhow::{bail, Context};
 use aura_agent::AgentLoopConfig;
 use aura_agent_trace::bundle::{list_runs, now_ms, RunBundle};
-use aura_agent_trace::{scorecard, RunMeta, RunScorecard, RunSource, RunTrace};
+use aura_agent_trace::{scorecard, RunMeta, RunRecorder, RunScorecard, RunSource, RunTrace};
 use aura_config::trace::TraceLevel;
 use aura_core_types::trace::{Reward, RewardKind, RewardTarget};
+use aura_core_types::ModelTokens;
+use aura_model_reasoner::model_catalog::GATE_MODEL_ID;
 use aura_model_reasoner::ModelProvider;
 use aura_tools::ToolConfig;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::headless::EvalTurn;
 use crate::recorded_runs::{self, HeadlessRun};
 
 /// Task definition file inside a task directory.
@@ -125,6 +135,48 @@ pub fn suite_name(suite: &Path) -> String {
 pub type ProviderFactory =
     Box<dyn Fn(&EvalTask) -> Arc<dyn ModelProvider + Send + Sync> + Send + Sync>;
 
+/// What runs the tasks of a suite.
+pub enum EvalRunner {
+    /// The agent loop on one model, with its own kernel per run.
+    Model {
+        /// Loop configuration (model, limits).
+        config: Box<AgentLoopConfig>,
+        /// Tool configuration.
+        tool_config: ToolConfig,
+        /// Provider for one run of a task.
+        provider: ProviderFactory,
+    },
+    /// Gate, as `aura -p` runs it.
+    Gate(EvalGate),
+}
+
+/// Runs tasks under `gate` as `aura -p` turns: classified and routed with
+/// Gate's table, the agent leading and its subtasks routed, the prompts,
+/// `Outcome`s and verify verdicts recorded in the data directory's agent
+/// records, so they count in that table.
+pub struct EvalGate {
+    turns: tokio::sync::Mutex<crate::headless::EvalTurns>,
+}
+
+impl EvalGate {
+    /// Gate on the agents and records of the terminal started in the
+    /// current directory, with `provider` (`mock` answers without a model).
+    ///
+    /// # Errors
+    /// When the sign-in state or data directory can't be read, or a
+    /// terminal has the data directory open.
+    pub(crate) async fn start(provider: &str) -> anyhow::Result<Self> {
+        let headless = crate::headless::eval_harness(provider).await?;
+        Ok(Self::on(crate::headless::EvalTurns::new(headless)))
+    }
+
+    pub(crate) fn on(turns: crate::headless::EvalTurns) -> Self {
+        Self {
+            turns: tokio::sync::Mutex::new(turns),
+        }
+    }
+}
+
 /// Settings shared by every task in a suite run.
 pub struct EvalOptions {
     /// `AURA_HOME`.
@@ -137,14 +189,10 @@ pub struct EvalOptions {
     pub repeat: usize,
     /// Trace level.
     pub level: TraceLevel,
-    /// Loop configuration (model, limits).
-    pub config: AgentLoopConfig,
-    /// Tool configuration.
-    pub tool_config: ToolConfig,
+    /// What runs the tasks.
+    pub runner: EvalRunner,
     /// Where task workspaces are created.
     pub work_root: PathBuf,
-    /// Provider for one run of a task.
-    pub provider: ProviderFactory,
     /// Stop starting runs once the suite's runs cost this much.
     pub budget_usd: Option<f64>,
 }
@@ -162,6 +210,30 @@ pub struct EvalResult {
     pub error: Option<String>,
     /// Scorecard including the verification outcome.
     pub scorecard: RunScorecard,
+    /// What Gate did, under `gate`.
+    pub gate: Option<GateUse>,
+}
+
+/// What Gate did in one run of a task.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct GateUse {
+    /// Models Gate routed the run's turns and subtasks to, first used
+    /// first.
+    pub routed: Vec<String>,
+    /// Model calls of the run and its subtasks per model, classifier
+    /// calls included.
+    pub tokens: Vec<ModelTokens>,
+}
+
+impl EvalResult {
+    /// What the run cost at list prices: under Gate its subtasks and
+    /// classifier calls included, else the scorecard's.
+    #[must_use]
+    pub fn cost_usd(&self) -> f64 {
+        self.gate.as_ref().map_or(self.scorecard.cost_usd, |gate| {
+            gate.tokens.iter().map(|m| m.cost_usd).sum()
+        })
+    }
 }
 
 /// Run every task `opts.repeat` times.
@@ -179,7 +251,7 @@ pub async fn run_suite(tasks: &[EvalTask], opts: &EvalOptions) -> anyhow::Result
                 return Ok(results);
             }
             let result = run_task(task, opts).await?;
-            spent += result.scorecard.cost_usd;
+            spent += result.cost_usd();
             results.push(result);
         }
     }
@@ -196,8 +268,13 @@ pub fn categories(suite: &str, tasks: &[EvalTask]) -> BTreeMap<String, String> {
 }
 
 async fn run_task(task: &EvalTask, opts: &EvalOptions) -> anyhow::Result<EvalResult> {
-    let mut meta = RunMeta::new(opts.config.model.clone(), RunSource::Eval);
-    meta.task_id = Some(format!("{}/{}", opts.suite, task.id));
+    let model = match &opts.runner {
+        EvalRunner::Model { config, .. } => config.model.clone(),
+        EvalRunner::Gate(_) => GATE_MODEL_ID.to_string(),
+    };
+    let task_id = format!("{}/{}", opts.suite, task.id);
+    let mut meta = RunMeta::new(model, RunSource::Eval);
+    meta.task_id = Some(task_id.clone());
     meta.title.clone_from(&task.title);
     meta.arm.clone_from(&opts.arm);
 
@@ -207,26 +284,82 @@ async fn run_task(task: &EvalTask, opts: &EvalOptions) -> anyhow::Result<EvalRes
     if fixture.is_dir() {
         copy_dir(&fixture, &workspace)?;
     }
+    let mut prompts = vec![task.prompt.clone()];
+    prompts.extend(task.follow_ups.iter().cloned());
+    let checks = task.dir.join(CHECKS_DIR);
 
-    let mut config = opts.config.clone();
+    let (config, tool_config, provider) = match &opts.runner {
+        EvalRunner::Model {
+            config,
+            tool_config,
+            provider,
+        } => (config, tool_config, provider),
+        EvalRunner::Gate(gate) => {
+            let workspace = workspace.canonicalize()?;
+            meta.workspace = workspace.display().to_string();
+            let level = match opts.level {
+                TraceLevel::Off => TraceLevel::Decisions,
+                level => level,
+            };
+            let trace = RunRecorder::start(&opts.home, meta, level)?.context("tracing is off")?;
+            let ran = gate
+                .turns
+                .lock()
+                .await
+                .run(EvalTurn {
+                    name: &format!("Eval {task_id}"),
+                    workspace: &workspace,
+                    prompts: &prompts,
+                    max_iterations: task.max_iterations,
+                    checks: checks.is_dir().then_some(checks.as_path()),
+                    verify: &task.verify,
+                    trace: Arc::clone(&trace),
+                })
+                .await?;
+            let passed = ran.check.passed == Some(true);
+            trace.add_rewards(&[Reward {
+                target: RewardTarget::Run,
+                kind: RewardKind::Outcome,
+                name: "verify".into(),
+                value: if passed { 1.0 } else { 0.0 },
+                source: "eval".into(),
+                at_ms: now_ms(),
+                evidence: json!({
+                    "cmd": task.verify,
+                    "exit_code": ran.check.exit_code,
+                    "ms": ran.check_ms,
+                    "output_tail": ran.check.tail,
+                    "via": "run_command",
+                }),
+            }]);
+            let card = trace.finish().context("reading the run's trace")?;
+            return Ok(EvalResult {
+                task: task.id.clone(),
+                run_id: trace.run_id(),
+                passed,
+                error: ran.error,
+                scorecard: card,
+                gate: Some(ran.gate),
+            });
+        }
+    };
+
+    let mut config = AgentLoopConfig::clone(config);
     if let Some(max) = task.max_iterations {
         config.max_iterations = max;
     }
-    let mut prompts = vec![task.prompt.clone()];
-    prompts.extend(task.follow_ups.iter().cloned());
     let outcome = recorded_runs::run(HeadlessRun {
         home: opts.home.clone(),
         workspace: workspace.clone(),
-        provider: (opts.provider)(task),
+        provider: provider(task),
         config,
         prompts,
         meta,
         level: opts.level,
-        tool_config: opts.tool_config.clone(),
+        tool_config: tool_config.clone(),
     })
     .await?;
 
-    let checks = task.dir.join(CHECKS_DIR);
     if checks.is_dir() {
         copy_dir(&checks, &workspace)?;
     }
@@ -241,6 +374,7 @@ async fn run_task(task: &EvalTask, opts: &EvalOptions) -> anyhow::Result<EvalRes
         passed,
         error: outcome.error,
         scorecard: card,
+        gate: None,
     })
 }
 
@@ -319,7 +453,7 @@ pub fn results_table(results: &[EvalResult]) -> String {
             if r.passed { "pass" } else { "FAIL" },
             r.scorecard.total_tokens(),
             r.scorecard.model_calls,
-            r.scorecard.cost_usd,
+            r.cost_usd(),
             r.scorecard.wall_ms as f64 / 1000.0,
             r.run_id,
             r.error
@@ -327,9 +461,21 @@ pub fn results_table(results: &[EvalResult]) -> String {
                 .map(|e| format!("  ({e})"))
                 .unwrap_or_default(),
         );
+        if let Some(gate) = &r.gate {
+            let calls: u32 = gate.tokens.iter().map(|m| m.calls).sum();
+            let _ = writeln!(
+                out,
+                "  gate routed to {} ({calls} model calls with subtasks and classifier)",
+                if gate.routed.is_empty() {
+                    "nothing".to_string()
+                } else {
+                    gate.routed.join(", ")
+                }
+            );
+        }
     }
     let passed = results.iter().filter(|r| r.passed).count();
-    let cost: f64 = results.iter().map(|r| r.scorecard.cost_usd).sum();
+    let cost: f64 = results.iter().map(EvalResult::cost_usd).sum();
     let _ = writeln!(out, "{passed}/{} passed, ${cost:.4}", results.len());
     out
 }

@@ -10,6 +10,7 @@ use aura_agent_trace::dataset::{self, ExportFilter, ExportFormat};
 use aura_agent_trace::{report, scorecard, RunTrace};
 use aura_config::HarnessParams;
 use aura_core_types::trace::{Reward, RewardKind, RewardTarget};
+use aura_model_reasoner::model_catalog::GATE_MODEL_ID;
 use aura_model_reasoner::ModelProvider;
 use aura_tools::ToolConfig;
 use serde_json::json;
@@ -18,7 +19,7 @@ use crate::cli::{
     DatasetCommand, DatasetSubcommand, EvalCommand, EvalSubcommand, HarnessArgs, RunsCommand,
     RunsSubcommand,
 };
-use crate::evals::{self, EvalOptions};
+use crate::evals::{self, EvalGate, EvalOptions, EvalRunner};
 use crate::model_selection::ModelSelection;
 use crate::recorded_runs::{self, HeadlessRun};
 use crate::{event_loop, session_helpers};
@@ -245,18 +246,25 @@ pub async fn cmd_eval(args: EvalCommand) -> anyhow::Result<()> {
                 }
             }
             let arm = install_params(&harness)?;
-            let (config, provider) =
-                loop_setup(&harness.provider, harness.model.as_deref()).await?;
+            let runner = if harness.model.as_deref() == Some(GATE_MODEL_ID) {
+                EvalRunner::Gate(EvalGate::start(&harness.provider).await?)
+            } else {
+                let (config, provider) =
+                    loop_setup(&harness.provider, harness.model.as_deref()).await?;
+                EvalRunner::Model {
+                    config: Box::new(config),
+                    tool_config: ToolConfig::for_autonomous_dev_loop(),
+                    provider: Box::new(move |_| Arc::clone(&provider)),
+                }
+            };
             let opts = EvalOptions {
                 home: home.clone(),
                 suite: evals::suite_name(&suite),
                 arm,
                 repeat,
                 level: aura_config::trace().level,
-                config,
-                tool_config: ToolConfig::for_autonomous_dev_loop(),
+                runner,
                 work_root: work_dir.unwrap_or_else(|| home.join("evals").join("work")),
-                provider: Box::new(move |_| Arc::clone(&provider)),
                 budget_usd,
             };
             let results = evals::run_suite(&tasks, &opts).await?;
@@ -335,7 +343,8 @@ fn install_params(args: &HarnessArgs) -> anyhow::Result<Option<String>> {
 
 /// Loop configuration and provider for a headless run. The model is
 /// `model` or the terminal's startup model; the choice is not persisted.
-/// `gate` runs every run on Gate's pick for the current sign-ins.
+/// `gate` runs every run on Gate's default pick for the current sign-ins
+/// (`aura runs branch`; `aura eval run` routes each task with Gate).
 async fn loop_setup(
     provider: &str,
     model: Option<&str>,

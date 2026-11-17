@@ -7,6 +7,7 @@
 //! resumed with `--resume` / `--continue` and opened in the terminal.
 //! stdout carries only the chosen output format; logs go to stderr.
 
+mod eval;
 mod output;
 mod run;
 mod sink;
@@ -15,6 +16,7 @@ mod tools;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use eval::{EvalTurn, EvalTurns};
 pub(crate) use output::{ExitReason, Output, RunReport};
 pub(crate) use run::{Headless, Request, RunLimits, SessionChoice};
 pub(crate) use tools::ToolFilter;
@@ -133,15 +135,14 @@ async fn prepare(
         max_turns: args.max_turns,
         max_time: args.max_time.or(long_run.turn_timeout),
         max_cost_usd: args.max_cost_usd.or(long_run.max_turn_cost_usd),
+        max_iterations: None,
     };
     let session = match (&args.resume, args.continue_session) {
         (Some(id), _) => SessionChoice::Resume(id.clone()),
         (None, true) => SessionChoice::Continue,
         (None, false) => SessionChoice::New,
     };
-    let data_dir = std::env::var("AURA_DATA_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| workspace_root.join("aura_data"));
+    let data_dir = data_dir(&workspace_root);
     let headless = build(args, requested_mode, workspace_root, &data_dir, long_run).await?;
     Ok((
         headless,
@@ -151,6 +152,39 @@ async fn prepare(
             limits,
         },
     ))
+}
+
+/// Where the terminal started in `workspace_root` keeps its agents and
+/// records: `AURA_DATA_DIR`, else `aura_data` there.
+fn data_dir(workspace_root: &std::path::Path) -> PathBuf {
+    std::env::var("AURA_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| workspace_root.join("aura_data"))
+}
+
+/// The harness `aura eval run` runs tasks on under `gate`: `aura -p`'s
+/// with `provider`, its agents in `agent` mode, on the agents and records
+/// of the terminal started in the current directory, so the runs count
+/// in that Gate table.
+///
+/// # Errors
+/// When the directory, sign-in state or data directory can't be read.
+pub(crate) async fn eval_harness(provider: &str) -> anyhow::Result<Headless> {
+    let workspace_root = std::env::current_dir().context("resolving working directory")?;
+    let data_dir = data_dir(&workspace_root);
+    let args = HeadlessArgs {
+        model: Some(aura_model_reasoner::model_catalog::GATE_MODEL_ID.to_string()),
+        provider: Some(provider.to_string()),
+        ..HeadlessArgs::default()
+    };
+    build(
+        &args,
+        Some(AgentMode::Agent),
+        workspace_root,
+        &data_dir,
+        LongRunSettings::from_env(),
+    )
+    .await
 }
 
 /// The prompt from `arg`, or from stdin for `-`. Piped stdin is appended
@@ -314,6 +348,7 @@ async fn build(
         workspace_root,
         tool_filter,
         job_wait: job_wait_from_env(),
+        trace: None,
     })
 }
 

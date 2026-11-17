@@ -1,6 +1,7 @@
 //! Headless counterpart of the terminal's turn forwarder: turns
 //! [`AgentLoopEvent`]s into `stream-json` lines, counts model calls and
-//! cost, and stops the turn when a run limit is reached.
+//! cost, stops the turn when a run limit is reached, and records the
+//! events to an eval run's trace.
 
 use super::output::{ExitReason, Output, StreamEvent};
 use crate::event_loop::hud::call_stats;
@@ -10,9 +11,11 @@ use aura_agent::{
     map_agent_loop_event, AgentLoopEvent, DebugEvent, TurnEventSink, PROGRESS_CONTEXT_SUMMARIZED,
     PROGRESS_TODOS_UPDATED,
 };
+use aura_agent_trace::RunRecorder;
 use aura_model_reasoner::Usage;
 use aura_tools::todo::TodoItem;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -43,6 +46,7 @@ pub(crate) struct HeadlessSink {
     /// Inputs of finished tool calls, until their result arrives
     inputs: HashMap<String, serde_json::Value>,
     tally: TurnTally,
+    trace: Option<Arc<RunRecorder>>,
 }
 
 impl HeadlessSink {
@@ -61,12 +65,22 @@ impl HeadlessSink {
             context_limit,
             inputs: HashMap::new(),
             tally: TurnTally::default(),
+            trace: None,
         }
+    }
+
+    /// Also record every event to `trace`.
+    pub(crate) fn with_trace(mut self, trace: Option<Arc<RunRecorder>>) -> Self {
+        self.trace = trace;
+        self
     }
 
     /// Drain `rx` until the turn drops its sender.
     pub(crate) async fn forward(mut self, mut rx: mpsc::Receiver<AgentLoopEvent>) -> TurnTally {
         while let Some(event) = rx.recv().await {
+            if let Some(trace) = &self.trace {
+                trace.on_event(&event);
+            }
             map_agent_loop_event(event, &mut self).await;
         }
         self.tally

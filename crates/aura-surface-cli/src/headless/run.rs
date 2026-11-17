@@ -20,6 +20,7 @@ use crate::event_loop::{AgentHub, AgentSession};
 use crate::session_checkpoint::SessionUsage;
 use aura_agent::{AgentLoop, AgentLoopConfig, AgentLoopResult};
 use aura_agent_kernel::Kernel;
+use aura_agent_trace::RunRecorder;
 use aura_core_modes::AgentMode;
 use aura_core_types::{
     AgentId, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, Route, RouteLevel,
@@ -56,6 +57,8 @@ pub(crate) struct RunLimits {
     pub max_turns: Option<u32>,
     pub max_time: Option<Duration>,
     pub max_cost_usd: Option<f64>,
+    /// Iteration cap of each turn, instead of the agent's own
+    pub max_iterations: Option<usize>,
 }
 
 pub(crate) struct Request {
@@ -81,6 +84,8 @@ pub(crate) struct Headless {
     /// Longest wait for the agent's background work (commands, spawns)
     /// once it has nothing else to do
     pub job_wait: Duration,
+    /// Run trace the turns are recorded to, for an eval task's run
+    pub trace: Option<Arc<RunRecorder>>,
 }
 
 /// `<agent hex>:<session start ms>`: names one saved session.
@@ -107,6 +112,8 @@ pub(crate) fn parse_session_id(id: &str, default_agent: AgentId) -> Result<(Agen
 
 /// How one agent turn ended.
 struct TurnOutcome {
+    /// The `Outcome` recorded for the turn, when Gate routed it
+    ended: Option<OutcomePayload>,
     result: Option<AgentLoopResult>,
     /// Model calls and tokens of the turn
     usage: SessionUsage,
@@ -146,31 +153,60 @@ impl Headless {
         interrupt: &CancellationToken,
     ) -> RunReport {
         let started = Instant::now();
-        let deadline = request.limits.max_time.map(|limit| started + limit);
         let (mut session, resumed) = match self.open(&request.session).await {
             Ok(opened) => opened,
             Err(problem) => return RunReport::failed(problem, self.model.clone()),
         };
-        let agent_id = session.agent_id();
-        let session_id = session_id(agent_id, session.started_ms);
+        let session_id = session_id(session.agent_id(), session.started_ms);
         self.announce(output, &session, &session_id, resumed);
+        let (report, _) = self
+            .drive(
+                &mut session,
+                request.prompt,
+                request.limits,
+                started,
+                output,
+                interrupt,
+            )
+            .await;
+        report
+    }
 
+    /// Run `prompt` on `session`, then the notices of the agent's
+    /// background work, until it has nothing left to do or a limit stops
+    /// it; `started` is when the run began. Also returns the `Outcome`
+    /// recorded for `prompt`'s turn, when Gate routed it.
+    pub(super) async fn drive(
+        &mut self,
+        session: &mut AgentSession,
+        prompt: String,
+        limits: RunLimits,
+        started: Instant,
+        output: &Output,
+        interrupt: &CancellationToken,
+    ) -> (RunReport, Option<OutcomePayload>) {
+        let deadline = limits.max_time.map(|limit| started + limit);
+        let session_id = session_id(session.agent_id(), session.started_ms);
         let mut totals = Totals::default();
-        let mut prompt = request.prompt;
+        let mut prompt = prompt;
+        let mut first_ended = None;
         let mut stop = None;
         loop {
             totals.agent_turns += 1;
             let outcome = self
                 .run_turn(
-                    &mut session,
+                    session,
                     prompt,
-                    request.limits,
+                    limits,
                     deadline,
                     totals.usage,
                     output,
                     interrupt,
                 )
                 .await;
+            if totals.agent_turns == 1 {
+                first_ended.clone_from(&outcome.ended);
+            }
             totals.usage.add(&outcome.usage);
             if let Some(result) = &outcome.result {
                 totals.compactions += result.summary_compactions;
@@ -209,7 +245,7 @@ impl Headless {
 
         let (exit_reason, error) = stop.unwrap_or((ExitReason::Success, None));
         let usage = UsageReport::from(&totals.usage);
-        RunReport {
+        let report = RunReport {
             kind: "result",
             exit_reason,
             is_error: exit_reason != ExitReason::Success,
@@ -225,7 +261,8 @@ impl Headless {
             todos: session.todos.clone(),
             files_changed: totals.files_changed,
             error,
-        }
+        };
+        (report, first_ended)
     }
 
     /// Open the session `choice` names. Returns it and whether it
@@ -320,11 +357,15 @@ impl Headless {
         let started = Instant::now();
         let workspace = session.kernel.agent_workspace();
         let (mut config, tools) = self.hub.lead_turn(session);
+        if let Some(max) = limits.max_iterations {
+            config.max_iterations = max;
+        }
         let (payload, routed) = self.route_turn(session, &mut config, &text).await;
         let prompt_tx = match record_prompt(session, &payload).await {
             Ok((tx, _)) => tx.hash,
             Err(problem) => {
                 return TurnOutcome {
+                    ended: None,
                     result: None,
                     usage: SessionUsage::default(),
                     stop: Some((ExitReason::Error, Some(problem))),
@@ -332,6 +373,10 @@ impl Headless {
                 };
             }
         };
+        if let Some(trace) = &self.trace {
+            config.trace_blobs = trace.blob_store();
+            trace.begin_turn(&text);
+        }
         let turn_start = session.messages.len();
         session.messages.push(Message::user(text));
         self.hub.register_root(
@@ -357,7 +402,8 @@ impl Headless {
             },
             turn_cancel.clone(),
             context_limit,
-        );
+        )
+        .with_trace(self.trace.clone());
         let forwarder = tokio::spawn(sink.forward(event_rx));
 
         // Cancelling at the deadline lets the loop stop between steps and
@@ -420,6 +466,18 @@ impl Headless {
             TurnTally::default()
         });
         session.usage.add(&tally.usage);
+        if let Some(trace) = &self.trace {
+            match result.as_ref() {
+                Some(Ok(result)) => trace.end_turn(result),
+                failed => trace.end_turn(&AgentLoopResult {
+                    llm_error: Some(failed.and_then(|r| r.as_ref().err()).map_or_else(
+                        || "the turn did not stop in time".to_string(),
+                        ToString::to_string,
+                    )),
+                    ..AgentLoopResult::default()
+                }),
+            }
+        }
 
         let limit = if interrupt.is_cancelled() {
             Some(ExitReason::Interrupted)
@@ -435,7 +493,7 @@ impl Headless {
         let (seen, unseen) = steering.finish(messages);
         let mut unseen: Vec<String> = unseen.into_iter().map(|(_, text)| text).collect();
         unseen.append(&mut late);
-        if routed {
+        let ended = if routed {
             // A run stopped by its own limits says nothing about the model.
             let signal = match (&result, limit) {
                 (Some(result), None) => ended_signal(result, turn_start),
@@ -451,9 +509,13 @@ impl Headless {
                 latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
             };
             gate_record::record(&session.kernel, session.agent_id(), &outcome).await;
-        }
+            Some(outcome)
+        } else {
+            None
+        };
 
         let mut outcome = TurnOutcome {
+            ended,
             result: None,
             usage: tally.usage,
             stop: None,

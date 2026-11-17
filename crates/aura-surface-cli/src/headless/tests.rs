@@ -169,6 +169,7 @@ fn harness(
         workspace_root: workspace,
         tool_filter: filter,
         job_wait: Duration::from_secs(5),
+        trace: None,
     };
     (headless, requests)
 }
@@ -683,4 +684,165 @@ async fn gate_routes_headless_turns_and_records_how_they_went() {
     assert_eq!(outcomes[0].model, SONNET);
     assert_eq!(outcomes[0].signal, OutcomeSignal::None);
     assert_eq!(h.hub.gate.recent().len(), 1);
+}
+
+/// Write the eval task `id` under `suite`: `prompt`, then `verify` with
+/// `note.txt` holding "hi" in its workspace.
+fn eval_task(suite: &Path, id: &str, prompt: &str, verify: &str) {
+    let dir = suite.join(id);
+    std::fs::create_dir_all(dir.join(crate::evals::FIXTURE_DIR)).unwrap();
+    std::fs::write(dir.join(crate::evals::FIXTURE_DIR).join("note.txt"), "hi\n").unwrap();
+    let toml = format!("prompt = {prompt:?}\nverify = {verify:?}\n");
+    std::fs::write(dir.join(crate::evals::TASK_FILE), toml).unwrap();
+}
+
+#[tokio::test]
+async fn an_eval_task_under_gate_is_routed_and_its_verdict_feeds_the_table() {
+    use super::EvalTurns;
+    use crate::evals::{self, EvalGate, EvalOptions, EvalRunner};
+    use crate::event_loop::subagents::lock;
+    use aura_agent_gate::Candidate;
+    use aura_agent_trace::{RunBundle, RunTrace};
+    use aura_core_types::{
+        OutcomeSignal, PromptCategory, Route, RouteLevel, RouteReason, ToolProposal,
+        TransactionType,
+    };
+    use aura_model_reasoner::model_catalog::{ModelBackend, ModelTier};
+    const HAIKU: &str = "aura-claude-haiku-4-5";
+    const SONNET: &str = "aura-claude-sonnet-4-6";
+    // One candidate, so the runs never explore.
+    let gate = GateBase {
+        classifier: HAIKU.to_string(),
+        candidates: Some(vec![Candidate {
+            id: SONNET.to_string(),
+            label: SONNET.to_string(),
+            backend: ModelBackend::Router,
+            tier: ModelTier::Standard,
+            cost_usd: Some(0.1),
+        }]),
+    };
+    let dirs = dirs();
+    let mode = super::permission_mode(aura_core_modes::AgentMode::Agent);
+    let (h, requests) = harness(
+        &dirs,
+        MockProvider::new().with_default_response(MockResponse::text("question")),
+        ToolFilter::default(),
+        mode,
+        gate,
+    );
+    let hub = Arc::clone(&h.hub);
+    let suite = TempDir::new().unwrap();
+    eval_task(
+        suite.path(),
+        "fails",
+        "is there a missing.txt?",
+        "test -f missing.txt",
+    );
+    eval_task(
+        suite.path(),
+        "passes",
+        "what does note.txt say?",
+        "[ \"$(cat note.txt)\" = 'hi' ]",
+    );
+    let tasks = evals::load_suite(suite.path()).unwrap();
+    let home = TempDir::new().unwrap();
+    let opts = EvalOptions {
+        home: home.path().to_path_buf(),
+        suite: "s".to_string(),
+        arm: Some("gate".to_string()),
+        repeat: 1,
+        level: aura_config::trace::TraceLevel::Full,
+        runner: EvalRunner::Gate(EvalGate::on(EvalTurns::new(h))),
+        work_root: home.path().join("work"),
+        budget_usd: None,
+    };
+
+    let results = tokio::time::timeout(Duration::from_secs(60), evals::run_suite(&tasks, &opts))
+        .await
+        .expect("the eval did not finish")
+        .unwrap();
+
+    let passed: Vec<(&str, bool)> = results
+        .iter()
+        .map(|r| (r.task.as_str(), r.passed))
+        .collect();
+    assert_eq!(passed, [("fails", false), ("passes", true)]);
+    let models: Vec<String> = requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| r.model.to_string())
+        .collect();
+    assert_eq!(
+        models,
+        [HAIKU, SONNET, HAIKU, SONNET],
+        "each task classified, then routed"
+    );
+    for result in &results {
+        let gate = result.gate.as_ref().expect("a gate run says what Gate did");
+        assert_eq!(gate.routed, [SONNET]);
+        let calls: u32 = gate.tokens.iter().map(|m| m.calls).sum();
+        assert_eq!(calls, 2, "the classifier call and the turn");
+        assert!(result.error.is_none(), "{:?}", result.error);
+    }
+    let table = evals::results_table(&results);
+    assert!(
+        table.contains(&format!("gate routed to {SONNET} (2 model calls")),
+        "{table}"
+    );
+
+    let agents: Vec<_> = lock(&hub.registry)
+        .agents()
+        .iter()
+        .filter(|a| a.name.starts_with("Eval s/"))
+        .cloned()
+        .collect();
+    assert_eq!(agents.len(), 2);
+    for (agent, verdict) in agents
+        .iter()
+        .zip([OutcomeSignal::ChecksFailed, OutcomeSignal::ChecksPassed])
+    {
+        let entries = hub
+            .factory
+            .store
+            .scan_record(agent.agent_id(), 1, 1_000)
+            .unwrap();
+        let prompts: Vec<_> = entries
+            .iter()
+            .filter_map(|e| e.tx.prompt_payload())
+            .collect();
+        assert_eq!(prompts.len(), 1, "{}", agent.name);
+        assert_eq!(prompts[0].category, PromptCategory::Question);
+        assert_eq!(prompts[0].route, Route::turn(SONNET, RouteReason::Default));
+        let signals: Vec<OutcomeSignal> = entries
+            .iter()
+            .filter_map(|e| e.tx.outcome_payload())
+            .map(|o| o.signal)
+            .collect();
+        assert_eq!(signals, [OutcomeSignal::None, verdict], "{}", agent.name);
+        let verify = entries
+            .iter()
+            .filter(|e| e.tx.tx_type == TransactionType::ToolProposal)
+            .filter_map(|e| serde_json::from_slice::<ToolProposal>(&e.tx.payload).ok())
+            .find(|p| p.source.as_deref() == Some("eval_verify"))
+            .expect("the verify command went through the agent's kernel");
+        assert_eq!(verify.tool, "run_command");
+    }
+    let row = hub
+        .gate
+        .stats()
+        .row(RouteLevel::Turn, PromptCategory::Question, SONNET)
+        .cloned()
+        .expect("the eval runs count in Gate's table");
+    assert_eq!((row.tries, row.successes), (2, 1));
+
+    let trace = RunTrace::load(&RunBundle::find(home.path(), &results[1].run_id).unwrap()).unwrap();
+    assert_eq!(trace.meta.model, "gate");
+    assert_eq!(trace.meta.task_id.as_deref(), Some("s/passes"));
+    let card = trace.scorecard();
+    assert_eq!(card.outcome, Some(1.0));
+    assert_eq!(card.model_calls, 1, "the routed turn is in the run's trace");
+    let rewards = trace.rewards();
+    let verify = rewards.iter().find(|r| r.name == "verify").unwrap();
+    assert_eq!(verify.evidence["via"], "run_command");
 }

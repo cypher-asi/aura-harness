@@ -31,20 +31,19 @@ use super::task_check;
 use super::turns::{ended_signal, record_prompt};
 use crate::agent_registry::RegisteredAgent;
 use aura_agent::AgentLoop;
-use aura_agent_gate::compare::{list_price, run_name, tally, Opponent, Schedule};
+use aura_agent_gate::compare::{list_price, run_name, Opponent, Schedule};
 use aura_agent_gate::{judge, Candidate};
 use aura_agent_kernel::Kernel;
 use aura_core_types::{
     AgentId, CompareArm, CompareCopy, CompareJudgment, ComparePayload, CompareRun, CompareStatus,
-    ModelTokens, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, Route, RouteLevel,
-    RouteReason, SystemKind, Transaction,
+    OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, Route, RouteLevel, RouteReason,
+    SystemKind, Transaction,
 };
 use aura_exec_isolation::changes::{self, BUILD_OUTPUT};
 use aura_exec_isolation::{
     CopyIsolation, IsolatedWorkspace, Isolation, IsolationStrategy, WorktreeIsolation,
 };
-use aura_model_reasoner::{Message, Usage};
-use aura_store_db::ReadStore;
+use aura_model_reasoner::Message;
 use aura_terminal::events::ProcessStatus;
 use aura_terminal::{PermissionMode, UiCommand};
 use aura_tools::plan_tools::{is_plan_path, todo_items, PlanFile};
@@ -65,9 +64,6 @@ const JUDGE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// Judge reasoning kept in the record, in characters.
 const MAX_REASONING: usize = 2_000;
-
-/// Record entries read per scan when adding up a run's model calls.
-const SCAN_BATCH: usize = 500;
 
 /// A comparison as the user confirmed it.
 #[derive(Debug, Clone)]
@@ -620,7 +616,7 @@ async fn run_turn(
         warn!(%agent_id, %problem, "Could not diff a compare run");
         String::new()
     });
-    let tokens = measure(hub, agent_id);
+    let tokens = hub.tokens_by_model(agent_id);
     let cost_usd = tokens.iter().map(|row| row.cost_usd).sum();
 
     hub.processes.finish(
@@ -655,44 +651,6 @@ async fn run_turn(
         patch,
         note: None,
     }
-}
-
-/// Tokens and cost per model of every model call `agent` and the agents
-/// under it made.
-fn measure(hub: &AgentHub, agent: AgentId) -> Vec<ModelTokens> {
-    let agents: Vec<AgentId> = std::iter::once(agent)
-        .chain(lock(&hub.registry).descendants(agent))
-        .collect();
-    let store = hub.factory.store.as_ref();
-    tally(
-        agents
-            .into_iter()
-            .flat_map(|agent| model_calls(store, agent)),
-    )
-}
-
-fn model_calls(store: &dyn ReadStore, agent: AgentId) -> Vec<(String, Usage)> {
-    let mut calls = Vec::new();
-    let mut from = 1;
-    loop {
-        let entries = match store.scan_record(agent, from, SCAN_BATCH) {
-            Ok(entries) => entries,
-            Err(e) => {
-                warn!(%agent, error = %e, "Could not read a compare run's record");
-                break;
-            }
-        };
-        calls.extend(
-            entries
-                .iter()
-                .filter_map(|entry| crate::record_loader::model_call(&entry.tx)),
-        );
-        match entries.last() {
-            Some(last) if entries.len() == SCAN_BATCH => from = last.seq + 1,
-            _ => break,
-        }
-    }
-    calls
 }
 
 /// A number from `agent` to seed the judge's order with.

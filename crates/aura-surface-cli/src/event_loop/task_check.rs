@@ -9,7 +9,8 @@
 //! subtask was retried on a stronger model.
 //!
 //! `/compare` runs its check on a finished run the same way, through the
-//! run's kernel.
+//! run's kernel, and so does `aura eval run` under `gate` with a task's
+//! verify command.
 
 use super::agents::AgentSession;
 use super::run_command::{process_user_proposal, terminal_output, RUN_COMMAND_TOOL};
@@ -32,7 +33,7 @@ const TAIL_LINES: usize = 20;
 
 /// How a check went.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct CheckRun {
+pub(crate) struct CheckRun {
     pub command: String,
     /// Whether it passed; `None` when it could not run (denied, or no
     /// exit status)
@@ -44,7 +45,7 @@ pub(super) struct CheckRun {
 
 impl CheckRun {
     /// The subtask's verdict, when the check gave one.
-    pub(super) fn signal(&self) -> Option<OutcomeSignal> {
+    pub(crate) fn signal(&self) -> Option<OutcomeSignal> {
         self.passed.map(|passed| {
             if passed {
                 OutcomeSignal::ChecksPassed
@@ -56,7 +57,7 @@ impl CheckRun {
 
     /// One line saying how it went, then the output's tail when it
     /// failed or could not run.
-    pub(super) fn describe(&self) -> String {
+    pub(crate) fn describe(&self) -> String {
         let mut out = format!("Check `{}`: ", self.command);
         match (self.passed, self.exit_code) {
             (Some(true), _) => out.push_str("passed"),
@@ -94,7 +95,7 @@ pub(super) async fn run_check(session: &AgentSession, command: &str) -> CheckRun
 
 /// Run the check `command` in `session`'s workspace through its kernel,
 /// proposed with `source`. A check that runs out of time failed.
-pub(super) async fn run_script(session: &AgentSession, command: &str, source: &str) -> CheckRun {
+pub(crate) async fn run_script(session: &AgentSession, command: &str, source: &str) -> CheckRun {
     drain_stale_inbox(session).await;
     let proposal = ToolProposal::new(
         format!("check_{}", uuid::Uuid::new_v4().simple()),

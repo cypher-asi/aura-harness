@@ -10,7 +10,7 @@ use aura_agent_trace::{RunBundle, RunSource, RunTrace};
 use aura_config::TraceLevel;
 use aura_core_types::trace::StepAction;
 use aura_model_reasoner::{MockProvider, MockResponse, ModelProvider};
-use aura_surface_cli::evals::{self, EvalOptions};
+use aura_surface_cli::evals::{self, EvalOptions, EvalRunner};
 use aura_surface_cli::recorded_runs::{self, HeadlessRun};
 use aura_tools::ToolConfig;
 use serde_json::json;
@@ -37,10 +37,12 @@ fn options(home: &Path, arm: &str, provider: fn() -> MockProvider) -> EvalOption
         arm: Some(arm.into()),
         repeat: 1,
         level: TraceLevel::Full,
-        config: AgentLoopConfig::for_agent("mock-model"),
-        tool_config: ToolConfig::for_autonomous_dev_loop(),
+        runner: EvalRunner::Model {
+            config: Box::new(AgentLoopConfig::for_agent("mock-model")),
+            tool_config: ToolConfig::for_autonomous_dev_loop(),
+            provider: Box::new(move |_| Arc::new(provider())),
+        },
         work_root: home.join("work"),
-        provider: Box::new(move |_| Arc::new(provider())),
         budget_usd: None,
     }
 }
@@ -59,10 +61,18 @@ async fn eval_runs_are_verified_scored_and_compared() {
     assert!(good[0].passed, "{good:?}");
     assert_eq!(good[0].scorecard.outcome, Some(1.0));
     assert_eq!(good[0].scorecard.writes, 1);
+    assert_eq!(good[0].gate, None, "a pinned model is not routed");
+    assert_eq!(good[0].cost_usd(), good[0].scorecard.cost_usd);
+    assert!(!evals::results_table(&good).contains("gate routed"));
 
     let bundle = RunBundle::find(home.path(), &good[0].run_id).unwrap();
     let trace = RunTrace::load(&bundle).unwrap();
     assert_eq!(trace.meta.source, RunSource::Eval);
+    assert_eq!(trace.meta.model, "mock-model");
+    let verified = trace.rewards();
+    let verify = verified.iter().find(|r| r.name == "verify").unwrap();
+    assert_eq!(verify.source, "eval");
+    assert!(verify.evidence.get("stdout_tail").is_some(), "{verify:?}");
     assert_eq!(trace.meta.task_id.as_deref(), Some("coding/write-file"));
     assert_eq!(trace.meta.arm.as_deref(), Some("good"));
     assert!(bundle.dir().join("record").is_dir());

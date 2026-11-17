@@ -765,7 +765,11 @@ seat, or a pinned main model, is never overridden. A `task` `check` is a
 `run_command` proposal through the child's kernel (source `task_check`), so
 it is policy-checked and recorded like the child's own commands. A
 `/compare` run's check is the same, through the run's kernel (source
-`compare_check`), in the run's copy after its turn. The one
+`compare_check`), in the run's copy after its turn, and so is the verify
+command of an `aura eval run --model gate` task, through the run's agent's
+kernel (source `eval_verify`), in the task's workspace after its turns.
+On a pinned model `aura eval run` still runs verify with `sh -c` after the
+run, outside any agent's kernel. The one
 escalation of a failed routed subtask runs as a new child, with route
 reason `escalate`. It restores only the files the first attempt's file
 tools changed, from the terminal's in-memory attempt checkpoint.

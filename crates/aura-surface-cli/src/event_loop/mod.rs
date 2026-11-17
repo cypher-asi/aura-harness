@@ -35,7 +35,7 @@ mod rewind;
 pub(crate) mod run_command;
 pub(crate) mod steering;
 pub(crate) mod subagents;
-mod task_check;
+pub(crate) mod task_check;
 pub(crate) mod trace;
 pub(crate) mod turns;
 

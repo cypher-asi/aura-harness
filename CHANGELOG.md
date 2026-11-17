@@ -78,6 +78,13 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   `checks/` folder copied in after the run; `aura eval run` reports each
   run's cost and takes `--budget-usd`. `evals/gate_hard` adds eight
   tasks with traps a careless fix falls into.
+- `aura eval run --model gate` runs each task as `aura -p` turns: Gate
+  classifies and routes them, the agent leads and delegates, and the
+  verify command runs as a `run_command` call through the run's agent's
+  kernel, its verdict recorded as a later outcome so eval results count
+  in Gate's table. The results table shows the models Gate routed each
+  task to. `EvalOptions` takes an `EvalRunner` instead of `config`,
+  `tool_config` and `provider`.
 
 ### Run traces (`aura-agent-trace`)
 
