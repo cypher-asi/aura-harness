@@ -5,7 +5,7 @@ Every coding run can be recorded as a trajectory: an ordered list of steps, each
 - **The model**: each LLM call. The observation is the request, and the action is the response (thinking, text, tool calls).
 - **The harness**: each steering nudge, block, compaction, cache hit, retry, build check or budget stop. The observation is the trigger state, and the action is the choice plus the `HarnessParams` behind it.
 
-One recording feeds the scorecards, the CLI and TUI views, eval comparisons and dataset exports. The code lives in [`aura-agent-trace`](../crates/aura-agent-trace); the schema is in [`aura-core-types/src/types/trace.rs`](../crates/aura-core-types/src/types/trace.rs).
+One recording feeds the scorecards, the CLI and TUI views, eval comparisons and dataset exports. The code lives in [`aura-agent-trace`](../crates/agent/aura-agent-trace); the schema is in [`aura-core-types/src/types/trace.rs`](../crates/core/aura-core-types/src/types/trace.rs).
 
 ## When runs are recorded
 
@@ -28,7 +28,8 @@ AURA_HOME/
     steps.jsonl     one Step per line, in seq order
     rewards.jsonl   stored rewards (outcome, human labels, interrupts)
     summary.json    the RunScorecard, rewritten when the run ends or is relabeled
-    record.jsonl    kernel record rows seen during the run (seq, tx type, tool_use_id)
+    record.jsonl    kernel record rows seen during the run (seq, tx type, time, tool_use_id,
+                    and for policy decisions the verdict and approver)
     record/         RocksDB kernel record log (headless runs: eval, branch)
   blobs/            shared zstd-compressed blobs, addressed by the blake3 of the raw bytes
 ```
@@ -55,6 +56,8 @@ Each line of `steps.jsonl` is a `Step`:
 
 Harness decisions name a `DecisionSource`: `steering`, `compaction`, `budget`, `tool_pipeline`, `cache`, `policy`, `retry`, `build`, `self_review`, `thinking` or `stop`. A test in `aura-agent/src/agent_loop/decisions.rs` fails if any source loses its emit site.
 
+The model step is written as soon as the model finishes streaming, before its tool calls run, and each tool result is written when that call finishes rather than when the whole batch does. When a call waits for an approval, the recorder adds a `policy` step named `approval_wait` once the answer arrives. Its trigger holds the tool, the wait in milliseconds, the approver and the verdict, and its action is `block` if the call was denied or `warn` if the wait took 30 seconds or more.
+
 When a run is loaded, the steps are joined to `record.jsonl`: user prompts match by order, and tool calls and results match by `tool_use_id`. Each matched step gets `record_seqs`, so the graph view can jump from a step to its kernel record row.
 
 ## Rewards
@@ -74,13 +77,14 @@ Derived rewards are recomputed from the steps every time a run is loaded, so imp
 
 ## Scorecard
 
-`RunScorecard` (in `summary.json`, `aura runs show` and `/status`) reports turns, model and tool calls, tool errors, input, output and cache tokens, wall and model time, time and tokens to first edit, reads and writes, redundant reads, failed edits, blocked calls, cache hits, retries, decisions and compactions by kind, per-decision effect rates, stop reasons, files changed, reward totals and the outcome.
+`RunScorecard` (in `summary.json`, `aura runs show` and `/status`) reports turns, model and tool calls, tool errors, input, output and cache tokens, wall and model time, time and tokens to first edit, reads and writes, redundant reads, failed edits, blocked calls, cache hits, retries, decisions and compactions by kind, per-decision effect rates, stop reasons, files changed, reward totals and the outcome. Its `approval` line counts approval prompts and denials, the total and longest wait, and tool calls that never finished.
 
 ## CLI
 
 ```sh
 aura runs list [--limit N] [--json]
 aura runs show <id> [--steps] [--json]          # id may be a unique prefix or suffix
+aura runs check <id> [--slow-secs 30] [--json]  # exits non-zero when the run has problems
 aura runs diff <baseline> <candidate> [--tolerance 0.1]
 aura runs label <id> <value> [--step N] [--name human] [--note "..."]
 aura runs verify <id> --cmd "cargo test"
@@ -92,6 +96,17 @@ aura eval compare [--suite S] [--arm A --arm B] [--tolerance 0.1] [--fail-on-reg
 
 aura dataset build --format sft|preference|rl|harness-bandit [--filter EXPR] [--out DIR]
 ```
+
+`aura runs check` tells whether a run got stuck, and where. It pairs each tool call's proposal, policy decision and execution rows in `record.jsonl` and reports:
+
+- calls that never finished, or are still waiting, along with what they are waiting for (a decision or execution);
+- calls cut off by a cancel;
+- approval waits longer than `--slow-secs`;
+- calls that ran but have no result step;
+- calls that ran but whose result told the model they were cancelled;
+- runs that never ended and have recorded nothing for 10 minutes.
+
+`aura runs show` prints the same health section under the scorecard, and `--json` includes it as `health`. Run it on any long run that looked stalled before reading the steps.
 
 `--set` overrides one `HarnessParams` field, such as `implement_now_threshold=4`, `repeated_read_threshold=3` or `failed_edit_stop_after=4`. Unknown keys are rejected. The arm label defaults to the overrides joined together.
 
@@ -120,7 +135,7 @@ A task may set `category` (default `general`) and `tags`, and may keep a `checks
 
 ## Improvement loop
 
-1. **Observe.** Use the TUI (`/graph`, the TRACE tab, `/status`) or `aura runs show` to find where runs waste work: redundant reads, failed edits, ignored nudges, or late first edits.
+1. **Observe.** Use the TUI (`/graph`, the TRACE tab, `/status`) or `aura runs show` to find where runs waste work: redundant reads, failed edits, ignored nudges, late first edits, or long approval waits. `aura runs check` flags stalled runs.
 2. **Change one thing.** Either a `HarnessParams` value (`--set`) or harness code.
 3. **Measure.** Run `aura eval run --set ...` for the candidate arm next to the default arm, then `aura eval compare --fail-on-regression`. Check against the live baseline before merging harness changes.
 4. **Counterfactuals.** Run `aura runs branch` from the step where a run went wrong, with another model or other params, to see whether that decision mattered.
@@ -146,3 +161,4 @@ A task may set `category` (default `general`) and `tags`, and may keep a `checks
   | `q`/`Esc` | Close the graph. |
 
 - The **TRACE** side tab is a live feed of iterations, tool calls, decisions and rewards; its count is marked `!` when it contains issues. Selecting an entry opens it in the graph. Shift with the arrow keys cycles the side tabs.
+- Calls of one turn that need approval are asked one after another. The prompt's title shows how many are waiting (`1 of 3`), and the activity list shows `awaiting approval` on each waiting call instead of a running timer. Answering "always allow" also allows any waiting calls that the new rule covers.

@@ -7,7 +7,7 @@ use aura_core_types::{
     ActionId, ActionResultPayload, AgentId, Hash, ProcessId, ProcessPending, Transaction,
     TransactionType,
 };
-use aura_tools::{cmd_run_with_threshold, Sandbox, ThresholdResult};
+use aura_exec_tools::{cmd_run_with_threshold, Sandbox, ThresholdResult};
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;

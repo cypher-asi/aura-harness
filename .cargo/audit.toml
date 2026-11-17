@@ -23,7 +23,7 @@ ignore = [
 
     # RUSTSEC-2017-0008 — `serial 0.4.0` is unmaintained.
     # Pulled in by `portable-pty 0.8.1` (the embedded PTY layer
-    # that the `aura` terminal helper uses for `aura-runtime` PTY
+    # that the `aura` terminal helper uses for `aura-node` PTY
     # spawning). `portable-pty` has no drop-in replacement and the
     # `serial` dep is only the legacy fallback for serial-port
     # consoles we never spawn — risk surface is empty, so we

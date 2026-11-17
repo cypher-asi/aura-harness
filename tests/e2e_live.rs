@@ -1,4 +1,4 @@
-//! End-to-end integration tests against a live aura-runtime server.
+//! End-to-end integration tests against a live aura-node server.
 //!
 //! These tests boot a real node, connect via HTTP and WebSocket, and exercise
 //! health, REST, WebSocket session lifecycle, and LLM/tool flows against live
@@ -857,7 +857,7 @@ async fn test_ws_runtime_request_with_model() {
 
     // Pin to the env-fallback model identifier — this end-to-end test
     // exercises the wire-protocol round trip, not model selection logic.
-    let model = aura_model_reasoner::ENV_FALLBACK_MODEL;
+    let model = aura_model::ENV_FALLBACK_MODEL;
     let tok = if token.is_empty() {
         None
     } else {

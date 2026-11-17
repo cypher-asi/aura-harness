@@ -71,15 +71,15 @@ const MIGRATED_CONST_NAMES: &[&str] = &[
 ];
 
 /// Allow-list of `(crate, const_name)` pairs where the name shadowing
-/// is legitimate (e.g. aura-tools has its own, unrelated
+/// is legitimate (e.g. aura-exec-tools has its own, unrelated
 /// `WRITE_FILE_CHUNK_BYTES` constant for its tool-sandbox layer; it
 /// intentionally lives outside aura-config because the tool-sandbox
 /// boundary is out of scope per Phase 1's plan).
 const SHADOW_ALLOWLIST: &[(&str, &str)] = &[
-    // `aura-tools` keeps its own per-tool write-cap constant for the
+    // `aura-exec-tools` keeps its own per-tool write-cap constant for the
     // executor-side guard. The agent-side cap lives in `aura-config`;
     // the two are intentionally separate.
-    ("aura-tools", "WRITE_FILE_CHUNK_BYTES"),
+    ("aura-exec-tools", "WRITE_FILE_CHUNK_BYTES"),
 ];
 
 #[test]
@@ -166,13 +166,13 @@ fn workspace_root() -> PathBuf {
 }
 
 fn is_inside_aura_config(path: &Path, root: &Path) -> bool {
-    let config_dir = root.join("crates").join("aura-config");
+    let config_dir = root.join("crates").join("config").join("aura-config");
     path.starts_with(config_dir)
 }
 
 /// Best-effort: returns the workspace crate name for a source path
-/// inside `crates/<name>/...`. Returns `""` for files outside any
-/// crate directory.
+/// inside `crates/<layer>/<name>/...`. Returns `""` for files outside
+/// any crate directory.
 fn crate_name_for(path: &Path, workspace_root: &Path) -> String {
     let crates_dir = workspace_root.join("crates");
     let Ok(relative) = path.strip_prefix(&crates_dir) else {
@@ -180,7 +180,7 @@ fn crate_name_for(path: &Path, workspace_root: &Path) -> String {
     };
     relative
         .components()
-        .next()
+        .nth(1)
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
         .unwrap_or_default()
 }

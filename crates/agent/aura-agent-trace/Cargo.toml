@@ -1,0 +1,32 @@
+[package]
+name = "aura-agent-trace"
+description = "Run trajectory recorder, bundles, rewards, scorecards, run graphs, dataset export and replay"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aura-core-types = { path = "../../core/aura-core-types" }
+aura-config = { path = "../../config/aura-config" }
+aura-agent = { path = "../aura-agent" }
+aura-agent-kernel = { path = "../aura-agent-kernel" }
+aura-model = { path = "../../model/aura-model" }
+aura-store-snapshot = { path = "../../store/aura-store-snapshot" }
+async-trait = { workspace = true }
+blake3 = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+bytes = { workspace = true }
+chrono = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

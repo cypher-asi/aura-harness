@@ -1,6 +1,6 @@
 # Configuration
 
-The node reads configuration from environment variables via `NodeConfig::from_env()` in [`crates/aura-runtime/src/config/mod.rs`](../crates/aura-runtime/src/config/mod.rs); agent and subagent settings come from [`aura-config`](../crates/aura-config). Copy [`.env.example`](../.env.example) as a starting point.
+The node reads configuration from environment variables via `NodeConfig::from_env()` in [`crates/surface/aura-node/src/config/mod.rs`](../crates/surface/aura-node/src/config/mod.rs); agent and subagent settings come from [`aura-config`](../crates/config/aura-config). Copy [`.env.example`](../.env.example) as a starting point.
 
 ## LLM routing
 
@@ -41,7 +41,9 @@ A terminal turn has no iteration cap and no time limit: it runs until the agent 
 | `AURA_TUI_TURN_TIMEOUT` | — (no limit) | Stop a turn that runs longer than this: `90s`, `45m`, `2h`, or a bare number of minutes. |
 | `AURA_TUI_MAX_TURN_COST_USD` | — (no limit) | Stop a turn once its model calls cost more than this many US dollars at API list prices. |
 | `AURA_COMPACTION_TRIGGER` | `0.70` | Context use (0.0–1.0) at which the terminal starts compacting history. Below it the transcript is left untouched so its prompt-cache prefix keeps matching. |
-| `AURA_TUI_MODE` | `AURA_DEFAULT_MODE` (`agent` means `default`) | Permission mode the terminal starts in when `--mode` is not given: `default`, `accept-edits`, `plan` or `unrestricted`. Set `unrestricted` to run every tool call without asking. `aura -p` does not read it. |
+| `AURA_TUI_MODE` | `AURA_DEFAULT_MODE` | Work mode the terminal starts in when `--mode` is not given: `agent`, `plan`, `read-only` or `debug`. The removed names `default`, `accept-edits` and `unrestricted` are ignored with a warning; use `AURA_TUI_APPROVAL` for how much asks. `aura -p` does not read it. |
+| `AURA_TUI_APPROVAL` | `yolo` | Approval level the terminal and desktop start at when `--approval` is not given: `yolo` (nothing asks; commands write only inside the folder), `ask` or `strict`. `aura -p` does not read it. |
+| `AURA_YOLO_WRITABLE_PATHS` | — | Extra folders, separated like `PATH`, that `yolo` commands may write to besides the working folder, temp folders and package caches. |
 | `AURA_TUI_APPROVAL_TIMEOUT_SECS` | `600` | Seconds an approval prompt waits for an answer. When it runs out, the tool call is denied and the turn goes on. |
 | `AURA_TUI_NOTIFY_AFTER_SECS` | `10` | A finished turn that took at least this many seconds rings the bell (and sends a desktop notification if those are on). `0` alerts after every turn. |
 | `AURA_TUI_BELL` | `1` | Set to `0` to stop the terminal bell for finished turns and approval prompts. |

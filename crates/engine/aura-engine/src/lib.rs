@@ -1,0 +1,81 @@
+//! # aura-engine
+//!
+//! Layer: engine
+//!
+//! Aura runtime orchestration engine — scheduler, worker, automaton
+//! bridge, child runner, memory observer, runtime capabilities, and
+//! executor factory.
+//!
+//! The HTTP/WS gateway in [`aura-node`] composes the primitives
+//! exposed here and hands them [`aura_core_protocol::RuntimeRequest`]
+//! payloads. The engine never owns inbound HTTP/WS plumbing; the
+//! gateway never owns the orchestration loop.
+//!
+//! ## Surface
+//!
+//! - [`scheduler`] — per-agent single-writer claim, identity registry,
+//!   per-turn `AgentLoopConfig` resolution. Same `Scheduler` API the
+//!   gateway used pre-extraction.
+//! - [`worker`] — kernel-mediated agent-loop driver. Owns the
+//!   `AGENT_LOOP_TIMEOUT` boundary timeout.
+//! - [`automaton`] — `AutomatonBridge` that wires `aura-engine-automaton`'s
+//!   dev-loop / task-run automatons through per-agent kernels with
+//!   recorded `System::AutomatonLifecycle` audit entries.
+//! - [`agents`] — `AgentHost`: recursive agents. Any agent can spawn
+//!   child agents (`task`, `spawn_agent`) that run through the
+//!   scheduler and can spawn their own, and agents message each other
+//!   through the host's local `AgentControlHook` / `AgentReadHook`.
+//! - [`memory_observer`] — `TurnObserver` adapter feeding completed
+//!   turns into [`aura_context_memory::MemoryManager`].
+//! - [`capabilities`] — `record_runtime_capabilities` helper called by
+//!   the automaton bridge during dev-loop / task-run bootstrap.
+//! - [`executor`] — shared `ToolResolver` / `ExecutorRouter`
+//!   construction helpers.
+//! - [`model_context`] — `context_window_for_model` lookup used by the
+//!   automaton bridge and the gateway-side session config.
+//!
+//! Phase C / Commit 4 moved the `JwtDomainApi` wrapper (and the
+//! HTTP `DomainApi` impl that used to live in the gateway) into the
+//! dedicated `aura-exec-domain-http` crate; the automaton bridge imports
+//! it from there now.
+
+#![forbid(unsafe_code)]
+#![warn(clippy::all)]
+#![allow(
+    clippy::doc_markdown,
+    clippy::must_use_candidate,
+    clippy::match_same_arms,
+    clippy::single_match,
+    clippy::single_match_else,
+    clippy::option_if_let_else,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::unnecessary_map_or,
+    clippy::wildcard_imports,
+    clippy::manual_let_else,
+    clippy::ignored_unit_patterns,
+    clippy::significant_drop_tightening,
+    clippy::missing_errors_doc,
+    clippy::missing_const_for_fn,
+    clippy::unused_self,
+    clippy::struct_field_names
+)]
+
+pub mod agents;
+pub mod automaton;
+pub mod capabilities;
+pub mod executor;
+pub mod memory_observer;
+pub mod model_context;
+pub mod scheduler;
+pub mod worker;
+
+pub use agents::{
+    AgentEnv, AgentHooks, AgentHost, AgentHostConfig, AgentInfo, AgentState, ChildKernel,
+    ChildKernelFactory, ChildKernelRequest, InboxMessage, MessageKind, ParentInbox, RootAgent,
+};
+pub use automaton::{AutomatonBridge, EventSubscription};
+pub use memory_observer::{turn_summary_from_result, MemoryTurnObserver};
+pub use model_context::context_window_for_model;
+pub use scheduler::{AgentIdentity, AgentIdentityRegistry, Scheduler, SchedulerError};
+pub use worker::{process_agent_detailed, ProcessedAgent};

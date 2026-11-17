@@ -11,7 +11,7 @@
 #   - kernel:   `aura-agent-kernel/`
 #   - store:    `aura-store-db/` + `aura-store-record/` (per-agent RecordLog
 #               trait) + `aura-store-snapshot/` (replay snapshot trait)
-#   - reasoner: `aura-model-reasoner/`
+#   - reasoner: `aura-model/`
 #   - memory:   `aura-context-memory/`
 #
 # When a legitimate new call-site needs to land (e.g. a newly-approved
@@ -75,7 +75,7 @@ run_band() {
 # §1/§3 — `.complete(` must only appear inside:
 #   - the kernel itself (`aura-agent-kernel/`)
 #   - the agent-side recording seams (kernel_gateway.rs, recording_stream.rs)
-#   - the reasoner provider internals and their mocks (`aura-model-reasoner/`)
+#   - the reasoner provider internals and their mocks (`aura-model/`)
 #   - the automaton runtime (wraps its provider with KernelModelGateway before
 #     handing it over)
 #   - the memory subsystem, which only ever holds an Arc<KernelModelGateway>
@@ -86,7 +86,7 @@ run_band() {
 #   - any *test* file (unit, integration, harness shims)
 run_band "§1/§3" "direct ModelProvider::complete call outside the recording seam" \
     '\.complete\(' \
-    '^(crates/aura-agent-kernel/|crates/aura-agent/src/kernel_gateway\.rs|crates/aura-agent/src/recording_stream\.rs|crates/aura-agent/src/agent_loop/|crates/aura-agent/src/event_sequence_tests\.rs|crates/aura-model-reasoner/|crates/aura-automaton/|crates/aura-context-memory/|crates/aura-agent-trace/src/replay\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/agent/aura-agent-kernel/|crates/agent/aura-agent/src/kernel_gateway\.rs|crates/agent/aura-agent/src/recording_stream\.rs|crates/agent/aura-agent/src/agent_loop/|crates/agent/aura-agent/src/event_sequence_tests\.rs|crates/model/aura-model/|crates/engine/aura-engine-automaton/|crates/context/aura-context-memory/|crates/agent/aura-agent-trace/src/replay\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §2 — direct store append functions bypass the per-agent kernel's
 # seq/context-hash pipeline unless they are inside:
@@ -97,7 +97,7 @@ run_band "§1/§3" "direct ModelProvider::complete call outside the recording se
 #
 # Sanctioned non-kernel/store call-sites (documented as exceptions in
 # docs/invariants.md):
-#   * `crates/aura-runtime/src/tool_permissions.rs` — HTTP-driven tool-
+#   * `crates/surface/aura-node/src/tool_permissions.rs` — HTTP-driven tool-
 #     permissions append guarded by the per-agent scheduler claim (see
 #     §12.a). Routed via `aura_agent_kernel::write_system_record`.
 # Agent-host fallback records (a root agent whose inbox is gone) also go
@@ -106,23 +106,23 @@ run_band "§1/§3" "direct ModelProvider::complete call outside the recording se
 # never names an `append_entry_*` symbol, so no allowlist entry is needed.
 run_band "§2" "append_entry_* used outside the kernel / store crates / tests" \
     'append_entry_(atomic|dequeued|direct|entries_batch)' \
-    '^(crates/aura-agent-kernel/|crates/aura-store-db/|crates/aura-store-record/|crates/aura-runtime/src/tool_permissions\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/agent/aura-agent-kernel/|crates/store/aura-store-db/|crates/store/aura-store-record/|crates/surface/aura-node/src/tool_permissions\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §1 — raw `git` processes must live in a kernel-mediated executor or in a
 # declared infrastructure exception.
 #
 # Permitted locations for `Command::new("git")`:
 #
-#   * `crates/aura-tools/src/git_tool/` — the `GitExecutor` and its shared
+#   * `crates/exec/aura-exec-tools/src/git_tool/` — the `GitExecutor` and its shared
 #     helpers (`git_commit_impl`, `git_push_impl`, `git_commit_push_impl`).
 #     Every mutating `git` subprocess in the tree must funnel through here.
-#   * `crates/aura-agent/src/git.rs` — read-only helpers (`git log` for
+#   * `crates/agent/aura-agent/src/git.rs` — read-only helpers (`git log` for
 #     unpushed-commit telemetry). Declared exception in docs/invariants.md.
-#   * `crates/aura-exec-isolation/src/lib.rs` — `git worktree add` /
-#     `worktree remove` for parallel-safe subagent workspaces. Sandbox /
-#     isolation infrastructure, not a mutating commit/push. Declared
+#   * `crates/surface/aura-app/src/isolation/mod.rs` — `git worktree add` /
+#     `worktree remove` for the workspace copies `/compare` runs in.
+#     Isolation infrastructure, not a mutating commit/push. Declared
 #     exception in docs/invariants.md.
-#   * `crates/aura-exec-isolation/src/changes.rs` — local-only `diff` /
+#   * `crates/surface/aura-app/src/isolation/changes.rs` — local-only `diff` /
 #     `apply` / `ls-files` / `add` / `write-tree` / `diff-index` / `init`
 #     to carry uncommitted work into an isolated copy, diff it against
 #     its baseline, and apply a chosen copy's patch back (`/compare`);
@@ -131,7 +131,7 @@ run_band "§2" "append_entry_* used outside the kernel / store crates / tests" \
 #     subtask and restore it before the retry. No commit, fetch or push.
 #     Declared exception in docs/invariants.md; its subcommands are pinned
 #     by the check after this band.
-#   * `crates/aura-runtime/src/gateway/handlers/safe_workspace.rs` —
+#   * `crates/surface/aura-node/src/gateway/handlers/safe_workspace.rs` —
 #     local-only worktree, imported-project baseline, checkpoint, restore, and
 #     apply lifecycle for explicitly selected hosted Safe Workspaces. A closed
 #     subcommand allowlist in that module rejects network Git operations.
@@ -139,12 +139,12 @@ run_band "§2" "append_entry_* used outside the kernel / store crates / tests" \
 #   * Test files.
 run_band "§1" "Command::new(\"git\") outside the GitExecutor / declared exceptions" \
     'Command::new\("git"\)' \
-    '^(crates/aura-tools/src/git_tool/|crates/aura-agent/src/git\.rs|crates/aura-exec-isolation/src/lib\.rs|crates/aura-exec-isolation/src/changes\.rs|crates/aura-runtime/src/gateway/handlers/safe_workspace\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/exec/aura-exec-tools/src/git_tool/|crates/agent/aura-agent/src/git\.rs|crates/surface/aura-app/src/isolation/mod\.rs|crates/surface/aura-app/src/isolation/changes\.rs|crates/surface/aura-node/src/gateway/handlers/safe_workspace\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §1 — the git subcommands `changes.rs` runs outside its tests (the first
 # literal of each `.arg(` / `.args([`) stay in the local-only set its row in
 # docs/invariants.md lists.
-changes_file='crates/aura-exec-isolation/src/changes.rs'
+changes_file='crates/surface/aura-app/src/isolation/changes.rs'
 changes_allowed='^(rev-parse|diff|apply|ls-files|init|add|write-tree|diff-index|diff-tree|read-tree|checkout-index)$'
 changes_subcommands=$(sed '/^#\[cfg(test)\]/,$d' "$changes_file" \
     | rg -U -o -r '$1' '\.args?\(\[?\s*"([^"]+)"' || true)
@@ -176,32 +176,32 @@ done <<<"$changes_subcommands"
 # explicit path) so post-Phase-2 callsites stay covered.
 #
 # Production holders:
-#   - crates/aura-runtime/src/gateway/state.rs   — RouterState field piped into WsContext
-#   - crates/aura-runtime/src/gateway/session/mod.rs — WsContext handed to Kernel::new
-#   - crates/aura-runtime/src/gateway/session/cross_agent_hook.rs — cross-agent chat/spawn hook
-#   - crates/aura-runtime/src/gateway/session/child_kernel.rs — session-scoped child-kernel
+#   - crates/surface/aura-node/src/gateway/state.rs   — RouterState field piped into WsContext
+#   - crates/surface/aura-node/src/gateway/session/mod.rs — WsContext handed to Kernel::new
+#   - crates/surface/aura-node/src/gateway/session/cross_agent_hook.rs — cross-agent chat/spawn hook
+#   - crates/surface/aura-node/src/gateway/session/child_kernel.rs — session-scoped child-kernel
 #                                                  factory captures the same store handle as
 #                                                  WsContext so nested child runs route through
 #                                                  AgentHost / Scheduler.
-#   - crates/aura-engine/src/scheduler.rs        — Scheduler builds per-agent kernels (§12.a claim seam)
-#   - crates/aura-engine/src/automaton/          — AutomatonBridge builds per-agent automaton kernels
+#   - crates/engine/aura-engine/src/scheduler.rs        — Scheduler builds per-agent kernels (§12.a claim seam)
+#   - crates/engine/aura-engine/src/automaton/          — AutomatonBridge builds per-agent automaton kernels
 #                                                  (mod.rs + build.rs + dispatch.rs + event_channel.rs)
-#   - crates/aura-engine/src/agents/host.rs      — AgentHost runs spawned agents through the
+#   - crates/engine/aura-engine/src/agents/host.rs      — AgentHost runs spawned agents through the
 #                                                  scheduler and writes inbox fallback records
-#   - crates/aura-runtime/src/node.rs            — boots the process-wide store and wires runtime surfaces
-#   - crates/aura-runtime/src/tool_permissions.rs — HTTP-driven tool-permissions
+#   - crates/surface/aura-node/src/node.rs            — boots the process-wide store and wires runtime surfaces
+#   - crates/surface/aura-node/src/tool_permissions.rs — HTTP-driven tool-permissions
 #                                                  append serialized via the §12.a claim
-#   - crates/aura-surface-cli/src/runner.rs      — interactive TUI composition root constructs a Kernel
+#   - crates/surface/aura-app/src/harness.rs             — interactive session host constructs a Kernel
 #
 # Test-only holders (filenames that don't match `*test*.rs` but whose hits
 # are inside `#[cfg(test)] mod tests`):
-#   - crates/aura-agent/src/kernel_gateway.rs
-#   - crates/aura-agent/src/kernel_domain_gateway/
-#   - crates/aura-agent/src/recording_stream.rs
-#   - crates/aura-engine/src/worker.rs
+#   - crates/agent/aura-agent/src/kernel_gateway.rs
+#   - crates/agent/aura-agent/src/kernel_domain_gateway/
+#   - crates/agent/aura-agent/src/recording_stream.rs
+#   - crates/engine/aura-engine/src/worker.rs
 run_band "§10" "Arc<dyn Store> outside the kernel / store crates" \
     'Arc<dyn (aura_store(_db)?::)?Store>' \
-    '^(crates/aura-agent-kernel/|crates/aura-store-db/|crates/aura-store-record/|crates/aura-runtime/src/gateway/state\.rs|crates/aura-runtime/src/gateway/session/mod\.rs|crates/aura-runtime/src/gateway/session/cross_agent_hook\.rs|crates/aura-runtime/src/gateway/session/child_kernel\.rs|crates/aura-engine/src/scheduler\.rs|crates/aura-engine/src/automaton/|crates/aura-engine/src/agents/host\.rs|crates/aura-engine/src/worker\.rs|crates/aura-runtime/src/node\.rs|crates/aura-runtime/src/tool_permissions\.rs|crates/aura-surface-cli/src/runner\.rs|crates/aura-agent/src/kernel_gateway\.rs|crates/aura-agent/src/kernel_domain_gateway/|crates/aura-agent/src/recording_stream\.rs|crates/aura-agent/src/agent_loop/|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/agent/aura-agent-kernel/|crates/store/aura-store-db/|crates/store/aura-store-record/|crates/surface/aura-node/src/gateway/state\.rs|crates/surface/aura-node/src/gateway/session/mod\.rs|crates/surface/aura-node/src/gateway/session/cross_agent_hook\.rs|crates/surface/aura-node/src/gateway/session/child_kernel\.rs|crates/engine/aura-engine/src/scheduler\.rs|crates/engine/aura-engine/src/automaton/|crates/engine/aura-engine/src/agents/host\.rs|crates/engine/aura-engine/src/worker\.rs|crates/surface/aura-node/src/node\.rs|crates/surface/aura-node/src/tool_permissions\.rs|crates/surface/aura-app/src/harness\.rs|crates/agent/aura-agent/src/kernel_gateway\.rs|crates/agent/aura-agent/src/kernel_domain_gateway/|crates/agent/aura-agent/src/recording_stream\.rs|crates/agent/aura-agent/src/agent_loop/|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §9 — the agent loop must not reach into the store crates directly. Any
 # code that needs persistence goes through the per-agent kernel. Test files
@@ -209,7 +209,7 @@ run_band "§10" "Arc<dyn Store> outside the kernel / store crates" \
 #
 # The pattern catches `use aura_store_db::` and the legacy `use aura_store::`.
 store_hits=$(rg -n --hidden --glob '!target/**' --glob '!.git/**' --type rust \
-    --glob 'crates/aura-agent/src/agent_loop/**' \
+    --glob 'crates/agent/aura-agent/src/agent_loop/**' \
     --glob '!**/*test*.rs' --glob '!**/*tests*.rs' \
     'use aura_store(_db)?::' . || true)
 if [[ -n "$store_hits" ]]; then

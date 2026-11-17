@@ -1,0 +1,537 @@
+//! Core types for the agent orchestration layer.
+//!
+//! Phase 6a relocated [`FileChange`], [`FileChangeKind`],
+//! [`ToolCallInfo`], and [`ToolCallResult`] into
+//! `aura-agent-steering` so the steering crate can sit below the
+//! agent loop in the layer order. This module re-exports them
+//! under their historical `crate::types::*` paths so every existing
+//! call site (`use crate::types::ToolCallInfo`, …) keeps working
+//! unchanged.
+
+use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
+pub use aura_agent_steering::{FileChange, FileChangeKind, ToolCallInfo, ToolCallResult};
+
+/// Per-bucket token estimates surfaced on [`AgentLoopResult`] and
+/// forwarded to clients via `aura_core_protocol::ContextBreakdown`. Buckets
+/// follow the same `chars / CHARS_PER_TOKEN` heuristic that produces
+/// [`AgentLoopResult::estimated_context_tokens`], so they are
+/// directly comparable on the wire.
+///
+/// `mcp_tokens` is reserved for MCP integration (see plan); the harness
+/// does not populate it today.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentContextBreakdown {
+    pub system_prompt_tokens: u64,
+    pub tools_tokens: u64,
+    pub skills_tokens: u64,
+    pub mcp_tokens: u64,
+    pub subagents_tokens: u64,
+    pub conversation_tokens: u64,
+    /// Cache-read tokens reported by the model provider for the most
+    /// recent successful iteration. Surfaced on `AgentLoopResult`'s
+    /// per-turn `context_breakdown` so the wire `ContextBreakdown`
+    /// can carry hit/miss counts to the UI's context-usage popover.
+    pub cache_read_tokens: u64,
+    /// Cache-creation tokens reported by the model provider for the
+    /// most recent successful iteration.
+    pub cache_creation_tokens: u64,
+}
+
+/// Rendered text plus token estimate for a single context entry — one
+/// tool, one skill, or one subagent kind. Converted at the wire
+/// boundary into `aura_core_protocol::ContextSegment` (see the
+/// `aura-node` gateway), mirroring how [`AgentContextBreakdown`]
+/// becomes `aura_core_protocol::ContextBreakdown`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentContextSegment {
+    /// Short human-readable label (tool name, skill name, subagent kind).
+    pub label: String,
+    /// Full rendered text the model receives for this entry.
+    pub text: String,
+    /// Estimated token cost of [`Self::text`], using the same
+    /// `chars / CHARS_PER_TOKEN` heuristic as [`AgentContextBreakdown`].
+    pub tokens: u64,
+}
+
+/// Actual rendered text for each static context bucket, parallel to the
+/// token counts in [`AgentContextBreakdown`]. Built each turn in
+/// [`crate::agent_loop::context`] from the same sources as the
+/// breakdown so the two stay in sync.
+///
+/// `mcp` is reserved for MCP integration and stays empty today, mirroring
+/// the zeroed `mcp_tokens` bucket on [`AgentContextBreakdown`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentContextContents {
+    /// Full rendered system prompt; `None` when the prompt is empty.
+    pub system_prompt: Option<String>,
+    /// One segment per tool the request would carry.
+    pub tools: Vec<AgentContextSegment>,
+    /// One segment per installed skill (name + summary).
+    pub skills: Vec<AgentContextSegment>,
+    /// One segment per registered subagent kind.
+    pub subagents: Vec<AgentContextSegment>,
+    /// Reserved for MCP server context; empty today.
+    pub mcp: Vec<AgentContextSegment>,
+}
+
+impl AgentContextContents {
+    /// True when no bucket carries any content. The wire boundary uses
+    /// this to leave `aura_core_protocol::SessionUsage::context_contents`
+    /// `None` for empty turns.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.system_prompt.is_none()
+            && self.tools.is_empty()
+            && self.skills.is_empty()
+            && self.subagents.is_empty()
+            && self.mcp.is_empty()
+    }
+}
+
+/// Result of an automatic build check.
+#[derive(Debug, Clone, Default)]
+pub struct AutoBuildResult {
+    /// Whether the build succeeded.
+    pub success: bool,
+    /// Build output (stdout + stderr).
+    pub output: String,
+    /// Number of errors detected.
+    pub error_count: usize,
+}
+
+/// Captured build error baseline for distinguishing pre-existing from new errors.
+#[derive(Debug, Clone, Default)]
+pub struct BuildBaseline {
+    /// Error signatures from the baseline build.
+    pub error_signatures: Vec<String>,
+}
+
+impl BuildBaseline {
+    /// Annotate build output by diffing against pre-existing errors.
+    #[must_use]
+    pub fn annotate(&self, output: &str) -> String {
+        if self.error_signatures.is_empty() {
+            return output.to_string();
+        }
+        let current_sigs = Self::extract_signatures(output);
+        if current_sigs.is_empty() {
+            return output.to_string();
+        }
+        let mut new_count = 0usize;
+        let mut preexisting_count = 0usize;
+        for sig in &current_sigs {
+            if self.error_signatures.contains(sig) {
+                preexisting_count += 1;
+            } else {
+                new_count += 1;
+            }
+        }
+        if preexisting_count == 0 {
+            return output.to_string();
+        }
+        format!(
+            "[BASELINE] {new_count} error(s) are NEW (introduced by your changes), \
+             {preexisting_count} error(s) are PRE-EXISTING (ignore them). Focus only on the new errors.\n\n{output}",
+        )
+    }
+
+    /// Extract individual error blocks and produce a normalized signature per block.
+    #[must_use]
+    pub fn extract_signatures(stderr: &str) -> Vec<String> {
+        let mut signatures = Vec::new();
+        let mut current_block = String::new();
+        for line in stderr.lines() {
+            let trimmed = line.trim_start();
+            let is_start = trimmed.starts_with("error[E")
+                || (trimmed.starts_with("error:") && !trimmed.starts_with("error: aborting"));
+            if is_start && !current_block.is_empty() {
+                let sig = Self::normalize_block(&current_block);
+                if !sig.is_empty() {
+                    signatures.push(sig);
+                }
+                current_block.clear();
+            }
+            if !current_block.is_empty() || is_start {
+                current_block.push_str(line);
+                current_block.push('\n');
+            }
+        }
+        if !current_block.is_empty() {
+            let sig = Self::normalize_block(&current_block);
+            if !sig.is_empty() {
+                signatures.push(sig);
+            }
+        }
+        signatures
+    }
+
+    fn normalize_block(block: &str) -> String {
+        let mut lines: Vec<String> = Vec::new();
+        for line in block.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty()
+                || trimmed.starts_with("For more information")
+                || trimmed.starts_with("help:")
+            {
+                continue;
+            }
+            if trimmed.starts_with("-->") {
+                lines.push("-->LOCATION".into());
+                continue;
+            }
+            if trimmed.chars().next().is_some_and(|c| c.is_ascii_digit()) && trimmed.contains('|') {
+                continue;
+            }
+            if trimmed
+                .chars()
+                .all(|c| c == '^' || c == '-' || c == ' ' || c == '~' || c == '+')
+            {
+                continue;
+            }
+            let normalized = Self::strip_line_col(trimmed);
+            if !normalized.is_empty() {
+                lines.push(normalized);
+            }
+        }
+        lines.sort();
+        lines.dedup();
+        lines.join("\n")
+    }
+
+    fn strip_line_col(line: &str) -> String {
+        let mut result = String::with_capacity(line.len());
+        let chars: Vec<char> = line.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            if chars[i] == ':' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit() {
+                result.push(':');
+                result.push('N');
+                i += 1;
+                while i < chars.len() && chars[i].is_ascii_digit() {
+                    i += 1;
+                }
+            } else {
+                result.push(chars[i]);
+                i += 1;
+            }
+        }
+        result
+    }
+}
+
+/// Result of the full agent loop execution.
+#[derive(Debug, Default)]
+pub struct AgentLoopResult {
+    /// Last sample exhausted its output allowance and recovery did not finish.
+    pub output_truncated: bool,
+    /// An actual task_done tool returned a successful terminal result.
+    pub task_done_completed: bool,
+    /// Whether the loop timed out. Also set on budget exhaustion for
+    /// callers that predate [`Self::budget_exhausted`].
+    pub timed_out: bool,
+    /// Whether the loop stopped because the iteration or credit budget
+    /// ran out.
+    pub budget_exhausted: bool,
+    /// Whether the loop stopped due to insufficient credits.
+    pub insufficient_credits: bool,
+    /// Whether the loop stopped due to stall detection.
+    pub stalled: bool,
+    /// LLM error that terminated the loop, if any.
+    pub llm_error: Option<String>,
+    /// Accumulated assistant text across all iterations.
+    pub total_text: String,
+    /// Accumulated thinking text across all iterations.
+    pub total_thinking: String,
+    /// Total input tokens used.
+    pub total_input_tokens: u64,
+    /// Total output tokens used.
+    pub total_output_tokens: u64,
+    /// Total cache creation input tokens used across all iterations.
+    pub total_cache_creation_input_tokens: u64,
+    /// Total cache read input tokens used across all iterations.
+    pub total_cache_read_input_tokens: u64,
+    /// Best-effort estimate of the current occupied context window in tokens.
+    pub estimated_context_tokens: u64,
+    /// Per-bucket token estimates that approximately sum to
+    /// [`Self::estimated_context_tokens`]. Computed using the same
+    /// `chars / CHARS_PER_TOKEN` heuristic; see
+    /// [`crate::agent_loop::context`] for the rules. Populated on every
+    /// turn that reaches the compaction step (which is every turn that
+    /// actually calls the model).
+    pub context_breakdown: AgentContextBreakdown,
+    /// Actual rendered text for each static context bucket, parallel to
+    /// [`Self::context_breakdown`]'s token counts. Built each turn
+    /// alongside the breakdown in [`crate::agent_loop::context`] and
+    /// converted to `aura_core_protocol::ContextContents` at the wire
+    /// boundary. Empty (`AgentContextContents::default()`) on turns
+    /// that never reach the compaction step.
+    pub context_contents: AgentContextContents,
+    /// Net file mutations observed across the turn.
+    pub file_changes: Vec<FileChange>,
+    /// Number of iterations completed.
+    pub iterations: usize,
+    /// Final message history.
+    pub messages: Vec<aura_model::Message>,
+    /// Todo list after the run: [`crate::AgentLoopConfig::initial_todos`]
+    /// with every `todo_write` call applied. Callers carry it into the
+    /// next run because summary compaction can drop the calls from
+    /// history.
+    pub todos: Vec<aura_exec_tools::todo::TodoItem>,
+    /// Summary compactions performed during the run.
+    pub summary_compactions: u32,
+}
+
+impl AgentLoopResult {
+    /// Why the loop stopped, as a stable label: `llm_error`,
+    /// `insufficient_credits`, `stalled`, `budget`, `timed_out`,
+    /// `output_truncated`, `task_done` or `end_turn`.
+    #[must_use]
+    pub fn stop_reason(&self) -> &'static str {
+        if self.llm_error.is_some() {
+            "llm_error"
+        } else if self.insufficient_credits {
+            "insufficient_credits"
+        } else if self.stalled {
+            "stalled"
+        } else if self.budget_exhausted {
+            "budget"
+        } else if self.timed_out {
+            "timed_out"
+        } else if self.output_truncated {
+            "output_truncated"
+        } else if self.task_done_completed {
+            "task_done"
+        } else {
+            "end_turn"
+        }
+    }
+
+    /// Record a file change, collapsing multiple mutations on the same path
+    /// into a single net effect for turn-level reporting.
+    ///
+    /// Line counts (`lines_added` / `lines_removed`) accumulate across
+    /// merged mutations so several edits to the same file in one turn
+    /// surface as a single rolled-up diff. The exception is the
+    /// Create-then-Delete pairing, where the entry is dropped entirely
+    /// (the file existed only transiently within the turn) — line
+    /// counts disappear with it, matching the "net effect" semantics.
+    pub fn record_file_change(&mut self, change: FileChange) {
+        if let Some(existing) = self.file_changes.iter_mut().find(|c| c.path == change.path) {
+            existing.lines_added = existing.lines_added.saturating_add(change.lines_added);
+            existing.lines_removed = existing.lines_removed.saturating_add(change.lines_removed);
+            match (existing.kind, change.kind) {
+                (FileChangeKind::Create, FileChangeKind::Modify) => {}
+                (FileChangeKind::Create, FileChangeKind::Delete) => {
+                    self.file_changes.retain(|c| c.path != change.path);
+                }
+                (FileChangeKind::Modify, FileChangeKind::Modify) => {}
+                (FileChangeKind::Modify, FileChangeKind::Delete) => {
+                    existing.kind = FileChangeKind::Delete;
+                }
+                (FileChangeKind::Delete, FileChangeKind::Create) => {
+                    existing.kind = FileChangeKind::Modify;
+                }
+                (FileChangeKind::Delete, FileChangeKind::Modify) => {
+                    existing.kind = FileChangeKind::Modify;
+                }
+                (_, next) => {
+                    existing.kind = next;
+                }
+            }
+            return;
+        }
+
+        self.file_changes.push(change);
+    }
+}
+
+/// Observer notified after every completed agent turn.
+///
+/// Implementations receive the full `AgentLoopResult` (including message
+/// history) so they can perform post-turn work such as memory ingestion.
+/// Observers are called **inside** `AgentLoop::run_with_events`, making
+/// them impossible to skip regardless of the calling entry point (WS,
+/// terminal, worker, etc.).
+#[async_trait]
+pub trait TurnObserver: Send + Sync {
+    async fn on_turn_complete(&self, result: &AgentLoopResult);
+}
+
+/// Convenience type for a shared collection of turn observers.
+pub type TurnObservers = Vec<Arc<dyn TurnObserver>>;
+
+/// Implementors execute tool calls and optionally provide build integration.
+///
+/// `aura-harness` provides a default implementation wrapping `ExecutorRouter`.
+/// `aura-app` can implement this with project-aware paths, domain tools
+/// (spec/task CRUD, dev loop, engine phase gating), and event forwarding.
+#[async_trait]
+pub trait AgentToolExecutor: Send + Sync {
+    /// Execute a batch of tool calls.
+    ///
+    /// Implementations may:
+    /// - Gate certain tools (e.g., writes before `submit_plan`)
+    /// - Dispatch domain tools to external services
+    /// - Track file operations for stub detection
+    /// - Signal loop termination via `stop_loop`
+    async fn execute(&self, tool_calls: &[ToolCallInfo]) -> Vec<ToolCallResult>;
+
+    /// Spawn a single tool call as a `Future<Output = ToolCallResult>`.
+    ///
+    /// Layer E.3: the streaming sampling pump in
+    /// [`crate::agent_loop::sampling`] calls this per
+    /// `ResponseEvent::OutputItemDone(tool_use)` so a tool can start
+    /// running while the model is still streaming subsequent items.
+    /// The returned futures are pushed into a `FuturesUnordered<…>`,
+    /// drained as they finish once the model signals `Completed`, and
+    /// sorted back into submission order (codex's `drain_in_flight`
+    /// contract).
+    ///
+    /// The default implementation forwards to [`Self::execute`] with
+    /// a one-element batch, so existing executors (in particular
+    /// `TaskToolExecutor`) keep working without changes. Implementors
+    /// that want true per-call concurrency can override the method
+    /// to dispatch the call directly without the batching detour.
+    ///
+    /// The future borrows `&'a self`, so it shares the executor's
+    /// lifetime. The pump holds an `&'a dyn AgentToolExecutor` for
+    /// the duration of one sampling request and pushes the returned
+    /// boxed-pin futures into a `FuturesUnordered<'a>`, draining them
+    /// once the model signals `Completed`.
+    fn spawn_tool_call<'a>(
+        &'a self,
+        call: ToolCallInfo,
+    ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
+        Box::pin(async move {
+            let mut results = self.execute(std::slice::from_ref(&call)).await;
+            results.pop().unwrap_or_else(|| {
+                ToolCallResult::error(
+                    call.id.clone(),
+                    format!(
+                        "spawn_tool_call: executor returned no result for tool {}",
+                        call.name
+                    ),
+                )
+            })
+        })
+    }
+
+    /// Settle a tool call whose result the loop already has (a per-run
+    /// cache hit, a steering block, an invalid tool use) without running
+    /// the tool.
+    ///
+    /// Recording executors override this so the call is still recorded
+    /// (with `source` naming why the tool did not run) and passes the
+    /// policy gate; a denial replaces `result`. The default returns
+    /// `result` unchanged. Wrapping executors must forward to their
+    /// inner executor.
+    fn spawn_preset<'a>(
+        &'a self,
+        call: ToolCallInfo,
+        source: &'static str,
+        result: ToolCallResult,
+    ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
+        let _ = (call, source);
+        Box::pin(std::future::ready(result))
+    }
+
+    /// Settle a tool call with a handler the caller owns (an engine tool
+    /// such as `task_done`) instead of the tool executor.
+    ///
+    /// Recording executors override this so the call is recorded and
+    /// passes the policy gate before `run` is polled; a denial drops
+    /// `run` unpolled and returns the denial, so `run` must not start
+    /// work before its first poll. The default just awaits `run`.
+    /// Wrapping executors must forward to their inner executor.
+    fn spawn_local<'a>(
+        &'a self,
+        call: ToolCallInfo,
+        source: &'static str,
+        run: Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>>,
+    ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
+        let _ = (call, source);
+        run
+    }
+
+    /// Run a lightweight build check (e.g., `cargo check --lib`).
+    ///
+    /// Returns `None` when build checking is not configured.
+    async fn auto_build_check(&self) -> Option<AutoBuildResult> {
+        None
+    }
+
+    /// Capture current build error state as a baseline for distinguishing
+    /// pre-existing errors from newly introduced ones.
+    async fn capture_build_baseline(&self) -> Option<BuildBaseline> {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AgentLoopResult, FileChange, FileChangeKind};
+
+    fn fc(path: &str, kind: FileChangeKind) -> FileChange {
+        FileChange {
+            path: path.into(),
+            kind,
+            lines_added: 0,
+            lines_removed: 0,
+        }
+    }
+
+    fn fc_lines(path: &str, kind: FileChangeKind, added: u32, removed: u32) -> FileChange {
+        FileChange {
+            path: path.into(),
+            kind,
+            lines_added: added,
+            lines_removed: removed,
+        }
+    }
+
+    #[test]
+    fn file_change_summary_keeps_net_create() {
+        let mut result = AgentLoopResult::default();
+        result.record_file_change(fc("src/new.rs", FileChangeKind::Create));
+        result.record_file_change(fc("src/new.rs", FileChangeKind::Modify));
+        assert_eq!(result.file_changes.len(), 1);
+        assert!(matches!(
+            result.file_changes[0].kind,
+            FileChangeKind::Create
+        ));
+    }
+
+    #[test]
+    fn file_change_summary_drops_create_then_delete() {
+        let mut result = AgentLoopResult::default();
+        result.record_file_change(fc("src/temp.rs", FileChangeKind::Create));
+        result.record_file_change(fc("src/temp.rs", FileChangeKind::Delete));
+        assert!(result.file_changes.is_empty());
+    }
+
+    #[test]
+    fn file_change_summary_turns_delete_then_create_into_modify() {
+        let mut result = AgentLoopResult::default();
+        result.record_file_change(fc("src/lib.rs", FileChangeKind::Delete));
+        result.record_file_change(fc("src/lib.rs", FileChangeKind::Create));
+        assert_eq!(result.file_changes.len(), 1);
+        assert!(matches!(
+            result.file_changes[0].kind,
+            FileChangeKind::Modify
+        ));
+    }
+
+    #[test]
+    fn file_change_summary_sums_line_counts_across_merges() {
+        let mut result = AgentLoopResult::default();
+        result.record_file_change(fc_lines("src/lib.rs", FileChangeKind::Modify, 10, 2));
+        result.record_file_change(fc_lines("src/lib.rs", FileChangeKind::Modify, 5, 3));
+        assert_eq!(result.file_changes.len(), 1);
+        assert_eq!(result.file_changes[0].lines_added, 15);
+        assert_eq!(result.file_changes[0].lines_removed, 5);
+    }
+}

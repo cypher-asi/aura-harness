@@ -53,6 +53,12 @@ fn cli_golden_top_level_help() {
 }
 
 #[test]
+fn cli_golden_desktop_help() {
+    let help = run_help(&["desktop"]);
+    insta::assert_snapshot!("desktop", help);
+}
+
+#[test]
 fn cli_golden_run_help() {
     let help = run_help(&["run"]);
     insta::assert_snapshot!("run", help);

@@ -8,95 +8,66 @@ publish = false
 name = "aura"
 path = "src/main.rs"
 
-# Phase 10 carve-out 1: the binary body migration moves every
-# line of useful logic out of `src/main.rs` and into
-# `aura_surface_cli::run`. The root binary now depends on the
-# surface-layer composition root and only the minimum set of
-# crates needed to call `aura_surface_cli::run().await`.
+# `src/main.rs` only dispatches: the desktop window, or `aura-cli`.
 [dependencies]
-aura-surface-cli = { path = "crates/aura-surface-cli" }
+aura-cli = { path = "crates/surface/aura-cli" }
+aura-desktop = { path = "crates/surface/aura-desktop", optional = true }
 anyhow = { workspace = true }
+clap = "4.5"
 tokio = { workspace = true }
 dotenvy = { workspace = true }
+
+# `aura` with no subcommand opens the desktop window. It needs Rust 1.88
+# (iced); build with `--no-default-features` for servers, containers and
+# the 1.85 MSRV check, where `aura` runs in the terminal instead.
+[features]
+default = ["desktop"]
+desktop = ["dep:aura-desktop"]
 
 [workspace]
 resolver = "2"
 members = [
-    "crates/aura-core-modes",
-    "crates/aura-core-permissions",
-    "crates/aura-core-types",
-    "crates/aura-core-protocol",
-    "crates/aura-core-auth",
-    "crates/aura-config",
-    # Phase 3 context layer crates
-    "crates/aura-context-prompts",
-    "crates/aura-context-compaction",
-    "crates/aura-context-memory",
-    "crates/aura-context-skills",
-    # Phase 2 store layer
-    "crates/aura-store-db",
-    "crates/aura-store-record",
-    "crates/aura-store-snapshot",
-    "crates/aura-tools",
-    # Exec layer primitives (aura-tools above holds the Tool impls,
-    # catalog and executor):
-    #   aura-exec-isolation — worktree / copy isolation primitives
-    #   aura-exec-sandbox   — FsSandbox + ProcessSandbox primitives
-    "crates/aura-exec-isolation",
-    "crates/aura-exec-sandbox",
-    # Phase 1 refactor: exec-layer executor/spawn traits relocated out
-    # of aura-agent-kernel so aura-tools no longer depends upward.
-    "crates/aura-exec-traits",
-    # Phase 3 model layer crate
-    "crates/aura-model-reasoner",
-    # Agent layer:
-    #   aura-agent-kernel    - deterministic kernel (renamed from aura-kernel)
-    #   aura-agent           - agent turn loop
-    #   aura-agent-steering  - turn-state steering evaluators
-    #   aura-agent-subagent  - subagent derivation + inheritance
-    "crates/aura-agent-kernel",
-    "crates/aura-agent-subagent",
-    "crates/aura-terminal",
-    "crates/aura-agent",
-    "crates/aura-agent-steering",
-    "crates/aura-agent-trace",
-    "crates/aura-agent-gate",
-    "crates/aura-auth",
-    # One crate per auth method; aura-auth composes them.
-    "crates/aura-auth-kit",
-    "crates/aura-auth-zos",
-    "crates/aura-auth-chatgpt",
-    "crates/aura-auth-claude",
-    "crates/aura-automaton",
-    # Phase B / Commit 3 surface-layer extraction: the orchestration
-    # engine (scheduler / worker / automaton bridge / memory observer /
-    # capabilities / executor / agent host) lives in
-    # `aura-engine`; `aura-runtime` is shrinking toward the gateway-only
-    # composition root.
-    "crates/aura-engine",
-    # Phase C / Commit 4 surface-layer extraction: HTTP `DomainApi`
-    # implementation (formerly `aura-runtime::domain`) plus the
-    # JWT-injecting wrapper (formerly `aura-engine::jwt_domain`) live
-    # here so the gateway crate no longer owns domain HTTP logic.
-    "crates/aura-domain-http",
-    "crates/aura-runtime",
-    "crates/aura-protocol",
-    # Phase 4b plugin layer (in-process API + on-disk manifest pipeline)
-    "crates/aura-plugin-api",
-    "crates/aura-plugin-core",
-    # Phase 4c plugin runtime surfaces (hook engine + MCP + connectors).
-    # No agent-loop wiring yet; Phase 8 lands the consumer side.
-    "crates/aura-plugin-hooks",
-    "crates/aura-plugin-mcp",
-    "crates/aura-plugin-connectors",
-    # Surface layer CLI composition root (+ ModeFlag). The TUI
-    # (aura-terminal), automaton host (aura-automaton) and zOS auth
-    # client (aura-auth) are listed above.
-    "crates/aura-surface-cli",
-    # Renderer-agnostic UI protocol and state shared by the TUI and the
-    # native desktop app (`aura-desktop`, iced).
-    "crates/aura-ui-core",
-    "crates/aura-desktop",
+    "crates/core/aura-core-modes",
+    "crates/core/aura-core-permissions",
+    "crates/core/aura-core-types",
+    "crates/core/aura-core-auth",
+    "crates/core/aura-core-protocol",
+    "crates/config/aura-config",
+    "crates/store/aura-store-snapshot",
+    "crates/store/aura-store-record",
+    "crates/store/aura-store-db",
+    "crates/model/aura-model",
+    "crates/context/aura-context-prompts",
+    "crates/context/aura-context-compaction",
+    "crates/context/aura-context-skills",
+    "crates/context/aura-context-memory",
+    "crates/plugin/aura-plugin-api",
+    "crates/plugin/aura-plugin-hooks",
+    "crates/plugin/aura-plugin-mcp",
+    "crates/plugin/aura-plugin-connectors",
+    "crates/plugin/aura-plugin",
+    "crates/exec/aura-exec-traits",
+    "crates/exec/aura-exec-domain-http",
+    "crates/exec/aura-exec-tools",
+    "crates/agent/aura-agent-subagent",
+    "crates/agent/aura-agent-steering",
+    "crates/agent/aura-agent-kernel",
+    "crates/agent/aura-agent",
+    "crates/agent/aura-agent-trace",
+    "crates/agent/aura-agent-gate",
+    "crates/auth/aura-auth-kit",
+    "crates/auth/aura-auth-zos",
+    "crates/auth/aura-auth-chatgpt",
+    "crates/auth/aura-auth-claude",
+    "crates/auth/aura-auth",
+    "crates/engine/aura-engine-automaton",
+    "crates/engine/aura-engine",
+    "crates/ui/aura-ui",
+    "crates/ui/aura-ui-terminal",
+    "crates/surface/aura-app",
+    "crates/surface/aura-node",
+    "crates/surface/aura-cli",
+    "crates/surface/aura-desktop",
 ]
 
 [profile.dev]
@@ -207,6 +178,9 @@ which = "7"
 # Embedded PTY (terminal spawning)
 portable-pty = "0.8"
 
+# Linux Landlock LSM (confining command writes to the workspace)
+landlock = "0.4"
+
 # Unicode display width
 unicode-width = "0.2"
 
@@ -233,31 +207,31 @@ aes-gcm = "0.10"
 zeroize = "1"
 
 [dev-dependencies]
-aura-runtime = { path = "crates/aura-runtime", features = ["test-support"] }
-aura-config = { path = "crates/aura-config" }
-aura-agent-kernel = { path = "crates/aura-agent-kernel" }
-aura-store-db = { path = "crates/aura-store-db" }
-aura-model-reasoner = { path = "crates/aura-model-reasoner" }
-aura-agent = { path = "crates/aura-agent" }
-aura-agent-trace = { path = "crates/aura-agent-trace" }
+aura-app = { path = "crates/surface/aura-app" }
+aura-node = { path = "crates/surface/aura-node", features = ["test-support"] }
+aura-config = { path = "crates/config/aura-config" }
+aura-agent-kernel = { path = "crates/agent/aura-agent-kernel" }
+aura-store-db = { path = "crates/store/aura-store-db" }
+aura-model = { path = "crates/model/aura-model" }
+aura-agent = { path = "crates/agent/aura-agent" }
+aura-agent-trace = { path = "crates/agent/aura-agent-trace" }
 chrono = { workspace = true }
-aura-automaton = { path = "crates/aura-automaton" }
-aura-tools = { path = "crates/aura-tools" }
-aura-protocol = { path = "crates/aura-protocol" }
-aura-core-modes = { path = "crates/aura-core-modes" }
-aura-core-protocol = { path = "crates/aura-core-protocol" }
-aura-store-record = { path = "crates/aura-store-record" }
-aura-core-types = { path = "crates/aura-core-types" }
-aura-core-permissions = { path = "crates/aura-core-permissions" }
-aura-agent-subagent = { path = "crates/aura-agent-subagent" }
-# Phase 10 carve-out 1: the root binary no longer holds these deps
-# directly (its body lives in `aura-surface-cli`), but the legacy
+aura-engine-automaton = { path = "crates/engine/aura-engine-automaton" }
+aura-exec-tools = { path = "crates/exec/aura-exec-tools" }
+aura-core-protocol = { path = "crates/core/aura-core-protocol" }
+aura-core-modes = { path = "crates/core/aura-core-modes" }
+aura-store-record = { path = "crates/store/aura-store-record" }
+aura-core-types = { path = "crates/core/aura-core-types" }
+aura-core-permissions = { path = "crates/core/aura-core-permissions" }
+aura-agent-subagent = { path = "crates/agent/aura-agent-subagent" }
+# The root binary no longer holds these deps directly (its body
+# lives in `aura-cli`), but the legacy
 # `tests/proptest_tests.rs`, `tests/e2e_*.rs` integration tests at
 # the root harness still consume the agent/terminal/auth surfaces
 # directly. Promoting them to dev-deps keeps the binary surface
 # slim without dropping the existing test coverage.
-aura-auth = { path = "crates/aura-auth" }
-aura-terminal = { path = "crates/aura-terminal" }
+aura-auth = { path = "crates/auth/aura-auth" }
+aura-ui-terminal = { path = "crates/ui/aura-ui-terminal" }
 axum = { workspace = true }
 tokio-util = { workspace = true }
 parking_lot = { workspace = true }

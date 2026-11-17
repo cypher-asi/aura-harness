@@ -93,6 +93,83 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   task to. `EvalOptions` takes an `EvalRunner` instead of `config`,
   `tool_config` and `provider`.
 
+### Approval levels
+
+##### Added
+
+- An approval level per agent, shown as a badge before the model name in
+  the terminal and desktop status line, and picked with `/approval
+  <level>`, Shift+Tab (`yolo` → `ask` → `strict`), `--approval` or
+  `AURA_TUI_APPROVAL`:
+  - `ask`: reads run; everything else asks unless a
+    project "always allow" rule covers it.
+  - `strict`: everything but reads asks, "always allow" rules are
+    ignored, and prompts offer no "always" answer.
+  - `yolo` (the default): nothing asks, and the agent's commands can write only inside
+    the working folder, temp folders and package caches. On Linux this
+    is enforced with Landlock; elsewhere commands still ask unless they
+    plainly stay in the folder. `AURA_YOLO_WRITABLE_PATHS` adds folders.
+- Spawned agents start at their parent's level, and every level change is
+  recorded in the agent's `mode_change` entries (`agent/ask` →
+  `agent/yolo`).
+
+##### Changed
+
+- `/mode` now picks only the work mode: `agent`, `plan`, `read-only`
+  (formerly `/mode ask`) or `debug`. The old `default`, `accept-edits`
+  and `unrestricted` modes are gone; `/mode unrestricted` points to
+  `/approval yolo`, saved sessions load them as `agent`, and
+  `AURA_TUI_MODE` set to one of them is ignored with a warning.
+- Shift+Tab cycles the approval level instead of the mode.
+- `aura -p` in agent mode runs at `yolo`, so on Linux its commands can no
+  longer write outside the working folder. `--approval ask` or `strict`
+  denies edits and commands instead.
+
+### Workspace layout
+
+##### Changed
+
+- Crates live in one folder per layer, `crates/<layer>/<crate>`, with
+  layers ordered from most to least fundamental: `core`, `config`,
+  `store`, `model`, `context`, `plugin`, `exec`, `agent`, `auth`,
+  `engine`, `ui`, `surface`. `auth`, `engine` and `ui` are new layers;
+  their crates were previously classified as `surface`, and
+  `aura-exec-domain-http` moved to `exec`.
+- Every crate below `surface` is named `aura-<layer>` or
+  `aura-<layer>-<part>`. Renamed, with no compatibility aliases:
+  - `aura-protocol` → `aura-core-protocol`
+  - `aura-plugin-core` → `aura-plugin`
+  - `aura-tools` → `aura-exec-tools`
+  - `aura-domain-http` → `aura-exec-domain-http`
+  - `aura-ui-core` → `aura-ui`
+  - `aura-terminal` → `aura-ui-terminal`
+  - `aura-runtime` → `aura-node` (the binary keeps its `aura-node` name)
+  - `aura-model-reasoner` → `aura-model`
+  - `aura-automaton` → `aura-engine-automaton`
+- `aura-surface-cli` split into `aura-app`, the session host shared by
+  the terminal, the desktop app and `aura -p`, and `aura-cli`, the
+  command line. `aura-desktop` now depends on `aura-app` instead of the
+  CLI.
+- `ReadStore`, `DequeueToken` and `StoreError` moved to
+  `aura-store-record`; RocksDB errors surface as `StoreError::Backend`.
+  The tool hook traits, `AutomatonController` and `DomainApi` moved to
+  `aura-exec-traits` (still re-exported from `aura-exec-tools`). The
+  `/ws/terminal` PTY handler moved from the terminal UI crate into the
+  `aura-node` gateway.
+- The TypeScript bindings are exported with
+  `cargo test -p aura-core-protocol --features typescript export_typescript_bindings`.
+  `aura-os` still calls its mirror of the wire types `aura_protocol`, so
+  the two no longer share a name.
+
+##### Removed
+
+- `aura-exec-sandbox` and `aura-exec-isolation`, which nothing used.
+  The filesystem sandbox the tools use is `sandbox.rs` in
+  `aura-exec-tools`.
+- The old `aura-core-protocol` placeholder, which only held
+  `ProtocolVersion`. It was merged into the wire protocol crate, which
+  now carries the `aura-core-protocol` name.
+
 ### Run traces (`aura-agent-trace`)
 
 ##### Added
@@ -112,6 +189,25 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
 
 ##### Added
 
+- `aura` (and so `cargo run`) opens the desktop window when given no
+  subcommand; `aura --terminal` (alias `--tui`) or `aura run` runs in the
+  terminal, as does `aura` with no display (e.g. over SSH). `aura desktop`
+  takes the window's options (`--workspace`, `--demo`, `--theme`, …).
+  The window comes from the root package's default `desktop` feature;
+  the Docker images and the 1.85 MSRV check build without it.
+- Tabs in the desktop window, which work as workspaces. A strip above
+  the grid has a numbered box per tab, a `+` box, and a wide box naming
+  what the tab in front shows. Each tab holds its own projects and
+  agents and shows only those, in its own `aura_terminal::App` with its
+  own draft, panels, overlays, scroll and selection, all on the one
+  session. The window starts with every project in one tab; `+` starts
+  an agent in a new tab, and a project created in a tab stays in it.
+  Ctrl+Shift+T / Ctrl+Shift+W open and close tabs (Cmd+T / Cmd+W on
+  macOS), Ctrl+1…9 or Alt+1…9 (Cmd+1…9) go to a tab by number, and
+  Ctrl+Tab / Ctrl+Shift+Tab move between them. Closing a tab moves its
+  projects to the tab before it. The split is kept in `desktop_tabs` in
+  the data directory. `UiEvent::FocusAgent` makes an agent the
+  session's active one without reloading its chat.
 - `aura-desktop`, the terminal UI in a native window built on iced and
   drawn on the GPU (wgpu, with a tiny-skia CPU fallback). It runs the
   same in-process session as the terminal (`session::start`) and the
@@ -137,10 +233,24 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
 - `aura_terminal::render`, `App::paste_from_clipboard` and
   `alerts::desktop_notify` are public so other frontends can draw the UI
   and share its clipboard and notifications.
+- Panels are window panes: the window draws their title bars itself,
+  with tabs packed to the left, each as wide as its label and always
+  outlined, the shown one filled (in the accent while its panel has
+  focus). Panels without tabs show their title in a filled box and their
+  info at the right. Dragging the border between two panels resizes
+  them. `App::set_host_chrome`, `App::pane_chrome`,
+  `App::set_pane_splits`, `App::select_pane_tab` and `App::focus_pane`
+  let other frontends do the same.
 
 ##### Changed
 
 - The CI MSRV check skips `aura-desktop`, which needs Rust 1.88.
+- The chat reads like a terminal in both frontends: it starts at the
+  panel's left edge, prompts are echoed as `> text`, replies follow
+  without `YOU` / `AURA` headers, a dim `[model · tokens · cost]` line
+  closes each reply, and notices start with `*`.
+- The window draws everything in Geist Mono, chat prose included, with
+  a block cursor; the proportional Geist faces are no longer bundled.
 
 ### Surface — UI protocol and agent session shared by every frontend
 
@@ -365,6 +475,10 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   output is waited for at most 5 seconds.
 
 ### Terminal — plan mode
+
+##### Fixed
+
+- `/plan` leaves plan mode when the session is already in it and returns to the previous permission mode (`default` when the session started in plan mode). While plan mode is on, the status line says `/plan to leave`.
 
 ##### Added
 

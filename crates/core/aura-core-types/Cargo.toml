@@ -1,0 +1,26 @@
+[package]
+name = "aura-core-types"
+description = "Behavior-free IDs and domain types shared by every layer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aura-core-modes = { path = "../aura-core-modes" }
+aura-core-permissions = { path = "../aura-core-permissions" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+bytes = { workspace = true }
+base64 = { workspace = true }
+uuid = { workspace = true }
+blake3 = { workspace = true }
+hex = "0.4"
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

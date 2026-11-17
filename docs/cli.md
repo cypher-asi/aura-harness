@@ -4,18 +4,17 @@
 
 | Binary | Entry point | Purpose |
 |--------|-------------|---------|
-| `aura` | [`src/main.rs`](../src/main.rs) | The main CLI. Opens the terminal UI by default, runs one prompt and exits with `aura -p`, runs headless with `aura run --ui none`, and hosts the account, plugin and subagent commands below. The CLI body lives in [`aura-surface-cli`](../crates/aura-surface-cli). |
-| `aura-node` | [`crates/aura-runtime/src/main.rs`](../crates/aura-runtime/src/main.rs) | Standalone headless server exposing the [HTTP / WebSocket API](api.md). |
-
-Older specs mention a separate `aura-cli` crate. It never shipped; read `aura-cli/src/...` paths as `src/...` in the root crate.
+| `aura` | [`src/main.rs`](../src/main.rs) | The main CLI. Opens the desktop window by default (the terminal UI with `--terminal`, or when there is no display), runs one prompt and exits with `aura -p`, runs headless with `aura run --ui none`, and hosts the account, plugin and subagent commands below. The command line lives in [`aura-cli`](../crates/surface/aura-cli); the agent session behind the terminal, the desktop window and `aura -p` lives in [`aura-app`](../crates/surface/aura-app). |
+| `aura-node` | [`crates/surface/aura-node/src/main.rs`](../crates/surface/aura-node/src/main.rs) | Standalone headless server exposing the [HTTP / WebSocket API](api.md). |
 
 ## Commands
 
-Defined in [`crates/aura-surface-cli/src/cli.rs`](../crates/aura-surface-cli/src/cli.rs).
+Defined in [`crates/surface/aura-cli/src/cli.rs`](../crates/surface/aura-cli/src/cli.rs).
 
 | Command | Description |
 |---------|-------------|
-| `aura run` (default) | Run the agent. Flags below. |
+| `aura desktop` (default) | Run the agent in the desktop window; `--workspace`, `--demo` and the `aura run` flags below. Needs a build with the default `desktop` feature. See [running.md](running.md#desktop-app). |
+| `aura run`, `aura --terminal` | Run the agent in the terminal (`--ui none`: as a headless server). Flags below. |
 | `aura -p "prompt"` | Run one prompt without the terminal UI, print the result and exit. See [`aura -p`](#aura--p-one-prompt-without-the-terminal). |
 | `aura login [zos\|claude\|chatgpt] [--paste]` | `zos` (default) signs in with email and password and unlocks the aura-router models. `claude` and `chatgpt` link your own Claude Pro/Max or ChatGPT plan through the browser; `--paste` uses a code you paste instead of a local redirect (SSH, headless). `/login [provider] [paste]` in the TUI does the same. |
 | `aura logout [zos\|claude\|chatgpt] [--all]` | Sign out of zOS (linked plans are kept for when you sign back in), unlink one plan, or with `--all` unlink every plan and sign out. `/logout [provider]` in the TUI. |
@@ -133,7 +132,13 @@ A refused call is recorded with the refusal as its result. `AURA_GATE_DELEGATE=o
 - **`/rewind`** lists the turns of the current session, newest first, with their time, prompt and how many files each changed. **`/rewind <n> [code|chat|both]`** undoes turn `n` and every turn after it (the agent must be idle). `code` puts back each file those turns changed as it was before turn `n`, and removes files that did not exist then. `chat` cuts the conversation the model sees back to just before turn `n`'s prompt and saves the session. `both` is the default. If turn `n` was summarized away by a history summary, only `code` is possible. The rewind is noted in the agent's record, and the record itself keeps every message.
 - **Diffs.** A `write_file`, `edit_file` or `delete_file` block in the chat shows the change as a diff with line numbers when you expand it, and its header counts the added and removed lines (`Edited main.rs · +3 -1`). `edit_file` blocks restored from history show the replaced text against its replacement. **`/diff`** shows how the files the latest turn changed differ now from before that turn; **`/diff session`** does the same for every file changed since the session started.
 - **Approvals.** When a tool call needs your approval, the turn pauses and the agent's chat shows what it wants to run. Press `y` to allow it once, `a` to always allow it in this project, or `n` (or Esc) to deny it. "Always" is saved per project folder in `<data_dir>/approvals.json`: for `run_command` it covers the program and its subcommand (`cargo test`, not every `cargo` command) and never matches a shell script that chains or redirects commands; for other tools it covers the tool. Commands you type in the chat are never asked about. A prompt left unanswered is denied after 10 minutes, and Ctrl+C denies it and stops the turn. An agent that is not on screen asks in its own chat, and the terminal tells you which agent is waiting.
-- **Modes.** `/mode` lists the modes and `/mode <name>` picks one for the agent on screen; Shift+Tab steps to the next one. `default` asks before file edits and commands, `accept-edits` lets file edits run but still asks before commands, `plan` is read-only, and `unrestricted` never asks. Reading files and searching never ask. The status line starts with the current mode. Each switch is written to the agent's record before the next tool call uses it, and agents it spawns start in the same mode. The starting mode comes from `--mode`, then `AURA_TUI_MODE`, then `AURA_DEFAULT_MODE`; `agent` means `default`.
+- **Approval levels.** The badge before the model name in the status line shows how much the agent on screen asks: `/approval <level>` picks one, and Shift+Tab steps `yolo` → `ask` → `strict`.
+  - `ask` runs reads and searches, and asks before file edits, commands and everything else unless a project "always allow" rule covers it.
+  - `strict` asks before everything but reads, even what an "always allow" rule covers, and offers no "always" answer.
+  - `yolo` (the default) asks nothing. The agent's commands can write only inside the folder the terminal started in, plus temp folders and package caches (`~/.cache`, `~/.cargo`, `~/.npm`, `/tmp`, ...); reading works everywhere. On Linux this is enforced by Landlock (kernel 5.13 or later), and a command that tries to write elsewhere fails with a permission error. Where Landlock is not available, `yolo` still asks before a command unless the command plainly stays in the folder (no shell syntax, no `..`, `~` or outside absolute paths), and the terminal warns when it starts at `yolo` or you pick it. `AURA_YOLO_WRITABLE_PATHS` adds writable folders. Commands you type, and calls you approve at a prompt, are not confined.
+
+  The starting level comes from `--approval`, then `AURA_TUI_APPROVAL`, else `yolo`; it is never remembered between sessions.
+- **Modes.** `/mode` lists the work modes and `/mode <name>` picks one for the agent on screen: `agent` (the default) can edit files and run commands, `plan` can read, run commands and write Markdown plans (`/plan`), `read-only` only reads, and `debug` reads and runs sandboxed probes. The approval level decides which of the allowed calls ask first; reading files and searching never ask. A badge shows any mode other than `agent`. Each switch of mode or level is written to the agent's record (as `agent/ask` → `agent/yolo`) before the next tool call uses it, and agents it spawns start with the same mode and level. The starting mode comes from `--mode`, then `AURA_TUI_MODE`, then `AURA_DEFAULT_MODE`. The old mode names `default`, `accept-edits` and `unrestricted` are gone: `/mode unrestricted` points you to `/approval yolo`.
 - **Notifications.** The terminal rings the bell when a turn that took at least 10 seconds finishes and when an agent needs approval. Desktop notifications are off unless you set `AURA_TUI_DESKTOP_NOTIFY=1`. See [Terminal long runs](configuration.md#terminal-long-runs) for the settings.
 
 ## Project instructions
@@ -177,7 +182,7 @@ aura -p "now add docs for it" --continue
 - **Same agent machinery as the terminal.** The run uses the terminal's session code: long-run settings (no iteration cap, the todo list keeps the agent going), background jobs, history compaction, session checkpoints, the web tools, the post-edit check, project instructions, and the permanent agents for `task`. It works in the current directory (or `--cwd`) and keeps its data in `AURA_DATA_DIR`, else `./aura_data`, like the terminal.
 - **Sessions.** Runs belong to a dedicated agent named "Headless" in the data directory's agent list, so they never replace the session of an agent the terminal shows. Each run starts a new session unless `--continue` (the Headless agent's latest session) or `--resume <session_id>` is given. A session id is `<agent id>:<session start ms>`, printed as `session_id` in the `json` and `stream-json` output; `--resume` also accepts ids of terminal agents' sessions, and a bare number names a session of the Headless agent. The terminal can open the Headless agent and `/resume` its sessions too.
 - **Background jobs.** When the agent ends its turn while jobs it started are still running, the run waits for them (up to `AURA_HEADLESS_JOB_WAIT`, default 10 minutes, and within `--max-time`) and gives the agent each exit notice as a new turn, as the terminal does. Jobs still running at the end are stopped.
-- **Permissions.** Nothing prompts. A tool call the policy would ask about is denied, and so is any tool outside `--allowed-tools` or inside `--disallowed-tools`; filtered tools are also left out of what the model is offered. `todo_write` is always allowed unless disallowed, and `job_output` / `job_kill` come with `run_command`. `--mode plan`, `ask` and `debug` behave as the terminal's modes of those names, with every ask denied. `--mode agent` (the default) lets edits and commands run, where the terminal's `default` mode would ask before them; `AURA_TUI_MODE` only sets the terminal's starting mode. Agents spawned with `task` get the same mode and tool filter.
+- **Permissions.** Nothing prompts. A tool call the policy would ask about is denied, and so is any tool outside `--allowed-tools` or inside `--disallowed-tools`; filtered tools are also left out of what the model is offered. `todo_write` is always allowed unless disallowed, and `job_output` / `job_kill` come with `run_command`. `--mode plan`, `ask` and `debug` behave as the terminal's `plan`, `read-only` and `debug` modes at the `ask` level, with every ask denied. `--mode agent` (the default) runs at `yolo`: edits and commands run, and on Linux commands can write only inside the working folder. `--approval ask` or `strict` makes a run deny those calls instead. `AURA_TUI_MODE` and `AURA_TUI_APPROVAL` only set the terminal's starting mode and level. Agents spawned with `task` get the same mode and tool filter.
 - **Limits.** `--max-turns` counts model calls across the whole run. `--max-time` and `--max-cost-usd` also apply to the whole run and default to `AURA_TUI_TURN_TIMEOUT` and `AURA_TUI_MAX_TURN_COST_USD`. A limit stops the agent between steps, so the work done so far is kept in the session and `--resume` can continue it. A limit that is reached while the agent writes its final reply does not count as stopping it.
 - **Output.** stdout carries only the chosen format; logs go to stderr (warnings only by default, `--verbose` or `RUST_LOG` for more).
 - **Store lock.** RocksDB lets one process open a data directory at a time, so `aura -p` cannot share a data directory with a running terminal. Point `AURA_DATA_DIR` elsewhere to run both.
@@ -242,7 +247,8 @@ Each requires `-p`.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--mode <agent\|plan\|ask\|debug>` | `AURA_DEFAULT_MODE`, else `agent` | Session mode for the terminal UI and `aura -p`. The kernel denies any tool call the mode does not allow. In the terminal, `agent` starts in the `default` permission mode, which asks before edits and commands; `/mode` changes it later. `aura -p` cannot ask, so there `agent` lets edits and commands run. Headless `--ui none` ignores the flag with a warning; there, each `POST /v1/run` carries its own optional `mode`. |
+| `--mode <agent\|plan\|ask\|debug>` | `AURA_DEFAULT_MODE`, else `agent` | Session mode for the terminal UI and `aura -p`. The kernel denies any tool call the mode does not allow. `ask` (also `read-only`) is the terminal's `read-only` mode. `/mode` changes it later. Headless `--ui none` ignores the flag with a warning; there, each `POST /v1/run` carries its own optional `mode`. |
+| `--approval <yolo\|ask\|strict>` | `AURA_TUI_APPROVAL`, else `yolo` | What tool calls ask first; see [approval levels](#long-tasks-in-the-terminal). `aura -p` cannot ask, so there every ask is denied, and without the flag `--mode agent` runs at `yolo` (edits and commands run, commands write only inside the folder) and other modes at `ask`. |
 | `-p, --print [PROMPT]` | — | Run one prompt without the terminal UI; see [`aura -p`](#aura--p-one-prompt-without-the-terminal). |
 
 ## `aura run` flags
@@ -262,9 +268,11 @@ Plan mode lets the agent research a task and write a plan before it touches code
 
 | Command | What it does |
 |---------|--------------|
-| `/plan` or Shift+Tab | Switch to plan mode (Shift+Tab switches back to agent mode). The agent can read, search, run commands and write Markdown files, but not edit other files, use the network or spawn agents. |
-| `/mode <agent\|plan\|ask\|debug>` | Switch to any session mode. |
-| `/build [plan path]` | Switch to agent mode and implement the latest plan, or the given one. |
+| `/plan` | Switch to plan mode. `/plan` again leaves it and returns to the previous mode (`agent` when the session started in plan mode). In plan mode the agent can read, search, run commands and write Markdown files, but not edit other files, use the network or spawn agents. |
+| Shift+Tab | Cycle the approval level `ask` → `strict` → `yolo`; the work mode stays. |
+| `/mode <name>` | Switch work mode (`agent`, `plan`, `read-only`, `debug`). |
+| `/approval <level>` | Switch approval level (`yolo`, `ask`, `strict`). |
+| `/build [plan path]` | Leave plan mode and implement the latest plan, or the given one. |
 
 In plan mode, ask for what you want; the agent may ask a question or two, then saves a plan to `.aura/plans/<name>_<id>.plan.md` in its workspace: YAML frontmatter (`name`, `overview`, `todos`) followed by the plan in Markdown. Keep chatting to revise it. While you build, the agent marks todos `in_progress` and `completed` with `todo_write`, and the strip above the input shows its progress. The mode badge next to the model name shows any mode other than agent.
 

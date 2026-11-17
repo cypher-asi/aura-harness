@@ -1,0 +1,21 @@
+[package]
+name = "aura-store-record"
+description = "Append-only record-log types, the RecordLog trait and the backend-neutral ReadStore"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aura-core-types = { path = "../../core/aura-core-types" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bytes = { workspace = true }
+thiserror = { workspace = true }
+blake3 = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+blake3 = { workspace = true }
+[lints]
+workspace = true

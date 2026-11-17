@@ -82,7 +82,8 @@ jobs:
   # ---------------------------------------------------------------------------
   # MSRV (Minimum Supported Rust Version) check — must match
   # `rust-version` in the workspace Cargo.toml. `aura-desktop` is left out:
-  # iced needs Rust 1.88, and the crate declares that floor itself.
+  # iced needs Rust 1.88, and the crate declares that floor itself. The
+  # root `aura` binary is checked without its default `desktop` feature.
   # ---------------------------------------------------------------------------
   msrv:
     name: cargo check (MSRV 1.85.0)
@@ -102,7 +103,9 @@ jobs:
           key: msrv-1.85.0
 
       - name: cargo check --workspace --locked (MSRV)
-        run: cargo check --workspace --exclude aura-desktop --all-targets --locked
+        run: |
+          cargo check --workspace --exclude aura --exclude aura-desktop --all-targets --locked
+          cargo check -p aura --no-default-features --all-targets --locked
 
   # ---------------------------------------------------------------------------
   # License / dependency policy

@@ -1,158 +1,86 @@
 //! Workspace boundary test for the layered crate architecture.
 //!
-//! Phase 1 deliverable: walks every `crates/*/Cargo.toml`, builds a
-//! `crate → layer` map from the new `aura-<layer>-<name>` naming
-//! convention (and an explicit `KNOWN_CRATES` table for the legacy
-//! pre-refactor crate names), and emits a line for every
-//! workspace-internal dependency edge that points "upward" in the
-//! layer stack.
+//! Walks every `crates/<layer>/<crate>/Cargo.toml`, classifies each
+//! crate by its `aura-<layer>[-<part>]` name (or the `KNOWN_CRATES`
+//! table for the surface crates, which are named after what you run),
+//! and fails on any workspace-internal dependency edge that points
+//! "upward" in the layer stack. There is no allowlist.
 //!
-//! Every upward edge fails CI; there is no allowlist. The audit also
-//! validates that every `crates/<crate>/src/lib.rs` carries a
-//! `//! Layer: <layer>` doc-comment tag that matches the
-//! `KNOWN_CRATES` / naming-convention assignment.
+//! It also checks that every crate lives in the folder of its layer and
+//! that its `src/lib.rs` carries a matching `//! Layer: <layer>` tag.
 //!
 //! ## Layer order (lowest → highest)
 //!
-//! `core` < `store` < `config` < `model` < `context` < `plugin` <
-//! `exec` < `agent` < `surface`.
+//! `core` < `config` < `store` < `model` < `context` < `plugin` <
+//! `exec` < `agent` < `auth` < `engine` < `ui` < `surface`.
 //!
-//! Equal or downward edges are silently accepted. Upward edges cause
-//! the test to fail.
+//! Equal or downward edges are accepted.
 //!
 //! ## Parsing
 //!
 //! We use a small hand-rolled TOML parser scoped to the `[package]`
-//! `name` field and the `[dependencies]`, `[dev-dependencies]`,
-//! `[build-dependencies]`, and target-conditional dep tables. Path
-//! dependencies referencing `../<other-crate>` are mapped to that
-//! crate's name. We deliberately avoid pulling in the `toml` or
-//! `cargo_toml` crates as test-only dev deps to keep this test
-//! self-contained.
+//! `name` field and the `[dependencies]`, `[build-dependencies]`, and
+//! target-conditional dep tables. We deliberately avoid pulling in the
+//! `toml` or `cargo_toml` crates as test-only dev deps to keep this
+//! test self-contained.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Layer rank — lower numbers depend "downward" (allowed); higher
-/// numbers depend "upward" (advisory warning).
+/// Layer rank, lowest first. A crate may depend on its own layer or any
+/// layer before it.
 const LAYER_ORDER: &[&str] = &[
-    "core", "store", "config", "model", "context", "plugin", "exec", "agent", "surface",
+    "core", "config", "store", "model", "context", "plugin", "exec", "agent", "auth", "engine",
+    "ui", "surface",
 ];
 
-/// Explicit layer assignments for crate names that don't follow the
-/// `aura-<layer>-<name>` convention. Empty string means "no layer
-/// assigned — skip".
+/// Surface crates are named after the binary or host they provide, so
+/// they don't carry an `aura-<layer>-` prefix.
 const KNOWN_CRATES: &[(&str, &str)] = &[
-    // Root binary + dev/CI stuff — not a crate-layer thing.
     ("aura", "surface"),
+    ("aura-app", "surface"),
+    ("aura-cli", "surface"),
     ("aura-node", "surface"),
-    ("aura-config", "config"),
-    // Phase 2 store layer split:
-    //   aura-store-db     — RocksDB-backed durable storage impl
-    //   aura-store-record — append-only record-log domain types + RecordLog trait
-    //   aura-store-snapshot — content-addressed snapshot store (V1 no-op stub)
-    ("aura-store-db", "store"),
-    ("aura-store-record", "store"),
-    ("aura-store-snapshot", "store"),
-    // Exec layer: aura-tools holds the Tool impls, catalog and
-    // executor; the aura-exec-* crates are its primitives.
-    //   aura-exec-isolation — worktree + copy isolation (no aura-* deps)
-    //   aura-exec-sandbox   — FsSandbox + ProcessSandbox primitives (no aura-* deps)
-    ("aura-tools", "exec"),
-    ("aura-exec-isolation", "exec"),
-    ("aura-exec-sandbox", "exec"),
-    // Phase 1 refactor: low-level executor/spawn traits relocated out
-    // of aura-agent-kernel so aura-tools no longer depends upward.
-    ("aura-exec-traits", "exec"),
-    // Phase 3 model + context layer crates. Phase 4 deleted the
-    // original `aura-<name>` compatibility shells; consumers now
-    // depend on the layered `aura-<layer>-<name>` crates directly.
-    // The `aura-<layer>-<name>` names match the
-    // `aura-<layer>-<rest>` auto-classification convention exactly,
-    // so they could theoretically be omitted from this table, but
-    // we list them explicitly for clarity.
-    ("aura-context-compaction", "context"),
-    ("aura-model-reasoner", "model"),
-    ("aura-context-memory", "context"),
-    ("aura-context-skills", "context"),
-    ("aura-context-prompts", "context"),
-    // Phase 6a renamed `aura-kernel` to `aura-agent-kernel`; the
-    // shell was removed in Phase 4.
-    ("aura-agent-kernel", "agent"),
-    ("aura-agent-subagent", "agent"),
-    ("aura-terminal", "surface"),
-    // UI protocol shared by the terminal and the native desktop app.
-    ("aura-ui-core", "surface"),
     ("aura-desktop", "surface"),
-    ("aura-agent", "agent"),
-    // Phase 3 placeholder, populated in Phase 6a.
-    ("aura-agent-steering", "agent"),
-    ("aura-agent-trace", "agent"),
-    ("aura-agent-gate", "agent"),
-    // Phase 9 reclassifies aura-auth from `core` to `surface`: the
-    // network client (ZosClient) and credential persistence
-    // (CredentialStore) are surface-side concerns. Token primitive
-    // types stay at the core layer in aura-core-auth.
-    ("aura-auth", "surface"),
-    // One crate per auth method (provider traits live in
-    // aura-core-auth); aura-auth composes them with the vault.
-    ("aura-auth-kit", "surface"),
-    ("aura-auth-zos", "surface"),
-    ("aura-auth-chatgpt", "surface"),
-    ("aura-auth-claude", "surface"),
-    ("aura-automaton", "surface"),
-    // Phase B / Commit 3 surface-layer extraction: orchestration
-    // engine pulled out of aura-runtime into aura-engine. Both live at
-    // the surface layer — aura-runtime is the HTTP/WS gateway, aura-engine
-    // is the reusable orchestration core the gateway composes.
-    ("aura-engine", "surface"),
-    // Phase C / Commit 4 surface-layer extraction: HTTP `DomainApi`
-    // implementation + JWT wrapper pulled out of aura-runtime /
-    // aura-engine. Stays at the surface layer because it composes
-    // lower-layer types (aura-tools::domain_tools::DomainApi) into a
-    // deployable HTTP edge.
-    ("aura-domain-http", "surface"),
-    ("aura-runtime", "surface"),
-    ("aura-protocol", "core"),
-    // Phase 4b plugin layer:
-    //   aura-plugin-api  — in-process contributor traits (first-party only)
-    //   aura-plugin-core — declarative manifest + install + cache + marketplace
-    ("aura-plugin-api", "plugin"),
-    ("aura-plugin-core", "plugin"),
-    // Phase 4c plugin runtime surfaces:
-    //   aura-plugin-hooks      — HookEngine + 10 Codex/Claude events
-    //   aura-plugin-mcp        — stdio JSON-RPC client + connection manager
-    //   aura-plugin-connectors — registry of plugin-contributed endpoints
-    ("aura-plugin-hooks", "plugin"),
-    ("aura-plugin-mcp", "plugin"),
-    ("aura-plugin-connectors", "plugin"),
-    // CLI composition root (ModeFlag, `--mode` resolution input).
-    ("aura-surface-cli", "surface"),
 ];
 
-/// Phase 9 strict-mode addition: verify every `crates/<name>/src/lib.rs`
-/// carries a `//! Layer: <layer>` doc-comment tag matching the
-/// `KNOWN_CRATES` / naming-convention assignment.
-///
-/// The doc tag is a human-readable guardrail (see plan §5
-/// cross-cutting ownership, "Layer doc tags"). Cargo manifest is
-/// the primary source of truth — this test only verifies the
-/// source-level tag is present and consistent so the two surfaces
-/// don't drift.
+/// Every crate sits in `crates/<layer>/` for its own layer.
+#[test]
+fn every_crate_lives_in_its_layer_folder() {
+    let mut offenders: Vec<String> = Vec::new();
+    for (folder, dir) in crate_dirs() {
+        let Some(name) = fs::read_to_string(dir.join("Cargo.toml"))
+            .ok()
+            .and_then(|contents| parse_package_name(&contents))
+        else {
+            continue;
+        };
+        match layer_for(&name) {
+            Some(layer) if layer == folder => {}
+            Some(layer) => offenders.push(format!(
+                "{name} is in crates/{folder}/ but its layer is `{layer}`"
+            )),
+            None => offenders.push(format!(
+                "{name} in crates/{folder}/ has no layer; name it aura-<layer>[-<part>]"
+            )),
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "crate folder audit failures:\n  - {}",
+        offenders.join("\n  - ")
+    );
+}
+
+/// Every `src/lib.rs` carries a `//! Layer: <layer>` doc-comment tag
+/// matching the crate's layer, so the source and the manifest don't
+/// drift.
 #[test]
 fn every_crate_carries_a_matching_layer_doc_tag() {
-    let workspace_root = workspace_root();
-    let crates_dir = workspace_root.join("crates");
-
     let mut offenders: Vec<String> = Vec::new();
-    let entries = fs::read_dir(&crates_dir).expect("crates dir readable");
-    for entry in entries.flatten() {
-        let manifest = entry.path().join("Cargo.toml");
-        if !manifest.is_file() {
-            continue;
-        }
-        let Ok(manifest_contents) = fs::read_to_string(&manifest) else {
+    for (_, dir) in crate_dirs() {
+        let Ok(manifest_contents) = fs::read_to_string(dir.join("Cargo.toml")) else {
             continue;
         };
         let Some(name) = parse_package_name(&manifest_contents) else {
@@ -162,7 +90,7 @@ fn every_crate_carries_a_matching_layer_doc_tag() {
             continue;
         };
 
-        let lib_path = entry.path().join("src").join("lib.rs");
+        let lib_path = dir.join("src").join("lib.rs");
         if !lib_path.is_file() {
             // Binary-only crates may not carry a `lib.rs`; skip
             // them — the manifest source remains authoritative.
@@ -213,39 +141,26 @@ fn every_crate_carries_a_matching_layer_doc_tag() {
 }
 
 /// External-consumer invariant: the current wire flow must be reachable from
-/// the `aura-runtime` Cargo surface alone. If these re-exports disappear,
-/// external consumers would have to depend on `aura-protocol` or lower
+/// the `aura-node` Cargo surface alone. If these re-exports disappear,
+/// external consumers would have to depend on `aura-core-protocol` or lower
 /// orchestration crates directly, which the architecture forbids.
 #[test]
-fn aura_runtime_reexports_canonical_wire_types() {
+fn aura_node_reexports_canonical_wire_types() {
     fn assert_external_wire_type<T: Send + Sync + 'static>() {}
 
-    assert_external_wire_type::<aura_runtime::RuntimeRequest>();
-    assert_external_wire_type::<aura_runtime::RuntimeRunResponse>();
-    assert_external_wire_type::<aura_runtime::InboundMessage>();
-    assert_external_wire_type::<aura_runtime::OutboundMessage>();
+    assert_external_wire_type::<aura_node::RuntimeRequest>();
+    assert_external_wire_type::<aura_node::RuntimeRunResponse>();
+    assert_external_wire_type::<aura_node::InboundMessage>();
+    assert_external_wire_type::<aura_node::OutboundMessage>();
 }
 
 #[test]
 fn no_upward_layer_dependencies() {
-    let workspace_root = workspace_root();
-    let crates_dir = workspace_root.join("crates");
-
     let mut layer_map: BTreeMap<String, &'static str> = BTreeMap::new();
     let mut manifests: Vec<(String, PathBuf)> = Vec::new();
 
-    let entries = match fs::read_dir(&crates_dir) {
-        Ok(e) => e,
-        Err(err) => {
-            eprintln!("LAYER WARN: cannot enumerate crates dir: {err}");
-            return;
-        }
-    };
-    for entry in entries.flatten() {
-        let manifest = entry.path().join("Cargo.toml");
-        if !manifest.is_file() {
-            continue;
-        }
+    for (_, dir) in crate_dirs() {
+        let manifest = dir.join("Cargo.toml");
         let Ok(contents) = fs::read_to_string(&manifest) else {
             continue;
         };
@@ -297,6 +212,29 @@ fn no_upward_layer_dependencies() {
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
+}
+
+/// `(layer folder, crate dir)` for every `crates/<layer>/<crate>/` that
+/// has a `Cargo.toml`.
+fn crate_dirs() -> Vec<(String, PathBuf)> {
+    let crates_dir = workspace_root().join("crates");
+    let mut out = Vec::new();
+    for layer in fs::read_dir(&crates_dir)
+        .expect("crates dir readable")
+        .flatten()
+    {
+        let Ok(entries) = fs::read_dir(layer.path()) else {
+            continue;
+        };
+        let folder = layer.file_name().to_string_lossy().into_owned();
+        for entry in entries.flatten() {
+            if entry.path().join("Cargo.toml").is_file() {
+                out.push((folder.clone(), entry.path()));
+            }
+        }
+    }
+    assert!(!out.is_empty(), "no crates found under crates/<layer>/");
+    out
 }
 
 fn layer_for(name: &str) -> Option<&'static str> {

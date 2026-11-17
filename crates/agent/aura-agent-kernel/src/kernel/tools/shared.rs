@@ -1,0 +1,425 @@
+//! Helpers shared between the single-proposal and batch
+//! tool-processing flows.
+//!
+//! Centralizing these here removes the duplication audit Phase 2a was
+//! aimed at: building the `Proposal` from a `ToolProposal`, applying the
+//! per-tool timeout, and resolving live `ask` prompts with provenance.
+
+use super::steps::Authorized;
+use crate::kernel::{Kernel, PendingToolPrompt, ToolApprovalRemember, ToolApprovalResponse};
+use crate::policy::{PolicyEvaluation, PolicyVerdict};
+use aura_core_types::{
+    Action, ActionKind, Effect, EffectKind, PolicyApproval, PolicyApprover, PolicyRule,
+    PolicySource, Proposal, ToolCall, ToolProposal, ToolState, UserDefaultMode, UserToolDefaults,
+};
+use aura_exec_traits::ExecuteContext;
+use aura_store_snapshot::SnapshotStore;
+use std::collections::BTreeMap;
+use std::time::Duration;
+
+/// Tools that manage their own end-to-end budget + cancellation and must NOT
+/// be bounded by the kernel's per-tool `tool_timeout_ms`.
+///
+/// `run_command` launches operating-system processes and owns its own hard
+/// timeout so it can terminate the spawned process group on expiry. The
+/// kernel's generic timeout would otherwise abort the tool future before the
+/// command runner can clean up children.
+///
+/// `task` dispatches a subagent and blocks (`SpawnMode::Wait`) while the child
+/// agent loop runs under the agent host's own (longer) timeout +
+/// parent cancellation token. The kernel's 120s default would otherwise abort
+/// a legitimately long child run prematurely. The name is hardcoded rather than
+/// imported from `aura-exec-tools` to keep the kernel free of an upward dependency
+/// on the tool crate.
+const TIMEOUT_EXEMPT_TOOLS: &[&str] = &["run_command", "task"];
+
+fn tool_manages_own_timeout(tool_name: &str) -> bool {
+    TIMEOUT_EXEMPT_TOOLS.contains(&tool_name)
+}
+
+/// `ToolProposal::source` of calls the user made themselves (a command
+/// typed in the terminal), which the approval level never confines.
+const USER_PROPOSAL_SOURCE: &str = "user";
+
+impl Kernel {
+    /// Whether the commands an authorized call spawns may only write
+    /// inside the workspace: under the `yolo` approval level, for calls
+    /// the user neither made nor answered a prompt for.
+    pub(super) fn confines_writes(&self, authorized: &Authorized) -> bool {
+        let user_decided = authorized.proposal.source.as_deref() == Some(USER_PROPOSAL_SOURCE)
+            || matches!(
+                authorized.evaluation.approval,
+                Some(PolicyApproval {
+                    approver: PolicyApprover::User { .. },
+                    ..
+                })
+            );
+        self.policy.approval().confines_writes() && !user_decided
+    }
+
+    /// Build the kernel-internal [`Proposal`] (a `Delegate` proposal whose
+    /// payload is the serialized [`ToolCall`]) from a reasoner-emitted
+    /// [`ToolProposal`]. Single and batch paths both go through this so
+    /// the on-wire shape stays in lockstep.
+    pub(super) fn kernel_proposal_from_tool_proposal(
+        &self,
+        proposal: &ToolProposal,
+    ) -> Result<Proposal, crate::KernelError> {
+        let tool_call = ToolCall::new(&proposal.tool, proposal.args.clone());
+        let payload = serde_json::to_vec(&tool_call)
+            .map_err(|e| crate::KernelError::Serialization(e.to_string()))?;
+        Ok(Proposal::new(ActionKind::Delegate, payload))
+    }
+
+    /// Run a single tool action under `config.tool_timeout_ms` and convert a
+    /// timeout into a failed `Effect`. Shared by `process_tool_proposal` and
+    /// `process_tools` so both the single-proposal and batch paths apply the
+    /// same per-tool budget (Invariant §1 / rules.md §6.2).
+    ///
+    /// `tool_name` is consulted against [`TIMEOUT_EXEMPT_TOOLS`]: a tool that
+    /// owns its own end-to-end budget + cancellation runs WITHOUT the kernel's
+    /// per-tool wrapper. The `task` subagent-dispatch tool blocks
+    /// (`SpawnMode::Wait`) for the full duration of a child agent run whose
+    /// budget (180–300s) intentionally exceeds the 120s kernel default; wrapping
+    /// it would kill long child runs with a spurious "Tool timed out" before the
+    /// child's own budget (enforced by the agent host) ever elapses.
+    pub(super) async fn execute_with_timeout(
+        &self,
+        ctx: &ExecuteContext,
+        action: &Action,
+        tool_name: &str,
+    ) -> Effect {
+        if tool_manages_own_timeout(tool_name) {
+            return self.executor.execute(ctx, action).await;
+        }
+        let tool_timeout = Duration::from_millis(self.config.tool_timeout_ms);
+        match tokio::time::timeout(tool_timeout, self.executor.execute(ctx, action)).await {
+            Ok(effect) => effect,
+            Err(_) => {
+                tracing::warn!(
+                    action_id = %action.action_id,
+                    timeout_ms = self.config.tool_timeout_ms,
+                    "Tool execution timed out"
+                );
+                Effect::failed(
+                    action.action_id,
+                    EffectKind::Agreement,
+                    format!("Tool timed out after {}ms", self.config.tool_timeout_ms),
+                )
+            }
+        }
+    }
+
+    /// Resolve the additive tri-state `ask` layer.
+    ///
+    /// If the policy verdict is a hard `Deny`, returns it unchanged.
+    /// Otherwise consults the live-prompt bridge and may upgrade the
+    /// verdict (e.g. an `Allow` becomes a `RequireApproval` or a
+    /// user-confirmed `Deny`). Every change is recorded on the
+    /// evaluation's `decided_by`, trace, and approval details.
+    pub(super) async fn resolve_live_ask(
+        &self,
+        tool_name: &str,
+        args: &serde_json::Value,
+        tool_use_id: &str,
+        mut evaluation: PolicyEvaluation,
+    ) -> Result<PolicyEvaluation, crate::KernelError> {
+        let verdict = &evaluation.verdict;
+        if matches!(verdict, PolicyVerdict::Deny { .. }) {
+            return Ok(evaluation);
+        }
+        let ask_without_prompt =
+            matches!(verdict, PolicyVerdict::RequireApproval { prompt: None, .. });
+        if ask_without_prompt && self.policy.resolve_tool_state(tool_name) != ToolState::Ask {
+            return Ok(evaluation);
+        }
+        if verdict.is_allowed() || ask_without_prompt {
+            let request_id = format!("{}:{tool_use_id}", self.agent_id.to_hex());
+            let remember_options = self.live_prompt_remember_options();
+            if let Some((verdict, rule)) = self.policy.live_tool_prompt_explained(
+                tool_name,
+                args,
+                self.agent_id,
+                request_id,
+                self.config.tool_approval_prompter.is_some(),
+                remember_options,
+            ) {
+                evaluation.decide(verdict, rule);
+                return self.resolve_prompt(evaluation).await;
+            }
+        }
+        Ok(evaluation)
+    }
+
+    async fn resolve_prompt(
+        &self,
+        mut evaluation: PolicyEvaluation,
+    ) -> Result<PolicyEvaluation, crate::KernelError> {
+        let PolicyVerdict::RequireApproval {
+            reason,
+            prompt: Some(prompt),
+        } = evaluation.verdict.clone()
+        else {
+            return Ok(evaluation);
+        };
+
+        // Phase 10 carve-out 5b: fire the PermissionRequest hook
+        // BEFORE the interactive prompter. A registered handler may
+        // short-circuit with Approve (→ allow) or Deny (→ deny);
+        // any other outcome (Continue / TimedOut / Block / Replace)
+        // falls through to the interactive prompt path below.
+        if let Some(host) = self.config.plugin_hooks.as_ref() {
+            use aura_plugin_hooks::HookOutcome;
+            let args_text = serde_json::to_string(&prompt.args).unwrap_or_default();
+            let outcome =
+                host.fire_permission_request(&prompt.tool_name, &args_text, "ask", &reason);
+            let hook_verdict = match outcome.decision {
+                HookOutcome::Approve => Some((PolicyVerdict::Allow, "approve")),
+                HookOutcome::Deny {
+                    reason: hook_reason,
+                } => Some((
+                    PolicyVerdict::Deny {
+                        reason: hook_reason,
+                    },
+                    "deny",
+                )),
+                HookOutcome::Continue
+                | HookOutcome::TimedOut
+                | HookOutcome::Block { .. }
+                | HookOutcome::Replace { .. } => None,
+            };
+            if let Some((verdict, rule)) = hook_verdict {
+                evaluation.decide(verdict, PolicyRule::new(PolicySource::PermissionHook, rule));
+                evaluation.approval = Some(PolicyApproval {
+                    approver: PolicyApprover::Hook,
+                    remember: None,
+                    request_id: Some(prompt.request_id.clone()),
+                });
+                return Ok(evaluation);
+            }
+        }
+
+        let Some(prompter) = self.config.tool_approval_prompter.as_ref() else {
+            evaluation.decide(
+                PolicyVerdict::Deny { reason },
+                PolicyRule::new(PolicySource::NoLiveSession, "no_prompter"),
+            );
+            return Ok(evaluation);
+        };
+
+        let response = prompter.prompt(prompt.clone()).await.map_err(|e| {
+            crate::KernelError::Internal(format!(
+                "tool approval prompt failed for '{}': {e}",
+                prompt.tool_name
+            ))
+        })?;
+
+        self.apply_live_approval_response(&prompt, response)?;
+
+        evaluation.approval = Some(PolicyApproval {
+            approver: PolicyApprover::User {
+                user_id: self.config.originating_user_id.clone(),
+            },
+            remember: Some(remember_label(response.remember).to_string()),
+            request_id: Some(prompt.request_id.clone()),
+        });
+        let user_rule = PolicyRule::new(
+            PolicySource::User,
+            crate::policy::tool_state_label(response.decision),
+        );
+        let verdict = match response.decision {
+            ToolState::Allow => PolicyVerdict::Allow,
+            ToolState::Deny => PolicyVerdict::Deny {
+                reason: format!("Tool '{}' was denied by the user", prompt.tool_name),
+            },
+            ToolState::Ask => PolicyVerdict::RequireApproval {
+                reason,
+                prompt: Some(prompt),
+            },
+        };
+        evaluation.decide(verdict, user_rule);
+        Ok(evaluation)
+    }
+
+    fn apply_live_approval_response(
+        &self,
+        prompt: &PendingToolPrompt,
+        response: ToolApprovalResponse,
+    ) -> Result<(), crate::KernelError> {
+        match response.remember {
+            ToolApprovalRemember::Once => {}
+            ToolApprovalRemember::Session => self
+                .policy
+                .remember_tool_state_for_session(&prompt.tool_name, response.decision),
+            ToolApprovalRemember::Forever => {
+                let Some(user_id) = self.config.originating_user_id.as_deref() else {
+                    return Err(crate::KernelError::Internal(format!(
+                        "cannot remember tool '{}' forever without an originating user id",
+                        prompt.tool_name
+                    )));
+                };
+                let defaults = fold_tool_state_into_defaults(
+                    &self.policy.config().user_default,
+                    &prompt.tool_name,
+                    response.decision,
+                );
+                self.store
+                    .put_user_tool_defaults(user_id, &defaults)
+                    .map_err(|e| {
+                        crate::KernelError::Store(format!("put_user_tool_defaults: {e}"))
+                    })?;
+                self.policy
+                    .remember_tool_state_for_session(&prompt.tool_name, response.decision);
+            }
+        }
+        Ok(())
+    }
+
+    fn live_prompt_remember_options(&self) -> Vec<ToolApprovalRemember> {
+        let mut options = vec![ToolApprovalRemember::Once, ToolApprovalRemember::Session];
+        if self.config.originating_user_id.is_some() {
+            options.push(ToolApprovalRemember::Forever);
+        }
+        options
+    }
+}
+
+const fn remember_label(remember: ToolApprovalRemember) -> &'static str {
+    match remember {
+        ToolApprovalRemember::Once => "once",
+        ToolApprovalRemember::Session => "session",
+        ToolApprovalRemember::Forever => "forever",
+    }
+}
+
+fn fold_tool_state_into_defaults(
+    defaults: &UserToolDefaults,
+    tool_name: &str,
+    state: ToolState,
+) -> UserToolDefaults {
+    let (mut per_tool, fallback): (BTreeMap<String, ToolState>, ToolState) = match &defaults.mode {
+        UserDefaultMode::FullAccess => (BTreeMap::new(), ToolState::Allow),
+        UserDefaultMode::AutoReview => (BTreeMap::new(), ToolState::Ask),
+        UserDefaultMode::DefaultPermissions { per_tool, fallback } => (per_tool.clone(), *fallback),
+    };
+    per_tool.insert(tool_name.to_string(), state);
+    UserToolDefaults::default_permissions(per_tool, fallback)
+}
+
+/// Apply [`aura_core_modes::KernelMode::AuditedLite`] summarisation to
+/// `effect.payload` if `lite_threshold` is `Some(n)` and the payload
+/// exceeds `n`. The summary is serialised through the
+/// [`aura_store_record::RecordPayload`] taxonomy and re-encoded as
+/// JSON bytes so existing `Bytes`-typed payload fields downstream do
+/// not need to learn about the new shape.
+///
+/// The full payload is written to `snapshots` under its `full_hash` so
+/// replay can resolve the summary; a failed write is logged and the
+/// summary is still recorded.
+///
+/// In [`aura_core_modes::KernelMode::Audited`] mode (`None`), or for
+/// payloads below the threshold, the effect is returned unchanged.
+pub(super) fn maybe_summarise_effect_payload(
+    mut effect: Effect,
+    lite_threshold: Option<usize>,
+    snapshots: &dyn SnapshotStore,
+) -> Effect {
+    if let Some(threshold) = lite_threshold {
+        if effect.payload.len() > threshold {
+            let summary = aura_store_record::summarize_payload(&effect.payload, threshold);
+            if let aura_store_record::RecordPayload::Summary { full_hash, .. } = &summary {
+                if let Err(e) = snapshots.put(full_hash, effect.payload.clone()) {
+                    tracing::warn!(%full_hash, error = %e, "failed to store full effect payload");
+                }
+            }
+            let encoded = serde_json::to_vec(&summary).unwrap_or_else(|_| effect.payload.to_vec());
+            effect.payload = bytes::Bytes::from(encoded);
+        }
+    }
+    effect
+}
+
+#[cfg(test)]
+mod summarisation_tests {
+    use super::*;
+    use aura_core_types::{Effect, EffectStatus};
+    use aura_store_record::RecordPayload;
+    use aura_store_snapshot::{FsSnapshotStore, NoopSnapshotStore};
+
+    #[test]
+    fn run_command_owns_its_timeout_budget() {
+        assert!(tool_manages_own_timeout("run_command"));
+        assert!(tool_manages_own_timeout("task"));
+        assert!(!tool_manages_own_timeout("read_file"));
+    }
+
+    fn effect_with(payload: Vec<u8>) -> Effect {
+        Effect::new(
+            aura_core_types::ActionId::generate(),
+            aura_core_types::EffectKind::Agreement,
+            EffectStatus::Committed,
+            payload,
+        )
+    }
+
+    #[test]
+    fn audited_mode_preserves_payload_verbatim() {
+        let original = vec![0xABu8; 4096];
+        let out =
+            maybe_summarise_effect_payload(effect_with(original.clone()), None, &NoopSnapshotStore);
+        assert_eq!(out.payload.as_ref(), original.as_slice());
+    }
+
+    #[test]
+    fn audited_lite_below_threshold_is_inline() {
+        let payload = vec![0x42u8; 256];
+        let out = maybe_summarise_effect_payload(
+            effect_with(payload.clone()),
+            Some(1024),
+            &NoopSnapshotStore,
+        );
+        assert_eq!(out.payload.as_ref(), payload.as_slice());
+    }
+
+    #[test]
+    fn audited_lite_above_threshold_is_summary_json() {
+        let payload = vec![0x37u8; 8192];
+        let out = maybe_summarise_effect_payload(
+            effect_with(payload.clone()),
+            Some(1024),
+            &NoopSnapshotStore,
+        );
+        let decoded: RecordPayload = serde_json::from_slice(out.payload.as_ref())
+            .expect("payload should round-trip as RecordPayload JSON in AuditedLite mode");
+        match decoded {
+            RecordPayload::Summary {
+                full_len,
+                full_hash,
+                ..
+            } => {
+                assert_eq!(full_len, payload.len());
+                assert!(!full_hash.is_empty());
+            }
+            RecordPayload::Inline(_) => {
+                panic!("payload above threshold must summarise, not stay inline")
+            }
+        }
+    }
+
+    #[test]
+    fn audited_lite_stores_full_payload_under_its_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FsSnapshotStore::open(dir.path()).unwrap();
+        let payload = b"line of tool output\n".repeat(500);
+        let out = maybe_summarise_effect_payload(effect_with(payload.clone()), Some(1024), &store);
+        let RecordPayload::Summary { full_hash, .. } =
+            serde_json::from_slice(out.payload.as_ref()).unwrap()
+        else {
+            panic!("expected a summary");
+        };
+        assert_eq!(
+            store.get(&full_hash).unwrap().unwrap().as_ref(),
+            payload.as_slice()
+        );
+    }
+}

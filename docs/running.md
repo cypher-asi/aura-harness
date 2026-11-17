@@ -15,43 +15,53 @@ macOS and Windows need no extra system packages. Everything else, including the 
 ```sh
 cargo build --release
 
-# Terminal UI — defaults to a small local model, no account needed
+# Desktop window — defaults to a small local model, no account needed
 ollama pull qwen3:4b                      # one-time, ~2.5 GB
 OLLAMA_CONTEXT_LENGTH=32768 ollama serve  # in another terminal
 cargo run
 
-# Terminal UI in Plan mode
+# The same UI in this terminal
+cargo run -- --terminal
+
+# Plan mode (desktop or terminal)
 cargo run -- --mode plan
 
 # Headless node, same binary
 cargo run -- run --ui none
 
 # Standalone server binary
-cargo run -p aura-runtime --bin aura-node
+cargo run -p aura-node --bin aura-node
 ```
 
 ## Desktop app
 
-`aura-desktop` is the terminal UI in a native window: the same agent session, the same screen and the same keys, drawn on the GPU (wgpu, through [iced](https://iced.rs)) on a cell grid instead of through a terminal emulator, with a CPU fallback (tiny-skia) when no GPU is available. Box-drawing lines, block characters, braille spinners and status symbols are drawn as shapes, so borders join without gaps and symbols missing from the font still render. It needs Rust 1.88 or later.
+`aura` with no subcommand opens the desktop window, `aura-desktop`: the terminal UI in a native window: the same agent session, the same screen and the same keys, drawn on the GPU (wgpu, through [iced](https://iced.rs)) on a cell grid instead of through a terminal emulator, with a CPU fallback (tiny-skia) when no GPU is available. Box-drawing lines, block characters, braille spinners and status symbols are drawn as shapes, so borders join without gaps and symbols missing from the font still render. It needs Rust 1.88 or later. `aura --terminal` (or `aura run`) runs in the terminal instead, and so does `aura` when there's no display to open a window on, such as over SSH. Builds with `--no-default-features` leave the desktop app out; the Docker images do.
 
 ```sh
-cargo run --release -p aura-desktop                        # agent in the current directory
-cargo run --release -p aura-desktop -- --workspace ~/proj  # agent in another folder
-cargo run --release -p aura-desktop -- --mode plan
-cargo run --release -p aura-desktop -- --demo              # scripted session, no model needed
+cargo run --release                                          # agent in the current directory
+cargo run --release -- desktop --workspace ~/proj            # agent in another folder
+cargo run --release -- --mode plan
+cargo run --release -- desktop --demo                        # scripted session, no model needed
+cargo run --release -p aura-desktop                          # the window on its own binary
 ```
 
-It takes the terminal's `--dir`, `--provider`, `--mode`, `--theme`, `--verbose` and `--allow-unrestricted-full-access`. Every terminal key works the same way, including Ctrl+C (copy a selection, interrupt the agent, or quit when idle) and Ctrl+D. Drag to select text in a panel; it's copied when you let go. On top of that, the window handles what a terminal emulator would:
+`aura desktop` takes the terminal's `--dir`, `--provider`, `--mode`, `--approval`, `--theme`, `--verbose` and `--allow-unrestricted-full-access`. Every terminal key works the same way, including Ctrl+C (copy a selection, interrupt the agent, or quit when idle) and Ctrl+D. Drag to select text in a panel; it's copied when you let go. On top of that, the window handles what a terminal emulator would:
 
 | Keys (Cmd on macOS) | Action |
 |---|---|
 | Ctrl+Shift+C | Copy the selection |
 | Ctrl+V, Ctrl+Shift+V, Shift+Insert | Paste into the input, as in the terminal: an image, or a path to one, is attached |
 | Ctrl+= / Ctrl+- / Ctrl+0 | Larger / smaller / default text |
+| Ctrl+Shift+T (Cmd+T) | New tab |
+| Ctrl+Shift+W (Cmd+W) | Close the tab; its projects move to the tab before it |
+| Ctrl+1 … Ctrl+9, Alt+1 … Alt+9 (Cmd+1 … Cmd+9) | Go to the tab with that number |
+| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab (Ctrl on macOS too) |
+
+The strip along the top holds the tabs, numbered from 1, a `+` box, and a wide box naming the project and agent the tab in front shows. A tab is a workspace: it holds some of the projects and shows only those, in its own copy of the UI with its own draft, panels, overlays, scroll position and selection. The window starts with every project in one tab. `+` starts a new agent in a tab of its own, and a project created in a tab (`+ New project`, Ctrl+N) stays in that tab. All tabs share the one session, so agents keep working in tabs that aren't in front; a bar under a tab's number marks one with an agent at work. Closing a tab (middle click, or Ctrl+Shift+W) moves its projects to the tab before it and stops nothing. Which projects are in which tab is kept in `desktop_tabs` in the data directory and comes back on the next start.
 
 Turn alerts follow the terminal's settings; where the terminal rings the bell, the window asks for attention instead.
 
-Text is set in Geist Mono, bundled (SIL Open Font License, [`assets/fonts/OFL.txt`](../crates/aura-desktop/assets/fonts/OFL.txt)).
+Text is set in Geist Mono, bundled (SIL Open Font License, [`assets/fonts/OFL.txt`](../crates/surface/aura-desktop/assets/fonts/OFL.txt)).
 
 | Variable | Effect |
 |---|---|
