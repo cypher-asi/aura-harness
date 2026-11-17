@@ -482,6 +482,24 @@ enum WriteOp {
 
 type Listener = Box<dyn Fn(&Step) + Send + Sync>;
 
+/// A second home for everything a [`RunRecorder`] writes to its bundle,
+/// such as the agent-state database. Calls come from the recorder's
+/// threads and must not block for long; failures are the sink's to log.
+pub trait TraceSink: Send + Sync {
+    /// The run's metadata, on start and whenever it changes.
+    fn meta(&self, meta: &RunMeta);
+    /// Steps, in sequence order, once they are written to the bundle.
+    fn steps(&self, run_id: &str, steps: &[Step]);
+    /// Rewards added to the run.
+    fn rewards(&self, run_id: &str, rewards: &[Reward]);
+    /// Kernel record rows joined to the run.
+    fn records(&self, run_id: &str, rows: &[RecordRow]);
+    /// The scorecard written when the run finishes.
+    fn summary(&self, run_id: &str, card: &RunScorecard);
+}
+
+type Sinks = Arc<Mutex<Vec<Arc<dyn TraceSink>>>>;
+
 /// Records one run to `AURA_HOME/runs/<run_id>/`.
 pub struct RunRecorder {
     meta: Mutex<RunMeta>,
@@ -492,6 +510,7 @@ pub struct RunRecorder {
     tx: Mutex<Option<SyncSender<WriteOp>>>,
     writer: Mutex<Option<JoinHandle<()>>>,
     listeners: Mutex<Vec<Listener>>,
+    sinks: Sinks,
     dropped: AtomicU64,
 }
 
@@ -530,9 +549,12 @@ impl RunRecorder {
         };
         let (tx, rx) = mpsc::sync_channel::<WriteOp>(WRITE_QUEUE);
         let path = bundle.path(STEPS_FILE);
+        let sinks: Sinks = Arc::default();
+        let writer_sinks = Arc::clone(&sinks);
+        let run_id = meta.run_id.clone();
         let writer = std::thread::Builder::new()
             .name("aura-trace-writer".into())
-            .spawn(move || writer_loop(&path, &rx))?;
+            .spawn(move || writer_loop(&path, &rx, &run_id, &writer_sinks))?;
         let builder = StepBuilder::new(meta.run_id.clone(), &meta.params, blobs.clone());
         Ok(Some(Arc::new(Self {
             meta: Mutex::new(meta),
@@ -543,8 +565,47 @@ impl RunRecorder {
             tx: Mutex::new(Some(tx)),
             writer: Mutex::new(Some(writer)),
             listeners: Mutex::new(Vec::new()),
+            sinks,
             dropped: AtomicU64::new(0),
         })))
+    }
+
+    /// Mirror the run into `sink` as well: what was recorded so far
+    /// right away, then everything after.
+    ///
+    /// Lock order is sinks before meta everywhere. Rewards and record
+    /// rows are appended to the bundle under the sinks lock, so none is
+    /// both copied here and sent again. Steps may reach a new sink
+    /// twice; sinks store them by seq.
+    pub fn add_sink(&self, sink: Arc<dyn TraceSink>) {
+        self.flush();
+        let mut sinks = lock(&self.sinks);
+        let run_id = self.run_id();
+        sink.meta(&self.meta());
+        let steps = self.bundle.read_steps().unwrap_or_default();
+        if !steps.is_empty() {
+            sink.steps(&run_id, &steps);
+        }
+        let rewards = self.bundle.read_rewards().unwrap_or_default();
+        if !rewards.is_empty() {
+            sink.rewards(&run_id, &rewards);
+        }
+        let records = self.bundle.read_records().unwrap_or_default();
+        if !records.is_empty() {
+            sink.records(&run_id, &records);
+        }
+        sinks.push(sink);
+    }
+
+    fn push_meta(&self) {
+        let sinks = lock(&self.sinks);
+        if sinks.is_empty() {
+            return;
+        }
+        let meta = self.meta();
+        for sink in sinks.iter() {
+            sink.meta(&meta);
+        }
     }
 
     /// Start a recorder with the process-wide trace level and
@@ -611,11 +672,14 @@ impl RunRecorder {
 
     /// Update metadata (title, mode, task id) after start.
     pub fn update_meta(&self, f: impl FnOnce(&mut RunMeta)) {
-        let mut meta = lock(&self.meta);
-        f(&mut meta);
-        if let Err(e) = self.bundle.write_meta(&meta) {
-            tracing::debug!(error = %e, "trace meta write failed");
+        {
+            let mut meta = lock(&self.meta);
+            f(&mut meta);
+            if let Err(e) = self.bundle.write_meta(&meta) {
+                tracing::debug!(error = %e, "trace meta write failed");
+            }
         }
+        self.push_meta();
     }
 
     fn emit(&self, step: Step) {
@@ -636,14 +700,19 @@ impl RunRecorder {
 
     /// Record a user prompt, starting a turn.
     pub fn begin_turn(&self, prompt: &str) {
-        {
+        let titled = {
             let mut meta = lock(&self.meta);
-            if meta.title.is_empty() {
+            let untitled = meta.title.is_empty();
+            if untitled {
                 meta.title = crate::recorder::excerpt(prompt.lines().next().unwrap_or(""), 80);
                 if let Err(e) = self.bundle.write_meta(&meta) {
                     tracing::debug!(error = %e, "trace meta write failed");
                 }
             }
+            untitled
+        };
+        if titled {
+            self.push_meta();
         }
         let step = lock(&self.builder).user_prompt(prompt, now_ms());
         self.emit(step);
@@ -681,8 +750,15 @@ impl RunRecorder {
 
     /// Append a kernel record row for the record-log join.
     pub fn on_record(&self, row: &RecordRow) {
-        if let Err(e) = self.bundle.append_records(std::slice::from_ref(row)) {
-            tracing::debug!(error = %e, "trace record write failed");
+        {
+            let sinks = lock(&self.sinks);
+            if let Err(e) = self.bundle.append_records(std::slice::from_ref(row)) {
+                tracing::debug!(error = %e, "trace record write failed");
+            }
+            let run_id = self.run_id();
+            for sink in sinks.iter() {
+                sink.records(&run_id, std::slice::from_ref(row));
+            }
         }
         let step = lock(&self.builder).on_record(row);
         if let Some(step) = step {
@@ -692,8 +768,13 @@ impl RunRecorder {
 
     /// Append external rewards (verification outcome, human labels).
     pub fn add_rewards(&self, rewards: &[Reward]) {
+        let sinks = lock(&self.sinks);
         if let Err(e) = self.bundle.append_rewards(rewards) {
             tracing::debug!(error = %e, "trace reward write failed");
+        }
+        let run_id = self.run_id();
+        for sink in sinks.iter() {
+            sink.rewards(&run_id, rewards);
         }
     }
 
@@ -717,6 +798,11 @@ impl RunRecorder {
             if let Err(e) = self.bundle.write_summary(card) {
                 tracing::debug!(error = %e, "trace summary write failed");
             }
+            let sinks = lock(&self.sinks);
+            let run_id = self.run_id();
+            for sink in sinks.iter() {
+                sink.summary(&run_id, card);
+            }
         }
         card
     }
@@ -731,7 +817,7 @@ impl Drop for RunRecorder {
     }
 }
 
-fn writer_loop(path: &Path, rx: &mpsc::Receiver<WriteOp>) {
+fn writer_loop(path: &Path, rx: &mpsc::Receiver<WriteOp>, run_id: &str, sinks: &Sinks) {
     use std::io::Write;
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -742,6 +828,16 @@ fn writer_loop(path: &Path, rx: &mpsc::Receiver<WriteOp>) {
         return;
     };
     let mut out = std::io::BufWriter::new(file);
+    let mut batch: Vec<Step> = Vec::new();
+    let send = |batch: &mut Vec<Step>| {
+        if batch.is_empty() {
+            return;
+        }
+        for sink in lock(sinks).iter() {
+            sink.steps(run_id, batch);
+        }
+        batch.clear();
+    };
     while let Ok(op) = rx.recv() {
         let mut pending = Some(op);
         while let Some(op) = pending.take() {
@@ -750,17 +846,21 @@ fn writer_loop(path: &Path, rx: &mpsc::Receiver<WriteOp>) {
                     if serde_json::to_writer(&mut out, &*step).is_ok() {
                         let _ = out.write_all(b"\n");
                     }
+                    batch.push(*step);
                 }
                 WriteOp::Flush(ack) => {
                     let _ = out.flush();
+                    send(&mut batch);
                     let _ = ack.send(());
                 }
             }
             pending = rx.try_recv().ok();
         }
         let _ = out.flush();
+        send(&mut batch);
     }
     let _ = out.flush();
+    send(&mut batch);
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {

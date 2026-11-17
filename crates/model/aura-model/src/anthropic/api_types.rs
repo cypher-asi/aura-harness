@@ -217,6 +217,11 @@ pub(super) struct ApiThinkingConfig {
     pub thinking_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub budget_tokens: Option<u32>,
+    /// `thinking.display`. Newer adaptive models (Opus 4.7+, Claude 5)
+    /// default to `"omitted"`, which streams thinking blocks with an
+    /// empty `thinking` field; `"summarized"` makes the text visible.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]

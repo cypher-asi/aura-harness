@@ -41,6 +41,9 @@ pub const ALL_CFS: &[&str] = &[
     cf::SECRETS,
     cf::PROCESSES,
     cf::PROCESS_RUNS,
+    cf::TRACE_RUNS,
+    cf::TRACE_STEPS,
+    cf::TRACE_INDEX,
 ];
 
 /// Column families whose **values** are sealed in sealed mode — the
@@ -51,7 +54,8 @@ pub const ALL_CFS: &[&str] = &[
 /// Deliberately excluded (plaintext in both modes, see `crate::seal`
 /// module docs): `agent_meta` (pure counters/status bytes that must be
 /// readable before any value is decrypted) and `memory_event_index`
-/// (event-id → timestamp index with no content).
+/// (event-id → timestamp index with no content), and `trace_index`
+/// (owner → run id keys with empty values).
 pub const SEALED_VALUE_CFS: &[&str] = &[
     cf::RECORD,
     cf::INBOX,
@@ -65,6 +69,8 @@ pub const SEALED_VALUE_CFS: &[&str] = &[
     cf::SECRETS,
     cf::PROCESSES,
     cf::PROCESS_RUNS,
+    cf::TRACE_RUNS,
+    cf::TRACE_STEPS,
 ];
 
 /// Maximum entries staged per `WriteBatch` while copying.

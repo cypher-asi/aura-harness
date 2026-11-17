@@ -22,6 +22,7 @@ use super::notices::{Notice, NoticeSender};
 use super::processes::{now_ms, task_id, ProcessTable};
 use super::record_ui::RecordPanelAgent;
 use super::steering::Steering;
+use super::trace::Traces;
 use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
 use crate::long_run::LongRunSettings;
@@ -31,6 +32,7 @@ use crate::record_loader::agent_summaries;
 use async_trait::async_trait;
 use aura_agent::{AgentLoop, AgentLoopConfig};
 use aura_agent_kernel::Kernel;
+use aura_agent_trace::{RunMeta, RunRecorder, RunSource};
 use aura_context_skills::SkillManager;
 use aura_core_types::{
     AgentId, SpawnMode, SubagentDispatchRequest, SubagentExit, SubagentResult, Transaction,
@@ -108,6 +110,8 @@ pub struct AgentHub {
     pub(crate) agents: Option<TerminalAgents>,
     /// The agent the RECORD panel follows.
     pub(crate) record_panel: RecordPanelAgent,
+    /// Every agent's run trace.
+    pub(crate) traces: Arc<Traces>,
 }
 
 /// Parts of an [`AgentHub`] other than the kernel factory.
@@ -131,6 +135,8 @@ pub struct AgentHubParts {
     pub agents: Option<TerminalAgents>,
     /// Shared with the kernels' [`super::UiRecordObserver`].
     pub record_panel: RecordPanelAgent,
+    /// Records each agent's runs.
+    pub traces: Arc<Traces>,
 }
 
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -173,6 +179,7 @@ impl AgentHub {
                 notice_rx: Mutex::new(Some(notice_rx)),
                 agents: parts.agents,
                 record_panel: parts.record_panel,
+                traces: parts.traces,
             }
         })
     }
@@ -368,8 +375,16 @@ impl AgentHub {
     pub async fn send_agent_list(&self) {
         self.name_agents();
         let summaries = self.agent_summaries();
+        let archived = crate::record_loader::archived_summaries(
+            &lock(&self.registry),
+            self.factory.store.as_ref(),
+        );
         let active = lock(&self.registry).active().agent_id();
         let _ = self.commands.send(UiCommand::SetAgents(summaries)).await;
+        let _ = self
+            .commands
+            .send(UiCommand::SetArchivedAgents(archived))
+            .await;
         let _ = self
             .commands
             .send(UiCommand::SetActiveAgent(active.to_hex()))
@@ -404,7 +419,8 @@ impl AgentHub {
     /// Tell the Processes tab what every agent is called.
     pub(crate) fn name_agents(&self) {
         for agent in lock(&self.registry).agents() {
-            self.processes.name_agent(agent.agent_id(), &agent.name);
+            self.processes
+                .name_agent(agent.agent_id(), agent.display_name());
         }
     }
 
@@ -544,6 +560,11 @@ impl AgentHub {
             config.system_prompt.push_str("\n\n");
             config.system_prompt.push_str(addendum);
         }
+        let mut meta = RunMeta::new(&config.model, RunSource::Tui);
+        meta.workspace = workspace.display().to_string();
+        meta.mode.clone_from(&definition.name);
+        meta.spawned_by = self.traces.run_id_of(request.parent_agent_id);
+        let recorder = self.traces.start(child_id, meta);
         self.register_root(child_id, &instance.name, workspace, &config);
         let mut summary = task_summary(
             &request,
@@ -562,6 +583,7 @@ impl AgentHub {
             tools,
             prompt: request.prompt,
             cancel,
+            recorder,
         };
 
         if detached {
@@ -604,16 +626,7 @@ impl AgentHub {
     async fn finish_task(&self, mut run: TaskRun) -> Result<String, String> {
         let child_id = run.session.agent_id();
         let ui = AgentUi::new(self.commands.clone(), child_id);
-        let outcome = run_task_turn(
-            &mut run.session,
-            &run.agent_loop,
-            run.tools,
-            &run.prompt,
-            &ui,
-            &run.cancel,
-            self.long_run,
-        )
-        .await;
+        let outcome = run_task_turn(&mut run, &ui, self.long_run).await;
         self.processes.finish(
             &task_id(child_id),
             if outcome.is_ok() {
@@ -640,6 +653,7 @@ struct TaskRun {
     tools: Vec<ToolDefinition>,
     prompt: String,
     cancel: CancellationToken,
+    recorder: Option<Arc<RunRecorder>>,
 }
 
 /// What `parent` is told when its background agent `name` finishes.
@@ -742,17 +756,24 @@ fn task_summary(
     }
 }
 
-/// Record `prompt` on `session` and run one turn of it, streaming it into
-/// `ui`, and return the final reply.
+/// Record `run`'s prompt on its session and run one turn of it, streaming
+/// it into `ui`, and return the final reply.
 async fn run_task_turn(
-    session: &mut AgentSession,
-    agent_loop: &AgentLoop,
-    tools: Vec<ToolDefinition>,
-    prompt: &str,
+    run: &mut TaskRun,
     ui: &AgentUi,
-    cancel: &CancellationToken,
     limits: LongRunSettings,
 ) -> Result<String, String> {
+    let TaskRun {
+        session,
+        agent_loop,
+        tools,
+        prompt,
+        cancel,
+        recorder,
+    } = run;
+    let tools = std::mem::take(tools);
+    let prompt = prompt.as_str();
+    let recorder = recorder.clone();
     let agent_id = session.agent_id();
     let store = session.kernel.store();
     store
@@ -773,13 +794,26 @@ async fn run_task_turn(
     })
     .await;
 
+    if let Some(rec) = &recorder {
+        rec.begin_turn(prompt);
+    }
     // Nothing sends to a spawn mid-task, so its steering stays empty.
     let steering = Steering::new(cancel);
     let (result, forwarded) = run_agent_turn(
-        session, agent_loop, tools, ui, cancel, &steering, limits, None,
+        session,
+        agent_loop,
+        tools,
+        ui,
+        cancel,
+        &steering,
+        limits,
+        recorder.clone(),
     )
     .await;
     steering.finish(&[]);
+    if let Some(rec) = &recorder {
+        super::trace::end_turn(rec, &result, cancel.is_cancelled());
+    }
     let result = match result {
         Ok(result) => result,
         Err(e) => {

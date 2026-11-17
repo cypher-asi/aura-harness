@@ -72,7 +72,8 @@ pub mod worker;
 
 pub use agents::{
     AgentEnv, AgentHooks, AgentHost, AgentHostConfig, AgentInfo, AgentState, ChildKernel,
-    ChildKernelFactory, ChildKernelRequest, InboxMessage, MessageKind, ParentInbox, RootAgent,
+    ChildKernelFactory, ChildKernelRequest, HostedTurn, InboxMessage, MessageKind, ParentInbox,
+    RootAgent, TurnObserver,
 };
 pub use automaton::{AutomatonBridge, EventSubscription};
 pub use memory_observer::{turn_summary_from_result, MemoryTurnObserver};

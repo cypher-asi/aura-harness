@@ -31,6 +31,11 @@ pub struct FileView {
     pub body: FileBody,
     /// Cursor and vim normal-mode state.
     pub vim: Vim,
+    /// Number shown in the gutter for the first line (1 for whole files,
+    /// the start line for a slice a tool read).
+    pub first_line: usize,
+    /// Highlighting to use instead of the one the path's extension picks.
+    pub language: Option<String>,
 }
 
 impl FileView {
@@ -48,7 +53,29 @@ impl FileView {
             title,
             body: read_body(path),
             vim: Vim::default(),
+            first_line: 1,
+            language: None,
         }
+    }
+
+    /// Text that is not read from disk (a tool's output), titled `title`
+    /// and highlighted as `language`, numbered from `first_line`.
+    #[must_use]
+    pub fn snapshot(title: &str, text: &str, language: &str, first_line: usize) -> Self {
+        Self {
+            path: PathBuf::from(title),
+            title: title.to_string(),
+            body: FileBody::Text(text.to_string()),
+            vim: Vim::default(),
+            first_line: first_line.max(1),
+            language: Some(language.to_string()),
+        }
+    }
+
+    /// Put the cursor on 0-based `line` and show it at the top.
+    pub fn jump_to(&mut self, line: usize) {
+        let lines = self.body.lines();
+        self.vim.jump_to(line, &lines);
     }
 
     /// Apply a vim key to the cursor and the view's `scroll`.
@@ -60,6 +87,9 @@ impl FileView {
     /// Lowercased file extension, used to pick syntax highlighting.
     #[must_use]
     pub fn extension(&self) -> String {
+        if let Some(language) = &self.language {
+            return language.clone();
+        }
         self.path
             .extension()
             .map(|ext| ext.to_string_lossy().to_lowercase())

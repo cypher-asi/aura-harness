@@ -1,10 +1,11 @@
 //! Run graph over the chat panel: the collapsible run → turn →
-//! iteration → step tree on the left, the selected node's metadata and
-//! links on the right. Nodes linked to the selection are marked in the
-//! tree.
+//! iteration → step tree. Enter or a click opens the selected node's
+//! metadata and links in a modal. Nodes linked to the selection are
+//! marked in the tree.
 
-use super::panels::{render_scrollbar, truncate_record_info, ScrollView};
-use super::text::{display_width, wrap_words};
+use super::header::HeaderInfo;
+use super::panels::{body_block, render_scrollbar, truncate_record_info, ScrollView};
+use super::text::display_width;
 use crate::app::graph::GraphRow;
 use crate::events::{TraceNode, TraceNodeStatus};
 use crate::{App, Theme};
@@ -12,14 +13,12 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Clear, Paragraph},
     Frame,
 };
 
-const HINT: &str = "↑↓ move  ←→ fold  Tab link  e issues  +/- label  r record  o file  Esc close";
-
-/// Narrowest chat panel that gets a side-by-side metadata pane.
-const SPLIT_MIN_WIDTH: u16 = 70;
+const HINT: &str =
+    "↑↓ move  ⏎/click open  Space/←→ fold  Tab link  e issues  +/- label  r record  o file  Esc close";
 
 pub(super) const fn status_glyph(status: TraceNodeStatus, theme: &Theme) -> (&'static str, Color) {
     match status {
@@ -109,94 +108,22 @@ fn tree_line<'a>(
     }
 }
 
-/// Metadata and links of `node`, wrapped to `width`.
-fn meta_lines<'a>(app: &App, node: &TraceNode, width: usize, theme: &Theme) -> Vec<Line<'a>> {
-    let muted = Style::default().fg(theme.colors.muted);
-    let fg = Style::default().fg(theme.colors.foreground);
-    let (glyph, color) = status_glyph(node.status, theme);
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled(format!("{glyph} "), Style::default().fg(color)),
-            Span::styled(
-                node.label.clone(),
-                Style::default()
-                    .fg(kind_color(&node.kind, theme))
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(Span::styled(
-            match node.seq {
-                Some(seq) => format!("{} · {} · step {seq}", node.kind, node.id),
-                None => format!("{} · {}", node.kind, node.id),
-            },
-            muted,
-        )),
-    ];
-    if !node.detail.is_empty() {
-        for wrapped in wrap_words(&node.detail, width.max(1)) {
-            lines.push(Line::from(Span::styled(wrapped, fg)));
-        }
-    }
-    let key_width = node
-        .meta
-        .iter()
-        .map(|(k, _)| display_width(k))
-        .max()
-        .unwrap_or(0)
-        .min(16);
-    if !node.meta.is_empty() {
-        lines.push(Line::from(""));
-    }
-    for (key, value) in &node.meta {
-        let room = width.saturating_sub(key_width + 1).max(8);
-        let mut first = true;
-        for raw in value.lines() {
-            for wrapped in wrap_words(raw, room) {
-                let name = if first { key.as_str() } else { "" };
-                first = false;
-                lines.push(Line::from(vec![
-                    Span::styled(format!("{name:<key_width$} "), muted),
-                    Span::styled(wrapped, fg),
-                ]));
-            }
-        }
-    }
-    let links = app.graph().links_of(&node.id);
-    if !links.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled("── links ──", muted)));
-        for (kind, other) in links {
-            let label = app
-                .graph()
-                .node(other)
-                .map_or_else(|| other.clone(), |n| n.label.clone());
-            lines.push(Line::from(vec![
-                Span::styled(format!("{kind:<12} "), muted),
-                Span::styled(
-                    truncate_record_info(&label, width.saturating_sub(13).max(4)),
-                    Style::default().fg(theme.colors.secondary),
-                ),
-            ]));
-        }
-    }
-    lines
+/// The chat panel's header while the graph is open: the run, and whether
+/// only issues are listed.
+pub(super) fn graph_header(app: &App, theme: &Theme) -> (String, Option<HeaderInfo>) {
+    let run = app.graph().run_id();
+    let title = format!("RUN GRAPH {}", run.get(..13).unwrap_or(run));
+    let info = app.graph().issues_only().then(|| HeaderInfo {
+        text: "ISSUES ONLY".to_string(),
+        short: "ISSUES".to_string(),
+        color: theme.colors.warning,
+    });
+    (title, info)
 }
 
 /// Draw the graph over `area`, the chat panel.
 pub(super) fn render_graph(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let rows = app.graph().rows();
-    let title = format!(
-        " Run graph {}{} ",
-        app.graph()
-            .run_id()
-            .get(..13)
-            .unwrap_or(app.graph().run_id()),
-        if app.graph().issues_only() {
-            " · issues"
-        } else {
-            ""
-        }
-    );
     let footer = Line::from(Span::styled(
         format!(
             " {} ",
@@ -204,11 +131,7 @@ pub(super) fn render_graph(frame: &mut Frame, area: Rect, app: &mut App, theme: 
         ),
         Style::default().fg(theme.colors.muted),
     ));
-    let block = Block::default()
-        .title(title)
-        .title_bottom(footer)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.colors.primary));
+    let block = body_block((true, app.host_chrome()), theme).title_bottom(footer);
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
 
@@ -218,31 +141,7 @@ pub(super) fn render_graph(frame: &mut Frame, area: Rect, app: &mut App, theme: 
         width: area.width.saturating_sub(2),
         height: area.height.saturating_sub(2),
     };
-    let split = inner.width >= SPLIT_MIN_WIDTH;
-    let tree_width = if split {
-        inner.width * 3 / 5
-    } else {
-        inner.width
-    };
-    let meta_height = if split { 0 } else { (inner.height / 3).min(10) };
-    let tree = Rect {
-        width: tree_width,
-        height: inner.height.saturating_sub(meta_height),
-        ..inner
-    };
-    let meta = if split {
-        Rect {
-            x: inner.x + tree_width + 1,
-            width: inner.width.saturating_sub(tree_width + 1),
-            ..inner
-        }
-    } else {
-        Rect {
-            y: inner.y + tree.height,
-            height: meta_height,
-            ..inner
-        }
-    };
+    let tree = inner;
 
     if rows.is_empty() {
         frame.render_widget(
@@ -252,6 +151,7 @@ pub(super) fn render_graph(frame: &mut Frame, area: Rect, app: &mut App, theme: 
             ))),
             tree,
         );
+        app.graph_mut().set_tree_area(None);
         app.set_detail_bounds(0, 0);
         return;
     }
@@ -292,35 +192,17 @@ pub(super) fn render_graph(frame: &mut Frame, area: Rect, app: &mut App, theme: 
         theme,
     );
 
-    if let Some(node) = app.graph().selected_node().cloned() {
-        if split {
-            let divider: Vec<Line> = (0..meta.height)
-                .map(|_| Line::from(Span::styled("│", Style::default().fg(theme.colors.muted))))
-                .collect();
-            frame.render_widget(
-                Paragraph::new(divider),
-                Rect {
-                    x: meta.x.saturating_sub(1),
-                    width: 1,
-                    ..meta
-                },
-            );
-        }
-        let pane = Rect {
-            x: meta.x.saturating_add(1),
-            width: meta.width.saturating_sub(1),
-            ..meta
-        };
-        let lines = meta_lines(app, &node, usize::from(pane.width), theme);
-        frame.render_widget(Paragraph::new(lines), pane);
-    }
+    app.graph_mut().set_tree_area(Some(tree));
     app.set_detail_bounds(0, visible);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::file_view::FileBody;
+    use crate::app::DetailView;
     use crate::events::UiCommand;
+    use crossterm::event::{KeyCode, KeyEvent};
     use ratatui::{backend::TestBackend, Terminal};
 
     fn node(id: &str, parent: Option<&str>, label: &str) -> TraceNode {
@@ -351,14 +233,30 @@ mod tests {
             .join("\n")
     }
 
+    fn open_json(app: &App) -> String {
+        match app.detail_view() {
+            Some(DetailView::File(file)) => match &file.body {
+                FileBody::Text(text) => {
+                    assert_eq!(file.extension(), "json");
+                    text.clone()
+                }
+                FileBody::Note(note) => panic!("note: {note}"),
+            },
+            other => panic!("not a file view: {other:?}"),
+        }
+    }
+
     #[test]
-    fn draws_tree_metadata_and_links() {
+    fn enter_opens_the_step_as_json_and_esc_comes_back() {
         let mut app = App::new();
         let mut nudge = node("s2", Some("t1"), "steering/implement_now");
         nudge.status = TraceNodeStatus::Warn;
         nudge.links = vec![("triggered".into(), "s3".into())];
         let mut model = node("s3", Some("t1"), "model → write_file");
-        model.meta = vec![("tokens".into(), "1.2k in".into())];
+        model.meta = vec![
+            ("tokens".into(), "1.2k in".into()),
+            ("args".into(), r#"{"path":"src/main.rs"}"#.into()),
+        ];
         app.process_command(UiCommand::GraphLoad {
             run_id: "0193abcd-0000-7000".into(),
             nodes: vec![
@@ -369,16 +267,34 @@ mod tests {
             ],
         });
         let text = screen(&mut app, 100, 14);
-        assert!(text.contains("Run graph 0193abcd-0000"), "{text}");
+        let (title, info) = graph_header(&app, &Theme::cyber());
+        assert_eq!(title, "RUN GRAPH 0193abcd-0000");
+        assert!(info.is_none());
         assert!(text.contains("▾ ✓ turn 1: add a greeting"), "{text}");
         assert!(text.contains("├─  ! ↔ steering/implement_now"), "{text}");
         assert!(text.contains("└─  ✓ model → write_file"), "{text}");
-        assert!(text.contains("tokens 1.2k in"), "{text}");
-        assert!(text.contains("←triggered"), "{text}");
+        assert!(
+            !text.contains("1.2k in"),
+            "no preview beside the tree: {text}"
+        );
+
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        let json = open_json(&app);
+        assert!(json.contains("\"tokens\": \"1.2k in\""), "{json}");
+        assert!(
+            json.contains("\"args\": {\n      \"path\": \"src/main.rs\""),
+            "{json}"
+        );
+        assert!(json.contains("\"kind\": \"←triggered\""), "{json}");
+
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert_eq!(app.detail_view(), Some(&DetailView::Graph));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(app.detail_view().is_none());
     }
 
     #[test]
-    fn narrow_panel_stacks_metadata_below() {
+    fn clicking_a_row_opens_it_full_panel() {
         let mut app = App::new();
         app.process_command(UiCommand::GraphLoad {
             run_id: "r".into(),
@@ -387,8 +303,11 @@ mod tests {
                 node("t1", Some("run"), "turn 1"),
             ],
         });
-        let text = screen(&mut app, 50, 16);
-        assert!(text.contains("turn 1"), "{text}");
-        assert!(text.contains("step · t1"), "{text}");
+        screen(&mut app, 50, 16);
+        // Row 0 of the tree sits inside the border at y = 1.
+        app.click_graph(5, 1);
+        assert!(open_json(&app).contains("\"id\": \"run\""));
+        app.handle_key(KeyEvent::from(KeyCode::Char('q')));
+        assert_eq!(app.detail_view(), Some(&DetailView::Graph));
     }
 }

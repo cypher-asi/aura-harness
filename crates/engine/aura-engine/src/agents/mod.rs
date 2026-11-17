@@ -25,6 +25,7 @@ mod factory;
 mod hooks;
 mod host;
 mod inbox;
+mod observer;
 mod setup;
 
 #[cfg(test)]
@@ -36,3 +37,4 @@ pub use host::{
     AgentEnv, AgentHost, AgentHostConfig, AgentInfo, AgentState, LifecycleAction, RootAgent,
 };
 pub use inbox::{InboxMessage, MessageKind, ParentInbox};
+pub use observer::{HostedTurn, TurnObserver};

@@ -23,7 +23,7 @@ use aura_ui_terminal::events::{JobView, ProcessKind, ProcessStatus, ProcessSumma
 use aura_ui_terminal::UiCommand;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -34,6 +34,10 @@ pub(crate) const MAX_FINISHED: usize = 50;
 
 /// How often the publisher looks for changes.
 const PUBLISH_INTERVAL: Duration = Duration::from_millis(500);
+/// Publishes between scans of `/proc`, which reads every process on the
+/// machine; the harness's own turns, agents and commands are checked on
+/// every publish.
+const OS_SCAN_EVERY: u32 = 10;
 
 /// Row id of `agent`'s running turn.
 pub(crate) fn turn_id(agent: AgentId) -> String {
@@ -100,6 +104,8 @@ struct Inner {
     names: HashMap<String, String>,
     /// Root agents registered with the host.
     roots: Vec<AgentId>,
+    /// `finished` changed since it was last saved.
+    unsaved: bool,
 }
 
 impl Inner {
@@ -117,6 +123,7 @@ impl Inner {
         summary.depth = 0;
         self.finished.push_front(summary);
         self.finished.truncate(MAX_FINISHED);
+        self.unsaved = true;
     }
 
     fn name_of(&self, agent_hex: &str) -> String {
@@ -137,6 +144,8 @@ pub struct ProcessTable {
     host: Option<AgentHost>,
     commands: Option<Arc<ProcessManager>>,
     scan_os: bool,
+    /// Where finished rows are kept between sessions.
+    history: OnceLock<PathBuf>,
 }
 
 impl ProcessTable {
@@ -147,7 +156,51 @@ impl ProcessTable {
             host,
             commands,
             scan_os: true,
+            history: OnceLock::new(),
         })
+    }
+
+    /// Keep finished rows in `path` between sessions, starting with the
+    /// ones it already holds.
+    pub fn keep_history(&self, path: PathBuf) {
+        let rows: Vec<ProcessSummary> = match std::fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+                warn!(path = %path.display(), error = %e, "Unreadable process history");
+                Vec::new()
+            }),
+            Err(_) => Vec::new(),
+        };
+        if self.history.set(path).is_err() {
+            return;
+        }
+        let mut inner = lock(&self.inner);
+        inner.finished.extend(rows);
+        inner.finished.truncate(MAX_FINISHED);
+    }
+
+    /// Write the finished rows to the history file, if they changed.
+    pub fn save(&self) {
+        let Some(path) = self.history.get() else {
+            return;
+        };
+        let rows: Vec<ProcessSummary> = {
+            let mut inner = lock(&self.inner);
+            if !std::mem::take(&mut inner.unsaved) {
+                return;
+            }
+            inner.finished.iter().cloned().collect()
+        };
+        let written = serde_json::to_vec(&rows)
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| {
+                let tmp = path.with_extension("json.tmp");
+                std::fs::write(&tmp, bytes)?;
+                std::fs::rename(&tmp, path)
+            });
+        if let Err(e) = written {
+            warn!(path = %path.display(), error = %e, "Could not save process history");
+            lock(&self.inner).unsaved = true;
+        }
     }
 
     /// A table that doesn't look at OS processes, for tests.
@@ -161,6 +214,7 @@ impl ProcessTable {
             host,
             commands,
             scan_os: false,
+            history: OnceLock::new(),
         })
     }
 
@@ -268,7 +322,9 @@ impl ProcessTable {
             done.status = status;
         }
         done.exit_code = exit_code;
-        Some(done.clone())
+        let row = done.clone();
+        inner.unsaved = true;
+        Some(row)
     }
 
     /// Kill row `id`.
@@ -335,6 +391,13 @@ impl ProcessTable {
     /// first.
     #[must_use]
     pub fn snapshot(&self) -> Vec<ProcessSummary> {
+        self.snapshot_scanning(true)
+    }
+
+    /// [`Self::snapshot`], looking through `/proc` for tagged processes
+    /// only when `scan`; otherwise the ones the last scan found are kept.
+    #[must_use]
+    pub fn snapshot_scanning(&self, scan: bool) -> Vec<ProcessSummary> {
         let roots = lock(&self.inner).roots.clone();
         let agents: Vec<(AgentId, Vec<AgentInfo>)> =
             self.host.as_ref().map_or_else(Vec::new, |h| {
@@ -344,10 +407,10 @@ impl ProcessTable {
             .commands
             .as_ref()
             .map_or_else(Vec::new, |m| m.snapshot());
-        let os = if self.scan_os {
-            os_processes::tagged_processes()
-        } else {
-            Vec::new()
+        let os = match (self.scan_os, scan) {
+            (false, _) => Vec::new(),
+            (true, true) => os_processes::tagged_processes(),
+            (true, false) => lock(&self.inner).os.values().cloned().collect(),
         };
 
         let mut inner = lock(&self.inner);
@@ -620,10 +683,18 @@ pub fn spawn_publisher(
         let mut last: Option<Vec<ProcessSummary>> = None;
         let mut last_jobs: HashMap<String, Vec<JobView>> = HashMap::new();
         let mut tick = tokio::time::interval(PUBLISH_INTERVAL);
+        let mut publishes: u32 = 0;
         loop {
             tick.tick().await;
+            let scan = publishes % OS_SCAN_EVERY == 0;
+            publishes = publishes.wrapping_add(1);
             let table = Arc::clone(&table);
-            let Ok(rows) = tokio::task::spawn_blocking(move || table.snapshot()).await else {
+            let snapshot = move || {
+                let rows = table.snapshot_scanning(scan);
+                table.save();
+                rows
+            };
+            let Ok(rows) = tokio::task::spawn_blocking(snapshot).await else {
                 continue;
             };
             if last.as_ref() == Some(&rows) {

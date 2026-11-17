@@ -13,6 +13,7 @@ aura-agent = { path = "../aura-agent" }
 aura-agent-kernel = { path = "../aura-agent-kernel" }
 aura-model = { path = "../../model/aura-model" }
 aura-store-snapshot = { path = "../../store/aura-store-snapshot" }
+aura-store-db = { path = "../../store/aura-store-db" }
 async-trait = { workspace = true }
 blake3 = { workspace = true }
 regex = { workspace = true }

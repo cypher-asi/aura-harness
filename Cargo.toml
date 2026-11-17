@@ -157,6 +157,9 @@ base64 = "0.22"
 # Directories
 dirs = "5.0"
 
+# Decoding pasted images for their terminal thumbnails
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+
 # CLI / TTY helpers
 colored = "2.1"
 rpassword = "7.5"

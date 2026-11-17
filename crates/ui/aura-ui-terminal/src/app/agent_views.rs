@@ -3,9 +3,10 @@
 //! Agents work in parallel, so the chat on screen is only one of several
 //! that are changing. The chat of the active agent lives in the `App`
 //! fields the rest of the UI reads; the chats of the other agents are kept
-//! as [`AgentView`]s and swapped in when their agent becomes active.
+//! as [`AgentView`]s and swapped in when their agent becomes active. Each
+//! chat has its own TRACE feed.
 
-use super::{hud::Hud, App, AppState, NotificationType, PendingApproval};
+use super::{hud::Hud, trace_feed::TraceFeed, App, AppState, NotificationType, PendingApproval};
 use crate::{
     components::Message,
     events::UiCommand,
@@ -26,6 +27,7 @@ pub(crate) struct AgentView {
     chat_lines: ChatLineCache,
     pending_approvals: VecDeque<PendingApproval>,
     hud: Hud,
+    trace_feed: TraceFeed,
     /// Whether the agent has a turn in flight
     busy: bool,
 }
@@ -42,6 +44,7 @@ impl Default for AgentView {
             chat_lines: ChatLineCache::default(),
             pending_approvals: VecDeque::new(),
             hud: Hud::default(),
+            trace_feed: TraceFeed::default(),
             busy: false,
         }
     }
@@ -72,6 +75,7 @@ impl App {
         mem::swap(&mut self.chat_lines, &mut view.chat_lines);
         mem::swap(&mut self.pending_approvals, &mut view.pending_approvals);
         mem::swap(&mut self.hud, &mut view.hud);
+        mem::swap(&mut self.trace_feed, &mut view.trace_feed);
     }
 
     /// Whether the agent with hex id `agent_id` has a turn in flight.

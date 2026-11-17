@@ -8,6 +8,7 @@ mod diff;
 mod graph;
 mod header;
 mod hud;
+mod images;
 mod input;
 mod markdown;
 mod mention_menu;
@@ -17,6 +18,7 @@ mod plans;
 mod processes;
 mod sandbox;
 mod segments;
+mod side_list;
 mod slash_menu;
 mod text;
 mod trace_feed;
@@ -31,7 +33,7 @@ use crate::mode_command::{ApprovalLevel, PermissionMode};
 use crate::{app::PanelAreas, App, Theme};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -54,21 +56,31 @@ fn inset_edges(area: Rect) -> Rect {
 pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     let area = frame.area();
 
+    // The input grows upward as it wraps inside the Chat panel's columns,
+    // so its height comes first, from where the columns fall.
+    let (_, chat_columns, _) = columns(area, app);
+    let chat_left = chat_columns.x.saturating_sub(area.x);
+    let chat_right = (chat_columns.x + chat_columns.width)
+        .saturating_sub(1)
+        .saturating_sub(area.x);
+    let max_input_rows = area.height.saturating_sub(1 + 3 + 1).max(1);
+    let input_rows = input::input_rows(area, app, theme, chat_left, chat_right, max_input_rows);
+
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Min(3),
-            Constraint::Length(2),
+            Constraint::Length(input_rows + 1),
         ])
         .split(area);
     let input_row = Rect {
-        height: 1,
+        height: main_chunks[2].height.saturating_sub(1).max(1),
         ..main_chunks[2]
     };
     let status_row = Rect {
-        y: input_row.y.saturating_add(1),
-        height: main_chunks[2].height.saturating_sub(1),
+        y: input_row.y.saturating_add(input_row.height),
+        height: main_chunks[2].height.saturating_sub(input_row.height),
         ..main_chunks[2]
     };
 
@@ -77,13 +89,12 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     app.set_prose_rows(Vec::new());
     let chat = render_content_panels(frame, main_chunks[1], app, theme);
     hud::render_todo_strip(frame, chat, app, theme);
+    images::render_pending_images(frame, chat, app, theme);
     detail::render_detail_view(frame, chat, app, theme);
     if let Some(selection) = app.selection() {
         selection.highlight(frame.buffer_mut());
     }
-    let chat_left = chat.x.saturating_sub(input_row.x);
-
-    input::render_input(frame, input_row, app, theme, chat_left);
+    input::render_input(frame, input_row, app, theme, chat_left, chat_right);
     if status_row.height > 0 {
         hud::render_status_line(frame, inset_edges(status_row), app, theme);
     }
@@ -105,6 +116,35 @@ const fn right_column_visible(app: &App) -> bool {
 /// returning where the Chat panel's body was drawn, below its header bar.
 fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) -> Rect {
     app.clear_pane_chrome();
+    let (swarm, chat, right) = columns(area, app);
+    let (records, sandbox) = split_right_column(right, app);
+    let areas = PanelAreas {
+        swarm,
+        chat: Some(chat),
+        records,
+        sandbox,
+        ..PanelAreas::default()
+    };
+    app.set_panel_areas(areas);
+
+    if let Some(swarm) = areas.swarm {
+        panels::render_agents_panel(frame, swarm, app, theme);
+    }
+    if let Some(chat) = areas.chat {
+        panels::render_chat_panel(frame, chat, app, theme);
+    }
+    if let Some(records) = areas.records {
+        panels::render_record_panel(frame, records, app, theme);
+    }
+    if let Some(sandbox) = areas.sandbox {
+        sandbox::render_sandbox_panel(frame, sandbox, app, theme);
+    }
+    header::split(chat, app.host_chrome()).1
+}
+
+/// Split `area` into the Agents, Chat and right columns. Only `area`'s
+/// width decides where the columns go.
+fn columns(area: Rect, app: &App) -> (Option<Rect>, Rect, Option<Rect>) {
     let swarm_visible = app.swarm_panel_visible();
     let right_visible = right_column_visible(app);
     let splits = app.pane_splits();
@@ -120,7 +160,7 @@ fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &T
             Constraint::Percentage(100 - percent),
         ],
     };
-    let (swarm, chat, right) = match (swarm_visible, right_visible) {
+    match (swarm_visible, right_visible) {
         (true, true) => {
             let default = area.width * 24 / 100;
             let left = splits
@@ -155,30 +195,7 @@ fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &T
             (None, chunks[0], Some(chunks[1]))
         }
         (false, false) => (None, area, None),
-    };
-    let (records, sandbox) = split_right_column(right, app);
-    let areas = PanelAreas {
-        swarm,
-        chat: Some(chat),
-        records,
-        sandbox,
-        ..PanelAreas::default()
-    };
-    app.set_panel_areas(areas);
-
-    if let Some(swarm) = areas.swarm {
-        panels::render_agents_panel(frame, swarm, app, theme);
     }
-    if let Some(chat) = areas.chat {
-        panels::render_chat_panel(frame, chat, app, theme);
-    }
-    if let Some(records) = areas.records {
-        panels::render_record_panel(frame, records, app, theme);
-    }
-    if let Some(sandbox) = areas.sandbox {
-        sandbox::render_sandbox_panel(frame, sandbox, app, theme);
-    }
-    header::split(chat, app.host_chrome()).1
 }
 
 /// Columns the Chat panel keeps however far the dividers are dragged.
@@ -292,14 +309,11 @@ pub(super) fn model_indicator_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span
     let separator = || Span::styled(" · ", Style::default().fg(theme.colors.muted));
     if let Some(level) = app.approval() {
         let (label, color) = match level {
-            ApprovalLevel::Yolo => ("YOLO", theme.colors.error),
+            ApprovalLevel::Yolo => ("YOLO", theme.colors.primary),
             ApprovalLevel::Ask => ("ASK", theme.colors.muted),
             ApprovalLevel::Strict => ("STRICT", theme.colors.primary),
         };
-        spans.push(Span::styled(
-            label,
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        ));
+        spans.push(Span::styled(label, Style::default().fg(color)));
     }
     let badge = match app.mode() {
         PermissionMode::Agent => None,
@@ -313,9 +327,7 @@ pub(super) fn model_indicator_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span
         }
         spans.push(Span::styled(
             badge,
-            Style::default()
-                .fg(theme.colors.warning)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.colors.warning),
         ));
     }
     if app.current_model().is_empty() {

@@ -17,8 +17,9 @@ use aura_ui_terminal::{ApprovalLevel, PermissionMode};
 use tempfile::TempDir;
 use tokio::sync::Semaphore;
 
-/// Answers like a mock model, but holds calls whose last message mentions
-/// "slow" until the test releases them.
+/// Answers like a mock model, but holds turn calls whose last message
+/// mentions "slow" until the test releases them. Auxiliary calls, like the
+/// chat title, quote the prompt and are answered at once.
 struct GatedProvider {
     inner: MockProvider,
     gate: Arc<Semaphore>,
@@ -32,7 +33,8 @@ impl ModelProvider for GatedProvider {
 
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ReasonerError> {
         let last = request.messages.last().map(|m| m.text_content());
-        let slow = last.as_deref().is_some_and(|text| text.contains("slow"));
+        let auxiliary = request.metadata.kind == Some(aura_model::ModelRequestKind::Auxiliary);
+        let slow = !auxiliary && last.as_deref().is_some_and(|text| text.contains("slow"));
         if slow {
             self.gate.acquire().await.unwrap().forget();
         }
@@ -82,6 +84,12 @@ fn fixture() -> (Fixture, mpsc::Receiver<UiCommand>) {
         .unwrap()
         .agent_id();
     let approvals = Arc::new(TerminalApprovals::new(commands_tx.clone(), data.path()));
+    let traces = Traces::new(
+        Some(data.path().join("home")),
+        Some(Arc::new(aura_store_db::TraceStore::for_store(&store))),
+        None,
+        commands_tx.clone(),
+    );
     let parts = AgentHubParts {
         registry,
         definitions: AgentDefinitions::load_or_seed(data.path()).unwrap(),
@@ -103,6 +111,7 @@ fn fixture() -> (Fixture, mpsc::Receiver<UiCommand>) {
         processes: ProcessTable::without_os_scan(None, None),
         agents: None,
         record_panel: RecordPanelAgent::default(),
+        traces,
     };
     let record_observer: Arc<dyn aura_agent_kernel::RecordObserver> = Arc::new(
         UiRecordObserver::new(commands_tx.clone(), RecordPanelAgent::default()),
@@ -209,8 +218,6 @@ fn loop_state<'a>(fixture: &'a Fixture, b: &'a mut Borrowed) -> LoopState<'a> {
         pending_link: None,
         processes: Arc::clone(&fixture.hub.processes),
         approvals: Arc::clone(&fixture.approvals),
-        traces: HashMap::new(),
-        record_router: Arc::new(aura_agent_trace::RecordRouter::new()),
     }
 }
 
@@ -505,10 +512,48 @@ async fn a_harness_notice_never_attaches_files() {
     )
     .await;
     let finished = next_done(&mut done).await;
+    assert_eq!(finished.title, None, "only typed prompts title a chat");
     handle_work_done(&mut state, finished).await;
 
     let prompts = user_texts(&state, first);
     assert!(!prompts[0].contains("remember the milk"), "{prompts:?}");
+}
+
+#[tokio::test]
+async fn the_first_turn_titles_a_placeholder_named_agent() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let (first, second) = (fixture.first, fixture.second);
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+
+    handle_ui_event(&mut state, message(first, "fix the build", true), &links).await;
+    let finished = next_done(&mut done).await;
+    let title = finished
+        .title
+        .clone()
+        .expect("the first turn titles the chat");
+    handle_work_done(&mut state, finished).await;
+    assert_eq!(
+        lock_registry_agent(&fixture, first).title.as_deref(),
+        Some(title.as_str())
+    );
+    assert_eq!(state.idle[&first].messages.len(), 2);
+    let shown = state.hub.agent_summaries();
+    let row = shown.iter().find(|a| a.id == first.to_hex()).unwrap();
+    assert_eq!(row.name, title);
+
+    handle_ui_event(&mut state, message(first, "and again", true), &links).await;
+    let finished = next_done(&mut done).await;
+    assert_eq!(finished.title, None, "an agent is titled once");
+    handle_work_done(&mut state, finished).await;
+
+    handle_ui_event(&mut state, message(second, "quick question", true), &links).await;
+    let finished = next_done(&mut done).await;
+    assert_eq!(finished.title, None, "a name the user picked stays");
+    handle_work_done(&mut state, finished).await;
+    assert_eq!(lock_registry_agent(&fixture, second).title, None);
 }
 
 /// A table whose process manager runs `true` as a background command of
@@ -604,6 +649,7 @@ async fn messages_the_turn_never_saw_run_next() {
             session: Some(session),
             failure: None,
             unseen: vec![(SteerSource::User, "late".to_string())],
+            title: None,
         },
     )
     .await;

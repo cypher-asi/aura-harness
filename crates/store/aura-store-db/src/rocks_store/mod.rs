@@ -135,6 +135,9 @@ impl RocksStore {
             cf::SECRETS,
             cf::PROCESSES,
             cf::PROCESS_RUNS,
+            cf::TRACE_RUNS,
+            cf::TRACE_STEPS,
+            cf::TRACE_INDEX,
         ];
         let mut cf_names = expected_cf_names
             .iter()
@@ -222,6 +225,13 @@ impl RocksStore {
         &self.db
     }
 
+    /// The value-sealing cipher, in sealed mode, for subsystems that
+    /// share the database and must seal the same way.
+    #[must_use]
+    pub const fn cipher(&self) -> Option<&Arc<SealCipher>> {
+        self.cipher.as_ref()
+    }
+
     /// Create write options based on `sync_writes` setting.
     fn write_opts(&self) -> WriteOptions {
         let mut opts = WriteOptions::default();
@@ -265,6 +275,8 @@ impl RocksStore {
                 | cf::SECRETS
                 | cf::PROCESSES
                 | cf::PROCESS_RUNS
+                | cf::TRACE_RUNS
+                | cf::TRACE_STEPS
         )
     }
 

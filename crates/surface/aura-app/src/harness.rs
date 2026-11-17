@@ -95,6 +95,10 @@ pub(crate) struct HubSetup {
     pub record_observer: Option<Arc<dyn RecordObserver>>,
     /// Which agent is on screen; shared with `record_observer`
     pub record_panel: event_loop::RecordPanelAgent,
+    /// Joins record entries into run traces; fed by `record_observer`
+    pub record_router: Option<Arc<aura_agent_trace::RecordRouter>>,
+    /// `AURA_HOME`, where run traces go; `None` records none
+    pub trace_home: Option<PathBuf>,
     /// Where agents' chats and panels go
     pub commands: mpsc::Sender<UiCommand>,
     pub long_run: crate::long_run::LongRunSettings,
@@ -189,6 +193,8 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
         policy,
         record_observer,
         record_panel,
+        record_router,
+        trace_home,
         commands,
         long_run,
         process_manager,
@@ -240,6 +246,15 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
         );
         (host, scheduler)
     });
+    let traces = event_loop::Traces::new(
+        trace_home,
+        Some(Arc::new(aura_store_db::TraceStore::for_store(&store))),
+        record_router,
+        commands.clone(),
+    );
+    if let Some((host, _)) = &host {
+        host.set_turn_observer(Arc::clone(&traces) as Arc<dyn aura_engine::TurnObserver>);
+    }
     let processes = event_loop::ProcessTable::new(
         host.as_ref().map(|(host, _)| host.clone()),
         Some(Arc::clone(&process_manager)),
@@ -283,6 +298,7 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
             processes,
             agents,
             record_panel,
+            traces,
         },
         move |dispatcher| {
             event_loop::KernelFactory::new(

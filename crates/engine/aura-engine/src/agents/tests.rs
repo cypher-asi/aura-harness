@@ -311,6 +311,67 @@ async fn observer_sees_the_spawn_record_and_the_childs_entries() {
     );
 }
 
+#[derive(Default)]
+struct SeenTurns(parking_lot::Mutex<Vec<String>>);
+
+impl TurnObserver for SeenTurns {
+    fn turn_started(&self, turn: &HostedTurn<'_>) {
+        self.0.lock().push(format!(
+            "start {} parent={}",
+            turn.prompt,
+            turn.parent.is_some()
+        ));
+    }
+
+    fn on_event(&self, _agent_id: AgentId, _event: &aura_agent::AgentLoopEvent) {
+        let mut seen = self.0.lock();
+        if seen.last().map(String::as_str) != Some("event") {
+            seen.push("event".into());
+        }
+    }
+
+    fn turn_ended(
+        &self,
+        _agent_id: AgentId,
+        result: Option<&aura_agent::AgentLoopResult>,
+        exit: &SubagentExit,
+    ) {
+        self.0.lock().push(format!(
+            "end result={} {exit:?}",
+            result.is_some_and(|r| r.total_text.contains("leaf"))
+        ));
+    }
+
+    fn agent_removed(&self, _agent_id: AgentId) {
+        self.0.lock().push("removed".into());
+    }
+}
+
+#[tokio::test]
+async fn turn_observer_hears_each_turn_in_order() {
+    let h = harness(AgentHostConfig::default());
+    let seen = Arc::new(SeenTurns::default());
+    h.host.set_turn_observer(seen.clone());
+
+    let result = h
+        .hooks
+        .dispatch(task_request(h.root, "level 1"))
+        .await
+        .unwrap();
+    assert_eq!(result.exit, SubagentExit::Completed, "{result:?}");
+
+    let seen = seen.0.lock().clone();
+    assert_eq!(
+        seen,
+        vec![
+            "start level 1 parent=true".to_string(),
+            "event".to_string(),
+            "end result=true Completed".to_string(),
+            "removed".to_string(),
+        ]
+    );
+}
+
 #[tokio::test]
 async fn task_child_is_visible_while_it_runs() {
     let h = harness(AgentHostConfig::default());

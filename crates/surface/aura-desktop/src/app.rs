@@ -5,7 +5,8 @@
 //! The loop mirrors `aura_ui_terminal::Terminal`: tick every 50 ms (the UI's
 //! animations count ticks), apply agent commands, render the frame, then
 //! copy selections and hand files to an editor when the UI asks. Every
-//! tab is kept up to date; only the one in front is rendered.
+//! tab is kept up to date; only the one in front is rendered, and an idle
+//! tick renders nothing.
 //!
 //! The window has no frame from the system: the tab bar is its title bar,
 //! and its edges resize it. The panels' title bars are the window's too
@@ -33,8 +34,15 @@ use tokio::sync::mpsc;
 
 /// Most commands applied in one update.
 const MAX_BATCH: usize = 1024;
+/// How long commands are gathered into one update after the first
+/// arrives. Every update renders the UI, so agents streaming at once
+/// would otherwise cost a render per command and starve input.
+const BATCH_WINDOW: Duration = Duration::from_millis(16);
 /// The terminal UI's tick; its spinners advance one frame per tick.
 const TICK: Duration = Duration::from_millis(50);
+/// While no agent works, ticks redraw only this often, for the few things
+/// that change with time alone (notices expiring).
+const IDLE_REDRAW_TICKS: u32 = 20;
 /// Half a cursor blink.
 const BLINK: Duration = Duration::from_millis(530);
 /// How often a file opened in an external editor is checked for a save.
@@ -107,6 +115,8 @@ pub struct App {
     focused: bool,
     blink_from: Instant,
     now: Instant,
+    /// Ticks since the last redraw.
+    idle_ticks: u32,
     perf: Perf,
 }
 
@@ -177,6 +187,7 @@ impl App {
             focused: true,
             blink_from: now,
             now,
+            idle_ticks: 0,
             perf: Perf::new(launched),
         };
         let first = app.refresh();
@@ -208,15 +219,7 @@ impl App {
         let bar = canvas(&self.bar)
             .width(Length::Fill)
             .height(Length::Fixed(tab_bar::height(&self.metrics)));
-        let grid = canvas(Grid {
-            screen: &self.screen,
-            chrome: &self.chrome,
-            metrics: self.metrics,
-            palette: self.palette,
-            cursor_on: self.cursor_on(),
-        })
-        .width(Length::Fill)
-        .height(Length::Fill);
+        let grid = canvas(self.grid()).width(Length::Fill).height(Length::Fill);
         let mut area = mouse_area(column![bar, grid]);
         let divider = self.dragging.or(match self.chrome.hover() {
             Some(chrome::Hit::Divider(divider)) => Some(divider),
@@ -238,13 +241,37 @@ impl App {
         element
     }
 
+    /// The canvas program that paints the grid.
+    pub(crate) fn grid(&self) -> Grid<'_> {
+        Grid {
+            screen: &self.screen,
+            chrome: &self.chrome,
+            metrics: self.metrics,
+            palette: self.palette,
+            cursor_on: self.cursor_on(),
+        }
+    }
+
     pub(crate) fn update(&mut self, message: Message) -> Task<Message> {
         let started = Instant::now();
+        let redraw = !matches!(message, Message::Tick(_)) || self.tick_redraws();
         let task = self.handle(message);
         self.tabs.forward_events();
-        let task = Task::batch([task, self.refresh()]);
+        let task = if redraw {
+            self.idle_ticks = 0;
+            Task::batch([task, self.refresh()])
+        } else {
+            task
+        };
         self.perf.update(started.elapsed());
         task
+    }
+
+    /// Whether a tick changes what is drawn: spinners turn while an agent
+    /// works. The cursor blinks in [`Self::view`] without a redraw.
+    fn tick_redraws(&mut self) -> bool {
+        self.idle_ticks += 1;
+        self.idle_ticks >= IDLE_REDRAW_TICKS || self.tabs.iter().any(crate::tab::Tab::busy)
     }
 
     /// The part of the window below the tab bar, which the grid fills.
@@ -657,7 +684,8 @@ impl App {
                         iced::clipboard::write(text).chain(Task::done(Message::Copied(chars))),
                     );
                 }
-                self.screen.update(frame.buffer);
+                let repainted = self.screen.update(frame.buffer, tui.prose_rows());
+                self.perf.repaint(repainted);
                 let at = (
                     self.metrics.origin(area, cols, rows),
                     self.metrics,
@@ -857,17 +885,19 @@ fn modified(path: &std::path::Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
-/// Commands from the event loop, grouped so a burst is applied in one update.
+/// Commands from the event loop, grouped so everything that arrives within
+/// [`BATCH_WINDOW`] is applied in one update.
 fn command_batches(commands: mpsc::Receiver<UiCommand>) -> impl Stream<Item = Message> {
     futures::stream::unfold(Some(commands), |commands| async move {
         let mut commands = commands?;
         match commands.recv().await {
             Some(first) => {
                 let mut batch = vec![first];
+                let deadline = tokio::time::Instant::now() + BATCH_WINDOW;
                 while batch.len() < MAX_BATCH {
-                    match commands.try_recv() {
-                        Ok(cmd) => batch.push(cmd),
-                        Err(_) => break,
+                    match tokio::time::timeout_at(deadline, commands.recv()).await {
+                        Ok(Some(cmd)) => batch.push(cmd),
+                        Ok(None) | Err(_) => break,
                     }
                 }
                 Some((Message::Commands(batch), Some(commands)))
@@ -956,5 +986,32 @@ mod tests {
         assert!(matches!(at(799.0, 599.0), Some(SouthEast)));
         assert!(at(400.0, 300.0).is_none());
         assert!(at(400.0, 10.0).is_none(), "the tab bar below the band");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn commands_trickling_in_within_a_frame_are_one_update() {
+        use futures::StreamExt;
+        let (tx, rx) = mpsc::channel(8);
+        let sender = tokio::spawn(async move {
+            for i in 0..5 {
+                tx.send(UiCommand::SetStatus(i.to_string())).await.unwrap();
+                tokio::time::sleep(BATCH_WINDOW / 8).await;
+            }
+            tokio::time::sleep(BATCH_WINDOW * 2).await;
+            tx.send(UiCommand::SetStatus("later".into())).await.unwrap();
+        });
+        let mut batches = std::pin::pin!(command_batches(rx));
+        let sizes: Vec<usize> = batches
+            .by_ref()
+            .take(2)
+            .map(|message| match message {
+                Message::Commands(batch) => batch.len(),
+                _ => 0,
+            })
+            .collect()
+            .await;
+        assert_eq!(sizes, [5, 1]);
+        sender.await.unwrap();
+        assert!(matches!(batches.next().await, Some(Message::SessionEnded)));
     }
 }

@@ -120,6 +120,12 @@ pub struct RunMeta {
     /// Probability the arm was chosen with, for randomized evals.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arm_propensity: Option<f64>,
+    /// Hex id of the agent whose conversation this run records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    /// Run of the agent that spawned this one, for spawned agents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spawned_by: Option<String>,
 }
 
 const fn default_true() -> bool {
@@ -149,6 +155,8 @@ impl RunMeta {
             branch_step: None,
             arm: None,
             arm_propensity: None,
+            agent_id: None,
+            spawned_by: None,
         }
     }
 }

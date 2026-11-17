@@ -18,6 +18,7 @@ use super::LoopState;
 use aura_context_prompts::model_messages::build_plan::build_plan_prompt;
 use aura_core_types::AgentId;
 use aura_exec_tools::plan_tools::{is_plan_path, todo_items, PlanFile, TodoStatus, PLANS_DIR};
+use aura_exec_tools::todo::TodoItem;
 use aura_ui_terminal::events::{PlanView, TodoState, TodoView};
 use aura_ui_terminal::UiCommand;
 use std::path::Path;
@@ -82,6 +83,26 @@ const fn todo_state(status: TodoStatus) -> TodoState {
         TodoStatus::Completed => TodoState::Completed,
         TodoStatus::Cancelled => TodoState::Cancelled,
     }
+}
+
+/// Whether `todos` is the todo list of the plan at `path` (relative to
+/// `workspace`): the same todo ids, whatever their order or status.
+///
+/// `/build` seeds the agent's list from the plan, so a session whose list
+/// still has the plan's ids is building it, even after the session was
+/// reopened and its in-memory build flag was lost.
+pub(crate) fn is_plan_todo_list(workspace: &Path, path: &str, todos: &[TodoItem]) -> bool {
+    if todos.is_empty() || !is_plan_path(path) {
+        return false;
+    }
+    let Ok(plan) = PlanFile::load(&workspace.join(path)) else {
+        return false;
+    };
+    let mut plan_ids: Vec<&str> = plan.meta.todos.iter().map(|t| t.id.as_str()).collect();
+    let mut list_ids: Vec<&str> = todos.iter().map(|t| t.id.as_str()).collect();
+    plan_ids.sort_unstable();
+    list_ids.sort_unstable();
+    plan_ids == list_ids
 }
 
 /// Show `agent_id` its plan, or hide its plan strip when it has none.
@@ -199,5 +220,36 @@ mod tests {
         assert_eq!(names, ["New", "Old"]);
         assert_eq!(plans[0].path, ".aura/plans/new_00000002.plan.md");
         assert_eq!(plans[0].todos[0].state, TodoState::Completed);
+    }
+
+    #[test]
+    fn a_list_with_the_plans_todo_ids_is_its_build_list() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(PLANS_DIR)).unwrap();
+        write_plan(dir.path(), "p_00000001.plan.md", "P", 0);
+        let path = ".aura/plans/p_00000001.plan.md";
+        let item = |id: &str, status| TodoItem {
+            id: id.into(),
+            content: "anything".into(),
+            status,
+        };
+
+        // Status and content may change while building; the ids decide.
+        assert!(is_plan_todo_list(
+            dir.path(),
+            path,
+            &[item("a", TodoStatus::InProgress)]
+        ));
+        assert!(!is_plan_todo_list(
+            dir.path(),
+            path,
+            &[item("b", TodoStatus::Pending)]
+        ));
+        assert!(!is_plan_todo_list(dir.path(), path, &[]));
+        assert!(!is_plan_todo_list(
+            dir.path(),
+            ".aura/plans/missing.plan.md",
+            &[item("a", TodoStatus::Pending)]
+        ));
     }
 }

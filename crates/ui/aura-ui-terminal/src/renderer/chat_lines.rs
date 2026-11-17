@@ -9,7 +9,7 @@ use super::segments::{
     reply_meta,
 };
 use super::text::Measure;
-use crate::app::{ToggleRow, ToggleTarget};
+use crate::app::{ImageHit, ToggleRow, ToggleTarget};
 use crate::components::{Activity, Message, MessageRole};
 use crate::Theme;
 use ratatui::text::Line;
@@ -83,6 +83,8 @@ pub(crate) struct BlockLines {
     /// Rows that expand or collapse something, `line` counted from the
     /// block's first line
     pub toggles: Vec<ToggleRow>,
+    /// Image thumbnails, `line` counted from the block's first line
+    pub images: Vec<ImageHit>,
     /// Whether each line is prose, the user's or the agent's flowing text:
     /// `Some` of the columns its marker, quote bar or indent takes. Lines
     /// past the end are not.
@@ -197,6 +199,16 @@ impl ChatLineCache {
                         single_lines(members[0], place, (width, measure), theme, spinner)
                     }
                 };
+                let mut images = Vec::new();
+                if !self.terminal && members.len() == 1 && !members[0].images().is_empty() {
+                    let (more, hits) = super::images::message_image_lines(members[0], width, theme);
+                    let start = lines.len();
+                    images.extend(hits.into_iter().map(|hit| ImageHit {
+                        line: start + hit.line,
+                        ..hit
+                    }));
+                    lines.extend(more);
+                }
                 lines.extend(reply_footer(&place.footer, width, theme));
                 self.entries.insert(
                     key,
@@ -207,6 +219,7 @@ impl ChatLineCache {
                             && members[0].role() == MessageRole::User,
                         lines,
                         toggles,
+                        images,
                         prose,
                     },
                 );

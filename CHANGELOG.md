@@ -7,6 +7,50 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Many agents at once
+
+##### Fixed
+
+- The desktop app no longer slows down and stops answering input while
+  many agents stream at once. It rendered the UI once per command the
+  agents sent, which with 30 agents took more than the whole second;
+  commands arriving within 16 ms are now applied in one update.
+- The desktop app repaints only the rows of the grid that changed. Any
+  change, such as a streamed word or a ticking timer, used to repaint and
+  re-shape every row; replaying a streamed reply now repaints 77% fewer
+  rows. `AURA_DESKTOP_PERF` reports the rows repainted.
+- The Sandbox tree is read again once per tick rather than after every
+  tool call of every agent.
+- The terminal UI takes the agents' commands every 5 ms while it waits
+  for input, rather than once a frame, so a busy swarm no longer fills
+  the command channel and holds up the agents and the event loop.
+
+### Chat titles
+
+##### Added
+
+- Agents with a placeholder name (`Agent`, `Agent N`, `Terminal Agent`)
+  get a short title for their chat after their first turn, such as
+  "Task build issue", written by Claude Haiku and shown in the agents
+  list and the Processes tab. The title is kept in `agents.json`; the
+  agent's name and identity don't change. Names the user picked and
+  permanent-agent instances are left alone. `AURA_TITLE_MODEL` picks
+  another model.
+
+### Projects list
+
+##### Added
+
+- A "+" at the right end of a project's row adds an agent to the project.
+  Agents added to a project, this way or by adding a permanent agent to
+  it, are listed at the same level as its first agent; only agents
+  another agent spawned are indented under it. Registries that linked
+  added agents under the first agent are moved on load.
+- An ARCHIVE tab in the agents panel. Delete on an agent in PROJECTS (or
+  `/archive`) moves it there with the agents under it, and Enter brings
+  it back. Shift+Delete (or `/remove-project`) removes the project from
+  the list after a `y`; its records and folder stay on disk.
+
 ### Approval levels
 
 ##### Added

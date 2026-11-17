@@ -78,6 +78,9 @@ pub(super) enum Task {
         steering: Steering,
         limits: LongRunSettings,
         recorder: Option<Arc<RunRecorder>>,
+        /// Model that titles the chat once the turn succeeds; `None` when
+        /// the agent needs no title.
+        title_model: Option<String>,
     },
     /// A typed shell command.
     Command { command: String, cols: u16 },
@@ -98,6 +101,8 @@ pub(super) struct WorkDone {
     pub failure: Option<String>,
     /// Messages sent into the turn that the model never got, to run next.
     pub unseen: Vec<(SteerSource, String)>,
+    /// Title the turn gave the agent's chat.
+    pub title: Option<String>,
 }
 
 /// Run `task` on `session` in the background, reporting to `ui`, and send
@@ -120,7 +125,7 @@ pub(super) fn spawn(
                     None,
                     Outcome {
                         failure: Some(format!("Agent stopped unexpectedly: {e}")),
-                        unseen: Vec::new(),
+                        ..Outcome::default()
                     },
                 )
             }
@@ -131,6 +136,7 @@ pub(super) fn spawn(
                 session,
                 failure: outcome.failure,
                 unseen: outcome.unseen,
+                title: outcome.title,
             })
             .await;
     });
@@ -141,6 +147,7 @@ pub(super) fn spawn(
 struct Outcome {
     failure: Option<String>,
     unseen: Vec<(SteerSource, String)>,
+    title: Option<String>,
 }
 
 async fn run(
@@ -157,6 +164,7 @@ async fn run(
             steering,
             limits,
             recorder,
+            title_model,
         } => {
             let turn = TurnParts {
                 agent_loop: &agent_loop,
@@ -164,6 +172,7 @@ async fn run(
                 steering: &steering,
                 limits,
                 recorder,
+                title_model,
             };
             run_prompt(&mut session, prompt, turn, &ui, &cancel).await
         }
@@ -186,6 +195,7 @@ struct TurnParts<'a> {
     steering: &'a Steering,
     limits: LongRunSettings,
     recorder: Option<Arc<RunRecorder>>,
+    title_model: Option<String>,
 }
 
 /// Record `text` on `session` as a prompt from the user. The kernels'
@@ -237,6 +247,7 @@ async fn run_prompt(
             &prompt.text,
         );
     }
+    let title_prompt = turn.title_model.is_some().then(|| prompt.text.clone());
     session.messages.push(model_message(session, prompt).await);
 
     let (process_result, forwarded) = run_agent_turn(
@@ -272,9 +283,24 @@ async fn run_prompt(
             .await;
     }
 
+    let mut title = None;
     let failure = match process_result {
         Ok(result) => {
             handle_agent_success(session, result, &forwarded, ui, &seen).await;
+            if let (Some(model), Some(prompt), false) =
+                (&turn.title_model, &title_prompt, cancelled)
+            {
+                title = Some(
+                    super::titles::generate(
+                        &session.model_gateway,
+                        turn.agent_loop.config(),
+                        model,
+                        prompt,
+                        &session.messages,
+                    )
+                    .await,
+                );
+            }
             None
         }
         Err(e) if cancelled => {
@@ -287,7 +313,11 @@ async fn run_prompt(
             Some(e.to_string())
         }
     };
-    Outcome { failure, unseen }
+    Outcome {
+        failure,
+        unseen,
+        title,
+    }
 }
 
 /// The user message the model gets for `prompt`: its images, then its

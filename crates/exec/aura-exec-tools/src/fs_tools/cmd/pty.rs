@@ -189,6 +189,9 @@ fn apply_terminal_env(builder: &mut CommandBuilder, cols: u16) {
     builder.env("PAGER", "cat");
     builder.env("GIT_PAGER", "cat");
     builder.env("GIT_TERMINAL_PROMPT", "0");
+    if let Some(jobs) = super::build_jobs_limit() {
+        builder.env(super::BUILD_JOBS_VAR, jobs);
+    }
 }
 
 fn read_until_closed(mut reader: Box<dyn Read + Send>, tx: &mpsc::Sender<Vec<u8>>) {

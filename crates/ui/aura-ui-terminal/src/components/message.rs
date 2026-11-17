@@ -10,9 +10,11 @@ use ratatui::{
     Frame,
 };
 
+use crate::app::image_preview::ImagePreview;
 use crate::components::Activity;
 use crate::events::{CallUsage, FileDiffData, MessageRole};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 static NEXT_MESSAGE_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -43,6 +45,8 @@ pub struct Message {
     usage: Option<CallUsage>,
     /// Set when the message shows file changes
     diff: Option<DiffBlock>,
+    /// Images the user pasted into the message, drawn under its text
+    images: Vec<Arc<ImagePreview>>,
     /// Unique to this message, clones included
     id: u64,
     /// Bumped on every change
@@ -62,6 +66,7 @@ impl Clone for Message {
             model: self.model.clone(),
             usage: self.usage,
             diff: self.diff.clone(),
+            images: self.images.clone(),
             id: next_message_id(),
             revision: 0,
         }
@@ -103,6 +108,7 @@ impl Message {
             model: None,
             usage: None,
             diff: None,
+            images: Vec::new(),
             id: next_message_id(),
             revision: 0,
         }
@@ -117,6 +123,20 @@ impl Message {
             files,
         });
         message
+    }
+
+    /// The message with `images` drawn under its text.
+    #[must_use]
+    pub fn with_images(mut self, images: Vec<Arc<ImagePreview>>) -> Self {
+        self.images = images;
+        self.touch();
+        self
+    }
+
+    /// Images pasted into the message.
+    #[must_use]
+    pub fn images(&self) -> &[Arc<ImagePreview>] {
+        &self.images
     }
 
     /// The file changes this message shows, if it is a diff.

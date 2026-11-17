@@ -1,7 +1,7 @@
 //! Auxiliary LLM-call prompts (compaction summary, etc.).
 //!
 //! "Auxiliary" means a call to the model that is not the main agent
-//! turn — today only the compaction-summary call lives here. Each
+//! turn: the compaction summary and the chat title. Each
 //! submodule owns one model-facing string the harness sends so the
 //! invariant "every model-facing string lives under
 //! `crates/aura-prompts/src/`" holds for non-system-prompt requests
@@ -16,4 +16,5 @@
 //! materialises on a Windows checkout. Using `auxiliary` here keeps
 //! the module portable across the whole engineering fleet.
 
+pub mod chat_title;
 pub mod compaction;

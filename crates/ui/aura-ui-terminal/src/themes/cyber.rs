@@ -9,7 +9,7 @@
 //! | Purple      | #cb01f4  | (203, 1, 244)  | Code block keywords                 |
 //! | Red         | #f4012a  | (244, 1, 42)   | Errors, danger                      |
 //! | White       | #ffffff  | (255, 255, 255)| Text, secondary accent, pending     |
-//! | Light gray  | #d4d4d4  | (212, 212, 212)| Body text of chat replies           |
+//! | Light gray  | #e6e6e6  | (230, 230, 230)| Body text of chat replies           |
 //! | Gray        | #888888  | (136, 136, 136)| Muted text, secondary info          |
 //! | Black       | #0d0d0d  | (13, 13, 13)   | Background, text on selection       |
 //! | Dark gray   | #1e1e1e  | (30, 30, 30)   | List cell                           |
@@ -37,8 +37,8 @@ pub const RED: Color = Color::Rgb(244, 1, 42);
 /// White - Primary text (#ffffff)
 pub const WHITE: Color = Color::White;
 
-/// Light gray - Body text of chat replies (#d4d4d4)
-pub const LIGHT_GRAY: Color = Color::Rgb(212, 212, 212);
+/// Light gray - Body text of chat replies (#e6e6e6)
+pub const LIGHT_GRAY: Color = Color::Rgb(230, 230, 230);
 
 /// Gray - Muted text, secondary info (#888888)
 pub const GRAY: Color = Color::Rgb(136, 136, 136);
@@ -74,7 +74,7 @@ pub fn cyber_theme() -> Theme {
             // Base colors
             background: BLACK, // #0d0d0d - deep black
             foreground: WHITE, // #ffffff - white text
-            text: LIGHT_GRAY,  // #d4d4d4 - chat reply body
+            text: LIGHT_GRAY,  // #e6e6e6 - chat reply body
 
             // Accent colors
             primary: CYAN,    // #01f4cb - cyan (primary accent)

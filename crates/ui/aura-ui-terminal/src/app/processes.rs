@@ -10,6 +10,9 @@ use crate::events::{ProcessSummary, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
+/// Rows PageUp/PageDown move the highlight in every side-panel tab.
+pub(super) const SIDE_PAGE: isize = 10;
+
 /// Views of the right-hand panel below the Record panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SidePanelTab {
@@ -162,13 +165,11 @@ impl App {
         match key.code {
             KeyCode::Up => self.move_process_selection(-1),
             KeyCode::Down => self.move_process_selection(1),
-            KeyCode::PageUp => self.move_process_selection(-5),
-            KeyCode::PageDown => self.move_process_selection(5),
+            KeyCode::PageUp => self.move_process_selection(-SIDE_PAGE),
+            KeyCode::PageDown => self.move_process_selection(SIDE_PAGE),
             KeyCode::Home => self.select_process(0),
             KeyCode::End => self.select_process(usize::MAX),
             KeyCode::Enter => self.open_selected_process(),
-            KeyCode::Left => self.show_side_tab(self.side_tab.prev()),
-            KeyCode::Right => self.show_side_tab(self.side_tab.next()),
             _ => {}
         }
     }
@@ -186,18 +187,44 @@ impl App {
         true
     }
 
-    /// Letter shortcuts of the Processes tab, used while the input is empty.
-    pub(super) fn handle_processes_shortcut(&mut self, key: KeyEvent) -> bool {
-        match key.code {
-            KeyCode::Char('o') => self.jump_to_selected_owner(),
-            KeyCode::Char('k') | KeyCode::Delete => self.request_kill_selected(),
-            KeyCode::Char('l') => self.open_selected_log(),
+    /// Keys of the side panel's lists that would otherwise go to the input,
+    /// used while it is empty: Home/End jump, Space folds in the trees, and
+    /// each tab's letters (`o`/`k`/`l` on Processes, `g` on Trace).
+    pub(super) fn handle_side_list_shortcut(&mut self, key: KeyEvent) -> bool {
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            return false;
+        }
+        match (self.side_tab, key.code) {
+            (_, KeyCode::Home | KeyCode::End) => {
+                let index = if key.code == KeyCode::End {
+                    usize::MAX
+                } else {
+                    0
+                };
+                match self.side_tab {
+                    SidePanelTab::Sandbox => self.sandbox.select(index),
+                    SidePanelTab::Processes => self.select_process(index),
+                    SidePanelTab::Trace => self.trace_feed.select(index),
+                    SidePanelTab::Plans => self.plan_list.select(index),
+                }
+            }
+            (SidePanelTab::Sandbox, KeyCode::Char(' ')) => self.sandbox.toggle_selected(),
+            (SidePanelTab::Plans, KeyCode::Char(' ')) => self.plan_list.toggle_selected(),
+            (SidePanelTab::Processes, KeyCode::Char('o')) => self.jump_to_selected_owner(),
+            (SidePanelTab::Processes, KeyCode::Char('k') | KeyCode::Delete) => {
+                self.request_kill_selected();
+            }
+            (SidePanelTab::Processes, KeyCode::Char('l')) => self.open_selected_log(),
+            (SidePanelTab::Trace, KeyCode::Char('g')) => self.open_selected_trace_in_graph(),
             _ => return false,
         }
         true
     }
 
-    fn open_selected_process(&mut self) {
+    pub(super) fn open_selected_process(&mut self) {
         if let Some(process) = self.selected_process_data().cloned() {
             self.open_detail(DetailView::Process(Box::new(process)));
         }
@@ -286,29 +313,33 @@ impl App {
         true
     }
 
-    /// Clicking a tab shows it; clicking a row highlights it, and clicking
-    /// the highlighted row opens it.
+    /// Clicking a tab shows it. Clicking a row highlights it and opens it
+    /// over the chat panel at once, the same in every tab: a file, a
+    /// process's details, a trace step, a plan (at the clicked todo).
+    /// Directories have nothing to open, so a click folds them; a plan
+    /// folds when its fold glyph is clicked.
     pub(super) fn click_side_panel(&mut self, column: u16, row: u16) {
         if let Some(tab) = self.side_tab_at(column, row) {
             self.show_side_tab(tab);
             return;
         }
         match self.side_tab {
-            SidePanelTab::Sandbox => self.click_sandbox_row(column, row),
+            SidePanelTab::Sandbox => {
+                if let Some(index) = self.sandbox_row_at(column, row) {
+                    self.sandbox.select(index);
+                    self.activate_selected_sandbox_row();
+                }
+            }
             SidePanelTab::Processes => {
                 if let Some(index) = self.process_row_at(column, row) {
-                    if index == self.selected_process {
-                        self.open_selected_process();
-                    }
-                    self.selected_process = index;
+                    self.select_process(index);
+                    self.open_selected_process();
                 }
             }
             SidePanelTab::Trace => {
                 if let Some(index) = self.trace_row_at(column, row) {
-                    if index == self.trace_feed.selected() {
-                        self.open_selected_trace_entry();
-                    }
                     self.trace_feed.select(index);
+                    self.open_selected_trace_entry();
                 }
             }
             SidePanelTab::Plans => self.click_plan_row(column, row),
@@ -317,6 +348,15 @@ impl App {
 
     fn side_tab_at(&self, column: u16, row: u16) -> Option<SidePanelTab> {
         tab_at(self.areas.side_tabs, column, row, SidePanelTab::layout)
+    }
+
+    pub(super) fn sandbox_row_at(&self, column: u16, row: u16) -> Option<usize> {
+        let rows = self
+            .areas
+            .sandbox_rows
+            .filter(|&rows| contains(Some(rows), column, row))?;
+        let index = self.areas.sandbox_scroll + usize::from(row - rows.y);
+        (index < self.sandbox.rows().len()).then_some(index)
     }
 
     fn trace_row_at(&self, column: u16, row: u16) -> Option<usize> {
@@ -337,19 +377,32 @@ impl App {
         (index < self.processes.len()).then_some(index)
     }
 
-    /// Clickable item of the side panel at a screen cell.
+    /// Clickable item of the side panel at a screen cell: a tab label, or
+    /// a row of the open tab.
     pub(super) fn hovered_side_panel(&self, column: u16, row: u16) -> Option<HoverTarget> {
         if let Some(tab) = self.side_tab_at(column, row) {
             return Some(HoverTarget::SideTab(tab));
         }
         match self.side_tab {
+            SidePanelTab::Sandbox => self
+                .sandbox_row_at(column, row)
+                .map(HoverTarget::SandboxRow),
             SidePanelTab::Processes => self
                 .process_row_at(column, row)
                 .map(HoverTarget::ProcessRow),
+            SidePanelTab::Trace => self.trace_row_at(column, row).map(HoverTarget::TraceRow),
             SidePanelTab::Plans => self.plan_row_at(column, row).map(HoverTarget::PlanRow),
-            SidePanelTab::Sandbox | SidePanelTab::Trace => None,
         }
     }
+}
+
+/// Whether `column` falls on the icon of a side-panel row drawn at
+/// `depth` in rows starting at `rows_x`: the icon column of
+/// `renderer::panels::list_row`, one leading space and two per level in.
+pub(super) fn on_row_icon(column: u16, rows_x: u16, depth: usize) -> bool {
+    let start = 1 + 2 * depth;
+    let offset = usize::from(column.saturating_sub(rows_x));
+    column >= rows_x && (start..start + crate::animation::AURA_WIDTH + 1).contains(&offset)
 }
 
 #[cfg(test)]
@@ -392,20 +445,34 @@ mod tests {
     }
 
     #[test]
-    fn shift_arrows_switch_tabs_from_either_tab() {
+    fn shift_arrows_switch_tabs_and_plain_arrows_stay_in_the_list() {
         let mut app = App::new();
         app.focus = PanelFocus::Sandbox;
         app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
         assert_eq!(app.side_tab(), SidePanelTab::Processes);
         app.handle_key(key(KeyCode::Left));
+        assert_eq!(app.side_tab(), SidePanelTab::Processes);
+        app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
         assert_eq!(app.side_tab(), SidePanelTab::Sandbox);
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
         assert_eq!(app.side_tab(), SidePanelTab::Plans);
-        app.handle_key(key(KeyCode::Left));
+        app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
         assert_eq!(app.side_tab(), SidePanelTab::Trace);
         app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.side_tab(), SidePanelTab::Trace);
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
         app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
         assert_eq!(app.side_tab(), SidePanelTab::Sandbox);
+    }
+
+    #[test]
+    fn home_and_end_move_the_list_not_the_input() {
+        let (mut app, _rx) = app();
+        app.handle_key(key(KeyCode::End));
+        assert_eq!(app.selected_process(), 2);
+        app.handle_key(key(KeyCode::Home));
+        assert_eq!(app.selected_process(), 0);
+        assert!(app.input().is_empty());
     }
 
     #[test]
@@ -479,12 +546,39 @@ mod tests {
         assert_eq!(app.hover(), Some(HoverTarget::ProcessRow(1)));
         app.handle_mouse(click(82, 14));
         assert_eq!(app.selected_process(), 1);
-        assert!(app.detail_view().is_none());
-        app.handle_mouse(click(82, 14));
-        assert!(matches!(app.detail_view(), Some(DetailView::Process(_))));
+        assert!(
+            matches!(app.detail_view(), Some(DetailView::Process(p)) if p.id == "b"),
+            "one click opens the process"
+        );
 
         app.close_detail();
         app.handle_mouse(click(82, 11));
         assert_eq!(app.side_tab(), SidePanelTab::Sandbox);
+    }
+
+    #[test]
+    fn trace_rows_hover_and_open_on_one_click() {
+        use crate::events::{TraceNode, TraceNodeStatus};
+        let mut app = App::new();
+        app.trace_feed.push(
+            "r",
+            &[TraceNode {
+                id: "s1".into(),
+                kind: "iteration".into(),
+                label: "step".into(),
+                status: TraceNodeStatus::Ok,
+                ..TraceNode::default()
+            }],
+        );
+        app.close_detail();
+        app.show_side_tab(SidePanelTab::Trace);
+        app.areas.sandbox = Some(Rect::new(80, 10, 30, 12));
+        app.set_trace_rows_area(Rect::new(81, 13, 28, 8), 0);
+        assert_eq!(
+            app.hovered_side_panel(82, 13),
+            Some(HoverTarget::TraceRow(0))
+        );
+        app.click_side_panel(82, 13);
+        assert!(matches!(app.detail_view(), Some(DetailView::File(_))));
     }
 }

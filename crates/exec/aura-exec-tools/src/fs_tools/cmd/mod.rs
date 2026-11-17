@@ -206,7 +206,8 @@ fn program_command(
     Ok((cmd, display, working_dir))
 }
 
-/// Disable colored / progress output for spawned child processes.
+/// Disable colored / progress output for spawned child processes, and
+/// cap Cargo's build parallelism.
 ///
 /// Applied uniformly to every command the harness launches so we never
 /// have to worry about ANSI escape sequences or `\r`-driven progress
@@ -218,6 +219,21 @@ fn apply_plain_output_env(cmd: &mut std::process::Command) {
     cmd.env("CLICOLOR", "0");
     cmd.env("CLICOLOR_FORCE", "0");
     cmd.env("TERM", "dumb");
+    if let Some(jobs) = build_jobs_limit() {
+        cmd.env(BUILD_JOBS_VAR, jobs);
+    }
+}
+
+const BUILD_JOBS_VAR: &str = "CARGO_BUILD_JOBS";
+
+/// Half the CPUs for Cargo unless the user picked a job count, so a build
+/// started by one agent leaves room for the UI and other agents.
+fn build_jobs_limit() -> Option<String> {
+    if std::env::var_os(BUILD_JOBS_VAR).is_some() {
+        return None;
+    }
+    let cpus = std::thread::available_parallelism().map_or(2, std::num::NonZeroUsize::get);
+    Some((cpus / 2).max(1).to_string())
 }
 
 /// Isolate each command tool invocation from the harness process group.

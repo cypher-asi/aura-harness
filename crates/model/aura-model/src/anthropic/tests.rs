@@ -709,6 +709,26 @@ fn test_resolve_thinking_auto_for_aura_alias_capable_model() {
 }
 
 #[test]
+fn test_resolve_thinking_requests_summarized_display() {
+    // Opus 4.7+ / Claude 5 default `display` to "omitted" (empty thinking
+    // text); we must opt into summaries so reasoning is visible.
+    for model in [
+        "aura-claude-opus-4-7",
+        "aura-claude-opus-5",
+        "claude-3-7-sonnet",
+    ] {
+        let request = ModelRequest::builder(model, "system")
+            .max_tokens(8192)
+            .try_build()
+            .unwrap();
+        let thinking = resolve_thinking(&request, model).unwrap();
+        assert_eq!(thinking.display, Some("summarized"), "{model}");
+        let json = serde_json::to_value(&thinking).unwrap();
+        assert_eq!(json["display"], "summarized", "{model}");
+    }
+}
+
+#[test]
 fn test_resolve_thinking_auto_for_opus_5() {
     let request = ModelRequest::builder("aura-claude-opus-5", "system")
         .max_tokens(8192)

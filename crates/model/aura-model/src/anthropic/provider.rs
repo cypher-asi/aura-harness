@@ -44,18 +44,6 @@ const fn millis_as_u64(elapsed: u128) -> u64 {
     }
 }
 
-/// Saturating cast from a `Duration::as_millis()` result (`u128`) to
-/// the `i64` epoch-style fields some observability frames carry. Same
-/// bounds rationale as [`millis_as_u64`].
-#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)] // saturate-on-overflow.
-const fn millis_as_i64(elapsed: u128) -> i64 {
-    if elapsed > i64::MAX as u128 {
-        i64::MAX
-    } else {
-        elapsed as i64
-    }
-}
-
 /// Set of ASCII bytes that frequently appear in code-pattern WAF
 /// signatures (Python slicing, comparison/assignment operators,
 /// boolean ops, function calls, array indexing, etc.). When the
@@ -388,9 +376,6 @@ impl AnthropicProvider {
                 "serialize Anthropic request body: {e}"
             )))
         })?;
-        // #region agent log
-        debug_log_waf_safe_serialization(model, body_bytes.len());
-        // #endregion
 
         let effective_cap = self.effective_body_cap(body_cap_override);
         let capped_bytes = self.apply_body_cap(model, body_bytes, effective_cap);
@@ -485,9 +470,7 @@ impl AnthropicProvider {
             self.build_request(request_ctx, model, final_bytes, request_summary.stream)?;
         throttle_outbound_request(self.config.min_request_interval_ms, model).await;
 
-        // #region agent log
         let send_started_at = std::time::Instant::now();
-        // #endregion
 
         // Bound connection/header stalls without expiring a healthy SSE body.
         let send_result = tokio::time::timeout(
@@ -500,20 +483,6 @@ impl AnthropicProvider {
             Ok(resp) => resp,
             Err(e) => {
                 let elapsed_ms = millis_as_u64(send_started_at.elapsed().as_millis());
-                // #region agent log
-                let send_error_text = format!("send_error: {e}");
-                debug_log_response_received(
-                    request_ctx,
-                    model,
-                    &request_summary,
-                    elapsed_ms,
-                    None,
-                    None,
-                    None,
-                    None,
-                    Some(send_error_text.as_str()),
-                );
-                // #endregion
                 error!(error = %e, "Model provider API request failed");
                 let is_timeout = e.is_timeout();
                 let err_str = e.to_string();
@@ -540,55 +509,7 @@ impl AnthropicProvider {
             }
         };
 
-        // #region agent log
-        // Capture the shape of every outbound `/v1/messages`
-        // round-trip — request fingerprint + response status + a
-        // handful of WAF-relevant response headers — so we can
-        // compare chat (success) vs dev-loop (still 403 after the
-        // header fix landed) without re-parsing the harness tracing
-        // log. The header fix verified by line 13 of debug-95fd5c.log
-        // means all four `X-Aura-*` headers now reach the wire on
-        // the dev-loop path; the next debugging pass needs to
-        // discriminate between body-content WAF rules, retry-rate
-        // accumulation, and per-edge Cloudflare behavior, all of
-        // which are observable from the response side here.
         let elapsed_ms = millis_as_u64(send_started_at.elapsed().as_millis());
-        let status_code = response.status().as_u16();
-        let cf_ray = response
-            .headers()
-            .get("cf-ray")
-            .and_then(|v| v.to_str().ok())
-            .map(String::from);
-        let server_header = response
-            .headers()
-            .get("server")
-            .and_then(|v| v.to_str().ok())
-            .map(String::from);
-        let resp_content_type = response
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .map(String::from);
-        debug_log_response_received(
-            request_ctx,
-            model,
-            &request_summary,
-            elapsed_ms,
-            Some(status_code),
-            cf_ray.as_deref(),
-            server_header.as_deref(),
-            resp_content_type.as_deref(),
-            None,
-        );
-        if status_code == 403 {
-            debug_log_cf_403_details(
-                model,
-                request_ctx.aura_session_id.as_deref(),
-                &request_summary,
-                response.headers(),
-            );
-        }
-        // #endregion
 
         if !response.status().is_success() {
             // Error bodies are buffered, even for streaming requests. They
@@ -667,17 +588,6 @@ impl AnthropicProvider {
             "Request body exceeded `AURA_LLM_EMERGENCY_BODY_CAP_BYTES`; \
              trimmed in place to stay under the proactive Cloudflare safety budget"
         );
-        // #region agent log
-        let cap_detail = format!("mode={mode},dropped_messages={dropped_messages}");
-        debug_log_body_cap_fired(
-            model,
-            original_len,
-            capped.len(),
-            cap,
-            true,
-            Some(cap_detail.as_str()),
-        );
-        // #endregion
         capped
     }
 
@@ -695,16 +605,6 @@ impl AnthropicProvider {
         streaming: bool,
     ) -> Result<reqwest::RequestBuilder, ApiError> {
         let token = request_ctx.auth_token.as_deref();
-
-        // #region agent log
-        debug_log_outbound_request(
-            request_ctx,
-            model,
-            body_bytes.len(),
-            token.unwrap_or("<public-guest>"),
-            &self.config.base_url,
-        );
-        // #endregion
 
         let client = if streaming {
             &self.streaming_client
@@ -786,258 +686,6 @@ impl AnthropicProvider {
         Ok(req_builder)
     }
 }
-
-// #region agent log
-fn debug_log_cf_403_details(
-    model: &str,
-    aura_session_id: Option<&str>,
-    summary: &RequestDiagnosticsSummary,
-    headers: &reqwest::header::HeaderMap,
-) {
-    use std::io::Write;
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let ts_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| millis_as_i64(d.as_millis()));
-    let mut cf_headers: Vec<(String, String)> = Vec::new();
-    for (name, value) in headers.iter() {
-        let n = name.as_str().to_ascii_lowercase();
-        if n.starts_with("cf-")
-            || n == "server"
-            || n == "x-cache"
-            || n == "expect-ct"
-            || n == "report-to"
-            || n == "nel"
-            || n == "x-cf-rule-id"
-            || n.contains("mitigat")
-            || n.contains("waf")
-            || n.contains("ratelimit")
-            || n.contains("rate-limit")
-        {
-            if let Ok(v) = value.to_str() {
-                cf_headers.push((n, v.to_string()));
-            }
-        }
-    }
-    let session_first8 = aura_session_id
-        .map(|s| s.chars().take(8).collect::<String>())
-        .unwrap_or_default();
-    let line = serde_json::json!({
-        "sessionId": "95fd5c",
-        "hypothesisId": "H_CONTENT_PATTERN",
-        "location": "aura-harness/crates/aura-reasoner/src/anthropic/provider.rs::send_checked@403",
-        "message": "Cloudflare 403 response headers (WAF-rule fingerprint)",
-        "timestamp": ts_ms,
-        "data": {
-            "model": model,
-            "aura_session_id_first8": session_first8,
-            "body_hash": summary.body_hash,
-            "system_bytes": summary.system_bytes,
-            "last_user_text_bytes": summary.last_user_text_bytes,
-            "last_user_text_hash": summary.last_user_text_hash,
-            "tools_count": summary.tools_count,
-            "cf_response_headers": cf_headers,
-        },
-    });
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(r"C:\\code\\aura-os\\debug-95fd5c.log")
-        .and_then(|mut f| writeln!(f, "{line}"));
-}
-// #endregion
-
-// #region agent log
-fn debug_log_body_cap_fired(
-    model: &str,
-    original_bytes: usize,
-    final_bytes: usize,
-    cap_bytes: usize,
-    truncated_ok: bool,
-    error: Option<&str>,
-) {
-    use std::io::Write;
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let ts_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| millis_as_i64(d.as_millis()));
-    let line = serde_json::json!({
-        "sessionId": "95fd5c",
-        "hypothesisId": "H_BODY_SIZE",
-        "location": "aura-harness/crates/aura-reasoner/src/anthropic/provider.rs::maybe_apply_emergency_body_cap",
-        "message": "emergency body cap fired",
-        "timestamp": ts_ms,
-        "data": {
-            "model": model,
-            "original_bytes": original_bytes,
-            "final_bytes": final_bytes,
-            "cap_bytes": cap_bytes,
-            "truncated_ok": truncated_ok,
-            "error": error,
-        },
-    });
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(r"C:\\code\\aura-os\\debug-95fd5c.log")
-        .and_then(|mut f| writeln!(f, "{line}"));
-}
-// #endregion
-
-// #region agent log
-fn debug_log_waf_safe_serialization(model: &str, body_len: usize) {
-    use std::io::Write;
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let enabled = waf_safe_json_enabled();
-    let ts_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| millis_as_i64(d.as_millis()));
-    let line = serde_json::json!({
-        "sessionId": "95fd5c",
-        "hypothesisId": "H_WAF_UNICODE_ESCAPE",
-        "location": "aura-harness/crates/aura-reasoner/src/anthropic/provider.rs::send_checked",
-        "message": "serialized request body with WAF-safe Unicode escaping",
-        "timestamp": ts_ms,
-        "data": {
-            "model": model,
-            "body_len": body_len,
-            "waf_safe_enabled": enabled,
-            "escaped_chars": String::from_utf8_lossy(WAF_ESCAPE_BYTES),
-        },
-    });
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(r"C:\\code\\aura-os\\debug-95fd5c.log")
-        .and_then(|mut f| writeln!(f, "{line}"));
-}
-// #endregion
-
-// #region agent log
-fn debug_log_outbound_request(
-    request_ctx: &ModelRequest,
-    model: &str,
-    body_len: usize,
-    auth_token: &str,
-    base_url: &str,
-) {
-    use std::io::Write;
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let prompt_caching_will_be_added = request_ctx.upstream_provider_family.as_deref().map_or_else(
-        || {
-            let m = model.trim().to_ascii_lowercase();
-            m.starts_with("claude") || m.starts_with("aura-claude")
-        },
-        |f| f.eq_ignore_ascii_case("anthropic"),
-    );
-    let ts_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| millis_as_i64(d.as_millis()));
-    let line = serde_json::json!({
-        "sessionId": "95fd5c",
-        "hypothesisId": "H1-H5-harness-wire",
-        "location": "aura-harness/crates/aura-reasoner/src/anthropic/provider.rs::build_request",
-        "message": "outbound /v1/messages headers + body shape",
-        "timestamp": ts_ms,
-        "data": {
-            "base_url": base_url,
-            "model": model,
-            "body_len": body_len,
-            "auth_token_len": auth_token.len(),
-            "auth_token_first8": auth_token.chars().take(8).collect::<String>(),
-            "has_aura_project_id": request_ctx.aura_project_id.is_some(),
-            "aura_project_id_len": request_ctx.aura_project_id.as_deref().map_or(0, str::len),
-            "has_aura_agent_id": request_ctx.aura_agent_id.is_some(),
-            "aura_agent_id_len": request_ctx.aura_agent_id.as_deref().map_or(0, str::len),
-            "has_aura_session_id": request_ctx.aura_session_id.is_some(),
-            "aura_session_id_len": request_ctx.aura_session_id.as_deref().map_or(0, str::len),
-            "has_aura_org_id": request_ctx.aura_org_id.is_some(),
-            "aura_org_id_len": request_ctx.aura_org_id.as_deref().map_or(0, str::len),
-            "has_upstream_provider_family": request_ctx
-                .upstream_provider_family
-                .as_deref()
-                .map(str::trim)
-                .is_some_and(|f| !f.is_empty()),
-            "upstream_provider_family": request_ctx
-                .upstream_provider_family
-                .as_deref()
-                .unwrap_or("<none>"),
-            "prompt_caching_will_be_added": prompt_caching_will_be_added,
-        },
-    });
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(r"C:\code\aura-os\debug-95fd5c.log")
-        .and_then(|mut f| writeln!(f, "{line}"));
-}
-// #endregion
-
-// #region agent log
-#[allow(clippy::too_many_arguments)]
-fn debug_log_response_received(
-    request_ctx: &ModelRequest,
-    model: &str,
-    summary: &RequestDiagnosticsSummary,
-    elapsed_ms: u64,
-    status_code: Option<u16>,
-    cf_ray: Option<&str>,
-    server_header: Option<&str>,
-    content_type: Option<&str>,
-    error_text: Option<&str>,
-) {
-    use std::io::Write;
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let ts_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| millis_as_i64(d.as_millis()));
-    let id_first8 = |opt: Option<&String>| -> String {
-        opt.map(|s| s.chars().take(8).collect::<String>())
-            .unwrap_or_default()
-    };
-    let line = serde_json::json!({
-        "sessionId": "95fd5c",
-        "hypothesisId": "H_postresp",
-        "location": "aura-harness/crates/aura-reasoner/src/anthropic/provider.rs::send_checked",
-        "message": "post-response shape (request fingerprint + response status/headers)",
-        "timestamp": ts_ms,
-        "data": {
-            "model": model,
-            "elapsed_ms": elapsed_ms,
-            "status_code": status_code,
-            "cf_ray": cf_ray,
-            "server_header": server_header,
-            "content_type": content_type,
-            "send_error": error_text,
-            "body_hash": summary.body_hash,
-            "top_level_keys": summary.top_level_keys,
-            "stream": summary.stream,
-            "system_bytes": summary.system_bytes,
-            "messages_text_bytes": summary.messages_text_bytes,
-            "last_user_text_bytes": summary.last_user_text_bytes,
-            "last_user_text_hash": summary.last_user_text_hash,
-            "tools_count": summary.tools_count,
-            "tool_names": summary.tool_names,
-            "tool_choice": summary.tool_choice,
-            "has_thinking": summary.has_thinking,
-            "has_output_config": summary.has_output_config,
-            "aura_project_id_first8": id_first8(request_ctx.aura_project_id.as_ref()),
-            "aura_agent_id_first8": id_first8(request_ctx.aura_agent_id.as_ref()),
-            "aura_org_id_first8": id_first8(request_ctx.aura_org_id.as_ref()),
-            "aura_session_id_first8": id_first8(request_ctx.aura_session_id.as_ref()),
-            "upstream_provider_family": request_ctx
-                .upstream_provider_family
-                .as_deref()
-                .unwrap_or("<none>"),
-        },
-    });
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(r"C:\code\aura-os\debug-95fd5c.log")
-        .and_then(|mut f| writeln!(f, "{line}"));
-}
-// #endregion
 
 /// Build the human-readable `thinking` row label for the request
 /// block. Combines the caller's [`ThinkingEffort`] intent with the

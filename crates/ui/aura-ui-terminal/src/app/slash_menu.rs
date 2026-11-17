@@ -56,6 +56,8 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Rename the current project",
         needs_args: false,
     },
+    command("archive", "Move the current agent to the Archive"),
+    command("remove-project", "Remove the current project from the list"),
     command("clear", "Clear messages"),
     command("context", "Show what fills the context window"),
     SlashCommand {

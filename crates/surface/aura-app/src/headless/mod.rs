@@ -317,6 +317,8 @@ async fn build(
         policy: tool_filter.apply(mode_policy(permissions, &tool_names), &tool_names),
         record_observer: None,
         record_panel: crate::event_loop::RecordPanelAgent::default(),
+        record_router: None,
+        trace_home: aura_config::AuraHome::resolve().ok().map(|home| home.path),
         commands,
         long_run,
         process_manager,

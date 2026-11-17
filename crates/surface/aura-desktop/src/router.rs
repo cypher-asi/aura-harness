@@ -69,7 +69,7 @@ pub struct Tabs {
     /// Every process of the session, as last listed.
     processes: Vec<ProcessSummary>,
     /// The latest of each list all tabs show whole, for tabs opened later.
-    lists: [Option<UiCommand>; 3],
+    lists: [Option<UiCommand>; 4],
     /// The session's active agent, as it last reported.
     session_active: String,
     /// Agent the session was asked to make active and hasn't confirmed.
@@ -97,7 +97,7 @@ impl Tabs {
             next_id: 2,
             agents: Vec::new(),
             processes: Vec::new(),
-            lists: [None, None, None],
+            lists: [None, None, None, None],
             session_active: String::new(),
             focus_sent: None,
             opening: false,
@@ -149,7 +149,7 @@ impl Tabs {
     fn root_of(&self, agent: &str) -> Option<&str> {
         let mut root = None;
         for listed in &self.agents {
-            if listed.depth == 0 {
+            if listed.heads_project() {
                 root = Some(listed.id.as_str());
             }
             if listed.id == agent {
@@ -216,12 +216,14 @@ impl Tabs {
             UiCommand::GraphUpsert { .. }
             | UiCommand::EndLink
             | UiCommand::SetAgentDefinitions(_)
+            | UiCommand::SetArchivedAgents(_)
             | UiCommand::SetModels { .. }
             | UiCommand::SetApiStatus { .. } => {
                 let slot = match command {
                     UiCommand::SetAgentDefinitions(_) => Some(0),
                     UiCommand::SetModels { .. } => Some(1),
                     UiCommand::SetApiStatus { .. } => Some(2),
+                    UiCommand::SetArchivedAgents(_) => Some(3),
                     _ => None,
                 };
                 if let Some(slot) = slot {
@@ -276,7 +278,7 @@ impl Tabs {
         let roots: Vec<String> = self
             .agents
             .iter()
-            .filter(|agent| agent.depth == 0)
+            .filter(|agent| agent.heads_project())
             .map(|agent| agent.id.clone())
             .collect();
         for tab in &mut self.tabs {
@@ -345,7 +347,7 @@ impl Tabs {
         let mut out = Vec::new();
         let mut held = false;
         for agent in &self.agents {
-            if agent.depth == 0 {
+            if agent.heads_project() {
                 held = tab.projects.contains(&agent.id);
             }
             if held {
@@ -481,7 +483,7 @@ impl Tabs {
                     return;
                 }
             }
-            UiEvent::CreateProject { .. } | UiEvent::CreateAgent(_) => {
+            UiEvent::CreateProject { .. } | UiEvent::CreateAgent(_) | UiEvent::RestoreAgent(_) => {
                 self.asker = Some(self.tabs[from].id);
             }
             _ => {}
@@ -700,6 +702,26 @@ mod tests {
         assert_eq!(tabs.arrangement(), [vec!["a1", "p2", "p4"], vec!["a3"]]);
         assert_eq!(shown(&tabs), ["p4", "a3"]);
         assert_eq!(tabs.front_index(), 0);
+    }
+
+    #[test]
+    fn an_agent_added_to_a_project_stays_in_its_tab() {
+        let (mut tabs, _events) = two_tabs();
+        let UiCommand::SetAgents(mut agents) = list(TWO, "a1") else {
+            unreachable!("list sends agents");
+        };
+        agents.insert(
+            2,
+            AgentSummary {
+                id: "a1.2".into(),
+                name: "A1.2".into(),
+                added_to_project: true,
+                ..AgentSummary::default()
+            },
+        );
+        tabs.apply(UiCommand::SetAgents(agents));
+        assert_eq!(tabs.arrangement(), [vec!["a1", "p2"], vec!["a3"]]);
+        assert_eq!(held(&tabs), [vec!["a1", "a1.1", "a1.2", "p2"], vec!["a3"]]);
     }
 
     #[test]

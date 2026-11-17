@@ -3,11 +3,13 @@
 //! Each image puts an `[image N]` chip in the input. Deleting the chip
 //! drops the image, so what is sent is exactly what the input shows.
 
+use super::image_preview::{ImagePreview, ImageView};
 use super::{App, AppState, NotificationType};
 use crate::clipboard::Clipboard;
 use crate::events::ImageAttachment;
 use base64::Engine;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Largest image accepted, in bytes: 3.75 MiB is 5 MiB once
 /// base64-encoded, the most Anthropic takes per image.
@@ -17,6 +19,9 @@ pub const MAX_IMAGE_BYTES: usize = 3 * 1024 * 1024 + 768 * 1024;
 /// provider's total size limit.
 pub const MAX_IMAGES: usize = 5;
 
+/// Messages with images waiting for a busy agent whose previews are kept.
+const MAX_QUEUED_MESSAGES: usize = 16;
+
 /// File extensions a pasted path must have to be read as an image.
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
 
@@ -25,6 +30,7 @@ const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
 pub(crate) struct PendingImage {
     label: usize,
     image: ImageAttachment,
+    preview: Arc<ImagePreview>,
 }
 
 /// The chip shown in the input and the chat for image `label`.
@@ -132,6 +138,7 @@ impl App {
                 data: base64::engine::general_purpose::STANDARD.encode(bytes),
                 bytes: bytes.len(),
             },
+            preview: ImagePreview::new(bytes.to_vec(), media_type),
         });
         self.insert_chip(&image_chip(label));
         Ok(())
@@ -152,13 +159,155 @@ impl App {
         self.images.retain(|p| input.contains(&image_chip(p.label)));
     }
 
-    /// The images to send with `text`, emptying the list either way.
-    pub(super) fn take_images(&mut self, text: &str) -> Vec<ImageAttachment> {
+    /// The images to send with `text`, and their previews for the chat,
+    /// emptying the list either way.
+    pub(super) fn take_images(
+        &mut self,
+        text: &str,
+    ) -> (Vec<ImageAttachment>, Vec<Arc<ImagePreview>>) {
         std::mem::take(&mut self.images)
             .into_iter()
             .filter(|p| text.contains(&image_chip(p.label)))
-            .map(|p| p.image)
+            .map(|p| (p.image, p.preview))
+            .unzip()
+    }
+
+    /// Images waiting in the input whose chip is still there, with their
+    /// labels, for the thumbnails above it.
+    #[must_use]
+    pub(crate) fn pending_previews(&self) -> Vec<(usize, Arc<ImagePreview>)> {
+        self.images
+            .iter()
+            .filter(|p| self.input.contains(&image_chip(p.label)))
+            .map(|p| (p.label, Arc::clone(&p.preview)))
             .collect()
+    }
+
+    /// Keep the previews of a message sent to a busy agent until the chat
+    /// shows it.
+    pub(super) fn queue_image_previews(&mut self, text: &str, previews: Vec<Arc<ImagePreview>>) {
+        if previews.is_empty() {
+            return;
+        }
+        self.queued_images.push_back((text.to_string(), previews));
+        while self.queued_images.len() > MAX_QUEUED_MESSAGES {
+            self.queued_images.pop_front();
+        }
+    }
+
+    /// The previews queued for a message reading `text`, once.
+    pub(super) fn take_queued_previews(&mut self, text: &str) -> Vec<Arc<ImagePreview>> {
+        self.queued_images
+            .iter()
+            .position(|(queued, _)| queued == text)
+            .and_then(|at| self.queued_images.remove(at))
+            .map(|(_, previews)| previews)
+            .unwrap_or_default()
+    }
+
+    /// Record where the chat drew image thumbnails this frame.
+    pub(crate) fn set_chat_images(&mut self, hits: Vec<super::ImageHit>) {
+        self.image_hits = hits;
+    }
+
+    /// Record where the thumbnails above the input were drawn this frame.
+    pub(crate) fn set_pending_image_areas(&mut self, areas: Vec<(ratatui::layout::Rect, usize)>) {
+        self.pending_image_areas = areas;
+    }
+
+    /// Open `preview` over the chat panel.
+    fn open_image(&mut self, preview: Arc<ImagePreview>, label: usize) {
+        let view = ImageView::new(preview, format!("IMAGE {label}"));
+        self.open_detail(super::DetailView::Image(Box::new(view)));
+    }
+
+    /// The chat thumbnail at a screen cell, using the last frame.
+    fn chat_image_at(&self, column: u16, row: u16) -> Option<super::ImageHit> {
+        let area = self.areas.chat_text?;
+        if !super::contains(Some(area), column, row) {
+            return None;
+        }
+        let line = self.chat_first_line + usize::from(row - area.y);
+        let x = column - area.x;
+        self.image_hits
+            .iter()
+            .find(|hit| {
+                (hit.line..hit.line + hit.rows).contains(&line)
+                    && (hit.x..hit.x + hit.width).contains(&x)
+            })
+            .copied()
+    }
+
+    /// Open the image whose thumbnail is at a screen cell, in the chat or
+    /// above the input. Returns whether one was opened.
+    pub(super) fn open_image_at(&mut self, column: u16, row: u16) -> bool {
+        if let Some(&(_, label)) = self
+            .pending_image_areas
+            .iter()
+            .find(|(area, _)| super::contains(Some(*area), column, row))
+        {
+            let preview = self
+                .images
+                .iter()
+                .find(|p| p.label == label)
+                .map(|p| Arc::clone(&p.preview));
+            if let Some(preview) = preview {
+                self.open_image(preview, label);
+                return true;
+            }
+        }
+        if self.detail.is_some() {
+            return false;
+        }
+        let Some(hit) = self.chat_image_at(column, row) else {
+            return false;
+        };
+        let preview = self
+            .messages
+            .iter()
+            .find(|m| m.version().0 == hit.message)
+            .and_then(|m| m.images().get(hit.index))
+            .map(Arc::clone);
+        match preview {
+            Some(preview) => {
+                self.open_image(preview, hit.index + 1);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The thumbnail at a screen cell, for the hover highlight.
+    pub(super) fn image_at(&self, column: u16, row: u16) -> Option<super::HoverTarget> {
+        if let Some(&(_, label)) = self
+            .pending_image_areas
+            .iter()
+            .find(|(area, _)| super::contains(Some(*area), column, row))
+        {
+            return Some(super::HoverTarget::PendingImage(label));
+        }
+        if self.detail.is_some() {
+            return None;
+        }
+        self.chat_image_at(column, row)
+            .map(|hit| super::HoverTarget::ChatImage(hit.message, hit.index))
+    }
+
+    /// Open the image on screen in the system's image viewer.
+    pub(super) fn open_image_externally(&mut self) {
+        let Some(super::DetailView::Image(view)) = &self.detail else {
+            return;
+        };
+        self.notification = Some(match view.open_externally() {
+            Ok(path) => (
+                format!("Opened {}", path.display()),
+                NotificationType::Success,
+            ),
+            Err(e) => (
+                format!("Cannot open the image: {e}"),
+                NotificationType::Error,
+            ),
+        });
     }
 
     /// Put `chip` at the cursor with a blank on either side.

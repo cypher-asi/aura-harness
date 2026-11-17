@@ -19,6 +19,7 @@
 
 pub mod bundle;
 pub mod dataset;
+pub mod db;
 pub mod graph;
 pub mod health;
 pub mod normalize;
@@ -30,10 +31,11 @@ pub mod rewards;
 pub mod scorecard;
 
 pub use bundle::{kernel_snapshot_store, list_runs, RunBundle, RunMeta, RunSource};
+pub use db::DbSink;
 pub use graph::{EdgeKind, GraphEdge, GraphNode, NodeKind, RunGraph};
 pub use health::RunHealth;
 pub use normalize::RunTrace;
-pub use recorder::{RunRecorder, StepBuilder};
+pub use recorder::{RunRecorder, StepBuilder, TraceSink};
 pub use records::{RecordRouter, RecordRow};
 pub use replay::ReplayProvider;
 pub use scorecard::RunScorecard;
@@ -59,4 +61,7 @@ pub enum TraceError {
     /// Bad input to an export or replay.
     #[error("{0}")]
     Invalid(String),
+    /// Trace database failure.
+    #[error("trace database: {0}")]
+    Store(#[from] aura_store_db::TraceStoreError),
 }

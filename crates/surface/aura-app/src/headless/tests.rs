@@ -135,6 +135,8 @@ fn headless_in(
         policy: filter.apply(mode_policy(permissions, &tool_names), &tool_names),
         record_observer: None,
         record_panel: crate::event_loop::RecordPanelAgent::default(),
+        record_router: None,
+        trace_home: Some(data.join("home")),
         commands,
         long_run: LongRunSettings::default(),
         process_manager,

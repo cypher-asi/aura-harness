@@ -427,8 +427,8 @@ pub fn latest_plan_path(store: &dyn ReadStore, agent_id: AgentId) -> Option<Stri
         })
 }
 
-/// Build the agents-column rows for every registered agent, each followed
-/// by the agents it spawned. `running` holds the agents currently working
+/// Build the agents-column rows for every registered agent in the order of
+/// [`AgentRegistry::tree`]. `running` holds the agents currently working
 /// on a task for their parent.
 #[must_use]
 pub fn agent_summaries(
@@ -440,28 +440,62 @@ pub fn agent_summaries(
     registry
         .tree()
         .into_iter()
+        .map(|(agent, depth)| summarize(registry, agent, depth, store, active, running))
+        .collect()
+}
+
+/// Rows for the Archive. Each archived agent's `project` names the project
+/// it was in, so the row can say where it came from.
+#[must_use]
+pub fn archived_summaries(registry: &AgentRegistry, store: &dyn ReadStore) -> Vec<AgentSummary> {
+    let none = HashSet::new();
+    let unknown = AgentId::new([0; 32]);
+    registry
+        .archived_tree()
+        .into_iter()
         .map(|(agent, depth)| {
-            let agent_id = agent.agent_id();
-            let record_count = store.get_head_seq(agent_id).unwrap_or(0);
-            let last_active_ms = (record_count > 0)
-                .then(|| store.get_record_entry(agent_id, record_count).ok())
-                .flatten()
-                .map(|entry| entry.tx.ts_ms);
-            AgentSummary {
-                id: agent_id.to_hex(),
-                name: agent.name.clone(),
-                zns_id: agent.zns_id.clone(),
-                is_active: agent_id == active,
-                record_count,
-                last_active: last_active_ms.map_or_else(|| "-".to_string(), format_local_time),
-                last_active_ms,
-                definition: agent.definition.clone(),
-                depth,
-                running: running.contains(&agent_id),
-                project: agent.project.clone(),
-            }
+            let mut summary = summarize(registry, agent, depth, store, unknown, &none);
+            summary.project = registry.project_root(agent.agent_id()).map(|root| {
+                root.project
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or(root.display_name())
+                    .to_string()
+            });
+            summary
         })
         .collect()
+}
+
+fn summarize(
+    registry: &AgentRegistry,
+    agent: &crate::agent_registry::RegisteredAgent,
+    depth: usize,
+    store: &dyn ReadStore,
+    active: AgentId,
+    running: &HashSet<AgentId>,
+) -> AgentSummary {
+    let agent_id = agent.agent_id();
+    let record_count = store.get_head_seq(agent_id).unwrap_or(0);
+    let last_active_ms = (record_count > 0)
+        .then(|| store.get_record_entry(agent_id, record_count).ok())
+        .flatten()
+        .map(|entry| entry.tx.ts_ms);
+    AgentSummary {
+        id: agent_id.to_hex(),
+        name: agent.display_name().to_string(),
+        zns_id: agent.zns_id.clone(),
+        is_active: agent_id == active,
+        record_count,
+        last_active: last_active_ms.map_or_else(|| "-".to_string(), format_local_time),
+        last_active_ms,
+        definition: agent.definition.clone(),
+        depth,
+        added_to_project: agent.parent.is_none() && !registry.heads_project(agent),
+        running: running.contains(&agent_id),
+        project: agent.project.clone(),
+    }
 }
 
 fn scan_tail(

@@ -4,25 +4,80 @@
 //! line, and hard-wraps long lines so code keeps its indentation. A file
 //! has a vim cursor the view follows.
 
+use super::header::HeaderInfo;
 use super::overlays::{record_detail_lines, record_status};
-use super::panels::{render_scrollbar, truncate_record_info, ScrollView};
+use super::panels::{body_block, render_scrollbar, truncate_record_info, ScrollView};
 use super::processes::{process_detail_lines, status_glyph};
 use super::text::display_width;
 use crate::app::file_view::{FileBody, FileView};
+use crate::app::image_preview::ImageView;
 use crate::app::vim::{Align, Vim};
 use crate::app::DetailView;
 use crate::components::highlight_code_line;
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Clear, Paragraph},
     Frame,
 };
 use unicode_width::UnicodeWidthChar;
 
 const TAB: &str = "    ";
+
+/// The chat panel's header while a view covers its body: what is open on
+/// the left, its status on the right. `None` leaves the CHAT | TERMINAL
+/// tabs.
+///
+/// ```text
+/// │ RECORD #60                 ✓ POLICY │
+/// │ src/main.rs               100 LINES │
+/// ```
+pub(super) fn detail_header(app: &App, theme: &Theme) -> Option<(String, Option<HeaderInfo>)> {
+    let status = |icon: &str, label: &str, color| HeaderInfo {
+        text: format!("{icon} {}", label.to_uppercase()),
+        short: icon.to_string(),
+        color,
+    };
+    match app.detail_view()? {
+        DetailView::Record => {
+            let record = app.selected_record_data()?;
+            let (icon, color) = record_status(record, theme);
+            let info = status(icon, &record.tx_kind, color);
+            Some((format!("RECORD #{}", record.seq), Some(info)))
+        }
+        DetailView::File(file) => {
+            let info = match &file.body {
+                FileBody::Text(text) => {
+                    let lines = file.body.lines().len();
+                    let unit = if lines == 1 { "LINE" } else { "LINES" };
+                    (!text.is_empty()).then(|| HeaderInfo::count(lines, unit, theme.colors.muted))
+                }
+                FileBody::Note(_) => None,
+            };
+            Some((file.title.clone(), info))
+        }
+        DetailView::Process(process) => {
+            let (icon, color) = status_glyph(process.status, theme);
+            let title = format!(
+                "{} {}",
+                process.kind.label().to_uppercase(),
+                truncate_record_info(&process.label, 40)
+            );
+            Some((title, Some(status(icon, process.status.label(), color))))
+        }
+        DetailView::Graph => Some(super::graph::graph_header(app, theme)),
+        DetailView::Image(view) => {
+            let info = HeaderInfo {
+                text: view.info(),
+                short: String::new(),
+                color: theme.colors.muted,
+            };
+            Some((view.title.clone(), Some(info)))
+        }
+    }
+}
 
 /// Draw the open record or file over `area`, the chat panel.
 pub(super) fn render_detail_view(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
@@ -36,9 +91,14 @@ pub(super) fn render_detail_view(frame: &mut Frame, area: Rect, app: &mut App, t
         width: area.width.saturating_sub(4),
         height: area.height.saturating_sub(2),
     };
+    let hosted = app.host_chrome();
+    if let Some(view) = app.image_view_mut() {
+        draw_image(frame, (area, rows, hosted), view, theme);
+        return;
+    }
     let bounds = match app.file_view_mut() {
-        Some((file, scroll)) => Some(draw_file(frame, area, rows, file, scroll, theme)),
-        None => draw_record(frame, area, rows, app, theme),
+        Some((file, scroll)) => Some(draw_file(frame, (area, rows, hosted), file, scroll, theme)),
+        None => draw_record(frame, (area, rows, hosted), app, theme),
     };
     if let Some((max_scroll, shown)) = bounds {
         app.set_detail_bounds(max_scroll, shown);
@@ -49,34 +109,21 @@ pub(super) fn render_detail_view(frame: &mut Frame, area: Rect, app: &mut App, t
 /// how many source lines are on screen.
 fn draw_record(
     frame: &mut Frame,
-    area: Rect,
-    rows: Rect,
+    (area, rows, hosted): (Rect, Rect, bool),
     app: &App,
     theme: &Theme,
 ) -> Option<(usize, usize)> {
-    let (source, title, color) = match app.detail_view()? {
+    let lines = match app.detail_view()? {
         DetailView::Record => {
             let record = app.selected_record_data()?;
-            let (icon, color) = record_status(record, theme);
-            let lines = record_detail_lines(record, rows.width.saturating_add(2), theme);
-            (
-                Source::Styled(lines),
-                format!(" Record #{} {icon} ", record.seq),
-                color,
-            )
+            record_detail_lines(record, rows.width.saturating_add(2), theme)
         }
         DetailView::Process(process) => {
-            let (icon, color) = status_glyph(process.status, theme);
-            let lines = process_detail_lines(process, rows.width.saturating_add(2), theme);
-            let label = truncate_record_info(&process.label, 40);
-            (
-                Source::Styled(lines),
-                format!(" {} {label} {icon} ", process.kind.label()),
-                color,
-            )
+            process_detail_lines(process, rows.width.saturating_add(2), theme)
         }
-        DetailView::File(_) | DetailView::Graph => return None,
+        DetailView::File(_) | DetailView::Graph | DetailView::Image(_) => return None,
     };
+    let source = Source::Styled(lines);
     let width = usize::from(rows.width).max(1);
     let visible = usize::from(rows.height);
     let total = source.len();
@@ -97,30 +144,47 @@ fn draw_record(
         visible: shown,
         first,
     };
-    draw_frame(
-        frame,
-        area,
-        rows,
-        (&title, color),
-        footer,
-        lines,
-        view,
-        theme,
-    );
+    draw_frame(frame, (area, rows, hosted), footer, lines, view, theme);
     Some((max_scroll, shown))
+}
+
+/// Draw the image as large as fits, centered in the panel.
+fn draw_image(
+    frame: &mut Frame,
+    (area, rows, hosted): (Rect, Rect, bool),
+    view: &mut ImageView,
+    theme: &Theme,
+) {
+    let lines = view.lines(rows.width, rows.height).to_vec();
+    let width = lines.iter().map(Line::width).max().unwrap_or(0);
+    let width = u16::try_from(width).unwrap_or(u16::MAX).min(rows.width);
+    let height = u16::try_from(lines.len())
+        .unwrap_or(u16::MAX)
+        .min(rows.height);
+    let centered = Rect {
+        x: rows.x + (rows.width - width) / 2,
+        y: rows.y + (rows.height - height) / 2,
+        width,
+        height,
+    };
+    let muted = Style::default().fg(theme.colors.muted);
+    let footer = Line::from(Span::styled(" o open externally  Esc close ", muted));
+    let block = body_block((true, hosted), theme).title_bottom(footer);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(lines), centered);
 }
 
 /// Draw `file` with its cursor in view, moving `scroll` to follow it.
 /// Returns the largest useful scroll and how many lines are on screen.
 fn draw_file(
     frame: &mut Frame,
-    area: Rect,
-    rows: Rect,
+    (area, rows, hosted): (Rect, Rect, bool),
     file: &mut FileView,
     scroll: &mut usize,
     theme: &Theme,
 ) -> (usize, usize) {
-    let source = file_source(&file.body, file.extension(), theme);
+    let source = file_source(&file.body, file.extension(), file.first_line, theme);
     let vim = &mut file.vim;
     let width = usize::from(rows.width).max(1);
     let visible = usize::from(rows.height);
@@ -155,7 +219,12 @@ fn draw_file(
     } else {
         if matches!(source, Source::Code { .. }) {
             footer.push(Span::styled(
-                format!(" Ln {}/{total}, Col {} ", vim.line() + 1, vim.col() + 1),
+                format!(
+                    " Ln {}/{}, Col {} ",
+                    vim.line() + file.first_line,
+                    total + file.first_line - 1,
+                    vim.col() + 1
+                ),
                 muted,
             ));
         }
@@ -168,42 +237,27 @@ fn draw_file(
         }
         footer.push(Span::styled(" q close  / search  :N line ", muted));
     }
-    let title = format!(" {} ", file.title);
     let view = ScrollView {
         total,
         visible: shown,
         first,
     };
-    let border = (title.as_str(), theme.colors.primary);
-    draw_frame(
-        frame,
-        area,
-        rows,
-        border,
-        Line::from(footer),
-        lines,
-        view,
-        theme,
-    );
+    let footer = Line::from(footer);
+    draw_frame(frame, (area, rows, hosted), footer, lines, view, theme);
     (max_scroll, shown)
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The chat panel's body border around `lines`, with `footer` on its
+/// bottom edge; the header bar above names what is shown.
 fn draw_frame(
     frame: &mut Frame,
-    area: Rect,
-    rows: Rect,
-    (title, color): (&str, Color),
+    (area, rows, hosted): (Rect, Rect, bool),
     footer: Line<'_>,
     lines: Vec<Line<'_>>,
     view: ScrollView,
     theme: &Theme,
 ) {
-    let block = Block::default()
-        .title(title)
-        .title_bottom(footer)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(color));
+    let block = body_block((true, hosted), theme).title_bottom(footer);
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(lines), rows);
@@ -276,10 +330,17 @@ enum Source<'a> {
         language: String,
         lines: Vec<&'a str>,
         gutter: usize,
+        /// Number of the first line in the gutter.
+        first_line: usize,
     },
 }
 
-fn file_source<'a>(body: &'a FileBody, language: String, theme: &Theme) -> Source<'a> {
+fn file_source<'a>(
+    body: &'a FileBody,
+    language: String,
+    first_line: usize,
+    theme: &Theme,
+) -> Source<'a> {
     match body {
         FileBody::Text(text) if text.is_empty() => Source::Styled(vec![Line::from(Span::styled(
             "Empty file",
@@ -287,10 +348,12 @@ fn file_source<'a>(body: &'a FileBody, language: String, theme: &Theme) -> Sourc
         ))]),
         FileBody::Text(_) => {
             let lines = body.lines();
+            let last = first_line.max(1) + lines.len().max(1) - 1;
             Source::Code {
                 language,
-                gutter: lines.len().max(1).to_string().len(),
+                gutter: last.to_string().len(),
                 lines,
+                first_line: first_line.max(1),
             }
         }
         FileBody::Note(note) => Source::Styled(vec![Line::from(Span::styled(
@@ -358,6 +421,7 @@ impl<'a> Source<'a> {
                     language,
                     lines,
                     gutter,
+                    first_line,
                 } => {
                     let on_cursor = vim.is_some_and(|vim| vim.line() == index);
                     let number = if on_cursor {
@@ -367,9 +431,11 @@ impl<'a> Source<'a> {
                     } else {
                         Style::default().fg(theme.colors.muted)
                     };
-                    let mut spans =
-                        vec![Span::styled(format!("{:>gutter$} │ ", index + 1), number)];
-                    let code = highlight_code_line(language, &sanitize(lines[index]), theme);
+                    let mut spans = vec![Span::styled(
+                        format!("{:>gutter$} │ ", index + first_line),
+                        number,
+                    )];
+                    let code = highlight_view_line(language, &sanitize(lines[index]), theme);
                     match vim {
                         Some(vim) => spans.extend(mark(code, lines[index], vim, on_cursor, theme)),
                         None => spans.extend(code),
@@ -383,6 +449,73 @@ impl<'a> Source<'a> {
         out.truncate(visible);
         (out, shown)
     }
+}
+
+/// Highlight one line of a detail view. Besides source languages, `grep`
+/// colors `path:line:` before highlighting the match by the path's
+/// extension, and `log` colors errors and warnings in command output.
+fn highlight_view_line(language: &str, line: &str, theme: &Theme) -> Vec<Span<'static>> {
+    match language {
+        "grep" => grep_line(line, theme),
+        "log" => vec![log_line(line, theme)],
+        _ => highlight_code_line(language, line, theme),
+    }
+}
+
+/// `path:line:text`, as search tools print matches.
+fn grep_line(line: &str, theme: &Theme) -> Vec<Span<'static>> {
+    let split = line.find(':').and_then(|colon| {
+        let rest = &line[colon + 1..];
+        let digits = rest.find(|c: char| !c.is_ascii_digit())?;
+        (digits > 0 && rest[digits..].starts_with(':')).then_some((colon, colon + 1 + digits))
+    });
+    let Some((colon, end)) = split else {
+        return vec![Span::styled(
+            line.to_string(),
+            Style::default().fg(theme.colors.secondary),
+        )];
+    };
+    let path = &line[..colon];
+    let language = path
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.to_lowercase())
+        .unwrap_or_default();
+    let muted = Style::default().fg(theme.colors.muted);
+    let mut spans = vec![
+        Span::styled(
+            path.to_string(),
+            Style::default().fg(theme.colors.secondary),
+        ),
+        Span::styled(":".to_string(), muted),
+        Span::styled(line[colon + 1..end].to_string(), muted),
+        Span::styled(":".to_string(), muted),
+    ];
+    spans.extend(highlight_code_line(&language, &line[end + 1..], theme));
+    spans
+}
+
+/// Command output: errors and warnings stand out, `-->` locations and
+/// the `stderr:` divider are subdued.
+fn log_line(line: &str, theme: &Theme) -> Span<'static> {
+    let trimmed = line.trim_start();
+    let lower = trimmed.to_lowercase();
+    let color =
+        if lower.starts_with("error") || lower.contains("panicked") || lower.contains("failed") {
+            theme.colors.error
+        } else if lower.starts_with("warning") {
+            theme.colors.warning
+        } else if trimmed.starts_with("-->")
+            || trimmed.starts_with("stderr:")
+            || trimmed.starts_with('|')
+        {
+            theme.colors.secondary
+        } else if lower.starts_with("test ") && lower.ends_with(" ok") || lower.contains("finished")
+        {
+            theme.colors.success
+        } else {
+            theme.colors.foreground
+        };
+    Span::styled(line.to_string(), Style::default().fg(color))
 }
 
 /// Restyle the highlighted `spans` of `raw` to show search matches and,
@@ -563,29 +696,6 @@ mod tests {
             .collect()
     }
 
-    /// Top-left and bottom-right corners of the box whose top border
-    /// starts with `title`.
-    fn box_corners(rows: &[Vec<String>], title: &str) -> ((usize, usize), (usize, usize)) {
-        let len = title.chars().count();
-        let (top, left) = rows
-            .iter()
-            .enumerate()
-            .find_map(|(y, row)| {
-                let x = (0..row.len().saturating_sub(len))
-                    .find(|&x| row[x] == "┌" && row[x + 1..=x + len].concat() == title)?;
-                Some((y, x))
-            })
-            .unwrap_or_else(|| panic!("no box titled {title:?}"));
-        let right = (left + 1..rows[top].len())
-            .find(|&x| rows[top][x] == "┐")
-            .unwrap();
-        let bottom = (top + 1..rows.len())
-            .find(|&y| rows[y][left] == "└")
-            .unwrap();
-        assert_eq!(rows[bottom][right], "┘");
-        ((top, left), (bottom, right))
-    }
-
     /// Corners of the chat panel's body, the box right below the header
     /// bar holding its CHAT | TERMINAL tabs.
     fn chat_corners(rows: &[Vec<String>]) -> ((usize, usize), (usize, usize)) {
@@ -652,13 +762,60 @@ mod tests {
             .map(|r| r.concat())
             .collect::<Vec<_>>()
             .join("\n");
-        assert_eq!(box_corners(&rows, " Record #60 ✓ "), chat, "{text}");
-        assert!(
-            text.contains(" CHAT ") && text.contains(" TERMINAL "),
-            "header bar stays: {text}"
-        );
+        let ((top, left), (bottom, right)) = chat;
+        let corners = [(top, left), (top, right), (bottom, left), (bottom, right)]
+            .map(|(y, x)| rows[y][x].as_str());
+        assert_eq!(corners, ["┌", "┐", "└", "┘"], "{text}");
+        let header: String = rows[top - 2][left..=right].concat();
+        assert!(header.starts_with("│ RECORD #60 "), "{header}");
+        assert!(header.ends_with(" ✓ POLICY │"), "{header}");
+        assert!(!text.contains("TERMINAL"), "the tabs give way: {text}");
+        let border: String = rows[top][left..=right].concat();
+        assert!(border.trim_matches(['┌', '─', '┐']).is_empty(), "{border}");
         assert!(text.contains("Sequence:    60"), "{text}");
         assert!(text.contains("Esc close"), "{text}");
+
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        let rows = screen(&mut app);
+        assert_eq!(chat_corners(&rows), chat, "closing brings the tabs back");
+    }
+
+    #[test]
+    fn the_named_header_bar_has_no_tabs_to_click() {
+        use crate::app::ChatTab;
+        use crate::events::UiCommand;
+        use crossterm::event::{
+            KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("notes.md"), "# Notes\n").unwrap();
+        let mut app = App::new();
+        app.process_command(UiCommand::SetSandboxRoot(dir.path().to_path_buf()));
+        let rows = screen(&mut app);
+        let (row, column) = rows
+            .iter()
+            .enumerate()
+            .find_map(|(y, row)| {
+                let x = (0..row.len().saturating_sub(8))
+                    .find(|&x| row[x..x + 8].concat() == "TERMINAL")?;
+                Some((y, x))
+            })
+            .expect("no TERMINAL tab");
+
+        while app.focus() != crate::app::PanelFocus::Sandbox {
+            app.handle_key(KeyEvent::from(KeyCode::Tab));
+        }
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        screen(&mut app);
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: u16::try_from(column).unwrap(),
+            row: u16::try_from(row).unwrap(),
+            modifiers: KeyModifiers::empty(),
+        });
+        assert_eq!(app.chat_tab(), ChatTab::Chat);
+        assert!(matches!(app.detail_view(), Some(DetailView::File(_))));
     }
 
     #[test]
@@ -684,7 +841,12 @@ mod tests {
                 .join("\n")
         };
         let first = text(&mut app);
-        assert!(first.contains(" main.rs "), "{first}");
+        let header = first
+            .lines()
+            .find(|row| row.contains("│ main.rs "))
+            .unwrap_or_else(|| panic!("no file header: {first}"));
+        assert!(header.contains(" 100 LINES │"), "{header}");
+        assert!(!first.contains("TERMINAL"), "{first}");
         assert!(first.contains("  1 │ let x1 = 1;"), "{first}");
 
         app.handle_key(KeyEvent::from(KeyCode::Char('G')));
@@ -750,6 +912,7 @@ mod tests {
             language: String::new(),
             lines: lines.iter().map(String::as_str).collect(),
             gutter: 3,
+            first_line: 1,
         };
         assert_eq!(fit(&source, Align::Cursor, 5, 0, 40, 10), 0);
         assert_eq!(fit(&source, Align::Cursor, 10, 0, 40, 10), 1);

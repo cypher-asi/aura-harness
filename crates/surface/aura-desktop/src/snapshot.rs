@@ -340,14 +340,18 @@ fn load_fonts() {
     });
 }
 
-/// Draw the app and return its RGBA pixels.
-fn render(app: &App) -> Vec<u8> {
-    let mut renderer = futures::executor::block_on(<iced::Renderer as Headless>::new(
+fn renderer() -> iced::Renderer {
+    futures::executor::block_on(<iced::Renderer as Headless>::new(
         theme::mono(),
         Pixels(theme::DEFAULT_FONT_SIZE),
         Some("tiny-skia"),
     ))
-    .expect("tiny-skia renderer");
+    .expect("tiny-skia renderer")
+}
+
+/// Draw the app and return its RGBA pixels.
+fn render(app: &App) -> Vec<u8> {
+    let mut renderer = renderer();
     let size = Size::new(f32::from(WIDTH), f32::from(HEIGHT));
     let palette = palette();
     let mut ui: UserInterface<'_, Message, iced::Theme, iced::Renderer> =
@@ -466,6 +470,31 @@ fn shortcuts_open_and_close_tabs() {
 }
 
 #[test]
+fn prose_is_set_in_inter_and_code_stays_on_the_grid() {
+    let mut h = harness();
+    seed(&mut h);
+    h.apply([
+        UiCommand::StartStreaming,
+        UiCommand::AppendText(
+            "Hi! That last message looks like a typo. What would you like to do?\n\n\
+             - **\"ls\":** I said I'd created a task, but I hadn't done anything. If you \
+             want, I can list the files in the project folder now.\n\n\
+             Here are some things I can help with in this repo (`aura-harness`): run \
+             the build, tests, or `cargo clippy`.\n\n```rust\nfn main() {}\n```"
+                .into(),
+        ),
+        UiCommand::FinishStreaming,
+        UiCommand::Complete,
+    ]);
+    let text = h.app.screen().text();
+    assert!(text.contains("the files in the project folder"), "{text}");
+    assert!(text.contains("fn main() {}"), "{text}");
+    let tui = &h.app.tabs().front().tui;
+    assert!(!tui.prose_rows().is_empty(), "the reply's text is prose");
+    snapshot("prose", &h);
+}
+
+#[test]
 fn welcome_screen() {
     let mut h = harness();
     seed(&mut h);
@@ -561,12 +590,14 @@ fn approval_request() {
 
 /// Replays a session the way a model streams it and reports timings:
 /// boot to first grid, each update (terminal UI render plus grid diff)
-/// while a long reply streams in small chunks and while typing, and full
-/// repaints on the CPU renderer. Run with
+/// while a long reply streams in small chunks and while typing, building
+/// the grid's drawing after each streamed chunk, and full repaints on the
+/// CPU renderer. Run with
 /// `cargo test --release -p aura-desktop -- --ignored --nocapture replay`.
 #[test]
 #[ignore = "benchmark"]
 fn replay_timings() {
+    use iced::widget::canvas::Program;
     let started = Instant::now();
     let mut h = harness();
     let boot = started.elapsed();
@@ -579,15 +610,38 @@ fn replay_timings() {
         .repeat(8)
         .chars()
         .collect();
+    let renderer = renderer();
+    let bounds = iced::Rectangle::with_size(Size::new(f32::from(WIDTH), f32::from(HEIGHT)));
     let mut streaming = Vec::new();
+    let mut painting = Vec::new();
     let mut frames = Vec::new();
+    let (mut changed_frames, mut changed_rows) = (0, 0);
     for (i, chunk) in text.chunks(12).enumerate() {
         let chunk: String = chunk.iter().collect();
+        let before = h.text();
         let t = Instant::now();
         let _ = h
             .app
             .update(Message::Commands(vec![UiCommand::AppendText(chunk)]));
         streaming.push(t.elapsed());
+        let after = h.text();
+        let rows = before
+            .lines()
+            .zip(after.lines())
+            .filter(|(a, b)| a != b)
+            .count();
+        changed_frames += usize::from(rows > 0);
+        changed_rows += rows;
+        let t = Instant::now();
+        let _ = Program::<Message>::draw(
+            &h.app.grid(),
+            &(),
+            &renderer,
+            &iced::Theme::Dark,
+            bounds,
+            mouse::Cursor::Unavailable,
+        );
+        painting.push(t.elapsed());
         if i % 25 == 0 {
             let t = Instant::now();
             let _ = render(&h.app);
@@ -606,7 +660,79 @@ fn replay_timings() {
     println!("boot to first grid: {:.2} ms", boot.as_secs_f64() * 1e3);
     report("update while streaming", &mut streaming);
     report("update per keystroke", &mut typing);
+    report("grid drawing per streamed chunk", &mut painting);
+    let (_, rows) = h.app.screen().size();
+    println!(
+        "rows repainted: {changed_rows} over {changed_frames} changed frames of {rows} rows \
+         (a whole-grid repaint would be {})",
+        changed_frames * usize::from(rows)
+    );
     report("full repaint (tiny-skia)", &mut frames);
+}
+
+/// One second of a swarm streaming at once: the agent in front writes a
+/// reply while the others think, call tools and write theirs. Reports how
+/// long the window spends applying it with one command per update (each
+/// arriving on its own), about a frame's worth per update, and all at
+/// once. Run with
+/// `cargo test --release -p aura-desktop -- --ignored --nocapture swarm`.
+#[test]
+#[ignore = "benchmark"]
+fn swarm_timings() {
+    const AGENTS: usize = 30;
+    const COMMANDS_PER_AGENT: usize = 100;
+    let reply: Vec<char> = REPLY.replace("{prompt}", "the crates").chars().collect();
+    let mut chunks = reply.chunks(12).cycle();
+    let mut second = Vec::new();
+    for step in 0..COMMANDS_PER_AGENT {
+        second.push(UiCommand::AppendText(
+            chunks.next().unwrap().iter().collect(),
+        ));
+        for i in 1..AGENTS {
+            let command = match step % 10 {
+                0 => UiCommand::ShowTool(ToolData {
+                    id: format!("t{step}"),
+                    name: "read_file".into(),
+                    args: r#"{"path":"src/lib.rs"}"#.into(),
+                }),
+                1 => UiCommand::CompleteTool {
+                    id: format!("t{}", step - 1),
+                    result: LISTING.into(),
+                    success: true,
+                },
+                2..=4 => UiCommand::AppendThinking("weighing the options ".into()),
+                _ => UiCommand::AppendText(chunks.next().unwrap().iter().collect()),
+            };
+            second.push(UiCommand::ForAgent {
+                agent_id: format!("b{i:02}"),
+                command: Box::new(command),
+            });
+        }
+    }
+
+    let mut agents = vec![agent("a1", "Agent01", 0, Some("aura-harness"))];
+    agents
+        .extend((1..AGENTS).map(|i| agent(&format!("b{i:02}"), &format!("Agent{i:02}"), 0, None)));
+    for per_update in [1, 50, 1024] {
+        let mut h = harness();
+        seed(&mut h);
+        h.apply([UiCommand::SetAgents(agents.clone())]);
+        steps(&mut h);
+        h.apply([UiCommand::StartStreaming]);
+        let mut updates = Vec::new();
+        for batch in second.chunks(per_update) {
+            let t = Instant::now();
+            let _ = h.app.update(Message::Commands(batch.to_vec()));
+            updates.push(t.elapsed());
+        }
+        let busy: std::time::Duration = updates.iter().sum();
+        println!(
+            "{} commands from {AGENTS} agents, {per_update} per update: busy {:.1} ms of the second",
+            second.len(),
+            busy.as_secs_f64() * 1e3
+        );
+        report("  update", &mut updates);
+    }
 }
 
 fn report(label: &str, samples: &mut [std::time::Duration]) {

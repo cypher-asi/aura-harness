@@ -1,5 +1,5 @@
 //! `aura -p` end to end: the real binary with the mock provider, run in a
-//! scratch project with its own data directory.
+//! scratch project with its own data directory and `AURA_HOME`.
 
 use serde_json::Value;
 use std::path::Path;
@@ -9,6 +9,7 @@ use tempfile::TempDir;
 struct Project {
     workspace: TempDir,
     data: TempDir,
+    home: TempDir,
 }
 
 impl Project {
@@ -16,6 +17,7 @@ impl Project {
         Self {
             workspace: TempDir::new().expect("workspace dir"),
             data: TempDir::new().expect("data dir"),
+            home: TempDir::new().expect("aura home"),
         }
     }
 
@@ -25,6 +27,7 @@ impl Project {
             .args(args)
             .current_dir(self.workspace.path())
             .env("AURA_DATA_DIR", self.data.path())
+            .env("AURA_HOME", self.home.path())
             .env_remove("RUST_LOG")
             .output()
             .expect("run aura")
@@ -118,6 +121,7 @@ fn print_reads_the_prompt_from_stdin_and_honours_cwd() {
         .arg(project.workspace.path())
         .current_dir(elsewhere.path())
         .env("AURA_DATA_DIR", project.data.path())
+        .env("AURA_HOME", project.home.path())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
