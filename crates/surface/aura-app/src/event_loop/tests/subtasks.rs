@@ -102,14 +102,14 @@ async fn a_task_under_gate_runs_on_the_model_gate_picks_for_it() {
         [PromptPayload {
             category: PromptCategory::Debugging,
             classifier: state.models.classifier_model(),
-            route: Route::subtask(GPT, RouteReason::Default),
+            route: Route::subtask(SONNET, RouteReason::Default),
             kind: Some("reviewer".to_string()),
             ..PromptPayload::new("fix the flaky parser test")
         }],
-        "debugging goes to the strongest model, as for turns"
+        "debugging starts on the cheapest standard model, as for turns"
     );
     assert_eq!(outcomes.len(), 1);
-    assert_eq!(outcomes[0].model, GPT);
+    assert_eq!(outcomes[0].model, SONNET);
     assert_eq!(outcomes[0].signal, OutcomeSignal::None);
     assert!(
         prompts_of(&state, first).is_empty(),
@@ -123,10 +123,10 @@ async fn a_task_under_gate_runs_on_the_model_gate_picks_for_it() {
         .iter()
         .find(|r| r.id == processes::task_id(child))
         .unwrap();
-    assert_eq!(row.model.as_deref(), Some(GPT));
+    assert_eq!(row.model.as_deref(), Some(SONNET));
     assert_eq!(
         route_lines(&mut commands),
-        ["gate → aura-gpt-5-4 (cloud) · subtask, debugging, default"]
+        ["gate → aura-claude-sonnet-4-6 (cloud) · subtask, debugging, default"]
     );
 }
 
@@ -181,15 +181,19 @@ async fn subtask_outcomes_fill_the_subtask_rows_and_show_in_slash_gate() {
     handle_ui_event(&mut state, UiEvent::ShowGate, &links).await;
     let text = system_texts(&drain(&mut commands));
     let (_, subtasks) = text.split_once("\n\nSubtasks\n").expect(&text);
+    let sonnet = subtasks
+        .lines()
+        .find(|line| line.contains("aura-claude-sonnet-4-6 (cloud)"))
+        .expect(subtasks);
+    assert!(sonnet.contains("33%"), "{text}");
     let question = subtasks
         .lines()
         .find(|line| line.trim_start().starts_with("question"))
         .expect(subtasks);
     assert!(
-        question.contains("aura-claude-sonnet-4-6 (cloud)"),
-        "{text}"
+        question.contains("aura-gpt-5-4 (cloud)") && question.contains("pick (default)"),
+        "one success in three rules Sonnet out for questions: {text}"
     );
-    assert!(question.contains("33%"), "{text}");
 }
 
 #[tokio::test]

@@ -6,7 +6,6 @@ use aura_core_types::{CompareArm, ComparePayload, CompareStatus};
 
 const SONNET: &str = "aura-claude-sonnet-4-6";
 const OPUS: &str = "aura-claude-opus-4-7";
-const GPT: &str = "aura-gpt-5-4";
 
 /// Send `/compare <args>` from the first agent's chat.
 async fn compare(state: &mut LoopState<'_>, links: &mpsc::Sender<auth::LinkOutcome>, args: &str) {
@@ -500,23 +499,23 @@ async fn gate_is_compared_with_itself_without_enforced_delegation() {
     assert_eq!(payload.against, "gate:nodelegate");
     let gate = payload.run("gate-1").unwrap();
     let other = payload.run("other-1").unwrap();
-    // A change across several files is led, and goes to the strongest
-    // model.
+    // A change across several files is led, and starts on the cheapest
+    // standard model.
     for run in [gate, other] {
         assert_eq!(run.error, None, "{}", run.name);
-        assert_eq!(run.model, GPT, "both arms are routed by Gate");
+        assert_eq!(run.model, SONNET, "both arms are routed by Gate");
         let prompts: Vec<PromptPayload> = entries(&state, run.agent_id)
             .iter()
             .filter_map(|e| e.tx.prompt_payload())
             .collect();
-        assert_eq!(prompts[0].route, Route::turn(GPT, RouteReason::Compare));
+        assert_eq!(prompts[0].route, Route::turn(SONNET, RouteReason::Compare));
     }
     assert_eq!(gate.files_changed, 0, "the enforced lead may not write");
     assert!(!gate.copy.workdir.join("answer.txt").exists());
     assert_eq!(other.files_changed, 1, "the other lead writes itself");
     assert_eq!(
         std::fs::read_to_string(other.copy.workdir.join("answer.txt")).unwrap(),
-        GPT
+        SONNET
     );
     let shown = system_texts(&drain(&mut commands));
     assert!(

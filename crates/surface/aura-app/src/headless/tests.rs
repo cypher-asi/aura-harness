@@ -885,3 +885,118 @@ async fn an_eval_run_under_gate_is_routed_and_its_verdict_feeds_the_table() {
     assert_eq!(trace.meta.model, "gate");
     assert_eq!(card.model_calls, 1, "the routed turn is in the run's trace");
 }
+
+#[tokio::test]
+async fn a_turn_whose_last_check_fails_goes_on_with_a_stronger_model() {
+    use aura_agent_gate::Candidate;
+    use aura_core_types::{OutcomeSignal, PromptCategory, Route, RouteLevel, RouteReason};
+    use aura_model::model_catalog::{ModelBackend, ModelTier};
+    const HAIKU: &str = "aura-claude-haiku-4-5";
+    const SONNET: &str = "aura-claude-sonnet-4-6";
+    const OPUS: &str = "aura-claude-opus-4-7";
+    let candidate = |id: &str, tier, cost_usd| Candidate {
+        id: id.to_string(),
+        label: id.to_string(),
+        backend: ModelBackend::Router,
+        tier,
+        cost_usd: Some(cost_usd),
+    };
+    // Debugging starts on the cheapest candidate, so the run never
+    // explores.
+    let gate = GateBase {
+        classifier: HAIKU.to_string(),
+        candidates: Some(vec![
+            candidate(SONNET, ModelTier::Standard, 0.1),
+            candidate(OPUS, ModelTier::Frontier, 0.2),
+        ]),
+    };
+    let dirs = dirs();
+    let permissions = super::permissions(aura_core_modes::AgentMode::Agent, None);
+    // No Cargo.toml in the workspace, so the test command fails.
+    let provider = MockProvider::new()
+        .with_response(MockResponse::text("debugging"))
+        .with_response(MockResponse::tool_use(
+            "c1",
+            "run_command",
+            json!({"program": "cargo", "args": ["test"]}),
+        ))
+        .with_response(MockResponse::text("The tests still fail."))
+        .with_response(MockResponse::text("Fixed it."));
+    let (mut h, requests) = harness(&dirs, provider, ToolFilter::default(), permissions, gate);
+
+    let (report, _) = execute(
+        &mut h,
+        request("fix the parser", SessionChoice::New),
+        OutputFormat::Json,
+    )
+    .await;
+
+    assert_eq!(
+        report.exit_reason,
+        ExitReason::Success,
+        "{:?}",
+        report.error
+    );
+    assert_eq!(report.model, OPUS);
+    assert_eq!(report.result, "Fixed it.");
+    assert_eq!(report.agent_turns, 2);
+    let models: Vec<String> = requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| r.model.to_string())
+        .collect();
+    assert_eq!(
+        models,
+        [HAIKU, SONNET, SONNET, OPUS],
+        "classified once, then the turn moved up a tier"
+    );
+    assert!(
+        last_prompts(&requests)
+            .last()
+            .unwrap()
+            .contains("You are a stronger model taking over"),
+        "the stronger model carries on in the same conversation"
+    );
+
+    let (agent, _) = parse_session_id(&report.session_id, AgentId::generate()).unwrap();
+    let entries = h.hub.factory.store.scan_record(agent, 1, 1_000).unwrap();
+    let routes: Vec<(PromptCategory, Route)> = entries
+        .iter()
+        .filter_map(|e| e.tx.prompt_payload())
+        .map(|p| (p.category, p.route))
+        .collect();
+    assert_eq!(
+        routes,
+        [
+            (
+                PromptCategory::Debugging,
+                Route::turn(SONNET, RouteReason::Default)
+            ),
+            (
+                PromptCategory::Debugging,
+                Route::turn(OPUS, RouteReason::Escalate)
+            ),
+        ]
+    );
+    let outcomes: Vec<(String, OutcomeSignal)> = entries
+        .iter()
+        .filter_map(|e| e.tx.outcome_payload())
+        .map(|o| (o.model, o.signal))
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            (SONNET.to_string(), OutcomeSignal::ChecksFailed),
+            (OPUS.to_string(), OutcomeSignal::None),
+        ]
+    );
+    let stats = h.hub.gate.stats();
+    let row = |model: &str| {
+        stats
+            .row(RouteLevel::Turn, PromptCategory::Debugging, model)
+            .map(|row| (row.tries, row.successes))
+    };
+    assert_eq!(row(SONNET), Some((1, 0)), "the failure counts for Sonnet");
+    assert_eq!(row(OPUS), None, "the stronger model's turn is not counted");
+}

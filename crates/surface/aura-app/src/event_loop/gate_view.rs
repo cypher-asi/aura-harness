@@ -481,7 +481,7 @@ mod tests {
         );
         assert_eq!(
             line("debugging"),
-            "debugging → claude-opus-4-7 (claude plan) - - - pick (default)"
+            "debugging → claude-sonnet-4-6 (claude plan) - - - pick (default)"
         );
         assert!(line("writing").ends_with("pick (default)"));
         assert!(!text.contains("Subtasks"), "no subtask outcomes yet");

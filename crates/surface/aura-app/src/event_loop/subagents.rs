@@ -61,7 +61,7 @@ use aura_agent_trace::{RunMeta, RunRecorder, RunSource};
 use aura_context_skills::SkillManager;
 use aura_core_types::{
     AgentId, Hash, ModelTokens, OutcomePayload, OutcomeSignal, PromptCategory, RecordEntry,
-    SpawnMode, SubagentDispatchRequest, SubagentExit, SubagentResult,
+    RouteLevel, SpawnMode, SubagentDispatchRequest, SubagentExit, SubagentResult,
 };
 use aura_exec_tools::agents::task::TASK_TOOL_NAME;
 use aura_exec_tools::jobs::{JOB_KILL_TOOL_NAME, JOB_OUTPUT_TOOL_NAME};
@@ -964,7 +964,10 @@ impl AgentHub {
             return TaskReport { first, retry: None };
         };
         let category = first.category.unwrap_or(PromptCategory::Unclassified);
-        let Some(decision) = self.gate.escalate(category, &first.model, &candidates) else {
+        let escalated =
+            self.gate
+                .escalate(RouteLevel::Subtask, category, &first.model, &candidates);
+        let Some(decision) = escalated else {
             info!(child = %first.name, "No stronger model to retry the subtask on");
             return TaskReport { first, retry: None };
         };
