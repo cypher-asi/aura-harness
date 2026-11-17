@@ -146,6 +146,11 @@ impl App {
             "resume" => self.handle_resume_command(arg),
             "rewind" => self.handle_rewind_command(arg),
             "diff" => self.handle_diff_command(arg),
+            "gate" => {
+                if let Some(tx) = &self.event_tx {
+                    let _ = tx.try_send(UiEvent::ShowGate);
+                }
+            }
             "good" | "bad" => {
                 if let Some(tx) = &self.event_tx {
                     let _ = tx.try_send(UiEvent::RateTurn {

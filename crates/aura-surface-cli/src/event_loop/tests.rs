@@ -7,7 +7,9 @@ use aura_agent::AgentLoopConfig;
 use aura_agent_kernel::KernelConfig;
 use aura_auth::{Vault, ZosIdentity};
 use aura_context_skills::{SkillLoader, SkillManager};
-use aura_core_types::{Hash, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, Route};
+use aura_core_types::{
+    Hash, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, Route, RouteLevel,
+};
 use aura_model_reasoner::{
     MockProvider, MockResponse, ModelProvider, ModelRequest, ModelResponse, ReasonerError,
 };
@@ -128,7 +130,21 @@ struct Fixture {
     _dirs: Vec<TempDir>,
 }
 
+/// Gate settings for tests: the defaults, without exploring.
+fn steady_gate() -> GateLive {
+    GateLive::new(aura_config::GateConfig {
+        explore_rate: 0.0,
+        ..aura_config::GateConfig::defaults()
+    })
+}
+
 fn fixture() -> (Fixture, mpsc::Receiver<UiCommand>) {
+    fixture_with_gate(steady_gate())
+}
+
+/// [`fixture`] whose kernels feed `gate`.
+fn fixture_with_gate(gate: GateLive) -> (Fixture, mpsc::Receiver<UiCommand>) {
+    let gate = Arc::new(gate);
     let data = TempDir::new().unwrap();
     let db = TempDir::new().unwrap();
     let workspace = TempDir::new().unwrap();
@@ -161,10 +177,16 @@ fn fixture() -> (Fixture, mpsc::Receiver<UiCommand>) {
         processes: ProcessTable::without_os_scan(None, None),
         agents: None,
         record_panel: RecordPanelAgent::default(),
+        gate: Arc::clone(&gate),
     };
-    let record_observer: Arc<dyn aura_agent_kernel::RecordObserver> = Arc::new(
-        UiRecordObserver::new(commands_tx.clone(), RecordPanelAgent::default()),
-    );
+    let record_observer: Arc<dyn aura_agent_kernel::RecordObserver> =
+        Arc::new(FanoutObserver(vec![
+            Arc::new(UiRecordObserver::new(
+                commands_tx.clone(),
+                RecordPanelAgent::default(),
+            )) as Arc<dyn aura_agent_kernel::RecordObserver>,
+            gate as Arc<dyn aura_agent_kernel::RecordObserver>,
+        ]));
     let gate = Arc::new(Semaphore::new(0));
     let provider_gate = Arc::clone(&gate);
     let workspace_root = workspace.path().to_path_buf();
@@ -1715,4 +1737,222 @@ async fn the_same_prompt_on_a_stronger_model_fails_the_earlier_turn() {
     assert_eq!(retried[0].model, "aura-claude-haiku-4-5");
     assert_eq!(retried[0].success, Some(false));
     assert_eq!(prompts[2].2.route.model, "aura-claude-opus-4-7");
+}
+
+/// Gate selected with a zOS sign-in: the router's models, no local ones.
+fn gate_on_zos(fixture: &Fixture) -> ModelSelection {
+    ModelSelection::signed_in(
+        &fixture.config,
+        aura_model_reasoner::model_catalog::GATE_MODEL_ID,
+        aura_auth::AuthSummary {
+            zos_user: Some("alice".to_string()),
+            ..aura_auth::AuthSummary::default()
+        },
+    )
+}
+
+/// Feed `live` `n` question turns on `model` that passed
+/// their checks, recorded by some other agent.
+fn learn_questions(live: &GateLive, model: &str, n: usize) {
+    use aura_agent_kernel::RecordObserver;
+    let agent = AgentId::generate();
+    for i in 0..n {
+        let mut prompt = PromptPayload::new(format!("earlier question {i}"));
+        prompt.category = PromptCategory::Question;
+        prompt.route = Route::turn(model, RouteReason::Default);
+        let prompt_tx = Transaction::user_prompt_with(agent, &prompt);
+        let outcome = OutcomePayload {
+            prompt_tx: prompt_tx.hash,
+            category: PromptCategory::Question,
+            model: model.to_string(),
+            success: Some(true),
+            signal: OutcomeSignal::ChecksPassed,
+            cost_usd: 0.001,
+            latency_ms: 10,
+        };
+        let seq = 2 * u64::try_from(i).unwrap();
+        live.on_entry(&aura_core_types::RecordEntry::builder(seq + 1, prompt_tx).build());
+        live.on_entry(
+            &aura_core_types::RecordEntry::builder(seq + 2, Transaction::outcome(agent, &outcome))
+                .build(),
+        );
+    }
+}
+
+/// The chat lines saying where Gate sent turns.
+fn route_lines(commands: &mut mpsc::Receiver<UiCommand>) -> Vec<String> {
+    drain(commands)
+        .into_iter()
+        .filter_map(|(_, c)| match c {
+            UiCommand::ShowMessage(m) if m.content.contains("gate → ") => Some(m.content),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn gate_routes_each_category_and_records_why() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+    learn_questions(&fixture.hub.gate, "aura-claude-haiku-4-5", 10);
+
+    turn(&mut state, &mut done, &links, first, "what does gate do?").await;
+    turn(&mut state, &mut done, &links, first, "fix the parser").await;
+
+    let prompts = prompts_of(&state, first);
+    assert_eq!(
+        prompts[0].2.route,
+        Route::turn("aura-claude-haiku-4-5", RouteReason::Proven),
+        "ten passing questions prove haiku on questions"
+    );
+    assert_eq!(prompts[1].2.category, PromptCategory::Debugging);
+    assert_eq!(
+        prompts[1].2.route,
+        Route::turn("aura-gpt-5-4", RouteReason::Default),
+        "debugging goes to the strongest model, the cheaper of the frontier ones"
+    );
+    let models: Vec<String> = outcomes_of(&state, first)
+        .into_iter()
+        .map(|(_, o)| o.model)
+        .collect();
+    assert_eq!(models, ["aura-claude-haiku-4-5", "aura-gpt-5-4"]);
+    let shown = route_lines(&mut commands);
+    assert_eq!(
+        shown,
+        [
+            "gate → aura-claude-haiku-4-5 (cloud) · question, proven",
+            "gate → aura-gpt-5-4 (cloud) · debugging, default",
+        ]
+    );
+    let recent = fixture.hub.gate.recent();
+    assert_eq!(recent.len(), 2);
+    assert_eq!(recent[1].reason, RouteReason::Default);
+}
+
+#[tokio::test]
+async fn gate_explores_the_next_cheaper_model_and_records_its_propensity() {
+    let gate = GateLive::with_rng(
+        aura_config::GateConfig {
+            explore_rate: 1.0,
+            ..aura_config::GateConfig::defaults()
+        },
+        aura_agent_gate::SplitMix64::seeded(3),
+    );
+    let (fixture, mut commands) = fixture_with_gate(gate);
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+
+    turn(&mut state, &mut done, &links, first, "what does gate do?").await;
+
+    let (_, _, prompt) = prompts_of(&state, first).remove(0);
+    assert_eq!(
+        prompt.route,
+        Route {
+            explored: true,
+            propensity: 1.0,
+            ..Route::turn("aura-gpt-5-4", RouteReason::Explore)
+        },
+        "the default for questions is sonnet; the next cheaper is gpt-5.4"
+    );
+    let (_, outcome) = outcomes_of(&state, first).remove(0);
+    assert_eq!(outcome.model, "aura-gpt-5-4");
+    assert_eq!(
+        route_lines(&mut commands),
+        ["gate → aura-gpt-5-4 (cloud) · question, explore"]
+    );
+}
+
+#[tokio::test]
+async fn the_next_turn_uses_what_the_last_outcome_taught_gate() {
+    let gate = GateLive::new(aura_config::GateConfig {
+        min_tries: 1,
+        explore_rate: 0.0,
+        ..aura_config::GateConfig::defaults()
+    });
+    let (fixture, _commands) = fixture_with_gate(gate);
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+    let rate = |good| UiEvent::RateTurn {
+        agent_id: first.to_hex(),
+        good,
+    };
+    let reasons = |state: &LoopState<'_>| -> Vec<RouteReason> {
+        prompts_of(state, first)
+            .into_iter()
+            .map(|(_, _, p)| p.route.reason)
+            .collect()
+    };
+
+    turn(&mut state, &mut done, &links, first, "what is a monad?").await;
+    handle_ui_event(&mut state, rate(true), &links).await;
+    turn(&mut state, &mut done, &links, first, "what is a functor?").await;
+    assert_eq!(reasons(&state), [RouteReason::Default, RouteReason::Proven]);
+
+    handle_ui_event(&mut state, rate(false), &links).await;
+    let row = fixture
+        .hub
+        .gate
+        .stats()
+        .row(
+            RouteLevel::Turn,
+            PromptCategory::Question,
+            "aura-claude-sonnet-4-6",
+        )
+        .copied()
+        .unwrap();
+    assert_eq!(
+        (row.tries, row.successes),
+        (2, 1),
+        "each prompt counts once"
+    );
+    turn(
+        &mut state,
+        &mut done,
+        &links,
+        first,
+        "what is an applicative?",
+    )
+    .await;
+    assert_eq!(
+        reasons(&state),
+        [
+            RouteReason::Default,
+            RouteReason::Proven,
+            RouteReason::Default
+        ],
+        "one of two is below the target, so sonnet drops back to the default"
+    );
+}
+
+#[tokio::test]
+async fn slash_gate_shows_the_table() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+    learn_questions(&fixture.hub.gate, "aura-claude-haiku-4-5", 10);
+
+    handle_ui_event(&mut state, UiEvent::ShowGate, &links).await;
+
+    let text = system_texts(&drain(&mut commands));
+    assert!(text.contains("Turns"), "{text}");
+    assert!(
+        text.contains("question            → aura-claude-haiku-4-5 (cloud)"),
+        "{text}"
+    );
+    assert!(text.contains("pick (proven)"), "{text}");
 }

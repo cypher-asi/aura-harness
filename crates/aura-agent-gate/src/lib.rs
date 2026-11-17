@@ -2,8 +2,10 @@
 //!
 //! Gate, the router behind the `gate` model id.
 //!
-//! - [`router`]: the candidates the user's sign-ins allow and the model a
-//!   turn goes to
+//! - [`router`]: the candidates the user's sign-ins allow and the model
+//!   a turn or subtask goes to
+//! - [`stats`]: what Gate has learned per level, category and model,
+//!   built from the record
 //! - [`classify`]: the request that labels a prompt with its category,
 //!   and reading the reply
 //! - [`checks`]: whether the tests or build a turn ran last passed
@@ -18,5 +20,7 @@ pub mod checks;
 pub mod classify;
 pub mod outcome;
 pub mod router;
+pub mod stats;
 
-pub use router::{candidates, fixed_pick, pick_order, Candidate};
+pub use router::{candidates, fixed_pick, pick, Candidate, Decision, Random, SplitMix64};
+pub use stats::GateStats;

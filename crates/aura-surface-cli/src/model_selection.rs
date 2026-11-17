@@ -143,28 +143,16 @@ impl ModelSelection {
         )
     }
 
-    /// Gate's pick for the next turn, `None` when a model is pinned or
-    /// nothing can run (then the turn goes to the default local model,
-    /// whose setup hint explains what is missing).
+    /// Where Gate expects the next turn to go before its prompt is
+    /// classified (its default for most categories), `None` when a model
+    /// is pinned or nothing can run (then the turn goes to the default
+    /// local model, whose setup hint explains what is missing). The
+    /// status line shows it until a turn is routed.
     pub fn route(&self) -> Option<Candidate> {
         if !self.is_gate() {
             return None;
         }
         aura_agent_gate::fixed_pick(&self.gate_candidates()).cloned()
-    }
-
-    /// Gate's picks after the next turn's, in the order it goes to them
-    /// when a route refuses the user's sign-in mid-turn.
-    pub fn fallbacks(&self) -> Vec<Candidate> {
-        if !self.is_gate() {
-            return Vec::new();
-        }
-        let candidates = self.gate_candidates();
-        aura_agent_gate::pick_order(&candidates)
-            .into_iter()
-            .skip(1)
-            .cloned()
-            .collect()
     }
 
     /// The model that classifies prompts: the cheapest fast-tier model the
@@ -684,13 +672,12 @@ mod tests {
         let claude = signed_in(None, &[ProviderKind::Claude]);
         let (mut selection, mut config) = selection_on(claude.clone(), GATE_MODEL_ID);
         assert_eq!(config.model, "claude/claude-sonnet-4-6");
-        let fallbacks: Vec<String> = selection.fallbacks().into_iter().map(|c| c.id).collect();
-        assert_eq!(
-            fallbacks,
-            ["claude/claude-opus-4-7", "claude/claude-haiku-4-5", LOCAL]
-        );
 
         selection.drop_model("claude/claude-sonnet-4-6");
+        assert!(!selection
+            .gate_candidates()
+            .iter()
+            .any(|c| c.id == "claude/claude-sonnet-4-6"));
         assert!(selection.refresh_route(&mut config));
         assert_eq!(config.model, "claude/claude-opus-4-7");
 

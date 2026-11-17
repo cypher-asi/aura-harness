@@ -7,6 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+aura-config = { path = "../aura-config" }
 aura-core-auth = { path = "../aura-core-auth" }
 aura-core-types = { path = "../aura-core-types" }
 aura-model-reasoner = { path = "../aura-model-reasoner" }

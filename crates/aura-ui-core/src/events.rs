@@ -63,6 +63,9 @@ pub enum UiEvent {
     /// User requested status display
     ShowStatus,
 
+    /// User asked what Gate has learned and how it routed lately (`/gate`)
+    ShowGate,
+
     /// User requested help
     ShowHelp,
 

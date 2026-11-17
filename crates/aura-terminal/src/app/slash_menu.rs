@@ -52,6 +52,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     command("good", "Rate the last turn good (teaches Gate)"),
     command("bad", "Rate the last turn bad (teaches Gate)"),
+    command("gate", "What Gate learned and how it routed lately"),
     SlashCommand {
         name: "name",
         args: "[name]",

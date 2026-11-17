@@ -544,6 +544,18 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
         post_edit_check,
         trace_snapshots,
     } = setup;
+    let gate = Arc::new(event_loop::GateLive::new(aura_config::gate()));
+    gate.rebuild_in_background(
+        store.clone() as Arc<dyn aura_store_db::ReadStore>,
+        registry.agents().iter().map(|a| a.agent_id()).collect(),
+    );
+    let record_observer: Option<Arc<dyn RecordObserver>> =
+        Some(Arc::new(event_loop::FanoutObserver(
+            record_observer
+                .into_iter()
+                .chain([Arc::clone(&gate) as Arc<dyn RecordObserver>])
+                .collect(),
+        )));
     let mut kernel_config = KernelConfig {
         workspace_base: workspace_root.clone(),
         use_workspace_base_as_root: true,
@@ -625,6 +637,7 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
             processes,
             agents,
             record_panel,
+            gate,
         },
         move |dispatcher| {
             event_loop::KernelFactory::new(

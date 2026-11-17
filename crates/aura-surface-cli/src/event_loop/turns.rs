@@ -9,6 +9,7 @@ use super::agent_events::AgentUi;
 use super::agent_events::ForwarderState;
 use super::agents::AgentSession;
 use super::attachments::{expand_mentions_in, mentioned_paths};
+use super::gate_live::GateLive;
 use super::gate_record;
 use super::handlers::{handle_agent_success, run_agent_turn, system_message};
 use super::run_command::run_user_command;
@@ -18,11 +19,11 @@ use crate::model_selection::ModelLimits;
 use aura_agent::{AgentLoop, CompactHistoryError};
 use aura_agent_gate::checks::last_check;
 use aura_agent_gate::outcome::turn_signal;
-use aura_agent_gate::Candidate;
+use aura_agent_gate::{Candidate, Decision};
 use aura_agent_trace::RunRecorder;
 use aura_core_types::{
     AgentId, Hash, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, RecordEntry,
-    Route, RouteReason, Transaction,
+    Route, RouteLevel, RouteReason, Transaction,
 };
 use aura_model_reasoner::{ContentBlock, ImageSource, Message, Role, ToolDefinition};
 use aura_terminal::events::ImageAttachment;
@@ -88,9 +89,8 @@ pub(super) enum Task {
         steering: Steering,
         limits: LongRunSettings,
         recorder: Option<Arc<RunRecorder>>,
-        /// Where the turn goes next when Gate picked its model and the
-        /// route refuses the user's sign-in
-        gate: Option<GateTurn>,
+        /// What Gate routes the turn among, when it routes it
+        gate: Option<Box<GateTurn>>,
         /// How Gate records the turn's prompt
         routing: Box<Routing>,
     },
@@ -103,11 +103,66 @@ pub(super) enum Task {
     },
 }
 
-/// Gate's next picks for a turn, in order, and how to point an agent
-/// loop at one.
+/// What Gate routes a turn among once its prompt is classified, and how
+/// to point an agent loop at its choice.
 pub(super) struct GateTurn {
-    pub fallbacks: Vec<Candidate>,
+    /// Models the turn may go to
+    pub candidates: Vec<Candidate>,
     pub limits: ModelLimits,
+    /// What Gate has learned
+    pub live: Arc<GateLive>,
+    /// The model selector and status line as they stand, for showing the
+    /// turn's route
+    pub models: UiCommand,
+}
+
+impl GateTurn {
+    /// Gate's choice for a turn asking for `category`, after the models
+    /// in `refused` turned the user's sign-in down; it explores only on
+    /// the first choice.
+    fn decide(&self, category: PromptCategory, refused: &[String]) -> Option<Decision> {
+        if refused.is_empty() {
+            return self
+                .live
+                .decide(RouteLevel::Turn, category, &self.candidates);
+        }
+        let left: Vec<Candidate> = self
+            .candidates
+            .iter()
+            .filter(|c| !refused.contains(&c.id))
+            .cloned()
+            .collect();
+        self.live.redecide(RouteLevel::Turn, category, &left)
+    }
+
+    /// Point `agent_loop` at `decision`'s model.
+    fn point(&self, agent_loop: &mut AgentLoop, decision: &Decision) {
+        if agent_loop.config().model == decision.model.id {
+            return;
+        }
+        let mut config = agent_loop.config().clone();
+        self.limits.configure(&mut config, &decision.model.id);
+        *agent_loop = AgentLoop::new(config);
+    }
+
+    /// Show the model and route of `decision` in the status line.
+    async fn show(&self, ui: &AgentUi, decision: &Decision) {
+        let mut models = self.models.clone();
+        if let UiCommand::SetModels { route, .. } = &mut models {
+            *route = Some(decision.model.route_label());
+        }
+        ui.send_app(models).await;
+    }
+}
+
+/// The chat line saying where Gate sent a turn asking for `category`,
+/// e.g. `gate → claude-sonnet-4-6 (claude plan) · question, default`.
+fn route_line(decision: &Decision, category: PromptCategory) -> String {
+    format!(
+        "gate → {} · {category}, {}",
+        decision.model.route_label(),
+        decision.reason
+    )
 }
 
 /// How Gate records a turn's prompt: who classifies it, and why the turn
@@ -116,7 +171,7 @@ pub(super) struct GateTurn {
 pub(super) struct Routing {
     /// Model that classifies the prompt
     pub classifier: String,
-    /// Why the turn runs on its model
+    /// Why the turn runs on its model, until Gate decides
     pub reason: RouteReason,
 }
 
@@ -226,7 +281,7 @@ struct TurnParts<'a> {
     steering: &'a Steering,
     limits: LongRunSettings,
     recorder: Option<Arc<RunRecorder>>,
-    gate: Option<GateTurn>,
+    gate: Option<Box<GateTurn>>,
     routing: Box<Routing>,
 }
 
@@ -261,8 +316,9 @@ pub(crate) async fn record_prompt(
 /// Record `prompt` as typed and run a turn answering it. The model gets
 /// the files it mentions as well. The prompt is recorded with its
 /// category and route, and the turn ends with an `Outcome` saying how it
-/// went. When Gate picked the model and its route refuses the user's
-/// sign-in, the turn carries on from where it stopped on Gate's next pick.
+/// went. When Gate routes the turn, it picks the model once the prompt is
+/// classified; when that model's route refuses the user's sign-in, the
+/// turn carries on from where it stopped on Gate's next choice.
 async fn run_prompt(
     session: &mut AgentSession,
     prompt: Prompt,
@@ -274,7 +330,7 @@ async fn run_prompt(
     let started = Instant::now();
     let model = turn.agent_loop.config().model.clone();
     gate_record::note_retry(session, &prompt.text, &model).await;
-    let label = Label {
+    let mut label = Label {
         text: prompt.text.clone(),
         classifier: turn.routing.classifier.clone(),
         auth_token: turn.agent_loop.config().auth_token.clone(),
@@ -290,7 +346,7 @@ async fn run_prompt(
             // before the turn's first model call ends; a classifier slower
             // than that call records it after the call's entry.
             let (recorded, (result, forwarded)) = tokio::join!(
-                label.record(session),
+                label.classify_and_record(session),
                 run_agent_turn(
                     session,
                     &turn.agent_loop,
@@ -311,7 +367,11 @@ async fn run_prompt(
             };
             (result, forwarded, Attempts::default(), recorded)
         } else {
-            let recorded = match label.record(session).await {
+            let category = label.classify(session).await;
+            if let Some(gate) = turn.gate.as_deref() {
+                route_turn(gate, &mut turn.agent_loop, &mut label, category, ui).await;
+            }
+            let recorded = match label.record(session, category).await {
                 Ok(recorded) => recorded,
                 Err(problem) => {
                     ui.send(UiCommand::ShowError(problem)).await;
@@ -324,7 +384,8 @@ async fn run_prompt(
                 files.note_prompt_tx(session.agent_id(), recorded.0);
             }
             session.messages.push(model_message(session, prompt).await);
-            let (result, forwarded, attempts) = run_attempts(session, &mut turn, ui, cancel).await;
+            let (result, forwarded, attempts) =
+                run_attempts(session, &mut turn, category, ui, cancel).await;
             (result, forwarded, attempts, Some(recorded))
         };
     if let Some(files) = &session.file_checkpoints {
@@ -388,6 +449,32 @@ async fn run_prompt(
     }
 }
 
+/// Have Gate pick the model of a turn asking for `category`, point
+/// `agent_loop` at it, show the choice, and make it the route `label`
+/// records.
+async fn route_turn(
+    gate: &GateTurn,
+    agent_loop: &mut AgentLoop,
+    label: &mut Label,
+    category: PromptCategory,
+    ui: &AgentUi,
+) {
+    let Some(decision) = gate.decide(category, &[]) else {
+        return;
+    };
+    info!(
+        model = %decision.model.id,
+        %category,
+        reason = %decision.reason,
+        "Gate routed the turn"
+    );
+    gate.point(agent_loop, &decision);
+    ui.send(system_message(route_line(&decision, category)))
+        .await;
+    gate.show(ui, &decision).await;
+    label.route = decision.route(RouteLevel::Turn);
+}
+
 /// What a turn's prompt is recorded with besides its category.
 struct Label {
     text: String,
@@ -397,16 +484,34 @@ struct Label {
 }
 
 impl Label {
-    /// Classify the prompt and record it on `session`, returning its
-    /// transaction hash and category.
-    async fn record(&self, session: &AgentSession) -> Result<(Hash, PromptCategory), String> {
-        let category = gate_record::classify_prompt(
+    /// The prompt's category, as the classifier says.
+    async fn classify(&self, session: &AgentSession) -> PromptCategory {
+        gate_record::classify_prompt(
             &session.kernel,
             &self.classifier,
             &self.text,
             self.auth_token.clone(),
         )
-        .await;
+        .await
+    }
+
+    /// Classify the prompt and record it on `session`, returning its
+    /// transaction hash and category.
+    async fn classify_and_record(
+        &self,
+        session: &AgentSession,
+    ) -> Result<(Hash, PromptCategory), String> {
+        let category = self.classify(session).await;
+        self.record(session, category).await
+    }
+
+    /// Record the prompt on `session` as asking for `category`, returning
+    /// its transaction hash and category.
+    async fn record(
+        &self,
+        session: &AgentSession,
+        category: PromptCategory,
+    ) -> Result<(Hash, PromptCategory), String> {
         let payload = PromptPayload {
             text: self.text.clone(),
             category,
@@ -459,11 +564,12 @@ struct Attempts {
     cost_usd: f64,
 }
 
-/// Run the turn, going down Gate's picks while a route refuses the user's
-/// sign-in.
+/// Run the turn of a prompt asking for `category`, asking Gate again
+/// while a route refuses the user's sign-in.
 async fn run_attempts(
     session: &mut AgentSession,
     turn: &mut TurnParts<'_>,
+    category: PromptCategory,
     ui: &AgentUi,
     cancel: &CancellationToken,
 ) -> (
@@ -472,10 +578,7 @@ async fn run_attempts(
     Attempts,
 ) {
     let mut attempts = Attempts::default();
-    let mut fallbacks = turn
-        .gate
-        .take()
-        .map(|gate| (gate.fallbacks.into_iter(), gate.limits));
+    let gate = turn.gate.take();
     loop {
         let (result, forwarded) = run_agent_turn(
             session,
@@ -488,32 +591,30 @@ async fn run_attempts(
             turn.recorder.clone(),
         )
         .await;
-        let Some((picks, limits)) = fallbacks.as_mut() else {
+        let Some(gate) = gate.as_ref() else {
             return (result, forwarded, attempts);
         };
         if !forwarded.credentials_rejected || cancel.is_cancelled() {
             return (result, forwarded, attempts);
         }
         let model = turn.agent_loop.config().model.clone();
-        let Some(next) = picks.next() else {
-            attempts.refused.push(model);
+        attempts.refused.push(model.clone());
+        let Some(next) = gate.decide(category, &attempts.refused) else {
             return (result, forwarded, attempts);
         };
-        attempts.refused.push(model.clone());
         attempts.cost_usd += forwarded.usage.cost_usd;
         session.usage.add(&forwarded.usage);
         if let Ok(partial) = &result {
             session.messages.clone_from(&partial.messages);
         }
+        info!(from = %model, to = %next.model.id, "Gate re-routed the turn");
         ui.send(system_message(format!(
-            "{model} refused your sign-in; Gate skips it until your sign-ins change.\n\
-             gate → {}",
-            next.route_label()
+            "{model} refused your sign-in; Gate skips it until your sign-ins change.\n{}",
+            route_line(&next, category)
         )))
         .await;
-        let mut config = turn.agent_loop.config().clone();
-        limits.configure(&mut config, &next.id);
-        *turn.agent_loop = AgentLoop::new(config);
+        gate.point(&mut turn.agent_loop, &next);
+        gate.show(ui, &next).await;
     }
 }
 

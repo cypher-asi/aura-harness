@@ -14,7 +14,9 @@ pub(crate) mod agents;
 pub(crate) mod approvals;
 mod attachments;
 pub(crate) mod auth;
+pub(crate) mod gate_live;
 pub(crate) mod gate_record;
+mod gate_view;
 pub(crate) mod handlers;
 pub(crate) mod host;
 pub(crate) mod hud;
@@ -34,6 +36,7 @@ pub(crate) mod turns;
 pub(crate) use agent_events::forward_agent_events;
 pub use agents::{AgentSession, KernelBuilder, KernelFactory};
 pub use approvals::TerminalApprovals;
+pub use gate_live::GateLive;
 pub use host::{TerminalAgents, TerminalChildKernels};
 pub use processes::{BackgroundCommands, ProcessTable};
 pub use record_ui::{FanoutObserver, RecordPanelAgent, UiRecordObserver};
@@ -428,6 +431,7 @@ async fn handle_ui_event(
             }
         }
         UiEvent::ShowStatus => trace::status_report(state).await,
+        UiEvent::ShowGate => gate_view::show(state).await,
         UiEvent::OpenGraph(id) => trace::open_graph(state, id).await,
         UiEvent::ListRuns => trace::list(state).await,
         UiEvent::LabelStep { run_id, seq, value } => {
@@ -598,7 +602,7 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
             })
             .await;
             let (agent_loop, tools, recorder) = prepare_turn(state, &session).await;
-            let gate = gate_turn(state, &agent_loop, &ui).await;
+            let gate = gate_turn(state, &agent_loop).map(Box::new);
             let routing = Box::new(routing(state, &agent_loop));
             if let Some(rec) = &recorder {
                 rec.begin_turn(&prompt.text);
@@ -698,28 +702,20 @@ async fn prepare_turn(
     (AgentLoop::new(config), tools, recorder)
 }
 
-/// When Gate picked the model `agent_loop` runs (a permanent agent may
-/// name its own), show the pick in the chat and the status line, and
-/// return where the turn goes if the pick refuses the user's sign-in.
-async fn gate_turn(
-    state: &LoopState<'_>,
-    agent_loop: &AgentLoop,
-    ui: &AgentUi,
-) -> Option<GateTurn> {
-    let pick = state
+/// When Gate routes the turn `agent_loop` is set up for (Gate is selected
+/// and no permanent agent names its own model), what it routes among once
+/// the prompt is classified. The turn shows Gate's choice when it makes
+/// it.
+fn gate_turn(state: &LoopState<'_>, agent_loop: &AgentLoop) -> Option<GateTurn> {
+    state
         .models
         .route()
-        .filter(|pick| pick.id == agent_loop.config().model)?;
-    info!(model = %pick.id, "Gate picked the turn's model");
-    ui.send(handlers::system_message(format!(
-        "gate → {}",
-        pick.route_label()
-    )))
-    .await;
-    let _ = state.commands.send(state.models.ui_command()).await;
+        .filter(|preview| preview.id == agent_loop.config().model)?;
     Some(GateTurn {
-        fallbacks: state.models.fallbacks(),
+        candidates: state.models.gate_candidates(),
         limits: state.models.limits(),
+        live: Arc::clone(&state.hub.gate),
+        models: state.models.ui_command(),
     })
 }
 

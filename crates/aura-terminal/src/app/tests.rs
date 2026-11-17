@@ -265,6 +265,14 @@ fn test_good_and_bad_rate_the_active_agents_last_turn() {
     ));
 }
 
+#[test]
+fn test_gate_asks_for_the_gate_view() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    app.handle_command("/gate");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::ShowGate)));
+}
+
 fn submit(app: &mut App, text: &str) {
     for c in text.chars() {
         app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()));

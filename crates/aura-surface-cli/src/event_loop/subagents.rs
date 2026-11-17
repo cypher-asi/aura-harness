@@ -14,6 +14,7 @@
 
 use super::agent_events::AgentUi;
 use super::agents::{AgentSession, KernelFactory};
+use super::gate_live::GateLive;
 use super::handlers::{handle_agent_success, run_agent_turn};
 use super::host::{agent_tool_definitions, TerminalAgents};
 use super::notices::{Notice, NoticeSender};
@@ -102,6 +103,8 @@ pub struct AgentHub {
     pub(crate) agents: Option<TerminalAgents>,
     /// The agent the RECORD panel follows.
     pub(crate) record_panel: RecordPanelAgent,
+    /// What Gate has learned, and its latest decisions.
+    pub(crate) gate: Arc<GateLive>,
 }
 
 /// Parts of an [`AgentHub`] other than the kernel factory.
@@ -121,6 +124,9 @@ pub struct AgentHubParts {
     pub agents: Option<TerminalAgents>,
     /// Shared with the kernels' [`super::UiRecordObserver`].
     pub record_panel: RecordPanelAgent,
+    /// Gate's table; the kernels' record observer must include it so it
+    /// sees every outcome.
+    pub gate: Arc<GateLive>,
 }
 
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -158,6 +164,7 @@ impl AgentHub {
                 notice_rx: Mutex::new(Some(notice_rx)),
                 agents: parts.agents,
                 record_panel: parts.record_panel,
+                gate: parts.gate,
             }
         })
     }

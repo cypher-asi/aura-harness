@@ -81,7 +81,9 @@ impl std::fmt::Display for PromptCategory {
 }
 
 /// What a routing decision covers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum RouteLevel {
     /// The main conversation loop for a whole turn.
@@ -89,6 +91,23 @@ pub enum RouteLevel {
     Turn,
     /// A piece of work delegated with the `task` tool.
     Subtask,
+}
+
+impl RouteLevel {
+    /// The level's name as stored, e.g. `turn`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Turn => "turn",
+            Self::Subtask => "subtask",
+        }
+    }
+}
+
+impl std::fmt::Display for RouteLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Why the work runs on the model it runs on.
@@ -104,6 +123,25 @@ pub enum RouteReason {
     Proven,
     /// Gate tried a cheaper model to learn how it does.
     Explore,
+}
+
+impl RouteReason {
+    /// The reason's name as stored, e.g. `proven`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pinned => "pinned",
+            Self::Default => "default",
+            Self::Proven => "proven",
+            Self::Explore => "explore",
+        }
+    }
+}
+
+impl std::fmt::Display for RouteReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// The model a prompt's work runs on, and why.
@@ -398,5 +436,20 @@ mod tests {
             assert_eq!(json, category.as_str());
         }
         assert_eq!(PromptCategory::from_name("bugfix"), None);
+    }
+
+    #[test]
+    fn level_and_reason_names_match_their_stored_form() {
+        for level in [RouteLevel::Turn, RouteLevel::Subtask] {
+            assert_eq!(serde_json::to_value(level).unwrap(), level.as_str());
+        }
+        for reason in [
+            RouteReason::Pinned,
+            RouteReason::Default,
+            RouteReason::Proven,
+            RouteReason::Explore,
+        ] {
+            assert_eq!(serde_json::to_value(reason).unwrap(), reason.as_str());
+        }
     }
 }

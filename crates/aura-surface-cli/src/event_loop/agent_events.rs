@@ -68,6 +68,12 @@ impl AgentUi {
         }
     }
 
+    /// Send `command` for the whole app (the model selector and status
+    /// line), not this agent's chat.
+    pub(crate) async fn send_app(&self, command: UiCommand) {
+        let _ = self.commands.send(command).await;
+    }
+
     /// Send `command` to this agent's chat.
     pub(crate) async fn send(&self, command: UiCommand) {
         let _ = self
