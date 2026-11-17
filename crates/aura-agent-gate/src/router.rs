@@ -9,7 +9,9 @@
 //!
 //! [`pick`] chooses among them for one category: the cheapest model that
 //! has proven itself there, else the category's default, and now and
-//! then the next cheaper model instead, to learn how it does.
+//! then the next cheaper model instead, to learn how it does. When a
+//! subtask's attempt fails, [`escalate`] picks the one model it is
+//! retried on.
 
 use std::collections::HashMap;
 
@@ -17,7 +19,7 @@ use aura_config::GateConfig;
 use aura_core_auth::ProviderKind;
 use aura_core_types::{PromptCategory, Route, RouteLevel, RouteReason};
 use aura_model_reasoner::model_catalog::{
-    estimate_cost_usd, model_key, route_label, ModelBackend, ModelOption, ModelTier,
+    estimate_cost_usd, infer_tier, model_key, route_label, ModelBackend, ModelOption, ModelTier,
 };
 use aura_model_reasoner::Usage;
 
@@ -308,6 +310,34 @@ pub fn pick(
     decide(index, reason, false, 1.0 - rate)
 }
 
+/// Where work at `level` that failed on `failed` is retried, once: the
+/// cheapest model (by [`by_expected_cost`]) of the lowest tier above
+/// `failed`'s. `None` when no candidate is stronger.
+#[must_use]
+pub fn escalate(
+    stats: &GateStats,
+    level: RouteLevel,
+    failed: &str,
+    candidates: &[Candidate],
+) -> Option<Decision> {
+    let tier = candidates
+        .iter()
+        .find(|c| c.id == failed)
+        .map_or_else(|| infer_tier(failed), |c| c.tier);
+    let stronger: Vec<&Candidate> = by_expected_cost(stats, level, candidates)
+        .into_iter()
+        .filter(|c| c.tier > tier)
+        .collect();
+    let next = stronger.iter().map(|c| c.tier).min()?;
+    let model = stronger.into_iter().find(|c| c.tier == next)?;
+    Some(Decision {
+        model: model.clone(),
+        reason: RouteReason::Escalate,
+        explored: false,
+        propensity: 1.0,
+    })
+}
+
 /// Position in `order` of the default model for `category`.
 fn default_index(order: &[&Candidate], category: PromptCategory) -> Option<usize> {
     let strongest = || {
@@ -569,6 +599,28 @@ mod tests {
             )
             .unwrap();
             (decision.model.id, decision.reason)
+        }
+
+        #[test]
+        fn a_failed_attempt_escalates_to_the_cheapest_model_one_tier_up() {
+            let empty = GateStats::default();
+            let up = |failed: &str, candidates: &[Candidate]| {
+                escalate(&empty, RouteLevel::Subtask, failed, candidates).map(|d| {
+                    assert_eq!(d.reason, RouteReason::Escalate);
+                    assert!(!d.explored);
+                    d.model.id
+                })
+            };
+            assert_eq!(up(HAIKU, &claude()).as_deref(), Some(SONNET));
+            assert_eq!(up(SONNET, &claude()).as_deref(), Some(OPUS));
+            assert_eq!(
+                up(SONNET, &all()).as_deref(),
+                Some("chatgpt/gpt-5.4"),
+                "the cheaper of the frontier models"
+            );
+            assert_eq!(up(LOCAL, &claude()).as_deref(), Some(HAIKU));
+            assert_eq!(up(OPUS, &claude()), None, "nothing is stronger");
+            assert_eq!(up(HAIKU, &[]), None);
         }
 
         #[test]

@@ -16,6 +16,7 @@ pub mod chat_capabilities;
 pub mod dev_loop_workflow;
 pub mod editing_etiquette;
 pub mod frontend_design;
+pub mod gate_lead;
 pub mod output_style;
 pub mod plan_mode;
 pub mod planning_guidance;

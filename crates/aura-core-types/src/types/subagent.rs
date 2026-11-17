@@ -165,6 +165,11 @@ pub struct SubagentDispatchRequest {
     /// keeps deriving `parent_tool_use_id` from `tool_call_id`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub council_parent_tool_use_id: Option<String>,
+    /// Command the dispatcher runs in the child's workspace after the
+    /// child finishes. Its exit status is the subtask's verdict; `None`
+    /// leaves the verdict to the last check the child ran itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
 }
 
 /// Terminal state of a foreground subagent task.

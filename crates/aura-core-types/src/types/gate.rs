@@ -126,6 +126,10 @@ pub enum RouteReason {
     /// A run of `/compare`: Gate's pick with exploration off, or the
     /// model Gate is compared with.
     Compare,
+    /// A subtask retried on a stronger model after its first attempt
+    /// failed. Recorded, but not counted in Gate's table: it only ever
+    /// sees work that already failed once.
+    Escalate,
 }
 
 impl RouteReason {
@@ -138,6 +142,7 @@ impl RouteReason {
             Self::Proven => "proven",
             Self::Explore => "explore",
             Self::Compare => "compare",
+            Self::Escalate => "escalate",
         }
     }
 }
@@ -496,6 +501,7 @@ mod tests {
             RouteReason::Proven,
             RouteReason::Explore,
             RouteReason::Compare,
+            RouteReason::Escalate,
         ] {
             assert_eq!(serde_json::to_value(reason).unwrap(), reason.as_str());
         }

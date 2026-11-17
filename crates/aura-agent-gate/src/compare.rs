@@ -99,8 +99,8 @@ pub enum CompareCommand {
 }
 
 /// How `/compare` is used, for error messages.
-pub const USAGE: &str = "Usage: /compare [prompt | --plan <file>] [--against <model>] \
-[--repeats N] [--check <cmd>] [--budget $] · /compare go | cancel | show [n] | \
+pub const USAGE: &str = "Usage: /compare [prompt | --plan <file>] \
+[--against <model> | gate:nodelegate] [--repeats N] [--check <cmd>] [--budget $] · /compare go | cancel | show [n] | \
 diff [run] | pick <gate|other> | apply <run> | dismiss";
 
 /// One word of the arguments: its text with quotes removed, and where it
@@ -338,7 +338,10 @@ pub fn resolve_against<'a>(
 ) -> Result<&'a Candidate, String> {
     let query = query.trim().to_ascii_lowercase();
     if query == "gate" {
-        return Err("Compare Gate with another model, e.g. --against opus".to_string());
+        return Err(format!(
+            "Compare Gate with another model, e.g. --against opus, or with itself \
+             without enforced delegation: --against {NO_DELEGATE}"
+        ));
     }
     let exact = candidates
         .iter()
@@ -360,6 +363,45 @@ pub fn resolve_against<'a>(
             }
         )
     })
+}
+
+/// What `--against` takes to compare Gate with Gate whose lead does not
+/// have to delegate (as with `AURA_GATE_DELEGATE=off`).
+pub const NO_DELEGATE: &str = "gate:nodelegate";
+
+/// What the other arm of a comparison runs on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Opponent {
+    /// Every turn and subtask on this model.
+    Model(String),
+    /// Routed by Gate like the Gate arm, but the lead keeps its own file
+    /// tools and commands.
+    GateNoDelegate,
+}
+
+impl Opponent {
+    /// How the comparison names the other arm: the model, or
+    /// [`NO_DELEGATE`].
+    #[must_use]
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Model(model) => model,
+            Self::GateNoDelegate => NO_DELEGATE,
+        }
+    }
+}
+
+/// The other arm `query` (the `--against` value) names among
+/// `candidates`: [`NO_DELEGATE`], else a model as [`resolve_against`]
+/// finds it.
+///
+/// # Errors
+/// As [`resolve_against`].
+pub fn resolve_opponent(query: &str, candidates: &[Candidate]) -> Result<Opponent, String> {
+    if query.trim().eq_ignore_ascii_case(NO_DELEGATE) {
+        return Ok(Opponent::GateNoDelegate);
+    }
+    resolve_against(query, candidates).map(|c| Opponent::Model(c.id.clone()))
 }
 
 /// List price of `usage` on `model`: 0 for local models, `None` when the
@@ -799,6 +841,29 @@ mod tests {
         assert!(resolve_against("opus", &[])
             .unwrap_err()
             .contains("sign in"));
+    }
+
+    #[test]
+    fn gate_nodelegate_compares_gate_with_delegation_off() {
+        let all = with_claude_plan();
+        assert_eq!(
+            start("fix it --against gate:nodelegate").against.as_deref(),
+            Some(NO_DELEGATE)
+        );
+        for query in [NO_DELEGATE, " Gate:NoDelegate "] {
+            assert_eq!(
+                resolve_opponent(query, &all),
+                Ok(Opponent::GateNoDelegate),
+                "{query}"
+            );
+        }
+        assert_eq!(Opponent::GateNoDelegate.label(), NO_DELEGATE);
+        let opus = resolve_opponent("opus", &all).unwrap();
+        assert_eq!(opus, Opponent::Model("claude/claude-opus-5-5".to_string()));
+        assert_eq!(opus.label(), "claude/claude-opus-5-5");
+        assert!(resolve_opponent("gate", &all)
+            .unwrap_err()
+            .contains(NO_DELEGATE));
     }
 
     #[test]

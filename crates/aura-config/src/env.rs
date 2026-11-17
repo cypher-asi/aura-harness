@@ -69,6 +69,10 @@ pub const AURA_GATE_MIN_TRIES: &str = "AURA_GATE_MIN_TRIES";
 /// Share (0..=1) of Gate's routes sent to the next cheaper model.
 /// Consumed by [`crate::GateConfig::explore_rate`].
 pub const AURA_GATE_EXPLORE: &str = "AURA_GATE_EXPLORE";
+/// `off` lets the lead agent under Gate edit files and run any command
+/// itself; delegating is then only recommended. Consumed by
+/// [`crate::GateConfig::delegate`].
+pub const AURA_GATE_DELEGATE: &str = "AURA_GATE_DELEGATE";
 
 /// The full list of env-var names this crate owns. Boundary tests use
 /// this to enforce that no other crate calls `std::env::var(...)` on
@@ -103,6 +107,7 @@ pub const ENV_VAR_NAMES: &[&str] = &[
     AURA_GATE_TARGET,
     AURA_GATE_MIN_TRIES,
     AURA_GATE_EXPLORE,
+    AURA_GATE_DELEGATE,
 ];
 
 // ---------------------------------------------------------------------------

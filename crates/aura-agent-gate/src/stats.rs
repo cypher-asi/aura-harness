@@ -13,14 +13,19 @@
 //! can overlap the live feed): which outcome counts depends only on the
 //! record sequence numbers, and seeing an entry again changes nothing.
 //! A prompt's outcomes are in the same record as the prompt, so their
-//! sequence numbers compare. A prompt is known by its agent and its
+//! sequence numbers compare. A subtask retried on a stronger model after
+//! its first attempt failed (route reason `escalate`) is not counted:
+//! the retry only ever sees work that already failed once, and the first
+//! attempt's outcome already says how the route did. A prompt is known by its agent and its
 //! transaction hash: the hash covers only the payload, so two agents
 //! given the same prompt (the repeats of a `/compare`) record the same
 //! hash for different work.
 
 use std::collections::HashMap;
 
-use aura_core_types::{AgentId, Hash, OutcomePayload, PromptCategory, RecordEntry, RouteLevel};
+use aura_core_types::{
+    AgentId, Hash, OutcomePayload, PromptCategory, RecordEntry, RouteLevel, RouteReason,
+};
 
 /// One row of the table: the counted outcomes of one model on one
 /// category at one level.
@@ -126,6 +131,8 @@ impl Counted {
 struct PromptState {
     /// From the prompt's route, once the prompt has been seen.
     level: Option<RouteLevel>,
+    /// The prompt is an escalated retry, which is never counted.
+    ignored: bool,
     /// The outcome it counts with, once one with a known result has
     /// been seen.
     counted: Option<Counted>,
@@ -155,6 +162,13 @@ impl GateStats {
     pub fn observe(&mut self, entry: &RecordEntry) {
         let agent = entry.tx.agent_id;
         if let Some(prompt) = entry.tx.prompt_payload() {
+            if prompt.route.reason == RouteReason::Escalate {
+                self.prompts
+                    .entry((agent, entry.tx.hash))
+                    .or_default()
+                    .ignored = true;
+                return;
+            }
             self.observe_prompt((agent, entry.tx.hash), prompt.route.level);
         } else if let Some(outcome) = entry.tx.outcome_payload() {
             self.observe_outcome(agent, entry.seq, outcome);
@@ -181,6 +195,9 @@ impl GateStats {
             return;
         };
         let state = self.prompts.entry((agent, prompt_tx)).or_default();
+        if state.ignored {
+            return;
+        }
         if state
             .counted
             .as_ref()
@@ -389,6 +406,27 @@ mod tests {
         second.outcome(b, SONNET, OutcomeSignal::ChecksFailed);
         let stats = GateStats::from_entries(first.entries.iter().chain(&second.entries));
         assert_eq!(debugging(&stats, RouteLevel::Turn, SONNET), Some((2, 1)));
+    }
+
+    #[test]
+    fn an_escalated_retry_is_recorded_but_not_counted() {
+        let mut log = Log::new();
+        let first = log.prompt("fix that part", RouteLevel::Subtask);
+        log.outcome(first, SONNET, OutcomeSignal::ChecksFailed);
+        let mut retry = PromptPayload::new("fix that part, again");
+        retry.category = PromptCategory::Debugging;
+        retry.route = Route::subtask(HAIKU, RouteReason::Escalate);
+        let retry = log.push(Transaction::user_prompt_with(log.agent, &retry));
+        log.outcome(retry, HAIKU, OutcomeSignal::ChecksPassed);
+
+        for stats in [
+            GateStats::from_entries(&log.entries),
+            GateStats::from_entries(log.entries.iter().rev()),
+        ] {
+            assert_eq!(debugging(&stats, RouteLevel::Subtask, SONNET), Some((1, 0)));
+            assert_eq!(debugging(&stats, RouteLevel::Subtask, HAIKU), None);
+            assert_eq!(stats.rows().len(), 1);
+        }
     }
 
     #[test]

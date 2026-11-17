@@ -74,7 +74,8 @@ fn has_exit_code(result: &Value) -> bool {
 
 /// The command line a `run_command` call runs: its script, or its program
 /// and arguments.
-fn command_line(input: &Value) -> String {
+#[must_use]
+pub fn command_line(input: &Value) -> String {
     if let Some(script) = ["shell_script", "command"]
         .iter()
         .find_map(|key| input[*key].as_str())
@@ -100,7 +101,7 @@ pub fn is_check_command(command: &str) -> bool {
 /// Whether one simple command (its words) is a check. Leading variable
 /// assignments and wrappers (`env`, `time`, `timeout 600`, `npx`, ...)
 /// are skipped.
-fn is_check_part(mut words: Vec<&str>) -> bool {
+pub(crate) fn is_check_part(mut words: Vec<&str>) -> bool {
     loop {
         match words.first().copied() {
             Some(word) if word.contains('=') && !word.starts_with('-') => {

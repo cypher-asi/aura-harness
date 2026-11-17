@@ -15,6 +15,9 @@
 //!   per-arm summary it shows
 //! - [`judge`]: the blind judge of `/compare`, which picks the better of
 //!   two runs
+//! - [`lead`]: what the lead agent under Gate may do itself while
+//!   delegation is enforced
+//! - [`delegation`]: how much of a lead's work went to subtasks
 //!
 //! Gate never calls a model itself: it chooses which model a turn runs
 //! on and builds the classifier's and judge's requests, and the calls go
@@ -23,10 +26,12 @@
 pub mod checks;
 pub mod classify;
 pub mod compare;
+pub mod delegation;
 pub mod judge;
+pub mod lead;
 pub mod outcome;
 pub mod router;
 pub mod stats;
 
-pub use router::{candidates, fixed_pick, pick, Candidate, Decision, Random, SplitMix64};
+pub use router::{candidates, escalate, fixed_pick, pick, Candidate, Decision, Random, SplitMix64};
 pub use stats::GateStats;

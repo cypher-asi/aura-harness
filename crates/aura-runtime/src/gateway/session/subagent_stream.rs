@@ -453,6 +453,7 @@ mod tests {
             spawn_mode: None,
             council_index: None,
             council_parent_tool_use_id: None,
+            check: None,
         }
     }
 
