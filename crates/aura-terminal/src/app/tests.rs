@@ -266,6 +266,24 @@ fn test_good_and_bad_rate_the_active_agents_last_turn() {
 }
 
 #[test]
+fn test_compare_passes_its_arguments_as_typed() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    app.active_agent_id = "abc".to_string();
+    app.handle_command("/compare fix the \"flaky\" test --repeats 2");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::Compare { ref agent_id, ref args })
+            if agent_id == "abc" && args == "fix the \"flaky\" test --repeats 2"
+    ));
+    app.handle_command("/compare");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::Compare { ref args, .. }) if args.is_empty()
+    ));
+}
+
+#[test]
 fn test_gate_asks_for_the_gate_view() {
     let (tx, mut rx) = mpsc::channel(8);
     let mut app = App::new().with_event_sender(tx);

@@ -64,6 +64,8 @@ pub(super) struct SubtaskGate {
     pub candidates: Option<Vec<Candidate>>,
     pub limits: ModelLimits,
     pub live: Arc<GateLive>,
+    /// Whether Gate may explore; off under the Gate arm of `/compare`
+    pub explore: bool,
 }
 
 impl SubtaskGate {
@@ -92,7 +94,13 @@ impl SubtaskGate {
         };
         let category = label.classify(session, cancel).await;
         label.category = Some(category);
-        let Some(decision) = self.live.decide(RouteLevel::Subtask, category, candidates) else {
+        let decision = if self.explore {
+            self.live.decide(RouteLevel::Subtask, category, candidates)
+        } else {
+            self.live
+                .redecide(RouteLevel::Subtask, category, candidates)
+        };
+        let Some(decision) = decision else {
             label.route.reason = RouteReason::Default;
             return label;
         };

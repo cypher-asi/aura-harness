@@ -23,6 +23,7 @@ aura-agent = { path = "../aura-agent" }
 aura-context-compaction = { path = "../aura-context-compaction" }
 aura-agent-trace = { path = "../aura-agent-trace" }
 aura-agent-gate = { path = "../aura-agent-gate" }
+aura-exec-isolation = { path = "../aura-exec-isolation" }
 aura-context-memory = { path = "../aura-context-memory" }
 aura-context-prompts = { path = "../aura-context-prompts" }
 aura-context-skills = { path = "../aura-context-skills" }

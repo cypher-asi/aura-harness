@@ -14,6 +14,9 @@ pub(crate) mod agents;
 pub(crate) mod approvals;
 mod attachments;
 pub(crate) mod auth;
+mod compare;
+mod compare_run;
+mod compare_view;
 pub(crate) mod gate_live;
 pub(crate) mod gate_record;
 pub(crate) mod gate_subtask;
@@ -118,6 +121,8 @@ pub(super) struct LoopState<'a> {
     /// Open run traces, one per agent conversation.
     pub(super) traces: HashMap<AgentId, trace::LiveRun>,
     pub(super) record_router: Arc<aura_agent_trace::RecordRouter>,
+    /// The comparison waiting for `/compare go`, and the one running.
+    pub(super) compare: compare::CompareState,
 }
 
 impl LoopState<'_> {
@@ -200,6 +205,11 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         approvals,
         traces: HashMap::new(),
         record_router,
+        compare: compare::CompareState::in_aura_home(
+            &std::env::current_dir()
+                .unwrap_or_default()
+                .join("aura_data"),
+        ),
     };
     let mut notice_rx = state.hub.take_notices();
     state.hub.name_agents();
@@ -503,6 +513,10 @@ async fn handle_ui_event(
         UiEvent::RateTurn { agent_id, good } => {
             let agent_id = state.agent_or_active(&agent_id);
             gate_record::handle_rate(state, agent_id, good).await;
+        }
+        UiEvent::Compare { agent_id, args } => {
+            let agent_id = state.agent_or_active(&agent_id);
+            compare::handle(state, agent_id, &args).await;
         }
         UiEvent::KillProcess(id) => handlers::handle_kill_process(state, &id).await,
         UiEvent::BuildPlan { agent_id, path } => {

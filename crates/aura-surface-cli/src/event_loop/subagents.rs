@@ -103,6 +103,17 @@ impl Redo {
     }
 }
 
+/// How the subtasks of a `/compare` run are routed, whatever the user
+/// selected: the Gate arm's by Gate without exploring, the other arm's
+/// on the model it is pinned to.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ArmRouting {
+    /// Gate routes among these.
+    Gate(Vec<Candidate>),
+    /// Every subtask nothing else pins runs on this model.
+    Pinned(String),
+}
+
 /// What every turn starts from before a permanent agent's settings apply.
 pub struct TurnBase {
     /// The terminal's agent-loop config (selected model, auth, prompt).
@@ -151,6 +162,8 @@ pub struct AgentHub {
     pub(crate) record_panel: RecordPanelAgent,
     /// What Gate has learned, and its latest decisions.
     pub(crate) gate: Arc<GateLive>,
+    /// How the subtasks of each running `/compare` run are routed.
+    compare_arms: Mutex<HashMap<AgentId, ArmRouting>>,
 }
 
 /// Parts of an [`AgentHub`] other than the kernel factory.
@@ -211,8 +224,39 @@ impl AgentHub {
                 agents: parts.agents,
                 record_panel: parts.record_panel,
                 gate: parts.gate,
+                compare_arms: Mutex::new(HashMap::new()),
             }
         })
+    }
+
+    /// Route the subtasks of the `/compare` run `agent` (and theirs) as
+    /// `routing` says, until [`Self::end_compare_run`].
+    pub(crate) fn begin_compare_run(&self, agent: AgentId, routing: ArmRouting) {
+        lock(&self.compare_arms).insert(agent, routing);
+    }
+
+    /// The `/compare` run `agent` ended.
+    pub(crate) fn end_compare_run(&self, agent: AgentId) {
+        lock(&self.compare_arms).remove(&agent);
+    }
+
+    /// How the subtasks of `agent` are routed when it works for a
+    /// `/compare` run, directly or through the agents between.
+    fn compare_routing(&self, agent: AgentId) -> Option<ArmRouting> {
+        let ancestry = lock(&self.registry).ancestry(agent);
+        let arms = lock(&self.compare_arms);
+        ancestry.iter().find_map(|id| arms.get(id).cloned())
+    }
+
+    /// Hand `session`, whose work ended, to the event loop to keep, and
+    /// note that it stopped running.
+    pub(crate) fn park(&self, session: AgentSession) {
+        let agent_id = session.agent_id();
+        // Parked before it stops running, so the event loop never sees the
+        // agent with neither a session nor work in flight.
+        lock(&self.finished).push(session);
+        self.stop_running(agent_id);
+        self.spawn_finished.notify_one();
     }
 
     /// Permission mode of `agent_id`.
@@ -695,29 +739,44 @@ impl AgentHub {
     /// `definition`, set up with `config`. A model the call names is
     /// applied to `config` here and pins the subtask, as do a council
     /// seat, a definition naming its own model, and a pinned main model.
+    /// Under a `/compare` run, the run's arm decides instead of the
+    /// user's selection.
     fn subtask_gate(
         &self,
         request: &SubagentDispatchRequest,
         definition: &AgentDefinition,
         config: &mut AgentLoopConfig,
     ) -> SubtaskGate {
+        let arm = self.compare_routing(request.parent_agent_id);
         let base = lock(&self.base);
         let explicit = explicit_model(request);
         if let Some(model) = explicit {
             base.limits.configure(config, model);
         }
-        let pinned =
+        let mut pinned =
             explicit.is_some() || request.council_index.is_some() || definition.model.is_some();
+        let mut candidates = base.gate.candidates.clone();
+        let mut explore = true;
+        match arm {
+            Some(ArmRouting::Pinned(model)) => {
+                if !pinned {
+                    base.limits.configure(config, &model);
+                }
+                pinned = true;
+            }
+            Some(ArmRouting::Gate(arm_candidates)) => {
+                candidates = Some(arm_candidates);
+                explore = false;
+            }
+            None => {}
+        }
         SubtaskGate {
             kind: definition.name.clone(),
             classifier: base.gate.classifier.clone(),
-            candidates: if pinned {
-                None
-            } else {
-                base.gate.candidates.clone()
-            },
+            candidates: if pinned { None } else { candidates },
             limits: base.limits,
             live: Arc::clone(&self.gate),
+            explore,
         }
     }
 
@@ -801,11 +860,7 @@ impl AgentHub {
             redo.record().await;
         }
 
-        // Parked before it stops running, so the event loop never sees the
-        // agent with neither a session nor work in flight.
-        lock(&self.finished).push(session);
-        self.stop_running(child_id);
-        self.spawn_finished.notify_one();
+        self.park(session);
         self.send_agent_list().await;
         end.reply
     }

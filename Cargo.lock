@@ -1081,6 +1081,7 @@ dependencies = [
  "aura-core-modes",
  "aura-core-types",
  "aura-engine",
+ "aura-exec-isolation",
  "aura-model-reasoner",
  "aura-plugin-core",
  "aura-runtime",

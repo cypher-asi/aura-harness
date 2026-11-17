@@ -20,6 +20,7 @@ use aura_tools::ToolConfig;
 use tempfile::TempDir;
 use tokio::sync::Semaphore;
 
+mod compare_runs;
 mod subtasks;
 
 /// Model whose route refuses the sign-in, for Gate's re-routing.
@@ -48,6 +49,18 @@ impl ModelProvider for GatedProvider {
         let last = request.messages.last().map(|m| m.text_content());
         if request.system == aura_agent_gate::classify::SYSTEM_PROMPT {
             return classify(&request, last.as_deref().unwrap_or_default()).await;
+        }
+        if request.system == aura_agent_gate::judge::SYSTEM_PROMPT {
+            return MockProvider::simple_response("A is tidier.\nWINNER: A")
+                .complete(request)
+                .await;
+        }
+        if request
+            .messages
+            .iter()
+            .any(|m| m.text_content().contains("write the answer"))
+        {
+            return answer(request, last.as_deref()).await;
         }
         let slow = last.as_deref().is_some_and(|text| text.contains("slow"));
         if slow {
@@ -100,6 +113,26 @@ impl ModelProvider for GatedProvider {
     async fn health_check(&self) -> bool {
         true
     }
+}
+
+/// A turn told to "write the answer": it writes `answer.txt` naming the
+/// model that answered, then says it is done. Calls are billed as the
+/// model asked for, so they have a list price.
+async fn answer(request: ModelRequest, last: Option<&str>) -> Result<ModelResponse, ReasonerError> {
+    let model = request.model.as_str().to_string();
+    let provider = if last.is_some_and(|text| text.contains("write the answer")) {
+        MockProvider::new().with_response(MockResponse::tool_use(
+            "toolu_answer",
+            "write_file",
+            serde_json::json!({ "path": "answer.txt", "content": model }),
+        ))
+    } else {
+        MockProvider::simple_response(format!("Wrote the answer on {model}."))
+    };
+    let mut response = provider.complete(request).await?;
+    response.trace.model.clone_from(&model);
+    response.model_used = model;
+    Ok(response)
 }
 
 /// The classifier's answer to `request`, asking about `prompt`: prompts
@@ -300,6 +333,10 @@ fn loop_state<'a>(fixture: &'a Fixture, b: &'a mut Borrowed) -> LoopState<'a> {
         approvals: Arc::clone(&fixture.approvals),
         traces: HashMap::new(),
         record_router: Arc::new(aura_agent_trace::RecordRouter::new()),
+        compare: compare::CompareState::new(
+            fixture._dirs[0].path().join("compare"),
+            aura_agent_gate::compare::DEFAULT_CONCURRENCY,
+        ),
     }
 }
 

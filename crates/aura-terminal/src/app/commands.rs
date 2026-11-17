@@ -151,6 +151,14 @@ impl App {
                     let _ = tx.try_send(UiEvent::ShowGate);
                 }
             }
+            "compare" => {
+                if let Some(tx) = &self.event_tx {
+                    let _ = tx.try_send(UiEvent::Compare {
+                        agent_id: self.active_agent_id.clone(),
+                        args: arg.to_string(),
+                    });
+                }
+            }
             "good" | "bad" => {
                 if let Some(tx) = &self.event_tx {
                     let _ = tx.try_send(UiEvent::RateTurn {

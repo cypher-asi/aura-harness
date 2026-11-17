@@ -228,6 +228,15 @@ pub enum UiEvent {
         /// `/good` rather than `/bad`
         good: bool,
     },
+
+    /// User ran `/compare` (Gate against another model on their own task)
+    /// with these arguments, as typed
+    Compare {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        /// Everything after `/compare`
+        args: String,
+    },
 }
 
 /// What `/rewind` puts back.

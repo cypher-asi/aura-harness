@@ -309,15 +309,27 @@ fn reasoning_model(tx: &Transaction) -> Option<String> {
 
 /// Tokens and cost of the call a `Reasoning` entry records, answered by `model`.
 fn reasoning_usage(tx: &Transaction, model: &str) -> Option<CallUsage> {
+    call_usage(model, &call_tokens(tx)?)
+}
+
+fn call_tokens(tx: &Transaction) -> Option<Usage> {
     let payload = json_payload(tx)?;
     let tokens = |key: &str| payload.get(key).and_then(Value::as_u64);
-    let usage = Usage {
+    Some(Usage {
         input_tokens: tokens("input_tokens").unwrap_or(0),
         output_tokens: tokens("output_tokens").unwrap_or(0),
         cache_creation_input_tokens: tokens("cache_creation_input_tokens"),
         cache_read_input_tokens: tokens("cache_read_input_tokens"),
-    };
-    call_usage(model, &usage)
+    })
+}
+
+/// The model and tokens of the call `tx` records, when it is a model
+/// call that got an answer.
+pub(crate) fn model_call(tx: &Transaction) -> Option<(String, Usage)> {
+    if tx.tx_type != TransactionType::Reasoning {
+        return None;
+    }
+    Some((reasoning_model(tx)?, call_tokens(tx)?))
 }
 
 /// The model's thinking from a `Reasoning` entry, when it thought.
