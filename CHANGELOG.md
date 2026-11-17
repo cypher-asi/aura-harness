@@ -103,6 +103,14 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   ones with history. When the lead is on a frontier model, its subtasks
   are first routed below the frontier tier; an escalated retry may still
   reach it.
+- Gate starts work cheap and moves it up on failure. `small_change`
+  starts on the cheapest fast-tier model, `planning` on the strongest
+  and every other category on the cheapest standard-tier model. A start
+  model that can no longer reach the target in a category hands it to
+  the next tier up. In `aura -p` and `aura eval run`, a routed turn that
+  errors or whose last test or build fails goes on in the same
+  conversation on the next tier up (route reason `escalate`, not
+  counted); terminal turns do not move up yet.
 - A `task`, `run_command` or plugin tool call drops the caller's cached
   tool results, so the next read shows what is on disk
   (`aura_config::FILE_NEUTRAL_TOOLS` lists the uncached tools that keep

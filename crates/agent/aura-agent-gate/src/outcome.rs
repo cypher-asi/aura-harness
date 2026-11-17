@@ -1,6 +1,8 @@
 //! How Gate judges a prompt's work from the signals recorded about it.
 //!
 //! - [`turn_signal`]: the signal written when a turn ends.
+//! - [`calls_for_stronger`]: whether that signal sends the work on to a
+//!   stronger model.
 //! - [`is_retry_stronger`]: whether the next prompt is the same request
 //!   sent again on a stronger model, which fails the earlier turn.
 //! - [`effective`]: which of a prompt's outcomes counts.
@@ -26,6 +28,13 @@ pub const fn turn_signal(errored: bool, last_check: Option<bool>) -> OutcomeSign
         (false, Some(true)) => OutcomeSignal::ChecksPassed,
         (false, None) => OutcomeSignal::None,
     }
+}
+
+/// Whether work that ended with `signal` goes on to a stronger model:
+/// it ended in an error, or its last check failed.
+#[must_use]
+pub const fn calls_for_stronger(signal: OutcomeSignal) -> bool {
+    matches!(signal, OutcomeSignal::Error | OutcomeSignal::ChecksFailed)
 }
 
 /// The outcome that counts among those recorded for one prompt, oldest

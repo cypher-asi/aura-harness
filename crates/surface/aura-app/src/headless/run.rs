@@ -15,10 +15,13 @@ use crate::event_loop::notices::{completion_notice, record_completion, Notice};
 use crate::event_loop::processes::stop_background_commands;
 use crate::event_loop::steering::{SteerSource, Steering};
 use crate::event_loop::subagents::lock;
+use crate::event_loop::task_check::takeover_prompt;
 use crate::event_loop::turns::{drain_stale_inbox, ended_signal, record_prompt};
 use crate::event_loop::{AgentHub, AgentSession};
 use crate::session_checkpoint::SessionUsage;
 use aura_agent::{AgentLoop, AgentLoopConfig, AgentLoopResult};
+use aura_agent_gate::outcome::calls_for_stronger;
+use aura_agent_gate::Decision;
 use aura_agent_kernel::Kernel;
 use aura_agent_trace::RunRecorder;
 use aura_core_modes::AgentMode;
@@ -201,8 +204,11 @@ impl Headless {
 
     /// Run `prompt` on `session`, then the notices of the agent's
     /// background work, until it has nothing left to do or a limit stops
-    /// it; `started` is when the run began. Also returns the `Outcome`
-    /// recorded for `prompt`'s turn, when Gate routed it.
+    /// it; `started` is when the run began. When Gate routes `prompt`'s
+    /// turn and it ends in an error or with its last check failing, the
+    /// turn goes on in the same conversation on the next stronger model,
+    /// tier by tier. Also returns the `Outcome` recorded for the last of
+    /// those turns, when Gate routed them.
     pub(super) async fn drive(
         &mut self,
         session: &mut AgentSession,
@@ -218,6 +224,10 @@ impl Headless {
         let mut prompt = prompt;
         let mut first_ended = None;
         let mut stop = None;
+        // Whether the turns so far answer `prompt` itself (its first turn
+        // and the stronger models it went on to) rather than a notice.
+        let mut answering = true;
+        let mut escalation = None;
         loop {
             totals.agent_turns += 1;
             let outcome = self
@@ -227,11 +237,12 @@ impl Headless {
                     limits,
                     deadline,
                     totals.usage,
+                    escalation.take(),
                     output,
                     interrupt,
                 )
                 .await;
-            if totals.agent_turns == 1 {
+            if answering {
                 first_ended.clone_from(&outcome.ended);
             }
             totals.usage.add(&outcome.usage);
@@ -249,6 +260,20 @@ impl Headless {
             if outcome.stop.is_some() {
                 stop = outcome.stop;
                 break;
+            }
+            if answering {
+                if let Some((decision, ended)) = self.stronger(session, outcome.ended.as_ref()) {
+                    let mut next = takeover_prompt(&ended.model, ended.signal);
+                    for unseen in &outcome.unseen {
+                        next.push_str("\n\n");
+                        next.push_str(unseen);
+                    }
+                    output.event(&StreamEvent::Notice { text: &next });
+                    prompt = format!("{}{next}", SteerSource::Harness.prefix());
+                    escalation = Some((decision, ended.category));
+                    continue;
+                }
+                answering = false;
             }
             let next = if outcome.unseen.is_empty() {
                 match self
@@ -290,6 +315,29 @@ impl Headless {
             error,
         };
         (report, first_ended)
+    }
+
+    /// Where a turn of `session` that Gate routed and that `ended` badly
+    /// goes on: the next stronger model, with how the turn ended. `None`
+    /// when it ended well enough or nothing is stronger.
+    fn stronger<'a>(
+        &self,
+        session: &AgentSession,
+        ended: Option<&'a OutcomePayload>,
+    ) -> Option<(Decision, &'a OutcomePayload)> {
+        let ended = ended.filter(|ended| calls_for_stronger(ended.signal))?;
+        let candidates = self.hub.gate_candidates(session.definition.as_deref())?;
+        let decision =
+            self.hub
+                .gate
+                .escalate(RouteLevel::Turn, ended.category, &ended.model, &candidates)?;
+        info!(
+            from = %ended.model,
+            to = %decision.model.id,
+            signal = %ended.signal,
+            "Gate moves the turn to a stronger model"
+        );
+        Some((decision, ended))
     }
 
     /// Open the session `choice` names. Returns it and whether it
@@ -364,6 +412,8 @@ impl Headless {
     /// Record `text` as the prompt and run one agent turn on `session`,
     /// with `before` the usage of the run's earlier turns. When Gate
     /// routes the turn, it ends with an `Outcome` saying how it went.
+    /// `escalation` is set for a turn that goes on with work a weaker
+    /// model failed at: the model it runs on and the work's category.
     #[allow(clippy::too_many_arguments)]
     async fn run_turn(
         &mut self,
@@ -372,6 +422,7 @@ impl Headless {
         limits: RunLimits,
         deadline: Option<Instant>,
         before: SessionUsage,
+        escalation: Option<(Decision, PromptCategory)>,
         output: &Output,
         interrupt: &CancellationToken,
     ) -> TurnOutcome {
@@ -382,7 +433,9 @@ impl Headless {
         if let Some(max) = limits.max_iterations {
             config.max_iterations = max;
         }
-        let (payload, routed) = self.route_turn(session, &mut config, &text).await;
+        let (payload, routed) = self
+            .route_turn(session, &mut config, &text, escalation)
+            .await;
         if let Some(lead) = lead.filter(|_| routed) {
             session.lead = lead.apply(payload.category, &mut config, &mut tools);
         }
@@ -571,13 +624,25 @@ impl Headless {
     /// gate, the agent names no model of its own and there is a model to
     /// route to: the prompt is classified and `config` pointed at Gate's
     /// pick, which the subtasks the turn dispatches are routed by.
-    /// Otherwise the prompt is recorded as it is.
+    /// Otherwise the prompt is recorded as it is. With `escalation`, the
+    /// turn goes to that model with that category, recorded with route
+    /// reason `escalate`.
     async fn route_turn(
         &mut self,
         session: &AgentSession,
         config: &mut AgentLoopConfig,
         text: &str,
+        escalation: Option<(Decision, PromptCategory)>,
     ) -> (PromptPayload, bool) {
+        if let Some((decision, category)) = escalation {
+            self.point(session, config, &decision);
+            let payload = PromptPayload {
+                category,
+                route: decision.route(RouteLevel::Turn),
+                ..PromptPayload::new(text)
+            };
+            return (payload, true);
+        }
         let Some(candidates) = self
             .hub
             .gate_candidates(session.definition.as_deref())
@@ -609,15 +674,7 @@ impl Headless {
                     reason = %decision.reason,
                     "Gate routed the turn"
                 );
-                if config.model != decision.model.id {
-                    self.hub
-                        .model_limits()
-                        .configure(config, &decision.model.id);
-                }
-                self.model.clone_from(&decision.model.id);
-                self.hub
-                    .gate
-                    .note_model(session.agent_id(), &decision.model.id);
+                self.point(session, config, &decision);
                 decision.route(RouteLevel::Turn)
             }
             None => Route::turn(config.model.clone(), RouteReason::Default),
@@ -629,6 +686,19 @@ impl Headless {
             ..PromptPayload::new(text)
         };
         (payload, true)
+    }
+
+    /// Point `config`, of a turn of `session`, at `decision`'s model.
+    fn point(&mut self, session: &AgentSession, config: &mut AgentLoopConfig, decision: &Decision) {
+        if config.model != decision.model.id {
+            self.hub
+                .model_limits()
+                .configure(config, &decision.model.id);
+        }
+        self.model.clone_from(&decision.model.id);
+        self.hub
+            .gate
+            .note_model(session.agent_id(), &decision.model.id);
     }
 
     /// Wait for the next notice for `kernel`'s agent: a background

@@ -194,14 +194,16 @@ async fn answer(request: ModelRequest, last: Option<&str>) -> Result<ModelRespon
 
 /// The classifier's answer to `request`, asking about `prompt`: prompts
 /// that say "across files" are changes across several files, those that
-/// say "fix" are debugging, "classifier down" fails the call, and the
-/// rest are questions.
+/// say "plan:" are planning, those that say "fix" are debugging,
+/// "classifier down" fails the call, and the rest are questions.
 async fn classify(request: &ModelRequest, prompt: &str) -> Result<ModelResponse, ReasonerError> {
     if prompt.contains("classifier down") {
         return Err(ReasonerError::Internal("classifier offline".to_string()));
     }
     let label = if prompt.contains("across files") {
         "multi_file_change"
+    } else if prompt.contains("plan:") {
+        "planning"
     } else if prompt.contains("fix") {
         "debugging"
     } else {
@@ -2113,20 +2115,20 @@ async fn gate_routes_each_category_and_records_why() {
     assert_eq!(prompts[1].2.category, PromptCategory::Debugging);
     assert_eq!(
         prompts[1].2.route,
-        Route::turn("aura-gpt-5-4", RouteReason::Default),
-        "debugging goes to the strongest model, the cheaper of the frontier ones"
+        Route::turn("aura-claude-sonnet-4-6", RouteReason::Default),
+        "debugging starts on the cheapest standard model"
     );
     let models: Vec<String> = outcomes_of(&state, first)
         .into_iter()
         .map(|(_, o)| o.model)
         .collect();
-    assert_eq!(models, ["aura-claude-haiku-4-5", "aura-gpt-5-4"]);
+    assert_eq!(models, ["aura-claude-haiku-4-5", "aura-claude-sonnet-4-6"]);
     let shown = route_lines(&mut commands);
     assert_eq!(
         shown,
         [
             "gate → aura-claude-haiku-4-5 (cloud) · question, proven",
-            "gate → aura-gpt-5-4 (cloud) · debugging, default",
+            "gate → aura-claude-sonnet-4-6 (cloud) · debugging, default",
         ]
     );
     let recent = fixture.hub.gate.recent();

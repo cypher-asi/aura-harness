@@ -535,21 +535,21 @@ async fn a_frontier_leads_subtasks_start_below_its_tier_and_may_escalate_to_it()
     let mut state = loop_state(&fixture, &mut b);
     select_gate(&fixture, &mut state);
     fixture.hub.set_permissions(first, yolo());
-    // Debugging goes to the strongest model, so on its own this subtask
+    // Planning goes to the strongest model, so on its own this subtask
     // would run on the lead's.
     fixture.hub.gate.note_model(first, GPT);
 
     let check = format!("ls notes/{GPT}.txt");
     let result = dispatch(
         &fixture,
-        task(first, "implement", "fix: write a note", Some(&check)),
+        task(first, "implement", "plan: write a note", Some(&check)),
     )
     .await;
 
     let attempts = children(&fixture, first, "implement");
     assert_eq!(attempts.len(), 2, "{}", result.final_message);
     let (prompts, outcomes) = record(&fixture, attempts[0]);
-    assert_eq!(prompts[0].category, PromptCategory::Debugging);
+    assert_eq!(prompts[0].category, PromptCategory::Planning);
     assert_eq!(
         prompts[0].route,
         Route::subtask(SONNET, RouteReason::Default),
@@ -574,7 +574,7 @@ async fn a_frontier_leads_subtasks_start_below_its_tier_and_may_escalate_to_it()
     );
     dispatch(
         &fixture,
-        task(first, "implement", "fix: write a note", None),
+        task(first, "implement", "plan: write a note", None),
     )
     .await;
     let attempts = children(&fixture, first, "implement");
@@ -728,7 +728,7 @@ async fn nothing_is_retried_without_a_stronger_model() {
         task(
             first,
             "implement",
-            "fix: write a note",
+            "plan: write a note",
             Some("ls no-such-dir"),
         ),
     )
@@ -740,7 +740,7 @@ async fn nothing_is_retried_without_a_stronger_model() {
     assert_eq!(
         prompts[0].route,
         Route::subtask(GPT, RouteReason::Default),
-        "debugging goes to the strongest model"
+        "planning goes to the strongest model"
     );
     assert_eq!(outcomes[0].signal, OutcomeSignal::ChecksFailed);
     assert!(!result.final_message.contains("Retried"));

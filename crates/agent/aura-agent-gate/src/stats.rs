@@ -13,11 +13,11 @@
 //! can overlap the live feed): which outcome counts depends only on the
 //! record sequence numbers, and seeing an entry again changes nothing.
 //! A prompt's outcomes are in the same record as the prompt, so their
-//! sequence numbers compare. A subtask retried on a stronger model after
-//! its first attempt failed (route reason `escalate`) is not counted:
-//! the retry only ever sees work that already failed once, and the first
-//! attempt's outcome already says how the route did. A prompt is known by its agent and its
-//! transaction hash: the hash covers only the payload, so two agents
+//! sequence numbers compare. Work that went on to a stronger model
+//! after its first attempt failed (route reason `escalate`) is not
+//! counted: it only ever sees work that already failed once, and the
+//! first attempt's outcome already says how the route did. A prompt is
+//! known by its agent and its transaction hash: the hash covers only the payload, so two agents
 //! given the same prompt (the repeats of a `/compare`) record the same
 //! hash for different work.
 
@@ -52,6 +52,16 @@ impl Row {
     #[must_use]
     pub fn mean_cost_usd(&self) -> Option<f64> {
         (self.tries > 0).then(|| self.cost_usd / f64::from(self.tries))
+    }
+
+    /// Whether the model can still have a success rate of at least
+    /// `target` once it has `min_tries` tries: it does now, with that many
+    /// tries or more, or would if every try it still lacks succeeded.
+    #[must_use]
+    pub fn can_still_reach(&self, target: f64, min_tries: u32) -> bool {
+        let lacking = min_tries.saturating_sub(self.tries);
+        let counted = self.tries.max(min_tries);
+        f64::from(self.successes + lacking) >= target * f64::from(counted)
     }
 
     fn add(&mut self, counted: &Counted) {
@@ -427,6 +437,22 @@ mod tests {
             assert_eq!(debugging(&stats, RouteLevel::Subtask, HAIKU), None);
             assert_eq!(stats.rows().len(), 1);
         }
+    }
+
+    #[test]
+    fn a_model_is_ruled_out_once_it_cannot_reach_the_target() {
+        let row = |tries, successes| Row {
+            tries,
+            successes,
+            ..Row::default()
+        };
+        assert!(row(0, 0).can_still_reach(0.85, 10));
+        assert!(row(1, 0).can_still_reach(0.85, 10), "9 of 10 would do");
+        assert!(!row(2, 0).can_still_reach(0.85, 10), "8 of 10 would not");
+        assert!(row(9, 8).can_still_reach(0.85, 10));
+        assert!(!row(9, 7).can_still_reach(0.85, 10));
+        assert!(row(20, 17).can_still_reach(0.85, 10));
+        assert!(!row(20, 16).can_still_reach(0.85, 10));
     }
 
     #[test]

@@ -8,10 +8,12 @@
 //! typical turn, local models first.
 //!
 //! [`pick`] chooses among them for one category: the cheapest model that
-//! has proven itself there, else the category's default, and now and
-//! then the next cheaper model instead, to learn how it does. When a
-//! subtask's attempt fails, [`escalate`] picks the one model it is
-//! retried on.
+//! has proven itself there, or the model the category starts on when
+//! that is cheaper, and now and then the next cheaper model instead, to
+//! learn how it does. Work starts cheap ([`start_tier`]) and a category
+//! moves up a tier once its start model has failed too often to reach
+//! the target. When an attempt fails, [`escalate`] picks the model the
+//! work goes on with.
 
 use std::collections::HashMap;
 
@@ -127,14 +129,26 @@ pub fn fixed_pick(candidates: &[Candidate]) -> Option<&Candidate> {
         .or_else(|| candidates.iter().rev().max_by_key(|c| c.tier))
 }
 
-/// Whether `category` defaults to the strongest model: work whose
-/// mistakes cost the most to find and undo.
+/// The tier work asking for `category` starts on before Gate has learned
+/// better; `None` for the strongest tier there is.
+///
+/// Code work starts cheap, because a failing test or build shows when
+/// the model was not enough and the work then moves up a tier. A plan
+/// has no such check and everything after it builds on it, so planning
+/// starts on the strongest model.
 #[must_use]
-pub const fn is_heavy(category: PromptCategory) -> bool {
-    matches!(
-        category,
-        PromptCategory::MultiFileChange | PromptCategory::Debugging | PromptCategory::Planning
-    )
+pub const fn start_tier(category: PromptCategory) -> Option<ModelTier> {
+    match category {
+        PromptCategory::SmallChange => Some(ModelTier::Fast),
+        PromptCategory::Planning => None,
+        PromptCategory::MultiFileChange
+        | PromptCategory::Debugging
+        | PromptCategory::Question
+        | PromptCategory::Research
+        | PromptCategory::Writing
+        | PromptCategory::Other
+        | PromptCategory::Unclassified => Some(ModelTier::Standard),
+    }
 }
 
 /// Where Gate sends a piece of work, and why.
@@ -289,9 +303,10 @@ pub fn by_expected_cost<'a>(
 ///
 /// 1. the cheapest model with at least `min_tries` counted outcomes on
 ///    the category and a success rate of at least `target`;
-/// 2. else the category's default: the strongest model for heavy
-///    categories ([`is_heavy`]), the cheapest standard-tier model for the
-///    rest, falling back to the strongest;
+/// 2. or, when it is cheaper than that (or nothing is proven), the model
+///    the category starts on: the cheapest model of its [`start_tier`],
+///    or of the next tier up while the category's outcomes on that model
+///    rule it out ([`crate::stats::Row::can_still_reach`]), ending at the strongest;
 /// 3. with probability `explore_rate`, the next cheaper model than that
 ///    instead, when there is one.
 ///
@@ -314,9 +329,10 @@ pub fn pick(
                     .is_some_and(|rate| rate >= settings.target)
         })
     });
+    let start = start_index(stats, level, category, &order, settings)?;
     let (index, reason) = match proven {
-        Some(index) => (index, RouteReason::Proven),
-        None => (default_index(&order, category)?, RouteReason::Default),
+        Some(index) if index <= start => (index, RouteReason::Proven),
+        _ => (start, RouteReason::Default),
     };
     let rate = settings.explore_rate.clamp(0.0, 1.0);
     let decide = |index: usize, reason, explored, propensity| {
@@ -336,9 +352,9 @@ pub fn pick(
     decide(index, reason, false, 1.0 - rate)
 }
 
-/// Where work at `level` that failed on `failed` is retried, once: the
-/// cheapest model (by [`by_expected_cost`]) of the lowest tier above
-/// `failed`'s. `None` when no candidate is stronger.
+/// Where work at `level` that failed on `failed` goes next: the cheapest
+/// model (by [`by_expected_cost`]) of the lowest tier above `failed`'s.
+/// `None` when no candidate is stronger.
 #[must_use]
 pub fn escalate(
     stats: &GateStats,
@@ -392,19 +408,40 @@ pub fn below_lead(candidates: &[Candidate], lead: Option<&str>) -> Vec<Candidate
     }
 }
 
-/// Position in `order` of the default model for `category`.
-fn default_index(order: &[&Candidate], category: PromptCategory) -> Option<usize> {
-    let strongest = || {
-        let top = order.iter().map(|c| c.tier).max()?;
-        order.iter().position(|c| c.tier == top)
+/// Position in `order` of the model work at `level` asking for
+/// `category` starts on: the cheapest model of the category's
+/// [`start_tier`], or of the lowest tier above it whose cheapest model
+/// the category's outcomes have not ruled out. The cheapest model of the
+/// strongest tier when every tier is ruled out or none is at or above
+/// the start tier.
+fn start_index(
+    stats: &GateStats,
+    level: RouteLevel,
+    category: PromptCategory,
+    order: &[&Candidate],
+    settings: &GateConfig,
+) -> Option<usize> {
+    let top = order.iter().map(|c| c.tier).max()?;
+    let strongest = order.iter().position(|c| c.tier == top);
+    let Some(start) = start_tier(category) else {
+        return strongest;
     };
-    if is_heavy(category) {
-        return strongest();
-    }
-    order
+    let mut tiers: Vec<ModelTier> = order
         .iter()
-        .position(|c| c.tier == ModelTier::Standard)
-        .or_else(strongest)
+        .map(|c| c.tier)
+        .filter(|tier| *tier >= start)
+        .collect();
+    tiers.sort_unstable();
+    tiers.dedup();
+    tiers
+        .into_iter()
+        .filter_map(|tier| order.iter().position(|c| c.tier == tier))
+        .find(|&index| {
+            stats
+                .row(level, category, &order[index].id)
+                .is_none_or(|row| row.can_still_reach(settings.target, settings.min_tries))
+        })
+        .or(strongest)
 }
 
 #[cfg(test)]
@@ -678,32 +715,99 @@ mod tests {
         }
 
         #[test]
-        fn heavy_categories_default_to_the_strongest_model() {
+        fn planning_starts_on_the_strongest_model() {
             let empty = GateStats::default();
-            for category in [
-                PromptCategory::MultiFileChange,
-                PromptCategory::Debugging,
-                PromptCategory::Planning,
-            ] {
-                assert_eq!(
-                    chosen(&empty, category, &claude()),
-                    (OPUS.to_string(), RouteReason::Default),
-                    "{category}"
-                );
-                assert_eq!(
-                    chosen(&empty, category, &all()).0,
-                    "chatgpt/gpt-5.4",
-                    "the cheaper of the frontier models"
-                );
-            }
+            assert_eq!(
+                chosen(&empty, PromptCategory::Planning, &claude()),
+                (OPUS.to_string(), RouteReason::Default)
+            );
+            assert_eq!(
+                chosen(&empty, PromptCategory::Planning, &all()).0,
+                "chatgpt/gpt-5.4",
+                "the cheaper of the frontier models"
+            );
         }
 
         #[test]
-        fn other_categories_default_to_the_cheapest_standard_model() {
+        fn small_changes_start_on_the_cheapest_fast_model() {
+            let empty = GateStats::default();
+            assert_eq!(
+                chosen(&empty, PromptCategory::SmallChange, &all()),
+                (HAIKU.to_string(), RouteReason::Default)
+            );
+            let no_fast: Vec<Candidate> = claude()
+                .into_iter()
+                .filter(|c| c.tier != ModelTier::Fast)
+                .collect();
+            assert_eq!(
+                chosen(&empty, PromptCategory::SmallChange, &no_fast).0,
+                SONNET,
+                "the next tier up when there is no fast model"
+            );
+        }
+
+        #[test]
+        fn a_start_model_that_fails_too_often_hands_the_category_up_a_tier() {
+            let mut log = Log::default();
+            log.turns(1, PromptCategory::Debugging, SONNET, false);
+            assert_eq!(
+                chosen(&log.stats(), PromptCategory::Debugging, &claude()).0,
+                SONNET,
+                "nine of ten can still pass"
+            );
+            log.turns(1, PromptCategory::Debugging, SONNET, false);
+            assert_eq!(
+                chosen(&log.stats(), PromptCategory::Debugging, &claude()),
+                (OPUS.to_string(), RouteReason::Default),
+                "eight of ten cannot reach 85%"
+            );
+            assert_eq!(
+                chosen(&log.stats(), PromptCategory::MultiFileChange, &claude()).0,
+                SONNET,
+                "failing at debugging says nothing about other work"
+            );
+
+            let mut log = Log::default();
+            log.turns(2, PromptCategory::SmallChange, HAIKU, false);
+            assert_eq!(
+                chosen(&log.stats(), PromptCategory::SmallChange, &claude()).0,
+                SONNET
+            );
+            log.turns(2, PromptCategory::SmallChange, SONNET, false);
+            assert_eq!(
+                chosen(&log.stats(), PromptCategory::SmallChange, &claude()).0,
+                OPUS
+            );
+            log.turns(2, PromptCategory::SmallChange, OPUS, false);
+            assert_eq!(
+                chosen(&log.stats(), PromptCategory::SmallChange, &claude()).0,
+                OPUS,
+                "the strongest model when every tier is ruled out"
+            );
+        }
+
+        #[test]
+        fn a_proven_stronger_model_does_not_outrank_a_cheaper_start() {
+            let mut log = Log::default();
+            log.turns(10, PromptCategory::Debugging, OPUS, true);
+            assert_eq!(
+                chosen(&log.stats(), PromptCategory::Debugging, &claude()),
+                (SONNET.to_string(), RouteReason::Default)
+            );
+            log.turns(2, PromptCategory::Debugging, SONNET, false);
+            assert_eq!(
+                chosen(&log.stats(), PromptCategory::Debugging, &claude()),
+                (OPUS.to_string(), RouteReason::Proven)
+            );
+        }
+
+        #[test]
+        fn other_categories_start_on_the_cheapest_standard_model() {
             let empty = GateStats::default();
             for category in [
                 PromptCategory::Question,
-                PromptCategory::SmallChange,
+                PromptCategory::MultiFileChange,
+                PromptCategory::Debugging,
                 PromptCategory::Research,
                 PromptCategory::Writing,
                 PromptCategory::Other,
@@ -880,11 +984,12 @@ mod tests {
                 "the untried fast model is priced from the standard tier's turns"
             );
             assert_eq!(
-                chosen(&stats, PromptCategory::SmallChange, &plan).0,
+                chosen(&stats, PromptCategory::Question, &plan).0,
                 SONNET_5,
                 "the cheaper standard model stays the default"
             );
-            assert_eq!(chosen(&stats, PromptCategory::Debugging, &plan).0, OPUS_5);
+            assert_eq!(chosen(&stats, PromptCategory::Debugging, &plan).0, SONNET_5);
+            assert_eq!(chosen(&stats, PromptCategory::Planning, &plan).0, OPUS_5);
         }
 
         #[test]
@@ -901,9 +1006,9 @@ mod tests {
             let among = below_lead(&claude, Some(OPUS));
             let empty = GateStats::default();
             assert_eq!(
-                chosen(&empty, PromptCategory::Debugging, &among).0,
+                chosen(&empty, PromptCategory::Planning, &among).0,
                 SONNET,
-                "heavy subtasks go to the strongest model left"
+                "work for the strongest model goes to the strongest left"
             );
             assert_eq!(
                 escalate(&empty, RouteLevel::Subtask, SONNET, &claude).map(|d| d.model.id),
