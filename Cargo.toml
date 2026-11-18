@@ -18,7 +18,7 @@ tokio = { workspace = true }
 dotenvy = { workspace = true }
 
 # `aura` with no subcommand opens the desktop window. It needs Rust 1.88
-# (iced); build with `--no-default-features` for servers, containers and
+# (wgpu); build with `--no-default-features` for servers, containers and
 # the 1.85 MSRV check, where `aura` runs in the terminal instead.
 [features]
 default = ["desktop"]

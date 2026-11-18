@@ -551,7 +551,7 @@ The `aura` command line. Owns the clap `Cli` / `Commands` / `RunArgs` / `Headles
 
 #### [`aura-desktop`](../crates/surface/aura-desktop)
 
-The terminal UI in a native, GPU-drawn window (iced). The agent session runs in-process on `aura-app`; the UI is `aura-ui-terminal`'s `App`, drawn on a cell grid. `aura_desktop::run(DesktopOptions, mode)` must run on the main thread. Needs Rust 1.88, so the root binary only builds it with the default `desktop` feature.
+The terminal UI in a native window that draws itself, with no UI toolkit: the window is winit's, and each frame is one list of quads over a glyph atlas, drawn by wgpu in one call or by a CPU rasterizer where there is no GPU. The agent session runs in-process on `aura-app`; the UI is `aura-ui-terminal`'s `App`, drawn on a cell grid. Commands from the session are applied as they arrive and the window renders at most once per frame of the display. `aura_desktop::run(DesktopOptions, mode)` must run on the main thread. Needs Rust 1.88, so the root binary only builds it with the default `desktop` feature.
 
 ---
 
