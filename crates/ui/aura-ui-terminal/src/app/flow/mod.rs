@@ -89,6 +89,9 @@ pub struct FlowState {
     detached: bool,
     layout: FlowLayout,
     stale: bool,
+    /// Rows of the view the layout fits its columns to; 0 before there
+    /// is one
+    room: usize,
     view: Option<FlowView>,
     /// Whether the front end draws the canvas in the cells of `view`
     hosted: bool,
@@ -352,6 +355,15 @@ impl FlowState {
         self.stale = true;
     }
 
+    /// Fit the columns of cards to a view `rows` tall from the next
+    /// layout on.
+    pub fn set_room(&mut self, rows: usize) {
+        if self.room != rows {
+            self.room = rows;
+            self.stale = true;
+        }
+    }
+
     /// Lay the flow out again if it changed, and keep the selection on
     /// something shown: the newest card while following the end, the
     /// prompt of a turn that was folded over it.
@@ -360,7 +372,13 @@ impl FlowState {
             return;
         }
         self.stale = false;
-        self.layout = build_layout(&self.lane_index, &self.nodes, &self.index, &self.collapsed);
+        self.layout = build_layout(
+            &self.lane_index,
+            &self.nodes,
+            &self.index,
+            &self.collapsed,
+            self.room,
+        );
         let selected = self
             .selected
             .as_deref()
@@ -542,7 +560,8 @@ impl FlowState {
     }
 
     /// Move a line down or up the selected card, and past its end to the
-    /// nearest card of the band below or above.
+    /// card under or over it in its column, else the nearest card of the
+    /// band below or above.
     fn move_line(&mut self, down: bool) {
         let Some((card, row)) = self.selected_place() else {
             return self.select_first();
@@ -558,23 +577,31 @@ impl FlowState {
         if let Some(row) = inside {
             return self.select_place(card, row);
         }
-        let (band, column) = (self.layout.cards[card].band, self.layout.cards[card].column);
+        let here = &self.layout.cards[card];
+        let (band, column, top) = (here.band, here.column, here.top);
         let target = self
             .layout
             .cards
             .iter()
             .enumerate()
             .filter_map(|(index, other)| {
-                let away = if down {
-                    other.band.checked_sub(band)
+                let (bands, rows) = if down {
+                    (other.band.checked_sub(band)?, other.top)
                 } else {
-                    band.checked_sub(other.band)
+                    // Up into a band, onto the bottom of a column.
+                    (band.checked_sub(other.band)?, usize::MAX - other.top)
                 };
-                let away = away.filter(|&away| away > 0)?;
-                Some((away, other.column.abs_diff(column), other.column, index))
+                let along = other.column.abs_diff(column);
+                let rows = match bands {
+                    0 if along > 0 => return None,
+                    0 if down => other.top.checked_sub(top + 1)?,
+                    0 => top.checked_sub(other.top + 1)?,
+                    _ => rows,
+                };
+                Some((bands, along, rows, other.column, index))
             })
             .min();
-        if let Some((_, _, _, index)) = target {
+        if let Some((_, _, _, _, index)) = target {
             let last = self.layout.cards[index].rows.len().checked_sub(1);
             self.select_place(index, if down { None } else { last });
         }

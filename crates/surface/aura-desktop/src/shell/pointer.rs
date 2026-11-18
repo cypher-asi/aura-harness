@@ -788,6 +788,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_precision_loss)]
     fn the_graph_canvas_drags_by_the_pixel_and_clicks_its_cards() {
         let mut stage = stage();
         stage.seed(false);
@@ -821,8 +822,10 @@ mod tests {
             flow.selected_node().map(|node| node.id.clone())
         };
 
-        // The model call's head line, in the card after the prompt's.
-        stage.drag(at(46.5, 2.5), at(46.5, 2.5));
+        // The model call's head line, in the card under the prompt's.
+        let model = stage.shell.tabs.front().tui.flow().layout().card_rect(1);
+        let head = at(model.x as f32 + 4.5, model.y as f32 + 1.5);
+        stage.drag(head, head);
         assert_eq!(selected(&stage).as_deref(), Some("a1:2"));
 
         // Empty canvas drags the view with the pointer, by the pixel.

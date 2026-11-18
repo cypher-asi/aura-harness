@@ -3,12 +3,17 @@
 //!
 //! ```text
 //!   Lead
-//!   ╭ ✓ prompt ──────────────────────╮      ╭ ✓ model ────── 1.2k/300 · 4s ╮
-//!   │ add a greeting                 ●─────▶│ sonnet                       ●─▶
-//!   ╰────────────────────────────────╯      │ ✓ task coder · write greet() ●─╮
-//!                                           ╰──────────────────────────────╯ │
-//!   coder #1                                                                 │
-//!                                                                            ╰▶╭ ✓ prompt ─
+//!   ┌ ▾ ✓ prompt ────────────────────┐
+//!   │ add a greeting                 │
+//!   └────────────────┬───────────────┘
+//!                    │
+//!   ┌ ✓ model ───────┴ 1.2k/300 · 4s ┐
+//!   │ sonnet                         │
+//!   │ ✓ task coder · write greet()   ●────╮
+//!   └────────────────────────────────┘    │ coder #1
+//!                                         │ ┌ ▾ ✓ prompt ────────── coder #1 ┐
+//!                                         ╰─┤ write greet()                  │
+//!                                           └────────────────────────────────┘
 //! ```
 //!
 //! Only the part of the canvas on screen is drawn, so a long flow costs no
@@ -34,10 +39,6 @@ use unicode_width::UnicodeWidthChar;
 
 const HINT: &str = "←→ card  ↑↓ line  [ ] prompt  ⏎ open  Space fold  z all  f link  o agent  r record  drag pan  Esc chat";
 
-/// Canvas columns and rows between the dots of the grid behind the cards.
-const DOT_COLUMNS: usize = 4;
-const DOT_ROWS: usize = 2;
-
 /// Draw the GRAPH tab in `area`, the chat panel below its header bar.
 pub(super) fn render_flow(
     frame: &mut Frame,
@@ -61,6 +62,7 @@ pub(super) fn render_flow(
     app.set_chat_width(inner.width);
     app.set_chat_text_area(inner);
 
+    app.flow_mut().set_room(usize::from(inner.height));
     app.flow_mut().ensure_layout();
     if inner.height < 3 || inner.width < 12 || app.flow().layout().cards.is_empty() {
         app.flow_mut().set_view(None, false);
@@ -201,7 +203,6 @@ impl Canvas<'_> {
     }
 
     fn draw(&mut self) {
-        self.dots();
         self.names();
         let selected = self.flow.selected_card();
         let mut wires: Vec<(bool, Wire)> = self
@@ -231,25 +232,15 @@ impl Canvas<'_> {
             self.card(card, standing);
         }
         for (hot, wire) in &wires {
-            let (x, y) = self.layout.port_out(wire.from, wire.row);
-            self.put(x, y, "●", self.wire_style(wire.kind, *hot));
-        }
-    }
-
-    /// The grid of dots the cards sit on.
-    fn dots(&mut self) {
-        let style = self.muted().add_modifier(Modifier::DIM);
-        for dy in 0..usize::from(self.area.height) {
-            let y = self.first.1 + dy;
-            if y % DOT_ROWS != 1 {
+            let style = self.wire_style(wire.kind, *hot);
+            if self.layout.stacked(wire) {
+                self.drop(*wire, style);
                 continue;
             }
-            for dx in 0..usize::from(self.area.width) {
-                let x = self.first.0 + dx;
-                if x % DOT_COLUMNS == 0 {
-                    self.put(x, y, "·", style);
-                }
-            }
+            let (x, y) = self.layout.port_out(wire.from, wire.row);
+            self.put(x, y, "●", style);
+            let (x, y) = self.layout.port_in(wire.to);
+            self.join(x, y, LEFT, style);
         }
     }
 
@@ -295,12 +286,11 @@ impl Canvas<'_> {
     fn wire(&mut self, wire: Wire, style: Style) {
         let (from_x, from_y) = self.layout.port_out(wire.from, wire.row);
         let (to_x, to_y) = self.layout.port_in(wire.to);
-        if to_x < from_x + 3 {
+        if to_x < from_x + 3 || self.layout.stacked(&wire) {
             return;
         }
-        let head = to_x - 1;
         if from_y == to_y {
-            self.horizontal(from_x + 1..head, from_y, style);
+            self.horizontal(from_x + 1..to_x, from_y, style);
         } else {
             let turn = (to_x - 2 - wire.track).max(from_x + 1);
             self.horizontal(from_x + 1..turn, from_y, style);
@@ -315,9 +305,25 @@ impl Canvas<'_> {
             };
             self.join(turn, from_y, leave, style);
             self.join(turn, to_y, arrive, style);
-            self.horizontal(turn + 1..head, to_y, style);
+            self.horizontal(turn + 1..to_x, to_y, style);
         }
-        self.put(head, to_y, "▶", style);
+    }
+
+    /// A wire straight down from a card's bottom border to the top border
+    /// of the card under it, joined to both where they are lines.
+    fn drop(&mut self, wire: Wire, style: Style) {
+        let (from, to) = (
+            self.layout.card_rect(wire.from),
+            self.layout.card_rect(wire.to),
+        );
+        let x = FlowLayout::stack_x(self.layout.cards[wire.from].column);
+        self.join(x, from.bottom() - 1, DOWN, style);
+        for y in from.bottom()..to.y {
+            self.join(x, y, UP | DOWN, style);
+        }
+        if ends_of(self.symbol(x, to.y)) == LEFT | RIGHT {
+            self.join(x, to.y, UP, style);
+        }
     }
 
     fn horizontal(&mut self, xs: std::ops::Range<usize>, y: usize, style: Style) {
@@ -364,9 +370,9 @@ impl Canvas<'_> {
         let bottom = rect.bottom() - 1;
         for line in y..=bottom {
             let (left, fill, right) = if line == y {
-                ("╭", "─", "╮")
+                ("┌", "─", "┐")
             } else if line == bottom {
-                ("╰", "─", "╯")
+                ("└", "─", "┘")
             } else {
                 ("│", " ", "│")
             };
@@ -421,7 +427,7 @@ impl Canvas<'_> {
         }
     }
 
-    /// `╭ ▾ ✓ model ─────── 1.2k/300 · 4s ╮`: fold marker (turns only),
+    /// `┌ ▾ ✓ model ─────── 1.2k/300 · 4s ┐`: fold marker (turns only),
     /// status, kind, and the card's facts against the right corner.
     fn title(&mut self, card: usize, border: Style) {
         let rect = self.layout.card_rect(card);
@@ -517,8 +523,9 @@ const DOWN: u8 = 2;
 const LEFT: u8 = 4;
 const RIGHT: u8 = 8;
 
-/// Box glyphs by the ends they join.
-const GLYPHS: [(&str, u8); 11] = [
+/// Box glyphs by the ends they join. A card's corners are square, a
+/// wire's round.
+const GLYPHS: [(&str, u8); 15] = [
     ("─", LEFT | RIGHT),
     ("│", UP | DOWN),
     ("╭", DOWN | RIGHT),
@@ -530,6 +537,10 @@ const GLYPHS: [(&str, u8); 11] = [
     ("┬", DOWN | LEFT | RIGHT),
     ("┴", UP | LEFT | RIGHT),
     ("┼", UP | DOWN | LEFT | RIGHT),
+    ("┌", DOWN | RIGHT),
+    ("┐", DOWN | LEFT),
+    ("└", UP | RIGHT),
+    ("┘", UP | LEFT),
 ];
 
 fn ends_of(symbol: &str) -> u8 {
@@ -687,23 +698,43 @@ mod tests {
     }
 
     #[test]
-    fn cards_sit_on_a_dot_grid_wired_port_to_port() {
+    fn cards_stack_down_a_column_then_wrap_right_wired_port_to_port() {
         let mut app = app_with_flow();
         press(&mut app, KeyCode::Home);
-        let rows = screen(&mut app, 84, 12);
+        let rows = screen(&mut app, 84, 24);
         let expected = [
-            "│  Lead                                                                            ┃",
-            "│· ╭ ▾ ✓ prompt ────────────────────╮·   · ╭ ✓ model ──────── 1.2k/300 · 4s ╮·   · ┃",
-            "│  │ add a greeting                 ●─────▶│ sonnet                         ●──────┃",
-            "│· ╰────────────────────────────────╯·   · │ ✓ read_file src/lib.rs    12ms │·   · ┃",
-            "│                                          │ ✓ task coder · write gre… 4.2s ●────╮ ┃",
-            "│·   ·   ·   ·   ·   ·   ·   ·   ·   ·   · ╰────────────────────────────────╯·   │ ┃",
-            "│                                                                                │ ┃",
-            "│·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   │ ┃",
-            "│                                                                                │ │",
-            "│·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ╰▶│",
+            "│  Lead                                                                            │",
+            "│  ┌ ▾ ✓ prompt ────────────────────┐                                              │",
+            "│  │ add a greeting                 │                                           ╭┬─│",
+            "│  └────────────────┬───────────────┘                                           ││ │",
+            "│                   │                                                           ││ │",
+            "│  ┌ ✓ model ───────┴ 1.2k/300 · 4s ┐                                           ││ │",
+            "│  │ sonnet                         ●───────────────────────────────────────────┼╯ │",
+            "│  │ ✓ read_file src/lib.rs    12ms │                                           │  │",
+            "│  │ ✓ task coder · write gre… 4.2s ●────╮                                      │  │",
+            "│  └────────────────────────────────┘    │                                      │  │",
+            "│                                        │                                      │  │",
+            "│                                        │ coder #1                             │  │",
+            "│                                        │ ┌ ▾ ✓ prompt ────────── coder #1 ┐   │  │",
+            "│                                        ╰─┤ write greet()                  │   │  │",
+            "│                                          └────────────────┬───────────────┘   │  │",
+            "│                                                           │                   │  │",
+            "│                                          ┌ ✓ reply ───────┴───────────────┐   │  │",
+            "│                                          │ done                           ●───╯  │",
+            "│                                          └────────────────────────────────┘      │",
         ];
-        assert_eq!(rows[1..=10], expected, "\n{}", rows.join("\n"));
+        assert_eq!(rows[1..=19], expected, "\n{}", rows.join("\n"));
+    }
+
+    #[test]
+    fn a_short_view_splits_its_rows_between_the_bands() {
+        let mut app = app_with_flow();
+        press(&mut app, KeyCode::Home);
+        let rows = screen(&mut app, 84, 12).join("\n");
+        assert!(
+            rows.contains("add a greeting                 ●──────┤ sonnet"),
+            "no room to stack: the model call is beside the prompt\n{rows}"
+        );
     }
 
     #[test]
@@ -711,11 +742,11 @@ mod tests {
         let mut app = app_with_flow();
         press(&mut app, KeyCode::Home);
         let rows = screen(&mut app, 200, 16).join("\n");
-        assert!(rows.contains("─┬▶│ coder #1 replied"), "{rows}");
+        assert!(rows.contains("─┬─┤ coder #1 replied"), "{rows}");
         // Drawn on top, the selection's wires still join the others.
         press(&mut app, KeyCode::Right);
         let rows = screen(&mut app, 200, 16).join("\n");
-        assert!(rows.contains("─┬▶│ coder #1 replied"), "{rows}");
+        assert!(rows.contains("─┬─┤ coder #1 replied"), "{rows}");
     }
 
     #[test]
@@ -725,12 +756,12 @@ mod tests {
         press(&mut app, KeyCode::Char(' '));
         let rows = screen(&mut app, 120, 16).join("\n");
         assert!(
-            rows.contains("╭ ▸ ✓ prompt ────────── +3 steps ╮"),
+            rows.contains("┌ ▸ ✓ prompt ────────── +3 steps ┐"),
             "{rows}"
         );
         assert!(!rows.contains("sonnet"), "{rows}");
         assert!(
-            rows.contains("╰▶│ write greet()"),
+            rows.contains("╰─┤ write greet()"),
             "the spawn comes from the prompt\n{rows}"
         );
     }
@@ -776,19 +807,20 @@ mod tests {
 
         // A drag on empty canvas moves the view with the pointer.
         let buffer = whole_screen(&mut app);
+        // The gutter right of the prompt.
         let (x, y) = find(&buffer, "add a greeting").unwrap();
-        let empty = (x, y + 3);
+        let empty = (x + 35, y);
         let pan = app.flow().pan();
         mouse(&mut app, down, empty);
         mouse(
             &mut app,
             MouseEventKind::Drag(MouseButton::Left),
-            (x - 5, y + 3),
+            (empty.0 - 5, y),
         );
         mouse(
             &mut app,
             MouseEventKind::Up(MouseButton::Left),
-            (x - 5, y + 3),
+            (empty.0 - 5, y),
         );
         assert_eq!(app.flow().pan(), (pan.0 + 5.0, pan.1));
         assert_eq!(app.flow().selected_node().unwrap().id, "aa:1");
@@ -802,6 +834,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_precision_loss)]
     fn a_front_end_that_draws_the_canvas_gets_it_blank() {
         let mut app = app_with_flow();
         app.set_host_canvas(true);
@@ -826,7 +859,8 @@ mod tests {
         let (x, y) = (canvas.x + 5, canvas.y + 2);
         mouse(&mut app, MouseEventKind::Down(MouseButton::Left), (x, y));
         assert_eq!(app.flow().selected_node().unwrap().id, "aa:1");
-        assert!(app.click_flow_at(46.5, 2.5));
+        let model = app.flow().layout().card_rect(1);
+        assert!(app.click_flow_at(model.x as f32 + 4.5, model.y as f32 + 1.5));
         assert_eq!(app.flow().selected_node().unwrap().id, "aa:2");
 
         // Away from the tab, there is no canvas to draw.

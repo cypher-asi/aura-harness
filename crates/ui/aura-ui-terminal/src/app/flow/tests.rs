@@ -145,16 +145,20 @@ fn a_model_call_is_a_card_with_its_tool_calls_as_rows() {
 }
 
 #[test]
-fn cards_run_left_to_right_and_no_wire_runs_backwards() {
+fn cards_go_down_a_column_and_no_wire_runs_backwards() {
     let app = app_with_flow();
     let layout = app.flow().layout();
     let columns: Vec<usize> = layout.cards.iter().map(|card| card.column).collect();
-    assert_eq!(columns, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    assert_eq!(columns, [0, 0, 1, 1, 2, 2, 3, 3, 4, 4]);
+    let tops: Vec<usize> = layout.cards.iter().map(|card| card.top).collect();
+    assert_eq!(tops, [0, 4, 0, 5, 0, 4, 0, 4, 0, 4]);
     for wire in &layout.wires {
-        assert!(
-            layout.cards[wire.from].column < layout.cards[wire.to].column,
-            "{wire:?}"
-        );
+        let (from, to) = (&layout.cards[wire.from], &layout.cards[wire.to]);
+        if layout.stacked(wire) {
+            assert!(wire.kind == WireKind::Next && from.top < to.top, "{wire:?}");
+        } else {
+            assert!(from.column < to.column, "{wire:?}");
+        }
     }
     let between = |kind: WireKind| -> Vec<(usize, Option<usize>, usize)> {
         layout
@@ -189,9 +193,68 @@ fn agents_that_take_turns_share_a_band() {
     let bands: Vec<usize> = layout.cards.iter().map(|card| card.band).collect();
     assert_eq!(bands, [0, 0, 1, 1, 0, 0, 1, 1, 0, 0]);
     assert_eq!(layout.bands.len(), 2);
-    // A band is as tall as its tallest card, with its names above.
-    assert_eq!(layout.bands[0].height, layout.cards[1].height() + 2);
+    // A band is as tall as its tallest column, with its names above.
+    let column = layout.cards[1].top + layout.cards[1].height();
+    assert_eq!(layout.bands[0].height, column + 2);
     assert_eq!(layout.height, layout.bands[1].y + layout.bands[1].height);
+}
+
+#[test]
+fn a_column_wraps_right_when_the_view_has_no_room_for_the_next_card() {
+    let nodes = (1..=5)
+        .map(|seq| {
+            let kind = if seq % 2 == 1 {
+                FlowKind::Prompt
+            } else {
+                FlowKind::Reply
+            };
+            node(LEAD, seq, 100 + seq, kind, "turn")
+        })
+        .collect();
+    let mut app = app_with(vec![lane(LEAD, "Lead", None)], nodes);
+    // Ten rows for cards: two of three, and the row between.
+    app.flow_mut().set_room(12);
+    app.flow_mut().ensure_layout();
+    let layout = app.flow().layout();
+    let places: Vec<(usize, usize)> = layout
+        .cards
+        .iter()
+        .map(|card| (card.column, card.top))
+        .collect();
+    assert_eq!(places, [(0, 0), (0, 4), (1, 0), (1, 4), (2, 0)]);
+    assert!(layout.height <= 12, "{}", layout.height);
+    let stacked: Vec<bool> = layout.wires.iter().map(|w| layout.stacked(w)).collect();
+    assert_eq!(stacked, [true, false, true, false]);
+
+    // A taller view fits them all in one column.
+    app.flow_mut().set_room(40);
+    app.flow_mut().ensure_layout();
+    assert!(app
+        .flow()
+        .layout()
+        .cards
+        .iter()
+        .all(|card| card.column == 0));
+}
+
+#[test]
+fn bands_too_tall_for_the_view_share_its_rows() {
+    let mut app = app_with_flow();
+    app.flow_mut().set_room(30);
+    app.flow_mut().ensure_layout();
+    let layout = app.flow().layout();
+    assert_eq!(layout.height, 20, "both fit as they are");
+    assert_eq!(layout.cards[1].top, 4);
+
+    app.flow_mut().set_room(16);
+    app.flow_mut().ensure_layout();
+    let layout = app.flow().layout();
+    assert_eq!(layout.bands.len(), 2);
+    assert!(layout.height <= 16, "{}", layout.height);
+    assert!(
+        layout.cards.iter().all(|card| card.top == 0),
+        "no room to stack"
+    );
 }
 
 #[test]
@@ -352,6 +415,10 @@ fn arrows_move_along_a_lane_through_a_card_and_between_bands() {
     let mut app = app_with_flow();
     press(&mut app, KeyCode::Home);
     assert_eq!(selected(&app), "aa:1");
+    press(&mut app, KeyCode::Down);
+    assert_eq!(selected(&app), "aa:2", "the card under it");
+    press(&mut app, KeyCode::Up);
+    assert_eq!(selected(&app), "aa:1", "and over it");
     press(&mut app, KeyCode::Right);
     assert_eq!(selected(&app), "aa:2", "the next card of the lead");
     press(&mut app, KeyCode::Char('j'));
