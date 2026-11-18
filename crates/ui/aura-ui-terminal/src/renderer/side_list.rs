@@ -26,6 +26,42 @@ pub(super) const TRACE_HINT: &str = "⏎ open  g graph  ⇧←→ tabs";
 /// Hint of the PLANS tab.
 pub(super) const PLANS_HINT: &str = "⏎ open  ←→ fold  ⇧←→ tabs";
 
+/// Whether a side-panel row is still in play. This alone decides white
+/// versus gray text in every tab, so the tabs read the same way:
+///
+/// | tab       | `Active` (foreground)        | `Settled` (muted)            |
+/// |-----------|------------------------------|------------------------------|
+/// | SANDBOX   | files and folders            | dot entries, "more" rows     |
+/// | PROCESSES | running, idle, paused        | exited, failed, killed       |
+/// | TRACE     | steps still pending          | finished steps               |
+/// | PLANS     | open plans and todos         | done plans, closed todos     |
+///
+/// Status (ok, warning, error) is shown by the row's icon color only, never
+/// by its text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Tone {
+    Active,
+    Settled,
+}
+
+impl Tone {
+    pub(super) const fn active_if(active: bool) -> Self {
+        if active {
+            Self::Active
+        } else {
+            Self::Settled
+        }
+    }
+}
+
+/// The name style of a row with `tone`.
+pub(super) fn name_style(tone: Tone, theme: &Theme) -> Style {
+    Style::default().fg(match tone {
+        Tone::Active => theme.colors.foreground,
+        Tone::Settled => theme.colors.muted,
+    })
+}
+
 /// Draw a tab's empty state: muted lines, each indented two columns.
 pub(super) fn render_empty(frame: &mut Frame, inner: Rect, message: &[&str], theme: &Theme) {
     let muted = Style::default().fg(theme.colors.muted);
@@ -82,6 +118,21 @@ mod tests {
             assert!(hint.starts_with("⏎ open  "), "{hint}");
             assert!(hint.ends_with("  ⇧←→ tabs"), "{hint}");
         }
+    }
+
+    #[test]
+    fn the_tone_rule_is_the_only_white_or_gray_switch() {
+        let theme = Theme::cyber();
+        assert_eq!(
+            name_style(Tone::Active, &theme).fg,
+            Some(theme.colors.foreground)
+        );
+        assert_eq!(
+            name_style(Tone::Settled, &theme).fg,
+            Some(theme.colors.muted)
+        );
+        assert_eq!(Tone::active_if(true), Tone::Active);
+        assert_eq!(Tone::active_if(false), Tone::Settled);
     }
 
     #[test]

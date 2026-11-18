@@ -13,7 +13,7 @@ mod tool;
 
 pub use content::{ContentBlock, ImageSource, Role, ToolResultContent};
 pub use content_profile::{
-    ModelContentProfile, ModelContractVerdict, ModelContractViolationReason,
+    ModelCallPurpose, ModelContentProfile, ModelContractVerdict, ModelContractViolationReason,
     ModelRequestContractViolation, ModelRequestKind, ModelRequestMetadata,
 };
 pub use message::Message;

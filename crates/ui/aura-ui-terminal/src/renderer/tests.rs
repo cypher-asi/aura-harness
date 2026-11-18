@@ -1224,6 +1224,26 @@ fn test_plans_tab_lists_plans_with_their_todos() {
         !rows.join("\n").contains("Split the lexer"),
         "done plans start folded"
     );
+
+    // One tone rule: open items white, closed ones gray; the ✓ is green.
+    // Unfocused, so no row wears the selection colors.
+    while app.focus() == PanelFocus::Sandbox {
+        let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
+    }
+    let theme = test_theme();
+    let buffer = render_buffer(&mut app, 160);
+    let fg_of = |text: &str| {
+        let row = row_of(&buffer, text);
+        find_cell(&buffer, row, text).unwrap().1.fg
+    };
+    let muted = Some(theme.colors.muted);
+    let foreground = Some(theme.colors.foreground);
+    assert_eq!(fg_of("Add session table"), muted, "completed todo");
+    assert_eq!(fg_of("Parser cleanup"), muted, "plan with nothing left");
+    assert_eq!(fg_of("Auth rework"), foreground, "plan with todos left");
+    let check_row = row_of(&buffer, "Add session table");
+    let (_, check) = find_cell(&buffer, check_row, "✓").unwrap();
+    assert_eq!(check.fg, Some(theme.colors.success));
 }
 
 #[test]
@@ -2679,7 +2699,9 @@ fn test_chat_bottom_leaves_room_below_a_long_reply() {
         .iter()
         .position(|row| row.contains("line 59"))
         .unwrap_or_else(|| panic!("last line not in:\n{screen}"));
-    let column = rows[last][..rows[last].find("line 59").unwrap()].chars().count();
+    let column = rows[last][..rows[last].find("line 59").unwrap()]
+        .chars()
+        .count();
     let blank_below = rows[last + 1..]
         .iter()
         .take_while(|row| row.chars().skip(column).take(7).all(char::is_whitespace))

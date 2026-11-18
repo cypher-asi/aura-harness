@@ -1,7 +1,9 @@
 use crate::record_loader::{build_record_summary, format_local_time, policy_outcome};
+use crate::turn_calls::{Seen, TurnCalls};
 use aura_agent_kernel::RecordObserver;
 use aura_core_types::{AgentId, PolicyDecision, RecordEntry, Transaction, TransactionType};
 use aura_ui_terminal::UiCommand;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 use tokio::sync::mpsc;
 
@@ -49,13 +51,15 @@ impl RecordPanelAgent {
 }
 
 /// Streams every record entry the kernel persists to the RECORD panel, in
-/// sequence order, and the policy rule behind every decision to the tool
-/// call it decided, in the chat of the agent that made the call (agents
-/// work in parallel, so that may not be the one on screen).
+/// sequence order, and to the chat of the agent that made it (agents work
+/// in parallel, so that may not be the one on screen): the policy rule
+/// behind every decision, on the tool call it decided, and the models of
+/// the turn so far, under its reply.
 #[derive(Debug)]
 pub struct UiRecordObserver {
     queue: mpsc::UnboundedSender<UiCommand>,
     panel: RecordPanelAgent,
+    turns: Mutex<HashMap<AgentId, TurnCalls>>,
 }
 
 impl UiRecordObserver {
@@ -72,11 +76,39 @@ impl UiRecordObserver {
                 }
             }
         });
-        Self { queue, panel }
+        Self {
+            queue,
+            panel,
+            turns: Mutex::default(),
+        }
     }
 
     fn send(&self, command: UiCommand) {
         let _ = self.queue.send(command);
+    }
+
+    /// Show the models of the turn `entry` belongs to under its reply,
+    /// when `entry` is one of its model calls or the reply itself. A
+    /// reply is shown after its last call is recorded, so the footer is
+    /// sent again for it.
+    fn show_turn_calls(&self, entry: &RecordEntry) {
+        let footer = {
+            let mut turns = self.turns.lock().unwrap_or_else(PoisonError::into_inner);
+            let calls = turns.entry(entry.tx.agent_id).or_default();
+            let seen = calls.see(&entry.tx);
+            let reply = entry.tx.tx_type == TransactionType::AgentMsg;
+            if seen == Seen::Call || reply {
+                calls.footer()
+            } else {
+                None
+            }
+        };
+        if let Some((model, usage)) = footer {
+            self.send(UiCommand::ForAgent {
+                agent_id: entry.tx.agent_id.to_hex(),
+                command: Box::new(UiCommand::SetReplyModel { model, usage }),
+            });
+        }
     }
 }
 
@@ -88,6 +120,7 @@ impl RecordObserver for UiRecordObserver {
                 entry.seq, &entry.tx, entry, timestamp,
             )));
         }
+        self.show_turn_calls(entry);
         if entry.tx.tx_type == TransactionType::PolicyDecision {
             let Ok(decision) = serde_json::from_slice::<PolicyDecision>(&entry.tx.payload) else {
                 return;

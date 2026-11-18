@@ -441,6 +441,23 @@ impl Tabs {
         self.focus((self.front + self.tabs.len() - 1) % self.tabs.len());
     }
 
+    /// Move the tab at `from` to `to`, shifting the ones between. The tab
+    /// in front stays in front.
+    pub fn move_tab(&mut self, from: usize, to: usize) {
+        if from == to || from >= self.tabs.len() || to >= self.tabs.len() {
+            return;
+        }
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        if self.front == from {
+            self.front = to;
+        } else if from < self.front && self.front <= to {
+            self.front -= 1;
+        } else if to <= self.front && self.front < from {
+            self.front += 1;
+        }
+    }
+
     /// Close the tab at `index`. Its projects move to the tab before it
     /// (after it, for the first), so nothing is lost. Returns `false` for
     /// the last tab, which stays.
@@ -878,6 +895,27 @@ mod tests {
         assert!(tabs.close(0));
         assert_eq!(tabs.arrangement(), [["a3", "a1", "p2"]]);
         assert_eq!(shown(&tabs), ["a3"]);
+    }
+
+    #[test]
+    fn moving_a_tab_keeps_its_projects_and_the_tab_in_front() {
+        let (mut tabs, mut events) = two_tabs();
+        tabs.move_tab(1, 0);
+        assert_eq!(tabs.arrangement(), [vec!["a3"], vec!["a1", "p2"]]);
+        assert_eq!(held(&tabs), [vec!["a3"], vec!["a1", "a1.1", "p2"]]);
+        assert_eq!(tabs.front_index(), 0);
+        assert_eq!(tabs.front().agent(), "a3");
+        tabs.forward_events();
+        assert!(sent(&mut events).is_empty());
+
+        // Another tab moving past the one in front shifts it.
+        tabs.move_tab(1, 0);
+        assert_eq!(tabs.arrangement(), [vec!["a1", "p2"], vec!["a3"]]);
+        assert_eq!(tabs.front_index(), 1);
+        assert_eq!(tabs.front().agent(), "a3");
+
+        tabs.move_tab(0, 5);
+        assert_eq!(tabs.arrangement(), [vec!["a1", "p2"], vec!["a3"]]);
     }
 
     #[test]

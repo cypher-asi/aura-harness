@@ -11,9 +11,9 @@ use ratatui::{
     text::{Line, Span},
 };
 
-/// `[claude-opus-4-7 · 12.4k tok · $0.042]` — the dim line closing a
-/// turn. `meta` (see [`reply_meta`]) loses its trailing parts when it
-/// doesn't fit in `width`.
+/// `[claude-sonnet-5-5 ×2 · gate: claude-haiku-5-5 · 27.9k tok · $0.040]`
+/// — the dim line closing a turn. `meta` (see [`reply_meta`]) loses its
+/// trailing parts when it doesn't fit in `width`.
 pub(super) fn reply_footer(meta: &[String], width: usize, theme: &Theme) -> Option<Line<'static>> {
     let text = fit_meta(meta, width.saturating_sub(2))?;
     Some(Line::from(Span::styled(
@@ -78,8 +78,8 @@ fn fit_meta(meta: &[String], room: usize) -> Option<String> {
     Some(cut)
 }
 
-/// Parts of a reply's footer, most important first: the model, then the
-/// call's tokens and cost when known.
+/// Parts of a reply's footer, most important first: the turn's models,
+/// then the tokens and cost of its calls when known.
 pub(super) fn reply_meta(model: Option<&str>, usage: Option<CallUsage>) -> Vec<String> {
     let mut parts: Vec<String> = model.map(str::to_string).into_iter().collect();
     if let Some(usage) = usage {

@@ -111,8 +111,8 @@ pub use kernel_propose::{ProposeLimits, ProposeRequest, RecordSummary};
 pub use mock::{MockProvider, MockResponse};
 pub use types::{
     AccumulatedToolUse, CacheControl, ContentBlock, ImageSource, MaxTokens, Message,
-    ModelContentProfile, ModelContractVerdict, ModelContractViolationReason, ModelName,
-    ModelRequest, ModelRequestContractViolation, ModelRequestKind, ModelRequestMetadata,
+    ModelCallPurpose, ModelContentProfile, ModelContractVerdict, ModelContractViolationReason,
+    ModelName, ModelRequest, ModelRequestContractViolation, ModelRequestKind, ModelRequestMetadata,
     ModelResponse, PartialToolUse, PromptCacheRetention, ProviderTrace, Role, StopReason,
     StreamAccumulator, StreamContentType, StreamEvent, Temperature, ThinkingConfig, ThinkingEffort,
     ToolChoice, ToolDefinition, ToolResultContent, Usage,

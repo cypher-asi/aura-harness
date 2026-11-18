@@ -155,6 +155,17 @@ impl Layout {
             .or_else(|| self.plus.contains(at).then_some(Hit::New))
     }
 
+    /// The tab whose place a tab dragged to `x` takes: the box `x` is
+    /// over, or the one at that end of the row past either end. A gap
+    /// counts with the box before it.
+    pub fn slot(&self, x: f32) -> Option<usize> {
+        if self.tabs.is_empty() {
+            return None;
+        }
+        let after = self.tabs.iter().take_while(|tab| tab.x <= x).count();
+        Some(after.saturating_sub(1))
+    }
+
     #[cfg(test)]
     fn rect(&self, hit: Hit) -> Option<Rectangle> {
         match hit {
@@ -222,6 +233,11 @@ impl Bar {
     /// What the pointer was over at the last [`Self::update`].
     pub const fn hover(&self) -> Option<Hit> {
         self.hover
+    }
+
+    /// See [`Layout::slot`].
+    pub fn slot(&self, x: f32) -> Option<usize> {
+        self.layout.slot(x)
     }
 
     /// The middle of the box `hit` names, if it is drawn.
@@ -477,6 +493,19 @@ mod tests {
         assert_eq!(layout.hit(middle(layout.controls[0])), Some(Hit::Minimize));
         assert_eq!(layout.hit(middle(layout.controls[1])), Some(Hit::Maximize));
         assert_eq!(layout.hit(middle(layout.controls[2])), Some(Hit::Close));
+    }
+
+    #[test]
+    fn a_dragged_tab_takes_the_place_of_the_box_under_it() {
+        let layout = Layout::of(&model(3, "AURA-HARNESS", 1300.0));
+        for (index, tab) in layout.tabs.iter().enumerate() {
+            assert_eq!(layout.slot(tab.center_x()), Some(index));
+        }
+        assert_eq!(layout.slot(0.0), Some(0), "left of the row");
+        assert_eq!(layout.slot(1200.0), Some(2), "right of the row");
+        let gap = layout.tabs[0].x + layout.tabs[0].width + 0.5;
+        assert_eq!(layout.slot(gap), Some(0));
+        assert_eq!(Layout::default().slot(10.0), None);
     }
 
     #[test]

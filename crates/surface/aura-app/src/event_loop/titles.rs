@@ -9,16 +9,14 @@ use aura_agent::AgentLoopConfig;
 use aura_context_prompts::auxiliary::chat_title::{
     chat_title_user_prompt, CHAT_TITLE_SYSTEM_PROMPT,
 };
-use aura_model::model_catalog::{backend_for, ModelBackend};
 use aura_model::{
-    Message, ModelProvider, ModelRequest, ModelRequestKind, Role, ThinkingEffort, ToolChoice,
+    Message, ModelCallPurpose, ModelProvider, ModelRequest, ModelRequestKind, Role, ThinkingEffort,
+    ToolChoice,
 };
 use tracing::{info, warn};
 
 /// Environment variable naming the model that writes titles.
 const TITLE_MODEL_ENV: &str = "AURA_TITLE_MODEL";
-const ROUTER_TITLE_MODEL: &str = "aura-claude-haiku-4-5";
-const CLAUDE_TITLE_MODEL: &str = "claude/claude-haiku-4-5";
 /// How much of the prompt and of the reply the model sees.
 const MAX_SIDE_CHARS: usize = 2_000;
 const MAX_TITLE_TOKENS: u32 = 24;
@@ -27,22 +25,17 @@ const MAX_TITLE_CHARS: usize = 50;
 /// Longest title made from the prompt when the model gives none.
 const MAX_FALLBACK_CHARS: usize = 40;
 
-/// The model that titles a chat whose turns run on `turn_model`:
-/// `AURA_TITLE_MODEL` when set, else Haiku on the same backend. Local and
-/// ChatGPT-plan turns have no Haiku to reach, so they use their own model.
-pub(super) fn title_model(turn_model: &str) -> String {
-    title_model_with(turn_model, std::env::var(TITLE_MODEL_ENV).ok().as_deref())
+/// The model that titles chats: `AURA_TITLE_MODEL` when set, else
+/// `classifier`, the cheap model Gate classifies prompts with.
+pub(super) fn title_model(classifier: String) -> String {
+    title_model_with(classifier, std::env::var(TITLE_MODEL_ENV).ok().as_deref())
 }
 
-fn title_model_with(turn_model: &str, configured: Option<&str>) -> String {
-    if let Some(model) = configured.map(str::trim).filter(|m| !m.is_empty()) {
-        return model.to_string();
-    }
-    match backend_for(turn_model) {
-        ModelBackend::Router => ROUTER_TITLE_MODEL.to_string(),
-        ModelBackend::Claude => CLAUDE_TITLE_MODEL.to_string(),
-        ModelBackend::Local | ModelBackend::Chatgpt => turn_model.to_string(),
-    }
+fn title_model_with(classifier: String, configured: Option<&str>) -> String {
+    configured
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map_or(classifier, str::to_string)
 }
 
 /// A title for the chat that opened with `prompt` and got `messages` in
@@ -71,6 +64,7 @@ pub(super) async fn generate(
         .aura_session_id(config.aura_session_id.clone())
         .aura_org_id(config.aura_org_id.clone())
         .request_kind(ModelRequestKind::Auxiliary)
+        .purpose(ModelCallPurpose::Title)
         .try_build();
     let titled = match request {
         Ok(request) => match provider.complete(request).await {
@@ -164,24 +158,13 @@ mod tests {
     use aura_model::MockProvider;
 
     #[test]
-    fn title_model_follows_the_turns_backend() {
+    fn titles_are_written_by_the_classifier_unless_configured() {
+        let haiku = || "claude/claude-haiku-5-5".to_string();
+        assert_eq!(title_model_with(haiku(), None), "claude/claude-haiku-5-5");
+        assert_eq!(title_model_with(haiku(), Some(" my-model ")), "my-model");
         assert_eq!(
-            title_model_with("aura-claude-opus-4-7", None),
-            ROUTER_TITLE_MODEL
-        );
-        assert_eq!(
-            title_model_with("claude/claude-opus-4-7", None),
-            CLAUDE_TITLE_MODEL
-        );
-        assert_eq!(title_model_with("local/qwen3", None), "local/qwen3");
-        assert_eq!(title_model_with("chatgpt/gpt-5.4", None), "chatgpt/gpt-5.4");
-        assert_eq!(
-            title_model_with("claude/claude-opus-4-7", Some(" my-model ")),
-            "my-model"
-        );
-        assert_eq!(
-            title_model_with("aura-gpt-5-4", Some("  ")),
-            ROUTER_TITLE_MODEL
+            title_model_with(haiku(), Some("  ")),
+            "claude/claude-haiku-5-5"
         );
     }
 
@@ -234,7 +217,7 @@ mod tests {
         let title = generate(
             &provider,
             &config,
-            ROUTER_TITLE_MODEL,
+            "aura-claude-haiku-4-5",
             "the build fails",
             &[Message::assistant("Fixed it.")],
         )

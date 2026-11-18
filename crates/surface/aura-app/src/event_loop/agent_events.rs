@@ -93,10 +93,6 @@ pub(crate) struct ForwarderState {
     pub streaming_active: bool,
     pub thinking_active: bool,
     pub had_text: bool,
-    /// Model that answered the latest model call of the turn
-    pub reply_model: Option<String>,
-    /// Tokens and cost of the latest model call of the turn
-    pub reply_usage: Option<CallUsage>,
     /// Estimated cost of every model call of the turn so far
     pub turn_cost_usd: f64,
     /// Context window of the turn's model
@@ -124,7 +120,7 @@ pub(crate) struct TurnPlan {
     pub building: Option<String>,
 }
 
-/// Tokens and estimated cost of one model call, for the reply header.
+/// Tokens and estimated cost of one model call, for the reply footer.
 /// `None` when the provider reported no usage at all.
 pub(crate) fn call_usage(model: &str, usage: &Usage) -> Option<CallUsage> {
     let tokens = model_catalog::call_tokens(model, usage);
@@ -443,16 +439,7 @@ impl TurnEventSink for UiCommandSink {
                 context_tokens: stats.prompt_tokens(),
             });
             self.ui.send(UiCommand::CallStats(stats)).await;
-            let usage = call_usage(&model, &usage);
-            self.ui
-                .send(UiCommand::SetReplyModel {
-                    model: model.clone(),
-                    usage,
-                })
-                .await;
-            self.state.reply_model = Some(model);
-            self.state.reply_usage = usage;
-            self.state.turn_cost_usd += usage.and_then(|u| u.cost_usd).unwrap_or(0.0);
+            self.state.turn_cost_usd += stats.cost_usd.unwrap_or(0.0);
             self.enforce_cost_cap().await;
         }
     }

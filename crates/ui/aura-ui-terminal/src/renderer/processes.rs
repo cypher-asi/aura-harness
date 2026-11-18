@@ -4,7 +4,7 @@
 use super::panels::{
     aura_icon, cell_style, list_row, now_ms, render_scrollbar, CellState, ScrollView, StatusIcon,
 };
-use super::side_list::{render_empty, render_hint, split_hint, PROCESSES_HINT};
+use super::side_list::{name_style, render_empty, render_hint, split_hint, Tone, PROCESSES_HINT};
 use super::text::wrap_words;
 use crate::app::{HoverTarget, PanelFocus};
 use crate::events::{ProcessStatus, ProcessSummary};
@@ -59,7 +59,7 @@ pub(super) fn render_processes(
             let cell = cell_style(
                 theme,
                 state,
-                Style::default().fg(label_color(process, theme)),
+                name_style(Tone::active_if(process.status.is_live()), theme),
             );
             let icon = status_icon(app, process.status, theme);
             let time = format!(
@@ -87,14 +87,6 @@ pub(super) fn render_processes(
     render_scrollbar(frame, area, rows_area, view, is_focused, theme);
     if let Some(hint) = hint {
         render_hint(frame, hint, PROCESSES_HINT, theme);
-    }
-}
-
-fn label_color(process: &ProcessSummary, theme: &Theme) -> Color {
-    if process.status.is_live() {
-        theme.colors.foreground
-    } else {
-        theme.colors.muted
     }
 }
 

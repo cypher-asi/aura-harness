@@ -19,9 +19,25 @@ pub enum ModelRequestKind {
     Auxiliary,
 }
 
+/// What a call made beside an agent's own work is for. The kernel keeps
+/// it in the call's record entry, so what a turn cost can be told apart
+/// from what routing and titling it cost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelCallPurpose {
+    /// Gate labelling a prompt with its category
+    Classify,
+    /// Gate's judge reviewing failed work
+    Judge,
+    /// Naming a chat after its first turn
+    Title,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ModelRequestMetadata {
     pub kind: Option<ModelRequestKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<ModelCallPurpose>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

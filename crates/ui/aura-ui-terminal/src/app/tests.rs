@@ -1650,7 +1650,7 @@ fn test_load_conversation_replaces_messages() {
 }
 
 #[test]
-fn test_reply_model_names_only_replies_since_last_user_message() {
+fn test_reply_model_sets_the_turn_so_far_on_replies_since_last_user_message() {
     let mut app = App::new();
     app.add_message(Message::new(MessageRole::Assistant, "earlier reply"));
     app.add_message(Message::new(MessageRole::User, "question"));
@@ -1673,7 +1673,7 @@ fn test_reply_model_names_only_replies_since_last_user_message() {
         cost_usd: Some(0.042),
     };
     app.process_command(UiCommand::SetReplyModel {
-        model: "claude-opus-4-7".to_string(),
+        model: "qwen3:4b · claude-opus-4-7".to_string(),
         usage: Some(opus),
     });
 
@@ -1688,8 +1688,16 @@ fn test_reply_model_names_only_replies_since_last_user_message() {
             ("earlier reply", None, None),
             ("question", None, None),
             ("", None, None),
-            ("first part", Some("qwen3:4b"), Some(900)),
-            ("second part", Some("claude-opus-4-7"), Some(12_400)),
+            (
+                "first part",
+                Some("qwen3:4b · claude-opus-4-7"),
+                Some(12_400)
+            ),
+            (
+                "second part",
+                Some("qwen3:4b · claude-opus-4-7"),
+                Some(12_400)
+            ),
         ]
     );
     assert_eq!(app.messages().back().unwrap().usage(), Some(opus));

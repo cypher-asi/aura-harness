@@ -344,12 +344,13 @@ pub enum UiCommand {
     /// Finalize the streaming message and display it.
     FinishStreaming,
 
-    /// The model that wrote the replies shown since the last user message
-    /// that don't name a model yet (sent once each model call finishes)
+    /// The models of the turn so far, for the replies shown since the last
+    /// user message (sent again as each model call finishes)
     SetReplyModel {
-        /// Model that answered the call
+        /// The models the turn ran on, e.g. `claude-sonnet-5-5 ×2 · gate:
+        /// claude-haiku-5-5`
         model: String,
-        /// Tokens and cost of the call, when the provider reported usage
+        /// Tokens and cost of all the turn's calls, when any reported usage
         usage: Option<CallUsage>,
     },
 
@@ -705,15 +706,16 @@ pub struct MessageData {
     /// Agent step (thinking or a tool call), shown as a collapsible block
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<ActivityData>,
-    /// Model that wrote an assistant reply
+    /// The models of the turn an assistant reply ends (see
+    /// [`UiCommand::SetReplyModel`])
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// Tokens and cost of the model call that wrote an assistant reply
+    /// Tokens and cost of that turn's model calls
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<CallUsage>,
 }
 
-/// Tokens a model call used and what they cost.
+/// Tokens model calls used and what they cost.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CallUsage {
     /// Whole prompt (cached or not) plus output

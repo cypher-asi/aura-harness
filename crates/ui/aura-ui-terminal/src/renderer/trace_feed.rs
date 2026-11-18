@@ -4,10 +4,11 @@ use super::graph::status_glyph;
 use super::panels::{
     cell_style, list_row_with_detail, render_scrollbar, CellState, ScrollView, StatusIcon,
 };
-use super::side_list::{render_empty, render_hint, split_hint, TRACE_HINT};
+use super::side_list::{name_style, render_empty, render_hint, split_hint, Tone, TRACE_HINT};
 use crate::app::{HoverTarget, PanelFocus};
+use crate::events::TraceNodeStatus;
 use crate::{App, Theme};
-use ratatui::{layout::Rect, style::Style, text::Line, widgets::Paragraph, Frame};
+use ratatui::{layout::Rect, text::Line, widgets::Paragraph, Frame};
 
 /// Draw the feed into `inner`, the body below the tab bar of the panel
 /// bordered by `area`.
@@ -49,7 +50,8 @@ pub(super) fn render_trace_feed(
         .take(visible)
         .map(|(i, entry)| {
             let state = CellState::of(is_focused && i == selected, hovered == Some(i));
-            let cell = cell_style(theme, state, Style::default().fg(theme.colors.foreground));
+            let tone = Tone::active_if(entry.node.status == TraceNodeStatus::Pending);
+            let cell = cell_style(theme, state, name_style(tone, theme));
             let (glyph, color) = status_glyph(entry.node.status, theme);
             let seq = entry.node.seq.map(|seq| format!("#{seq}"));
             list_row_with_detail(

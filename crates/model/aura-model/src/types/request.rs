@@ -1,4 +1,4 @@
-use super::content_profile::{ModelRequestKind, ModelRequestMetadata};
+use super::content_profile::{ModelCallPurpose, ModelRequestKind, ModelRequestMetadata};
 use super::message::Message;
 use super::tool::{ToolChoice, ToolDefinition};
 use crate::error::ReasonerError;
@@ -539,6 +539,12 @@ impl ModelRequestBuilder {
     #[must_use]
     pub const fn request_kind(mut self, kind: ModelRequestKind) -> Self {
         self.metadata.kind = Some(kind);
+        self
+    }
+
+    #[must_use]
+    pub const fn purpose(mut self, purpose: ModelCallPurpose) -> Self {
+        self.metadata.purpose = Some(purpose);
         self
     }
 

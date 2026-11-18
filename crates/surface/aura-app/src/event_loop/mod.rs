@@ -666,7 +666,7 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
                 && subagents::lock(&state.hub.registry)
                     .find(agent_id)
                     .is_some_and(RegisteredAgent::needs_title))
-            .then(|| titles::title_model(&agent_loop.config().model));
+            .then(|| titles::title_model(state.models.classifier_model()));
             Task::Turn {
                 prompt,
                 agent_loop: Box::new(agent_loop),

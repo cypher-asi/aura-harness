@@ -15,7 +15,8 @@
 
 use aura_model::model_catalog::infer_tier;
 use aura_model::{
-    Message, ModelRequest, ModelRequestKind, ReasonerError, ThinkingEffort, ToolChoice,
+    Message, ModelCallPurpose, ModelRequest, ModelRequestKind, ReasonerError, ThinkingEffort,
+    ToolChoice,
 };
 
 use crate::judge::{cut, MAX_DIFF, MAX_REPLY};
@@ -136,6 +137,7 @@ pub fn request(
         .thinking_effort(Some(ThinkingEffort::Off))
         .auth_token(auth_token)
         .request_kind(ModelRequestKind::Auxiliary)
+        .purpose(ModelCallPurpose::Judge)
         .try_build()
 }
 

@@ -566,7 +566,7 @@ fn reasoning_with_thinking_becomes_a_thinking_block() {
 }
 
 #[test]
-fn reply_names_the_model_of_its_turn() {
+fn reply_names_the_models_of_its_turn() {
     let dir = tempfile::tempdir().unwrap();
     let store = RocksStore::open(dir.path(), false).unwrap();
     let agent = AgentId::generate();
@@ -596,11 +596,51 @@ fn reply_names_the_model_of_its_turn() {
         models,
         [
             ("first", None),
-            ("answer one", Some("claude-opus-4-7")),
+            ("answer one", Some("qwen3:4b · claude-opus-4-7")),
             ("second", None),
             ("answer two", None),
         ]
     );
+}
+
+#[test]
+fn reply_footer_counts_the_classifier_before_its_prompt_and_the_title_after_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RocksStore::open(dir.path(), false).unwrap();
+    let agent = AgentId::generate();
+    let call = |model: &str, purpose: Option<&str>| {
+        let mut payload = json!({"model": model, "input_tokens": 100, "output_tokens": 10});
+        if let Some(purpose) = purpose {
+            payload["purpose"] = json!(purpose);
+        }
+        text_tx(agent, TransactionType::Reasoning, &payload.to_string())
+    };
+    let routed = aura_core_types::PromptPayload {
+        route: aura_core_types::Route::turn(
+            "claude/claude-sonnet-5-5",
+            aura_core_types::RouteReason::Default,
+        ),
+        ..aura_core_types::PromptPayload::new("test")
+    };
+    let entries = [
+        call("claude/claude-haiku-5-5", Some("classify")),
+        Transaction::user_prompt_with(agent, &routed),
+        call("claude/claude-sonnet-5-5", None),
+        call("claude/claude-sonnet-5-5", None),
+        text_tx(agent, TransactionType::AgentMsg, "done"),
+        call("claude/claude-haiku-5-5", Some("title")),
+    ];
+    for (seq, tx) in (1..).zip(entries) {
+        append(&store, seq, tx);
+    }
+
+    let history = conversation_history(&store, agent).unwrap();
+    let reply = history.iter().find(|m| m.content == "done").unwrap();
+    assert_eq!(
+        reply.model.as_deref(),
+        Some("claude-sonnet-5-5 ×2 · gate: claude-haiku-5-5 · title: claude-haiku-5-5")
+    );
+    assert_eq!(reply.usage.unwrap().tokens, 4 * 110);
 }
 
 #[test]

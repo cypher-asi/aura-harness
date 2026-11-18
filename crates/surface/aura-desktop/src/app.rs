@@ -103,6 +103,8 @@ pub struct App {
     grid_pointer: Option<Point>,
     /// The divider being dragged.
     dragging: Option<Divider>,
+    /// Where the tab being dragged along the tab bar is now.
+    tab_drag: Option<usize>,
     /// Where the pointer is while it is over the tab bar.
     bar_pointer: Option<Point>,
     /// The window side or corner under the pointer.
@@ -179,6 +181,7 @@ impl App {
             pointer: None,
             grid_pointer: None,
             dragging: None,
+            tab_drag: None,
             bar_pointer: None,
             edge: None,
             last_bar_press: None,
@@ -225,7 +228,9 @@ impl App {
             Some(chrome::Hit::Divider(divider)) => Some(divider),
             _ => None,
         });
-        if let Some(edge) = self.edge {
+        if self.tab_drag.is_some() {
+            area = area.interaction(mouse::Interaction::Grabbing);
+        } else if let Some(edge) = self.edge {
             area = area.interaction(resize_cursor(edge));
         } else if let Some(divider) = divider {
             area = area.interaction(if divider.sideways() {
@@ -321,6 +326,10 @@ impl App {
             }
             Message::Focused(focused) => {
                 self.focused = focused;
+                if !focused {
+                    // The release may go to another window.
+                    self.tab_drag = None;
+                }
                 self.restart_blink();
             }
             Message::Copied(chars) => self.tabs.front_mut().tui.notify_copied(chars, &Ok(())),
@@ -466,6 +475,14 @@ impl App {
     fn mouse(&mut self, event: mouse::Event) -> Task<Message> {
         let kind = match event {
             mouse::Event::CursorMoved { position } => {
+                if let Some(from) = self.tab_drag {
+                    self.bar_pointer = Some(position);
+                    if let Some(to) = self.bar.slot(position.x).filter(|to| *to != from) {
+                        self.tabs.move_tab(from, to);
+                        self.tab_drag = Some(to);
+                    }
+                    return Task::none();
+                }
                 self.edge = (!self.left_down)
                     .then(|| edge(self.window, position))
                     .flatten();
@@ -532,6 +549,9 @@ impl App {
                     self.chrome.point(self.grid_pointer);
                     return Task::none();
                 }
+                if button == mouse::Button::Left && self.tab_drag.take().is_some() {
+                    return Task::none();
+                }
                 let Some(button) = mouse_button(button) else {
                     return Task::none();
                 };
@@ -567,13 +587,16 @@ impl App {
         Task::none()
     }
 
-    /// A button went down on the tab bar: left picks or opens a tab or
-    /// works a window box, middle closes the tab under the pointer, and
-    /// left on empty space moves the window, or maximizes it when pressed
-    /// twice.
+    /// A button went down on the tab bar: left picks a tab and starts
+    /// dragging it along the bar, opens a tab or works a window box,
+    /// middle closes the tab under the pointer, and left on empty space
+    /// moves the window, or maximizes it when pressed twice.
     fn bar_press(&mut self, button: mouse::Button) -> Task<Message> {
         match (self.bar.hover(), button) {
-            (Some(Hit::Tab(index)), mouse::Button::Left) => self.tabs.focus(index),
+            (Some(Hit::Tab(index)), mouse::Button::Left) => {
+                self.tabs.focus(index);
+                self.tab_drag = Some(index);
+            }
             (Some(Hit::Tab(index)), mouse::Button::Middle) => {
                 self.tabs.close(index);
             }

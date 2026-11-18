@@ -6,17 +6,11 @@ use super::header::{self, PanelHeader};
 use super::panels::{
     cell_style, list_row, render_body_block, render_scrollbar, CellState, ScrollView, StatusIcon,
 };
-use super::side_list::{render_empty, render_hint, split_hint, SANDBOX_HINT};
+use super::side_list::{name_style, render_empty, render_hint, split_hint, Tone, SANDBOX_HINT};
 use crate::app::sandbox::{SandboxEntryKind, SandboxRow};
 use crate::app::{HoverTarget, Pane, PanelFocus, SidePanelTab};
 use crate::{App, Theme};
-use ratatui::{
-    layout::Rect,
-    style::{Color, Style},
-    text::Line,
-    widgets::Paragraph,
-    Frame,
-};
+use ratatui::{layout::Rect, text::Line, widgets::Paragraph, Frame};
 
 /// Render the panel: its header bar, then the open tab.
 pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
@@ -121,29 +115,23 @@ fn sandbox_line<'a>(row: &SandboxRow, state: CellState, width: usize, theme: &Th
         SandboxEntryKind::Symlink => (" ", format!("{}@", row.name)),
         SandboxEntryKind::More(_) => (" ", row.name.clone()),
     };
-    let color = name_color(row, theme);
+    let tone = Tone::active_if(
+        !row.name.starts_with('.') && !matches!(row.kind, SandboxEntryKind::More(_)),
+    );
     list_row(
         width,
         row.depth,
         StatusIcon::new(glyph, muted),
         &name,
-        cell_style(theme, state, Style::default().fg(color)),
+        cell_style(theme, state, name_style(tone, theme)),
         None,
     )
-}
-
-fn name_color(row: &SandboxRow, theme: &Theme) -> Color {
-    let hidden = row.name.starts_with('.') || matches!(row.kind, SandboxEntryKind::More(_));
-    if hidden {
-        theme.colors.muted
-    } else {
-        theme.colors.foreground
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::style::Color;
     use std::path::PathBuf;
 
     fn row(name: &str, kind: SandboxEntryKind) -> SandboxRow {

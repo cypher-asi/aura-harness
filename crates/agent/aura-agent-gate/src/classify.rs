@@ -11,8 +11,8 @@
 use aura_core_types::PromptCategory;
 use aura_model::model_catalog::ModelTier;
 use aura_model::{
-    Message, ModelRequest, ModelRequestKind, ModelResponse, ReasonerError, ThinkingEffort,
-    ToolChoice,
+    Message, ModelCallPurpose, ModelRequest, ModelRequestKind, ModelResponse, ReasonerError,
+    ThinkingEffort, ToolChoice,
 };
 
 use crate::router::Candidate;
@@ -63,6 +63,7 @@ pub fn request(
         .thinking_effort(Some(ThinkingEffort::Off))
         .auth_token(auth_token)
         .request_kind(ModelRequestKind::Auxiliary)
+        .purpose(ModelCallPurpose::Classify)
         .try_build()
 }
 

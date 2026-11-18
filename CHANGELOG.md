@@ -42,6 +42,14 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   turn carries on with the next pick. Each turn shows
   `gate → <model> (<route>) · <category>, <reason>`, and the status line
   at the bottom right shows `GATE` in place of the model.
+- The footer under a reply covers the whole turn: every model that ran,
+  with Gate's calls and the chat title marked, and the tokens and cost
+  of all of them, e.g. `[claude-sonnet-5-5 ×2 · gate: claude-haiku-5-5 ·
+  title: claude-haiku-5-5 · 27.9k tok · $0.040]`. It used to show the
+  last call only. The classifier, the judges and the title call record
+  their `purpose` in their `Reasoning` entry, so a reloaded chat shows
+  the same footer. Chat titles are written by the classifier's model
+  instead of a fixed Haiku 4.5 (`AURA_TITLE_MODEL` still overrides it).
 - Every prompt is classified into one of 8 categories by the cheapest
   fast-tier model, through the agent's kernel. Every turn ends with an
   `Outcome` (`error`, `checks_failed`, `checks_passed` or `none`), and

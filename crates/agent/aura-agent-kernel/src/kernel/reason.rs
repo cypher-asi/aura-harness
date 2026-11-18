@@ -27,6 +27,7 @@ impl Kernel {
         // T7.3.)
         let timeout = std::time::Duration::from_millis(self.config.proposal_timeout_ms);
         let started = std::time::Instant::now();
+        let purpose = request.metadata.purpose;
         let response = match tokio::time::timeout(timeout, self.provider.complete(request)).await {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => {
@@ -80,6 +81,9 @@ impl Kernel {
         });
         super::stream::add_cache_usage(&mut reasoning_payload, &response.usage);
         super::stream::add_plan_usage(&mut reasoning_payload, &response.trace.plan_usage);
+        if let Some(purpose) = purpose {
+            reasoning_payload["purpose"] = serde_json::json!(purpose);
+        }
         let thinking: String = response
             .message
             .content

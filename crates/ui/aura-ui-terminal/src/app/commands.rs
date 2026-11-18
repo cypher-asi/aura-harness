@@ -909,11 +909,7 @@ impl App {
             .iter_mut()
             .rev()
             .take_while(|m| m.role() != MessageRole::User)
-            .filter(|m| {
-                m.role() == MessageRole::Assistant
-                    && m.activity_step().is_none()
-                    && m.model().is_none()
-            });
+            .filter(|m| m.role() == MessageRole::Assistant && m.activity_step().is_none());
         for message in replies {
             message.set_model(model);
             message.set_usage(usage);

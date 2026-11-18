@@ -9,7 +9,7 @@
 //! ```
 
 use super::panels::{cell_style, list_row, render_scrollbar, CellState, ScrollView, StatusIcon};
-use super::side_list::{render_empty, render_hint, split_hint, PLANS_HINT};
+use super::side_list::{name_style, render_empty, render_hint, split_hint, Tone, PLANS_HINT};
 use crate::app::plans::PlanRow;
 use crate::app::{HoverTarget, PanelFocus};
 use crate::events::TodoState;
@@ -40,15 +40,14 @@ const fn marker_color(state: TodoState, theme: &Theme) -> Color {
     }
 }
 
-/// How a todo's text is drawn: `foreground` while open, `muted` once
-/// closed, and struck through when cancelled.
+/// How a todo's text is drawn: the shared tone (open todos `Active`,
+/// closed ones `Settled`), struck through when cancelled.
 fn todo_style(state: TodoState, theme: &Theme) -> Style {
-    match state {
-        TodoState::InProgress | TodoState::Pending => Style::default().fg(theme.colors.foreground),
-        TodoState::Completed => Style::default().fg(theme.colors.muted),
-        TodoState::Cancelled => Style::default()
-            .fg(theme.colors.muted)
-            .add_modifier(Modifier::CROSSED_OUT),
+    let style = name_style(Tone::active_if(!state.is_closed()), theme);
+    if state == TodoState::Cancelled {
+        style.add_modifier(Modifier::CROSSED_OUT)
+    } else {
+        style
     }
 }
 
@@ -90,12 +89,10 @@ pub(super) fn render_plans(
             match row {
                 PlanRow::Plan { open, .. } => {
                     let (closed, total) = plan.progress();
-                    let done = total > 0 && closed == total;
-                    let name = Style::default().fg(if done {
-                        theme.colors.muted
-                    } else {
-                        theme.colors.foreground
-                    });
+                    // A plan with nothing left to do settles like its todos;
+                    // one with no todos yet is still open.
+                    let tone = Tone::active_if(total == 0 || plan.has_open_todos());
+                    let name = name_style(tone, theme);
                     let fold = if open { "▾" } else { "▸" };
                     list_row(
                         width,

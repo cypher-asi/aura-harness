@@ -1,8 +1,8 @@
 //! Loading and displaying historical records from the store.
 
 use crate::agent_registry::AgentRegistry;
-use crate::event_loop::agent_events::call_usage;
 use crate::event_loop::run_command::is_user_tool_use;
+use crate::turn_calls::{Seen, TurnCalls};
 use aura_agent_kernel::decode_tool_effect;
 use aura_core_types::{
     ActionResultPayload, AgentId, EffectStatus, PlanUsage, PolicyApprover, PolicyCheckOutcome,
@@ -234,30 +234,34 @@ pub fn conversation_history(
     let mut history: Vec<MessageData> = Vec::new();
     // Tool use id -> (index in `history`, proposal time)
     let mut tool_calls: HashMap<String, (usize, u64)> = HashMap::new();
-    // Model, tokens and cost of the latest model call in the current turn
-    let mut reply_model: Option<String> = None;
-    let mut reply_usage: Option<CallUsage> = None;
+    // The models of the current turn, and where its replies are in `history`
+    let mut calls = TurnCalls::default();
+    let mut replies: Vec<usize> = Vec::new();
     for entry in scan_tail(store, agent_id, HISTORY_SCAN_LIMIT)? {
         let tx = &entry.tx;
+        match calls.see(tx) {
+            Seen::NewTurn => replies.clear(),
+            Seen::Call => {
+                let footer = calls.footer();
+                for &at in &replies {
+                    set_footer(&mut history[at], footer.clone());
+                }
+            }
+            Seen::Other => {}
+        }
         match tx.tx_type {
             TransactionType::UserPrompt => {
-                reply_model = None;
-                reply_usage = None;
                 history.extend(history_message(tx));
             }
             TransactionType::Reasoning => {
-                if let Some(model) = reasoning_model(tx) {
-                    reply_usage = reasoning_usage(tx, &model);
-                    reply_model = Some(model);
-                }
                 history.extend(thinking_message(tx));
             }
             TransactionType::AgentMsg => {
-                history.extend(history_message(tx).map(|message| MessageData {
-                    model: reply_model.clone(),
-                    usage: reply_usage,
-                    ..message
-                }));
+                if let Some(mut message) = history_message(tx) {
+                    set_footer(&mut message, calls.footer());
+                    replies.push(history.len());
+                    history.push(message);
+                }
             }
             TransactionType::ToolProposal if !is_user_proposal(tx) => {
                 match serde_json::from_slice::<ToolProposal>(&tx.payload) {
@@ -299,6 +303,13 @@ pub fn conversation_history(
     Ok(history.into_iter().skip(skip).collect())
 }
 
+/// Put the footer of a reply's turn, its models and their usage, on `reply`.
+fn set_footer(reply: &mut MessageData, footer: Option<(String, Option<CallUsage>)>) {
+    let (model, usage) = footer.unzip();
+    reply.model = model;
+    reply.usage = usage.flatten();
+}
+
 /// The model that answered the call a `Reasoning` entry records.
 fn reasoning_model(tx: &Transaction) -> Option<String> {
     json_payload(tx)?
@@ -306,11 +317,6 @@ fn reasoning_model(tx: &Transaction) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|model| !model.is_empty() && *model != "unknown")
         .map(str::to_string)
-}
-
-/// Tokens and cost of the call a `Reasoning` entry records, answered by `model`.
-fn reasoning_usage(tx: &Transaction, model: &str) -> Option<CallUsage> {
-    call_usage(model, &call_tokens(tx)?)
 }
 
 fn call_tokens(tx: &Transaction) -> Option<Usage> {

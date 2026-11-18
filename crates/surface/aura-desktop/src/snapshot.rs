@@ -135,6 +135,21 @@ impl Harness {
         }
     }
 
+    /// Press the left button on a box of the tab bar and let go over
+    /// another.
+    fn drag_tab(&mut self, from: Hit, to: Hit) {
+        let from = self.app.bar().spot(from).expect("the box is drawn");
+        let to = self.app.bar().spot(to).expect("the box is drawn");
+        for event in [
+            mouse::Event::CursorMoved { position: from },
+            mouse::Event::ButtonPressed(mouse::Button::Left),
+            mouse::Event::CursorMoved { position: to },
+            mouse::Event::ButtonReleased(mouse::Button::Left),
+        ] {
+            let _ = self.app.update(Message::Mouse(event));
+        }
+    }
+
     /// What the window asked of the session since the last call.
     fn asked(&mut self) -> Vec<String> {
         let mut out = Vec::new();
@@ -446,6 +461,27 @@ fn tabs_are_workspaces_with_their_own_projects() {
     assert_eq!(h.asked(), [r#"FocusAgent("a1")"#]);
     assert_eq!(h.app.tabs().front_index(), 0);
     assert!(h.text().contains("Summarise the crates"));
+}
+
+#[test]
+fn tabs_drag_into_a_new_order() {
+    let mut h = harness();
+    seed(&mut h);
+    h.click(Hit::New);
+    h.created("a3", "Agent03");
+    let _ = h.asked();
+    assert_eq!(h.app.tabs().arrangement(), [vec!["a1"], vec!["a3"]]);
+
+    h.drag_tab(Hit::Tab(1), Hit::Tab(0));
+    assert_eq!(h.app.tabs().arrangement(), [vec!["a3"], vec!["a1"]]);
+    assert_eq!(h.app.tabs().front_index(), 0);
+    assert_eq!(h.app.bar().title(), Some("AGENT03"));
+    assert!(h.asked().is_empty());
+
+    // Numbers pick tabs by their new places.
+    h.chord(Key::Character("2".into()), None, Modifiers::ALT);
+    assert_eq!(h.asked(), [r#"FocusAgent("a1")"#]);
+    assert_eq!(h.app.bar().title(), Some("AURA-HARNESS / AGENT01"));
 }
 
 #[test]

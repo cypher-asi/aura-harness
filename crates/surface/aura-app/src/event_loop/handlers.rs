@@ -171,10 +171,11 @@ pub(super) async fn handle_agent_success(
             warn!(%problem, "Failed to record a mid-turn message");
         }
     }
-    // The kernels' record observer shows the entry in the Record panel.
+    // Shown before it is recorded: the kernels' record observer shows the
+    // entry in the Record panel and the turn's models under the reply.
+    emit_response_to_ui(&result, forwarded, ui).await;
     record_response(session, &result.total_text).await;
     session.save_checkpoint().await;
-    emit_response_to_ui(&result, forwarded, ui).await;
 
     // Memory ingestion now fires automatically via TurnObserver inside
     // AgentLoop::run_with_events — no manual call needed here.
@@ -230,8 +231,8 @@ async fn emit_response_to_ui(
                 timestamp_ms: None,
                 command: None,
                 activity: None,
-                model: forwarded.reply_model.clone(),
-                usage: forwarded.reply_usage,
+                model: None,
+                usage: None,
             }))
             .await;
         }
