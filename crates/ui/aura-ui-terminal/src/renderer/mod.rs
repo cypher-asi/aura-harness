@@ -286,7 +286,7 @@ fn spans_width(spans: &[Span<'_>]) -> usize {
 }
 
 /// `● local  http://127.0.0.1:8080` when signed out, otherwise where you are
-/// signed in: `● alice (zOS) · Claude · ChatGPT  http://...`. The dot
+/// signed in: `● alice (zOS) · CLAUDE MAX 20X · CHATGPT  http://...`. The dot
 /// reflects API connectivity.
 fn header_status_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
     let (icon, icon_color) = if app.api_active() {
@@ -305,7 +305,7 @@ fn header_status_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
         if spans.len() > 1 {
             spans.push(Span::styled(" · ", muted));
         }
-        spans.push(Span::styled(plan.as_str(), signed_in));
+        spans.push(Span::styled(plan.to_uppercase(), signed_in));
     }
     if spans.len() == 1 {
         spans.push(Span::styled("local", muted));

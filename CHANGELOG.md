@@ -29,6 +29,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and a collapsed group reads `6 steps (click to expand)`. Inline code is
   light gray like the reply. Steps, hints and notices are no longer
   italic, and project names and code block labels are no longer bold.
+- The header names linked plans in capitals (`CLAUDE MAX 20X · CHATGPT
+  PRO`), like the title bar and tabs.
 - The desktop window's title bars and tabs fill the selected box in gray
   instead of the accent, and it draws `⬢ ☐ ☒ ▣` itself.
 

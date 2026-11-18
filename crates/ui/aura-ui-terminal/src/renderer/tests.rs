@@ -1980,11 +1980,11 @@ fn test_header_shows_logged_in_user() {
 
 #[test]
 fn test_header_shows_linked_plans_without_zos() {
-    let rows = render_rows(&mut app_with_auth(None, &["Claude"]), 120);
+    let rows = render_rows(&mut app_with_auth(None, &["Claude Max 20x"]), 120);
     assert!(
         rows[0]
             .trim_end()
-            .ends_with("● Claude  http://127.0.0.1:8080"),
+            .ends_with("● CLAUDE MAX 20X  http://127.0.0.1:8080"),
         "{:?}",
         rows[0]
     );
@@ -1994,13 +1994,13 @@ fn test_header_shows_linked_plans_without_zos() {
 #[test]
 fn test_header_shows_zos_user_and_plans() {
     let rows = render_rows(
-        &mut app_with_auth(Some("alice"), &["ChatGPT", "Claude"]),
+        &mut app_with_auth(Some("alice"), &["ChatGPT Pro", "Claude"]),
         120,
     );
     assert!(
         rows[0]
             .trim_end()
-            .ends_with("● alice (zOS) · ChatGPT · Claude  http://127.0.0.1:8080"),
+            .ends_with("● alice (zOS) · CHATGPT PRO · CLAUDE  http://127.0.0.1:8080"),
         "{:?}",
         rows[0]
     );
