@@ -49,6 +49,7 @@ impl Tab {
             .with_event_sender(sender)
             .with_alert_settings(settings.alerts);
         tui.set_host_chrome(true);
+        tui.set_host_canvas(true);
         tui.set_prose_measure(settings.measure);
         if settings.verbose {
             tui.set_verbose(true);

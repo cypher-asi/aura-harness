@@ -52,7 +52,7 @@ use crate::{
     renderer::{ChatLineCache, GroupState},
 };
 pub use chat_tabs::ChatTab;
-use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 pub use definitions::AgentsTab;
 use file_view::FileView;
 use folder_picker::FolderPicker;
@@ -273,6 +273,8 @@ pub struct App {
     prose_measure: Option<ProseMeasure>,
     /// Whether the front end draws the panels' title bars itself
     host_chrome: bool,
+    /// Whether the front end draws the GRAPH tab's canvas itself
+    host_canvas: bool,
     /// What each panel's title bar showed in the last frame, for a front
     /// end that draws them
     pane_chrome: Vec<PaneChrome>,
@@ -637,6 +639,7 @@ impl App {
             prose_rows: Vec::new(),
             prose_measure: None,
             host_chrome: false,
+            host_canvas: false,
             pane_chrome: Vec::new(),
             pane_splits: PaneSplits::default(),
             hover: None,
@@ -1014,7 +1017,7 @@ impl App {
     fn scroll_panel_up(&mut self, panel: PanelFocus, lines: usize) {
         match panel {
             PanelFocus::Chat if self.flow.is_open() => {
-                self.scroll_flow(-isize::try_from(lines).unwrap_or(isize::MAX));
+                self.scroll_flow(MouseEventKind::ScrollUp, KeyModifiers::NONE, lines);
             }
             PanelFocus::Chat => {
                 self.scroll_offset = self.scroll_offset.saturating_add(lines);
@@ -1049,7 +1052,7 @@ impl App {
     fn scroll_panel_down(&mut self, panel: PanelFocus, lines: usize) {
         match panel {
             PanelFocus::Chat if self.flow.is_open() => {
-                self.scroll_flow(isize::try_from(lines).unwrap_or(isize::MAX));
+                self.scroll_flow(MouseEventKind::ScrollDown, KeyModifiers::NONE, lines);
             }
             PanelFocus::Chat => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(lines);
@@ -1395,12 +1398,18 @@ impl App {
         match mouse.kind {
             MouseEventKind::Drag(MouseButton::Left) => {
                 self.hover = None;
+                if self.drag_flow(mouse.column, mouse.row) {
+                    return;
+                }
                 if let Some(selection) = self.selection.as_mut().filter(|_| self.selecting) {
                     selection.extend_to(at);
                 }
                 return;
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                if self.release_flow() {
+                    return;
+                }
                 if std::mem::take(&mut self.selecting) {
                     if self.selection.is_some_and(|s| !s.is_empty()) {
                         self.copy_requested = true;
@@ -1433,6 +1442,15 @@ impl App {
             MouseEventKind::ScrollDown if over_detail => {
                 self.clear_selection();
                 self.scroll_detail_down(step);
+            }
+            MouseEventKind::ScrollUp
+            | MouseEventKind::ScrollDown
+            | MouseEventKind::ScrollLeft
+            | MouseEventKind::ScrollRight
+                if panel == PanelFocus::Chat && self.flow.is_open() =>
+            {
+                self.clear_selection();
+                self.scroll_flow(mouse.kind, mouse.modifiers, step);
             }
             MouseEventKind::ScrollUp => {
                 self.clear_selection();

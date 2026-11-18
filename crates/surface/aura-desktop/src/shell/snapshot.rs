@@ -20,8 +20,9 @@ use crate::gpu::Offscreen;
 use crate::tab_bar::Hit;
 use crate::{raster, text};
 use aura_ui::events::{
-    AgentDefinitionSummary, AgentSummary, CallUsage, MessageData, MessageRole, ModelOptionView,
-    ProcessKind, ProcessStatus, ProcessSummary, ToolData, UiCommand,
+    AgentDefinitionSummary, AgentSummary, CallUsage, FlowKind, FlowLane, FlowNode, MessageData,
+    MessageRole, ModelOptionView, ProcessKind, ProcessStatus, ProcessSummary, ToolData,
+    TraceNodeStatus, UiCommand,
 };
 use aura_ui_terminal::{AgentsTab, ChatTab, PaneTab};
 use winit::event::MouseButton;
@@ -468,6 +469,108 @@ fn model_picker() {
     session(&mut h);
     h.submit("/model");
     snapshot("models", &mut h);
+}
+
+/// What a lead did, and the coder and tester it gave work to.
+pub fn flow(h: &mut Stage) {
+    let node = |agent: &str, seq: u64, kind: FlowKind, label: &str, detail: &str| FlowNode {
+        id: format!("{agent}:{seq}"),
+        agent_id: agent.into(),
+        kind,
+        label: label.into(),
+        detail: detail.into(),
+        status: TraceNodeStatus::Ok,
+        seq,
+        at_ms: 1_000 * seq + if agent == "a1" { 0 } else { 3_500 },
+        ..FlowNode::default()
+    };
+    let linked = |mut node: FlowNode, kind: &str, to: &str| {
+        node.links = vec![(kind.into(), to.into())];
+        node
+    };
+    let lane = |id: &str, name: &str, parent: Option<&str>| FlowLane {
+        agent_id: id.into(),
+        name: name.into(),
+        parent: parent.map(Into::into),
+    };
+    let mut pending = node("a1", 9, FlowKind::Model, "qwen3-coder", "");
+    pending.status = TraceNodeStatus::Pending;
+    h.apply([UiCommand::FlowLoad {
+        agent_id: "a1".into(),
+        lanes: vec![
+            lane("a1", "Agent01", None),
+            lane("c1", "coder #1", Some("a1")),
+            lane("t1", "tester #1", Some("a1")),
+        ],
+        nodes: vec![
+            node("a1", 1, FlowKind::Prompt, "Summarise the crates", ""),
+            node("a1", 2, FlowKind::Model, "qwen3-coder", "1.2k/300 · 4s"),
+            node("a1", 3, FlowKind::Tool, "list_files crates", "12ms"),
+            linked(
+                node("a1", 4, FlowKind::Tool, "task coder · fix README", "8.1s"),
+                "spawn",
+                "c1:1",
+            ),
+            linked(
+                node("a1", 5, FlowKind::Tool, "task tester · cargo test", "6.3s"),
+                "spawn",
+                "t1:1",
+            ),
+            node("c1", 1, FlowKind::Prompt, "fix README", ""),
+            node("c1", 2, FlowKind::Model, "qwen3-coder", "800/120 · 2s"),
+            node("c1", 3, FlowKind::Tool, "edit_file README.md", "4ms"),
+            linked(node("c1", 4, FlowKind::Reply, "done", ""), "return", "a1:7"),
+            node("t1", 1, FlowKind::Prompt, "cargo test", ""),
+            node("t1", 2, FlowKind::Tool, "run_command cargo test", "5.9s"),
+            linked(
+                node("t1", 3, FlowKind::Reply, "42 passed", ""),
+                "return",
+                "a1:8",
+            ),
+            node("a1", 7, FlowKind::Result, "coder #1 replied", ""),
+            node("a1", 8, FlowKind::Result, "tester #1 replied", ""),
+            pending,
+        ],
+    }]);
+}
+
+#[test]
+fn graph_canvas() {
+    let mut h = stage();
+    seed(&mut h);
+    let graph = PaneTab::Chat(ChatTab::Graph);
+    let tab = h.shell.chrome.spot(graph).expect("the tab is drawn");
+    h.drag(tab, tab);
+    flow(&mut h);
+    let screen = h.screen();
+    assert!(
+        !screen.contains("qwen3-coder"),
+        "the window draws the cards\n{screen}"
+    );
+    let tui = &h.shell.tabs.front().tui;
+    let canvas = tui.flow_canvas().expect("the canvas is on screen");
+    assert_eq!(tui.flow_canvas_clip(), [canvas]);
+    snapshot("graph", &mut h);
+
+    h.shell.key_pressed(&Press::of(NamedKey::Home), h.now);
+    h.shell.key_pressed(&Press::of(NamedKey::ArrowRight), h.now);
+    h.shell.key_pressed(&Press::of(NamedKey::ArrowDown), h.now);
+    h.shell.key_pressed(&Press::of(NamedKey::ArrowDown), h.now);
+    let tui = &h.shell.tabs.front().tui;
+    assert_eq!(
+        tui.flow().selected_node().map(|n| n.id.as_str()),
+        Some("a1:4")
+    );
+    snapshot("graph-delegation", &mut h);
+
+    // A menu over the canvas stays over it.
+    h.type_text("/");
+    h.shell.frame(h.now);
+    let tui = &h.shell.tabs.front().tui;
+    let clip = tui.flow_canvas_clip();
+    let drawn: u32 = clip.iter().map(|rect| rect.area()).sum();
+    assert!(drawn > 0 && drawn < canvas.area(), "{clip:?}");
+    snapshot("graph-menu", &mut h);
 }
 
 #[test]

@@ -108,6 +108,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     overlays::render_folder_picker(frame, app, theme);
     overlays::render_overlays(frame, app, theme);
     app.drop_covered_prose(frame.buffer_mut());
+    app.flow_mut().take_canvas_marks(frame.buffer_mut());
 }
 
 /// Whether the right column (Record above Sandbox) has anything to show.
@@ -119,6 +120,7 @@ const fn right_column_visible(app: &App) -> bool {
 /// returning where the Chat panel's body was drawn, below its header bar.
 fn render_content_panels(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) -> Rect {
     app.clear_pane_chrome();
+    app.flow_mut().set_view(None, false);
     let (swarm, chat, right) = columns(area, app);
     let (records, sandbox) = split_right_column(right, app);
     let areas = PanelAreas {

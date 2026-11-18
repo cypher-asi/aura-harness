@@ -28,6 +28,7 @@ mod window;
 
 pub use window::run;
 
+use crate::canvas::{self, Canvas};
 use crate::chrome::{self, Chrome};
 use crate::geom::Size;
 use crate::grid::{Metrics, Palette};
@@ -338,6 +339,7 @@ impl Shell {
             palette: self.palette,
             bar: &self.bar,
             chrome: &self.chrome,
+            canvas: canvas_of(self.tabs.front(), &self.tui_theme, self.palette),
         };
         // After the UI is rendered: it measures prose with the same
         // fonts.
@@ -509,6 +511,21 @@ impl Shell {
     }
 }
 
+/// The GRAPH tab's canvas, when `tab` shows it.
+fn canvas_of<'a>(
+    tab: &'a Tab,
+    theme: &aura_ui_terminal::Theme,
+    palette: Palette,
+) -> Option<Canvas<'a>> {
+    let tui = &tab.tui;
+    tui.flow_canvas().map(|area| Canvas {
+        flow: tui.flow(),
+        area,
+        clip: tui.flow_canvas_clip(),
+        colors: canvas::Colors::new(theme, palette),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -638,6 +655,7 @@ mod tests {
             palette: shell.palette,
             bar: &shell.bar,
             chrome: &shell.chrome,
+            canvas: canvas_of(shell.tabs.front(), &shell.tui_theme, shell.palette),
         };
         let mut pixels = Vec::new();
         text::with(|text| {

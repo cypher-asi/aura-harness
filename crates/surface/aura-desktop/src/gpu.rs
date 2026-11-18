@@ -924,6 +924,7 @@ mod tests {
                 palette,
                 bar: &bar,
                 chrome: &chrome,
+                canvas: None,
             };
             painter.paint_with(&view, &mut text);
             generations.push(text.atlas().generation());

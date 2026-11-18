@@ -12,6 +12,7 @@
 //! draws in one call (`gpu`), or the CPU where there is none (`raster`).
 //! `shell` holds what the window shows and decides when a frame is due.
 
+mod canvas;
 mod chrome;
 mod demo;
 mod geom;

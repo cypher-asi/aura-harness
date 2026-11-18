@@ -2,7 +2,8 @@
 //! cell; on the panels' title bars and the borders between them it picks
 //! tabs, focuses panels and drags; on the tab bar it works the tabs and
 //! the window, which has no frame from the system: empty bar space moves
-//! it and its edges resize it.
+//! it and its edges resize it. On the GRAPH tab's canvas, which the
+//! window draws, it drags the view by the pixel and clicks cards.
 
 use super::{Effect, Shell};
 use crate::chrome::{self, Divider};
@@ -22,6 +23,22 @@ const CORNER: f32 = 16.0;
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 /// Most lines one turn of the wheel scrolls, whatever the device says.
 const MOST_LINES: f32 = 200.0;
+/// Pixels a press on the canvas moves before it drags the view rather
+/// than clicks, on a plain display.
+const DRAG_SLOP: f32 = 3.0;
+/// Canvas rows and columns a line of the wheel pans.
+const WHEEL_ROWS: f32 = 3.0;
+const WHEEL_COLUMNS: f32 = 8.0;
+
+/// A press on the GRAPH tab's canvas, in the grid's part of the window.
+#[derive(Debug, Clone, Copy)]
+struct CanvasPress {
+    from: Point,
+    /// Where the view was last dragged to
+    last: Point,
+    /// It went far enough to drag
+    moved: bool,
+}
 
 /// Where the pointer is and what it is doing.
 #[derive(Default)]
@@ -43,6 +60,7 @@ pub struct Pointer {
     left_down: bool,
     /// Scroll distance not yet turned into whole lines
     scroll: f32,
+    canvas: Option<CanvasPress>,
 }
 
 impl Shell {
@@ -84,6 +102,22 @@ impl Shell {
             let splits = self.chrome.drag(divider, in_grid, tui.pane_splits());
             tui.set_pane_splits(splits);
             self.dirty = true;
+            return;
+        }
+        if let Some(press) = &mut pointer.canvas {
+            let slop = DRAG_SLOP * self.scale;
+            let gone = (in_grid.x - press.from.x).hypot(in_grid.y - press.from.y);
+            press.moved |= gone > slop;
+            if press.moved {
+                let cell = self.metrics.cell;
+                let (dx, dy) = (in_grid.x - press.last.x, in_grid.y - press.last.y);
+                press.last = in_grid;
+                self.tabs
+                    .front_mut()
+                    .tui
+                    .pan_flow(-dx / cell.width, -dy / cell.height);
+                self.dirty = true;
+            }
             return;
         }
         if !pointer.left_down {
@@ -135,6 +169,16 @@ impl Shell {
                 self.settle(started);
                 return;
             }
+            if let Some(at) = self.pointer.on_grid.filter(|_| button == MouseButton::Left) {
+                if self.canvas_point(at).is_some() {
+                    self.pointer.canvas = Some(CanvasPress {
+                        from: at,
+                        last: at,
+                        moved: false,
+                    });
+                    return;
+                }
+            }
             let Some(button) = mouse_button(button) else {
                 return;
             };
@@ -149,6 +193,15 @@ impl Shell {
                 self.chrome.point(self.pointer.on_grid);
                 self.dirty = true;
                 return;
+            }
+            if button == MouseButton::Left {
+                if let Some(press) = self.pointer.canvas.take() {
+                    if !press.moved {
+                        self.click_canvas(press.from);
+                    }
+                    self.settle(started);
+                    return;
+                }
             }
             let Some(button) = mouse_button(button) else {
                 return;
@@ -168,6 +221,10 @@ impl Shell {
             return;
         }
         let started = Instant::now();
+        if self.wheel_canvas(delta) {
+            self.settle(started);
+            return;
+        }
         #[allow(clippy::cast_possible_truncation)]
         let lines = match delta {
             MouseScrollDelta::LineDelta(_, y) => y,
@@ -202,7 +259,8 @@ impl Shell {
             Some(chrome::Hit::Divider(divider)) => Some(divider),
             _ => None,
         });
-        if self.pointer.tab_drag.is_some() {
+        let panning = self.pointer.canvas.is_some_and(|press| press.moved);
+        if self.pointer.tab_drag.is_some() || panning {
             CursorIcon::Grabbing
         } else if let Some(edge) = self.pointer.edge {
             resize_cursor(edge)
@@ -264,6 +322,80 @@ impl Shell {
             chrome::Hit::Bar(pane) => tui.focus_pane(pane),
             chrome::Hit::Divider(divider) => self.pointer.dragging = Some(divider),
         }
+    }
+
+    /// The GRAPH tab's canvas point, in cells, at `at` on the grid's part
+    /// of the window, when the window draws the canvas there.
+    fn canvas_point(&self, at: Point) -> Option<(f32, f32)> {
+        let tui = &self.tabs.front().tui;
+        let area = tui.flow_canvas()?;
+        let origin = self.metrics.origin(self.grid_area(), self.cols, self.rows);
+        let cell = self.metrics.cell;
+        let (x, y) = (
+            (at.x - origin.x) / cell.width,
+            (at.y - origin.y) / cell.height,
+        );
+        let on = |at: f32| {
+            (at >= 0.0 && at < f32::from(u16::MAX)).then(|| {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let whole = at.floor() as u16;
+                whole
+            })
+        };
+        let cell_at = Position::new(on(x)?, on(y)?);
+        if !tui
+            .flow_canvas_clip()
+            .iter()
+            .any(|rect| rect.contains(cell_at))
+        {
+            return None;
+        }
+        let pan = tui.flow().pan();
+        Some((pan.0 + x - f32::from(area.x), pan.1 + y - f32::from(area.y)))
+    }
+
+    /// A press and release on the canvas that did not drag: it works the
+    /// card there, or focuses the chat panel on empty canvas.
+    fn click_canvas(&mut self, at: Point) {
+        let Some((x, y)) = self.canvas_point(at) else {
+            return;
+        };
+        let tui = &mut self.tabs.front_mut().tui;
+        if !tui.click_flow_at(x, y) {
+            tui.focus_pane(aura_ui_terminal::Pane::Chat);
+        }
+    }
+
+    /// The wheel over the canvas pans it, by fractions of a cell on a
+    /// touchpad; sideways with Shift held. Returns whether it was there.
+    fn wheel_canvas(&mut self, delta: MouseScrollDelta) -> bool {
+        let Some(at) = self.pointer.on_grid else {
+            return false;
+        };
+        if self.canvas_point(at).is_none() {
+            return false;
+        }
+        let cell = self.metrics.cell;
+        #[allow(clippy::cast_possible_truncation)]
+        let (dx, dy) = match delta {
+            MouseScrollDelta::LineDelta(x, y) => (x * WHEEL_COLUMNS, y * WHEEL_ROWS),
+            MouseScrollDelta::PixelDelta(by) => {
+                (by.x as f32 / cell.width, by.y as f32 / cell.height)
+            }
+        };
+        let (dx, dy) = if self.modifiers.shift_key() && dx == 0.0 {
+            (dy * WHEEL_COLUMNS / WHEEL_ROWS, 0.0)
+        } else {
+            (dx, dy)
+        };
+        if dx.is_finite() && dy.is_finite() {
+            let most = MOST_LINES;
+            self.tabs
+                .front_mut()
+                .tui
+                .pan_flow(-dx.clamp(-most, most), -dy.clamp(-most, most));
+        }
+        true
     }
 
     fn send_mouse(&mut self, kind: MouseEventKind) {
@@ -332,11 +464,13 @@ const fn mouse_button(button: MouseButton) -> Option<Button> {
 mod tests {
     use super::super::tests::{stage, Stage};
     use super::*;
+    use crate::shell::keys::Press;
     use crate::shell::WINDOW;
     use aura_ui::events::UiCommand;
     use aura_ui_terminal::{ChatTab, Pane, PaneChrome, PaneTab};
     use std::time::Duration;
     use winit::dpi::PhysicalPosition;
+    use winit::keyboard::NamedKey;
 
     impl Stage {
         /// Draw a frame, so what is pointed at is where it was drawn.
@@ -577,6 +711,78 @@ mod tests {
         stage.draw();
         stage.shell.wheel(MouseScrollDelta::LineDelta(0.0, 30.0));
         assert!(!stage.shell.dirty());
+    }
+
+    #[test]
+    fn the_graph_canvas_drags_by_the_pixel_and_clicks_its_cards() {
+        let mut stage = stage();
+        stage.seed(false);
+        stage.draw();
+        let graph = PaneTab::Chat(ChatTab::Graph);
+        let tab = stage.shell.chrome.spot(graph).expect("the tab is drawn");
+        stage.drag(tab, tab);
+        super::super::snapshot::flow(&mut stage);
+        stage
+            .shell
+            .key_pressed(&Press::of(NamedKey::Home), stage.now);
+        stage.draw();
+        assert_eq!(pan(&stage), (0.0, 0.0));
+
+        // Canvas cell (x, y) on the grid's part of the window.
+        let area = stage.shell.tabs.front().tui.flow_canvas().expect("drawn");
+        let origin =
+            stage
+                .shell
+                .metrics
+                .origin(stage.shell.grid_area(), stage.shell.cols, stage.shell.rows);
+        let cell = stage.shell.metrics.cell;
+        let at = |x: f32, y: f32| {
+            Point::new(
+                origin.x + (f32::from(area.x) + x) * cell.width,
+                origin.y + (f32::from(area.y) + y) * cell.height,
+            )
+        };
+        let selected = |stage: &Stage| {
+            let flow = stage.shell.tabs.front().tui.flow();
+            flow.selected_node().map(|node| node.id.clone())
+        };
+
+        // The model call's head line, in the card after the prompt's.
+        stage.drag(at(46.5, 2.5), at(46.5, 2.5));
+        assert_eq!(selected(&stage).as_deref(), Some("a1:2"));
+
+        // Empty canvas drags the view with the pointer, by the pixel.
+        let bar = tab_bar::height(&stage.shell.metrics);
+        let on_window = |at: Point| Point::new(at.x, at.y + bar);
+        let from = at(10.5, 12.5);
+        stage.shell.pointer_moved(on_window(from));
+        stage.shell.button(MouseButton::Left, true, stage.now);
+        assert_eq!(stage.shell.cursor_icon(), CursorIcon::Default, "not yet");
+        stage
+            .shell
+            .pointer_moved(on_window(Point::new(from.x - 30.0, from.y)));
+        assert_eq!(stage.shell.cursor_icon(), CursorIcon::Grabbing);
+        stage.shell.button(MouseButton::Left, false, stage.now);
+        stage.draw();
+        let (x, y) = pan(&stage);
+        assert!((x - 30.0 / cell.width).abs() < 1e-3 && y == 0.0, "{x}, {y}");
+        assert!(x.fract() != 0.0, "a fraction of a cell");
+        assert_eq!(
+            selected(&stage).as_deref(),
+            Some("a1:2"),
+            "the drag selects nothing"
+        );
+        assert!(stage.shell.take_effects().is_empty(), "nor any text");
+
+        // A touchpad pans by what it says.
+        let nudge = MouseScrollDelta::PixelDelta(PhysicalPosition::new(-12.0, 0.0));
+        stage.shell.wheel(nudge);
+        stage.draw();
+        assert!((pan(&stage).0 - 42.0 / cell.width).abs() < 1e-3);
+    }
+
+    fn pan(stage: &Stage) -> (f32, f32) {
+        stage.shell.tabs.front().tui.flow().pan()
     }
 
     #[test]
