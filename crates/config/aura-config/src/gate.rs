@@ -1,5 +1,6 @@
 //! How Gate decides a model has proven itself, how often it tries a
-//! cheaper one, and whether the lead agent must delegate its work.
+//! cheaper one, whether the lead agent must delegate its work, and
+//! whether a judge model reviews routed turns that failed.
 //!
 //! ## Owned env vars
 //!
@@ -9,6 +10,7 @@
 //! | `AURA_GATE_MIN_TRIES` | u32 (>= 1) | `10` | [`GateConfig::min_tries`] |
 //! | `AURA_GATE_EXPLORE` | f64 (0..=1) | `0.05` | [`GateConfig::explore_rate`] |
 //! | `AURA_GATE_DELEGATE` | `on` / `off` | `on` | [`GateConfig::delegate`] |
+//! | `AURA_GATE_JUDGE` | `on` / `off` | `on` | [`GateConfig::judge`] |
 //!
 //! A value outside what a variable accepts keeps that setting's default
 //! and logs a warning naming the variable and its accepted values; the
@@ -19,8 +21,8 @@ use std::fmt::Display;
 use serde::{Deserialize, Serialize};
 
 use crate::env::{
-    lookup_string, AURA_GATE_DELEGATE, AURA_GATE_EXPLORE, AURA_GATE_MIN_TRIES, AURA_GATE_TARGET,
-    FALSY_LITERALS, TRUTHY_LITERALS,
+    lookup_string, AURA_GATE_DELEGATE, AURA_GATE_EXPLORE, AURA_GATE_JUDGE, AURA_GATE_MIN_TRIES,
+    AURA_GATE_TARGET, FALSY_LITERALS, TRUTHY_LITERALS,
 };
 use crate::ConfigError;
 
@@ -56,6 +58,14 @@ pub struct GateConfig {
     ///
     /// env: `AURA_GATE_DELEGATE` (default: `on`)
     pub delegate: bool,
+    /// Whether a judge model reviews each turn Gate routed that failed
+    /// (an error, or its last test or build failing) and says whether the
+    /// model was at fault, which decides whether the failure counts
+    /// against it and the turn moves to a stronger model. When off, every
+    /// such failure counts and moves the turn up.
+    ///
+    /// env: `AURA_GATE_JUDGE` (default: `on`)
+    pub judge: bool,
 }
 
 impl GateConfig {
@@ -67,6 +77,7 @@ impl GateConfig {
             min_tries: DEFAULT_MIN_TRIES,
             explore_rate: DEFAULT_EXPLORE_RATE,
             delegate: true,
+            judge: true,
         }
     }
 
@@ -121,6 +132,15 @@ impl GateConfig {
             &mut rejected,
         ) {
             cfg.delegate = v;
+        }
+        if let Some(v) = read(
+            AURA_GATE_JUDGE,
+            SWITCH_ACCEPTS,
+            "on",
+            parse_switch,
+            &mut rejected,
+        ) {
+            cfg.judge = v;
         }
         (cfg, rejected)
     }
@@ -183,6 +203,7 @@ mod tests {
         std::env::remove_var(AURA_GATE_MIN_TRIES);
         std::env::remove_var(AURA_GATE_EXPLORE);
         std::env::remove_var(AURA_GATE_DELEGATE);
+        std::env::remove_var(AURA_GATE_JUDGE);
     }
 
     #[test]
@@ -192,6 +213,7 @@ mod tests {
         assert_eq!(cfg.min_tries, 10);
         assert_eq!(cfg.explore_rate, 0.05);
         assert!(cfg.delegate);
+        assert!(cfg.judge);
     }
 
     #[test]
@@ -211,6 +233,7 @@ mod tests {
         std::env::set_var(AURA_GATE_MIN_TRIES, " 4 ");
         std::env::set_var(AURA_GATE_EXPLORE, "0");
         std::env::set_var(AURA_GATE_DELEGATE, "off");
+        std::env::set_var(AURA_GATE_JUDGE, "no");
         let cfg = GateConfig::from_env();
         clear_gate_env();
         assert_eq!(
@@ -220,6 +243,7 @@ mod tests {
                 min_tries: 4,
                 explore_rate: 0.0,
                 delegate: false,
+                judge: false,
             }
         );
     }
@@ -254,6 +278,7 @@ mod tests {
             (AURA_GATE_MIN_TRIES, "ten", MIN_TRIES_ACCEPTS),
             (AURA_GATE_MIN_TRIES, "2.5", MIN_TRIES_ACCEPTS),
             (AURA_GATE_DELEGATE, "maybe", SWITCH_ACCEPTS),
+            (AURA_GATE_JUDGE, "sometimes", SWITCH_ACCEPTS),
         ] {
             clear_gate_env();
             std::env::set_var(name, raw);
@@ -286,6 +311,7 @@ mod tests {
                 min_tries: DEFAULT_MIN_TRIES,
                 explore_rate: DEFAULT_EXPLORE_RATE,
                 delegate: false,
+                judge: true,
             }
         );
         let names: Vec<&str> = rejected

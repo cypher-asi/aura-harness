@@ -274,8 +274,14 @@ fn progress_line(n: usize, total: usize, result: &EvalResult, spent: f64) -> Str
         .filter(|gate| !gate.routed.is_empty())
         .map(|gate| format!("  on {}", gate.routed.join(", ")))
         .unwrap_or_default();
+    let judged = result
+        .gate
+        .as_ref()
+        .filter(|gate| !gate.judged.is_empty())
+        .map(|gate| format!("  {}", judged_note(gate)))
+        .unwrap_or_default();
     format!(
-        "[{n}/{total}] {} {} ${:.4} {:.1}s (${spent:.4} so far){routed}{}",
+        "[{n}/{total}] {} {} ${:.4} {:.1}s (${spent:.4} so far){routed}{judged}{}",
         result.task,
         if result.passed { "pass" } else { "FAIL" },
         result.cost_usd(),
@@ -285,6 +291,32 @@ fn progress_line(n: usize, total: usize, result: &EvalResult, spent: f64) -> Str
             .as_deref()
             .map(|e| format!("  ({e})"))
             .unwrap_or_default(),
+    )
+}
+
+/// What Gate's judge found on a run's failed turns and what asking it
+/// cost, which is part of the run's cost.
+fn judged_note(gate: &GateUse) -> String {
+    let label = |id: &str| aura_model::model_catalog::route_label(id);
+    let found: Vec<String> = gate
+        .judged
+        .iter()
+        .map(|judged| {
+            format!(
+                "{} {}",
+                label(&judged.model),
+                if judged.verdict.at_fault {
+                    "at fault"
+                } else {
+                    "excused"
+                }
+            )
+        })
+        .collect();
+    format!(
+        "judge: {} (${:.4} of the cost)",
+        found.join(", "),
+        gate.judge_cost_usd()
     )
 }
 
@@ -484,11 +516,28 @@ pub fn results_table(results: &[EvalResult]) -> String {
                     gate.routed.join(", ")
                 }
             );
+            if !gate.judged.is_empty() {
+                let _ = writeln!(out, "  {}", judged_note(gate));
+            }
         }
     }
     let passed = results.iter().filter(|r| r.passed).count();
     let cost: f64 = results.iter().map(EvalResult::cost_usd).sum();
     let _ = writeln!(out, "{passed}/{} passed, ${cost:.4}", results.len());
+    let judged: Vec<&aura_app::headless::Judged> = results
+        .iter()
+        .filter_map(|r| r.gate.as_ref())
+        .flat_map(|gate| &gate.judged)
+        .collect();
+    if !judged.is_empty() {
+        let at_fault = judged.iter().filter(|j| j.verdict.at_fault).count();
+        let cost: f64 = judged.iter().map(|j| j.cost_usd).sum();
+        let _ = writeln!(
+            out,
+            "judge: reviewed {} failed turn(s), {at_fault} the model's fault, ${cost:.4} of the cost spent on learning from them",
+            judged.len()
+        );
+    }
     out
 }
 

@@ -336,7 +336,7 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "/resume [n] List or resume earlier sessions",
         "/rewind [n] [code|chat]  Undo to before turn n",
         "/diff [session]     Files changed by last turn",
-        "/gate /compare /good /bad [n]  Gate, A/B, rate",
+        "/gate /compare      Gate's table, A/B run",
         "/clear     Clear messages",
         "/context   What fills the context window",
         "/compact [focus]    Summarize older history now",

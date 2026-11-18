@@ -55,6 +55,7 @@ use crate::record_loader::agent_summaries;
 use async_trait::async_trait;
 use aura_agent::{AgentLoop, AgentLoopConfig};
 use aura_agent_gate::compare::{tally, PlanReading};
+use aura_agent_gate::turn_judge::{Failed, Verdict};
 use aura_agent_gate::{Candidate, Decision};
 use aura_agent_kernel::Kernel;
 use aura_agent_trace::{RunMeta, RunRecorder, RunSource};
@@ -957,9 +958,22 @@ impl AgentHub {
             None
         };
         let first = self.finish_task(first).await;
-        let Some(why) = first.attempted().failure().filter(|_| !first.cancelled) else {
+        let Some(mut why) = first.attempted().failure().filter(|_| !first.cancelled) else {
             return TaskReport { first, retry: None };
         };
+        match &first.judged {
+            // Not the model's doing: a stronger model would fail the
+            // same way.
+            Some(verdict) if !verdict.at_fault => {
+                info!(child = %first.name, "The judge excused the subtask's failure; not retried");
+                return TaskReport { first, retry: None };
+            }
+            Some(verdict) if !verdict.reasons.trim().is_empty() => {
+                why.push_str("\nA reviewer of that attempt found: ");
+                why.push_str(verdict.reasons.trim());
+            }
+            _ => {}
+        }
         let Some(candidates) = candidates else {
             return TaskReport { first, retry: None };
         };
@@ -1093,6 +1107,18 @@ impl AgentHub {
                 .is_some_and(|d| d.model.is_some())
         });
         (!pinned).then_some(candidates)
+    }
+
+    /// The model that judges `ended`, the outcome of work Gate routed for
+    /// an agent running the permanent agent `definition` (see
+    /// [`gate_record::judge_for`]).
+    pub(crate) fn judge_of(
+        &self,
+        definition: Option<&str>,
+        ended: &OutcomePayload,
+    ) -> Option<String> {
+        let candidates = self.gate_candidates(definition)?;
+        gate_record::judge_for(&self.gate, &candidates, ended)
     }
 
     /// The model that classifies prompts; empty when nothing does.
@@ -1231,6 +1257,14 @@ impl AgentHub {
             _ => None,
         };
         let files_before = files.map(|files| files.take_attempt(child_id));
+        let failure = task_check::Attempted {
+            model: &agent_loop.config().model,
+            reply: &end.reply,
+            files: &end.files,
+            check: check.as_ref(),
+        }
+        .failure()
+        .filter(|_| !cancelled);
         self.processes.finish(
             &task_id(child_id),
             if end.reply.is_ok() {
@@ -1253,6 +1287,39 @@ impl AgentHub {
         if let Some(ended) = &ended {
             gate_record::record(&session.kernel, child_id, ended).await;
         }
+        // A first attempt that failed is reviewed before it is retried on
+        // a stronger model: was the model at fault?
+        let mut ended = ended;
+        let mut judged = None;
+        if let (Some(outcome), Some(failure), Some(candidates), None) = (
+            ended.as_mut(),
+            &failure,
+            gate.candidates.as_deref(),
+            &gate.escalation,
+        ) {
+            if let Some(judge) = gate_record::judge_for(&self.gate, candidates, outcome) {
+                let workspace = session.kernel.agent_workspace();
+                let diff = files_before
+                    .as_ref()
+                    .map(|files| files.diff(Some(&workspace)))
+                    .unwrap_or_default();
+                let failed = Failed {
+                    task: &prompt,
+                    diff: &diff,
+                    reply: end.reply.as_deref().unwrap_or_default(),
+                    failure,
+                };
+                let auth_token = agent_loop.config().auth_token.clone();
+                if let Some((judged_as, found)) =
+                    gate_record::judge_failed(&session.kernel, &judge, outcome, &failed, auth_token)
+                        .await
+                {
+                    ui.send(system_message(found.describe())).await;
+                    *outcome = judged_as;
+                    judged = Some(found.verdict);
+                }
+            }
+        }
         if let Some(redo) = self.end_attempt(parent, child_id, ended) {
             redo.record().await;
         }
@@ -1269,6 +1336,7 @@ impl AgentHub {
             check,
             files_before,
             cancelled,
+            judged,
         }
     }
 }
@@ -1319,6 +1387,8 @@ struct TaskDone {
     /// What the files it changed held before, when it may be retried
     files_before: Option<AttemptFiles>,
     cancelled: bool,
+    /// What Gate's judge found, when the attempt failed and was reviewed
+    judged: Option<Verdict>,
 }
 
 impl TaskDone {

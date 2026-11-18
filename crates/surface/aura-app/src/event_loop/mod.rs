@@ -531,14 +531,6 @@ async fn handle_ui_event(
             let agent_id = state.agent_or_active(&agent_id);
             rewind::handle_diff(state, agent_id, session).await;
         }
-        UiEvent::RateTurn {
-            agent_id,
-            good,
-            turns_back,
-        } => {
-            let agent_id = state.agent_or_active(&agent_id);
-            gate_record::handle_rate(state, agent_id, good, turns_back).await;
-        }
         UiEvent::Compare { agent_id, args } => {
             let agent_id = state.agent_or_active(&agent_id);
             compare::handle(state, agent_id, &args).await;

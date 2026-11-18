@@ -17,19 +17,39 @@ const RUN_COMMAND: &str = "run_command";
 /// code of a failed `run_command` call that ran to its end.
 const EXIT_CODE: &str = "exit_code";
 
+/// A check that ran to its end.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckSeen {
+    /// The command line it ran.
+    pub command: String,
+    /// Whether it passed.
+    pub passed: bool,
+    /// What it printed, as the model was shown it.
+    pub output: String,
+}
+
 /// Whether the last check in `messages` passed; `None` when they hold no
 /// check that ran to its end.
 #[must_use]
 pub fn last_check(messages: &[Message]) -> Option<bool> {
-    let mut checks: Vec<(&str, Option<bool>)> = Vec::new();
+    last_check_seen(messages).map(|check| check.passed)
+}
+
+/// The last check in `messages` that ran to its end, with its command
+/// and output; `None` when they hold none.
+#[must_use]
+pub fn last_check_seen(messages: &[Message]) -> Option<CheckSeen> {
+    // Each check's call id, its command and, once it ran to its end,
+    // whether it passed and what it printed.
+    type Ran = Option<(bool, String)>;
+    let mut checks: Vec<(&str, String, Ran)> = Vec::new();
     for message in messages {
         for block in &message.content {
             match block {
                 ContentBlock::ToolUse { id, name, input } if name == RUN_COMMAND => {
-                    if input["background"].as_bool() != Some(true)
-                        && is_check_command(&command_line(input))
-                    {
-                        checks.push((id.as_str(), None));
+                    let command = command_line(input);
+                    if input["background"].as_bool() != Some(true) && is_check_command(&command) {
+                        checks.push((id.as_str(), command, None));
                     }
                 }
                 ContentBlock::ToolResult {
@@ -37,15 +57,27 @@ pub fn last_check(messages: &[Message]) -> Option<bool> {
                     content,
                     is_error,
                 } => {
-                    if let Some(check) = checks.iter_mut().find(|(id, _)| id == tool_use_id) {
-                        check.1 = verdict(content, *is_error);
+                    if let Some(check) = checks.iter_mut().find(|(id, ..)| id == tool_use_id) {
+                        check.2 = verdict(content, *is_error).map(|passed| {
+                            let output = match content {
+                                ToolResultContent::Text(text) => text.clone(),
+                                ToolResultContent::Json(value) => value.to_string(),
+                            };
+                            (passed, output)
+                        });
                     }
                 }
                 _ => {}
             }
         }
     }
-    checks.into_iter().rev().find_map(|(_, passed)| passed)
+    checks.into_iter().rev().find_map(|(_, command, ran)| {
+        ran.map(|(passed, output)| CheckSeen {
+            command,
+            passed,
+            output,
+        })
+    })
 }
 
 /// Pass or fail from a check's result; `None` when the command did not
@@ -252,6 +284,14 @@ mod tests {
             result("2", "exit_code: 1\nstderr:\nerror TS2304", true),
         ];
         assert_eq!(last_check(&passed_then_failed), Some(false));
+        assert_eq!(
+            last_check_seen(&passed_then_failed),
+            Some(CheckSeen {
+                command: "npm run build".to_string(),
+                passed: false,
+                output: "exit_code: 1\nstderr:\nerror TS2304".to_string(),
+            })
+        );
     }
 
     #[test]

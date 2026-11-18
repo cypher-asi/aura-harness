@@ -197,6 +197,16 @@ pub(crate) enum StreamEvent<'a> {
     Notice {
         text: &'a str,
     },
+    /// Gate's judge reviewed a turn that failed on `model`.
+    Judged {
+        model: &'a str,
+        judge: &'a str,
+        /// Whether the model's own work caused the failure
+        at_fault: bool,
+        reasons: &'a str,
+        /// What the judge's call cost
+        cost_usd: f64,
+    },
 }
 
 /// Where a run's output goes, shared by the event sink and the runner.

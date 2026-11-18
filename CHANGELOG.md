@@ -44,8 +44,7 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
 - Every prompt is classified into one of 8 categories by the cheapest
   fast-tier model, through the agent's kernel. Every turn ends with an
   `Outcome` (`error`, `checks_failed`, `checks_passed` or `none`), and
-  rewinds, stronger retries and the new `/good` and `/bad` commands
-  append later ones.
+  the judge's findings, rewinds and stronger retries append later ones.
 - Gate routes each category to the cheapest model with
   `AURA_GATE_MIN_TRIES` (10) counted outcomes at `AURA_GATE_TARGET`
   (85%) success. Otherwise it uses the category's default, and it
@@ -107,10 +106,26 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   starts on the cheapest fast-tier model, `planning` on the strongest
   and every other category on the cheapest standard-tier model. A start
   model that can no longer reach the target in a category hands it to
-  the next tier up. In `aura -p` and `aura eval run`, a routed turn that
-  errors or whose last test or build fails goes on in the same
-  conversation on the next tier up (route reason `escalate`, not
-  counted); terminal turns do not move up yet.
+  the next tier up. A routed turn that fails through the model's own
+  doing goes on in the same conversation on the next tier up (route
+  reason `escalate`, not counted), in the terminal, `aura -p` and
+  `aura eval run`.
+- Gate's judge reviews failed work. When a routed turn or a subtask's
+  first attempt ends in a model error or with its last test or build
+  failing, the strongest Opus you can use is shown the request, the
+  diff, the final reply and the failure, and says whether the model was
+  at fault. If so (`judged_fail`) the failure counts in Gate's table and
+  the work moves up a tier, told what the judge found. If not
+  (`judged_excused`) it counts for nothing and stays where it is. Work
+  that did not fail is never judged, so the judge costs nothing on a
+  clean run; `aura eval run` reports its cost per task and in total, and
+  `aura -p --output-format stream-json` emits a `judged` event.
+  `AURA_GATE_JUDGE=off` switches it off.
+- Exploration now goes to the nearest cheaper model the category has
+  not ruled out, else the nearest, so a ruled-out model is tried again
+  once nothing cheaper is more promising.
+- `/good` and `/bad` are removed. How a turn went is learned from its
+  own signals and the judge; `/compare pick` still records your pick.
 - A `task`, `run_command` or plugin tool call drops the caller's cached
   tool results, so the next read shows what is on disk
   (`aura_config::FILE_NEUTRAL_TOOLS` lists the uncached tools that keep

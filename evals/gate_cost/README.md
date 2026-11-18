@@ -19,6 +19,13 @@ the verify verdicts in that table
 (see [Gate](../../docs/cli.md#gate)). `--budget-usd` stops an arm once
 its runs have cost that much.
 
+Under `--model gate`, a turn that fails in the run (a model error, or
+its last test or build command failing) is reviewed by Gate's judge,
+which never sees the hidden checks. The task's line then shows what the
+judge found and what asking it cost, and the results table ends with the
+judge's share of the arm's cost: what the arm paid to learn from
+failures rather than to do the work.
+
 ```sh
 aura eval run evals/gate_cost --model claude/claude-opus-5-5 --arm opus --repeat 3 --budget-usd 20
 aura eval run evals/gate_cost --model claude/claude-haiku-5-5 --arm haiku --repeat 3 --budget-usd 5

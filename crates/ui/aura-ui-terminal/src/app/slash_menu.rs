@@ -50,18 +50,6 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Show file changes of the last turn or session",
         needs_args: false,
     },
-    SlashCommand {
-        name: "good",
-        args: "[n]",
-        description: "Rate the last turn, or the one n back, good (teaches Gate)",
-        needs_args: false,
-    },
-    SlashCommand {
-        name: "bad",
-        args: "[n]",
-        description: "Rate the last turn, or the one n back, bad (teaches Gate)",
-        needs_args: false,
-    },
     command("gate", "What Gate learned and how it routed lately"),
     SlashCommand {
         name: "compare",
