@@ -3,7 +3,7 @@
 use super::detail::detail_header;
 use super::header::{self, HeaderInfo, PanelHeader};
 use super::markdown::is_inline_code;
-use super::text::{display_width, Measure};
+use super::text::{display_width, wrap_words, Measure};
 use crate::{
     animation::AURA_WIDTH,
     app::{
@@ -708,22 +708,35 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
                 first: app.archived_scroll(),
             };
             let lines: Vec<Line> = lines.into_iter().skip(view.first).take(visible).collect();
-            frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), body);
+            frame.render_widget(Paragraph::new(lines), body);
             render_scrollbar(frame, area, body, view, is_focused, theme);
         }
     }
 }
 
+/// Columns kept clear on each side of the text a list shows while it is
+/// empty, as the side panel's tabs keep them.
+const EMPTY_INDENT: usize = 2;
+
 /// Archive rows: each archived agent with the project it came from on the
 /// right, and the agents under it indented below. Empty, it says how
-/// agents get there.
+/// agents get there, wrapped to the panel inside its padding.
 fn build_archived_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>> {
     let archived = app.archived();
     if archived.is_empty() {
-        return vec![Line::from(Span::styled(
-            " No archived agents. Delete on an agent in PROJECTS archives it.",
-            Style::default().fg(theme.colors.muted),
-        ))];
+        let muted = Style::default().fg(theme.colors.muted);
+        let room = usize::from(inner.width)
+            .saturating_sub(2 * EMPTY_INDENT)
+            .max(1);
+        let indent = " ".repeat(EMPTY_INDENT);
+        return [
+            "No archived agents.",
+            "Delete on an agent in PROJECTS archives it.",
+        ]
+        .into_iter()
+        .flat_map(|sentence| wrap_words(sentence, room))
+        .map(|line| Line::from(Span::styled(format!("{indent}{line}"), muted)))
+        .collect();
     }
     let is_focused = app.focus() == PanelFocus::Swarm;
     let width = inner.width as usize;

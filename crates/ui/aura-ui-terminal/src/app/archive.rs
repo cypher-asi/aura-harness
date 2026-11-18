@@ -215,6 +215,79 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
+    /// The screen at `width` columns, a line per row.
+    fn screen(app: &mut App, width: u16) -> Vec<String> {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
+        let theme = crate::Theme::cyber();
+        terminal
+            .draw(|frame| crate::renderer::render(frame, app, &theme))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let width = usize::from(buffer.area.width);
+        buffer
+            .content
+            .chunks(width)
+            .map(|row| row.iter().map(ratatui::buffer::Cell::symbol).collect())
+            .collect()
+    }
+
+    #[test]
+    fn the_empty_archive_says_so_inside_the_panels_padding() {
+        let (mut app, _rx) = app();
+        app.handle_key(key(KeyCode::Left));
+        assert_eq!(app.agents_tab(), AgentsTab::Archive);
+        for width in [100, 160] {
+            let rows = screen(&mut app, width);
+            let first = rows.iter().position(|row| row.contains("No archived"));
+            let first = first.unwrap_or_else(|| panic!("no message:\n{}", rows.join("\n")));
+            // The panel's left border, then two columns of padding.
+            let border = rows[first].find('│').expect("the panel's border");
+            let lines: Vec<&str> = rows[first..]
+                .iter()
+                .map(|row| {
+                    row[border + '│'.len_utf8()..]
+                        .split('│')
+                        .next()
+                        .unwrap_or("")
+                })
+                .take_while(|line| !line.trim().is_empty())
+                .collect();
+            assert!(lines.len() >= 2, "{lines:?}");
+            for line in &lines {
+                assert!(line.starts_with("  "), "{width}: {line:?}");
+                assert!(!line.starts_with("   "), "{width}: {line:?}");
+                assert!(line.ends_with("  "), "{width}: {line:?}");
+            }
+            let text = lines
+                .iter()
+                .map(|line| line.trim())
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert_eq!(
+                text,
+                "No archived agents. Delete on an agent in PROJECTS archives it."
+            );
+        }
+    }
+
+    #[test]
+    fn archived_agents_keep_their_indent_under_the_one_they_ran_for() {
+        let (mut app, _rx) = app();
+        app.process_command(UiCommand::SetArchivedAgents(vec![
+            agent("dd", 0),
+            agent("ee", 1),
+        ]));
+        app.handle_key(key(KeyCode::Left));
+        let rows = screen(&mut app, 100);
+        let column = |name: &str| {
+            let row = rows.iter().find(|row| row.contains(name));
+            let row = row.unwrap_or_else(|| panic!("no {name}:\n{}", rows.join("\n")));
+            row[..row.find(name).unwrap_or(0)].chars().count()
+        };
+        assert_eq!(column("EE"), column("DD") + 2);
+    }
+
     #[test]
     fn delete_archives_the_highlighted_agent() {
         let (mut app, mut rx) = app();

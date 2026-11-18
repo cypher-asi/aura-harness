@@ -6,19 +6,26 @@
 //! terminal UI (`aura_app::session`), and the UI itself is the
 //! terminal one (`aura_ui_terminal::App`), drawn on a cell grid with Geist
 //! Mono instead of through a terminal emulator.
+//!
+//! The window is winit's and has no toolkit in it. Each frame the tabs
+//! of terminal UI become one list of quads (`paint`), which the GPU
+//! draws in one call (`gpu`), or the CPU where there is none (`raster`).
+//! `shell` holds what the window shows and decides when a frame is due.
 
-mod app;
 mod chrome;
 mod demo;
-mod glyphs;
+mod geom;
+mod gpu;
 mod grid;
-mod input;
-mod perf;
+mod paint;
+mod raster;
 mod router;
-#[cfg(test)]
-mod snapshot;
+mod scene;
+mod shapes;
+mod shell;
 mod tab;
 mod tab_bar;
+mod text;
 mod theme;
 
 use anyhow::Context;
@@ -89,7 +96,7 @@ pub fn run(args: DesktopOptions, mode: Option<AgentMode>) -> anyhow::Result<()> 
         .thread_name("aura-agent")
         .build()
         .context("starting the async runtime")?;
-    // Widgets that spawn futures (e.g. file reads) run on this runtime too.
+    // The window pumps the session's commands and runs editors on it.
     let _guard = runtime.enter();
 
     let tabs_file = (!args.demo).then(|| router::arrangement_file(args.dir.as_deref()));
@@ -103,19 +110,19 @@ pub fn run(args: DesktopOptions, mode: Option<AgentMode>) -> anyhow::Result<()> 
             approval: args.approval,
         };
         let session = runtime.block_on(aura_app::session::start(&options, mode))?;
-        let handles = app::Handles {
+        let handles = shell::Handles {
             events: session.events,
             commands: session.commands,
         };
         (handles, Some(session.task))
     };
 
-    let options = app::Options {
+    let options = shell::Options {
         theme: args.theme,
         verbose: args.verbose,
         tabs_file,
     };
-    let result = app::run(handles, options, launched);
+    let result = shell::run(handles, &options, launched);
     if let Some(task) = task {
         runtime.block_on(task.finish())?;
     }
@@ -126,7 +133,7 @@ fn init_tracing(verbose: bool) {
     let default = if verbose {
         "aura=debug,aura_desktop=debug"
     } else {
-        "aura=info,aura_desktop=info,wgpu=warn,iced=warn"
+        "aura=info,aura_desktop=info,wgpu=warn"
     };
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
     tracing_subscriber::fmt()

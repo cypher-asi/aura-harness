@@ -185,12 +185,17 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
 
 - The desktop app no longer slows down and stops answering input while
   many agents stream at once. It rendered the UI once per command the
-  agents sent, which with 30 agents took more than the whole second;
-  commands arriving within 16 ms are now applied in one update.
-- The desktop app repaints only the rows of the grid that changed. Any
-  change, such as a streamed word or a ticking timer, used to repaint and
-  re-shape every row; replaying a streamed reply now repaints 77% fewer
-  rows. `AURA_DESKTOP_PERF` reports the rows repainted.
+  agents sent, which with 30 agents took more than the whole second.
+  Commands are now applied as they arrive and the window renders at
+  most once per frame of the display: a second of 3,000 commands from
+  30 agents costs about 50 ms of the window's thread.
+- The desktop app shapes only the rows of the grid whose content is
+  new. Any change, such as a streamed word or a ticking timer, used to
+  repaint and re-shape every row; a row that is unchanged, or that only
+  scrolled, now reuses the quads it was drawn with. A frame that comes
+  out the same as the one on screen is not shown again, so an idle
+  window draws only when the cursor blinks. `AURA_DESKTOP_PERF` reports
+  the rows painted anew and the frames skipped.
 - The Sandbox tree is read again once per tick rather than after every
   tool call of every agent.
 - The terminal UI takes the agents' commands every 5 ms while it waits
@@ -339,17 +344,19 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   projects to the tab before it. The split is kept in `desktop_tabs` in
   the data directory. `UiEvent::FocusAgent` makes an agent the
   session's active one without reloading its chat.
-- `aura-desktop`, the terminal UI in a native window built on iced and
-  drawn on the GPU (wgpu, with a tiny-skia CPU fallback). It runs the
-  same in-process session as the terminal (`session::start`) and the
+- `aura-desktop`, the terminal UI in a native window (winit) that
+  draws itself: a frame is one list of quads over a glyph atlas, drawn
+  by the GPU in one call (wgpu) or by the CPU where there is no GPU.
+  No UI toolkit is involved. It runs the same in-process session as the terminal (`session::start`) and the
   same `aura_terminal::App`, rendered through a ratatui backend into a
   cell grid, so the screen, keys, mouse selection and copy behave as
   they do in a terminal.
 - The grid is painted in Geist Mono (bundled) with one text draw per
   styled run; box drawing, block elements, braille and the status
   symbols are drawn as shapes, so borders join and glyphs missing from
-  the font still render. The painted grid is cached until a cell
-  changes, and the cursor blinks on its own layer.
+  the font still render. A row's quads are kept until its content
+  changes, and glyphs and drawn shapes are rasterized once into an
+  atlas.
 - Window shortcuts: Ctrl+Shift+C copies, Ctrl+V / Ctrl+Shift+V /
   Shift+Insert paste (images attach, as in the terminal), Ctrl+= /
   Ctrl+- / Ctrl+0 zoom (Cmd on macOS). Turn alerts use the terminal's
@@ -357,10 +364,17 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   `--theme` picks the terminal theme; `AURA_DESKTOP_MONO_FONT`,
   `AURA_DESKTOP_FONT_FILES` and `AURA_DESKTOP_FONT_SIZE` change the
   font. `--demo` runs a scripted session and `AURA_DESKTOP_PERF` logs
-  frame timings.
-- Offscreen snapshot tests render whole screens with the CPU renderer;
-  `AURA_DESKTOP_SNAPSHOTS=<dir>` saves them as PNGs. An ignored
-  `replay` test reports boot, streaming, keystroke and repaint timings.
+  frame timings. `AURA_DESKTOP_RENDERER=cpu` draws on the CPU whatever
+  the machine has, and `=gpu` on whatever adapter there is.
+- Offscreen snapshot tests draw whole screens with the CPU rasterizer;
+  `AURA_DESKTOP_SNAPSHOTS=<dir>` saves them as PNGs, and
+  `AURA_DESKTOP_GPU=1` checks the GPU draws the same pixels. Ignored
+  `replay_timings` and `swarm_timings` tests report boot, streaming,
+  keystroke and frame timings, and a second of thirty agents streaming
+  at once; `history_timings` reports frames of a 2,000-message
+  conversation and of a long reply streaming after it, and
+  `aura-ui-terminal` has `history_timings` and `streaming_timings` for
+  the UI alone.
 - `aura_terminal::render`, `App::paste_from_clipboard` and
   `alerts::desktop_notify` are public so other frontends can draw the UI
   and share its clipboard and notifications.
@@ -376,6 +390,14 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
 ##### Changed
 
 - The CI MSRV check skips `aura-desktop`, which needs Rust 1.88.
+- The window's clipboard is `arboard`'s.
+- A reply is laid out a part at a time while it streams, in both
+  frontends: what comes before its last blank line or closed code block
+  is kept, and only the paragraph, list, table or code block still being
+  written is wrapped again. A frame after a chunk costs the same however
+  long the reply is: about 0.5 ms in the window at 76,000 characters,
+  where it was 3.9 ms. The reply is laid out whole once more when it
+  ends.
 - The chat reads like a terminal in both frontends: it starts at the
   panel's left edge, prompts are echoed as `> text`, replies follow
   without `YOU` / `AURA` headers, a dim `[model · tokens · cost]` line

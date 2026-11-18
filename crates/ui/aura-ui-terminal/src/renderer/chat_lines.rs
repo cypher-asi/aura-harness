@@ -1,5 +1,7 @@
 //! Chat lines for each message, kept between frames.
 
+mod stream;
+
 use super::activity::{activity_lines, collapsed_hint, group_header, records_link, GroupView};
 use super::command::shell_lines;
 use super::diff::diff_message_lines;
@@ -16,6 +18,7 @@ use ratatui::text::Line;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
+use stream::Settled;
 
 /// How the groups of agent steps in the chat are shown.
 #[derive(Debug, Clone, Copy)]
@@ -89,6 +92,8 @@ pub(crate) struct BlockLines {
     /// `Some` of the columns its marker, quote bar or indent takes. Lines
     /// past the end are not.
     pub prose: Vec<Option<u16>>,
+    /// How much of a reply that is still streaming is laid out for good
+    settled: Option<Settled>,
 }
 
 impl ChatLineCache {
@@ -172,6 +177,7 @@ impl ChatLineCache {
                     .is_none_or(|block| block.revision != revision)
             {
                 let shell = members[0].shell_run().filter(|_| self.terminal);
+                let mut settled = None;
                 let (mut lines, toggles, prose) = match (shell, view) {
                     (Some(run), _) => (
                         shell_lines(run, &self.prompt, width, theme),
@@ -193,6 +199,19 @@ impl ChatLineCache {
                             prose.extend(flags);
                             lines.extend(more);
                         }
+                        (lines, Vec::new(), prose)
+                    }
+                    (None, None) if !self.terminal && stream::applies(members[0]) => {
+                        let (mut lines, mut prose, mut state) = self
+                            .entries
+                            .remove(&key)
+                            .map_or_else(Default::default, |block| {
+                                (block.lines, block.prose, block.settled.unwrap_or_default())
+                            });
+                        state.extend(members[0].content(), (&mut lines, &mut prose), |text| {
+                            content_lines(text, MessageRole::Assistant, (width, measure), theme)
+                        });
+                        settled = Some(state);
                         (lines, Vec::new(), prose)
                     }
                     (None, None) => {
@@ -221,6 +240,7 @@ impl ChatLineCache {
                         toggles,
                         images,
                         prose,
+                        settled,
                     },
                 );
             }
@@ -497,12 +517,21 @@ fn message_lines(
         );
         return (lines, Vec::new());
     }
+    content_lines(message.content(), role, (width, measure), theme)
+}
+
+/// The lines of the text a message of `role` says, and whether each is
+/// prose: fenced code set apart from the text around it.
+fn content_lines(
+    content: &str,
+    role: MessageRole,
+    (width, measure): (usize, Measure),
+    theme: &Theme,
+) -> (Vec<Line<'static>>, Vec<Option<u16>>) {
+    let (prompt, prompt_color, msg_color) = message_style(role, theme);
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut prose = Vec::new();
-    for (i, segment) in parse_content_segments(message.content())
-        .into_iter()
-        .enumerate()
-    {
+    for (i, segment) in parse_content_segments(content).into_iter().enumerate() {
         prose.resize(lines.len(), None);
         match segment {
             ContentSegment::Text(text) => {

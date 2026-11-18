@@ -16,6 +16,9 @@ const EVENT_QUEUE: usize = 256;
 pub struct Settings {
     pub verbose: bool,
     pub alerts: aura_ui_terminal::AlertSettings,
+    /// How wide chat prose is in the proportional face, in cells: asked
+    /// of the fonts of whichever renderer draws the window
+    pub measure: aura_ui_terminal::ProseMeasure,
 }
 
 /// A file the user is editing in an app that doesn't report closing; it
@@ -46,7 +49,7 @@ impl Tab {
             .with_event_sender(sender)
             .with_alert_settings(settings.alerts);
         tui.set_host_chrome(true);
-        tui.set_prose_measure(crate::grid::prose_cells);
+        tui.set_prose_measure(settings.measure);
         if settings.verbose {
             tui.set_verbose(true);
         }

@@ -1,9 +1,9 @@
 [package]
 name = "aura-desktop"
-description = "The AURA terminal UI in a native GPU window, built on iced"
+description = "The AURA terminal UI in a native GPU window, drawn with wgpu"
 version.workspace = true
 edition.workspace = true
-# iced 0.14 needs Rust 1.88; the rest of the workspace keeps the 1.85 floor.
+# wgpu 27 needs Rust 1.88; the rest of the workspace keeps the 1.85 floor.
 rust-version = "1.88"
 license.workspace = true
 publish = false
@@ -18,10 +18,17 @@ aura-app = { path = "../aura-app" }
 aura-core-modes = { path = "../../core/aura-core-modes" }
 aura-ui-terminal = { path = "../../ui/aura-ui-terminal" }
 
-iced = { version = "0.14", features = ["tokio", "canvas", "advanced"] }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 unicode-width = { workspace = true }
+# Text, drawn shapes, the GPU, the window, and the window's pixels where
+# there is no GPU.
+cosmic-text = "0.15"
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
+wgpu = { version = "27", default-features = false, features = ["std", "parking_lot", "wgsl", "vulkan", "gles", "metal", "dx12"] }
+winit = "0.30"
+softbuffer = { version = "0.4", default-features = false, features = ["x11", "x11-dlopen", "wayland", "wayland-dlopen"] }
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 
 anyhow = { workspace = true }
 chrono = { workspace = true }
@@ -31,10 +38,6 @@ futures = "0.3"
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-
-[dev-dependencies]
-iced_runtime = "0.14"
-tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true
