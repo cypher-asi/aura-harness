@@ -68,6 +68,7 @@ Text is set in Geist Mono, bundled (SIL Open Font License, [`assets/fonts/OFL.tx
 | `AURA_DESKTOP_MONO_FONT` | Another installed monospace family, e.g. `JetBrains Mono` |
 | `AURA_DESKTOP_FONT_FILES` | Extra font files to load, separated like `PATH` |
 | `AURA_DESKTOP_FONT_SIZE` | Starting text size in pixels (default 14) |
+| `AURA_DESKTOP_SCROLL_SPEED` | How far the wheel and touchpad scroll, times the default (default 1, e.g. `1.5`) |
 | `AURA_DESKTOP_PERF` | Log startup time and, every five seconds, update / render / paint / show timings, frames shown and skipped, and rows painted to stderr |
 | `AURA_DESKTOP_RENDERER` | `cpu` draws on the CPU whatever the machine has; `gpu` draws on whatever graphics adapter there is, a software one included. Unset, the GPU is used unless the only adapter is a software one |
 

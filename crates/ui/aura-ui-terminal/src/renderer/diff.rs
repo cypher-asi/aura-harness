@@ -69,9 +69,7 @@ pub(super) fn diff_message_lines(
     if hidden > 0 {
         lines.push(Line::from(Span::styled(
             format!("… {hidden} more lines"),
-            Style::default()
-                .fg(theme.colors.muted)
-                .add_modifier(Modifier::ITALIC),
+            Style::default().fg(theme.colors.muted),
         )));
     }
     lines

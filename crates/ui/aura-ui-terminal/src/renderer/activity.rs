@@ -10,7 +10,7 @@ use crate::app::format::{file_name, format_tool_label, is_complete_json, parse_t
 use crate::components::{Activity, DiffView, ThinkingStep, ToolStatus, ToolStep};
 use crate::Theme;
 use ratatui::{
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
 };
 use std::collections::BTreeSet;
@@ -68,7 +68,7 @@ pub(super) fn activity_lines(
     };
     let marker = Span::styled(
         format!("{lead}{marker} "),
-        Style::default().fg(theme.colors.secondary),
+        Style::default().fg(theme.colors.faint),
     );
     let body = Body::new(body_indent(number), width);
     match activity {
@@ -91,24 +91,20 @@ fn body_indent(number: Option<usize>) -> usize {
 pub(super) fn records_link(number: Option<usize>, width: usize, theme: &Theme) -> Line<'static> {
     Body::new(body_indent(number), width).line(
         "→ records for this turn".to_string(),
-        Style::default()
-            .fg(theme.colors.secondary)
-            .add_modifier(Modifier::ITALIC),
+        Style::default().fg(theme.colors.muted),
         theme,
     )
 }
 
-/// `… 5 steps, click to show` under a collapsed group's summary line.
+/// `5 steps (click to expand)` under a collapsed group's summary line.
 pub(super) fn collapsed_hint(steps: usize, theme: &Theme) -> Line<'static> {
     Line::from(Span::styled(
         format!(
-            "{}… {}, click to show",
+            "{}{} (click to expand)",
             " ".repeat(NUMBER_WIDTH + 2),
             count(steps, "step", "steps")
         ),
-        Style::default()
-            .fg(theme.colors.muted)
-            .add_modifier(Modifier::ITALIC),
+        Style::default().fg(theme.colors.muted),
     ))
 }
 
@@ -132,7 +128,7 @@ pub(super) fn group_header(
     };
     let marker = Span::styled(
         format!("{INDENT}{marker} "),
-        Style::default().fg(theme.colors.secondary),
+        Style::default().fg(theme.colors.faint),
     );
     let tally = Tally::of(steps);
     let failed = if tally.failed > 0 {
@@ -145,7 +141,10 @@ pub(super) fn group_header(
     );
     let summary = truncate(&tally.summary(live), room);
     let mut spans = vec![marker];
-    spans.extend(verb_spans(&summary, theme));
+    spans.push(Span::styled(
+        summary,
+        Style::default().fg(theme.colors.muted),
+    ));
     spans.push(Span::styled(
         progress.to_string(),
         Style::default().fg(theme.colors.muted),
@@ -295,20 +294,6 @@ fn thought_label(duration_ms: Option<u64>) -> String {
     }
 }
 
-/// `text` with its first word brighter than the rest: `Read` stands out
-/// from `main.rs L1-80`.
-fn verb_spans(text: &str, theme: &Theme) -> Vec<Span<'static>> {
-    let split = text.find(' ').unwrap_or(text.len());
-    let (verb, rest) = text.split_at(split);
-    vec![
-        Span::styled(
-            verb.to_string(),
-            Style::default().fg(theme.colors.foreground),
-        ),
-        Span::styled(rest.to_string(), Style::default().fg(theme.colors.muted)),
-    ]
-}
-
 /// Where a block's body lines go: the `│` rule under its marker.
 struct Body {
     prefix: String,
@@ -349,12 +334,7 @@ impl Body {
     }
 
     fn rule(&self, theme: &Theme) -> Span<'static> {
-        Span::styled(
-            self.prefix.clone(),
-            Style::default()
-                .fg(theme.colors.muted)
-                .add_modifier(Modifier::DIM),
-        )
+        Span::styled(self.prefix.clone(), Style::default().fg(theme.colors.faint))
     }
 }
 
@@ -374,12 +354,9 @@ fn thinking_lines(
     } else {
         thought_label(step.duration_ms)
     };
-    let mut lines = vec![Line::from(vec![
-        marker,
-        Span::styled(label, muted.add_modifier(Modifier::ITALIC)),
-    ])];
+    let mut lines = vec![Line::from(vec![marker, Span::styled(label, muted)])];
 
-    let text_style = muted.add_modifier(Modifier::ITALIC);
+    let text_style = muted;
     let mut text: Vec<String> = step
         .text
         .trim()
@@ -435,7 +412,7 @@ fn tool_lines(
         body.push_wrapped(
             &mut lines,
             &format!("policy: {policy}"),
-            Style::default().fg(color).add_modifier(Modifier::ITALIC),
+            Style::default().fg(color),
             theme,
         );
     }
@@ -449,7 +426,7 @@ fn tool_lines(
         if total > MAX_RESULT_LINES {
             lines.push(body.line(
                 format!("… {} more lines", total - MAX_RESULT_LINES),
-                muted.add_modifier(Modifier::ITALIC),
+                muted,
                 theme,
             ));
         }
@@ -482,15 +459,11 @@ fn tool_lines(
         body.push_wrapped(&mut lines, line, style, theme);
     }
     if total > MAX_RESULT_LINES {
-        lines.push(
-            body.line(
-                format!("… {} more lines", total - MAX_RESULT_LINES),
-                Style::default()
-                    .fg(theme.colors.muted)
-                    .add_modifier(Modifier::ITALIC),
-                theme,
-            ),
-        );
+        lines.push(body.line(
+            format!("… {} more lines", total - MAX_RESULT_LINES),
+            Style::default().fg(theme.colors.muted),
+            theme,
+        ));
     }
     lines
 }
@@ -527,7 +500,7 @@ fn tool_header(
         marker,
         Span::styled(icon.to_string(), Style::default().fg(icon_color)),
     ];
-    spans.extend(verb_spans(&label, theme));
+    spans.push(Span::styled(label, Style::default().fg(theme.colors.muted)));
     spans.extend(stat);
     spans.push(Span::styled(meta, Style::default().fg(theme.colors.muted)));
     Line::from(spans)
@@ -941,7 +914,7 @@ mod tests {
         let theme = Theme::default();
         assert_eq!(
             text(&collapsed_hint(5, &theme)),
-            "       … 5 steps, click to show"
+            "       5 steps (click to expand)"
         );
     }
 

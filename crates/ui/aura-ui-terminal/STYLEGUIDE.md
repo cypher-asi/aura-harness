@@ -1,57 +1,80 @@
 # AURA Terminal Style Guide
 
-This document defines the approved color palette and styling conventions for the AURA CLI terminal UI.
+This document defines the color palette and styling conventions for the
+AURA terminal UI and the desktop window that draws it. The default theme
+(`cyber`) is graphite and gray: the chrome is neutral, and color is kept
+for status.
 
-## Approved Color Palette
+## Palette
 
-Only these colors should be used in the terminal UI:
-
-| Color       | Hex Code  | RGB             | Rust Constant | Usage                              |
-|-------------|-----------|-----------------|---------------|------------------------------------|
-| Cyan/Green  | `#01f4cb` | `(1, 244, 203)` | `CYAN`        | Success states, neon accents       |
-| Blue        | `#01a4f4` | `(1, 164, 244)` | `BLUE`        | Primary accent, info, provisioning |
-| Purple      | `#cb01f4` | `(203, 1, 244)` | `PURPLE`      | Pending states, secondary accent   |
-| Red         | `#f4012a` | `(244, 1, 42)`  | `RED`         | Errors, danger                     |
-| White       | `#ffffff` | `(255, 255, 255)` | `WHITE`     | Primary text                       |
-| Gray        | `#888888` | `(136, 136, 136)` | `GRAY`      | Muted text, secondary info         |
-| Black       | `#0d0d0d` | `(13, 13, 13)`  | `BLACK`       | Background                         |
+| Color      | Hex Code  | RGB               | Rust Constant | Usage                                  |
+|------------|-----------|-------------------|---------------|----------------------------------------|
+| Cyan/Green | `#01f4cb` | `(1, 244, 203)`   | `CYAN`        | Status: ready, working, success        |
+| Blue       | `#01a4f4` | `(1, 164, 244)`   | `BLUE`        | Warnings, waiting states, flags        |
+| Purple     | `#cb01f4` | `(203, 1, 244)`   | `PURPLE`      | Syntax highlighting only               |
+| Red        | `#f4012a` | `(244, 1, 42)`    | `RED`         | Errors, danger                         |
+| White      | terminal  | `Color::White`    | `WHITE`       | Titles, what the user typed            |
+| Light gray | `#e6e6e6` | `(230, 230, 230)` | `LIGHT_GRAY`  | Reply text                             |
+| Silver     | `#b3b3b3` | `(179, 179, 179)` | `SILVER`      | Hovered labels, to-do counts           |
+| Gray       | `#808080` | `(128, 128, 128)` | `GRAY`        | Secondary text, focused borders        |
+| Dim gray   | `#5a5a5a` | `(90, 90, 90)`    | `DIM_GRAY`    | Borders at rest, markers, key hints    |
+| Black      | `#191919` | `(25, 25, 25)`    | `BLACK`       | Background                             |
+| Dark gray  | `#242424` | `(36, 36, 36)`    | `DARK_GRAY`   | Raised surfaces (user prompt band)     |
+| Graphite   | `#2e2e2e` | `(46, 46, 46)`    | `GRAPHITE`    | Hover fill                             |
+| Slate      | `#383838` | `(56, 56, 56)`    | `SLATE`       | Selection fill                         |
 
 ## Semantic Color Mapping
 
-Use theme colors semantically via `theme.colors.*`:
+Use theme colors via `theme.colors.*`, never the constants, so the other
+themes keep working:
 
-| Theme Field       | Color   | When to Use                                    |
-|-------------------|---------|------------------------------------------------|
-| `background`      | Black   | Panel backgrounds, main background             |
-| `foreground`      | White   | Primary text, titles, important content        |
-| `primary`         | Blue    | Primary accents, active states, focus borders  |
-| `secondary`       | Purple  | Secondary accents, tool calls, highlights      |
-| `success`         | Cyan    | Success messages, completed states, checkmarks |
-| `warning`         | Blue    | Info messages, warnings, provisioning states   |
-| `error`           | Red     | Error messages, failed states, danger actions  |
-| `pending`         | Purple  | Pending states, in-progress, spinners          |
-| `muted`           | Gray    | Secondary text, timestamps, less important info|
+| Theme Field     | Cyber      | When to Use                                          |
+|-----------------|------------|------------------------------------------------------|
+| `background`    | Black      | The main background                                  |
+| `foreground`    | White      | Titles, the user's messages, the item being worked on |
+| `text`          | Light gray | The agent's replies, what is being typed             |
+| `primary`       | White      | Headings and emphasis                                |
+| `secondary`     | Silver     | Hovered labels, the to-do count                      |
+| `success`       | Cyan       | Live and working status (`●`, `⬢`), success          |
+| `warning`       | Blue       | Warnings, waiting on approval, non-agent modes       |
+| `error`         | Red        | Errors, failed steps, danger actions                 |
+| `pending`       | White      | Pending states                                       |
+| `muted`         | Gray       | Secondary text, focused borders, prompts             |
+| `faint`         | Dim gray   | Borders at rest, step markers, separators, key hints |
+| `surface`       | Dark gray  | Raised rows                                          |
+| `surface_hover` | Graphite   | Hovered rows and tabs                                |
+| `selection`     | Slate      | The selected row and the focused active tab          |
+| `on_selection`  | White      | Text on `selection`                                  |
 
 ## Usage Guidelines
 
-### Text Colors
+### Weight and Slant
 
-- **Primary text**: Use `theme.colors.foreground` (white)
-- **Secondary/muted text**: Use `theme.colors.muted` (gray)
-- **Emphasized text**: Use accent colors sparingly
+- No italics in UI chrome: steps, hints, notices and counts are upright.
+  Italics are kept for markdown emphasis in replies.
+- Bold is for headings, the active tab, the live tail's `Working` and
+  status label, and the to-do being worked on. Prompts, project names and
+  code block labels are regular weight.
 
 ### Status Indicators
 
-- **Success (✓)**: Use `theme.colors.success` (cyan)
-- **Error (✗)**: Use `theme.colors.error` (red)
-- **Pending (◌)**: Use `theme.colors.pending` (purple)
-- **Neutral (·)**: Use `theme.colors.muted` (gray)
+- **Ready (`●`)** and **working (`⬢`)**: `success`
+- **Waiting (`◐`)**: `warning`
+- **Error (`✗`)**: `error`
+- **To-dos**: `☒` done in `faint`, `▣` in progress in bold `foreground`,
+  `☐` pending in `muted`, cancelled `☐` struck through in `faint`. Past
+  ten, the rest are counted on a `muted` `N more` row.
 
 ### Borders and Panels
 
-- **Focused panel**: Use `theme.colors.primary` (blue) for border
-- **Unfocused panel**: Use `theme.colors.muted` (gray) for border
-- **Error highlight**: Use `theme.colors.error` (red) for border
+- **Focused panel**: `muted` border
+- **Unfocused panel**: `faint` border
+- **Menus and the `/todos` list**: `muted` border
+- **Approval dialog**: `warning` border
+- **Code blocks and step rules**: `faint`
+- **Spacing**: panels side by side sit one blank column apart and one
+  column in from the screen's edges. A cell is about twice as tall as it
+  is wide, so that matches panels stacked on rows that touch.
 
 ### Panel Headers
 
@@ -68,7 +91,7 @@ Panels without tabs (Kernel) show a title on the left of the info cell.
 ```
 
 - **Frame and dividers**: the panel's border color
-- **Active tab**: filled `primary` while the panel is focused, with its label in `background` (inverted) and bold. While the panel is not focused, the label is bold `foreground` with no fill
+- **Active tab**: bold. While the panel is focused it is filled with `selection` and labelled in `on_selection`; otherwise the label is `foreground` with no fill
 - **Hovered tab**: `surface_hover` fill with a `secondary` label
 - **Other tabs**: `muted` label, no fill
 - **Info cell**: no fill; counts in `foreground`, problems (trace issues) in `error`
@@ -77,18 +100,52 @@ Narrow bars drop the tab padding, then switch to three-letter labels
 (`short_label`), and give the info cell's room to the tabs when it would be
 under three columns.
 
-### Messages
+### The Chat Column
 
-- **User messages**: Gray text with white nickname
-- **Assistant messages**: White text with blue accent
-- **System messages**: Muted gray text
-- **Error messages**: Red text or red icon
+```text
+┌──────────────────────────────────────────────┐
+│                                              │
+│  → fix the login bug                         │
+│                                              │
+│    ▸ Explored 4 files, 2 searches            │
+│      2 steps (click to expand)               │
+│                                              │
+│  ⬢ Working on 2 to-dos                       │
+│    ☒ Read the handler                        │
+│    ▣ Fix the redirect                        │
+│                                              │
+│  ⬢ Thinking… 12s                             │
+└──────────────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│ → Add a follow-up                            │
+└──────────────────────────────────────────────┘
+ qwen3:4b · 23% context used · 2 calls  ● Ready
+ / for commands · @ for files · $ for a terminal
+```
+
+- The conversation is inset two columns, starts a row below the border
+  and runs at most 110 columns wide.
+- **User messages**: a `muted` `→ ` prompt, then `foreground` text
+- **Replies**: `text`, list markers `muted`, inline code `text` on
+  `surface`
+- **Steps**: markers `faint`, the whole line `muted`
+- **Live tail**: while a turn runs, the to-do checklist (`⬢` `faint`,
+  `Working` bold `foreground`, the count `secondary`), then the working
+  line flush with the reply: `⬢` in `success`, the label bold
+  `foreground`, the elapsed time `muted`
+- **Input box**: as wide as the Chat panel, bordered like it, with a
+  `muted` `→ ` prompt and a `muted` placeholder (`Ask anything`, then
+  `Add a follow-up`). Shell and login prompts replace the arrow.
+- **Footer**: the mode outside agent mode, the approval level, the model
+  and what the agent has used in `muted`, separated by `faint` dots,
+  with the status at the right; then key hints in `faint` when the
+  screen has room. Parts that don't fit drop from the right.
 
 ### Interactive Elements
 
-- **Selected item**: Blue background or blue text
-- **Hover state**: Purple highlight
-- **Active/pressed**: Cyan accent
+- **Selected item**: `selection` fill, `on_selection` text
+- **Hover state**: `surface_hover` fill
+- **Clickable text** (records link, collapsed steps): `muted`
 
 ## Code Examples
 
@@ -106,23 +163,14 @@ fn render_status(theme: &Theme, is_success: bool) -> Style {
 }
 ```
 
-### Using Color Constants Directly
-
-```rust
-use crate::themes::{CYAN, BLUE, PURPLE, RED, WHITE, GRAY, BLACK};
-
-// Only use constants when theme is not available
-let success_style = Style::default().fg(CYAN);
-```
-
 ### Status Indicator Pattern
 
 ```rust
 let (icon, color) = match status {
     Status::Ok => ("✓", theme.colors.success),
     Status::Error => ("✗", theme.colors.error),
-    Status::Pending => ("◌", theme.colors.pending),
-    Status::None => ("·", theme.colors.muted),
+    Status::Waiting => ("◐", theme.colors.warning),
+    Status::None => ("·", theme.colors.faint),
 };
 ```
 
@@ -131,24 +179,22 @@ let (icon, color) = match status {
 ### Do
 
 - Use semantic theme colors (`theme.colors.success`, etc.)
-- Keep text readable with sufficient contrast
-- Use cyan for positive/success feedback
+- Keep the chrome gray and let status carry the color
+- Use `faint` for anything that frames content rather than being content
 - Use red sparingly, only for actual errors
-- Use purple for in-progress/pending states
 
 ### Don't
 
+- Use the accent for borders, tabs or selections
 - Use arbitrary RGB values not in the palette
-- Use yellow, orange, pink, or other unapproved colors
-- Mix too many accent colors in one view
+- Use italics outside markdown emphasis
 - Use color as the only indicator (add icons too)
-- Use bright colors for large text blocks
 
-## Migration Notes
+## The Desktop Window
 
-When updating existing code:
-
-1. Replace `Color::Rgb(...)` with theme colors or constants
-2. Replace `Color::Yellow`, `Color::Magenta`, etc. with approved colors
-3. Use `theme.colors.pending` for pending states (was often warning)
-4. Use `theme.colors.error` (red) instead of hot pink for errors
+`aura-desktop` paints the same cell grid, so it follows this guide. Its
+own title bars and window tabs take their colors from `grid::Palette`:
+the focused active box is filled with `selection`, boxes at rest are
+outlined in `faint`, hovered ones in `muted`, and the busy bar under a
+window tab is the status accent. It draws `⬢ ☐ ☒ ▣` itself, since Geist
+Mono has no glyphs for them.

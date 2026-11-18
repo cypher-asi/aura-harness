@@ -7,7 +7,7 @@ use crate::components::{CodeBlock, MessageRole};
 use crate::events::CallUsage;
 use crate::Theme;
 use ratatui::{
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
 };
 
@@ -40,12 +40,7 @@ pub(super) fn prefixed_lines(
     }
     for (i, line) in lines.iter_mut().enumerate() {
         let lead = if i == 0 {
-            Span::styled(
-                prefix.to_string(),
-                Style::default()
-                    .fg(prefix_color)
-                    .add_modifier(Modifier::BOLD),
-            )
+            Span::styled(prefix.to_string(), Style::default().fg(prefix_color))
         } else {
             Span::raw(" ".repeat(indent))
         };
@@ -96,14 +91,14 @@ pub(super) const fn message_style<'a>(
     theme: &Theme,
 ) -> (&'a str, ratatui::style::Color, ratatui::style::Color) {
     match role {
-        MessageRole::User => (USER_PROMPT, theme.colors.primary, theme.colors.primary),
+        MessageRole::User => (USER_PROMPT, theme.colors.muted, theme.colors.foreground),
         MessageRole::Assistant => ("", theme.colors.muted, theme.colors.text),
         MessageRole::System => (NOTICE_PROMPT, theme.colors.muted, theme.colors.muted),
     }
 }
 
 /// Before a prompt the user sent, as in the input row.
-pub(super) const USER_PROMPT: &str = "> ";
+pub(super) const USER_PROMPT: &str = "→ ";
 /// Before a system message.
 pub(super) const NOTICE_PROMPT: &str = "* ";
 

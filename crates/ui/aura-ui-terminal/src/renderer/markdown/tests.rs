@@ -59,7 +59,7 @@ fn inline_bold_italic_strike_and_code() {
     assert!(has(both, Modifier::BOLD) && has(both, Modifier::ITALIC));
     assert!(has(span_style(&spans, "gone"), Modifier::CROSSED_OUT));
     let code = span_style(&spans, "x * y");
-    assert_eq!(code.fg, Some(theme().colors.primary));
+    assert_eq!(code.fg, Some(theme().colors.text));
     assert_eq!(code.bg, Some(theme().colors.surface));
 }
 

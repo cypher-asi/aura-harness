@@ -1,96 +1,57 @@
-//! Input rendering: the prompt and what is being typed, wrapped inside the
-//! Chat panel's columns and growing upward as it gets longer, with the
-//! model and status on the right of its last row.
+//! Input rendering: the prompt and what is being typed, in a box under
+//! the Chat panel as wide as it, growing upward as the text wraps.
+//!
+//! ```text
+//! ┌──────────────────────────────────────┐
+//! │ → Add a follow-up                    │
+//! └──────────────────────────────────────┘
+//! ```
 
-use super::{text::display_width, EDGE_INSET};
-use crate::{app::AppState, App, Theme};
+use super::text::display_width;
+use crate::{
+    app::{AppState, PanelFocus},
+    App, Theme,
+};
 use ratatui::{
     layout::Rect,
-    style::Style,
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Block, Borders, Paragraph},
     Frame,
 };
 use unicode_width::UnicodeWidthChar;
 
-/// Columns between the model indicator and the status.
-const MODEL_GAP: u16 = 2;
-/// Below this many typing columns the model indicator is hidden.
-const MIN_INPUT_WIDTH: u16 = 20;
+/// Rows the box's border adds to the rows of text.
+pub(super) const BOX_ROWS: u16 = 2;
+/// Blank columns inside the border on each side of the text.
+const PAD: u16 = 1;
 /// Prompt before a chat message.
-const CHAT_PROMPT: &str = "> ";
+const CHAT_PROMPT: &str = "→ ";
 /// Most rows the input grows to; past this it scrolls with the cursor.
 const MAX_INPUT_ROWS: u16 = 8;
+/// What the empty input says before the first message.
+const FIRST_PLACEHOLDER: &str = "Ask anything";
+/// What the empty input says once the conversation has started.
+const FOLLOW_UP_PLACEHOLDER: &str = "Add a follow-up";
 
-/// Where the input goes on screen, worked out from the row's columns.
+/// Where the input goes in a box spanning `area`'s columns.
 struct Plan<'a> {
     prompt: &'a str,
-    prompt_width: u16,
+    prompt_x: u16,
     typing_x: u16,
     /// Rows of typed text, each at most the typing width.
     rows: Vec<Vec<Span<'static>>>,
     /// Row and column of the cursor within `rows`.
     cursor: (usize, usize),
-    status_text: String,
-    status_style: Style,
-    status_x: u16,
-    status_len: u16,
-    model: Option<(u16, Vec<Span<'a>>)>,
-    is_thinking: bool,
+    /// Shown in place of the text while nothing is typed.
+    placeholder: Option<&'static str>,
 }
 
-/// Lay out the input for a row spanning `area`'s columns. `chat_left` and
-/// `chat_right` are the Chat panel's border columns, relative to `area`.
-fn plan<'a>(area: Rect, app: &'a App, theme: &Theme, chat_left: u16, chat_right: u16) -> Plan<'a> {
+/// Lay out the input in a box spanning `area`'s columns.
+fn plan<'a>(area: Rect, app: &'a App, theme: &Theme) -> Plan<'a> {
     let input = app.input();
-    let cursor_pos = app.cursor_pos();
-
-    let status = app.status();
-    let is_ready = status == "Ready";
-    let is_thinking = status.contains("Thinking");
-
-    let status_style = if is_ready {
-        Style::default().fg(theme.colors.primary)
-    } else if is_thinking {
-        Style::default().fg(theme.colors.muted)
-    } else {
-        Style::default().fg(theme.colors.warning)
-    };
-    let status_text = if is_ready {
-        format!("● {status}")
-    } else if is_thinking {
-        format!("{} {status}", app.spinner_char())
-    } else {
-        format!("◐ {status}")
-    };
-    let status_len = u16::try_from(display_width(&status_text)).unwrap_or(u16::MAX);
-
-    let model_spans = super::model_indicator_spans(app, theme);
-    let model_len = u16::try_from(super::spans_width(&model_spans)).unwrap_or(u16::MAX);
-    let model_reserved = if model_len == 0 {
-        0
-    } else {
-        model_len + MODEL_GAP
-    };
-    let usable_width = area.width.saturating_sub(EDGE_INSET);
-    let show_model = model_len > 0
-        && usable_width.saturating_sub(status_len + 2 + chat_left + model_reserved)
-            >= MIN_INPUT_WIDTH;
-    let left_reserved = if show_model { model_reserved } else { 0 };
-    let model = show_model.then(|| {
-        (
-            area.x + usable_width.saturating_sub(status_len + model_reserved),
-            model_spans,
-        )
-    });
-
-    // Typing stays left of the model and status, and inside the Chat
-    // panel so it never runs under the side columns.
-    let input_right = (area.x + usable_width.saturating_sub(status_len + 2 + left_reserved))
-        .min(area.x + chat_right.max(chat_left + 1));
-
+    let before_cursor = input.get(..app.cursor_pos()).unwrap_or(input);
     let command = app.input_is_command();
-    let before_cursor = input.get(..cursor_pos).unwrap_or(input);
     let (prompt, display_input, display_before) = match app.state() {
         _ if command => (
             app.shell_prompt(),
@@ -112,13 +73,18 @@ fn plan<'a>(area: Rect, app: &'a App, theme: &Theme, chat_left: u16, chat_right:
         _ => (CHAT_PROMPT, one_line(input), one_line(before_cursor)),
     };
     let prompt_width = u16::try_from(display_width(prompt)).unwrap_or(u16::MAX);
+    let placeholder = (input.is_empty() && prompt == CHAT_PROMPT).then(|| {
+        if app.messages().is_empty() {
+            FIRST_PLACEHOLDER
+        } else {
+            FOLLOW_UP_PLACEHOLDER
+        }
+    });
 
-    // Typing starts at the Chat panel's left border, inset one column like
-    // the other outer text, with the prompt right-aligned under the Agents
-    // column before it. Typing moves right only when the prompt is wider
-    // than the space left of the chat.
-    let typing_x = (area.x + chat_left + EDGE_INSET).max(area.x + EDGE_INSET + prompt_width);
-    let width = usize::from(input_right.saturating_sub(typing_x).max(1));
+    let prompt_x = area.x + 1 + PAD;
+    let typing_x = prompt_x.saturating_add(prompt_width);
+    let right = (area.x + area.width).saturating_sub(1 + PAD);
+    let width = usize::from(right.saturating_sub(typing_x).max(1));
 
     let spans = if command {
         super::command::command_spans(&display_input, theme)
@@ -139,16 +105,11 @@ fn plan<'a>(area: Rect, app: &'a App, theme: &Theme, chat_left: u16, chat_right:
 
     Plan {
         prompt,
-        prompt_width,
+        prompt_x,
         typing_x,
         rows,
         cursor,
-        status_text,
-        status_style,
-        status_x: area.x + usable_width.saturating_sub(status_len),
-        status_len,
-        model,
-        is_thinking,
+        placeholder,
     }
 }
 
@@ -236,17 +197,10 @@ fn wrapped_cursor(text: &str, starts: &[usize], offset: usize, width: usize) -> 
     }
 }
 
-/// Rows the input wants for a row spanning `area`'s columns, at most
-/// `max_rows` and never fewer than one.
-pub(super) fn input_rows(
-    area: Rect,
-    app: &App,
-    theme: &Theme,
-    chat_left: u16,
-    chat_right: u16,
-    max_rows: u16,
-) -> u16 {
-    let rows = plan(area, app, theme, chat_left, chat_right).rows.len();
+/// Rows of text the input wants in a box spanning `area`'s columns, at
+/// most `max_rows` and never fewer than one. The box adds [`BOX_ROWS`].
+pub(super) fn input_rows(area: Rect, app: &App, theme: &Theme, max_rows: u16) -> u16 {
+    let rows = plan(area, app, theme).rows.len();
     u16::try_from(rows)
         .unwrap_or(u16::MAX)
         .min(MAX_INPUT_ROWS)
@@ -254,68 +208,59 @@ pub(super) fn input_rows(
         .max(1)
 }
 
-/// Render the input into `area`, whose height is the rows it gets (see
-/// [`input_rows`]). `chat_left` and `chat_right` are the Chat panel's
-/// border columns, relative to `area`.
-pub(super) fn render_input(
-    frame: &mut Frame,
-    area: Rect,
-    app: &App,
-    theme: &Theme,
-    chat_left: u16,
-    chat_right: u16,
-) {
-    if area.height == 0 {
+/// Render the input box into `area`, whose height is the rows of text
+/// it gets (see [`input_rows`]) and the border's.
+pub(super) fn render_input(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    if area.height < BOX_ROWS + 1 || area.width < 2 * (1 + PAD) + 2 {
         return;
     }
-    let plan = plan(area, app, theme, chat_left, chat_right);
-    let last_y = area.y + area.height - 1;
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(super::panels::border_color(
+            app.focus() == PanelFocus::Chat,
+            theme,
+        )));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
-    if let Some((x, spans)) = plan.model {
-        let width = u16::try_from(super::spans_width(&spans)).unwrap_or(u16::MAX);
+    let plan = plan(area, app, theme);
+    let right = inner.x + inner.width;
+    let prompt_width = plan.typing_x - plan.prompt_x;
+    frame.render_widget(
+        Paragraph::new(Line::from(prompt_spans(
+            plan.prompt,
+            theme.colors.muted,
+            theme,
+        ))),
+        Rect {
+            x: plan.prompt_x,
+            y: inner.y,
+            width: prompt_width.min(right.saturating_sub(plan.prompt_x)),
+            height: 1,
+        },
+    );
+
+    let typing_width = right.saturating_sub(plan.typing_x);
+    if let Some(placeholder) = plan.placeholder {
         frame.render_widget(
-            Paragraph::new(Line::from(spans)),
+            Paragraph::new(Span::styled(
+                placeholder,
+                Style::default().fg(theme.colors.muted),
+            )),
             Rect {
-                x,
-                y: last_y,
-                width,
+                x: plan.typing_x,
+                y: inner.y,
+                width: typing_width,
                 height: 1,
             },
         );
     }
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            &plan.status_text,
-            plan.status_style,
-        ))),
-        Rect {
-            x: plan.status_x,
-            y: last_y,
-            width: plan.status_len,
-            height: 1,
-        },
-    );
 
     // Keep the cursor's row in view once the input outgrows its rows.
-    let visible = usize::from(area.height);
+    let visible = usize::from(inner.height);
     let first = (plan.cursor.0 + 1).saturating_sub(visible);
-    let prompt_x = plan.typing_x - plan.prompt_width;
-    frame.render_widget(
-        Paragraph::new(Line::from(prompt_spans(
-            plan.prompt,
-            theme.colors.primary,
-            theme,
-        ))),
-        Rect {
-            x: prompt_x,
-            y: area.y,
-            width: plan.prompt_width,
-            height: 1,
-        },
-    );
-    let typing_width = area.x + area.width - plan.typing_x.min(area.x + area.width);
     for (i, row) in plan.rows.into_iter().skip(first).take(visible).enumerate() {
-        let y = area.y + u16::try_from(i).unwrap_or(u16::MAX);
+        let y = inner.y + u16::try_from(i).unwrap_or(u16::MAX);
         frame.render_widget(
             Paragraph::new(Line::from(row)),
             Rect {
@@ -327,9 +272,9 @@ pub(super) fn render_input(
         );
     }
 
-    if !plan.is_thinking {
+    if !app.status().contains("Thinking") {
         let (row, col) = plan.cursor;
-        let y = area.y + u16::try_from(row - first).unwrap_or(0);
+        let y = inner.y + u16::try_from(row - first).unwrap_or(0);
         let x = plan
             .typing_x
             .saturating_add(u16::try_from(col).unwrap_or(u16::MAX));
@@ -343,11 +288,13 @@ fn one_line(text: &str) -> String {
     text.replace('\n', "↵")
 }
 
-/// Typed text in the muted color, with `@path` mentions and `[image N]`
+/// Typed text in the reply color, with `@path` mentions and `[image N]`
 /// chips picked out so it is clear what will be attached.
 pub(super) fn prose_spans<'a>(text: &'a str, theme: &Theme) -> Vec<Span<'a>> {
-    let plain = Style::default().fg(theme.colors.muted);
-    let chip = Style::default().fg(theme.colors.primary);
+    let plain = Style::default().fg(theme.colors.text);
+    let chip = Style::default()
+        .fg(theme.colors.foreground)
+        .add_modifier(Modifier::UNDERLINED);
     let mut spans = Vec::new();
     let mut start = 0;
     let mut i = 0;

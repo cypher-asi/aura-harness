@@ -21,7 +21,7 @@ impl Bar {
         let palette = model.palette;
         let unit = unit(&model.metrics);
         let line = (model.metrics.font_size / 14.0).round().max(1.0);
-        let idle = palette.muted.mix(palette.bg, 0.35);
+        let idle = palette.faint;
         let size = label_size(&model.metrics);
         let plain = Label {
             text: "",
@@ -45,11 +45,11 @@ impl Bar {
                     rect.y,
                     rect.width,
                     rect.height,
-                    palette.fg,
+                    palette.selection,
                 );
-                palette.bg
+                palette.fg
             } else if hover == Some(Hit::Tab(index)) {
-                outline(&mut out.under, *rect, palette.accent, line);
+                outline(&mut out.under, *rect, palette.muted, line);
                 palette.fg
             } else {
                 outline(&mut out.under, *rect, idle, line);
@@ -79,7 +79,7 @@ impl Bar {
 
         let over = hover == Some(Hit::New);
         let (edge, ink) = if over {
-            (palette.accent, palette.fg)
+            (palette.muted, palette.fg)
         } else {
             (idle, palette.muted)
         };
@@ -123,7 +123,7 @@ impl Bar {
 
         for (rect, control) in layout.controls.iter().zip(CONTROLS) {
             let (edge, ink) = if hover == Some(control) {
-                (palette.accent, palette.fg)
+                (palette.muted, palette.fg)
             } else {
                 (idle, palette.muted)
             };

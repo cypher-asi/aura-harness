@@ -29,6 +29,7 @@ mod selection;
 pub(crate) mod shell_input;
 mod shell_prompt;
 mod slash_menu;
+mod smooth;
 pub mod tab_bar;
 mod tool_view;
 pub mod trace_feed;
@@ -66,6 +67,7 @@ use ratatui::{
 };
 use sandbox::{SandboxEntryKind, SandboxTree};
 pub use selection::Selection;
+pub use smooth::ChatScroll;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -271,6 +273,8 @@ pub struct App {
     prose_rows: Vec<ProseRow>,
     /// How wide prose is in the front end's proportional face, if it has one
     prose_measure: Option<ProseMeasure>,
+    /// The chat as last drawn, for a front end that scrolls it by pixels
+    smooth: smooth::SmoothScroll,
     /// Whether the front end draws the panels' title bars itself
     host_chrome: bool,
     /// Whether the front end draws the GRAPH tab's canvas itself
@@ -638,6 +642,7 @@ impl App {
             areas: PanelAreas::default(),
             prose_rows: Vec::new(),
             prose_measure: None,
+            smooth: smooth::SmoothScroll::default(),
             host_chrome: false,
             host_canvas: false,
             pane_chrome: Vec::new(),
@@ -1389,7 +1394,17 @@ impl App {
     /// Dragging with the left button selects text inside the panel the
     /// drag started in and copies it when the button is released.
     /// Moving over a clickable item highlights it until the pointer leaves.
-    pub fn handle_mouse(&mut self, mouse: MouseEvent) {
+    ///
+    /// Returns whether the screen may look different: false for a move or
+    /// a drag that left the highlight and the selection as they were.
+    pub fn handle_mouse(&mut self, mouse: MouseEvent) -> bool {
+        let pointing = matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Drag(_));
+        let before = (self.hover, self.selection);
+        self.mouse(mouse);
+        !pointing || before != (self.hover, self.selection)
+    }
+
+    fn mouse(&mut self, mouse: MouseEvent) {
         if self.state != AppState::Idle && self.state != AppState::Processing {
             self.hover = None;
             return;
@@ -1432,7 +1447,8 @@ impl App {
         let Some(panel) = self.panel_at(mouse.column, mouse.row) else {
             return;
         };
-        let step = if panel == PanelFocus::Swarm { 1 } else { 3 };
+        let picks_a_row = panel == PanelFocus::Swarm && self.agents_tab != AgentsTab::Projects;
+        let step = if picks_a_row { 1 } else { 3 };
         let over_detail = panel == PanelFocus::Chat && self.detail.is_some();
         match mouse.kind {
             MouseEventKind::ScrollUp if over_detail => {

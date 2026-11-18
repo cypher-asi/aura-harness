@@ -199,6 +199,122 @@ fn history(messages: usize) -> Vec<MessageData> {
     out
 }
 
+/// The middle of `pane`'s body on the window, in pixels.
+#[allow(clippy::cast_precision_loss)]
+fn inside(stage: &super::tests::Stage, pane: aura_ui_terminal::Pane) -> crate::geom::Point {
+    let shell = &stage.shell;
+    let chrome = shell.tabs.front().tui.pane_chrome();
+    let area = chrome
+        .iter()
+        .find(|c| c.pane == pane)
+        .expect("the panel is drawn")
+        .area;
+    let origin = shell
+        .metrics
+        .origin(shell.grid_area(), shell.cols, shell.rows);
+    let cell = shell.metrics.cell;
+    let bar = crate::tab_bar::height(&shell.metrics);
+    crate::geom::Point::new(
+        origin.x + (f32::from(area.x) + f32::from(area.width) / 2.0) * cell.width,
+        bar + origin.y + (f32::from(area.y) + f32::from(area.height) / 2.0) * cell.height,
+    )
+}
+
+/// Scrolling with a lot on screen: a long conversation, and hundreds of
+/// agents in the projects list. The chat scrolls a quarter of a row at
+/// a time, as a touchpad does, and a wheel's notch at a time; the
+/// projects list a notch at a time. A frame follows each.
+#[test]
+#[ignore = "benchmark"]
+fn scroll_timings() {
+    use aura_ui_terminal::Pane;
+    use winit::dpi::PhysicalPosition;
+    use winit::event::MouseScrollDelta;
+
+    let mut stage = stage();
+    seed(&mut stage);
+    let mut agents = Vec::new();
+    for project in 0..40 {
+        let name = format!("project-{project:02}");
+        agents.push(agent(
+            &format!("r{project}"),
+            &format!("Lead{project:02}"),
+            0,
+            Some(&name),
+        ));
+        for i in 0..9 {
+            let id = format!("r{project}-{i}");
+            agents.push(agent(
+                &id,
+                &format!("Helper{project:02}-{i}"),
+                1 + i % 2,
+                None,
+            ));
+        }
+    }
+    agents[0].id = "a1".into();
+    // No two rows alike, as in a real conversation.
+    let conversation: Vec<MessageData> = (0..200)
+        .flat_map(|turn| {
+            let reply: String = (0..12)
+                .map(|k| {
+                    format!(
+                        "Turn {turn}, point {k}: the kernel records step {k} of turn {turn} \
+                         and checks it against the policy before it runs.\n\n"
+                    )
+                })
+                .collect();
+            [
+                MessageData::new(MessageRole::User, format!("Question number {turn}")),
+                MessageData::new(MessageRole::Assistant, reply),
+            ]
+        })
+        .collect();
+    stage.apply([
+        UiCommand::SetAgents(agents),
+        UiCommand::SetActiveAgent("a1".into()),
+        UiCommand::LoadConversation(conversation),
+    ]);
+
+    let run = |stage: &mut super::tests::Stage, label: &str, delta: MouseScrollDelta| {
+        let (mut frames, mut built) = (Vec::new(), 0);
+        for _ in 0..160 {
+            stage.now += Duration::from_millis(16);
+            let t = Instant::now();
+            stage.shell.wheel(delta, stage.now);
+            stage.shell.frame(stage.now);
+            frames.push(t.elapsed());
+            built += stage.shell.painter.built();
+        }
+        report(label, &mut frames);
+        println!(
+            "  pieces painted anew: {built} over {} frames",
+            frames.len()
+        );
+    };
+
+    let chat = inside(&stage, Pane::Chat);
+    stage.shell.pointer_moved(chat);
+    stage.shell.frame(stage.now);
+    let quarter = f64::from(stage.shell.metrics.cell.height / super::glide::TOUCHPAD_GAIN) / 4.0;
+    let touchpad = MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, quarter));
+    run(&mut stage, "chat, a quarter row up and its frame", touchpad);
+    run(
+        &mut stage,
+        "chat, a notch up and its frame",
+        MouseScrollDelta::LineDelta(0.0, 1.0),
+    );
+
+    let projects = inside(&stage, Pane::Agents);
+    stage.shell.pointer_moved(projects);
+    stage.shell.frame(stage.now);
+    run(
+        &mut stage,
+        "projects list, a notch down and its frame",
+        MouseScrollDelta::LineDelta(0.0, -1.0),
+    );
+}
+
 /// The window with the most messages the UI keeps, and with a twentieth
 /// of that: the first frame, which lays every message out, a key and
 /// its frame, a frame after the window changed width, which lays them

@@ -122,7 +122,7 @@ pub(super) fn render_slash_menu(frame: &mut Frame, chat: Rect, app: &App, theme:
         .title(title)
         .title_bottom(Line::from(hint).right_aligned())
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.colors.primary));
+        .border_style(Style::default().fg(theme.colors.muted));
     frame.render_widget(Clear, area);
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }

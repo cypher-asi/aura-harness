@@ -54,8 +54,8 @@ pub use alerts::AlertSettings;
 /// The GRAPH tab's cards and wires, for a front end that draws them.
 pub use app::flow::{layout as flow_layout, FlowState};
 pub use app::{
-    AgentsTab, App, AppState, ChatTab, Pane, PaneChrome, PaneSplits, PaneTab, ProseMeasure,
-    ProseRow, SidePanelTab,
+    AgentsTab, App, AppState, ChatScroll, ChatTab, Pane, PaneChrome, PaneSplits, PaneTab,
+    ProseMeasure, ProseRow, SidePanelTab,
 };
 pub use events::{UiCommand, UiEvent};
 pub use mode_command::{ApprovalLevel, ModeCommandError, PermissionMode, SlashModeCommand};

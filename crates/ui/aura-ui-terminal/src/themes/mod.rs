@@ -4,18 +4,19 @@
 //!
 //! # Approved Colors (Cyber Theme)
 //!
-//! | Color       | Hex Code | Constant | Usage                              |
-//! |-------------|----------|----------|------------------------------------|
-//! | Cyan/Green  | #01f4cb  | `CYAN`   | Success states, neon accents       |
-//! | Blue        | #01a4f4  | `BLUE`   | Primary accent, info, provisioning |
-//! | Purple      | #cb01f4  | `PURPLE` | Code block keywords                |
-//! | Red         | #f4012a  | `RED`    | Errors, danger                     |
-//! | White       | #ffffff  | `WHITE`  | Text, secondary accent, pending    |
-//! | Gray        | #888888  | `GRAY`   | Muted text, secondary info         |
-//! | Black       | #0d0d0d  | `BLACK`  | Background                         |
+//! | Color       | Hex Code | Constant   | Usage                              |
+//! |-------------|----------|------------|------------------------------------|
+//! | Cyan/Green  | #01f4cb  | `CYAN`     | The accent: status, success        |
+//! | Blue        | #01a4f4  | `BLUE`     | Info, links                        |
+//! | Purple      | #cb01f4  | `PURPLE`   | Code block keywords                |
+//! | Red         | #f4012a  | `RED`      | Errors, danger                     |
+//! | White       | #ffffff  | `WHITE`    | Titles, emphasized text            |
+//! | Gray        | #808080  | `GRAY`     | Muted text, secondary info         |
+//! | Dim gray    | #5a5a5a  | `DIM_GRAY` | Borders, markers, the footer       |
+//! | Graphite    | #191919  | `BLACK`    | Background                         |
 
 mod cyber;
 mod theme;
 
-pub use cyber::{cyber_theme, BLACK, BLUE, CYAN, GRAY, PURPLE, RED, WHITE};
+pub use cyber::{cyber_theme, BLACK, BLUE, CYAN, DIM_GRAY, GRAY, PURPLE, RED, WHITE};
 pub use theme::{BorderStyle, Theme, ThemeColors};

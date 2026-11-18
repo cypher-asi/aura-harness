@@ -1,0 +1,45 @@
+ AURA CLI                                                                                                     ● demo@aura.dev (zOS)  http://127.0.0.1:8787 
+ ┌──────────────────────────────────┐ ┌─────────────────────────────────────────────────────────────────────────────┐ ┌──────────────────────────────────┐ 
+ │                                  │ │                                                                             │ │                                  │ 
+ ├──────────────────────────────────┤ ├─────────────────────────────────────────────────────────────────────────────┤ ├──────────────────────────────────┤ 
+ │ 🗁  aura-harness                + │ │                                                                             │ │                                  │ 
+ │    Agent01                       │ │  Turn 21: the kernel records the step, checks it against the policy and runs it. Then    │ │  No records yet.                 │ 
+ │   ⠐⠀ Reviewer                    │ │  cargo test passes.                                                          │ │                                  │ 
+ │                                  │ │                                                                             │ │  Records will appear             │ 
+ │                                  │ │  • one                                                                      │ │  as they are created.            │ 
+ │                                  │ │  • two                                                                      │ │                                  │ 
+ │                                  │ │                                                                             │ │                                  │ 
+ │                                  │ │  → Question 22: what runs next?                                               │ │                                  │ 
+ │                                  │ │                                                                             │ │                                  │ 
+ │                                  │ │  Turn 22: the kernel records the step, checks it against the policy and runs it. Then    │ │                                  │ 
+ │                                  │ │  cargo test passes.                                                          │ │                                  │ 
+ │                                  │ │                                                                             │ │                                  │ 
+ │                                  │ │  • one                                                                      │ │                                  │ 
+ │                                  │ │  • two                                                                      │ │                                  │ 
+ │                                  │ │                                                                             │ │                                  │ 
+ │                                  │ │  → Question 23: what runs next?                                               │ │                                  │ 
+ │                                  │ │                                                                             │ │                                  │ 
+ │                                  │ │  Turn 23: the kernel records the step, checks it against the policy and runs it. Then    │ │                                  │ 
+ │                                  │ │  cargo test passes.                                                          │ └──────────────────────────────────┘ 
+ │                                  │ │                                                                             │ ┌──────────────────────────────────┐ 
+ │                                  │ │  • one                                                                      │ │                                  │ 
+ │                                  │ │  • two                                                                      │ ├──────────────────────────────────┤ 
+ │                                  │ │                                                                             │ │  No sandbox yet.                 │ 
+ │                                  │ │  → Question 24: what runs next?                                               ┃ │                                  │ 
+ │                                  │ │                                                                             ┃ │                                  │ 
+ │                                  │ │  Turn 24: the kernel records the step, checks it against the policy and runs it. Then    ┃ │                                  │ 
+ │                                  │ │  cargo test passes.                                                          ┃ │                                  │ 
+ │                                  │ │                                                                             │ │                                  │ 
+ │                                  │ │  • one                                                                      │ │                                  │ 
+ │                                  │ │  • two                                                                      │ │                                  │ 
+ │                                  │ │                                                                             │ │                                  │ 
+ │                                  │ │  → Question 25: what runs next?                                               │ │                                  │ 
+ │                                  │ │                                                                             │ │                                  │ 
+ │                                  │ │  Turn 25: the kernel records the step, checks it against the policy and runs it. Then    │ │                                  │ 
+ │                                  │ │  cargo test passes.                                                          │ │                                  │ 
+ │                                  │ └─────────────────────────────────────────────────────────── ↓ 35 lines below ┘ │                                  │ 
+ │                                  │ ┌─────────────────────────────────────────────────────────────────────────────┐ │                                  │ 
+ │                                  │ │ → Add a follow-up                                                           │ │                                  │ 
+ │                                  │ └─────────────────────────────────────────────────────────────────────────────┘ │                                  │ 
+ │ +  New project                   │  Qwen3 Coder                                                           ● Ready  │                                  │ 
+ └──────────────────────────────────┘  / for commands · @ for files · $ for a terminal · Shift+Tab approval           └──────────────────────────────────┘ 

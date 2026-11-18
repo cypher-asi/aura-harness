@@ -248,15 +248,10 @@ impl CodeBlock {
         let label_str = format!(" {label} ");
         let border_after_label = "─".repeat(box_width.saturating_sub(label_str.len() + 3));
         result.push(Line::from(vec![
-            Span::styled("╭─", Style::default().fg(theme.colors.muted)),
-            Span::styled(
-                label_str,
-                Style::default()
-                    .fg(theme.colors.secondary)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(border_after_label, Style::default().fg(theme.colors.muted)),
-            Span::styled("╮", Style::default().fg(theme.colors.muted)),
+            Span::styled("╭─", Style::default().fg(theme.colors.faint)),
+            Span::styled(label_str, Style::default().fg(theme.colors.muted)),
+            Span::styled(border_after_label, Style::default().fg(theme.colors.faint)),
+            Span::styled("╮", Style::default().fg(theme.colors.faint)),
         ]));
 
         // Code lines with syntax highlighting
@@ -265,10 +260,10 @@ impl CodeBlock {
             let line_len = line.len();
             let padding = " ".repeat(box_width.saturating_sub(line_len + 4));
 
-            let mut spans = vec![Span::styled("│ ", Style::default().fg(theme.colors.muted))];
+            let mut spans = vec![Span::styled("│ ", Style::default().fg(theme.colors.faint))];
             spans.extend(highlighted);
             spans.push(Span::styled(padding, Style::default()));
-            spans.push(Span::styled(" │", Style::default().fg(theme.colors.muted)));
+            spans.push(Span::styled(" │", Style::default().fg(theme.colors.faint)));
 
             result.push(Line::from(spans));
         }
@@ -276,9 +271,9 @@ impl CodeBlock {
         // Bottom border
         let bottom_border = "─".repeat(box_width.saturating_sub(2));
         result.push(Line::from(vec![
-            Span::styled("╰", Style::default().fg(theme.colors.muted)),
-            Span::styled(bottom_border, Style::default().fg(theme.colors.muted)),
-            Span::styled("╯", Style::default().fg(theme.colors.muted)),
+            Span::styled("╰", Style::default().fg(theme.colors.faint)),
+            Span::styled(bottom_border, Style::default().fg(theme.colors.faint)),
+            Span::styled("╯", Style::default().fg(theme.colors.faint)),
         ]));
 
         result

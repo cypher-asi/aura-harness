@@ -169,7 +169,7 @@ fn render_model_selector(frame: &mut Frame, app: &App, theme: &Theme) {
     let block = Block::default()
         .title(" Select model ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.colors.primary));
+        .border_style(Style::default().fg(theme.colors.muted));
     frame.render_widget(Paragraph::new(lines).block(block), modal_area);
 }
 
@@ -271,7 +271,7 @@ pub(super) fn render_folder_picker(frame: &mut Frame, app: &mut App, theme: &The
     let block = Block::default()
         .title(" Select project folder ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.colors.primary));
+        .border_style(Style::default().fg(theme.colors.muted));
     frame.render_widget(Paragraph::new(lines).block(block), modal_area);
 }
 
@@ -320,7 +320,7 @@ fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
     let block = Block::default()
         .title(" Help ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.colors.primary));
+        .border_style(Style::default().fg(theme.colors.muted));
 
     let paragraph = Paragraph::new(help_text)
         .block(block)

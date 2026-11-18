@@ -27,9 +27,7 @@ fn token_style(kind: TokenKind, theme: &Theme) -> Style {
         TokenKind::Operator => style
             .fg(theme.colors.secondary)
             .add_modifier(Modifier::BOLD),
-        TokenKind::Quoted => style
-            .fg(theme.colors.foreground)
-            .add_modifier(Modifier::ITALIC),
+        TokenKind::Quoted => style.fg(theme.colors.text),
         TokenKind::Arg => style.fg(theme.colors.foreground),
     }
 }

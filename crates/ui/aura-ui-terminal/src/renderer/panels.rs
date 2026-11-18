@@ -7,8 +7,8 @@ use super::text::{display_width, wrap_words, Measure};
 use crate::{
     animation::AURA_WIDTH,
     app::{
-        tab_bar::TabLayout, AgentsTab, ChatTab, HoverTarget, ImageHit, Pane, PanelFocus,
-        ProjectListRow, ProseRow, ToggleRow, ToggleTarget,
+        tab_bar::TabLayout, AgentsTab, AppState, ChatScroll, ChatTab, HoverTarget, ImageHit, Pane,
+        PanelFocus, ProjectListRow, ProseRow, ToggleRow, ToggleTarget,
     },
     App, Theme,
 };
@@ -17,7 +17,9 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
+    widgets::{
+        Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Widget, Wrap,
+    },
     Frame,
 };
 use std::ops::Range;
@@ -76,19 +78,18 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     app.set_chat_width(padded.width);
     app.set_chat_text_area(padded);
 
-    let working_line = if terminal {
-        None
+    let tail = if terminal {
+        LiveTail::default()
     } else {
-        working_indicator_line(app, theme)
+        live_tail(app, padded.width as usize, theme)
     };
-    if app.pane_is_empty() && working_line.is_none() {
+    if app.pane_is_empty() && tail.lines.is_empty() {
         app.set_chat_images(Vec::new());
         render_welcome(frame, padded, terminal, theme);
         return;
     }
-    let tail: Vec<Line<'static>> = working_line.into_iter().collect();
 
-    let rows = render_chat_lines(frame, padded, app, theme, &tail);
+    let rows = render_chat_lines(frame, (body, padded), app, theme, &tail);
     render_scrollbar(
         frame,
         area,
@@ -122,11 +123,7 @@ pub(super) fn render_body_block(
 
 /// The border of a panel's body, below its header bar.
 pub(super) fn body_block<'a>((is_focused, hosted): (bool, bool), theme: &Theme) -> Block<'a> {
-    let border_color = if is_focused {
-        theme.colors.primary
-    } else {
-        theme.colors.muted
-    };
+    let border_color = border_color(is_focused, theme);
     let border_set = if hosted {
         ratatui::symbols::border::Set {
             top_left: "├",
@@ -140,6 +137,15 @@ pub(super) fn body_block<'a>((is_focused, hosted): (bool, bool), theme: &Theme) 
         .borders(Borders::ALL)
         .border_set(border_set)
         .border_style(Style::default().fg(border_color))
+}
+
+/// A panel's border: gray while it has focus, dim gray otherwise.
+pub(super) const fn border_color(is_focused: bool, theme: &Theme) -> Color {
+    if is_focused {
+        theme.colors.muted
+    } else {
+        theme.colors.faint
+    }
 }
 
 /// How much of a panel's list is on screen.
@@ -167,15 +173,11 @@ pub(super) fn render_scrollbar(
     if view.total <= view.visible || panel.width == 0 || rows.height == 0 {
         return;
     }
-    let border = if is_focused {
-        theme.colors.primary
+    let border = border_color(is_focused, theme);
+    let thumb = if is_focused {
+        theme.colors.foreground
     } else {
         theme.colors.muted
-    };
-    let thumb = if is_focused {
-        theme.colors.primary
-    } else {
-        theme.colors.secondary
     };
     let column = Rect {
         x: panel.x + panel.width - 1,
@@ -200,13 +202,15 @@ pub(super) fn render_scrollbar(
 
 /// Draw the rows of the conversation that fall in `padded` at the current
 /// scroll position, cloning only those rows out of the line cache, then
-/// `tail` (the working indicator) a blank row below them.
+/// `tail` a blank row below them. With smooth scrolling on, the row below
+/// `padded` is drawn on its own too, and `body` is what the front end
+/// slides.
 fn render_chat_lines(
     frame: &mut Frame,
-    padded: Rect,
+    (body, padded): (Rect, Rect),
     app: &mut App,
     theme: &Theme,
-    tail: &[Line<'static>],
+    tail: &LiveTail,
 ) -> ChatRows {
     let spinner = app.spinner_char();
     let hovered_activity = match app.hover() {
@@ -239,17 +243,17 @@ fn render_chat_lines(
         }));
         message_rows += block.lines.len();
     }
-    let tail_gap = usize::from(message_rows > 0 && !tail.is_empty());
+    let tail_gap = usize::from(message_rows > 0 && !tail.lines.is_empty());
     let tail_toggle = app
         .turn_started_ms()
-        .filter(|_| !tail.is_empty())
-        .map(|started| ToggleRow {
-            line: message_rows + tail_gap,
+        .zip(tail.status_row)
+        .map(|(started, row)| ToggleRow {
+            line: message_rows + tail_gap + row,
             target: ToggleTarget::TurnRecords(started),
             open: false,
         });
     toggle_rows.extend(tail_toggle);
-    let content = message_rows + tail_gap + tail.len();
+    let content = message_rows + tail_gap + tail.lines.len();
     let height = padded.height as usize;
     // Blank rows after the end, enough that scrolling to the bottom can
     // bring the latest prompt to the top with the reply filling in below,
@@ -262,16 +266,18 @@ fn render_chat_lines(
     let start = app.sync_chat_scroll(total, height, reflowed);
     app.set_chat_layout(toggle_rows, start);
 
+    let smooth = app.smooth_scroll();
+    let rows = height + usize::from(smooth);
     let (_, cache, _) = app.chat_line_cache();
     let blank = Line::default();
-    let mut visible = Vec::with_capacity(height);
+    let mut visible = Vec::with_capacity(rows);
     let mut prose = Vec::new();
     let mut user_rows = Vec::new();
     let mut line_index = 0usize;
     for (i, block) in cache.blocks().enumerate() {
         if i > 0 {
             for _ in 0..gap {
-                push_visible(&mut visible, &mut line_index, start, height, blank.clone());
+                push_visible(&mut visible, &mut line_index, start, rows, blank.clone());
             }
         }
         let hovered = |offset: usize| {
@@ -281,7 +287,7 @@ fn render_chat_lines(
                 .any(|toggle| toggle.line == offset && hovered_activity == Some(toggle.target))
         };
         for (offset, line) in block.lines.iter().enumerate() {
-            if line_index >= start && visible.len() < height {
+            if line_index >= start && visible.len() < rows {
                 let mut line = line.clone();
                 if hovered(offset) {
                     apply_activity_hover(&mut line, theme);
@@ -298,15 +304,25 @@ fn render_chat_lines(
         }
     }
     if tail_gap > 0 {
-        push_visible(&mut visible, &mut line_index, start, height, blank);
+        push_visible(&mut visible, &mut line_index, start, rows, blank);
     }
-    for (row, line) in tail.iter().enumerate() {
+    for (row, line) in tail.lines.iter().enumerate() {
         let mut line = line.clone();
-        if row == 0 && tail_toggle.is_some_and(|t| hovered_activity == Some(t.target)) {
+        if tail.status_row == Some(row)
+            && tail_toggle.is_some_and(|t| hovered_activity == Some(t.target))
+        {
             apply_activity_hover(&mut line, theme);
         }
-        push_visible(&mut visible, &mut line_index, start, height, line);
+        push_visible(&mut visible, &mut line_index, start, rows, line);
     }
+    let next = (visible.len() > height).then(|| visible.pop()).flatten();
+    let next_prose = prose
+        .last()
+        .filter(|(row, _)| *row == height)
+        .map(|&(_, indent)| indent.min(padded.width));
+    prose.retain(|(row, _)| *row < height);
+    let next_user = user_rows.last() == Some(&height);
+    user_rows.retain(|row| *row < height);
     let prose_lines: Vec<(usize, u16, Line<'static>)> = prose
         .into_iter()
         .map(|(row, indent)| (row, indent.min(padded.width), visible[row].clone()))
@@ -354,11 +370,58 @@ fn render_chat_lines(
         }
     }
     app.set_chat_images(image_hits);
+    if smooth {
+        let width = frame.buffer_mut().area.width;
+        let below = row_below(width, padded, next, (next_prose, next_user), measure, theme);
+        let view = ChatScroll {
+            body,
+            above: start,
+            below: app.scroll_offset(),
+        };
+        app.set_chat_scroll(view, frame.buffer_mut(), below);
+    }
     ChatRows {
         total,
         first: start,
         padding,
     }
+}
+
+/// The chat's `line` below `padded`, drawn alone into a buffer a row high
+/// and `width` wide, with its prose when it has an indent (`prose`), and
+/// the band of a user's message under it when it is one (`user`).
+fn row_below(
+    width: u16,
+    padded: Rect,
+    line: Option<Line<'static>>,
+    (prose, user): (Option<u16>, bool),
+    measure: Measure,
+    theme: &Theme,
+) -> (Buffer, Option<ProseRow>) {
+    let mut buffer = Buffer::empty(Rect::new(0, 0, width, 1));
+    let row = Rect {
+        y: 0,
+        height: 1,
+        ..padded
+    }
+    .intersection(buffer.area);
+    let Some(line) = line else {
+        return (buffer, None);
+    };
+    let prose_line = prose.map(|indent| (indent, line.clone()));
+    Paragraph::new(line).render(row, &mut buffer);
+    let prose = prose_line.map(|(indent, line)| {
+        let (width, code) = if measure.is_grid() {
+            prose_columns(&line, row, theme)
+        } else {
+            pack_prose(&mut buffer, &line, (row, indent), measure, theme)
+        };
+        ProseRow::new(&buffer, (row.x, row.y), (width, indent), code)
+    });
+    if user {
+        paint_user_band(&mut buffer, row, &[0], theme);
+    }
+    (buffer, prose)
 }
 
 /// How the chat's rows fell in the last frame.
@@ -537,7 +600,7 @@ fn render_lines_below_hint(frame: &mut Frame, panel: Rect, below: usize, theme: 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             label,
-            Style::default().fg(theme.colors.primary),
+            Style::default().fg(theme.colors.muted),
         )))
         .alignment(ratatui::layout::Alignment::Right),
         border_row,
@@ -546,59 +609,100 @@ fn render_lines_below_hint(frame: &mut Frame, panel: Rect, below: usize, theme: 
 
 /// The text area of the chat and the terminal. The terminal keeps a single
 /// column on each side, so output starts at the top left like a terminal's;
-/// the chat is inset further so the conversation reads as a narrower column.
+/// the chat is inset further, starts a row down, and stops at
+/// [`MAX_CHAT_WIDTH`] columns so long lines stay readable.
 fn terminal_text_area(area: Rect, terminal: bool) -> Rect {
-    let inset = if terminal { 1 } else { chat_inset(area.width) };
+    if terminal {
+        return Rect {
+            x: area.x.saturating_add(1),
+            width: area.width.saturating_sub(2),
+            ..area
+        };
+    }
+    let inset = chat_inset(area.width);
+    let top = u16::from(area.height > CHAT_TOP_PAD_MIN_HEIGHT);
     Rect {
         x: area.x.saturating_add(inset),
-        width: area.width.saturating_sub(inset * 2),
-        ..area
+        y: area.y + top,
+        width: area.width.saturating_sub(inset * 2).min(MAX_CHAT_WIDTH),
+        height: area.height - top,
     }
 }
 
-/// Columns of blank space on each side of the chat. Grows with the panel
-/// so wide panels get a narrower reading column, but stays at one column
-/// on narrow panels where every column of text counts.
-fn chat_inset(width: u16) -> u16 {
+/// Widest the chat's text runs, in columns.
+const MAX_CHAT_WIDTH: u16 = 110;
+
+/// Chat panels this short or shorter give up the blank row above the
+/// conversation.
+const CHAT_TOP_PAD_MIN_HEIGHT: u16 = 8;
+
+/// Columns of blank space on each side of the chat: two, or one on narrow
+/// panels where every column of text counts.
+const fn chat_inset(width: u16) -> u16 {
     if width < 40 {
         1
     } else {
-        (width / 12).clamp(3, 8)
+        2
     }
 }
 
-/// `⠹ thinking… 12s` — shown below the conversation while a turn is in
-/// flight and no reply text is streaming. Once the agent has shown
-/// something this turn, it sits in line with the steps:
-/// `  ⠹ thinking… 12s`.
+/// What follows the conversation while a turn is in flight: the to-do
+/// checklist, then the working line.
+#[derive(Default)]
+struct LiveTail {
+    lines: Vec<Line<'static>>,
+    /// Row in `lines` of the working line, which opens the turn's records
+    /// when clicked.
+    status_row: Option<usize>,
+}
+
+fn live_tail(app: &App, width: usize, theme: &Theme) -> LiveTail {
+    let mut lines = if app.state() == AppState::Processing {
+        super::hud::todo_checklist(app.hud(), width, theme)
+    } else {
+        Vec::new()
+    };
+    let status_row = working_indicator_line(app, theme).map(|line| {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        lines.push(line);
+        lines.len() - 1
+    });
+    LiveTail { lines, status_row }
+}
+
+/// `⬢ Thinking… 12s` — shown below the conversation, flush with the
+/// prose, while a turn is in flight and no reply text is streaming.
 pub(super) fn working_indicator_line<'a>(app: &App, theme: &Theme) -> Option<Line<'a>> {
     if app.has_live_activity() || app.ends_in_live_group() {
         return None;
     }
     let label = app.working_label()?;
-    let lead = if app.turn_has_agent_block() { "  " } else { "" };
     let mut spans = vec![
-        Span::raw(lead),
+        Span::styled("⬢ ", Style::default().fg(theme.colors.success)),
         Span::styled(
-            format!("{} ", app.spinner_char()),
-            Style::default().fg(theme.colors.secondary),
-        ),
-        Span::styled(
-            format!("{label}…"),
+            format!("{}…", capitalized(&label)),
             Style::default()
-                .fg(theme.colors.muted)
-                .add_modifier(Modifier::ITALIC),
+                .fg(theme.colors.foreground)
+                .add_modifier(Modifier::BOLD),
         ),
     ];
     if let Some(elapsed) = app.processing_elapsed().filter(|e| e.as_secs() > 0) {
         spans.push(Span::styled(
             format!(" {}", format_elapsed(elapsed)),
-            Style::default()
-                .fg(theme.colors.muted)
-                .add_modifier(Modifier::DIM),
+            Style::default().fg(theme.colors.muted),
         ));
     }
     Some(Line::from(spans))
+}
+
+/// `text` with its first letter in upper case.
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
 }
 
 /// `7s`, `2m 05s`.
@@ -664,14 +768,14 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
             app.set_agent_rows_area(rows_area);
             app.set_new_project_area(bottom_row);
             app.sync_agents_scroll(visible);
-            let mut lines = build_swarm_lines(app, body, theme);
-            let new_project = lines.pop().unwrap_or_default();
+            let first = app.agents_scroll();
+            let (lines, new_project, total) =
+                build_swarm_lines(app, body, first..first + visible, theme);
             let view = ScrollView {
-                total: lines.len(),
+                total,
                 visible,
-                first: app.agents_scroll(),
+                first,
             };
-            let lines: Vec<Line> = lines.into_iter().skip(view.first).take(visible).collect();
             frame.render_widget(Paragraph::new(lines), rows_area);
             frame.render_widget(Paragraph::new(new_project), bottom_row);
             render_scrollbar(frame, area, rows_area, view, is_focused, theme);
@@ -701,13 +805,13 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
             let visible = body.height as usize;
             app.set_archived_rows_area(body);
             app.sync_archived_scroll(visible);
-            let lines = build_archived_lines(app, body, theme);
+            let first = app.archived_scroll();
+            let (lines, total) = build_archived_lines(app, body, first..first + visible, theme);
             let view = ScrollView {
-                total: lines.len(),
+                total,
                 visible,
-                first: app.archived_scroll(),
+                first,
             };
-            let lines: Vec<Line> = lines.into_iter().skip(view.first).take(visible).collect();
             frame.render_widget(Paragraph::new(lines), body);
             render_scrollbar(frame, area, body, view, is_focused, theme);
         }
@@ -720,8 +824,14 @@ const EMPTY_INDENT: usize = 2;
 
 /// Archive rows: each archived agent with the project it came from on the
 /// right, and the agents under it indented below. Empty, it says how
-/// agents get there, wrapped to the panel inside its padding.
-fn build_archived_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>> {
+/// agents get there, wrapped to the panel inside its padding. Only the
+/// rows in `window` are drawn; the total comes with them.
+fn build_archived_lines<'a>(
+    app: &App,
+    inner: Rect,
+    window: Range<usize>,
+    theme: &Theme,
+) -> (Vec<Line<'a>>, usize) {
     let archived = app.archived();
     if archived.is_empty() {
         let muted = Style::default().fg(theme.colors.muted);
@@ -729,7 +839,7 @@ fn build_archived_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'
             .saturating_sub(2 * EMPTY_INDENT)
             .max(1);
         let indent = " ".repeat(EMPTY_INDENT);
-        return [
+        let lines: Vec<Line> = [
             "No archived agents.",
             "Delete on an agent in PROJECTS archives it.",
         ]
@@ -737,13 +847,22 @@ fn build_archived_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'
         .flat_map(|sentence| wrap_words(sentence, room))
         .map(|line| Line::from(Span::styled(format!("{indent}{line}"), muted)))
         .collect();
+        let total = lines.len();
+        let shown = lines
+            .into_iter()
+            .skip(window.start)
+            .take(window.len())
+            .collect();
+        return (shown, total);
     }
     let is_focused = app.focus() == PanelFocus::Swarm;
     let width = inner.width as usize;
     let now_ms = now_ms();
-    archived
+    let shown = archived
         .iter()
         .enumerate()
+        .skip(window.start)
+        .take(window.len())
         .map(|(index, agent)| {
             let selected = is_focused && index == app.selected_archived();
             let hovered = matches!(app.hover(), Some(HoverTarget::ArchivedRow(i)) if i == index);
@@ -768,7 +887,8 @@ fn build_archived_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'
                 side.as_deref(),
             )
         })
-        .collect()
+        .collect();
+    (shown, archived.len())
 }
 
 /// A project is its own row under a folder icon, with a "+" on the right
@@ -793,7 +913,16 @@ fn build_archived_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'
 ///  …
 ///  +  New project
 /// ```
-fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>> {
+///
+/// Returns the rows in `window` of the ones that scroll, the pinned last
+/// row, and how many rows scroll. Only those rows are formatted, so a
+/// long list costs what fits on screen.
+fn build_swarm_lines<'a>(
+    app: &App,
+    inner: Rect,
+    window: Range<usize>,
+    theme: &Theme,
+) -> (Vec<Line<'a>>, Line<'a>, usize) {
     let is_focused = app.focus() == PanelFocus::Swarm;
     let selected = app.selected_agent();
     let active_id = app.active_agent_id();
@@ -802,13 +931,30 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
     let is_thinking = |agent: &crate::events::AgentSummary| {
         agent.running || (agent.id == active_id && app.is_processing())
     };
-    let project_name = Style::default()
-        .fg(theme.colors.muted)
-        .add_modifier(Modifier::BOLD);
+    let project_name = Style::default().fg(theme.colors.muted);
     let agent_name = Style::default().fg(theme.colors.foreground);
-    let mut lines = Vec::new();
+    let rows = app.project_rows();
+    let listed = rows.len().saturating_sub(1);
+    // A project's agents run up to the next project's root.
+    let roots: Vec<usize> = rows
+        .iter()
+        .filter_map(|row| match row {
+            ProjectListRow::Project { root, .. } => Some(*root),
+            _ => None,
+        })
+        .collect();
+    let mut projects_seen = 0;
+    let mut lines = Vec::with_capacity(window.len());
+    let mut new_project = Line::default();
 
-    for (row_index, row) in app.project_rows().into_iter().enumerate() {
+    for (row_index, row) in rows.into_iter().enumerate() {
+        if matches!(row, ProjectListRow::Project { .. }) {
+            projects_seen += 1;
+        }
+        let pinned = matches!(row, ProjectListRow::NewProject);
+        if !pinned && (row_index >= listed || !window.contains(&row_index)) {
+            continue;
+        }
         let is_selected = match row {
             ProjectListRow::Project { .. } | ProjectListRow::Gap => false,
             _ if is_focused => row_index == selected,
@@ -821,7 +967,10 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
             || matches!(app.hover(), Some(HoverTarget::ProjectRow(index)) if index == row_index);
         match row {
             ProjectListRow::Project { root, expanded } => {
-                let end = app_project_end(app, root);
+                let end = roots
+                    .get(projects_seen)
+                    .copied()
+                    .unwrap_or(app.agents().len());
                 let agents = &app.agents()[root..end];
                 let icon = if !expanded && agents.iter().any(is_thinking) {
                     aura_icon(app)
@@ -868,12 +1017,12 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
                     Style::default().fg(theme.colors.muted),
                 );
                 let icon = StatusIcon::new("+", cell.text.fg.unwrap_or(theme.colors.muted));
-                lines.push(list_row(width, 0, icon, "New project", cell, None));
+                new_project = list_row(width, 0, icon, "New project", cell, None);
             }
             ProjectListRow::Gap => lines.push(Line::default()),
         }
     }
-    lines
+    (lines, new_project, listed)
 }
 
 /// What sits in the icon column of a projects-list row.
@@ -1031,15 +1180,6 @@ pub(super) fn format_ago(then_ms: u64, now_ms: u64) -> String {
         s if s < WEEK => format!("{}d", s / DAY),
         s => format!("{}w", s / WEEK),
     }
-}
-
-/// First index past the agents belonging to the project rooted at `root`.
-fn app_project_end(app: &App, root: usize) -> usize {
-    app.agents()
-        .iter()
-        .skip(root + 1)
-        .position(|agent| agent.heads_project())
-        .map_or(app.agents().len(), |offset| root + 1 + offset)
 }
 
 fn project_label(agent: &crate::events::AgentSummary) -> String {

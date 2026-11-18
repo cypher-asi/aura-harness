@@ -7,7 +7,9 @@
 //! A row of the grid costs the most to turn into quads (its text is
 //! shaped), so [`RowCache`] keeps the quads of each row by what the row
 //! holds. A row that scrolled is the same quads at another height, and
-//! a row that comes back is not shaped again.
+//! a row that comes back is not shaped again. Rows are kept in pieces,
+//! a panel's stretch of the row each, so a panel that scrolls leaves the
+//! pieces of the panels beside it as they were.
 
 use crate::geom::{rgba, Color};
 use aura_ui_terminal::ProseRow;
@@ -77,6 +79,23 @@ impl Quad {
     pub const fn lowered(mut self, rows: i32) -> Self {
         self.y += rows;
         self
+    }
+
+    /// The part of the quad from pixel row `top` to before `bottom`, and
+    /// the atlas pixels under that part; `None` when it is all outside.
+    #[must_use]
+    pub fn clipped(mut self, top: i32, bottom: i32) -> Option<Self> {
+        let end = self.y.saturating_add_unsigned(self.h).min(bottom);
+        let start = self.y.max(top);
+        if end <= start {
+            return None;
+        }
+        if self.fill != Fill::Solid {
+            self.v += start.abs_diff(self.y);
+        }
+        self.y = start;
+        self.h = end.abs_diff(start);
+        Some(self)
     }
 }
 
@@ -160,9 +179,18 @@ impl Layers {
         self.under.extend(other.under.iter().map(lowered));
         self.over.extend(other.over.iter().map(lowered));
     }
+
+    /// Add `other`, `rows` pixels lower, cut to the pixel rows `clip`.
+    pub fn extend_clipped(&mut self, other: &Self, rows: i32, clip: Range<i32>) {
+        let lowered = |quad: &Quad| quad.lowered(rows).clipped(clip.start, clip.end);
+        self.under.extend(other.under.iter().filter_map(lowered));
+        self.over.extend(other.over.iter().filter_map(lowered));
+    }
 }
 
 struct CachedRow {
+    /// The column the piece starts at
+    start: usize,
     cells: Vec<Cell>,
     flow: Option<Flow>,
     /// With the row's top at 0
@@ -172,31 +200,31 @@ struct CachedRow {
 }
 
 impl CachedRow {
-    fn holds(&self, cells: &[Cell], prose: Option<&ProseRow>) -> bool {
+    fn holds(&self, start: usize, cells: &[Cell], prose: Option<&ProseRow>) -> bool {
         let same_flow = match (&self.flow, prose) {
             (None, None) => true,
             (Some(flow), Some(prose)) => flow.is(prose),
             _ => false,
         };
-        same_flow && self.cells == cells
+        same_flow && self.start == start && self.cells == cells
     }
 }
 
-/// The quads of grid rows, by what the rows hold. Everything else a row's
-/// quads depend on (the font size, the colors, where the grid starts, the
-/// atlas) is the same for every row, so the owner calls [`Self::clear`]
-/// when one of those changes.
+/// The quads of pieces of grid rows, by where a piece starts and what it
+/// holds. Everything else a piece's quads depend on (the font size, the
+/// colors, where the grid starts, the atlas) is the same for every
+/// piece, so the owner calls [`Self::clear`] when one of those changes.
 pub struct RowCache {
     rows: HashMap<u64, CachedRow>,
     frame: u64,
-    /// Rows kept; the ones not drawn for longest go first
+    /// Pieces kept; the ones not drawn for longest go first
     limit: usize,
     built: usize,
 }
 
 impl Default for RowCache {
     fn default() -> Self {
-        Self::new(1024)
+        Self::new(4096)
     }
 }
 
@@ -210,15 +238,18 @@ impl RowCache {
         }
     }
 
-    /// The quads of a row holding `cells` and `prose`, with the row's top
-    /// at 0: `build` makes them the first time.
+    /// The quads of a piece of a row from column `start`, holding `cells`
+    /// and `prose`, with the row's top at 0: `build` makes them the first
+    /// time.
     pub fn row(
         &mut self,
+        start: usize,
         cells: &[Cell],
         prose: Option<&ProseRow>,
         build: impl FnOnce(&mut Layers),
     ) -> &Layers {
         let mut hasher = DefaultHasher::new();
+        start.hash(&mut hasher);
         cells.hash(&mut hasher);
         if let Some(prose) = prose {
             (prose.x, prose.width, prose.indent, &prose.code).hash(&mut hasher);
@@ -229,7 +260,7 @@ impl RowCache {
         let hit = self
             .rows
             .get(&key)
-            .is_some_and(|row| row.holds(cells, prose));
+            .is_some_and(|row| row.holds(start, cells, prose));
         if !hit {
             let mut quads = Layers::default();
             build(&mut quads);
@@ -237,6 +268,7 @@ impl RowCache {
             self.rows.insert(
                 key,
                 CachedRow {
+                    start,
                     cells: cells.to_vec(),
                     flow: prose.map(Flow::of),
                     quads,
@@ -310,12 +342,44 @@ mod tests {
     }
 
     #[test]
+    fn clipping_keeps_the_atlas_pixels_under_what_is_left() {
+        let glyph = Quad {
+            fill: Fill::Mask,
+            u: 40,
+            v: 100,
+            ..Quad::solid(0.0, 10.0, 4.0, 20.0, RED).expect("a quad")
+        };
+        let top = glyph.clipped(14, 30).expect("its lower part");
+        assert_eq!((top.y, top.h, top.u, top.v), (14, 6, 40, 104));
+        let bottom = glyph.clipped(0, 12).expect("its upper part");
+        assert_eq!((bottom.y, bottom.h, bottom.v), (10, 2, 100));
+        assert_eq!(glyph.clipped(20, 40), None);
+
+        let solid = Quad::solid(0.0, 10.0, 4.0, 20.0, RED).expect("a quad");
+        assert_eq!(
+            solid.clipped(15, 30).map(|q| (q.y, q.h, q.v)),
+            Some((15, 5, 0))
+        );
+
+        let mut layers = Layers::default();
+        layers.under.push(solid);
+        layers.over.push(glyph);
+        let mut frame = Layers::default();
+        frame.extend_clipped(&layers, -8, 4..10);
+        assert_eq!(frame.under.len(), 1);
+        assert_eq!(
+            (frame.over[0].y, frame.over[0].h, frame.over[0].v),
+            (4, 6, 102)
+        );
+    }
+
+    #[test]
     fn a_row_is_built_once_for_what_it_holds() {
         let mut cache = RowCache::default();
         let (a, b) = (row("hello"), row("world"));
         let mut builds = 0;
         for cells in [&a, &b, &a, &a] {
-            let quads = cache.row(cells, None, |out| {
+            let quads = cache.row(0, cells, None, |out| {
                 builds += 1;
                 out.under.push(mark(7));
             });
@@ -325,33 +389,37 @@ mod tests {
         assert_eq!(builds, 2);
         assert_eq!(cache.finish_frame(), 2);
 
-        cache.row(&a, None, |_| panic!("kept from the last frame"));
+        cache.row(0, &a, None, |_| panic!("kept from the last frame"));
         assert_eq!(cache.finish_frame(), 0);
+
+        let mut built = false;
+        cache.row(4, &a, None, |_| built = true);
+        assert!(built, "the same cells further along are other quads");
     }
 
     #[test]
     fn rows_not_drawn_for_longest_are_forgotten() {
         let mut cache = RowCache::new(8);
         for frame in 0..40 {
-            cache.row(&row(&format!("row {frame}")), None, |_| {});
-            cache.row(&row("always"), None, |_| {});
+            cache.row(0, &row(&format!("row {frame}")), None, |_| {});
+            cache.row(0, &row("always"), None, |_| {});
             cache.finish_frame();
         }
         assert!(cache.len() <= 8, "{} rows kept", cache.len());
-        cache.row(&row("always"), None, |_| panic!("drawn every frame"));
-        cache.row(&row("row 39"), None, |_| panic!("drawn last frame"));
+        cache.row(0, &row("always"), None, |_| panic!("drawn every frame"));
+        cache.row(0, &row("row 39"), None, |_| panic!("drawn last frame"));
         let mut rebuilt = false;
-        cache.row(&row("row 0"), None, |_| rebuilt = true);
+        cache.row(0, &row("row 0"), None, |_| rebuilt = true);
         assert!(rebuilt, "the oldest row was dropped");
     }
 
     #[test]
     fn clearing_forgets_every_row() {
         let mut cache = RowCache::default();
-        cache.row(&row("hello"), None, |_| {});
+        cache.row(0, &row("hello"), None, |_| {});
         cache.clear();
         let mut rebuilt = false;
-        cache.row(&row("hello"), None, |_| rebuilt = true);
+        cache.row(0, &row("hello"), None, |_| rebuilt = true);
         assert!(rebuilt);
     }
 }

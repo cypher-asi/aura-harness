@@ -21,8 +21,8 @@ use crate::tab_bar::Hit;
 use crate::{raster, text};
 use aura_ui::events::{
     AgentDefinitionSummary, AgentSummary, CallUsage, FlowKind, FlowLane, FlowNode, MessageData,
-    MessageRole, ModelOptionView, ProcessKind, ProcessStatus, ProcessSummary, ToolData,
-    TraceNodeStatus, UiCommand,
+    MessageRole, ModelOptionView, ProcessKind, ProcessStatus, ProcessSummary, TodoState, TodoView,
+    ToolData, TraceNodeStatus, UiCommand,
 };
 use aura_ui_terminal::{AgentsTab, ChatTab, PaneTab};
 use winit::event::MouseButton;
@@ -395,10 +395,50 @@ fn prose_is_set_in_inter_and_code_stays_on_the_grid() {
         UiCommand::Complete,
     ]);
     let text = h.screen();
-    assert!(text.contains("the files in the project folder"), "{text}");
+    assert!(text.contains("files in the project folder"), "{text}");
     assert!(text.contains("fn main() {}"), "{text}");
     assert!(!h.shell.prose.is_empty(), "the reply's text is prose");
     snapshot("prose", &mut h);
+}
+
+#[test]
+fn the_chat_slides_half_a_row_up() {
+    use winit::dpi::PhysicalPosition;
+    use winit::event::MouseScrollDelta;
+
+    let mut h = stage();
+    seed(&mut h);
+    let conversation: Vec<MessageData> = (0..30)
+        .flat_map(|turn| {
+            [
+                MessageData::new(
+                    MessageRole::User,
+                    format!("Question {turn}: what runs next?"),
+                ),
+                MessageData::new(
+                    MessageRole::Assistant,
+                    format!(
+                        "Turn {turn}: the kernel records the step, checks it against the \
+                         policy and runs it. Then `cargo test` passes.\n\n- one\n- two"
+                    ),
+                ),
+            ]
+        })
+        .collect();
+    h.apply([UiCommand::LoadConversation(conversation)]);
+    let (width, height) = (h.shell.window.width, h.shell.window.height);
+    h.shell.pointer_moved(Point::new(width / 2.0, height / 2.0));
+    h.shell.frame(h.now);
+    let row = f64::from(h.shell.metrics.cell.height / super::glide::TOUCHPAD_GAIN);
+    for _ in 0..41 {
+        h.shell.wheel(
+            MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, row * 1.5)),
+            h.now,
+        );
+        h.shell.frame(h.now);
+    }
+    assert!(h.shell.tabs.front().tui.scroll_offset() > 0);
+    snapshot("chat-sliding", &mut h);
 }
 
 #[test]
@@ -448,10 +488,23 @@ fn agent_working() {
     let mut h = stage();
     seed(&mut h);
     steps(&mut h);
-    h.apply([UiCommand::AppendThinking("Checking the diff…".into())]);
+    let todo = |content: &str, state| TodoView {
+        content: content.into(),
+        state,
+    };
+    h.apply([
+        UiCommand::SetTodos(vec![
+            todo("Read the failing test", TodoState::Completed),
+            todo("Fix the parser", TodoState::InProgress),
+            todo("Run the suite", TodoState::Pending),
+        ]),
+        UiCommand::AppendThinking("Checking the diff…".into()),
+    ]);
     for _ in 0..3 {
         h.pass(TICK);
     }
+    let screen = h.screen();
+    assert!(screen.contains("Working on 3 to-dos"), "{screen}");
     snapshot("working", &mut h);
 }
 

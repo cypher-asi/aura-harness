@@ -1,19 +1,22 @@
-//! Default cyber theme with neon colors.
+//! Default cyber theme: graphite neutrals with one green accent.
 //!
 //! # Approved Color Palette
 //!
-//! | Color       | Hex Code | RGB            | Usage                              |
-//! |-------------|----------|----------------|-------------------------------------|
-//! | Cyan/Green  | #01f4cb  | (1, 244, 203)  | Success, neon accents, selected row |
-//! | Blue        | #01a4f4  | (1, 164, 244)  | Primary accent, info, provisioning  |
-//! | Purple      | #cb01f4  | (203, 1, 244)  | Code block keywords                 |
-//! | Red         | #f4012a  | (244, 1, 42)   | Errors, danger                      |
-//! | White       | #ffffff  | (255, 255, 255)| Text, secondary accent, pending     |
-//! | Light gray  | #e6e6e6  | (230, 230, 230)| Body text of chat replies           |
-//! | Gray        | #888888  | (136, 136, 136)| Muted text, secondary info          |
-//! | Black       | #0d0d0d  | (13, 13, 13)   | Background, text on selection       |
-//! | Dark gray   | #1e1e1e  | (30, 30, 30)   | List cell                           |
-//! | Graphite    | #2a2a2a  | (42, 42, 42)   | List cell under the pointer         |
+//! | Color       | Hex Code | RGB            | Usage                                   |
+//! |-------------|----------|----------------|-----------------------------------------|
+//! | Cyan/Green  | #01f4cb  | (1, 244, 203)  | Status glyphs, success, diff additions  |
+//! | Blue        | #01a4f4  | (1, 164, 244)  | Info, links, mode badges                |
+//! | Purple      | #cb01f4  | (203, 1, 244)  | Code block keywords                     |
+//! | Red         | #f4012a  | (244, 1, 42)   | Errors, danger                          |
+//! | White       | #ffffff  | (255, 255, 255)| Titles, the user's text, the current item |
+//! | Light gray  | #e6e6e6  | (230, 230, 230)| Body text of chat replies               |
+//! | Silver      | #b3b3b3  | (179, 179, 179)| Secondary text, the verb of a step      |
+//! | Gray        | #808080  | (128, 128, 128)| Muted text, focused borders             |
+//! | Dim gray    | #5a5a5a  | (90, 90, 90)   | Borders, markers, the footer            |
+//! | Graphite    | #191919  | (25, 25, 25)   | Background                              |
+//! | Dark gray   | #242424  | (36, 36, 36)   | List cell, the user's messages, code    |
+//! | Charcoal    | #2e2e2e  | (46, 46, 46)   | List cell under the pointer             |
+//! | Slate       | #383838  | (56, 56, 56)   | Selected row, active tab                |
 
 use super::{BorderStyle, Theme, ThemeColors};
 use ratatui::style::Color;
@@ -22,10 +25,10 @@ use ratatui::style::Color;
 // APPROVED COLOR CONSTANTS
 // ============================================================================
 
-/// Cyan/Green - Success states, neon accents (#01f4cb)
+/// Cyan/Green - Status glyphs, success (#01f4cb)
 pub const CYAN: Color = Color::Rgb(1, 244, 203);
 
-/// Blue - Primary accent, info, provisioning (#01a4f4)
+/// Blue - Info, links (#01a4f4)
 pub const BLUE: Color = Color::Rgb(1, 164, 244);
 
 /// Purple - Code block keywords (#cb01f4)
@@ -34,23 +37,32 @@ pub const PURPLE: Color = Color::Rgb(203, 1, 244);
 /// Red - Errors, danger (#f4012a)
 pub const RED: Color = Color::Rgb(244, 1, 42);
 
-/// White - Primary text (#ffffff)
+/// White - Titles and emphasized text (#ffffff)
 pub const WHITE: Color = Color::White;
 
 /// Light gray - Body text of chat replies (#e6e6e6)
 pub const LIGHT_GRAY: Color = Color::Rgb(230, 230, 230);
 
-/// Gray - Muted text, secondary info (#888888)
-pub const GRAY: Color = Color::Rgb(136, 136, 136);
+/// Silver - Secondary text (#b3b3b3)
+pub const SILVER: Color = Color::Rgb(179, 179, 179);
 
-/// Black - Background (#0d0d0d)
-pub const BLACK: Color = Color::Rgb(13, 13, 13);
+/// Gray - Muted text, secondary info (#808080)
+pub const GRAY: Color = Color::Rgb(128, 128, 128);
 
-/// Dark gray - List cell (#1e1e1e)
-pub const DARK_GRAY: Color = Color::Rgb(30, 30, 30);
+/// Dim gray - Borders, markers and the footer (#5a5a5a)
+pub const DIM_GRAY: Color = Color::Rgb(90, 90, 90);
 
-/// Graphite - List cell under the pointer (#2a2a2a)
-pub const GRAPHITE: Color = Color::Rgb(42, 42, 42);
+/// Graphite - Background (#191919)
+pub const BLACK: Color = Color::Rgb(25, 25, 25);
+
+/// Dark gray - List cell, shaded messages (#242424)
+pub const DARK_GRAY: Color = Color::Rgb(36, 36, 36);
+
+/// Charcoal - List cell under the pointer (#2e2e2e)
+pub const GRAPHITE: Color = Color::Rgb(46, 46, 46);
+
+/// Slate - Selected row and active tab (#383838)
+pub const SLATE: Color = Color::Rgb(56, 56, 56);
 
 // ============================================================================
 // THEME
@@ -58,12 +70,10 @@ pub const GRAPHITE: Color = Color::Rgb(42, 42, 42);
 
 /// Create the default cyber theme.
 ///
-/// Uses only the approved color palette:
-/// - Cyan (#01f4cb): Success, neon accents, selected list row
-/// - Blue (#01a4f4): Info
-/// - Red (#f4012a): Errors, danger
-/// - White: Text, secondary accent, pending states
-/// - Gray/Black: Muted text and backgrounds
+/// Text and chrome are shades of gray, so the screen reads by brightness:
+/// white for what matters now, light gray for replies, gray for what
+/// surrounds them, dim gray for borders. The green accent marks status
+/// (working, ready, connected, success) and nothing else.
 ///
 /// Purple is reserved for syntax-highlighted keywords in code blocks.
 #[must_use]
@@ -72,28 +82,29 @@ pub fn cyber_theme() -> Theme {
         name: "cyber".to_string(),
         colors: ThemeColors {
             // Base colors
-            background: BLACK, // #0d0d0d - deep black
+            background: BLACK, // #191919 - graphite
             foreground: WHITE, // #ffffff - white text
             text: LIGHT_GRAY,  // #e6e6e6 - chat reply body
 
-            // Accent colors
-            primary: CYAN,    // #01f4cb - cyan (primary accent)
-            secondary: WHITE, // #ffffff - white (secondary accent)
+            // Neutral emphasis
+            primary: WHITE,    // #ffffff - titles, the user's text
+            secondary: SILVER, // #b3b3b3 - secondary text
 
             // Semantic colors
-            success: CYAN,  // #01f4cb - cyan/green (success)
-            warning: BLUE,  // #01a4f4 - blue (info/warning)
-            error: RED,     // #f4012a - red (errors/danger)
-            pending: WHITE, // #ffffff - white (pending states)
+            success: CYAN,  // #01f4cb - the accent: status and success
+            warning: BLUE,  // #01a4f4 - info/warning
+            error: RED,     // #f4012a - errors/danger
+            pending: WHITE, // #ffffff - pending states
 
-            // Muted text
-            muted: GRAY, // #888888 - gray
+            // Muted text and borders
+            muted: GRAY,     // #808080 - gray
+            faint: DIM_GRAY, // #5a5a5a - dim gray
 
             // List cells
-            surface: DARK_GRAY,      // #1e1e1e - dark gray
-            surface_hover: GRAPHITE, // #2a2a2a - graphite
-            selection: CYAN,         // #01f4cb - cyan, same as the primary accent
-            on_selection: BLACK,     // #0d0d0d - black
+            surface: DARK_GRAY,      // #242424 - dark gray
+            surface_hover: GRAPHITE, // #2e2e2e - charcoal
+            selection: SLATE,        // #383838 - slate
+            on_selection: WHITE,     // #ffffff - white
         },
         border_style: BorderStyle::Rounded,
         show_icons: true,
@@ -110,11 +121,13 @@ mod tests {
     fn test_cyber_theme() {
         let theme = cyber_theme();
         assert_eq!(theme.name, "cyber");
-        assert_eq!(theme.colors.primary, CYAN);
+        assert_eq!(theme.colors.primary, WHITE);
         assert_eq!(theme.colors.success, CYAN);
         assert_eq!(theme.colors.error, RED);
-        assert_eq!(theme.colors.secondary, WHITE);
+        assert_eq!(theme.colors.secondary, SILVER);
         assert_eq!(theme.colors.pending, WHITE);
+        assert_eq!(theme.colors.selection, SLATE);
+        assert_eq!(theme.colors.on_selection, WHITE);
     }
 
     #[test]

@@ -56,6 +56,7 @@ impl Theme {
                 error: Color::Red,
                 pending: Color::Rgb(136, 136, 136),
                 muted: Color::Rgb(136, 136, 136),
+                faint: Color::Rgb(90, 90, 90),
                 surface: Color::Rgb(38, 38, 38),
                 surface_hover: Color::Rgb(52, 52, 52),
                 selection: Color::White,
@@ -80,6 +81,7 @@ impl Theme {
                 error: Color::Rgb(200, 0, 0),
                 pending: Color::Rgb(0, 180, 0),
                 muted: Color::Rgb(0, 100, 0),
+                faint: Color::Rgb(0, 70, 0),
                 surface: Color::Rgb(0, 20, 0),
                 surface_hover: Color::Rgb(0, 36, 0),
                 selection: Color::Rgb(0, 255, 0),
@@ -104,6 +106,7 @@ impl Theme {
                 error: Color::Rgb(255, 20, 147),    // deep pink
                 pending: Color::Rgb(180, 100, 255), // lavender
                 muted: Color::Rgb(136, 136, 136),
+                faint: Color::Rgb(84, 84, 120),
                 surface: Color::Rgb(38, 38, 64),
                 surface_hover: Color::Rgb(52, 52, 84),
                 selection: Color::Rgb(255, 46, 151),
@@ -151,46 +154,51 @@ impl Default for Theme {
 ///
 /// | Color       | Hex Code | Usage                              |
 /// |-------------|----------|------------------------------------|
-/// | Cyan/Green  | #01f4cb  | Success, neon accents, selected row|
-/// | Blue        | #01a4f4  | Primary accent, info, provisioning |
-/// | Purple      | #cb01f4  | Pending states, secondary accent   |
+/// | Cyan/Green  | #01f4cb  | The accent: status, success        |
+/// | Blue        | #01a4f4  | Info, links                        |
 /// | Red         | #f4012a  | Errors, danger                     |
-/// | White       | #ffffff  | Primary text                       |
+/// | White       | #ffffff  | Titles, emphasized text            |
 /// | Light gray  | #e6e6e6  | Body text of chat replies          |
-/// | Gray        | #888888  | Muted text, secondary info         |
-/// | Black       | #0d0d0d  | Background, text on selection      |
-/// | Dark gray   | #1e1e1e  | List cell                          |
-/// | Graphite    | #2a2a2a  | List cell under the pointer        |
+/// | Silver      | #b3b3b3  | Secondary text                     |
+/// | Gray        | #808080  | Muted text, secondary info         |
+/// | Dim gray    | #5a5a5a  | Borders, markers, the footer       |
+/// | Graphite    | #191919  | Background                         |
+/// | Dark gray   | #242424  | List cell, shaded messages         |
+/// | Charcoal    | #2e2e2e  | List cell under the pointer        |
+/// | Slate       | #383838  | Selected row, active tab           |
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemeColors {
-    /// Background color (#0d0d0d black)
+    /// Background color (#191919 graphite)
     pub background: Color,
     /// Foreground/primary text color (#ffffff white)
     pub foreground: Color,
     /// Body text of chat replies, a step softer than `foreground` so bold
     /// text and headings stand out (#e6e6e6 light gray)
     pub text: Color,
-    /// Primary accent color - blue (#01a4f4)
+    /// Titles, the user's text and other emphasis (#ffffff white)
     pub primary: Color,
-    /// Secondary accent color - purple (#cb01f4)
+    /// Secondary text, a step below `text` (#b3b3b3 silver)
     pub secondary: Color,
-    /// Success color - cyan/green (#01f4cb)
+    /// Success and status glyphs, the theme's accent (#01f4cb cyan/green)
     pub success: Color,
     /// Warning/info color - blue (#01a4f4)
     pub warning: Color,
     /// Error/danger color - red (#f4012a)
     pub error: Color,
-    /// Pending state color - purple (#cb01f4)
+    /// Pending state color (#ffffff white)
     pub pending: Color,
-    /// Muted text color - gray (#888888)
+    /// Muted text color - gray (#808080)
     pub muted: Color,
-    /// Background of a list cell - dark gray (#1e1e1e)
+    /// Borders, step markers, the footer and finished items, a step
+    /// below `muted` (#5a5a5a dim gray)
+    pub faint: Color,
+    /// Background of a list cell and of the user's messages (#242424)
     pub surface: Color,
-    /// Background of a list cell under the pointer - gray (#2a2a2a)
+    /// Background of a list cell under the pointer (#2e2e2e)
     pub surface_hover: Color,
-    /// Background of the selected list row - cyan (#01f4cb)
+    /// Background of the selected list row and the active tab (#383838)
     pub selection: Color,
-    /// Text on the selected list row - black (#0d0d0d)
+    /// Text on the selected list row (#ffffff white)
     pub on_selection: Color,
 }
 
@@ -331,6 +339,7 @@ mod tests {
             error: Color::Red,
             pending: Color::Magenta,
             muted: Color::Gray,
+            faint: Color::DarkGray,
             surface: Color::DarkGray,
             surface_hover: Color::Gray,
             selection: Color::LightBlue,

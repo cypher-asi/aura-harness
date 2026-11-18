@@ -29,11 +29,6 @@ impl Chrome {
         };
 
         for bar in &self.layout.bars {
-            let accent = if bar.focused {
-                palette.accent
-            } else {
-                palette.muted
-            };
             for boxed in &bar.boxes {
                 let mut rect = boxed.rect;
                 rect.y += top;
@@ -43,21 +38,24 @@ impl Chrome {
                 };
                 let over =
                     matches!(boxed.kind, Kind::Tab(tab) if self.hover == Some(Hit::Tab(tab)));
-                let ink = if filled {
+                let ink = if filled && bar.focused {
                     fill(
                         &mut out.under,
                         rect.x,
                         rect.y,
                         rect.width,
                         rect.height,
-                        accent,
+                        palette.selection,
                     );
-                    palette.bg
+                    palette.fg
+                } else if filled {
+                    outline(&mut out.under, rect, palette.faint, line);
+                    palette.fg
                 } else if over {
-                    outline(&mut out.under, rect, palette.accent, line);
+                    outline(&mut out.under, rect, palette.muted, line);
                     palette.fg
                 } else {
-                    outline(&mut out.under, rect, palette.muted, line);
+                    outline(&mut out.under, rect, palette.faint, line);
                     palette.muted
                 };
                 let middle = Point::new(rect.center_x(), rect.center_y());

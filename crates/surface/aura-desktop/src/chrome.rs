@@ -3,7 +3,8 @@
 //! each as wide as its label and always outlined, then the panel's info
 //! at the right end. A panel without tabs shows its title in a filled
 //! box; a panel with tabs fills the box of the one it shows. Fills take
-//! the accent while their panel has focus.
+//! the selection color while their panel has focus; otherwise the box is
+//! only outlined.
 //!
 //! The dividers between panels live here too: bands along the borders
 //! two panels share, which drag to move the border.
@@ -131,6 +132,8 @@ struct BarLayout {
 struct Band {
     divider: Divider,
     rect: Rectangle,
+    /// Blank cells between the borders on either side
+    gap: u16,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -179,21 +182,29 @@ impl Layout {
                 model.origin.y + f32::from(row) * cell.height,
             )
         };
-        // Two cells wide: the borders on either side of the line.
-        let upright = |divider, x: u16, area: Rect| Band {
-            divider,
-            rect: Rectangle::new(
-                at(x.saturating_sub(1), area.y),
-                Size::new(2.0 * cell.width, f32::from(area.height) * cell.height),
-            ),
+        // From the border on one side of the gap to the border on the
+        // other, beside the chat's rows.
+        let upright = |divider, left: Rect, right: Rect, rows: Rect| {
+            let gap = right.x.saturating_sub(left.right());
+            Band {
+                divider,
+                rect: Rectangle::new(
+                    at(left.right().saturating_sub(1), rows.y),
+                    Size::new(
+                        f32::from(gap + 2) * cell.width,
+                        f32::from(rows.height) * cell.height,
+                    ),
+                ),
+                gap,
+            }
         };
         let mut bands = Vec::new();
         if !model.covered {
-            if let (Some(_), Some(chat)) = (find(Pane::Agents), find(Pane::Chat)) {
-                bands.push(upright(Divider::Agents, chat.x, chat));
+            if let (Some(agents), Some(chat)) = (find(Pane::Agents), find(Pane::Chat)) {
+                bands.push(upright(Divider::Agents, agents, chat, chat));
             }
             if let (Some(chat), Some(column)) = (find(Pane::Chat), column) {
-                bands.push(upright(Divider::Right, column.x, chat));
+                bands.push(upright(Divider::Right, chat, column, chat));
             }
             if let (Some(records), Some(side)) = (find(Pane::Records), find(Pane::Side)) {
                 if records.x == side.x && side.y == records.bottom() {
@@ -203,6 +214,7 @@ impl Layout {
                             at(side.x, side.y - 1),
                             Size::new(f32::from(side.width) * cell.width, 2.0 * cell.height),
                         ),
+                        gap: 0,
                     });
                 }
             }
@@ -350,9 +362,16 @@ impl Chrome {
             })
         };
         let wide = right.saturating_sub(left);
+        // The middle of the gap stands for the edge of the dragged panel.
+        let half_gap = self
+            .layout
+            .bands
+            .iter()
+            .find(|band| band.divider == divider)
+            .map_or(0.0, |band| f32::from(band.gap) / 2.0);
         match divider {
-            Divider::Agents => splits.agents = share(col - f32::from(left), wide),
-            Divider::Right => splits.right = share(f32::from(right) - col, wide),
+            Divider::Agents => splits.agents = share(col - half_gap - f32::from(left), wide),
+            Divider::Right => splits.right = share(f32::from(right) - col - half_gap, wide),
             Divider::Records => {
                 splits.records = share(row - f32::from(top), bottom.saturating_sub(top));
             }
