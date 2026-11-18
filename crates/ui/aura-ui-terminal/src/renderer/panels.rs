@@ -7,7 +7,7 @@ use super::text::{display_width, wrap_words, Measure};
 use crate::{
     animation::AURA_WIDTH,
     app::{
-        tab_bar::TabLayout, AgentsTab, ChatTab, HoverTarget, ImageHit, Pane, PanelFocus,
+        tab_bar::TabLayout, AgentsTab, AppState, ChatTab, HoverTarget, ImageHit, Pane, PanelFocus,
         ProjectListRow, ProseRow, ToggleRow, ToggleTarget,
     },
     App, Theme,
@@ -76,17 +76,16 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     app.set_chat_width(padded.width);
     app.set_chat_text_area(padded);
 
-    let working_line = if terminal {
-        None
+    let tail = if terminal {
+        LiveTail::default()
     } else {
-        working_indicator_line(app, theme)
+        live_tail(app, padded.width as usize, theme)
     };
-    if app.pane_is_empty() && working_line.is_none() {
+    if app.pane_is_empty() && tail.lines.is_empty() {
         app.set_chat_images(Vec::new());
         render_welcome(frame, padded, terminal, theme);
         return;
     }
-    let tail: Vec<Line<'static>> = working_line.into_iter().collect();
 
     let rows = render_chat_lines(frame, padded, app, theme, &tail);
     render_scrollbar(
@@ -122,11 +121,7 @@ pub(super) fn render_body_block(
 
 /// The border of a panel's body, below its header bar.
 pub(super) fn body_block<'a>((is_focused, hosted): (bool, bool), theme: &Theme) -> Block<'a> {
-    let border_color = if is_focused {
-        theme.colors.primary
-    } else {
-        theme.colors.muted
-    };
+    let border_color = border_color(is_focused, theme);
     let border_set = if hosted {
         ratatui::symbols::border::Set {
             top_left: "├",
@@ -140,6 +135,15 @@ pub(super) fn body_block<'a>((is_focused, hosted): (bool, bool), theme: &Theme) 
         .borders(Borders::ALL)
         .border_set(border_set)
         .border_style(Style::default().fg(border_color))
+}
+
+/// A panel's border: gray while it has focus, dim gray otherwise.
+pub(super) const fn border_color(is_focused: bool, theme: &Theme) -> Color {
+    if is_focused {
+        theme.colors.muted
+    } else {
+        theme.colors.faint
+    }
 }
 
 /// How much of a panel's list is on screen.
@@ -167,15 +171,11 @@ pub(super) fn render_scrollbar(
     if view.total <= view.visible || panel.width == 0 || rows.height == 0 {
         return;
     }
-    let border = if is_focused {
-        theme.colors.primary
+    let border = border_color(is_focused, theme);
+    let thumb = if is_focused {
+        theme.colors.foreground
     } else {
         theme.colors.muted
-    };
-    let thumb = if is_focused {
-        theme.colors.primary
-    } else {
-        theme.colors.secondary
     };
     let column = Rect {
         x: panel.x + panel.width - 1,
@@ -200,13 +200,13 @@ pub(super) fn render_scrollbar(
 
 /// Draw the rows of the conversation that fall in `padded` at the current
 /// scroll position, cloning only those rows out of the line cache, then
-/// `tail` (the working indicator) a blank row below them.
+/// `tail` a blank row below them.
 fn render_chat_lines(
     frame: &mut Frame,
     padded: Rect,
     app: &mut App,
     theme: &Theme,
-    tail: &[Line<'static>],
+    tail: &LiveTail,
 ) -> ChatRows {
     let spinner = app.spinner_char();
     let hovered_activity = match app.hover() {
@@ -239,17 +239,17 @@ fn render_chat_lines(
         }));
         message_rows += block.lines.len();
     }
-    let tail_gap = usize::from(message_rows > 0 && !tail.is_empty());
+    let tail_gap = usize::from(message_rows > 0 && !tail.lines.is_empty());
     let tail_toggle = app
         .turn_started_ms()
-        .filter(|_| !tail.is_empty())
-        .map(|started| ToggleRow {
-            line: message_rows + tail_gap,
+        .zip(tail.status_row)
+        .map(|(started, row)| ToggleRow {
+            line: message_rows + tail_gap + row,
             target: ToggleTarget::TurnRecords(started),
             open: false,
         });
     toggle_rows.extend(tail_toggle);
-    let content = message_rows + tail_gap + tail.len();
+    let content = message_rows + tail_gap + tail.lines.len();
     let height = padded.height as usize;
     // Blank rows after the end, enough that scrolling to the bottom can
     // bring the latest prompt to the top with the reply filling in below,
@@ -300,9 +300,11 @@ fn render_chat_lines(
     if tail_gap > 0 {
         push_visible(&mut visible, &mut line_index, start, height, blank);
     }
-    for (row, line) in tail.iter().enumerate() {
+    for (row, line) in tail.lines.iter().enumerate() {
         let mut line = line.clone();
-        if row == 0 && tail_toggle.is_some_and(|t| hovered_activity == Some(t.target)) {
+        if tail.status_row == Some(row)
+            && tail_toggle.is_some_and(|t| hovered_activity == Some(t.target))
+        {
             apply_activity_hover(&mut line, theme);
         }
         push_visible(&mut visible, &mut line_index, start, height, line);
@@ -537,7 +539,7 @@ fn render_lines_below_hint(frame: &mut Frame, panel: Rect, below: usize, theme: 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             label,
-            Style::default().fg(theme.colors.primary),
+            Style::default().fg(theme.colors.muted),
         )))
         .alignment(ratatui::layout::Alignment::Right),
         border_row,
@@ -546,31 +548,73 @@ fn render_lines_below_hint(frame: &mut Frame, panel: Rect, below: usize, theme: 
 
 /// The text area of the chat and the terminal. The terminal keeps a single
 /// column on each side, so output starts at the top left like a terminal's;
-/// the chat is inset further so the conversation reads as a narrower column.
+/// the chat is inset further, starts a row down, and stops at
+/// [`MAX_CHAT_WIDTH`] columns so long lines stay readable.
 fn terminal_text_area(area: Rect, terminal: bool) -> Rect {
-    let inset = if terminal { 1 } else { chat_inset(area.width) };
+    if terminal {
+        return Rect {
+            x: area.x.saturating_add(1),
+            width: area.width.saturating_sub(2),
+            ..area
+        };
+    }
+    let inset = chat_inset(area.width);
+    let top = u16::from(area.height > CHAT_TOP_PAD_MIN_HEIGHT);
     Rect {
         x: area.x.saturating_add(inset),
-        width: area.width.saturating_sub(inset * 2),
-        ..area
+        y: area.y + top,
+        width: area.width.saturating_sub(inset * 2).min(MAX_CHAT_WIDTH),
+        height: area.height - top,
     }
 }
 
-/// Columns of blank space on each side of the chat. Grows with the panel
-/// so wide panels get a narrower reading column, but stays at one column
-/// on narrow panels where every column of text counts.
-fn chat_inset(width: u16) -> u16 {
+/// Widest the chat's text runs, in columns.
+const MAX_CHAT_WIDTH: u16 = 110;
+
+/// Chat panels this short or shorter give up the blank row above the
+/// conversation.
+const CHAT_TOP_PAD_MIN_HEIGHT: u16 = 8;
+
+/// Columns of blank space on each side of the chat: two, or one on narrow
+/// panels where every column of text counts.
+const fn chat_inset(width: u16) -> u16 {
     if width < 40 {
         1
     } else {
-        (width / 12).clamp(3, 8)
+        2
     }
 }
 
-/// `⠹ thinking… 12s` — shown below the conversation while a turn is in
+/// What follows the conversation while a turn is in flight: the to-do
+/// checklist, then the working line.
+#[derive(Default)]
+struct LiveTail {
+    lines: Vec<Line<'static>>,
+    /// Row in `lines` of the working line, which opens the turn's records
+    /// when clicked.
+    status_row: Option<usize>,
+}
+
+fn live_tail(app: &App, width: usize, theme: &Theme) -> LiveTail {
+    let mut lines = if app.state() == AppState::Processing {
+        super::hud::todo_checklist(app.hud(), width, theme)
+    } else {
+        Vec::new()
+    };
+    let status_row = working_indicator_line(app, theme).map(|line| {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        lines.push(line);
+        lines.len() - 1
+    });
+    LiveTail { lines, status_row }
+}
+
+/// `⬢ Thinking… 12s` — shown below the conversation while a turn is in
 /// flight and no reply text is streaming. Once the agent has shown
 /// something this turn, it sits in line with the steps:
-/// `  ⠹ thinking… 12s`.
+/// `  ⬢ Thinking… 12s`.
 pub(super) fn working_indicator_line<'a>(app: &App, theme: &Theme) -> Option<Line<'a>> {
     if app.has_live_activity() || app.ends_in_live_group() {
         return None;
@@ -579,26 +623,27 @@ pub(super) fn working_indicator_line<'a>(app: &App, theme: &Theme) -> Option<Lin
     let lead = if app.turn_has_agent_block() { "  " } else { "" };
     let mut spans = vec![
         Span::raw(lead),
+        Span::styled("⬢ ", Style::default().fg(theme.colors.success)),
         Span::styled(
-            format!("{} ", app.spinner_char()),
+            format!("{}…", capitalized(&label)),
             Style::default().fg(theme.colors.secondary),
-        ),
-        Span::styled(
-            format!("{label}…"),
-            Style::default()
-                .fg(theme.colors.muted)
-                .add_modifier(Modifier::ITALIC),
         ),
     ];
     if let Some(elapsed) = app.processing_elapsed().filter(|e| e.as_secs() > 0) {
         spans.push(Span::styled(
             format!(" {}", format_elapsed(elapsed)),
-            Style::default()
-                .fg(theme.colors.muted)
-                .add_modifier(Modifier::DIM),
+            Style::default().fg(theme.colors.muted),
         ));
     }
     Some(Line::from(spans))
+}
+
+/// `text` with its first letter in upper case.
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
 }
 
 /// `7s`, `2m 05s`.
@@ -802,9 +847,7 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
     let is_thinking = |agent: &crate::events::AgentSummary| {
         agent.running || (agent.id == active_id && app.is_processing())
     };
-    let project_name = Style::default()
-        .fg(theme.colors.muted)
-        .add_modifier(Modifier::BOLD);
+    let project_name = Style::default().fg(theme.colors.muted);
     let agent_name = Style::default().fg(theme.colors.foreground);
     let mut lines = Vec::new();
 

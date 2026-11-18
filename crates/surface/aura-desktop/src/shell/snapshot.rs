@@ -21,7 +21,7 @@ use crate::tab_bar::Hit;
 use crate::{raster, text};
 use aura_ui::events::{
     AgentDefinitionSummary, AgentSummary, CallUsage, MessageData, MessageRole, ModelOptionView,
-    ProcessKind, ProcessStatus, ProcessSummary, ToolData, UiCommand,
+    ProcessKind, ProcessStatus, ProcessSummary, TodoState, TodoView, ToolData, UiCommand,
 };
 use aura_ui_terminal::{AgentsTab, ChatTab, PaneTab};
 use winit::event::MouseButton;
@@ -394,7 +394,7 @@ fn prose_is_set_in_inter_and_code_stays_on_the_grid() {
         UiCommand::Complete,
     ]);
     let text = h.screen();
-    assert!(text.contains("the files in the project folder"), "{text}");
+    assert!(text.contains("files in the project folder"), "{text}");
     assert!(text.contains("fn main() {}"), "{text}");
     assert!(!h.shell.prose.is_empty(), "the reply's text is prose");
     snapshot("prose", &mut h);
@@ -447,10 +447,23 @@ fn agent_working() {
     let mut h = stage();
     seed(&mut h);
     steps(&mut h);
-    h.apply([UiCommand::AppendThinking("Checking the diff…".into())]);
+    let todo = |content: &str, state| TodoView {
+        content: content.into(),
+        state,
+    };
+    h.apply([
+        UiCommand::SetTodos(vec![
+            todo("Read the failing test", TodoState::Completed),
+            todo("Fix the parser", TodoState::InProgress),
+            todo("Run the suite", TodoState::Pending),
+        ]),
+        UiCommand::AppendThinking("Checking the diff…".into()),
+    ]);
     for _ in 0..3 {
         h.pass(TICK);
     }
+    let screen = h.screen();
+    assert!(screen.contains("Working on 3 to-dos"), "{screen}");
     snapshot("working", &mut h);
 }
 

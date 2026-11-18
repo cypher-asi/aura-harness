@@ -1,45 +1,45 @@
  AURA CLI                                                                                                     ● demo@aura.dev (zOS)  http://127.0.0.1:8787 
-┌──────────┬──────────┬───────┐┌──────────┬──────────┬──────────────────────────────────────────────────────┐┌────────────────────────────────────────────┐
-│ PROJECTS │  AGENTS  │   1   ││   CHAT   │ TERMINAL │                       AGENT01                        ││ KERNEL                           0 RECORDS │
-└──────────┴──────────┴───────┘└──────────┴──────────┴──────────────────────────────────────────────────────┘└────────────────────────────────────────────┘
-┌─────────────────────────────┐┌────────────────────────────────────────────────────────────────────────────┐┌────────────────────────────────────────────┐
-│ ▱  aura-harness             ││    YOU  19:27:36                                                           ││                                            │
-│    Agent01                  ││    What does this project do?                                                    ││  No records yet.                           │
-│   ⠐⠀ Reviewer               ││                                                                            ││                                            │
-│                             ││    AURA  19:27:36                                     local/qwen3-coder    ││  Records will appear                       │
-│                             ││    AURA records every step as a transaction.                                       ││  as they are created.                      │
-│                             ││                                                                            ││                                            │
-│                             ││    Hi! That last message looks like a typo. What would you like to do?                      ││                                            │
-│                             ││                                                                            ││                                            │
-│                             ││    • "ls": I said I'd created a task, but I hadn't done anything. If you want, I can list the files     ││                                            │
-│                             ││      in the project folder now.                                                   ││                                            │
-│                             ││    • The story: You asked for 5 paragraphs, and I gave you an outline split into acts. I can      ││                                            │
-│                             ││      rewrite it as an actual 5-paragraph story.                                       ││                                            │
-│                             ││                                                                            ││                                            │
-│                             ││    Here are some other things I can help with in this repo (aura-harness): run the build,       ││                                            │
-│                             ││    tests, or cargo clippy, and look at the codebase.                                 ││                                            │
-│                             ││                                                                            ││                                            │
-│                             ││                                                                            │└────────────────────────────────────────────┘
-│                             ││                                                                            │┌───────────┬───────────┬───────────┬────────┐
-│                             ││                                                                            ││  SANDBOX  │ PROCESSES │   TRACE   │        │
-│                             ││                                                                            │└───────────┴───────────┴───────────┴────────┘
-│                             ││                                                                            │┌────────────────────────────────────────────┐
-│                             ││                                                                            ││  No sandbox yet.                           │
-│                             ││                                                                            ││                                            │
-│                             ││                                                                            ││                                            │
-│                             ││                                                                            ││                                            │
-│                             ││                                                                            ││                                            │
-│                             ││                                                                            ││                                            │
-│                             ││                                                                            ││                                            │
-│                             ││                                                                            ││                                            │
-│                             ││                                                                            ││                                            │
-│                             ││                                                                            ││                                            │
-│                             ││                                                                            ││                                            │
-│                             ││                                                                            ││                                            │
-│                             ││                                                                            ││                                            │
-│                             ││                                                                            ││                                            │
-│                             ││                                                                            ││                                            │
-│ +  New project              ││                                                                            ││                                            │
-└─────────────────────────────┘└────────────────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────┘
-                              >                                                                                                       Qwen3 Coder  ● Ready 
-                                                                                                                                                           
+┌───────────────────────────────────┐┌───────────────────────────────────────────────────────────────────────────────┐┌───────────────────────────────────┐
+│                                   ││                                                                               ││                                   │
+├───────────────────────────────────┤├───────────────────────────────────────────────────────────────────────────────┤├───────────────────────────────────┤
+│ 🗁  aura-harness                 + ││                                                                               ││                                   │
+│    Agent01                        ││  → What does this project do?                                                    ││  No records yet.                  │
+│   ⠐⠀ Reviewer                     ││                                                                               ││                                   │
+│                                   ││  AURA records every step as a transaction.                                       ││  Records will appear              │
+│                                   ││                                                                               ││  as they are created.             │
+│                                   ││  Hi! That last message looks like a typo. What would you like to do?                   ││                                   │
+│                                   ││                                                                               ││                                   │
+│                                   ││  • "ls": I said I'd created a task, but I hadn't done anything. If you want, I can list the    ││                                   │
+│                                   ││    files in the project folder now.                                                 ││                                   │
+│                                   ││                                                                               ││                                   │
+│                                   ││  Here are some things I can help with in this repo (aura-harness): run the build, tests,   ││                                   │
+│                                   ││  or cargo clippy.                                                              ││                                   │
+│                                   ││                                                                               ││                                   │
+│                                   ││  ╭─ Rust ───────╮                                                             ││                                   │
+│                                   ││  │ fn main() {} │                                                             ││                                   │
+│                                   ││  ╰──────────────╯                                                             ││                                   │
+│                                   ││                                                                               ││                                   │
+│                                   ││  [local/qwen3-coder]                                                          ││                                   │
+│                                   ││                                                                               │└───────────────────────────────────┘
+│                                   ││                                                                               │┌───────────────────────────────────┐
+│                                   ││                                                                               ││                                   │
+│                                   ││                                                                               │├───────────────────────────────────┤
+│                                   ││                                                                               ││  No sandbox yet.                  │
+│                                   ││                                                                               ││                                   │
+│                                   ││                                                                               ││                                   │
+│                                   ││                                                                               ││                                   │
+│                                   ││                                                                               ││                                   │
+│                                   ││                                                                               ││                                   │
+│                                   ││                                                                               ││                                   │
+│                                   ││                                                                               ││                                   │
+│                                   ││                                                                               ││                                   │
+│                                   ││                                                                               ││                                   │
+│                                   ││                                                                               ││                                   │
+│                                   ││                                                                               ││                                   │
+│                                   ││                                                                               ││                                   │
+│                                   │└───────────────────────────────────────────────────────────────────────────────┘│                                   │
+│                                   │┌───────────────────────────────────────────────────────────────────────────────┐│                                   │
+│                                   ││ → Add a follow-up                                                             ││                                   │
+│                                   │└───────────────────────────────────────────────────────────────────────────────┘│                                   │
+│ +  New project                    │ Qwen3 Coder                                                             ● Ready │                                   │
+└───────────────────────────────────┘ / for commands · @ for files · $ for a terminal · Shift+Tab approval            └───────────────────────────────────┘

@@ -1,6 +1,10 @@
-//! What the agent on screen has used and is working on: the status line
-//! under the input, its todo progress on the Chat panel's bottom border,
-//! and the full todo list that `/todos` opens.
+//! What the agent on screen has used and is working on: the footer under
+//! the input, and the full todo list that `/todos` opens.
+//!
+//! ```text
+//! qwen3:4b · 23% context used · 2 calls                        ● Ready
+//! / for commands · @ for files · $ for a terminal · Ctrl+O steps
+//! ```
 
 use super::text::display_width;
 use crate::app::format::{format_cost, format_tokens};
@@ -16,45 +20,54 @@ use ratatui::{
     Frame,
 };
 
-/// Cells of the context gauge.
-const GAUGE_CELLS: u64 = 5;
-
 /// Most todo items listed at once.
 const MAX_TODO_ROWS: usize = 10;
 
-/// Columns of the bottom border left for the "lines below" hint.
-const BORDER_HINT_ROOM: usize = 20;
+/// Screens shorter than this get no key hints under the status line.
+const MIN_HEIGHT_FOR_HINTS: u16 = 16;
+
+/// Columns kept clear between the stats and the status at the right.
+const STATUS_GAP: usize = 2;
 
 const SEPARATOR: &str = " · ";
 
-/// The parts of the status line, most important first.
+/// Key hints on the footer's second row, most useful first.
+const HINTS: [&str; 5] = [
+    "/ for commands",
+    "@ for files",
+    "$ for a terminal",
+    "Shift+Tab approval",
+    "Ctrl+O steps",
+];
+
+/// Rows the footer takes on a screen `height` rows tall.
+pub(super) const fn footer_rows(height: u16) -> u16 {
+    if height >= MIN_HEIGHT_FOR_HINTS {
+        2
+    } else {
+        1
+    }
+}
+
+/// The parts of the status line after the model, most important first.
 pub(super) fn status_parts(hud: &Hud, theme: &Theme) -> Vec<(String, Color)> {
     let stats = &hud.stats;
     let mut parts = Vec::new();
-    if let Some(mode) = hud.mode {
-        let color = match mode {
-            PermissionMode::Agent => theme.colors.muted,
-            PermissionMode::Plan | PermissionMode::ReadOnly | PermissionMode::Debug => {
-                theme.colors.secondary
-            }
-        };
-        let label = if mode == PermissionMode::Plan {
-            "plan mode (/plan to leave)".to_string()
-        } else {
-            format!("{mode} mode")
-        };
-        parts.push((label, color));
+    match hud.mode {
+        None | Some(PermissionMode::Agent) => {}
+        Some(PermissionMode::Plan) => {
+            parts.push((
+                "plan mode (/plan to leave)".to_string(),
+                theme.colors.warning,
+            ));
+        }
+        Some(mode) => parts.push((format!("{mode} mode"), theme.colors.warning)),
     }
     if stats.context_tokens > 0 {
-        let mut text = format!("ctx {}", format_tokens(stats.context_tokens));
+        let mut text = format!("{} context", format_tokens(stats.context_tokens));
         let mut color = theme.colors.muted;
-        if let (Some(percent), Some(limit)) = (stats.context_percent(), stats.context_limit) {
-            text = format!(
-                "ctx {percent}% {} {}/{}",
-                gauge(percent),
-                format_tokens(stats.context_tokens),
-                format_tokens(limit)
-            );
+        if let Some(percent) = stats.context_percent() {
+            text = format!("{percent}% context used");
             color = match percent {
                 90.. => theme.colors.error,
                 75.. => theme.colors.warning,
@@ -64,7 +77,7 @@ pub(super) fn status_parts(hud: &Hud, theme: &Theme) -> Vec<(String, Color)> {
         parts.push((text, color));
     }
     if let Some(hit) = stats.cache_hit_percent() {
-        parts.push((format!("cache {hit}%"), theme.colors.muted));
+        parts.push((format!("{hit}% cached"), theme.colors.muted));
     }
     if stats.priced {
         parts.push((format_cost(stats.cost_usd), theme.colors.muted));
@@ -75,10 +88,10 @@ pub(super) fn status_parts(hud: &Hud, theme: &Theme) -> Vec<(String, Color)> {
     }
     let jobs = hud.running_jobs();
     if jobs > 0 {
-        parts.push((format!("{jobs} bg"), theme.colors.primary));
+        parts.push((format!("{jobs} in background"), theme.colors.foreground));
     }
     if hud.queued > 0 {
-        parts.push((format!("{} queued", hud.queued), theme.colors.primary));
+        parts.push((format!("{} queued", hud.queued), theme.colors.foreground));
     }
     if stats.compactions > 0 {
         parts.push((
@@ -89,77 +102,93 @@ pub(super) fn status_parts(hud: &Hud, theme: &Theme) -> Vec<(String, Color)> {
     parts
 }
 
-/// `▰▰▰▱▱` for `percent` full.
-fn gauge(percent: u64) -> String {
-    let full = (percent * GAUGE_CELLS).div_ceil(100).min(GAUGE_CELLS);
-    let full = usize::try_from(full).unwrap_or(0);
-    let cells = usize::try_from(GAUGE_CELLS).unwrap_or(0);
-    format!("{}{}", "▰".repeat(full), "▱".repeat(cells - full))
+/// `● Ready`, the spinner while thinking, or what the agent is waiting on.
+fn status_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
+    let status = app.status();
+    let (mark, mark_color, text_color) = if status == "Ready" {
+        ("●".to_string(), theme.colors.success, theme.colors.muted)
+    } else if status.contains("Thinking") {
+        (
+            app.spinner_char().to_string(),
+            theme.colors.muted,
+            theme.colors.muted,
+        )
+    } else {
+        ("◐".to_string(), theme.colors.warning, theme.colors.warning)
+    };
+    vec![
+        Span::styled(format!("{mark} "), Style::default().fg(mark_color)),
+        Span::styled(status, Style::default().fg(text_color)),
+    ]
 }
 
-/// Render the status line right-aligned in `row`, dropping trailing parts
-/// that don't fit.
-pub(super) fn render_status_line(frame: &mut Frame, row: Rect, app: &App, theme: &Theme) {
-    let parts = status_parts(app.hud(), theme);
-    let room = usize::from(row.width);
+/// `parts` joined by separators, dropping the trailing ones that don't fit
+/// in `room` columns.
+fn fitting<'a>(parts: Vec<Vec<Span<'a>>>, room: usize, theme: &Theme) -> Vec<Span<'a>> {
     let mut used = 0;
     let mut spans = Vec::new();
-    for (text, color) in parts {
+    for part in parts {
+        let width: usize = part.iter().map(|s| display_width(&s.content)).sum();
+        if width == 0 {
+            continue;
+        }
         let sep = if spans.is_empty() { 0 } else { SEPARATOR.len() };
-        let width = display_width(&text);
         if used + sep + width > room {
             break;
         }
         if sep > 0 {
             spans.push(Span::styled(
                 SEPARATOR,
-                Style::default().fg(theme.colors.muted),
+                Style::default().fg(theme.colors.faint),
             ));
         }
-        spans.push(Span::styled(text, Style::default().fg(color)));
+        spans.extend(part);
         used += sep + width;
     }
-    if spans.is_empty() {
-        return;
-    }
-    frame.render_widget(
-        Paragraph::new(Line::from(spans)).alignment(Alignment::Right),
-        row,
-    );
+    spans
 }
 
-/// ` [3/7] ▸ Write the parser ` on the left of the Chat panel's bottom
-/// border.
-pub(super) fn render_todo_strip(frame: &mut Frame, chat: Rect, app: &App, theme: &Theme) {
-    let hud = app.hud();
-    if hud.todos.is_empty() || chat.width < 8 || chat.height < 2 {
+/// Render the footer into `area`: the model and what the agent has used on
+/// the left of the first row with its status at the right, then key hints
+/// when `area` has a second row.
+pub(super) fn render_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    if area.height == 0 || area.width == 0 {
         return;
     }
-    let (done, total) = hud.todo_progress();
-    let room = usize::from(chat.width - 2).saturating_sub(BORDER_HINT_ROOM);
-    let count = format!(" [{done}/{total}]");
-    let mut spans = vec![Span::styled(
-        count.clone(),
-        Style::default().fg(theme.colors.primary),
-    )];
-    if let Some(todo) = hud.current_todo() {
-        let label_room = room.saturating_sub(display_width(&count) + 4);
-        if label_room > 3 {
-            spans.push(Span::styled(
-                format!(" ▸ {} ", truncate(&todo.content, label_room)),
-                Style::default().fg(theme.colors.foreground),
-            ));
+    let row = Rect { height: 1, ..area };
+    let status = status_spans(app, theme);
+    let status_width: usize = status.iter().map(|s| display_width(&s.content)).sum();
+    let room = usize::from(row.width).saturating_sub(status_width + STATUS_GAP);
+
+    let mut stats = status_parts(app.hud(), theme).into_iter();
+    let mut parts = Vec::new();
+    if app.mode() != PermissionMode::Agent {
+        if let Some((text, color)) = stats.next() {
+            parts.push(vec![Span::styled(text, Style::default().fg(color))]);
         }
-    } else {
-        spans.push(Span::raw(" "));
     }
-    let border_row = Rect {
-        x: chat.x + 1,
-        y: chat.bottom() - 1,
-        width: chat.width - 2,
-        height: 1,
-    };
-    frame.render_widget(Paragraph::new(Line::from(spans)), border_row);
+    parts.push(super::model_indicator_spans(app, theme));
+    parts.extend(stats.map(|(text, color)| vec![Span::styled(text, Style::default().fg(color))]));
+    frame.render_widget(Paragraph::new(Line::from(fitting(parts, room, theme))), row);
+    frame.render_widget(
+        Paragraph::new(Line::from(status)).alignment(Alignment::Right),
+        row,
+    );
+
+    if area.height > 1 {
+        let hints = HINTS
+            .iter()
+            .map(|hint| vec![Span::styled(*hint, Style::default().fg(theme.colors.faint))])
+            .collect();
+        frame.render_widget(
+            Paragraph::new(Line::from(fitting(hints, usize::from(area.width), theme))),
+            Rect {
+                y: area.y + 1,
+                height: 1,
+                ..area
+            },
+        );
+    }
 }
 
 /// The full todo list over the bottom of the Chat panel, while `/todos`
@@ -198,29 +227,64 @@ pub(super) fn render_todo_panel(frame: &mut Frame, chat: Rect, app: &App, theme:
         .title(format!(" TODOS {done}/{total} "))
         .title_bottom(Line::from(" /todos close ").right_aligned())
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.colors.primary));
+        .border_style(Style::default().fg(theme.colors.muted));
     frame.render_widget(Clear, area);
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-fn todo_line<'a>(todo: &TodoView, room: usize, theme: &Theme) -> Line<'a> {
-    let (mark, style) = match todo.state {
-        TodoState::Completed => ("✓", Style::default().fg(theme.colors.success)),
-        TodoState::InProgress => ("▸", Style::default().fg(theme.colors.primary)),
-        TodoState::Pending => ("○", Style::default().fg(theme.colors.foreground)),
+/// `⬢ Working on 3 to-dos` over the to-do list, as the chat's live tail
+/// while a turn is in flight.
+pub(super) fn todo_checklist(hud: &Hud, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+    if hud.todos.is_empty() {
+        return Vec::new();
+    }
+    let (_, total) = hud.todo_progress();
+    let plural = if total == 1 { "" } else { "s" };
+    let mut lines = vec![Line::from(vec![
+        Span::styled("⬢ ", Style::default().fg(theme.colors.faint)),
+        Span::styled(
+            format!("Working on {total} to-do{plural}"),
+            Style::default().fg(theme.colors.secondary),
+        ),
+    ])];
+    let room = width.saturating_sub(4);
+    lines.extend(
+        hud.todos
+            .iter()
+            .take(MAX_TODO_ROWS)
+            .map(|todo| todo_line(todo, room, theme)),
+    );
+    lines
+}
+
+/// `  ▣ Write the parser`: a to-do's box, then its text.
+fn todo_line(todo: &TodoView, room: usize, theme: &Theme) -> Line<'static> {
+    let (mark, mark_color, text_style) = match todo.state {
+        TodoState::Completed => (
+            "☒",
+            theme.colors.muted,
+            Style::default().fg(theme.colors.muted),
+        ),
+        TodoState::InProgress => (
+            "▣",
+            theme.colors.foreground,
+            Style::default().fg(theme.colors.foreground),
+        ),
+        TodoState::Pending => (
+            "☐",
+            theme.colors.secondary,
+            Style::default().fg(theme.colors.text),
+        ),
         TodoState::Cancelled => (
-            "✗",
+            "☐",
+            theme.colors.faint,
             Style::default()
-                .fg(theme.colors.muted)
+                .fg(theme.colors.faint)
                 .add_modifier(Modifier::CROSSED_OUT),
         ),
     };
-    let text_style = match todo.state {
-        TodoState::Completed => Style::default().fg(theme.colors.muted),
-        _ => style,
-    };
     Line::from(vec![
-        Span::styled(format!(" {mark} "), style),
+        Span::styled(format!("  {mark} "), Style::default().fg(mark_color)),
         Span::styled(truncate(&todo.content, room), text_style),
     ])
 }
@@ -260,11 +324,19 @@ mod tests {
     }
 
     #[test]
-    fn gauge_fills_by_fifths() {
-        assert_eq!(gauge(0), "▱▱▱▱▱");
-        assert_eq!(gauge(20), "▰▱▱▱▱");
-        assert_eq!(gauge(62), "▰▰▰▰▱");
-        assert_eq!(gauge(100), "▰▰▰▰▰");
+    fn agent_mode_is_left_out_of_the_status() {
+        let theme = Theme::default();
+        let hud = crate::app::hud::Hud {
+            mode: Some(PermissionMode::Agent),
+            ..crate::app::hud::Hud::default()
+        };
+        assert!(status_parts(&hud, &theme).is_empty());
+    }
+
+    #[test]
+    fn footer_hints_need_room() {
+        assert_eq!(footer_rows(MIN_HEIGHT_FOR_HINTS - 1), 1);
+        assert_eq!(footer_rows(MIN_HEIGHT_FOR_HINTS), 2);
     }
 
     #[test]

@@ -7,6 +7,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Terminal and desktop — chat restyle
+
+##### Changed
+
+- The default `cyber` theme is graphite and gray. The cyan accent is kept
+  for status (`● Ready`, the working `⬢`, busy tabs); borders, tabs,
+  selections and menus are neutral. Themes gain a `faint` color for
+  borders at rest, markers and hints.
+- The input is a box under the Chat panel, as wide as it, with a `→`
+  prompt and an `Ask anything` / `Add a follow-up` placeholder. The model,
+  approval level, usage (`23% context used`) and status moved to a footer
+  under it, followed by key hints when the screen has room.
+- While a turn runs, its to-do checklist (`☒ ▣ ☐`) and a `⬢ Thinking…`
+  line follow the conversation, replacing the progress strip on the Chat
+  panel's border. `/todos` uses the same boxes.
+- The chat is inset two columns, starts a row below the border and stops
+  at 110 columns. User prompts start with `→`. Steps, hints and notices
+  are no longer italic, and project names and code block labels are no
+  longer bold.
+- The desktop window's title bars and tabs fill the selected box in gray
+  instead of the accent, and it draws `⬢ ☐ ☒ ▣` itself.
+
 ### Gate router (`aura-agent-gate`)
 
 Gate is now one learning router and the default model. The coordinator

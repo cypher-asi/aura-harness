@@ -661,6 +661,10 @@ fn is_sketched(c: char) -> bool {
                 | '▱'
                 | '⊘'
                 | '⏱'
+                | '⬢'
+                | '☐'
+                | '☒'
+                | '▣'
     )
 }
 
@@ -910,6 +914,33 @@ fn symbol(pen: &mut Pen, c: char, cell: Rectangle) {
                 stroke(pen, shape, thin);
             }
         }
+        '☐' | '☒' | '▣' => {
+            let s = 0.36;
+            let square = Outline::polygon(&[p(-s, -s), p(s, -s), p(s, s), p(-s, s)]);
+            stroke(pen, square, thin);
+            if c == '☒' {
+                let s = 0.2;
+                let mut cross = Outline::new();
+                cross.move_to(p(-s, -s));
+                cross.line_to(p(s, s));
+                cross.move_to(p(s, -s));
+                cross.line_to(p(-s, s));
+                stroke(pen, cross, thin);
+            } else if c == '▣' {
+                let s = 0.18;
+                pen.fill(Outline::polygon(&[p(-s, -s), p(s, -s), p(s, s), p(-s, s)]));
+            }
+        }
+        '⬢' => {
+            let r = 0.42;
+            let corners: Vec<Point> = (0..6u8)
+                .map(|i| {
+                    let angle = PI / 3.0 * f32::from(i) - PI / 2.0;
+                    p(r * angle.cos(), r * angle.sin())
+                })
+                .collect();
+            pen.fill(Outline::polygon(&corners));
+        }
         '⊘' => {
             stroke(pen, Outline::circle(p(0.0, 0.0), w * 0.38), thin);
             stroke(pen, Outline::line(p(-0.27, 0.27), p(0.27, -0.27)), thin);
@@ -977,7 +1008,7 @@ mod tests {
         let mut text = TextSystem::new();
         let mut quads = Vec::new();
         let shapes = "─━│┃┌┐└┘┏┓┗┛├┤┬┴┼╭╮╯╰═║╔╗╚╝▀▄█▌▐░▒▓▖▟⠿⣿🗀🗁\
-                      ✓✔✗✘✕✖▸►▶◂◄◀▾▼▴▲◦◐◑◒◓◇◆◈■□▪▫▰▱⊘‖⏱";
+                      ✓✔✗✘✕✖▸►▶◂◄◀▾▼▴▲◦◐◑◒◓◇◆◈■□▪▫▰▱⊘‖⏱⬢☐☒▣";
         for c in shapes.chars() {
             quads.clear();
             assert!(

@@ -3,7 +3,8 @@
 //! each as wide as its label and always outlined, then the panel's info
 //! at the right end. A panel without tabs shows its title in a filled
 //! box; a panel with tabs fills the box of the one it shows. Fills take
-//! the accent while their panel has focus.
+//! the selection color while their panel has focus; otherwise the box is
+//! only outlined.
 //!
 //! The dividers between panels live here too: bands along the borders
 //! two panels share, which drag to move the border.

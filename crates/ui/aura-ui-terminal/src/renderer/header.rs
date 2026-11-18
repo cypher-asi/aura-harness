@@ -156,11 +156,7 @@ pub(super) fn render_panel_header<T: Copy + PartialEq>(
         return;
     }
     let colors = &theme.colors;
-    let frame_style = Style::default().fg(if header.focused {
-        colors.primary
-    } else {
-        colors.muted
-    });
+    let frame_style = Style::default().fg(super::panels::border_color(header.focused, theme));
     let buf = frame.buffer_mut();
     if header.hosted {
         draw_hosted_frame(buf, bar, frame_style);
@@ -205,7 +201,7 @@ pub(super) fn render_panel_header<T: Copy + PartialEq>(
                 .fg(colors.foreground)
                 .add_modifier(Modifier::BOLD);
             if header.focused {
-                style = style.bg(colors.primary).fg(colors.background);
+                style = style.bg(colors.selection).fg(colors.on_selection);
             }
             style
         } else if header.hovered == Some(cell.tab) {
@@ -347,8 +343,8 @@ mod tests {
         let colors = Theme::cyber().colors;
         let focused = draw(40, 10, &chat_header(40, true, Some(1)));
         let active = focused[(1, 1)].style();
-        assert_eq!(active.bg, Some(colors.primary));
-        assert_eq!(active.fg, Some(colors.background));
+        assert_eq!(active.bg, Some(colors.selection));
+        assert_eq!(active.fg, Some(colors.on_selection));
         let hovered = focused[(25, 1)].style();
         assert_eq!(hovered.bg, Some(colors.surface_hover));
         assert_eq!(hovered.fg, Some(colors.secondary));
@@ -361,7 +357,8 @@ mod tests {
         let idle = unfocused[(25, 1)].style();
         assert_eq!(idle.bg, Some(Color::Reset));
         assert_eq!(idle.fg, Some(colors.muted));
-        assert_eq!(unfocused[(0, 0)].style().fg, Some(colors.muted));
+        assert_eq!(unfocused[(0, 0)].style().fg, Some(colors.faint));
+        assert_eq!(focused[(0, 0)].style().fg, Some(colors.muted));
     }
 
     #[test]

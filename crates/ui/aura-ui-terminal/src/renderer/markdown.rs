@@ -245,7 +245,7 @@ fn render_list_item(
     (base, theme): (Style, &Theme),
     measure: Measure,
 ) -> usize {
-    let marker_style = base.fg(theme.colors.primary);
+    let marker_style = base.fg(theme.colors.muted);
     let mut prefix = indent_spans(indent);
     prefix.push(if item.ordered {
         Span::styled(format!("{} ", item.marker), marker_style)

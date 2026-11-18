@@ -191,20 +191,27 @@ impl Metrics {
 pub struct Palette {
     pub fg: Color,
     pub bg: Color,
-    /// The theme's primary accent.
+    /// The theme's status accent: what is live or working.
     pub accent: Color,
     /// Text that stays in the background.
     pub muted: Color,
+    /// Outlines and boxes at rest.
+    pub faint: Color,
+    /// The fill of the selected tab.
+    pub selection: Color,
 }
 
 impl Palette {
     pub fn from_theme(theme: &aura_ui_terminal::Theme) -> Self {
         let fg = color(theme.colors.foreground, Color::from_rgb8(0xe6, 0xe6, 0xe6));
+        let muted = color(theme.colors.muted, Color::from_rgb8(0x88, 0x88, 0x88));
         Self {
             fg,
             bg: color(theme.colors.background, Color::from_rgb8(0x0d, 0x0d, 0x0d)),
-            accent: color(theme.colors.primary, fg),
-            muted: color(theme.colors.muted, Color::from_rgb8(0x88, 0x88, 0x88)),
+            accent: color(theme.colors.success, fg),
+            muted,
+            faint: color(theme.colors.faint, muted),
+            selection: color(theme.colors.selection, muted),
         }
     }
 }
