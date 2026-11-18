@@ -1954,6 +1954,12 @@ impl App {
         self.chat_width = width;
     }
 
+    /// Width of the chat text area drawn last frame.
+    #[cfg(test)]
+    pub(crate) const fn chat_width(&self) -> u16 {
+        self.chat_width
+    }
+
     /// Terminal width for a command, matching where its output is drawn.
     pub(super) fn command_columns(&self) -> u16 {
         if self.chat_width == 0 {

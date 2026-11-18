@@ -24,6 +24,8 @@ mod text;
 mod trace_feed;
 
 #[cfg(test)]
+mod bench;
+#[cfg(test)]
 mod tests;
 
 pub(crate) use chat_lines::{ChatLineCache, GroupState};

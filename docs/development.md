@@ -19,8 +19,12 @@ cargo check -p aura-core-types -p aura-core-modes -p aura-core-protocol -p aura-
 # Desktop app screens, rendered offscreen and saved as PNGs
 AURA_DESKTOP_SNAPSHOTS=target/snapshots cargo test -p aura-desktop snapshot
 
-# Desktop timings: boot, frames while streaming and typing, a swarm's second
+# Desktop timings: boot, frames while streaming and typing, a swarm's second,
+# a 2,000-message conversation and a long reply streaming after it
 cargo test --release -p aura-desktop -- --ignored --nocapture timings
+
+# The same conversation and reply in the terminal UI alone
+cargo test --release -p aura-ui-terminal -- --ignored --nocapture timings
 ```
 
 The desktop snapshot tests run the terminal UI in the window's shell, without a window, and draw whole screens (conversation, a working agent, the slash menu, dialogs) with the CPU rasterizer, so they run without a display or GPU. With `AURA_DESKTOP_SNAPSHOTS` set, each screen is saved as a PNG next to a `.txt` dump of its cells; without it they only check that something was drawn. With `AURA_DESKTOP_GPU=1`, on a machine with a graphics adapter, each screen is also drawn by the GPU and compared with the CPU's picture.
