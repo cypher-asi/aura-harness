@@ -246,8 +246,12 @@ fn render_chat_lines(
     let content = message_rows + tail_gap + tail.len();
     let height = padded.height as usize;
     // Blank rows after the end, enough that scrolling to the bottom can
-    // bring the latest prompt to the top with the reply filling in below.
-    let padding = last_prompt_row.map_or(0, |row| (row + height).saturating_sub(content));
+    // bring the latest prompt to the top with the reply filling in below,
+    // and never less than a third of the screen in the chat, so its last
+    // line can always be scrolled up off the bottom edge.
+    let to_prompt = last_prompt_row.map_or(0, |row| (row + height).saturating_sub(content));
+    let trailing = if app.terminal_pane() { 0 } else { height / 3 };
+    let padding = to_prompt.max(trailing);
     let total = content + padding;
     let start = app.sync_chat_scroll(total, height, reflowed);
     app.set_chat_layout(toggle_rows, start);

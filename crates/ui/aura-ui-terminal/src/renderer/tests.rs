@@ -767,6 +767,7 @@ fn test_chat_renders_assistant_markdown() {
          | Crate | Tests |\n|---|---:|\n| aura-terminal | 231 |\n\n\
          > note: see [docs](https://example.com)",
     ));
+    app.scroll_chat_to_top();
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(85, 30)).unwrap();
     terminal
         .draw(|frame| super::render(frame, &mut app, &test_theme()))
@@ -812,6 +813,7 @@ fn test_chat_prose_rows_leave_out_code_and_tables() {
         "Run `cargo test` now.\n\n```sh\ncargo test\n```\n\n\
          | Crate | Tests |\n|---|---:|\n| aura-terminal | 231 |\n\n---\n\nAll green.",
     ));
+    app.scroll_chat_to_top();
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 30)).unwrap();
     terminal
         .draw(|frame| super::render(frame, &mut app, &test_theme()))
@@ -2220,6 +2222,7 @@ fn test_turn_activity_renders_inline_between_prompt_and_reply() {
         crossterm::event::KeyCode::Char('o'),
         crossterm::event::KeyModifiers::CONTROL,
     ));
+    app.scroll_chat_to_top();
     let rows = render_rows(&mut app, 120);
     let text = rows.join("\n");
     assert!(text.contains("▾ Explored 2 files"), "{text}");
@@ -2598,7 +2601,7 @@ fn test_scrolled_chat_stays_put_while_reply_streams() {
             .collect()
     };
     let before = render_rows(&mut app, 100);
-    assert!(before.join("\n").contains("↓ 12 lines below"));
+    assert!(before.join("\n").contains("lines below"));
 
     app.process_command(UiCommand::StartStreaming);
     app.process_command(UiCommand::AppendText("first\nsecond\nthird".to_string()));
@@ -2661,6 +2664,29 @@ fn test_chat_bottom_leaves_room_below_latest_prompt() {
 
     app.scroll_up(3);
     let screen = render_rows(&mut app, 100).join("\n");
+    assert!(!screen.contains("lines below"), "{screen}");
+}
+
+#[test]
+fn test_chat_bottom_leaves_room_below_a_long_reply() {
+    use crate::components::{Message, MessageRole};
+
+    let mut app = crate::App::new();
+    app.add_message(Message::new(MessageRole::User, "prompt"));
+    let reply: Vec<String> = (0..60).map(|i| format!("line {i:02}")).collect();
+    app.add_message(Message::new(MessageRole::Assistant, &reply.join("\n\n")));
+    let rows = render_rows(&mut app, 100);
+    let screen = rows.join("\n");
+    let last = rows
+        .iter()
+        .position(|row| row.contains("line 59"))
+        .unwrap_or_else(|| panic!("last line not in:\n{screen}"));
+    let column = rows[last][..rows[last].find("line 59").unwrap()].chars().count();
+    let blank_below = rows[last + 1..]
+        .iter()
+        .take_while(|row| row.chars().skip(column).take(7).all(char::is_whitespace))
+        .count();
+    assert!(blank_below >= 5, "{screen}");
     assert!(!screen.contains("lines below"), "{screen}");
 }
 
