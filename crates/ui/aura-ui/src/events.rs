@@ -4,6 +4,7 @@
 //! - `UiEvent`: Events from the UI to the kernel (user actions)
 //! - `UiCommand`: Commands from the kernel to the UI (state updates)
 
+pub use crate::flow::{FlowKind, FlowLane, FlowNode};
 use crate::mode_command::{ApprovalLevel, PermissionMode};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -191,6 +192,10 @@ pub enum UiEvent {
     /// (`None`) or a recorded run by id or prefix
     OpenGraph(Option<String>),
 
+    /// User opened the GRAPH tab for the agent with this hex id: send its
+    /// flow, and keep it up to date
+    OpenFlow(String),
+
     /// User labeled a recorded step (`seq`) or the whole run (`None`);
     /// positive is good
     LabelStep {
@@ -251,17 +256,6 @@ pub enum UiEvent {
         agent_id: String,
         /// Every change since the session started
         session: bool,
-    },
-
-    /// User rated one of the agent's finished turns (`/good [n]` or
-    /// `/bad [n]`), overriding what Gate inferred about how it went
-    RateTurn {
-        /// Agent the chat showed (hex id)
-        agent_id: String,
-        /// `/good` rather than `/bad`
-        good: bool,
-        /// How many finished turns back: 1 is the last
-        turns_back: usize,
     },
 
     /// User ran `/compare` (Gate against another model on their own task)
@@ -563,6 +557,28 @@ pub enum UiCommand {
         run_id: String,
         /// New or changed nodes, parents before children
         nodes: Vec<TraceNode>,
+    },
+
+    /// Replace the flow of the GRAPH tab. Ignored by a UI showing another
+    /// agent.
+    FlowLoad {
+        /// Hex id of the agent the flow was asked for
+        agent_id: String,
+        /// That agent, then every agent it spawned
+        lanes: Vec<FlowLane>,
+        /// Nodes, oldest first within each agent
+        nodes: Vec<FlowNode>,
+    },
+
+    /// Add or update lanes and nodes of the flow as agents work. Ignored
+    /// by a UI whose GRAPH tab shows another agent's flow.
+    FlowUpsert {
+        /// Hex id of the agent the flow was asked for
+        agent_id: String,
+        /// Agents that joined the flow
+        lanes: Vec<FlowLane>,
+        /// New nodes and updates to earlier ones ([`FlowNode::merge`])
+        nodes: Vec<FlowNode>,
     },
 
     /// Set the API status (URL and whether it's active)

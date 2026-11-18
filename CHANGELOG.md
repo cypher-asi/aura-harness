@@ -40,12 +40,12 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   model (the plan first) and tiers them `local`, `fast`, `standard` and
   `frontier`. A model whose route refuses the sign-in is dropped and the
   turn carries on with the next pick. Each turn shows
-  `gate → <model> (<route>) · <category>, <reason>`.
+  `gate → <model> (<route>) · <category>, <reason>`, and the status line
+  at the bottom right shows `GATE` in place of the model.
 - Every prompt is classified into one of 8 categories by the cheapest
   fast-tier model, through the agent's kernel. Every turn ends with an
   `Outcome` (`error`, `checks_failed`, `checks_passed` or `none`), and
-  rewinds, stronger retries and the new `/good` and `/bad` commands
-  append later ones.
+  the judge's findings, rewinds and stronger retries append later ones.
 - Gate routes each category to the cheapest model with
   `AURA_GATE_MIN_TRIES` (10) counted outcomes at `AURA_GATE_TARGET`
   (85%) success. Otherwise it uses the category's default, and it
@@ -56,8 +56,10 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
 - Subtasks under `gate` are classified and routed with their own table
   rows. Models named by the call, the permanent agent or a council seat
   stay pinned.
-- Under `gate` the main agent leads. It gets the `gate_lead` prompt
-  section and, unless `AURA_GATE_DELEGATE=off`, no file-changing tools,
+- Under `gate` the main agent leads the turns classified
+  `multi_file_change` or `planning`, and does the rest itself on the
+  model Gate routes it to. On a turn it leads it gets the `gate_lead`
+  prompt section and, unless `AURA_GATE_DELEGATE=off`, no file-changing tools,
   capped reads and searches, and a `run_command` limited to checks and
   inspection. New `implement` and `tests` permanent agents (and bundled
   kinds) take the work. `task` gains a `check` command and returns a
@@ -87,13 +89,57 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   run's cost and takes `--budget-usd`. `evals/gate_hard` adds eight
   tasks with traps a careless fix falls into.
 - `aura eval run --model gate` runs each task as `aura -p` turns: Gate
-  classifies and routes them, the agent leads and delegates, and the
+  classifies and routes them, the agent leads and delegates where the
+  category calls for it, and the
   verify command runs as a `run_command` call through the run's agent's
   kernel, its verdict recorded as a later outcome so eval results count
   in Gate's table. The results table shows the models Gate routed each
   task to. `EvalOptions` takes an `EvalRunner` instead of `config`,
   `tool_config` and `provider`. The runs' agents work at `yolo`, like
   `aura -p` in `agent` mode.
+- Gate prices a model it has not tried from its list price scaled by how
+  the tried models of its tier (else the nearest tier) cost against
+  theirs, so newer, cheaper models are no longer ranked behind older
+  ones with history. When the lead is on a frontier model, its subtasks
+  are first routed below the frontier tier; an escalated retry may still
+  reach it.
+- Gate starts work cheap and moves it up on failure. `small_change`
+  starts on the cheapest fast-tier model, `planning` on the strongest
+  and every other category on the cheapest standard-tier model. A start
+  model that can no longer reach the target in a category hands it to
+  the next tier up. A routed turn that fails through the model's own
+  doing goes on in the same conversation on the next tier up (route
+  reason `escalate`, not counted), in the terminal, `aura -p` and
+  `aura eval run`.
+- Gate's judge reviews failed work. When a routed turn or a subtask's
+  first attempt ends in a model error or with its last test or build
+  failing, the strongest Opus you can use is shown the request, the
+  diff, the final reply and the failure, and says whether the model was
+  at fault. If so (`judged_fail`) the failure counts in Gate's table and
+  the work moves up a tier, told what the judge found. If not
+  (`judged_excused`) it counts for nothing and stays where it is. Work
+  that did not fail is never judged, so the judge costs nothing on a
+  clean run; `aura eval run` reports its cost per task and in total, and
+  `aura -p --output-format stream-json` emits a `judged` event.
+  `AURA_GATE_JUDGE=off` switches it off.
+- Exploration now goes to the nearest cheaper model the category has
+  not ruled out, else the nearest, so a ruled-out model is tried again
+  once nothing cheaper is more promising.
+- `/good` and `/bad` are removed. How a turn went is learned from its
+  own signals and the judge; `/compare pick` still records your pick.
+- A `task`, `run_command` or plugin tool call drops the caller's cached
+  tool results, so the next read shows what is on disk
+  (`aura_config::FILE_NEUTRAL_TOOLS` lists the uncached tools that keep
+  the cache).
+- On Claude models the thinking effort stays at medium for the whole
+  run. Lowering it after the first write made Anthropic rewrite the
+  conversation's prompt cache.
+- `aura eval run` prints one line per task on stderr as it starts and
+  ends (verdict, cost, time, spend so far, routed models), and with
+  `--model gate` the classifier and the models Gate routes among.
+- The Claude plan's live model list is saved as `plan_models.json`
+  beside the model preferences and used when a later fetch fails, with
+  a note saying so.
 - Under any approval level, the lead's `run_command` limit only narrows
   what the level lets run, and a `task` `check` runs through the
   subtask's kernel at the level the subtask inherited from its parent.
@@ -101,18 +147,47 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   `/compare` runs in and the change carrying, diffing and scratch-index
   snapshots `/compare` and the escalation use.
 
+### Terminal — GRAPH tab
+
+##### Added
+
+- The chat panel has a third tab, GRAPH, next to CHAT and TERMINAL
+  (Shift+←/→ or a click). It shows the flow between the agent on screen
+  and every agent below it as their kernels recorded it: a lane per
+  agent, a box per prompt, model call, tool call, reply, spawn, message
+  and finished process, in time order, with arrows from each `task`
+  call or spawn to the agent it started and from that agent's reply
+  back to its caller. Agents that work in turn share a column.
+- The tab follows the agents live. Arrow keys move through the boxes
+  and across lanes, `[` / `]` jump between prompts, `f` follows an
+  arrow to the other agent, Space and `z` fold turns down to their
+  prompt, Enter opens a step as JSON, `r` opens its record entry and
+  `o` switches to its agent. See
+  [The GRAPH tab](docs/cli.md#the-graph-tab).
+- `UiEvent::OpenFlow` asks the session for an agent's flow;
+  `UiCommand::FlowLoad` and `UiCommand::FlowUpsert` carry it as
+  `FlowLane`s and `FlowNode`s (`aura_ui::flow`). The session builds it
+  in `event_loop/flow.rs` from a record observer on every kernel and
+  the record store, off the kernels' and the event loop's tasks. Only
+  the boxes on screen are drawn.
+
 ### Many agents at once
 
 ##### Fixed
 
 - The desktop app no longer slows down and stops answering input while
   many agents stream at once. It rendered the UI once per command the
-  agents sent, which with 30 agents took more than the whole second;
-  commands arriving within 16 ms are now applied in one update.
-- The desktop app repaints only the rows of the grid that changed. Any
-  change, such as a streamed word or a ticking timer, used to repaint and
-  re-shape every row; replaying a streamed reply now repaints 77% fewer
-  rows. `AURA_DESKTOP_PERF` reports the rows repainted.
+  agents sent, which with 30 agents took more than the whole second.
+  Commands are now applied as they arrive and the window renders at
+  most once per frame of the display: a second of 3,000 commands from
+  30 agents costs about 50 ms of the window's thread.
+- The desktop app shapes only the rows of the grid whose content is
+  new. Any change, such as a streamed word or a ticking timer, used to
+  repaint and re-shape every row; a row that is unchanged, or that only
+  scrolled, now reuses the quads it was drawn with. A frame that comes
+  out the same as the one on screen is not shown again, so an idle
+  window draws only when the cursor blinks. `AURA_DESKTOP_PERF` reports
+  the rows painted anew and the frames skipped.
 - The Sandbox tree is read again once per tick rather than after every
   tool call of every agent.
 - The terminal UI takes the agents' commands every 5 ms while it waits
@@ -261,17 +336,19 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   projects to the tab before it. The split is kept in `desktop_tabs` in
   the data directory. `UiEvent::FocusAgent` makes an agent the
   session's active one without reloading its chat.
-- `aura-desktop`, the terminal UI in a native window built on iced and
-  drawn on the GPU (wgpu, with a tiny-skia CPU fallback). It runs the
-  same in-process session as the terminal (`session::start`) and the
+- `aura-desktop`, the terminal UI in a native window (winit) that
+  draws itself: a frame is one list of quads over a glyph atlas, drawn
+  by the GPU in one call (wgpu) or by the CPU where there is no GPU.
+  No UI toolkit is involved. It runs the same in-process session as the terminal (`session::start`) and the
   same `aura_terminal::App`, rendered through a ratatui backend into a
   cell grid, so the screen, keys, mouse selection and copy behave as
   they do in a terminal.
 - The grid is painted in Geist Mono (bundled) with one text draw per
   styled run; box drawing, block elements, braille and the status
   symbols are drawn as shapes, so borders join and glyphs missing from
-  the font still render. The painted grid is cached until a cell
-  changes, and the cursor blinks on its own layer.
+  the font still render. A row's quads are kept until its content
+  changes, and glyphs and drawn shapes are rasterized once into an
+  atlas.
 - Window shortcuts: Ctrl+Shift+C copies, Ctrl+V / Ctrl+Shift+V /
   Shift+Insert paste (images attach, as in the terminal), Ctrl+= /
   Ctrl+- / Ctrl+0 zoom (Cmd on macOS). Turn alerts use the terminal's
@@ -279,10 +356,17 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   `--theme` picks the terminal theme; `AURA_DESKTOP_MONO_FONT`,
   `AURA_DESKTOP_FONT_FILES` and `AURA_DESKTOP_FONT_SIZE` change the
   font. `--demo` runs a scripted session and `AURA_DESKTOP_PERF` logs
-  frame timings.
-- Offscreen snapshot tests render whole screens with the CPU renderer;
-  `AURA_DESKTOP_SNAPSHOTS=<dir>` saves them as PNGs. An ignored
-  `replay` test reports boot, streaming, keystroke and repaint timings.
+  frame timings. `AURA_DESKTOP_RENDERER=cpu` draws on the CPU whatever
+  the machine has, and `=gpu` on whatever adapter there is.
+- Offscreen snapshot tests draw whole screens with the CPU rasterizer;
+  `AURA_DESKTOP_SNAPSHOTS=<dir>` saves them as PNGs, and
+  `AURA_DESKTOP_GPU=1` checks the GPU draws the same pixels. Ignored
+  `replay_timings` and `swarm_timings` tests report boot, streaming,
+  keystroke and frame timings, and a second of thirty agents streaming
+  at once; `history_timings` reports frames of a 2,000-message
+  conversation and of a long reply streaming after it, and
+  `aura-ui-terminal` has `history_timings` and `streaming_timings` for
+  the UI alone.
 - `aura_terminal::render`, `App::paste_from_clipboard` and
   `alerts::desktop_notify` are public so other frontends can draw the UI
   and share its clipboard and notifications.
@@ -298,6 +382,14 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
 ##### Changed
 
 - The CI MSRV check skips `aura-desktop`, which needs Rust 1.88.
+- The window's clipboard is `arboard`'s.
+- A reply is laid out a part at a time while it streams, in both
+  frontends: what comes before its last blank line or closed code block
+  is kept, and only the paragraph, list, table or code block still being
+  written is wrapped again. A frame after a chunk costs the same however
+  long the reply is: about 0.5 ms in the window at 76,000 characters,
+  where it was 3.9 ms. The reply is laid out whole once more when it
+  ends.
 - The chat reads like a terminal in both frontends: it starts at the
   panel's left edge, prompts are echoed as `> text`, replies follow
   without `YOU` / `AURA` headers, a dim `[model · tokens · cost]` line

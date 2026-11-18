@@ -73,6 +73,10 @@ pub const AURA_GATE_EXPLORE: &str = "AURA_GATE_EXPLORE";
 /// itself; delegating is then only recommended. Consumed by
 /// [`crate::GateConfig::delegate`].
 pub const AURA_GATE_DELEGATE: &str = "AURA_GATE_DELEGATE";
+/// `off` stops Gate's judge model from reviewing routed turns that
+/// failed; a failed test, build or run then always counts against the
+/// model. Consumed by [`crate::GateConfig::judge`].
+pub const AURA_GATE_JUDGE: &str = "AURA_GATE_JUDGE";
 
 /// The full list of env-var names this crate owns. Boundary tests use
 /// this to enforce that no other crate calls `std::env::var(...)` on
@@ -108,6 +112,7 @@ pub const ENV_VAR_NAMES: &[&str] = &[
     AURA_GATE_MIN_TRIES,
     AURA_GATE_EXPLORE,
     AURA_GATE_DELEGATE,
+    AURA_GATE_JUDGE,
 ];
 
 // ---------------------------------------------------------------------------

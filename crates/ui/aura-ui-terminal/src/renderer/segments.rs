@@ -96,7 +96,7 @@ pub(super) const fn message_style<'a>(
     theme: &Theme,
 ) -> (&'a str, ratatui::style::Color, ratatui::style::Color) {
     match role {
-        MessageRole::User => (USER_PROMPT, theme.colors.primary, theme.colors.foreground),
+        MessageRole::User => (USER_PROMPT, theme.colors.primary, theme.colors.primary),
         MessageRole::Assistant => ("", theme.colors.muted, theme.colors.text),
         MessageRole::System => (NOTICE_PROMPT, theme.colors.muted, theme.colors.muted),
     }

@@ -8,9 +8,16 @@
 //! agent that names its own model, a council member, a model given in the
 //! `task` call, and every subtask when the user pinned the main model.
 //!
+//! A subtask dispatched by an agent working on a frontier model is first
+//! routed below that tier ([`aura_agent_gate::below_lead`]), so the most
+//! expensive model plans and a cheaper one does the work.
+//!
 //! A subtask Gate routed whose attempt failed is retried once on the next
-//! stronger model; the retry is recorded with route reason `escalate`,
-//! which Gate's table does not count.
+//! stronger model, the lead's tier included; the retry is recorded with
+//! route reason `escalate`, which Gate's table does not count. Gate's
+//! judge reviews the failed attempt first (see
+//! [`aura_agent_gate::turn_judge`]): a failure it does not put down to
+//! the model is not retried and counts for nothing.
 
 use super::agents::AgentSession;
 use super::gate_live::GateLive;
@@ -66,6 +73,8 @@ pub(super) struct SubtaskGate {
     pub classifier: String,
     /// What Gate picks the subtask's model among; `None` when it is pinned
     pub candidates: Option<Vec<Candidate>>,
+    /// The model Gate sent the dispatching agent's work to, if it did
+    pub lead_model: Option<String>,
     pub limits: ModelLimits,
     pub live: Arc<GateLive>,
     /// Whether Gate may explore; off under the Gate arm of `/compare`
@@ -101,6 +110,7 @@ impl SubtaskGate {
             if config.model != decision.model.id {
                 self.limits.configure(config, &decision.model.id);
             }
+            self.live.note_model(session.agent_id(), &decision.model.id);
             label.category = Some(*category);
             label.shown = Some(route_line(decision, *category));
             label.route = decision.route(RouteLevel::Subtask);
@@ -111,11 +121,11 @@ impl SubtaskGate {
         };
         let category = label.classify(session, cancel).await;
         label.category = Some(category);
+        let among = aura_agent_gate::below_lead(candidates, self.lead_model.as_deref());
         let decision = if self.explore {
-            self.live.decide(RouteLevel::Subtask, category, candidates)
+            self.live.decide(RouteLevel::Subtask, category, &among)
         } else {
-            self.live
-                .redecide(RouteLevel::Subtask, category, candidates)
+            self.live.redecide(RouteLevel::Subtask, category, &among)
         };
         let Some(decision) = decision else {
             label.route.reason = RouteReason::Default;
@@ -131,6 +141,7 @@ impl SubtaskGate {
         if config.model != decision.model.id {
             self.limits.configure(config, &decision.model.id);
         }
+        self.live.note_model(session.agent_id(), &decision.model.id);
         label.shown = Some(route_line(&decision, category));
         label.route = decision.route(RouteLevel::Subtask);
         label

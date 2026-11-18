@@ -315,6 +315,15 @@ pub fn model_key(model: &str) -> String {
     name.to_ascii_lowercase().replace('.', "-")
 }
 
+/// Whether changing the thinking effort between two requests of one
+/// conversation makes `model`'s provider write the conversation to its
+/// prompt cache again. Claude models do: only the tools and the system
+/// prompt are still read from the cache after a change.
+#[must_use]
+pub fn effort_change_resets_prompt_cache(model: &str) -> bool {
+    model_key(model).starts_with("claude-")
+}
+
 /// Whether `name` is `key` or one of its dated snapshots
 /// (`claude-haiku-4-5-20251001`, `gpt-5-4-2026-03-05`).
 fn is_snapshot_of(name: &str, key: &str) -> bool {

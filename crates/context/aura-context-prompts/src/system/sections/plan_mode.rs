@@ -15,7 +15,7 @@ The session is in plan mode. The user wants a plan before any change is made.
 - If the request is ambiguous or has several reasonable implementations that change the plan, ask the user one or two short questions and stop, instead of guessing.
 - When you are ready, call `create_plan` with a short name, a one or two sentence overview, the plan in Markdown, and ordered todos. Cite the files to change and the key code; keep it proportional to the task.
 - To revise a plan after feedback, call `create_plan` again with `path` set to the existing plan.
-- After writing the plan, summarize it in a few sentences and tell the user to run /build when they are happy with it, or /plan to leave plan mode without building. Do not start implementing.";
+- After writing the plan, summarize it in a few sentences and tell the user to say \"implement\" (or run /build) when they are happy with it, or /plan to leave plan mode without building. Do not start implementing.";
     format!("<plan_mode>\n{body}\n</plan_mode>")
 }
 

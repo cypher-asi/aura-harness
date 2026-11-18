@@ -9,6 +9,7 @@ mod chat_tabs;
 mod commands;
 mod definitions;
 pub mod file_view;
+pub mod flow;
 pub mod folder_picker;
 pub(crate) use aura_ui::format;
 pub mod graph;
@@ -364,6 +365,8 @@ pub struct App {
     pub(super) plan_list: plans::PlanList,
     /// Node to select once the requested graph loads.
     pub(super) pending_graph_node: Option<String>,
+    /// Flow between agents shown by the chat panel's GRAPH tab
+    pub(super) flow: flow::FlowState,
 }
 
 /// Screen areas of the content panels from the last rendered frame.
@@ -678,6 +681,7 @@ impl App {
             trace_feed: trace_feed::TraceFeed::default(),
             plan_list: plans::PlanList::default(),
             pending_graph_node: None,
+            flow: flow::FlowState::default(),
         }
     }
 
@@ -1009,6 +1013,9 @@ impl App {
 
     fn scroll_panel_up(&mut self, panel: PanelFocus, lines: usize) {
         match panel {
+            PanelFocus::Chat if self.flow.is_open() => {
+                self.scroll_flow(-isize::try_from(lines).unwrap_or(isize::MAX));
+            }
             PanelFocus::Chat => {
                 self.scroll_offset = self.scroll_offset.saturating_add(lines);
             }
@@ -1041,6 +1048,9 @@ impl App {
 
     fn scroll_panel_down(&mut self, panel: PanelFocus, lines: usize) {
         match panel {
+            PanelFocus::Chat if self.flow.is_open() => {
+                self.scroll_flow(isize::try_from(lines).unwrap_or(isize::MAX));
+            }
             PanelFocus::Chat => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(lines);
             }
@@ -1452,6 +1462,11 @@ impl App {
                             self.clear_selection();
                         } else if self.detail == Some(DetailView::Graph) {
                             self.click_graph(mouse.column, mouse.row);
+                        } else if self.detail.is_none()
+                            && self.flow.is_open()
+                            && self.click_flow(mouse.column, mouse.row)
+                        {
+                            self.clear_selection();
                         }
                     }
                 }
@@ -1952,6 +1967,12 @@ impl App {
     /// Record the width of the chat text area drawn this frame.
     pub fn set_chat_width(&mut self, width: u16) {
         self.chat_width = width;
+    }
+
+    /// Width of the chat text area drawn last frame.
+    #[cfg(test)]
+    pub(crate) const fn chat_width(&self) -> u16 {
+        self.chat_width
     }
 
     /// Terminal width for a command, matching where its output is drawn.

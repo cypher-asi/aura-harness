@@ -135,6 +135,34 @@ impl AttemptFiles {
         self.0.is_empty()
     }
 
+    /// How the files differ now from before the attempt, as one unified
+    /// diff per file under its path (relative to `workspace` when inside
+    /// it). Files back in their old state are left out; empty when
+    /// nothing differs.
+    #[must_use]
+    pub fn diff(&self, workspace: Option<&Path>) -> String {
+        let workspace = workspace.map(|w| w.canonicalize().unwrap_or_else(|_| w.to_path_buf()));
+        let mut out = String::new();
+        for (path, before) in &self.0 {
+            let Ok(now) = read_optional(path) else {
+                continue;
+            };
+            if *before == now {
+                continue;
+            }
+            let diff = unified_diff(before.as_deref(), now.as_deref())
+                .unwrap_or_else(|| "(binary or very large file changed; no diff)\n".to_string());
+            out.push_str("=== ");
+            out.push_str(&display_path(path, workspace.as_deref()));
+            out.push('\n');
+            out.push_str(&diff);
+            if !diff.ends_with('\n') {
+                out.push('\n');
+            }
+        }
+        out
+    }
+
     /// Put every file back as it was before the attempt: written back, or
     /// removed if it didn't exist.
     #[must_use]
@@ -241,6 +269,16 @@ impl FileCheckpoints {
     pub fn take_attempt(&self, agent: AgentId) -> AttemptFiles {
         lock(&self.inner.attempts)
             .remove(&agent)
+            .unwrap_or_default()
+    }
+
+    /// The files `agent`'s watched attempt changed so far; the attempt
+    /// stays watched.
+    #[must_use]
+    pub fn attempt(&self, agent: AgentId) -> AttemptFiles {
+        lock(&self.inner.attempts)
+            .get(&agent)
+            .cloned()
             .unwrap_or_default()
     }
 

@@ -482,7 +482,7 @@ async fn gate_is_compared_with_itself_without_enforced_delegation() {
     compare(
         &mut state,
         &links,
-        "write the answer --repeats 1 --against gate:nodelegate",
+        "write the answer across files --repeats 1 --against gate:nodelegate",
     )
     .await;
     let estimate = system_texts(&drain(&mut commands));
@@ -499,6 +499,8 @@ async fn gate_is_compared_with_itself_without_enforced_delegation() {
     assert_eq!(payload.against, "gate:nodelegate");
     let gate = payload.run("gate-1").unwrap();
     let other = payload.run("other-1").unwrap();
+    // A change across several files is led, and starts on the cheapest
+    // standard model.
     for run in [gate, other] {
         assert_eq!(run.error, None, "{}", run.name);
         assert_eq!(run.model, SONNET, "both arms are routed by Gate");

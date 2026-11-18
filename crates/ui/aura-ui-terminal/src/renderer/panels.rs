@@ -3,7 +3,7 @@
 use super::detail::detail_header;
 use super::header::{self, HeaderInfo, PanelHeader};
 use super::markdown::is_inline_code;
-use super::text::{display_width, Measure};
+use super::text::{display_width, wrap_words, Measure};
 use crate::{
     animation::AURA_WIDTH,
     app::{
@@ -22,9 +22,10 @@ use ratatui::{
 };
 use std::ops::Range;
 
-/// Render the Chat panel: a CHAT | TERMINAL header bar over the
-/// conversation or the shell commands run this session. While a record,
-/// file, process or the run graph covers the body, the bar names it.
+/// Render the Chat panel: a CHAT | TERMINAL | GRAPH header bar over the
+/// conversation, the shell commands run this session, or the flow between
+/// the agent and the agents it spawned. While a record, file, process or
+/// the run graph covers the body, the bar names it.
 pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Chat;
     let hosted = app.host_chrome();
@@ -59,6 +60,11 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
             hosted,
         };
         header::show(frame, app, (Pane::Chat, panel, bar), &header, theme);
+    }
+
+    if app.chat_tab() == ChatTab::Graph {
+        super::flow::render_flow(frame, area, app, theme, is_focused);
+        return;
     }
 
     let Some(body) = render_body_block(frame, area, (is_focused, hosted), theme) else {
@@ -246,8 +252,12 @@ fn render_chat_lines(
     let content = message_rows + tail_gap + tail.len();
     let height = padded.height as usize;
     // Blank rows after the end, enough that scrolling to the bottom can
-    // bring the latest prompt to the top with the reply filling in below.
-    let padding = last_prompt_row.map_or(0, |row| (row + height).saturating_sub(content));
+    // bring the latest prompt to the top with the reply filling in below,
+    // and never less than a third of the screen in the chat, so its last
+    // line can always be scrolled up off the bottom edge.
+    let to_prompt = last_prompt_row.map_or(0, |row| (row + height).saturating_sub(content));
+    let trailing = if app.terminal_pane() { 0 } else { height / 3 };
+    let padding = to_prompt.max(trailing);
     let total = content + padding;
     let start = app.sync_chat_scroll(total, height, reflowed);
     app.set_chat_layout(toggle_rows, start);
@@ -256,6 +266,7 @@ fn render_chat_lines(
     let blank = Line::default();
     let mut visible = Vec::with_capacity(height);
     let mut prose = Vec::new();
+    let mut user_rows = Vec::new();
     let mut line_index = 0usize;
     for (i, block) in cache.blocks().enumerate() {
         if i > 0 {
@@ -277,6 +288,9 @@ fn render_chat_lines(
                 }
                 if let Some(Some(indent)) = block.prose.get(offset).filter(|_| line.width() > 0) {
                     prose.push((visible.len(), *indent));
+                }
+                if block.user {
+                    user_rows.push(visible.len());
                 }
                 visible.push(line);
             }
@@ -317,6 +331,7 @@ fn render_chat_lines(
         })
         .collect();
     app.set_prose_rows(prose);
+    paint_user_band(frame.buffer_mut(), padded, &user_rows, theme);
 
     let hovered_image = match app.hover() {
         Some(HoverTarget::ChatImage(message, index)) => Some((message, index)),
@@ -453,6 +468,26 @@ fn pack_prose(
         }
     }
     (cell, code)
+}
+
+/// Shade the rows of the user's messages across the chat, one column
+/// into the inset on each side. Painted after prose is packed, since a
+/// span with the surface background reads as inline code.
+fn paint_user_band(buffer: &mut Buffer, padded: Rect, rows: &[usize], theme: &Theme) {
+    let style = Style::default().bg(theme.colors.surface);
+    for &row in rows {
+        let Ok(offset) = u16::try_from(row) else {
+            continue;
+        };
+        let band = Rect {
+            x: padded.x.saturating_sub(1),
+            y: padded.y + offset,
+            width: padded.width + 2,
+            height: 1,
+        }
+        .intersection(buffer.area);
+        buffer.set_style(band, style);
+    }
 }
 
 /// Keep `line` when it falls inside the chat viewport.
@@ -673,22 +708,35 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
                 first: app.archived_scroll(),
             };
             let lines: Vec<Line> = lines.into_iter().skip(view.first).take(visible).collect();
-            frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), body);
+            frame.render_widget(Paragraph::new(lines), body);
             render_scrollbar(frame, area, body, view, is_focused, theme);
         }
     }
 }
 
+/// Columns kept clear on each side of the text a list shows while it is
+/// empty, as the side panel's tabs keep them.
+const EMPTY_INDENT: usize = 2;
+
 /// Archive rows: each archived agent with the project it came from on the
 /// right, and the agents under it indented below. Empty, it says how
-/// agents get there.
+/// agents get there, wrapped to the panel inside its padding.
 fn build_archived_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>> {
     let archived = app.archived();
     if archived.is_empty() {
-        return vec![Line::from(Span::styled(
-            " No archived agents. Delete on an agent in PROJECTS archives it.",
-            Style::default().fg(theme.colors.muted),
-        ))];
+        let muted = Style::default().fg(theme.colors.muted);
+        let room = usize::from(inner.width)
+            .saturating_sub(2 * EMPTY_INDENT)
+            .max(1);
+        let indent = " ".repeat(EMPTY_INDENT);
+        return [
+            "No archived agents.",
+            "Delete on an agent in PROJECTS archives it.",
+        ]
+        .into_iter()
+        .flat_map(|sentence| wrap_words(sentence, room))
+        .map(|line| Line::from(Span::styled(format!("{indent}{line}"), muted)))
+        .collect();
     }
     let is_focused = app.focus() == PanelFocus::Swarm;
     let width = inner.width as usize;

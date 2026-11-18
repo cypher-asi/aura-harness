@@ -16,9 +16,11 @@
 //!
 //! Instances of permanent agents that only read (their tools change no
 //! file) run side by side; the others run one at a time per workspace,
-//! so their edits never collide. Under Gate the user's own agent is a
-//! lead: [`AgentHub::lead_turn`] gives it the lead's prompt and, while
-//! delegation is enforced, the lead's tools (see [`super::lead`]).
+//! so their edits never collide. Under Gate the user's own agent leads
+//! the turns that ask for a change across several files or for planning:
+//! [`LeadProfile::apply`] gives such a turn the lead's prompt and, while
+//! delegation is enforced, the lead's tools (see [`super::lead`]). It
+//! does every other turn itself, on the model Gate routes it to.
 //!
 //! Spawns run inside the parent's tool call, on the parent's turn task, so
 //! the event loop keeps running beside them and the user can open a spawn
@@ -53,13 +55,14 @@ use crate::record_loader::agent_summaries;
 use async_trait::async_trait;
 use aura_agent::{AgentLoop, AgentLoopConfig};
 use aura_agent_gate::compare::{tally, PlanReading};
+use aura_agent_gate::turn_judge::{Failed, Verdict};
 use aura_agent_gate::{Candidate, Decision};
 use aura_agent_kernel::Kernel;
 use aura_agent_trace::{RunMeta, RunRecorder, RunSource};
 use aura_context_skills::SkillManager;
 use aura_core_types::{
     AgentId, Hash, ModelTokens, OutcomePayload, OutcomeSignal, PromptCategory, RecordEntry,
-    SpawnMode, SubagentDispatchRequest, SubagentExit, SubagentResult,
+    RouteLevel, SpawnMode, SubagentDispatchRequest, SubagentExit, SubagentResult,
 };
 use aura_exec_tools::agents::task::TASK_TOOL_NAME;
 use aura_exec_tools::jobs::{JOB_KILL_TOOL_NAME, JOB_OUTPUT_TOOL_NAME};
@@ -139,6 +142,44 @@ pub(crate) enum ArmRouting {
     },
     /// Every subtask nothing else pins runs on this model.
     Pinned(String),
+}
+
+/// How a turn of one of the user's agents leads under Gate once its
+/// prompt asks for work a lead takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LeadProfile {
+    /// Whether the lead must delegate, rather than being advised to
+    enforced: bool,
+}
+
+impl LeadProfile {
+    /// Make the turn set up with `config` and `tools` a lead's when its
+    /// prompt asks for `category` ([`aura_agent_gate::lead::leads`]): the
+    /// prompt says how to lead and, with delegation enforced, the lead's
+    /// tools replace the file tools. Any other turn is left as it is, for
+    /// the model Gate routes it to to do the work itself. Returns whether
+    /// the turn's calls must stay within the lead's limits
+    /// ([`AgentSession::lead`]).
+    pub(crate) fn apply(
+        self,
+        category: PromptCategory,
+        config: &mut AgentLoopConfig,
+        tools: &mut Vec<ToolDefinition>,
+    ) -> bool {
+        if !aura_agent_gate::lead::leads(category) {
+            return false;
+        }
+        config.system_prompt.push_str("\n\n");
+        config
+            .system_prompt
+            .push_str(&aura_context_prompts::system::sections::gate_lead::render(
+                self.enforced,
+            ));
+        if self.enforced {
+            *tools = lead_tools(std::mem::take(tools));
+        }
+        self.enforced
+    }
 }
 
 /// What every turn starts from before a permanent agent's settings apply.
@@ -387,11 +428,12 @@ impl AgentHub {
         (config, tools)
     }
 
-    /// Whether the turns of the agent `agent_id`, an instance of the
-    /// permanent agent `definition` if any, lead under Gate: `Some(true)`
-    /// with delegation enforced, `Some(false)` with it only recommended
+    /// Whether the agent `agent_id`, an instance of the permanent agent
+    /// `definition` if any, leads under Gate the turns that call for a
+    /// lead ([`aura_agent_gate::lead::leads`]): `Some(true)` with
+    /// delegation enforced, `Some(false)` with it only recommended
     /// (`AURA_GATE_DELEGATE=off`, or the `gate:nodelegate` arm of
-    /// `/compare`), `None` when they don't lead. Only the user's own
+    /// `/compare`), `None` when it never leads. Only the user's own
     /// agents lead, and only when Gate routes their work: never an
     /// instance of a permanent agent, a pinned main model or a pinned
     /// `/compare` arm.
@@ -411,29 +453,23 @@ impl AgentHub {
     }
 
     /// [`Self::agent_turn`] for a turn `session` runs for the user (or a
-    /// `/compare` run). When it leads under Gate the prompt says how to
-    /// lead and, with delegation enforced, the lead's tools replace the
-    /// file tools and `session` keeps its calls within the lead's limits.
-    pub(crate) fn lead_turn(
+    /// `/compare` run), and how the turn leads when its prompt turns out
+    /// to ask for work a lead takes ([`LeadProfile::apply`]); `None` when
+    /// it never leads (see [`Self::leads`]). `session` starts the turn
+    /// without the lead's limits.
+    pub(crate) fn user_turn(
         &self,
         session: &mut AgentSession,
-    ) -> (AgentLoopConfig, Vec<ToolDefinition>) {
+    ) -> (AgentLoopConfig, Vec<ToolDefinition>, Option<LeadProfile>) {
         let workspace = session.kernel.agent_workspace();
         let agent_id = session.agent_id();
         let definition = session.definition.clone();
-        let (mut config, mut tools) = self.agent_turn(agent_id, definition.as_deref(), &workspace);
-        let leads = self.leads(agent_id, definition.as_deref());
-        session.lead = leads == Some(true);
-        if let Some(enforced) = leads {
-            config.system_prompt.push_str("\n\n");
-            config.system_prompt.push_str(
-                &aura_context_prompts::system::sections::gate_lead::render(enforced),
-            );
-            if enforced {
-                tools = lead_tools(tools);
-            }
-        }
-        (config, tools)
+        let (config, tools) = self.agent_turn(agent_id, definition.as_deref(), &workspace);
+        session.lead = false;
+        let lead = self
+            .leads(agent_id, definition.as_deref())
+            .map(|enforced| LeadProfile { enforced });
+        (config, tools, lead)
     }
 
     /// [`Self::turn`] for `agent_id`, with the plan-mode instructions when
@@ -697,6 +733,7 @@ impl AgentHub {
     /// Note that `agent_id` has no work in flight any more. Returns
     /// whether that work was cancelled.
     pub(crate) fn stop_running(&self, agent_id: AgentId) -> bool {
+        self.gate.forget_model(agent_id);
         lock(&self.running)
             .remove(&agent_id)
             .is_some_and(|running| running.cancel.is_cancelled())
@@ -921,14 +958,30 @@ impl AgentHub {
             None
         };
         let first = self.finish_task(first).await;
-        let Some(why) = first.attempted().failure().filter(|_| !first.cancelled) else {
+        let Some(mut why) = first.attempted().failure().filter(|_| !first.cancelled) else {
             return TaskReport { first, retry: None };
         };
+        match &first.judged {
+            // Not the model's doing: a stronger model would fail the
+            // same way.
+            Some(verdict) if !verdict.at_fault => {
+                info!(child = %first.name, "The judge excused the subtask's failure; not retried");
+                return TaskReport { first, retry: None };
+            }
+            Some(verdict) if !verdict.reasons.trim().is_empty() => {
+                why.push_str("\nA reviewer of that attempt found: ");
+                why.push_str(verdict.reasons.trim());
+            }
+            _ => {}
+        }
         let Some(candidates) = candidates else {
             return TaskReport { first, retry: None };
         };
         let category = first.category.unwrap_or(PromptCategory::Unclassified);
-        let Some(decision) = self.gate.escalate(category, &first.model, &candidates) else {
+        let escalated =
+            self.gate
+                .escalate(RouteLevel::Subtask, category, &first.model, &candidates);
+        let Some(decision) = escalated else {
             info!(child = %first.name, "No stronger model to retry the subtask on");
             return TaskReport { first, retry: None };
         };
@@ -1035,6 +1088,7 @@ impl AgentHub {
             kind: definition.name.clone(),
             classifier: base.gate.classifier.clone(),
             candidates: if pinned { None } else { candidates },
+            lead_model: self.gate.model_of(request.parent_agent_id),
             limits: base.limits,
             live: Arc::clone(&self.gate),
             explore,
@@ -1053,6 +1107,18 @@ impl AgentHub {
                 .is_some_and(|d| d.model.is_some())
         });
         (!pinned).then_some(candidates)
+    }
+
+    /// The model that judges `ended`, the outcome of work Gate routed for
+    /// an agent running the permanent agent `definition` (see
+    /// [`gate_record::judge_for`]).
+    pub(crate) fn judge_of(
+        &self,
+        definition: Option<&str>,
+        ended: &OutcomePayload,
+    ) -> Option<String> {
+        let candidates = self.gate_candidates(definition)?;
+        gate_record::judge_for(&self.gate, &candidates, ended)
     }
 
     /// The model that classifies prompts; empty when nothing does.
@@ -1191,6 +1257,14 @@ impl AgentHub {
             _ => None,
         };
         let files_before = files.map(|files| files.take_attempt(child_id));
+        let failure = task_check::Attempted {
+            model: &agent_loop.config().model,
+            reply: &end.reply,
+            files: &end.files,
+            check: check.as_ref(),
+        }
+        .failure()
+        .filter(|_| !cancelled);
         self.processes.finish(
             &task_id(child_id),
             if end.reply.is_ok() {
@@ -1213,6 +1287,39 @@ impl AgentHub {
         if let Some(ended) = &ended {
             gate_record::record(&session.kernel, child_id, ended).await;
         }
+        // A first attempt that failed is reviewed before it is retried on
+        // a stronger model: was the model at fault?
+        let mut ended = ended;
+        let mut judged = None;
+        if let (Some(outcome), Some(failure), Some(candidates), None) = (
+            ended.as_mut(),
+            &failure,
+            gate.candidates.as_deref(),
+            &gate.escalation,
+        ) {
+            if let Some(judge) = gate_record::judge_for(&self.gate, candidates, outcome) {
+                let workspace = session.kernel.agent_workspace();
+                let diff = files_before
+                    .as_ref()
+                    .map(|files| files.diff(Some(&workspace)))
+                    .unwrap_or_default();
+                let failed = Failed {
+                    task: &prompt,
+                    diff: &diff,
+                    reply: end.reply.as_deref().unwrap_or_default(),
+                    failure,
+                };
+                let auth_token = agent_loop.config().auth_token.clone();
+                if let Some((judged_as, found)) =
+                    gate_record::judge_failed(&session.kernel, &judge, outcome, &failed, auth_token)
+                        .await
+                {
+                    ui.send(system_message(found.describe())).await;
+                    *outcome = judged_as;
+                    judged = Some(found.verdict);
+                }
+            }
+        }
         if let Some(redo) = self.end_attempt(parent, child_id, ended) {
             redo.record().await;
         }
@@ -1229,6 +1336,7 @@ impl AgentHub {
             check,
             files_before,
             cancelled,
+            judged,
         }
     }
 }
@@ -1279,6 +1387,8 @@ struct TaskDone {
     /// What the files it changed held before, when it may be retried
     files_before: Option<AttemptFiles>,
     cancelled: bool,
+    /// What Gate's judge found, when the attempt failed and was reviewed
+    judged: Option<Verdict>,
 }
 
 impl TaskDone {

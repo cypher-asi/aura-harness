@@ -17,6 +17,8 @@ pub mod auth;
 mod compare;
 mod compare_run;
 mod compare_view;
+pub(crate) mod flow;
+mod flow_builder;
 pub(crate) mod gate_live;
 pub(crate) mod gate_record;
 pub(crate) mod gate_subtask;
@@ -44,6 +46,7 @@ pub(crate) mod turns;
 pub(crate) use agent_events::forward_agent_events;
 pub use agents::{AgentSession, KernelBuilder, KernelFactory};
 pub use approvals::TerminalApprovals;
+pub use flow::{FlowFeed, FlowInbox};
 pub use gate_live::GateLive;
 pub use gate_subtask::GateBase;
 pub use host::{TerminalAgents, TerminalChildKernels};
@@ -96,6 +99,8 @@ pub struct EventLoopContext<'a> {
     pub auth: Arc<AuthManager>,
     /// Tool calls waiting for the user's answer.
     pub approvals: Arc<TerminalApprovals>,
+    /// Feed of the GRAPH tab, when the kernels report to one.
+    pub flow: Option<Arc<FlowFeed>>,
 }
 
 /// Mutable state threaded through all event handlers.
@@ -124,6 +129,8 @@ pub(super) struct LoopState<'a> {
     pub(super) approvals: Arc<TerminalApprovals>,
     /// The comparison waiting for `/compare go`, and the one running.
     pub(super) compare: compare::CompareState,
+    /// Feed of the GRAPH tab.
+    pub(super) flow: Option<Arc<FlowFeed>>,
 }
 
 impl LoopState<'_> {
@@ -180,6 +187,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         models,
         auth,
         approvals,
+        flow,
     } = ctx;
     let processes = Arc::clone(&hub.processes);
     let publisher = processes::spawn_publisher(Arc::clone(&processes), commands.clone());
@@ -208,6 +216,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
                 .unwrap_or_default()
                 .join("aura_data"),
         ),
+        flow,
     };
     let mut notice_rx = state.hub.take_notices();
     state.hub.name_agents();
@@ -460,6 +469,11 @@ async fn handle_ui_event(
         UiEvent::ShowStatus => trace::status_report(state).await,
         UiEvent::ShowGate => gate_view::show(state).await,
         UiEvent::OpenGraph(id) => trace::open_graph(state, id).await,
+        UiEvent::OpenFlow(agent_id) => {
+            if let Some(flow) = &state.flow {
+                flow.open(state.agent_or_active(&agent_id));
+            }
+        }
         UiEvent::ListRuns => trace::list(state).await,
         UiEvent::LabelStep { run_id, seq, value } => {
             trace::label(state, &run_id, seq, value).await;
@@ -530,14 +544,6 @@ async fn handle_ui_event(
         UiEvent::Diff { agent_id, session } => {
             let agent_id = state.agent_or_active(&agent_id);
             rewind::handle_diff(state, agent_id, session).await;
-        }
-        UiEvent::RateTurn {
-            agent_id,
-            good,
-            turns_back,
-        } => {
-            let agent_id = state.agent_or_active(&agent_id);
-            gate_record::handle_rate(state, agent_id, good, turns_back).await;
         }
         UiEvent::Compare { agent_id, args } => {
             let agent_id = state.agent_or_active(&agent_id);
@@ -643,8 +649,8 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
                 prompt: (!shown).then(|| prompt.text.clone()),
             })
             .await;
-            let (agent_loop, tools, recorder) = prepare_turn(state, &mut session).await;
-            let gate = gate_turn(state, &agent_loop).map(Box::new);
+            let (agent_loop, tools, recorder, lead) = prepare_turn(state, &mut session).await;
+            let gate = gate_turn(state, &agent_loop, lead).map(Box::new);
             let routing = Box::new(routing(state, &agent_loop));
             if let Some(rec) = &recorder {
                 rec.begin_turn(&prompt.text);
@@ -707,12 +713,18 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
     agents::send_agent_list(state).await;
 }
 
-/// The agent loop and tools for a turn of `session`, and the recorder of
-/// its conversation's run when tracing is on.
+/// The agent loop and tools for a turn of `session`, the recorder of its
+/// conversation's run when tracing is on, and how the turn leads when
+/// its prompt asks for work a lead takes.
 async fn prepare_turn(
     state: &mut LoopState<'_>,
     session: &mut AgentSession,
-) -> (AgentLoop, Vec<ToolDefinition>, Option<Arc<RunRecorder>>) {
+) -> (
+    AgentLoop,
+    Vec<ToolDefinition>,
+    Option<Arc<RunRecorder>>,
+    Option<subagents::LeadProfile>,
+) {
     for problem in subagents::lock(&state.hub.definitions).reload() {
         warn!(%problem, "Skipping agent definition");
     }
@@ -720,7 +732,7 @@ async fn prepare_turn(
     state.sync_turn_base();
     let workspace = session.kernel.agent_workspace();
     let agent_id = session.agent_id();
-    let (mut config, tools) = state.hub.lead_turn(session);
+    let (mut config, tools, lead) = state.hub.user_turn(session);
     state.hub.send_instructions(agent_id, &workspace).await;
     state
         .hub
@@ -744,14 +756,18 @@ async fn prepare_turn(
     if let Some(rec) = &recorder {
         config.trace_blobs = rec.blob_store();
     }
-    (AgentLoop::new(config), tools, recorder)
+    (AgentLoop::new(config), tools, recorder, lead)
 }
 
 /// When Gate routes the turn `agent_loop` is set up for (Gate is selected
 /// and no permanent agent names its own model), what it routes among once
 /// the prompt is classified. The turn shows Gate's choice when it makes
-/// it.
-fn gate_turn(state: &LoopState<'_>, agent_loop: &AgentLoop) -> Option<GateTurn> {
+/// it, and leads as `lead` says when the prompt calls for a lead.
+fn gate_turn(
+    state: &LoopState<'_>,
+    agent_loop: &AgentLoop,
+    lead: Option<subagents::LeadProfile>,
+) -> Option<GateTurn> {
     state
         .models
         .route()
@@ -761,6 +777,7 @@ fn gate_turn(state: &LoopState<'_>, agent_loop: &AgentLoop) -> Option<GateTurn> 
         limits: state.models.limits(),
         live: Arc::clone(&state.hub.gate),
         models: state.models.ui_command(),
+        lead,
     })
 }
 

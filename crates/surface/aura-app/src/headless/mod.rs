@@ -16,6 +16,7 @@ mod tools;
 #[cfg(test)]
 mod tests;
 
+pub use crate::event_loop::gate_record::Judged;
 pub use crate::event_loop::task_check::CheckRun;
 pub use eval::{copy_dir, EvalRan, EvalTurn, EvalTurns, GateUse};
 pub(crate) use output::{ExitReason, Output, RunReport};
@@ -319,6 +320,7 @@ async fn build(
             crate::event_loop::auth::auth_summary(auth, config.auth_token.as_deref())
         });
     let mut models = ModelSelection::init(&mut config, summary);
+    let mut notes = Vec::new();
     if let Some(model) = &args.model {
         if let Err(problem) = models.use_for_run(&mut config, model) {
             if !mock {
@@ -336,6 +338,7 @@ async fn build(
         if models.is_gate() {
             if let Some(note) = models.refresh_plans(auth.as_ref()).await {
                 warn!("{note}");
+                notes.push(note);
             }
             models.refresh_route(&mut config);
             info!(model = %config.model, "{}", models.display());
@@ -397,6 +400,8 @@ async fn build(
         tool_filter,
         job_wait: job_wait_from_env(),
         trace: None,
+        notes,
+        judged: Vec::new(),
     })
 }
 

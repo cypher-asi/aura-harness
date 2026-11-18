@@ -35,7 +35,7 @@ cargo run -p aura-node --bin aura-node
 
 ## Desktop app
 
-`aura` with no subcommand opens the desktop window, `aura-desktop`: the terminal UI in a native window: the same agent session, the same screen and the same keys, drawn on the GPU (wgpu, through [iced](https://iced.rs)) on a cell grid instead of through a terminal emulator, with a CPU fallback (tiny-skia) when no GPU is available. Box-drawing lines, block characters, braille spinners and status symbols are drawn as shapes, so borders join without gaps and symbols missing from the font still render. It needs Rust 1.88 or later. `aura --terminal` (or `aura run`) runs in the terminal instead, and so does `aura` when there's no display to open a window on, such as over SSH. Builds with `--no-default-features` leave the desktop app out; the Docker images do.
+`aura` with no subcommand opens the desktop window, `aura-desktop`: the terminal UI in a native window: the same agent session, the same screen and the same keys, drawn on the GPU ([wgpu](https://wgpu.rs)) on a cell grid instead of through a terminal emulator, and on the CPU when no GPU is available. Box-drawing lines, block characters, braille spinners and status symbols are drawn as shapes, so borders join without gaps and symbols missing from the font still render. It needs Rust 1.88 or later. `aura --terminal` (or `aura run`) runs in the terminal instead, and so does `aura` when there's no display to open a window on, such as over SSH. Builds with `--no-default-features` leave the desktop app out; the Docker images do.
 
 ```sh
 cargo run --release                                          # agent in the current directory
@@ -68,9 +68,10 @@ Text is set in Geist Mono, bundled (SIL Open Font License, [`assets/fonts/OFL.tx
 | `AURA_DESKTOP_MONO_FONT` | Another installed monospace family, e.g. `JetBrains Mono` |
 | `AURA_DESKTOP_FONT_FILES` | Extra font files to load, separated like `PATH` |
 | `AURA_DESKTOP_FONT_SIZE` | Starting text size in pixels (default 14) |
-| `AURA_DESKTOP_PERF` | Log startup time and frame / update / view timings to stderr |
+| `AURA_DESKTOP_PERF` | Log startup time and, every five seconds, update / render / paint / show timings, frames shown and skipped, and rows painted to stderr |
+| `AURA_DESKTOP_RENDERER` | `cpu` draws on the CPU whatever the machine has; `gpu` draws on whatever graphics adapter there is, a software one included. Unset, the GPU is used unless the only adapter is a software one |
 
-On Linux the window opens on Wayland, or on X11 when `WAYLAND_DISPLAY` is unset; nothing beyond the packages above is needed to build it. `WGPU_BACKEND=gl` forces OpenGL when Vulkan drivers misbehave, and `ICED_BACKEND=tiny-skia` forces the CPU renderer. Editing a permanent agent opens `$VISUAL` / `$EDITOR`; editors that need a terminal (vim, nano, helix…) can't run in a window, so the file opens in the system's default app instead and is reloaded the first time you save it.
+On Linux the window opens on Wayland, or on X11 when `WAYLAND_DISPLAY` is unset; nothing beyond the packages above is needed to build it. `WGPU_BACKEND=gl` forces OpenGL when Vulkan drivers misbehave, and `AURA_DESKTOP_RENDERER=cpu` forces the CPU renderer. Editing a permanent agent opens `$VISUAL` / `$EDITOR`; editors that need a terminal (vim, nano, helix…) can't run in a window, so the file opens in the system's default app instead and is reloaded the first time you save it.
 
 The node listens on `127.0.0.1:8080` by default. Start work with `POST /v1/run` and follow it on `WS /stream/:run_id`; see [api.md](api.md). Environment variables are listed in [configuration.md](configuration.md); copy [`.env.example`](../.env.example) as a starting point.
 

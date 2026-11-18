@@ -1,9 +1,9 @@
 //! `aura eval run --model gate`: each run of a task is an agent of its
 //! own under the Headless agent, working in the task's workspace, and its
 //! prompts are `aura -p` turns. Gate classifies and routes them with the
-//! table as configured (exploration included), the agent leads and its
-//! `task` subtasks are routed and escalated, and every prompt ends with
-//! its `Outcome`. The task's verify command then runs as a `run_command`
+//! table as configured (exploration included), the agent leads the turns
+//! that call for a lead and its `task` subtasks are routed and escalated,
+//! and every prompt ends with its `Outcome`. The task's verify command then runs as a `run_command`
 //! call through the agent's kernel, and its verdict is recorded as a
 //! later `Outcome` of the last prompt, so eval results count in the Gate
 //! table of the data directory.
@@ -11,7 +11,7 @@
 use super::output::Output;
 use super::run::{Headless, RunLimits};
 use super::OutputFormat;
-use crate::event_loop::gate_record;
+use crate::event_loop::gate_record::{self, Judged};
 use crate::event_loop::subagents::lock;
 use crate::event_loop::task_check::{run_script, CheckRun};
 use aura_agent_trace::RunRecorder;
@@ -67,6 +67,12 @@ impl EvalTurns {
         }
     }
 
+    /// What to show before the first run (see [`Headless::setup_lines`]).
+    #[must_use]
+    pub fn setup_lines(&self) -> Vec<String> {
+        self.headless.setup_lines()
+    }
+
     /// Run `turn`'s prompts, then its verify command.
     ///
     /// # Errors
@@ -98,6 +104,7 @@ impl EvalTurns {
         self.headless.trace = Some(Arc::clone(&turn.trace));
         let mut error = None;
         let mut last = None;
+        self.headless.judged.clear();
         for prompt in turn.prompts {
             let (report, ended) = self
                 .headless
@@ -144,6 +151,7 @@ impl EvalTurns {
             gate: GateUse {
                 routed: hub.routed_models(agent_id),
                 tokens: hub.tokens_by_model(agent_id),
+                judged: std::mem::take(&mut self.headless.judged),
             },
         })
     }
@@ -156,8 +164,19 @@ pub struct GateUse {
     /// first.
     pub routed: Vec<String>,
     /// Model calls of the run and its subtasks per model, classifier
-    /// calls included.
+    /// and judge calls included.
     pub tokens: Vec<ModelTokens>,
+    /// What Gate's judge found on the turns that failed, oldest first.
+    pub judged: Vec<Judged>,
+}
+
+impl GateUse {
+    /// What the judge's calls cost in USD: paid to learn from failed
+    /// turns, and part of `tokens` too.
+    #[must_use]
+    pub fn judge_cost_usd(&self) -> f64 {
+        self.judged.iter().map(|judged| judged.cost_usd).sum()
+    }
 }
 
 /// Copy the files under `from` into `to`, keeping relative paths.

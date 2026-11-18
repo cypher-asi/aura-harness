@@ -170,7 +170,6 @@ impl App {
                     });
                 }
             }
-            "good" | "bad" => self.handle_rate_command(cmd == "good", arg),
             "new" | "n" => {
                 self.messages.clear();
                 self.scroll_offset = 0;
@@ -416,7 +415,7 @@ impl App {
     }
 
     /// Handle `/build [path]`: run the given plan, or the latest one.
-    fn request_build(&mut self, arg: &str) {
+    pub(super) fn request_build(&mut self, arg: &str) {
         if self.turn_running() {
             self.notification = Some((
                 "Wait for the current turn to finish before building".to_string(),
@@ -438,6 +437,38 @@ impl App {
                 path,
             });
         }
+    }
+
+    /// Whether `text` asks a plan-mode agent with a plan to build it, the
+    /// way `/build` does: a bare "implement", "build it", "go ahead"...
+    /// Anything longer is feedback on the plan and goes to the agent.
+    pub(super) fn wants_build(&self, text: &str) -> bool {
+        const PHRASES: &[&str] = &[
+            "implement",
+            "implement it",
+            "implement this",
+            "implement plan",
+            "implement the plan",
+            "build",
+            "build it",
+            "build the plan",
+            "go ahead",
+            "go ahead and implement",
+            "go ahead and implement it",
+            "do it",
+            "proceed",
+        ];
+        if self.hud.mode != Some(PermissionMode::Plan) || self.active_plan.is_none() {
+            return false;
+        }
+        let text = text
+            .trim()
+            .trim_end_matches(|c: char| matches!(c, '.' | '!'))
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase();
+        PHRASES.contains(&text.as_str())
     }
 
     /// Handle `/spawn <permanent agent>`.
@@ -578,32 +609,6 @@ impl App {
                 agent_id: self.active_agent_id.clone(),
                 turn,
                 scope,
-            });
-        }
-    }
-
-    /// `/good [n]` or `/bad [n]`: rate the agent's finished turn `n` back
-    /// (1, the default, is the last). The event loop rejects an `n` beyond
-    /// the turns it has.
-    fn handle_rate_command(&mut self, good: bool, arg: &str) {
-        let turns_back = if arg.is_empty() {
-            Some(1)
-        } else {
-            arg.parse::<usize>().ok().filter(|n| *n > 0)
-        };
-        let Some(turns_back) = turns_back else {
-            let name = if good { "good" } else { "bad" };
-            self.notification = Some((
-                format!("Usage: /{name} [n] (n turns back, 1 = the last finished turn)"),
-                NotificationType::Warning,
-            ));
-            return;
-        };
-        if let Some(tx) = &self.event_tx {
-            let _ = tx.try_send(UiEvent::RateTurn {
-                agent_id: self.active_agent_id.clone(),
-                good,
-                turns_back,
             });
         }
     }
@@ -816,6 +821,16 @@ impl App {
                 self.trace_feed.push(&run_id, &nodes);
                 self.upsert_graph(&run_id, nodes);
             }
+            UiCommand::FlowLoad {
+                agent_id,
+                lanes,
+                nodes,
+            } => self.load_flow(&agent_id, lanes, nodes),
+            UiCommand::FlowUpsert {
+                agent_id,
+                lanes,
+                nodes,
+            } => self.upsert_flow(&agent_id, lanes, nodes),
             UiCommand::SetApiStatus { url, active } => {
                 self.api_url = url;
                 self.api_active = active;
@@ -1145,6 +1160,10 @@ impl App {
 
     fn cmd_set_active_agent(&mut self, agent_id: &str) {
         self.show_agent_chat(agent_id);
+        if self.flow.is_open() {
+            // The GRAPH tab follows the agent on screen.
+            self.request_flow();
+        }
         for agent in &mut self.agents {
             agent.is_active = agent.id == self.active_agent_id;
         }

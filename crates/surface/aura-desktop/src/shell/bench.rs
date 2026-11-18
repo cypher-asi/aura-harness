@@ -1,0 +1,273 @@
+//! The window's timings on the scenes of [`super::snapshot`]:
+//! `cargo test --release -p aura-desktop -- --ignored --nocapture timings`.
+//!
+//! The window applies what happens when it happens and renders once per
+//! frame of the display, so updates are reported with the frames they
+//! lead to.
+
+use super::keys::Press;
+use super::snapshot::{agent, report, seed, steps};
+use super::tests::stage;
+use crate::demo::{LISTING, REPLY};
+use crate::geom::Size;
+use crate::raster;
+use crate::text;
+use aura_ui::events::{ActivityData, MessageData, MessageRole, ToolData, UiCommand};
+use std::time::{Duration, Instant};
+
+/// Frames a display shows in a second.
+const REFRESH: usize = 60;
+
+fn sum(samples: &[Duration]) -> f64 {
+    samples.iter().sum::<Duration>().as_secs_f64() * 1e3
+}
+
+/// A session replayed the way a model streams it: a long reply in small
+/// chunks with a frame after each, typing, and whole frames rasterized
+/// on the CPU as they are where there is no GPU.
+#[test]
+#[ignore = "benchmark"]
+fn replay_timings() {
+    let started = Instant::now();
+    let mut stage = stage();
+    stage.shell.frame(stage.now);
+    let boot = started.elapsed();
+    seed(&mut stage);
+    steps(&mut stage);
+    stage.apply([UiCommand::StartStreaming]);
+
+    let text: Vec<char> = REPLY
+        .replace("{prompt}", "the crates")
+        .repeat(8)
+        .chars()
+        .collect();
+    let (mut streaming, mut frames, mut rasters) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut changed_frames, mut changed_rows) = (0, 0);
+    let mut pixels = Vec::new();
+    for (i, chunk) in text.chunks(12).enumerate() {
+        let chunk: String = chunk.iter().collect();
+        let t = Instant::now();
+        stage.shell.commands([UiCommand::AppendText(chunk)]);
+        streaming.push(t.elapsed());
+        let t = Instant::now();
+        stage.shell.frame(stage.now);
+        frames.push(t.elapsed());
+        let rows = stage.shell.painter.built();
+        changed_frames += usize::from(rows > 0);
+        changed_rows += rows;
+        if i % 25 == 0 {
+            let scene = stage.shell.painter.scene();
+            let t = Instant::now();
+            text::with(|text| raster::paint(scene, text.atlas(), &mut pixels));
+            rasters.push(t.elapsed());
+        }
+    }
+    stage.apply([UiCommand::FinishStreaming, UiCommand::Complete]);
+
+    let mut typing = Vec::new();
+    let mut buffer = [0; 4];
+    for c in "how are the crates tested?".chars() {
+        let key = Press::typing(c.encode_utf8(&mut buffer));
+        let t = Instant::now();
+        stage.shell.key_pressed(&key, stage.now);
+        stage.shell.frame(stage.now);
+        typing.push(t.elapsed());
+    }
+
+    println!(
+        "boot to first frame's quads: {:.2} ms",
+        boot.as_secs_f64() * 1e3
+    );
+    report("commands while streaming", &mut streaming);
+    report("frame per streamed chunk (render + quads)", &mut frames);
+    report("key and its frame", &mut typing);
+    println!(
+        "rows painted anew: {changed_rows} over {changed_frames} changed frames of {} rows",
+        stage.shell.rows
+    );
+    report("whole frame rasterized on the CPU", &mut rasters);
+}
+
+/// One second of a swarm streaming at once: the agent in front writes a
+/// reply while the others think, call tools and write theirs. The
+/// commands arrive one at a time, about a frame's worth at a time, and
+/// all at once, with the frames a display shows in that second.
+#[test]
+#[ignore = "benchmark"]
+fn swarm_timings() {
+    const AGENTS: usize = 30;
+    const COMMANDS_PER_AGENT: usize = 100;
+    let reply: Vec<char> = REPLY.replace("{prompt}", "the crates").chars().collect();
+    let mut chunks = reply.chunks(12).cycle();
+    let mut second = Vec::new();
+    for step in 0..COMMANDS_PER_AGENT {
+        second.push(UiCommand::AppendText(
+            chunks.next().unwrap().iter().collect(),
+        ));
+        for i in 1..AGENTS {
+            let command = match step % 10 {
+                0 => UiCommand::ShowTool(ToolData {
+                    id: format!("t{step}"),
+                    name: "read_file".into(),
+                    args: r#"{"path":"src/lib.rs"}"#.into(),
+                }),
+                1 => UiCommand::CompleteTool {
+                    id: format!("t{}", step - 1),
+                    result: LISTING.into(),
+                    success: true,
+                },
+                2..=4 => UiCommand::AppendThinking("weighing the options ".into()),
+                _ => UiCommand::AppendText(chunks.next().unwrap().iter().collect()),
+            };
+            second.push(UiCommand::ForAgent {
+                agent_id: format!("b{i:02}"),
+                command: Box::new(command),
+            });
+        }
+    }
+
+    let mut agents = vec![agent("a1", "Agent01", 0, Some("aura-harness"))];
+    agents
+        .extend((1..AGENTS).map(|i| agent(&format!("b{i:02}"), &format!("Agent{i:02}"), 0, None)));
+    for per_update in [1, 50, 1024] {
+        let mut stage = stage();
+        seed(&mut stage);
+        stage.apply([UiCommand::SetAgents(agents.clone())]);
+        steps(&mut stage);
+        stage.apply([UiCommand::StartStreaming]);
+        let batches: Vec<&[UiCommand]> = second.chunks(per_update).collect();
+        // The display takes a frame every so many updates; fewer than
+        // its sixty when the second has fewer updates than that.
+        let every = batches.len().div_ceil(REFRESH).max(1);
+        let (mut updates, mut frames) = (Vec::new(), Vec::new());
+        for (i, batch) in batches.iter().enumerate() {
+            let t = Instant::now();
+            stage.shell.commands(batch.to_vec());
+            updates.push(t.elapsed());
+            if (i + 1) % every == 0 || i + 1 == batches.len() {
+                let t = Instant::now();
+                stage.shell.frame(stage.now);
+                frames.push(t.elapsed());
+            }
+        }
+        println!(
+            "{} commands from {AGENTS} agents, {per_update} per update: busy {:.1} ms of the \
+             second ({:.1} applying, {:.1} in {} frames)",
+            second.len(),
+            sum(&updates) + sum(&frames),
+            sum(&updates),
+            sum(&frames),
+            frames.len(),
+        );
+        report("  update", &mut updates);
+        report("  frame", &mut frames);
+    }
+}
+
+/// A conversation of `messages` messages: a prompt, two tool calls and a
+/// reply, over and over.
+fn history(messages: usize) -> Vec<MessageData> {
+    let tool = |turn: usize, name: &str| MessageData {
+        activity: Some(ActivityData::Tool {
+            id: format!("t{turn}-{name}"),
+            name: name.into(),
+            args: r#"{"path":"crates"}"#.into(),
+            result: Some(LISTING.into()),
+            is_error: false,
+            duration_ms: Some(120),
+            policy: None,
+        }),
+        ..MessageData::new(MessageRole::Assistant, "")
+    };
+    let mut out = Vec::with_capacity(messages);
+    while out.len() < messages {
+        let turn = out.len() / 4;
+        let prompt = format!("Summarise the crates and fix the README, pass {turn}");
+        let mut reply = MessageData::new(
+            MessageRole::Assistant,
+            REPLY.replace("{prompt}", "the crates"),
+        );
+        reply.model = Some("local/qwen3-coder".into());
+        out.extend([
+            MessageData::new(MessageRole::User, prompt),
+            tool(turn, "read_file"),
+            tool(turn, "list_files"),
+            reply,
+        ]);
+    }
+    out.truncate(messages);
+    out
+}
+
+/// The window with the most messages the UI keeps, and with a twentieth
+/// of that: the first frame, which lays every message out, a key and
+/// its frame, a frame after the window changed width, which lays them
+/// all out again, and a reply streaming in small chunks with a frame
+/// after each, as it grows.
+#[test]
+#[ignore = "benchmark"]
+fn history_timings() {
+    let ms = |d: Duration| d.as_secs_f64() * 1e3;
+    for messages in [100, 2000] {
+        let mut stage = stage();
+        seed(&mut stage);
+        stage.shell.frame(stage.now);
+        stage
+            .shell
+            .commands([UiCommand::LoadConversation(history(messages))]);
+        let t = Instant::now();
+        stage.shell.frame(stage.now);
+        println!("{messages} messages: first frame {:.2} ms", ms(t.elapsed()));
+
+        let mut typing = Vec::new();
+        let mut buffer = [0; 4];
+        for c in "how are the crates tested?".chars() {
+            let key = Press::typing(c.encode_utf8(&mut buffer));
+            let t = Instant::now();
+            stage.shell.key_pressed(&key, stage.now);
+            stage.shell.frame(stage.now);
+            typing.push(t.elapsed());
+        }
+        report("  key and its frame", &mut typing);
+
+        let mut widths = Vec::new();
+        for step in 1..=10_u8 {
+            let wide = 1320.0 - 12.0 * f32::from(step);
+            let t = Instant::now();
+            stage.shell.resized(Size::new(wide, 860.0), 1.0);
+            stage.shell.frame(stage.now);
+            widths.push(t.elapsed());
+        }
+        report("  frame at a new width", &mut widths);
+
+        stage.apply([UiCommand::StartStreaming]);
+        let text: Vec<char> = REPLY
+            .replace("{prompt}", "the crates")
+            .repeat(160)
+            .chars()
+            .collect();
+        let marks = [2_000, 10_000, 40_000, usize::MAX];
+        let (mut mark, mut sent) = (0, 0);
+        let mut frames = Vec::new();
+        for chunk in text.chunks(12) {
+            let t = Instant::now();
+            stage
+                .shell
+                .commands([UiCommand::AppendText(chunk.iter().collect())]);
+            stage.shell.frame(stage.now);
+            frames.push(t.elapsed());
+            sent += chunk.len();
+            if sent >= marks[mark] {
+                let label = format!(
+                    "  streamed chunk and its frame, up to {} characters",
+                    marks[mark]
+                );
+                report(&label, &mut frames);
+                frames.clear();
+                mark += 1;
+            }
+        }
+        let label = format!("  streamed chunk and its frame, up to {sent} characters");
+        report(&label, &mut frames);
+    }
+}

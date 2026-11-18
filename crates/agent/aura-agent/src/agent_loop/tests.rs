@@ -626,7 +626,7 @@ fn effort_medium_on_iteration_0_no_disable() {
 fn effort_low_after_first_write() {
     use aura_model::ThinkingEffort;
 
-    let config = AgentLoopConfig::for_agent("claude-test-model");
+    let config = AgentLoopConfig::for_agent("gpt-test-model");
     let mut state = super::LoopState::new(&config, vec![]);
     state.had_any_file_write = true;
     assert_eq!(
@@ -642,13 +642,36 @@ fn effort_low_after_first_write() {
 fn effort_low_after_submit_plan() {
     use aura_model::ThinkingEffort;
 
-    let config = AgentLoopConfig::for_agent("claude-test-model");
+    let config = AgentLoopConfig::for_agent("gpt-test-model");
     let mut state = super::LoopState::new(&config, vec![]);
     state.submit_plan_called = true;
     assert_eq!(
         state.compute_thinking_effort(&config, 2),
         ThinkingEffort::Low
     );
+}
+
+/// A change of effort makes Claude write the conversation to its prompt
+/// cache again, so a Claude model keeps `Medium` after a write or a plan.
+#[test]
+fn effort_stays_medium_on_claude_models() {
+    use aura_model::ThinkingEffort;
+
+    for model in [
+        "claude/claude-sonnet-5-5",
+        "aura-claude-opus-4-7",
+        "claude-haiku-4-5",
+    ] {
+        let config = AgentLoopConfig::for_agent(model);
+        let mut state = super::LoopState::new(&config, vec![]);
+        state.had_any_file_write = true;
+        state.submit_plan_called = true;
+        assert_eq!(
+            state.compute_thinking_effort(&config, 3),
+            ThinkingEffort::Medium,
+            "{model}"
+        );
+    }
 }
 
 /// Non-iteration-0 iterations without writes, plans, or continuation

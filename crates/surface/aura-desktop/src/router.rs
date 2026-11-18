@@ -213,7 +213,11 @@ impl Tabs {
                 self.processes = processes;
                 self.send_processes();
             }
+            // Each tab's GRAPH shows the flow of its own agent and ignores
+            // the others'.
             UiCommand::GraphUpsert { .. }
+            | UiCommand::FlowLoad { .. }
+            | UiCommand::FlowUpsert { .. }
             | UiCommand::EndLink
             | UiCommand::SetAgentDefinitions(_)
             | UiCommand::SetArchivedAgents(_)
@@ -546,6 +550,7 @@ mod tests {
         let settings = Settings {
             verbose: false,
             alerts: AlertSettings::from_env(),
+            measure: crate::text::prose_cells,
         };
         let restore = restore
             .iter()

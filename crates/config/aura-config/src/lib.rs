@@ -73,6 +73,7 @@
 //! | `AURA_GATE_MIN_TRIES` | u32 (>= 1) | `10` | [`GateConfig::min_tries`] |
 //! | `AURA_GATE_EXPLORE` | f64 (0..=1) | `0.05` | [`GateConfig::explore_rate`] |
 //! | `AURA_GATE_DELEGATE` | `on` / `off` | `on` | [`GateConfig::delegate`] |
+//! | `AURA_GATE_JUDGE` | `on` / `off` | `on` | [`GateConfig::judge`] |
 //! | `AURA_HOME` | path | `~/.aura` | [`AuraHome::resolve`] (read-only `CODEX_HOME` compat alias also honoured during V1 transition) |
 //!
 //! Tool-sandbox knobs (`file_ops::SKIP_DIRS`, `INCLUDE_EXTENSIONS`),
@@ -87,7 +88,7 @@
 //! Names exported as plain `pub const` from the crate root because they
 //! are pure compile-time values (no env override, no per-process
 //! tuning): [`CACHEABLE_TOOLS`], [`EXPLORATION_TOOLS`], [`WRITE_TOOLS`],
-//! [`COMMAND_TOOLS`], [`MAX_ITERATIONS`], [`AUTO_BUILD_COOLDOWN`],
+//! [`COMMAND_TOOLS`], [`FILE_NEUTRAL_TOOLS`], [`MAX_ITERATIONS`], [`AUTO_BUILD_COOLDOWN`],
 //! [`THINKING_TAPER_AFTER`], [`THINKING_TAPER_FACTOR`],
 //! [`THINKING_MIN_BUDGET`], [`THINKING_AUTO_ENABLE_THRESHOLD`],
 //! [`BUDGET_WARNING_30`], [`BUDGET_WARNING_40_NO_WRITE`],
@@ -186,9 +187,9 @@ pub use thinking::{
 };
 pub use tools::{
     tool_result_cache_key, CACHEABLE_TOOLS, COMMAND_TOOLS, DEFAULT_TOOL_HEARTBEAT_INTERVAL_SECS,
-    EXPLORATION_TOOLS, MAX_TOOL_HEARTBEAT_INTERVAL_SECS, MIN_TOOL_HEARTBEAT_INTERVAL_SECS,
-    READS_AFTER_WRITE_ALLOWANCE, TOOL_ERROR_PREVIEW_LIMIT, WRITE_FILE_CHUNK_BYTES,
-    WRITE_FILE_HARD_MAX_BYTES, WRITE_TOOLS,
+    EXPLORATION_TOOLS, FILE_NEUTRAL_TOOLS, MAX_TOOL_HEARTBEAT_INTERVAL_SECS,
+    MIN_TOOL_HEARTBEAT_INTERVAL_SECS, READS_AFTER_WRITE_ALLOWANCE, TOOL_ERROR_PREVIEW_LIMIT,
+    WRITE_FILE_CHUNK_BYTES, WRITE_FILE_HARD_MAX_BYTES, WRITE_TOOLS,
 };
 pub use trace::{HarnessParams, TraceConfig, TraceLevel};
 pub use verify::{

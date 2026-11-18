@@ -395,7 +395,7 @@ fn arm_named(payload: &ComparePayload, name: &str) -> Option<CompareArm> {
     }
 }
 
-/// `/compare pick <arm>`: `/good` on every run of the arm, `/bad` on the
+/// `/compare pick <arm>`: every run of the arm is rated good, every run of the
 /// other's.
 async fn pick(state: &mut LoopState<'_>, name: &str) -> Result<String, String> {
     let (host, compare, mut payload) = latest(state)?;

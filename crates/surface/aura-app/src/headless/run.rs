@@ -7,7 +7,7 @@
 use super::output::{ExitReason, Output, RunReport, StreamEvent, UsageReport};
 use super::sink::{CallLimits, HeadlessSink, TurnTally};
 use super::tools::ToolFilter;
-use crate::event_loop::gate_record;
+use crate::event_loop::gate_record::{self, Judged};
 use crate::event_loop::handlers::{
     drive_turn, mark_session_start, record_response, resume_checkpoint,
 };
@@ -15,10 +15,14 @@ use crate::event_loop::notices::{completion_notice, record_completion, Notice};
 use crate::event_loop::processes::stop_background_commands;
 use crate::event_loop::steering::{SteerSource, Steering};
 use crate::event_loop::subagents::lock;
-use crate::event_loop::turns::{drain_stale_inbox, ended_signal, record_prompt};
+use crate::event_loop::task_check::takeover_prompt;
+use crate::event_loop::turns::{drain_stale_inbox, ended_signal, failure_text, record_prompt};
 use crate::event_loop::{AgentHub, AgentSession};
 use crate::session_checkpoint::SessionUsage;
 use aura_agent::{AgentLoop, AgentLoopConfig, AgentLoopResult};
+use aura_agent_gate::outcome::calls_for_stronger;
+use aura_agent_gate::turn_judge::Failed;
+use aura_agent_gate::Decision;
 use aura_agent_kernel::Kernel;
 use aura_agent_trace::RunRecorder;
 use aura_core_modes::AgentMode;
@@ -86,6 +90,12 @@ pub struct Headless {
     pub(crate) job_wait: Duration,
     /// Run trace the turns are recorded to, for an eval task's run
     pub(crate) trace: Option<Arc<RunRecorder>>,
+    /// Problems found while setting up that change what the run does,
+    /// such as a plan's model list that would not load
+    pub(crate) notes: Vec<String>,
+    /// What Gate's judge found on the turns that failed, oldest first;
+    /// whoever reports on the run takes them
+    pub(crate) judged: Vec<Judged>,
 }
 
 /// `<agent hex>:<session start ms>`: names one saved session.
@@ -121,6 +131,11 @@ struct TurnOutcome {
     stop: Option<(ExitReason, Option<String>)>,
     /// Notices the model never got, for the next turn
     unseen: Vec<String>,
+    /// How the turn failed, in words, when Gate routed it and it did
+    failure: Option<String>,
+    /// Whether `stop` is a model error the turn's conversation survived,
+    /// so a stronger model can still take the turn over
+    can_go_on: bool,
 }
 
 /// Whether the agent ended `result` on its own: a final reply with no
@@ -144,6 +159,30 @@ struct Totals {
 }
 
 impl Headless {
+    /// What a caller should show before the first turn: the problems
+    /// found while setting up, then, when Gate routes the turns, the
+    /// model that classifies prompts and the models it routes among,
+    /// cheapest first.
+    #[must_use]
+    pub fn setup_lines(&self) -> Vec<String> {
+        let mut lines = self.notes.clone();
+        if let Some(candidates) = self.hub.gate_candidates(None) {
+            let label = |id: &str| aura_model::model_catalog::route_label(id);
+            let classifier = self.hub.classifier();
+            lines.push(format!(
+                "gate: prompts classified by {}",
+                if classifier.is_empty() {
+                    "nothing".to_string()
+                } else {
+                    label(&classifier)
+                }
+            ));
+            let models: Vec<String> = candidates.iter().map(|c| label(&c.id)).collect();
+            lines.push(format!("gate: routing among {}", models.join(", ")));
+        }
+        lines
+    }
+
     /// Run `request` to the end, streaming to `output`. `interrupt` stops
     /// the run (Ctrl+C).
     pub(crate) async fn execute(
@@ -174,8 +213,13 @@ impl Headless {
 
     /// Run `prompt` on `session`, then the notices of the agent's
     /// background work, until it has nothing left to do or a limit stops
-    /// it; `started` is when the run began. Also returns the `Outcome`
-    /// recorded for `prompt`'s turn, when Gate routed it.
+    /// it; `started` is when the run began. When Gate routes `prompt`'s
+    /// turn and it ends in a model error or with its last check failing,
+    /// Gate's judge says whether the model was at fault
+    /// ([`Self::judge`]). If it was, or nothing judged the turn, it goes
+    /// on in the same conversation on the next stronger model, tier by
+    /// tier. Also returns the `Outcome` recorded for the last of those
+    /// turns, when Gate routed them.
     pub(super) async fn drive(
         &mut self,
         session: &mut AgentSession,
@@ -188,23 +232,51 @@ impl Headless {
         let deadline = limits.max_time.map(|limit| started + limit);
         let session_id = session_id(session.agent_id(), session.started_ms);
         let mut totals = Totals::default();
+        // Watched from here so the judge can see what a failed turn
+        // changed.
+        let files = session.file_checkpoints.clone();
+        if let Some(files) = &files {
+            files.begin_attempt(session.agent_id());
+        }
+        let task = prompt.clone();
         let mut prompt = prompt;
         let mut first_ended = None;
         let mut stop = None;
+        // Whether the turns so far answer `prompt` itself (its first turn
+        // and the stronger models it went on to) rather than a notice.
+        let mut answering = true;
+        let mut escalation = None;
         loop {
             totals.agent_turns += 1;
-            let outcome = self
+            let mut outcome = self
                 .run_turn(
                     session,
                     prompt,
                     limits,
                     deadline,
                     totals.usage,
+                    escalation.take(),
                     output,
                     interrupt,
                 )
                 .await;
-            if totals.agent_turns == 1 {
+            // What the turn's own signal said, and what the judge found
+            // wrong with it.
+            let raw = outcome.ended.as_ref().map(|ended| ended.signal);
+            let mut review = None;
+            if answering {
+                if let Some((judged_as, judged)) = self.judge(session, &task, &outcome).await {
+                    output.event(&StreamEvent::Judged {
+                        model: &judged.model,
+                        judge: &judged.judge,
+                        at_fault: judged.verdict.at_fault,
+                        reasons: &judged.verdict.reasons,
+                        cost_usd: judged.cost_usd,
+                    });
+                    outcome.ended = Some(judged_as);
+                    review = Some(judged.verdict.reasons.clone());
+                    self.judged.push(judged);
+                }
                 first_ended.clone_from(&outcome.ended);
             }
             totals.usage.add(&outcome.usage);
@@ -219,10 +291,28 @@ impl Headless {
                     totals.reply.clone_from(&result.total_text);
                 }
             }
+            if answering && (outcome.stop.is_none() || outcome.can_go_on) {
+                if let Some((decision, ended)) = self.stronger(session, outcome.ended.as_ref()) {
+                    let mut next = takeover_prompt(
+                        &aura_model::model_catalog::route_label(&ended.model),
+                        raw.unwrap_or(ended.signal),
+                        review.as_deref(),
+                    );
+                    for unseen in &outcome.unseen {
+                        next.push_str("\n\n");
+                        next.push_str(unseen);
+                    }
+                    output.event(&StreamEvent::Notice { text: &next });
+                    prompt = format!("{}{next}", SteerSource::Harness.prefix());
+                    escalation = Some((decision, ended.category));
+                    continue;
+                }
+            }
             if outcome.stop.is_some() {
                 stop = outcome.stop;
                 break;
             }
+            answering = false;
             let next = if outcome.unseen.is_empty() {
                 match self
                     .next_notice(&session.kernel, deadline, interrupt, output)
@@ -242,6 +332,9 @@ impl Headless {
             prompt = format!("{}{next}", SteerSource::Harness.prefix());
         }
         stop_background_commands(self.background.as_ref());
+        if let Some(files) = &files {
+            let _ = files.take_attempt(session.agent_id());
+        }
 
         let (exit_reason, error) = stop.unwrap_or((ExitReason::Success, None));
         let usage = UsageReport::from(&totals.usage);
@@ -263,6 +356,65 @@ impl Headless {
             error,
         };
         (report, first_ended)
+    }
+
+    /// Ask Gate's judge about `turn`, a turn of `session` answering
+    /// `task`, when Gate routed it and it failed on a model weaker than
+    /// the judge: was the model at fault? The finding is recorded as a
+    /// later `Outcome` of the turn's prompt, which is returned with it:
+    /// `judged_fail` counts against the model and sends the turn on to a
+    /// stronger one, `judged_excused` counts for nothing and leaves the
+    /// turn where it is. `None` when the turn is not judged or the judge
+    /// gave no verdict; the turn's own signal then stands.
+    ///
+    /// The judge is only asked about failures, so what it costs is paid
+    /// when there is something to learn; the cost is reported on its own
+    /// ([`Judged::cost_usd`]), not as part of the work.
+    async fn judge(
+        &self,
+        session: &AgentSession,
+        task: &str,
+        turn: &TurnOutcome,
+    ) -> Option<(OutcomePayload, Judged)> {
+        let ended = turn.ended.as_ref()?;
+        let judge = self.hub.judge_of(session.definition.as_deref(), ended)?;
+        let workspace = session.kernel.agent_workspace();
+        let diff = session
+            .file_checkpoints
+            .as_ref()
+            .map(|files| files.attempt(session.agent_id()).diff(Some(&workspace)))
+            .unwrap_or_default();
+        let (config, _) = self.hub.turn(session.definition.as_deref(), &workspace);
+        let failed = Failed {
+            task,
+            diff: &diff,
+            reply: turn.result.as_ref().map_or("", |r| r.total_text.as_str()),
+            failure: turn.failure.as_deref().unwrap_or_default(),
+        };
+        gate_record::judge_failed(&session.kernel, &judge, ended, &failed, config.auth_token).await
+    }
+
+    /// Where a turn of `session` that Gate routed and that `ended` badly
+    /// goes on: the next stronger model, with how the turn ended. `None`
+    /// when it ended well enough or nothing is stronger.
+    fn stronger<'a>(
+        &self,
+        session: &AgentSession,
+        ended: Option<&'a OutcomePayload>,
+    ) -> Option<(Decision, &'a OutcomePayload)> {
+        let ended = ended.filter(|ended| calls_for_stronger(ended.signal))?;
+        let candidates = self.hub.gate_candidates(session.definition.as_deref())?;
+        let decision =
+            self.hub
+                .gate
+                .escalate(RouteLevel::Turn, ended.category, &ended.model, &candidates)?;
+        info!(
+            from = %ended.model,
+            to = %decision.model.id,
+            signal = %ended.signal,
+            "Gate moves the turn to a stronger model"
+        );
+        Some((decision, ended))
     }
 
     /// Open the session `choice` names. Returns it and whether it
@@ -316,14 +468,9 @@ impl Headless {
 
     fn announce(&self, output: &Output, session: &AgentSession, session_id: &str, resumed: bool) {
         let workspace = session.kernel.agent_workspace();
-        let (_, mut tools) = self.hub.turn(session.definition.as_deref(), &workspace);
-        if self
-            .hub
-            .leads(session.agent_id(), session.definition.as_deref())
-            == Some(true)
-        {
-            tools = crate::event_loop::lead::lead_tools(tools);
-        }
+        // A turn that leads has fewer tools; which turns do is only known
+        // once their prompt is classified.
+        let (_, tools) = self.hub.turn(session.definition.as_deref(), &workspace);
         let tools = self.tool_filter.filter(tools);
         let agent_hex = session.agent_id().to_hex();
         let cwd = self.workspace_root.display().to_string();
@@ -342,6 +489,8 @@ impl Headless {
     /// Record `text` as the prompt and run one agent turn on `session`,
     /// with `before` the usage of the run's earlier turns. When Gate
     /// routes the turn, it ends with an `Outcome` saying how it went.
+    /// `escalation` is set for a turn that goes on with work a weaker
+    /// model failed at: the model it runs on and the work's category.
     #[allow(clippy::too_many_arguments)]
     async fn run_turn(
         &mut self,
@@ -350,17 +499,23 @@ impl Headless {
         limits: RunLimits,
         deadline: Option<Instant>,
         before: SessionUsage,
+        escalation: Option<(Decision, PromptCategory)>,
         output: &Output,
         interrupt: &CancellationToken,
     ) -> TurnOutcome {
         drain_stale_inbox(session).await;
         let started = Instant::now();
         let workspace = session.kernel.agent_workspace();
-        let (mut config, tools) = self.hub.lead_turn(session);
+        let (mut config, mut tools, lead) = self.hub.user_turn(session);
         if let Some(max) = limits.max_iterations {
             config.max_iterations = max;
         }
-        let (payload, routed) = self.route_turn(session, &mut config, &text).await;
+        let (payload, routed) = self
+            .route_turn(session, &mut config, &text, escalation)
+            .await;
+        if let Some(lead) = lead.filter(|_| routed) {
+            session.lead = lead.apply(payload.category, &mut config, &mut tools);
+        }
         let prompt_tx = match record_prompt(session, &payload).await {
             Ok((tx, _)) => tx.hash,
             Err(problem) => {
@@ -370,6 +525,8 @@ impl Headless {
                     usage: SessionUsage::default(),
                     stop: Some((ExitReason::Error, Some(problem))),
                     unseen: Vec::new(),
+                    failure: None,
+                    can_go_on: false,
                 };
             }
         };
@@ -493,10 +650,14 @@ impl Headless {
         let (seen, unseen) = steering.finish(messages);
         let mut unseen: Vec<String> = unseen.into_iter().map(|(_, text)| text).collect();
         unseen.append(&mut late);
+        let mut failure = None;
         let ended = if routed {
             // A run stopped by its own limits says nothing about the model.
             let signal = match (&result, limit) {
-                (Some(result), None) => ended_signal(result, turn_start),
+                (Some(result), None) => {
+                    failure = failure_text(result, turn_start);
+                    ended_signal(result, turn_start)
+                }
                 _ => OutcomeSignal::None,
             };
             let outcome = OutcomePayload {
@@ -520,11 +681,17 @@ impl Headless {
             usage: tally.usage,
             stop: None,
             unseen,
+            failure,
+            can_go_on: false,
         };
         match result {
             Some(Ok(result)) => {
                 commit(session, &result, &seen).await;
                 outcome.stop = turn_stop(limit, &result);
+                // The model's call failed, not the run: its conversation
+                // is kept, so another model can go on from it.
+                outcome.can_go_on =
+                    limit.is_none() && !result.insufficient_credits && result.llm_error.is_some();
                 outcome.result = Some(result);
             }
             Some(Err(e)) => {
@@ -545,13 +712,26 @@ impl Headless {
     /// whether Gate routed it. Gate routes the turn when the user selected
     /// gate, the agent names no model of its own and there is a model to
     /// route to: the prompt is classified and `config` pointed at Gate's
-    /// pick. Otherwise the prompt is recorded as it is.
+    /// pick, which the subtasks the turn dispatches are routed by.
+    /// Otherwise the prompt is recorded as it is. With `escalation`, the
+    /// turn goes to that model with that category, recorded with route
+    /// reason `escalate`.
     async fn route_turn(
         &mut self,
         session: &AgentSession,
         config: &mut AgentLoopConfig,
         text: &str,
+        escalation: Option<(Decision, PromptCategory)>,
     ) -> (PromptPayload, bool) {
+        if let Some((decision, category)) = escalation {
+            self.point(session, config, &decision);
+            let payload = PromptPayload {
+                category,
+                route: decision.route(RouteLevel::Turn),
+                ..PromptPayload::new(text)
+            };
+            return (payload, true);
+        }
         let Some(candidates) = self
             .hub
             .gate_candidates(session.definition.as_deref())
@@ -583,12 +763,7 @@ impl Headless {
                     reason = %decision.reason,
                     "Gate routed the turn"
                 );
-                if config.model != decision.model.id {
-                    self.hub
-                        .model_limits()
-                        .configure(config, &decision.model.id);
-                }
-                self.model.clone_from(&decision.model.id);
+                self.point(session, config, &decision);
                 decision.route(RouteLevel::Turn)
             }
             None => Route::turn(config.model.clone(), RouteReason::Default),
@@ -600,6 +775,19 @@ impl Headless {
             ..PromptPayload::new(text)
         };
         (payload, true)
+    }
+
+    /// Point `config`, of a turn of `session`, at `decision`'s model.
+    fn point(&mut self, session: &AgentSession, config: &mut AgentLoopConfig, decision: &Decision) {
+        if config.model != decision.model.id {
+            self.hub
+                .model_limits()
+                .configure(config, &decision.model.id);
+        }
+        self.model.clone_from(&decision.model.id);
+        self.hub
+            .gate
+            .note_model(session.agent_id(), &decision.model.id);
     }
 
     /// Wait for the next notice for `kernel`'s agent: a background

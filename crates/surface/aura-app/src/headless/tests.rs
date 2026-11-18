@@ -172,6 +172,8 @@ fn harness(
         tool_filter: filter,
         job_wait: Duration::from_secs(5),
         trace: None,
+        notes: Vec::new(),
+        judged: Vec::new(),
     };
     (headless, requests)
 }
@@ -658,15 +660,21 @@ async fn gate_routes_headless_turns_and_records_how_they_went() {
     assert_eq!(models, [HAIKU, SONNET], "classified, then routed");
     {
         let requests = requests.lock().unwrap();
-        let lead = &requests[1];
-        let tools: Vec<&str> = lead.tools.iter().map(|t| t.name.as_str()).collect();
-        assert!(tools.contains(&"read_file") && tools.contains(&"run_command"));
+        let turn = &requests[1];
+        let tools: Vec<&str> = turn.tools.iter().map(|t| t.name.as_str()).collect();
         assert!(
-            !tools.contains(&"write_file") && !tools.contains(&"edit_file"),
-            "the headless lead delegates its edits: {tools:?}"
+            tools.contains(&"write_file") && tools.contains(&"edit_file"),
+            "a question is answered by the model it is routed to: {tools:?}"
         );
-        assert!(lead.system.contains("<gate_lead>"));
+        assert!(!turn.system.contains("<gate_lead>"));
     }
+    assert_eq!(
+        h.setup_lines(),
+        [
+            format!("gate: prompts classified by {HAIKU} (cloud)"),
+            format!("gate: routing among {SONNET} (cloud)"),
+        ]
+    );
     let (agent, _) = parse_session_id(&report.session_id, AgentId::generate()).unwrap();
     let entries = h.hub.factory.store.scan_record(agent, 1, 1_000).unwrap();
     let prompts: Vec<_> = entries
@@ -685,6 +693,51 @@ async fn gate_routes_headless_turns_and_records_how_they_went() {
     assert_eq!(outcomes[0].model, SONNET);
     assert_eq!(outcomes[0].signal, OutcomeSignal::None);
     assert_eq!(h.hub.gate.recent().len(), 1);
+}
+
+#[tokio::test]
+async fn a_headless_turn_changing_several_files_is_led() {
+    use aura_agent_gate::Candidate;
+    use aura_model::model_catalog::{ModelBackend, ModelTier};
+    const HAIKU: &str = "aura-claude-haiku-4-5";
+    const SONNET: &str = "aura-claude-sonnet-4-6";
+    let gate = GateBase {
+        classifier: HAIKU.to_string(),
+        candidates: Some(vec![Candidate {
+            id: SONNET.to_string(),
+            label: SONNET.to_string(),
+            backend: ModelBackend::Router,
+            tier: ModelTier::Standard,
+            cost_usd: Some(0.1),
+        }]),
+    };
+    let dirs = dirs();
+    let permissions = super::permissions(aura_core_modes::AgentMode::Agent, None);
+    let (mut h, requests) = harness(
+        &dirs,
+        MockProvider::simple_response("multi_file_change"),
+        ToolFilter::default(),
+        permissions,
+        gate,
+    );
+
+    let (report, _) = execute(
+        &mut h,
+        request("rename the crate everywhere", SessionChoice::New),
+        OutputFormat::Json,
+    )
+    .await;
+
+    assert_eq!(report.exit_reason, ExitReason::Success);
+    let requests = requests.lock().unwrap();
+    let lead = &requests[1];
+    let tools: Vec<&str> = lead.tools.iter().map(|t| t.name.as_str()).collect();
+    assert!(tools.contains(&"read_file") && tools.contains(&"task"));
+    assert!(
+        !tools.contains(&"write_file") && !tools.contains(&"edit_file"),
+        "the headless lead delegates its edits: {tools:?}"
+    );
+    assert!(lead.system.contains("<gate_lead>"));
 }
 
 #[tokio::test]
@@ -832,4 +885,390 @@ async fn an_eval_run_under_gate_is_routed_and_its_verdict_feeds_the_table() {
     let trace = RunTrace::load(&RunBundle::find(home.path(), run_id).unwrap()).unwrap();
     assert_eq!(trace.meta.model, "gate");
     assert_eq!(card.model_calls, 1, "the routed turn is in the run's trace");
+}
+
+/// What a run whose first turn ends with a failing check left behind.
+struct FailedCheckRun {
+    report: super::RunReport,
+    lines: Vec<Value>,
+    /// Model of each model call, in order
+    models: Vec<String>,
+    requests: Arc<Mutex<Vec<ModelRequest>>>,
+    routes: Vec<(aura_core_types::PromptCategory, aura_core_types::Route)>,
+    outcomes: Vec<(String, aura_core_types::OutcomeSignal)>,
+    /// Tries and successes of the debugging rows of Sonnet and Opus
+    rows: [Option<(u32, u32)>; 2],
+}
+
+const GATE_HAIKU: &str = "aura-claude-haiku-4-5";
+const GATE_SONNET: &str = "aura-claude-sonnet-4-6";
+const GATE_OPUS: &str = "aura-claude-opus-4-7";
+
+/// Gate routing among Sonnet and Opus, classifying with Haiku. Debugging
+/// starts on Sonnet, the cheapest of the two, so runs never explore.
+fn sonnet_and_opus() -> GateBase {
+    use aura_agent_gate::Candidate;
+    use aura_model::model_catalog::{ModelBackend, ModelTier};
+    let candidate = |id: &str, tier, cost_usd| Candidate {
+        id: id.to_string(),
+        label: id.to_string(),
+        backend: ModelBackend::Router,
+        tier,
+        cost_usd: Some(cost_usd),
+    };
+    GateBase {
+        classifier: GATE_HAIKU.to_string(),
+        candidates: Some(vec![
+            candidate(GATE_SONNET, ModelTier::Standard, 0.1),
+            candidate(GATE_OPUS, ModelTier::Frontier, 0.2),
+        ]),
+    }
+}
+
+/// A model whose prompt is classified as debugging and whose turn writes
+/// `parser.txt`, then runs `cargo test` (which fails in a workspace with
+/// no crate) and gives up. The model calls after that are answered with
+/// `then`, in order.
+fn failing_check_provider(then: &[&str]) -> MockProvider {
+    let mut provider = MockProvider::new()
+        .with_response(MockResponse::text("debugging"))
+        .with_response(MockResponse::tool_use(
+            "c0",
+            "write_file",
+            json!({"path": "parser.txt", "content": "skip the last token\n"}),
+        ))
+        .with_response(MockResponse::tool_use(
+            "c1",
+            "run_command",
+            json!({"program": "cargo", "args": ["test"]}),
+        ))
+        .with_response(MockResponse::text("The tests still fail."));
+    for reply in then {
+        provider = provider.with_response(MockResponse::text(*reply));
+    }
+    provider
+}
+
+/// Run "fix the parser" under [`sonnet_and_opus`] on
+/// [`failing_check_provider`]: the turn starts on Sonnet and its last
+/// check fails.
+async fn run_with_a_failing_check(then: &[&str]) -> FailedCheckRun {
+    use aura_core_types::{PromptCategory, RouteLevel};
+    let gate = sonnet_and_opus();
+    let dirs = dirs();
+    let permissions = super::permissions(aura_core_modes::AgentMode::Agent, None);
+    let provider = failing_check_provider(then);
+    let (mut h, requests) = harness(&dirs, provider, ToolFilter::default(), permissions, gate);
+
+    let (report, captured) = execute(
+        &mut h,
+        request("fix the parser", SessionChoice::New),
+        OutputFormat::StreamJson,
+    )
+    .await;
+
+    let models = requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| r.model.to_string())
+        .collect();
+    let (agent, _) = parse_session_id(&report.session_id, AgentId::generate()).unwrap();
+    let entries = h.hub.factory.store.scan_record(agent, 1, 1_000).unwrap();
+    let stats = h.hub.gate.stats();
+    let row = |model: &str| {
+        stats
+            .row(RouteLevel::Turn, PromptCategory::Debugging, model)
+            .map(|row| (row.tries, row.successes))
+    };
+    FailedCheckRun {
+        lines: captured.json_lines(),
+        models,
+        requests,
+        routes: entries
+            .iter()
+            .filter_map(|e| e.tx.prompt_payload())
+            .map(|p| (p.category, p.route))
+            .collect(),
+        outcomes: entries
+            .iter()
+            .filter_map(|e| e.tx.outcome_payload())
+            .map(|o| (o.model, o.signal))
+            .collect(),
+        rows: [row(GATE_SONNET), row(GATE_OPUS)],
+        report,
+    }
+}
+
+#[tokio::test]
+async fn a_failed_turn_the_judge_blames_on_the_model_goes_on_with_a_stronger_one() {
+    use aura_core_types::{OutcomeSignal, PromptCategory, Route, RouteReason};
+    let run = run_with_a_failing_check(&[
+        "The parser still drops the last token.\nVERDICT: MODEL",
+        "Fixed it.",
+    ])
+    .await;
+
+    let report = &run.report;
+    assert_eq!(
+        report.exit_reason,
+        ExitReason::Success,
+        "{:?}",
+        report.error
+    );
+    assert_eq!(report.model, GATE_OPUS);
+    assert_eq!(report.result, "Fixed it.");
+    assert_eq!(report.agent_turns, 2);
+    assert_eq!(
+        run.models,
+        [
+            GATE_HAIKU,
+            GATE_SONNET,
+            GATE_SONNET,
+            GATE_SONNET,
+            GATE_OPUS,
+            GATE_OPUS
+        ],
+        "classified, worked on Sonnet, judged by Opus, then moved up a tier"
+    );
+    {
+        let requests = run.requests.lock().unwrap();
+        let judge = &requests[4];
+        assert_eq!(
+            judge.system.as_str(),
+            aura_agent_gate::turn_judge::SYSTEM_PROMPT
+        );
+        assert!(judge.tools.is_empty());
+        let shown = judge.messages[0].text_content();
+        assert!(shown.contains("fix the parser"), "{shown}");
+        assert!(shown.contains("`cargo test`, failed"), "{shown}");
+        assert!(
+            shown.contains("=== parser.txt") && shown.contains("+skip the last token"),
+            "the judge sees what the turn changed: {shown}"
+        );
+        assert!(shown.contains("The tests still fail."), "{shown}");
+    }
+    let takeover = last_prompts(&run.requests).pop().unwrap();
+    assert!(
+        takeover.contains("You are a stronger model taking over"),
+        "the stronger model carries on in the same conversation: {takeover}"
+    );
+    assert!(
+        takeover.contains("The parser still drops the last token."),
+        "it is told what the judge found: {takeover}"
+    );
+    let judged: Vec<&Value> = run
+        .lines
+        .iter()
+        .filter(|line| line["type"] == "judged")
+        .collect();
+    assert_eq!(judged.len(), 1, "{:?}", run.lines);
+    assert_eq!(judged[0]["model"], GATE_SONNET);
+    assert_eq!(judged[0]["judge"], GATE_OPUS);
+    assert_eq!(judged[0]["at_fault"], true);
+
+    assert_eq!(
+        run.routes,
+        [
+            (
+                PromptCategory::Debugging,
+                Route::turn(GATE_SONNET, RouteReason::Default)
+            ),
+            (
+                PromptCategory::Debugging,
+                Route::turn(GATE_OPUS, RouteReason::Escalate)
+            ),
+        ]
+    );
+    assert_eq!(
+        run.outcomes,
+        [
+            (GATE_SONNET.to_string(), OutcomeSignal::ChecksFailed),
+            (GATE_SONNET.to_string(), OutcomeSignal::JudgedFail),
+            (GATE_OPUS.to_string(), OutcomeSignal::None),
+        ]
+    );
+    assert_eq!(
+        run.rows,
+        [Some((1, 0)), None],
+        "the failure counts once for Sonnet; the stronger model's turn is not counted"
+    );
+}
+
+#[tokio::test]
+async fn an_eval_verdict_after_a_move_up_lands_on_the_uncounted_attempt() {
+    use super::{EvalTurn, EvalTurns};
+    use aura_agent_trace::{RunMeta, RunRecorder, RunSource};
+    use aura_core_types::{OutcomeSignal, PromptCategory, RouteLevel};
+    let dirs = dirs();
+    let permissions = super::permissions(aura_core_modes::AgentMode::Agent, None);
+    let provider = failing_check_provider(&["It skips a token.\nVERDICT: MODEL", "Fixed it."]);
+    let (h, requests) = harness(
+        &dirs,
+        provider,
+        ToolFilter::default(),
+        permissions,
+        sonnet_and_opus(),
+    );
+    let hub = Arc::clone(&h.hub);
+    let mut turns = EvalTurns::new(h);
+    let home = TempDir::new().unwrap();
+    let work = TempDir::new().unwrap();
+    let workspace = work.path().canonicalize().unwrap();
+    let mut meta = RunMeta::new("gate", RunSource::Eval);
+    meta.task_id = Some("s/parser".to_string());
+    let trace = RunRecorder::start(home.path(), meta, aura_config::trace::TraceLevel::Full)
+        .unwrap()
+        .unwrap();
+
+    let ran = tokio::time::timeout(
+        Duration::from_secs(60),
+        turns.run(EvalTurn {
+            name: "Eval s/parser",
+            workspace: &workspace,
+            prompts: &["fix the parser".to_string()],
+            max_iterations: None,
+            checks: None,
+            verify: "test -f parser.txt",
+            trace: Arc::clone(&trace),
+        }),
+    )
+    .await
+    .expect("the eval run did not finish")
+    .unwrap();
+
+    assert!(ran.error.is_none(), "{:?}", ran.error);
+    assert_eq!(ran.check.passed, Some(true));
+    assert_eq!(ran.gate.routed, [GATE_SONNET, GATE_OPUS]);
+    assert_eq!(ran.gate.judged.len(), 1);
+    let judged = &ran.gate.judged[0];
+    assert_eq!(
+        (judged.model.as_str(), judged.judge.as_str()),
+        (GATE_SONNET, GATE_OPUS)
+    );
+    assert!(judged.verdict.at_fault);
+    assert_eq!(judged.verdict.reasons, "It skips a token.");
+    let asked: Vec<String> = requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| r.model.to_string())
+        .collect();
+    let recorded: u32 = ran.gate.tokens.iter().map(|m| m.calls).sum();
+    assert_eq!(
+        recorded as usize,
+        asked.len(),
+        "every model call is in the run's cost, the judge's included: {asked:?}"
+    );
+    assert_eq!(
+        asked.iter().filter(|model| *model == GATE_OPUS).count(),
+        2,
+        "the judge's call and the turn it sent on: {asked:?}"
+    );
+
+    let agent = crate::event_loop::subagents::lock(&hub.registry)
+        .agents()
+        .iter()
+        .find(|a| a.name == "Eval s/parser")
+        .unwrap()
+        .agent_id();
+    let outcomes: Vec<(String, OutcomeSignal)> = hub
+        .factory
+        .store
+        .scan_record(agent, 1, 1_000)
+        .unwrap()
+        .iter()
+        .filter_map(|e| e.tx.outcome_payload())
+        .map(|o| (o.model, o.signal))
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            (GATE_SONNET.to_string(), OutcomeSignal::ChecksFailed),
+            (GATE_SONNET.to_string(), OutcomeSignal::JudgedFail),
+            (GATE_OPUS.to_string(), OutcomeSignal::None),
+            (GATE_OPUS.to_string(), OutcomeSignal::ChecksPassed),
+        ],
+        "the hidden check's verdict is recorded for the model that finished the work"
+    );
+    let stats = hub.gate.stats();
+    let row = |model: &str| {
+        stats
+            .row(RouteLevel::Turn, PromptCategory::Debugging, model)
+            .map(|row| (row.tries, row.successes))
+    };
+    assert_eq!(
+        row(GATE_SONNET),
+        Some((1, 0)),
+        "the start model's failure stands"
+    );
+    assert_eq!(row(GATE_OPUS), None, "work taken over is not counted");
+}
+
+#[tokio::test]
+async fn a_failed_turn_the_judge_excuses_stays_put_and_counts_for_nothing() {
+    use aura_core_types::{OutcomeSignal, PromptCategory, Route, RouteReason};
+    let run = run_with_a_failing_check(&["There is no crate here to test.\nVERDICT: OTHER"]).await;
+
+    let report = &run.report;
+    assert_eq!(
+        report.exit_reason,
+        ExitReason::Success,
+        "{:?}",
+        report.error
+    );
+    assert_eq!(report.model, GATE_SONNET);
+    assert_eq!(report.result, "The tests still fail.");
+    assert_eq!(report.agent_turns, 1, "no stronger model takes over");
+    assert_eq!(
+        run.models,
+        [GATE_HAIKU, GATE_SONNET, GATE_SONNET, GATE_SONNET, GATE_OPUS],
+        "the judge's call is the only one on Opus"
+    );
+    let judged: Vec<&Value> = run
+        .lines
+        .iter()
+        .filter(|line| line["type"] == "judged")
+        .collect();
+    assert_eq!(judged.len(), 1, "{:?}", run.lines);
+    assert_eq!(judged[0]["at_fault"], false);
+    assert_eq!(judged[0]["reasons"], "There is no crate here to test.");
+    assert_eq!(
+        run.routes,
+        [(
+            PromptCategory::Debugging,
+            Route::turn(GATE_SONNET, RouteReason::Default)
+        )]
+    );
+    assert_eq!(
+        run.outcomes,
+        [
+            (GATE_SONNET.to_string(), OutcomeSignal::ChecksFailed),
+            (GATE_SONNET.to_string(), OutcomeSignal::JudgedExcused),
+        ]
+    );
+    assert_eq!(
+        run.rows,
+        [None, None],
+        "a failure that was not the model's doing counts for nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_turn_the_judge_says_nothing_clear_about_still_moves_up() {
+    use aura_core_types::OutcomeSignal;
+    let run = run_with_a_failing_check(&["Hard to say.", "Fixed it."]).await;
+
+    assert_eq!(run.report.model, GATE_OPUS);
+    assert_eq!(run.report.result, "Fixed it.");
+    assert!(run.lines.iter().all(|line| line["type"] != "judged"));
+    assert_eq!(
+        run.outcomes,
+        [
+            (GATE_SONNET.to_string(), OutcomeSignal::ChecksFailed),
+            (GATE_OPUS.to_string(), OutcomeSignal::None),
+        ],
+        "the turn's own signal stands"
+    );
+    assert_eq!(run.rows, [Some((1, 0)), None]);
 }

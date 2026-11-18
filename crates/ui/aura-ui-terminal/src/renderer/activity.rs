@@ -379,7 +379,7 @@ fn thinking_lines(
         Span::styled(label, muted.add_modifier(Modifier::ITALIC)),
     ])];
 
-    let text_style = muted.add_modifier(Modifier::DIM | Modifier::ITALIC);
+    let text_style = muted.add_modifier(Modifier::ITALIC);
     let mut text: Vec<String> = step
         .text
         .trim()

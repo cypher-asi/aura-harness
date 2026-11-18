@@ -82,7 +82,7 @@ jobs:
   # ---------------------------------------------------------------------------
   # MSRV (Minimum Supported Rust Version) check — must match
   # `rust-version` in the workspace Cargo.toml. `aura-desktop` is left out:
-  # iced needs Rust 1.88, and the crate declares that floor itself. The
+  # wgpu needs Rust 1.88, and the crate declares that floor itself. The
   # root `aura` binary is checked without its default `desktop` feature.
   # ---------------------------------------------------------------------------
   msrv:

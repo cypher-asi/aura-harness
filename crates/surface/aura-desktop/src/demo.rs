@@ -2,7 +2,7 @@
 //! tool calls and streamed markdown, and runs fake commands, so the UI can
 //! be shown and profiled without a model or an agent store.
 
-use crate::app::Handles;
+use crate::shell::Handles;
 use aura_ui::events::{
     AgentDefinitionSummary, AgentSummary, CallUsage, MessageData, MessageRole, ModelOptionView,
     ProcessKind, ProcessStatus, ProcessSummary, RecordStatus, RecordSummary, ToolData, UiCommand,
@@ -455,8 +455,8 @@ pub(crate) const REPLY: &str = "Here's what I found for **{prompt}**:\n\n\
 | Crate | Role |\n|---|---|\n\
 | `aura-ui` | event protocol shared by the frontends |\n\
 | `aura-ui-terminal` | the ratatui terminal UI |\n\
-| `aura-desktop` | this window, drawn on the GPU with iced |\n\n\
+| `aura-desktop` | this window, drawn on the GPU with wgpu |\n\n\
 The tests pass, and I updated the README:\n\n\
 ```rust\nlet session = aura_app::session::start(&options, mode).await?;\n```\n\n\
 - Both UIs share one event loop\n- Fonts are Geist and Geist Mono\n\n\
-See [iced](https://iced.rs) for the toolkit.";
+See [wgpu](https://wgpu.rs) for the renderer.";

@@ -7,17 +7,20 @@
 //! (the user's latest rating, else the latest outcome with a known
 //! result, as [`crate::outcome::effective`] says). An outcome that
 //! replaces an earlier one for the same prompt takes its place in the
-//! table instead of adding to it.
+//! table instead of adding to it, and one that takes the earlier ones
+//! back (the judge found the failure was not the model's doing, see
+//! [`aura_core_types::OutcomeSignal::voids`]) leaves the prompt out of
+//! the table.
 //!
 //! Entries may arrive in any order and more than once (a startup scan
 //! can overlap the live feed): which outcome counts depends only on the
 //! record sequence numbers, and seeing an entry again changes nothing.
 //! A prompt's outcomes are in the same record as the prompt, so their
-//! sequence numbers compare. A subtask retried on a stronger model after
-//! its first attempt failed (route reason `escalate`) is not counted:
-//! the retry only ever sees work that already failed once, and the first
-//! attempt's outcome already says how the route did. A prompt is known by its agent and its
-//! transaction hash: the hash covers only the payload, so two agents
+//! sequence numbers compare. Work that went on to a stronger model
+//! after its first attempt failed (route reason `escalate`) is not
+//! counted: it only ever sees work that already failed once, and the
+//! first attempt's outcome already says how the route did. A prompt is
+//! known by its agent and its transaction hash: the hash covers only the payload, so two agents
 //! given the same prompt (the repeats of a `/compare`) record the same
 //! hash for different work.
 
@@ -54,16 +57,32 @@ impl Row {
         (self.tries > 0).then(|| self.cost_usd / f64::from(self.tries))
     }
 
+    /// Whether the model can still have a success rate of at least
+    /// `target` once it has `min_tries` tries: it does now, with that many
+    /// tries or more, or would if every try it still lacks succeeded.
+    #[must_use]
+    pub fn can_still_reach(&self, target: f64, min_tries: u32) -> bool {
+        let lacking = min_tries.saturating_sub(self.tries);
+        let counted = self.tries.max(min_tries);
+        f64::from(self.successes + lacking) >= target * f64::from(counted)
+    }
+
     fn add(&mut self, counted: &Counted) {
+        let Some(success) = counted.success else {
+            return;
+        };
         self.tries += 1;
-        self.successes += u32::from(counted.success);
+        self.successes += u32::from(success);
         self.cost_usd += counted.cost_usd;
         self.latency_ms = self.latency_ms.saturating_add(counted.latency_ms);
     }
 
     fn remove(&mut self, counted: &Counted) {
+        let Some(success) = counted.success else {
+            return;
+        };
         self.tries = self.tries.saturating_sub(1);
-        self.successes = self.successes.saturating_sub(u32::from(counted.success));
+        self.successes = self.successes.saturating_sub(u32::from(success));
         self.cost_usd = (self.cost_usd - counted.cost_usd).max(0.0);
         self.latency_ms = self.latency_ms.saturating_sub(counted.latency_ms);
     }
@@ -90,18 +109,23 @@ struct Counted {
     rating: bool,
     category: PromptCategory,
     model: String,
-    success: bool,
+    /// `None` when the outcome takes back what was said before: the
+    /// prompt then counts in no row.
+    success: Option<bool>,
     cost_usd: f64,
     latency_ms: u64,
 }
 
 impl Counted {
     fn from_outcome(seq: u64, outcome: OutcomePayload) -> Option<Self> {
+        if outcome.success.is_none() && !outcome.signal.voids() {
+            return None;
+        }
         Some(Self {
             seq,
             rating: outcome.signal.is_rating(),
             category: outcome.category,
-            success: outcome.success?,
+            success: outcome.success,
             model: outcome.model,
             cost_usd: outcome.cost_usd,
             latency_ms: outcome.latency_ms,
@@ -181,7 +205,7 @@ impl GateStats {
             return;
         }
         state.level = Some(level);
-        if let Some(counted) = &state.counted {
+        if let Some(counted) = state.counted.as_ref().filter(|c| c.success.is_some()) {
             self.rows
                 .entry(counted.key(level))
                 .or_default()
@@ -215,7 +239,9 @@ impl GateStats {
                     }
                 }
             }
-            self.rows.entry(new.key(level)).or_default().add(&new);
+            if new.success.is_some() {
+                self.rows.entry(new.key(level)).or_default().add(&new);
+            }
         }
         state.counted = Some(new);
     }
@@ -427,6 +453,52 @@ mod tests {
             assert_eq!(debugging(&stats, RouteLevel::Subtask, HAIKU), None);
             assert_eq!(stats.rows().len(), 1);
         }
+    }
+
+    #[test]
+    fn a_failure_the_judge_excuses_counts_for_nothing() {
+        let mut log = Log::new();
+        let excused = log.prompt("fix the build", RouteLevel::Turn);
+        log.outcome(excused, SONNET, OutcomeSignal::ChecksFailed);
+        log.outcome(excused, SONNET, OutcomeSignal::JudgedExcused);
+        let confirmed = log.prompt("fix the parser", RouteLevel::Turn);
+        log.outcome(confirmed, SONNET, OutcomeSignal::ChecksFailed);
+        log.outcome(confirmed, SONNET, OutcomeSignal::JudgedFail);
+        for stats in [
+            GateStats::from_entries(&log.entries),
+            GateStats::from_entries(log.entries.iter().rev()),
+        ] {
+            assert_eq!(debugging(&stats, RouteLevel::Turn, SONNET), Some((1, 0)));
+        }
+
+        // A later signal still has the last word.
+        log.outcome(excused, SONNET, OutcomeSignal::ChecksPassed);
+        let stats = GateStats::from_entries(&log.entries);
+        assert_eq!(debugging(&stats, RouteLevel::Turn, SONNET), Some((2, 1)));
+
+        let mut log = Log::new();
+        let only = log.prompt("fix the build", RouteLevel::Turn);
+        log.outcome(only, SONNET, OutcomeSignal::ChecksFailed);
+        log.outcome(only, SONNET, OutcomeSignal::JudgedExcused);
+        let stats = GateStats::from_entries(&log.entries);
+        assert_eq!(debugging(&stats, RouteLevel::Turn, SONNET), None);
+        assert!(stats.rows().is_empty(), "no row is left with zero tries");
+    }
+
+    #[test]
+    fn a_model_is_ruled_out_once_it_cannot_reach_the_target() {
+        let row = |tries, successes| Row {
+            tries,
+            successes,
+            ..Row::default()
+        };
+        assert!(row(0, 0).can_still_reach(0.85, 10));
+        assert!(row(1, 0).can_still_reach(0.85, 10), "9 of 10 would do");
+        assert!(!row(2, 0).can_still_reach(0.85, 10), "8 of 10 would not");
+        assert!(row(9, 8).can_still_reach(0.85, 10));
+        assert!(!row(9, 7).can_still_reach(0.85, 10));
+        assert!(row(20, 17).can_still_reach(0.85, 10));
+        assert!(!row(20, 16).can_still_reach(0.85, 10));
     }
 
     #[test]

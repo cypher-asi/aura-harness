@@ -22,6 +22,7 @@ use tokio::sync::Semaphore;
 
 mod compare_runs;
 mod delegation;
+mod flow;
 mod subtasks;
 
 /// Model whose route refuses the sign-in, for Gate's re-routing.
@@ -30,7 +31,9 @@ const REFUSING_MODEL: &str = "claude/claude-sonnet-4-6";
 /// Answers like a mock model, but holds turn calls whose last message
 /// mentions "slow" until the test releases them, and refuses
 /// [`REFUSING_MODEL`]. Auxiliary calls, like the chat title, quote the
-/// prompt and are answered at once.
+/// prompt and are answered at once. Gate's judge of failed work blames
+/// the model when the work's request says "judge: blame", excuses it
+/// when it says "judge: excuse", and gives no verdict otherwise.
 struct GatedProvider {
     inner: MockProvider,
     gate: Arc<Semaphore>,
@@ -52,6 +55,17 @@ impl ModelProvider for GatedProvider {
         let last = request.messages.last().map(|m| m.text_content());
         if request.system == aura_agent_gate::classify::SYSTEM_PROMPT {
             return classify(&request, last.as_deref().unwrap_or_default()).await;
+        }
+        if request.system == aura_agent_gate::turn_judge::SYSTEM_PROMPT {
+            let asked = last.as_deref().unwrap_or_default();
+            let reply = if asked.contains("judge: blame") {
+                "The change is wrong.\nVERDICT: MODEL"
+            } else if asked.contains("judge: excuse") {
+                "The check cannot pass here.\nVERDICT: OTHER"
+            } else {
+                "Hard to say."
+            };
+            return MockProvider::simple_response(reply).complete(request).await;
         }
         if request.system == aura_agent_gate::judge::SYSTEM_PROMPT {
             return MockProvider::simple_response("A is tidier.\nWINNER: A")
@@ -193,13 +207,18 @@ async fn answer(request: ModelRequest, last: Option<&str>) -> Result<ModelRespon
 }
 
 /// The classifier's answer to `request`, asking about `prompt`: prompts
-/// that say "fix" are debugging, "classifier down" fails the call, and the
-/// rest are questions.
+/// that say "across files" are changes across several files, those that
+/// say "plan:" are planning, those that say "fix" are debugging,
+/// "classifier down" fails the call, and the rest are questions.
 async fn classify(request: &ModelRequest, prompt: &str) -> Result<ModelResponse, ReasonerError> {
     if prompt.contains("classifier down") {
         return Err(ReasonerError::Internal("classifier offline".to_string()));
     }
-    let label = if prompt.contains("fix") {
+    let label = if prompt.contains("across files") {
+        "multi_file_change"
+    } else if prompt.contains("plan:") {
+        "planning"
+    } else if prompt.contains("fix") {
         "debugging"
     } else {
         "question"
@@ -418,6 +437,7 @@ fn loop_state<'a>(fixture: &'a Fixture, b: &'a mut Borrowed) -> LoopState<'a> {
             fixture._dirs[0].path().join("compare"),
             aura_agent_gate::compare::DEFAULT_CONCURRENCY,
         ),
+        flow: None,
     }
 }
 
@@ -1847,125 +1867,6 @@ async fn a_turn_that_fails_records_an_error_outcome() {
 }
 
 #[tokio::test]
-async fn good_and_bad_override_the_turns_own_signal() {
-    let (fixture, mut commands) = fixture();
-    let mut b = borrowed(&fixture);
-    let links = b.links.clone();
-    let first = fixture.first;
-    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
-    let mut state = loop_state(&fixture, &mut b);
-    let rate = |good| UiEvent::RateTurn {
-        agent_id: first.to_hex(),
-        good,
-        turns_back: 1,
-    };
-
-    handle_ui_event(&mut state, rate(true), &links).await;
-    assert!(system_texts(&drain(&mut commands)).contains("No finished turn"));
-    assert!(outcomes_of(&state, first).is_empty());
-
-    unrestricted(&mut state, &links, first).await;
-    turn(&mut state, &mut done, &links, first, "run failing check").await;
-    handle_ui_event(&mut state, rate(true), &links).await;
-    assert!(system_texts(&drain(&mut commands)).contains("Rated the last turn good"));
-
-    let outcomes: Vec<OutcomePayload> = outcomes_of(&state, first)
-        .into_iter()
-        .map(|(_, o)| o)
-        .collect();
-    let signals: Vec<OutcomeSignal> = outcomes.iter().map(|o| o.signal).collect();
-    assert_eq!(signals, [OutcomeSignal::ChecksFailed, OutcomeSignal::Good]);
-    assert_eq!(outcomes[1].prompt_tx, outcomes[0].prompt_tx);
-    assert_eq!(outcomes[1].cost_usd, outcomes[0].cost_usd);
-    let counted = aura_agent_gate::outcome::effective(&outcomes).unwrap();
-    assert_eq!(counted.success, Some(true), "/good overrides checks_failed");
-
-    handle_ui_event(&mut state, rate(false), &links).await;
-    let outcomes: Vec<OutcomePayload> = outcomes_of(&state, first)
-        .into_iter()
-        .map(|(_, o)| o)
-        .collect();
-    let counted = aura_agent_gate::outcome::effective(&outcomes).unwrap();
-    assert_eq!(counted.signal, OutcomeSignal::Bad);
-}
-
-#[tokio::test]
-async fn good_and_bad_rate_an_earlier_turn_by_how_many_turns_back() {
-    let (fixture, mut commands) = fixture();
-    let mut b = borrowed(&fixture);
-    let links = b.links.clone();
-    let first = fixture.first;
-    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
-    let mut state = loop_state(&fixture, &mut b);
-    let rate = |good, turns_back| UiEvent::RateTurn {
-        agent_id: first.to_hex(),
-        good,
-        turns_back,
-    };
-
-    unrestricted(&mut state, &links, first).await;
-    turn(&mut state, &mut done, &links, first, "run failing check").await;
-    turn(&mut state, &mut done, &links, first, "run passing check").await;
-    turn(&mut state, &mut done, &links, first, "third turn").await;
-    let prompts: Vec<Hash> = prompts_of(&state, first)
-        .into_iter()
-        .map(|(_, hash, _)| hash)
-        .collect();
-    drain(&mut commands);
-
-    let ratings_of = |state: &LoopState<'_>, prompt: Hash| -> Vec<OutcomePayload> {
-        outcomes_of(state, first)
-            .into_iter()
-            .map(|(_, o)| o)
-            .filter(|o| o.prompt_tx == prompt)
-            .collect()
-    };
-
-    handle_ui_event(&mut state, rate(true, 3), &links).await;
-    assert!(system_texts(&drain(&mut commands)).contains("Rated the turn 3 back good"));
-    let rated = ratings_of(&state, prompts[0]);
-    let signals: Vec<OutcomeSignal> = rated.iter().map(|o| o.signal).collect();
-    assert_eq!(signals, [OutcomeSignal::ChecksFailed, OutcomeSignal::Good]);
-    assert_eq!(rated[1].model, rated[0].model);
-    assert_eq!(rated[1].category, rated[0].category);
-    for later in &prompts[1..] {
-        assert!(
-            ratings_of(&state, *later)
-                .iter()
-                .all(|o| o.signal.is_turn_end()),
-            "only the first turn is rated"
-        );
-    }
-
-    handle_ui_event(&mut state, rate(false, 3), &links).await;
-    let rated = ratings_of(&state, prompts[0]);
-    let counted = aura_agent_gate::outcome::effective(&rated).unwrap();
-    assert_eq!(counted.signal, OutcomeSignal::Bad, "the latest rating wins");
-    assert_eq!(counted.success, Some(false));
-
-    handle_ui_event(&mut state, rate(false, 2), &links).await;
-    let second = ratings_of(&state, prompts[1]);
-    assert_eq!(
-        aura_agent_gate::outcome::effective(&second).unwrap().signal,
-        OutcomeSignal::Bad,
-        "/bad 2 overrides the second turn's passing check"
-    );
-    drain(&mut commands);
-
-    let before = outcomes_of(&state, first).len();
-    handle_ui_event(&mut state, rate(true, 4), &links).await;
-    assert!(system_texts(&drain(&mut commands))
-        .contains("No turn 4 back to rate: there are 3 finished turns"));
-    handle_ui_event(&mut state, rate(true, 0), &links).await;
-    assert!(system_texts(&drain(&mut commands)).contains("Turns back start at 1"));
-    assert_eq!(
-        outcomes_of(&state, first).len(),
-        before,
-        "a rejected rating writes nothing"
-    );
-}
-
-#[tokio::test]
 async fn rewinding_turns_fails_them() {
     let (fixture, _commands) = fixture();
     let mut b = borrowed(&fixture);
@@ -2110,25 +2011,151 @@ async fn gate_routes_each_category_and_records_why() {
     assert_eq!(prompts[1].2.category, PromptCategory::Debugging);
     assert_eq!(
         prompts[1].2.route,
-        Route::turn("aura-gpt-5-4", RouteReason::Default),
-        "debugging goes to the strongest model, the cheaper of the frontier ones"
+        Route::turn("aura-claude-sonnet-4-6", RouteReason::Default),
+        "debugging starts on the cheapest standard model"
     );
     let models: Vec<String> = outcomes_of(&state, first)
         .into_iter()
         .map(|(_, o)| o.model)
         .collect();
-    assert_eq!(models, ["aura-claude-haiku-4-5", "aura-gpt-5-4"]);
+    assert_eq!(models, ["aura-claude-haiku-4-5", "aura-claude-sonnet-4-6"]);
     let shown = route_lines(&mut commands);
     assert_eq!(
         shown,
         [
             "gate → aura-claude-haiku-4-5 (cloud) · question, proven",
-            "gate → aura-gpt-5-4 (cloud) · debugging, default",
+            "gate → aura-claude-sonnet-4-6 (cloud) · debugging, default",
         ]
     );
     let recent = fixture.hub.gate.recent();
     assert_eq!(recent.len(), 2);
     assert_eq!(recent[1].reason, RouteReason::Default);
+}
+
+/// Run `text` as a debugging turn under Gate, which starts it on Sonnet,
+/// and return the routes of its prompts, its outcomes, the chat's system
+/// lines, and the tries and successes of the debugging rows of Sonnet and
+/// of GPT, the cheapest model of the next tier up.
+async fn debugging_turn_under_gate(
+    text: &str,
+) -> (
+    Vec<Route>,
+    Vec<(String, OutcomeSignal)>,
+    String,
+    [Option<(u32, u32)>; 2],
+) {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+    unrestricted(&mut state, &links, first).await;
+    drain(&mut commands);
+
+    let finished = turn(&mut state, &mut done, &links, first, text).await;
+    assert_eq!(finished.failure, None);
+
+    let routes = prompts_of(&state, first)
+        .into_iter()
+        .map(|(_, _, p)| p.route)
+        .collect();
+    let outcomes = outcomes_of(&state, first)
+        .into_iter()
+        .map(|(_, o)| (o.model, o.signal))
+        .collect();
+    let stats = fixture.hub.gate.stats();
+    let row = |model: &str| {
+        stats
+            .row(RouteLevel::Turn, PromptCategory::Debugging, model)
+            .map(|row| (row.tries, row.successes))
+    };
+    let rows = [row("aura-claude-sonnet-4-6"), row("aura-gpt-5-4")];
+    (routes, outcomes, system_texts(&drain(&mut commands)), rows)
+}
+
+#[tokio::test]
+async fn a_failed_turn_the_judge_blames_on_the_model_carries_on_on_a_stronger_one() {
+    const SONNET: &str = "aura-claude-sonnet-4-6";
+    const GPT: &str = "aura-gpt-5-4";
+    let (routes, outcomes, shown, rows) =
+        debugging_turn_under_gate("fix it: run failing check (judge: blame)").await;
+
+    assert_eq!(
+        routes,
+        [
+            Route::turn(SONNET, RouteReason::Default),
+            Route::turn(GPT, RouteReason::Escalate),
+        ]
+    );
+    assert_eq!(
+        outcomes,
+        [
+            (SONNET.to_string(), OutcomeSignal::ChecksFailed),
+            (SONNET.to_string(), OutcomeSignal::JudgedFail),
+            (GPT.to_string(), OutcomeSignal::None),
+        ]
+    );
+    assert!(
+        shown.contains("the failure is aura-claude-sonnet-4-6 (cloud)'s. The change is wrong."),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("gate → aura-gpt-5-4 (cloud) · debugging, escalate"),
+        "{shown}"
+    );
+    assert_eq!(
+        rows,
+        [Some((1, 0)), None],
+        "the failure counts once for Sonnet; the stronger model's work is not counted"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_turn_the_judge_excuses_ends_where_it_is() {
+    const SONNET: &str = "aura-claude-sonnet-4-6";
+    let (routes, outcomes, shown, rows) =
+        debugging_turn_under_gate("fix it: run failing check (judge: excuse)").await;
+
+    assert_eq!(routes, [Route::turn(SONNET, RouteReason::Default)]);
+    assert_eq!(
+        outcomes,
+        [
+            (SONNET.to_string(), OutcomeSignal::ChecksFailed),
+            (SONNET.to_string(), OutcomeSignal::JudgedExcused),
+        ]
+    );
+    assert!(
+        shown.contains("the failure is not aura-claude-sonnet-4-6 (cloud)'s doing"),
+        "{shown}"
+    );
+    assert!(!shown.contains("escalate"), "{shown}");
+    assert_eq!(rows, [None, None], "an excused failure counts for nothing");
+}
+
+#[tokio::test]
+async fn a_failed_turn_with_no_verdict_carries_on_on_a_stronger_model() {
+    const SONNET: &str = "aura-claude-sonnet-4-6";
+    const GPT: &str = "aura-gpt-5-4";
+    let (routes, outcomes, _, rows) = debugging_turn_under_gate("fix it: run failing check").await;
+
+    assert_eq!(
+        routes,
+        [
+            Route::turn(SONNET, RouteReason::Default),
+            Route::turn(GPT, RouteReason::Escalate),
+        ]
+    );
+    assert_eq!(
+        outcomes,
+        [
+            (SONNET.to_string(), OutcomeSignal::ChecksFailed),
+            (GPT.to_string(), OutcomeSignal::None),
+        ],
+        "the turn's own signal stands and is recorded once"
+    );
+    assert_eq!(rows, [Some((1, 0)), None]);
 }
 
 #[tokio::test]
@@ -2182,11 +2209,12 @@ async fn the_next_turn_uses_what_the_last_outcome_taught_gate() {
     let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
     let mut state = loop_state(&fixture, &mut b);
     state.models = gate_on_zos(&fixture);
-    let rate = |good| UiEvent::RateTurn {
-        agent_id: first.to_hex(),
-        good,
-        turns_back: 1,
-    };
+    // A later signal about the last turn, as `/compare pick` records one.
+    async fn rate(state: &LoopState<'_>, agent: AgentId, signal: OutcomeSignal) {
+        let kernel = state.kernel_for(agent).unwrap();
+        let last = gate_record::last_turn(kernel.store().as_ref(), agent).unwrap();
+        assert!(gate_record::record(&kernel, agent, &last.outcome.with_signal(signal)).await);
+    }
     let reasons = |state: &LoopState<'_>| -> Vec<RouteReason> {
         prompts_of(state, first)
             .into_iter()
@@ -2195,11 +2223,11 @@ async fn the_next_turn_uses_what_the_last_outcome_taught_gate() {
     };
 
     turn(&mut state, &mut done, &links, first, "what is a monad?").await;
-    handle_ui_event(&mut state, rate(true), &links).await;
+    rate(&state, first, OutcomeSignal::Good).await;
     turn(&mut state, &mut done, &links, first, "what is a functor?").await;
     assert_eq!(reasons(&state), [RouteReason::Default, RouteReason::Proven]);
 
-    handle_ui_event(&mut state, rate(false), &links).await;
+    rate(&state, first, OutcomeSignal::Bad).await;
     let row = fixture
         .hub
         .gate

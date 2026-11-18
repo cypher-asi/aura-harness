@@ -50,7 +50,7 @@ pub struct Attempt {
 }
 
 /// `text` cut to `max` characters, saying so when it was cut.
-fn cut(text: &str, max: usize, what: &str) -> String {
+pub(crate) fn cut(text: &str, max: usize, what: &str) -> String {
     if text.chars().count() <= max {
         return text.to_string();
     }

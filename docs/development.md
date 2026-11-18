@@ -19,18 +19,22 @@ cargo check -p aura-core-types -p aura-core-modes -p aura-core-protocol -p aura-
 # Desktop app screens, rendered offscreen and saved as PNGs
 AURA_DESKTOP_SNAPSHOTS=target/snapshots cargo test -p aura-desktop snapshot
 
-# Desktop timings: boot, updates while streaming and typing, CPU repaints
-cargo test --release -p aura-desktop -- --ignored --nocapture replay
+# Desktop timings: boot, frames while streaming and typing, a swarm's second,
+# a 2,000-message conversation and a long reply streaming after it
+cargo test --release -p aura-desktop -- --ignored --nocapture timings
+
+# The same conversation and reply in the terminal UI alone
+cargo test --release -p aura-ui-terminal -- --ignored --nocapture timings
 ```
 
-The desktop snapshot tests run the terminal UI on the desktop cell grid and draw whole screens (conversation, a working agent, the slash menu, dialogs) with the CPU renderer, so they run without a display or GPU. With `AURA_DESKTOP_SNAPSHOTS` set, each screen is saved as a PNG next to a `.txt` dump of its cells; without it they only check that something was drawn.
+The desktop snapshot tests run the terminal UI in the window's shell, without a window, and draw whole screens (conversation, a working agent, the slash menu, dialogs) with the CPU rasterizer, so they run without a display or GPU. With `AURA_DESKTOP_SNAPSHOTS` set, each screen is saved as a PNG next to a `.txt` dump of its cells; without it they only check that something was drawn. With `AURA_DESKTOP_GPU=1`, on a machine with a graphics adapter, each screen is also drawn by the GPU and compared with the CPU's picture.
 
 ## CI gates
 
 [`.github/workflows/`](../.github/workflows) runs, on every PR:
 
 - `cargo fmt --check`, `cargo clippy` (warnings reported, not denied), and `cargo test --workspace --all-features`.
-- `cargo check` on the MSRV (1.85), except `aura-desktop`, which needs 1.88 for iced.
+- `cargo check` on the MSRV (1.85), except `aura-desktop`, which needs 1.88 for wgpu.
 - `cargo deny check` (hard fail) and `cargo audit` (soft fail).
 - `cargo machete` for unused dependencies.
 - [`scripts/check_invariants.sh`](../scripts/check_invariants.sh), the invariant grep gate.

@@ -205,23 +205,46 @@ impl ModelSelection {
     }
 
     /// Reload the model lists of linked plans. Returns a user-facing
-    /// note when a linked plan's list could not be loaded.
+    /// note when a linked plan's list could not be loaded; the list saved
+    /// when it last loaded is used then, else the built-in one.
     pub async fn refresh_plans(&mut self, resolver: &dyn CredentialResolver) -> Option<String> {
         if !self.auth.can_use(ProviderKind::Claude) {
             self.plan_models.clear();
             return None;
         }
-        match aura_model::plan_models::fetch_claude_models(resolver).await {
+        let listed = aura_model::plan_models::fetch_claude_models(resolver).await;
+        self.plans_listed(listed.map_err(|e| e.to_string()))
+    }
+
+    /// Take in the Claude plan's model list as `listed` just now, or why
+    /// it could not be. Returns the note of [`Self::refresh_plans`].
+    fn plans_listed(&mut self, listed: Result<Vec<ModelOption>, String>) -> Option<String> {
+        let saved_at = self
+            .prefs_path
+            .as_ref()
+            .map(|prefs| prefs.with_file_name(PLAN_MODELS_FILE));
+        match listed {
             Ok(models) => {
+                if let Some(path) = &saved_at {
+                    save_plan_models(path, &models);
+                }
                 self.plan_models = models;
                 None
             }
-            Err(e) => {
-                warn!(error = %e, "Failed to list Claude plan models");
-                self.plan_models.clear();
+            Err(problem) => {
+                warn!(error = %problem, "Failed to list Claude plan models");
+                self.plan_models = saved_at
+                    .as_deref()
+                    .map(load_plan_models)
+                    .unwrap_or_default();
+                let shown = if self.plan_models.is_empty() {
+                    "showing the built-in list"
+                } else {
+                    "showing the list saved when it last loaded"
+                };
                 Some(format!(
-                    "Couldn't load your Claude plan's model list ({e}); showing the built-in \
-                     list. Any model works with /model claude/<model-id>."
+                    "Couldn't load your Claude plan's model list ({problem}); {shown}. Any \
+                     model works with /model claude/<model-id>."
                 ))
             }
         }
@@ -512,6 +535,54 @@ fn load_prefs(path: &std::path::Path) -> Option<TuiPrefs> {
     serde_json::from_slice(&bytes).ok()
 }
 
+/// Beside `tui.json`: the Claude plan's model list as it last loaded,
+/// used when it can't be loaded. The built-in list is older and would
+/// leave Gate routing among models the plan has since replaced.
+const PLAN_MODELS_FILE: &str = "plan_models.json";
+
+/// A plan model as saved in [`PLAN_MODELS_FILE`].
+#[derive(Debug, Serialize, Deserialize)]
+struct SavedPlanModel {
+    id: String,
+    label: String,
+}
+
+fn save_plan_models(path: &std::path::Path, models: &[ModelOption]) {
+    let saved: Vec<SavedPlanModel> = models
+        .iter()
+        .map(|m| SavedPlanModel {
+            id: m.id.clone(),
+            label: m.label.clone(),
+        })
+        .collect();
+    let written = serde_json::to_vec_pretty(&saved)
+        .map_err(std::io::Error::other)
+        .and_then(|bytes| std::fs::write(path, bytes));
+    if let Err(e) = written {
+        warn!(path = %path.display(), error = %e, "Could not save the plan's model list");
+    }
+}
+
+/// The Claude plan models saved at `path`; none when there is no
+/// readable list.
+fn load_plan_models(path: &std::path::Path) -> Vec<ModelOption> {
+    let saved: Vec<SavedPlanModel> = std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    saved
+        .into_iter()
+        .filter(|m| backend_for(&m.id) == ModelBackend::Claude)
+        .map(|m| ModelOption {
+            tier: infer_tier(&m.id),
+            backend: ModelBackend::Claude,
+            installed: true,
+            id: m.id,
+            label: m.label,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -591,6 +662,45 @@ mod tests {
 
     fn selection(user: Option<&str>) -> (ModelSelection, AgentLoopConfig) {
         selection_on(signed_in(user, &[]), LOCAL)
+    }
+
+    #[test]
+    fn a_plan_list_that_fails_to_load_falls_back_to_the_one_saved_last() {
+        let home = tempfile::tempdir().unwrap();
+        let claude = signed_in(None, &[ProviderKind::Claude]);
+        let (mut selection, _) = selection_on(claude, GATE_MODEL_ID);
+        let ids = |selection: &ModelSelection| -> Vec<String> {
+            selection
+                .gate_candidates()
+                .into_iter()
+                .filter(|c| c.backend == ModelBackend::Claude)
+                .map(|c| c.id)
+                .collect()
+        };
+
+        let note = selection
+            .plans_listed(Err("timed out".to_string()))
+            .unwrap();
+        assert!(note.contains("timed out") && note.contains("built-in list"));
+        assert!(ids(&selection).contains(&"claude/claude-sonnet-4-6".to_string()));
+
+        selection.prefs_path = Some(home.path().join("tui.json"));
+        let live = ["claude/claude-haiku-5-5", "claude/claude-sonnet-5-5"].map(|id| ModelOption {
+            id: id.to_string(),
+            label: id.to_string(),
+            backend: ModelBackend::Claude,
+            installed: true,
+            tier: infer_tier(id),
+        });
+        assert_eq!(selection.plans_listed(Ok(live.to_vec())), None);
+        assert_eq!(ids(&selection), live.clone().map(|m| m.id));
+
+        let (mut later, _) = selection_on(signed_in(None, &[ProviderKind::Claude]), GATE_MODEL_ID);
+        later.prefs_path = Some(home.path().join("tui.json"));
+        let note = later.plans_listed(Err("timed out".to_string())).unwrap();
+        assert!(note.contains("saved when it last loaded"), "{note}");
+        assert_eq!(ids(&later), live.map(|m| m.id), "not the built-in list");
+        assert_eq!(later.classifier_model(), "claude/claude-haiku-5-5");
     }
 
     #[test]

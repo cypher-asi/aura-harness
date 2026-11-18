@@ -248,66 +248,6 @@ fn test_diff_command_picks_turn_or_session() {
 }
 
 #[test]
-fn test_good_and_bad_rate_the_active_agents_last_turn() {
-    let (tx, mut rx) = mpsc::channel(8);
-    let mut app = App::new().with_event_sender(tx);
-    app.active_agent_id = "abc".to_string();
-
-    app.handle_command("/good");
-    assert!(matches!(
-        rx.try_recv(),
-        Ok(UiEvent::RateTurn { ref agent_id, good: true, turns_back: 1 }) if agent_id == "abc"
-    ));
-    app.handle_command("/bad");
-    assert!(matches!(
-        rx.try_recv(),
-        Ok(UiEvent::RateTurn {
-            good: false,
-            turns_back: 1,
-            ..
-        })
-    ));
-}
-
-#[test]
-fn test_good_and_bad_take_how_many_turns_back() {
-    let (tx, mut rx) = mpsc::channel(8);
-    let mut app = App::new().with_event_sender(tx);
-
-    app.handle_command("/good 3");
-    assert!(matches!(
-        rx.try_recv(),
-        Ok(UiEvent::RateTurn {
-            good: true,
-            turns_back: 3,
-            ..
-        })
-    ));
-    app.handle_command("/bad  2 ");
-    assert!(matches!(
-        rx.try_recv(),
-        Ok(UiEvent::RateTurn {
-            good: false,
-            turns_back: 2,
-            ..
-        })
-    ));
-
-    for bad in ["/good 0", "/bad -1", "/good two", "/bad 2 3"] {
-        app.notification = None;
-        app.handle_command(bad);
-        assert!(rx.try_recv().is_err(), "{bad} should not be sent");
-        assert!(
-            matches!(
-                app.notification(),
-                Some((text, NotificationType::Warning)) if text.starts_with("Usage: /")
-            ),
-            "{bad}"
-        );
-    }
-}
-
-#[test]
 fn test_compare_passes_its_arguments_as_typed() {
     let (tx, mut rx) = mpsc::channel(8);
     let mut app = App::new().with_event_sender(tx);
@@ -3297,6 +3237,37 @@ fn test_build_needs_a_plan() {
         rx.try_recv(),
         Ok(UiEvent::BuildPlan { path: None, .. })
     ));
+}
+
+#[test]
+fn saying_implement_in_plan_mode_builds_the_plan() {
+    let (mut app, mut rx) = app_with_events();
+    app.process_command(UiCommand::SetMode(crate::PermissionMode::Plan));
+
+    // No plan yet: the agent gets the message.
+    submit(&mut app, "implement");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::UserMessage { text, .. }) if text == "implement"
+    ));
+    app.state = AppState::Idle;
+
+    app.process_command(UiCommand::SetPlan(Some(sample_plan())));
+    submit(&mut app, "  Implement it! ");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::BuildPlan { path: None, .. })
+    ));
+
+    // Longer messages are feedback on the plan.
+    submit(&mut app, "implement it with a trait instead");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::UserMessage { .. })));
+    app.state = AppState::Idle;
+
+    // Outside plan mode "implement" is an ordinary message.
+    app.process_command(UiCommand::SetMode(crate::PermissionMode::Agent));
+    submit(&mut app, "implement");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::UserMessage { .. })));
 }
 
 #[test]
