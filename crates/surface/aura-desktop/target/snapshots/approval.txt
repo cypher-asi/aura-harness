@@ -3,27 +3,28 @@
  │                                  │ │                                                                             │ │                                  │ 
  ├──────────────────────────────────┤ ├─────────────────────────────────────────────────────────────────────────────┤ ├──────────────────────────────────┤ 
  │ 🗁  aura-harness                + │ │                                                                             │ │                                  │ 
- │    Agent01                       │ │  Here's what I found for the crates:                                             │ │  No records yet.                 │ 
- │   ⠐⠀ Reviewer                    │ │                                                                             │ │                                  │ 
- │                                  │ │  Layout                                                                     │ │  Records will appear             │ 
- │                                  │ │                                                                             │ │  as they are created.            │ 
+ │    Agent01                       │ │                                                                             │ │  No records yet.                 │ 
+ │   ⠐⠀ Reviewer                    │ │  Here's what I found for the crates:                                             │ │                                  │ 
+ │                                  │ │                                                                             │ │  Records will appear             │ 
+ │                                  │ │  Layout                                                                     │ │  as they are created.            │ 
+ │                                  │ │                                                                             │ │                                  │ 
  │                                  │ │  ┌──────────────────┬─────────────────────────────────────────┐             │ │                                  │ 
  │                                  │ │  │ Crate            │ Role                                    │             │ │                                  │ 
- │                                  │ │  ├──────────────────┼─────────────────────────────────────────┤             │ │                                  │ 
- │                                  │ │  │ aura-ui          │ event protocol shared by the frontends  │             │ │                                  │ 
+ │                                  │ │  ├──────────────────┼─────────────────────────────────────────┤             ┃ │                                  │ 
+ │                                  │ │  │ aura-ui          │ event protocol shared by the frontends  │             ┃ │                                  │ 
  │                                  │ │  │ aura-ui-terminal │ the ratatui terminal UI                 │             ┃ │                                  │ 
  │                                  │ │  │ aura-desktop     │ this window, drawn on the GPU with wgpu │             ┃ │                                  │ 
  │                                  │ │  └──────────────────┴─────────────────────────────────────────┘             ┃ │                                  │ 
  │                                  │ │                                                                             ┃ │                                  │ 
- │                                  │ │  The tests pass, and I updated the README:                                     ┃ │                                  │ 
- │                                  │ │      ┌ Approval Required ───────────────────────────────────────────┐       ┃ │                                  │ 
- │                                  │ │  ╭─ R│run_command wants to:                                         │       ┃ │                                  │ 
- │                                  │ │  │ le│rm -rf target/                                                │       ┃ │                                  │ 
- │                                  │ │  ╰───│                                                              │       ┃ └──────────────────────────────────┘ 
- │                                  │ │      │[Y] Allow once                                                │       ┃ ┌──────────────────────────────────┐ 
- │                                  │ │  • Bo│[A] Always allow `rm` commands in this project                │       ┃ │                                  │ 
- │                                  │ │  • Fo│[N] Deny (Esc)                                                │       ┃ ├──────────────────────────────────┤ 
- │                                  │ │      └──────────────────────────────────────────────────────────────┘       ┃ │  No sandbox yet.                 │ 
+ │                                  │ │  The ┌ Approval Required ───────────────────────────────────────────┐       ┃ │                                  │ 
+ │                                  │ │      │run_command wants to:                                         │       ┃ │                                  │ 
+ │                                  │ │  ╭─ R│rm -rf target/                                                │       ┃ │                                  │ 
+ │                                  │ │  │ le│                                                              │       ┃ │                                  │ 
+ │                                  │ │  ╰───│[Y] Allow once                                                │       ┃ └──────────────────────────────────┘ 
+ │                                  │ │      │[A] Always allow `rm` commands in this project                │       ┃ ┌──────────────────────────────────┐ 
+ │                                  │ │  • Bo│[N] Deny (Esc)                                                │       ┃ │                                  │ 
+ │                                  │ │  • Fo└──────────────────────────────────────────────────────────────┘       ┃ ├──────────────────────────────────┤ 
+ │                                  │ │                                                                             ┃ │  No sandbox yet.                 │ 
  │                                  │ │  See wgpu (https://wgpu.rs) for the renderer.                                    ┃ │                                  │ 
  │                                  │ │  [local/qwen3-coder · 4.8k tok]                                             ┃ │                                  │ 
  │                                  │ │                                                                             ┃ │                                  │ 
@@ -42,4 +43,3 @@
  │ +  New project                   │ │ → Add a follow-up                                                           │ │                                  │ 
  └──────────────────────────────────┘ └─────────────────────────────────────────────────────────────────────────────┘ └──────────────────────────────────┘ 
                                        Qwen3 Coder                         ◐ Waiting for approval to run run_command                                       
-                                       / for commands · @ for files · $ for a terminal · Shift+Tab approval                                                

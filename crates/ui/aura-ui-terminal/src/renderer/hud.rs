@@ -23,31 +23,13 @@ use ratatui::{
 /// Most todo items listed at once.
 const MAX_TODO_ROWS: usize = 10;
 
-/// Screens shorter than this get no key hints under the status line.
-const MIN_HEIGHT_FOR_HINTS: u16 = 16;
-
 /// Columns kept clear between the stats and the status at the right.
 const STATUS_GAP: usize = 2;
 
 const SEPARATOR: &str = " · ";
 
-/// Key hints on the footer's second row, most useful first.
-const HINTS: [&str; 5] = [
-    "/ for commands",
-    "@ for files",
-    "$ for a terminal",
-    "Shift+Tab approval",
-    "Ctrl+O steps",
-];
-
-/// Rows the footer takes on a screen `height` rows tall.
-pub(super) const fn footer_rows(height: u16) -> u16 {
-    if height >= MIN_HEIGHT_FOR_HINTS {
-        2
-    } else {
-        1
-    }
-}
+/// Rows the footer takes under the input box.
+pub(super) const FOOTER_ROWS: u16 = 1;
 
 /// The parts of the status line after the model, most important first.
 pub(super) fn status_parts(hud: &Hud, theme: &Theme) -> Vec<(String, Color)> {
@@ -149,8 +131,7 @@ fn fitting<'a>(parts: Vec<Vec<Span<'a>>>, room: usize, theme: &Theme) -> Vec<Spa
 }
 
 /// Render the footer into `area`: the model and what the agent has used on
-/// the left of the first row with its status at the right, then key hints
-/// when `area` has a second row.
+/// the left, with its status at the right.
 pub(super) fn render_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     if area.height == 0 || area.width == 0 {
         return;
@@ -174,21 +155,6 @@ pub(super) fn render_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Th
         Paragraph::new(Line::from(status)).alignment(Alignment::Right),
         row,
     );
-
-    if area.height > 1 {
-        let hints = HINTS
-            .iter()
-            .map(|hint| vec![Span::styled(*hint, Style::default().fg(theme.colors.faint))])
-            .collect();
-        frame.render_widget(
-            Paragraph::new(Line::from(fitting(hints, usize::from(area.width), theme))),
-            Rect {
-                y: area.y + 1,
-                height: 1,
-                ..area
-            },
-        );
-    }
 }
 
 /// The full todo list over the bottom of the Chat panel, while `/todos`
@@ -346,12 +312,6 @@ mod tests {
             ..crate::app::hud::Hud::default()
         };
         assert!(status_parts(&hud, &theme).is_empty());
-    }
-
-    #[test]
-    fn footer_hints_need_room() {
-        assert_eq!(footer_rows(MIN_HEIGHT_FOR_HINTS - 1), 1);
-        assert_eq!(footer_rows(MIN_HEIGHT_FOR_HINTS), 2);
     }
 
     #[test]

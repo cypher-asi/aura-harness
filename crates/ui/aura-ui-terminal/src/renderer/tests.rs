@@ -276,7 +276,7 @@ fn test_default_layout_shows_agents_column() {
     assert!(rows[terminal_agent].contains(" 3m "));
     assert!(rows[researcher_project].contains("🗁  Researcher"));
     assert!(!screen.contains("12│"));
-    let above_footer = rows[..rows.len() - 2].join("\n");
+    let above_footer = rows[..rows.len() - 1].join("\n");
     assert!(!above_footer.contains("# ") && !above_footer.contains("@ "));
     assert!(!screen.contains('↳') && !screen.contains('▾') && !screen.contains('▸'));
 
@@ -1406,7 +1406,7 @@ fn test_hosted_panels_leave_their_title_bars_to_the_front_end() {
 
 /// Rows from the bottom of the screen to a one-row input: below it are the
 /// input box's bottom border and the footer's two rows.
-const INPUT_FROM_BOTTOM: usize = 4;
+const INPUT_FROM_BOTTOM: usize = 3;
 
 #[test]
 fn test_side_panels_end_level_with_the_input_box() {
@@ -1470,17 +1470,17 @@ fn test_slash_menu_spans_chat_width_above_input() {
 
     let (_, chat_left, chat_right) = chat_panel(&rows);
 
-    let menu_bottom = &rows[n - 6];
+    let menu_bottom = &rows[n - 5];
     let chars: Vec<char> = menu_bottom.chars().collect();
     assert_eq!(chars[chat_left], '└', "{menu_bottom:?}");
     assert_eq!(chars[chat_right], '┘', "{menu_bottom:?}");
     assert!(menu_bottom.contains("Esc close"), "{menu_bottom:?}");
 
-    assert!(rows[n - 8].contains("› /login"), "{:?}", rows[n - 8]);
-    assert!(rows[n - 8].contains("Login for cloud models"));
-    assert!(rows[n - 7].contains("  /logout"), "{:?}", rows[n - 7]);
-    assert!(rows[n - 9].contains(" COMMANDS "), "{:?}", rows[n - 9]);
-    let menu_top: Vec<char> = rows[n - 9].chars().collect();
+    assert!(rows[n - 7].contains("› /login"), "{:?}", rows[n - 7]);
+    assert!(rows[n - 7].contains("Login for cloud models"));
+    assert!(rows[n - 6].contains("  /logout"), "{:?}", rows[n - 6]);
+    assert!(rows[n - 8].contains(" COMMANDS "), "{:?}", rows[n - 8]);
+    let menu_top: Vec<char> = rows[n - 8].chars().collect();
     assert_eq!(menu_top[chat_left], '┌');
     assert_eq!(menu_top[chat_right], '┐');
 
@@ -1501,9 +1501,9 @@ fn test_mention_picker_lists_files_above_the_input() {
     type_text(&mut app, "look at @ma");
     let rows = render_rows(&mut app, 120);
     let n = rows.len();
-    assert!(rows[n - 8].contains(" FILES "), "{:?}", rows[n - 8]);
-    assert!(rows[n - 7].contains("› @src/main.rs"), "{:?}", rows[n - 7]);
-    assert!(rows[n - 6].contains("Enter insert"), "{:?}", rows[n - 6]);
+    assert!(rows[n - 7].contains(" FILES "), "{:?}", rows[n - 7]);
+    assert!(rows[n - 6].contains("› @src/main.rs"), "{:?}", rows[n - 6]);
+    assert!(rows[n - 5].contains("Enter insert"), "{:?}", rows[n - 5]);
 
     type_text(&mut app, " ");
     let screen = render_rows(&mut app, 120).join("\n");
@@ -1583,22 +1583,22 @@ fn test_agent_space_shows_permanent_agents_to_add() {
     let n = rows.len();
 
     assert!(
-        rows[n - 9].contains(" ADD AGENT TO PROJECT "),
-        "{:?}",
-        rows[n - 9]
-    );
-    assert!(
-        rows[n - 8].contains("› explorer   Reads code"),
+        rows[n - 8].contains(" ADD AGENT TO PROJECT "),
         "{:?}",
         rows[n - 8]
     );
-    assert!(!rows[n - 8].contains("and more"));
     assert!(
-        rows[n - 7].contains("  reviewer   Reviews diffs"),
+        rows[n - 7].contains("› explorer   Reads code"),
         "{:?}",
         rows[n - 7]
     );
-    assert!(rows[n - 6].contains("Enter add"), "{:?}", rows[n - 6]);
+    assert!(!rows[n - 7].contains("and more"));
+    assert!(
+        rows[n - 6].contains("  reviewer   Reviews diffs"),
+        "{:?}",
+        rows[n - 6]
+    );
+    assert!(rows[n - 5].contains("Enter add"), "{:?}", rows[n - 5]);
 }
 
 #[test]
@@ -1611,12 +1611,12 @@ fn test_header_shows_local_url_and_model_moves_to_the_footer() {
 
     let n = rows.len();
     let (_, chat_left, chat_right) = chat_panel(&rows);
-    let box_top: Vec<char> = rows[n - 5].chars().collect();
-    let box_bottom: Vec<char> = rows[n - 3].chars().collect();
+    let box_top: Vec<char> = rows[n - 4].chars().collect();
+    let box_bottom: Vec<char> = rows[n - 2].chars().collect();
     assert_eq!((box_top[chat_left], box_top[chat_right]), ('┌', '┐'));
     assert_eq!((box_bottom[chat_left], box_bottom[chat_right]), ('└', '┘'));
     assert!(
-        rows[n - 6].contains('└'),
+        rows[n - 5].contains('└'),
         "panel border above the input box"
     );
 
@@ -1625,7 +1625,7 @@ fn test_header_shows_local_url_and_model_moves_to_the_footer() {
     assert!(!input_row.contains("]$ "), "{input_row:?}");
     assert!(!input_row.contains("qwen3:4b"), "{input_row:?}");
 
-    let footer: String = rows[n - 2]
+    let footer: String = rows[n - 1]
         .chars()
         .skip(chat_left)
         .take(chat_right - chat_left)
@@ -1633,7 +1633,6 @@ fn test_header_shows_local_url_and_model_moves_to_the_footer() {
     assert!(footer.trim_start().starts_with("qwen3:4b"), "{footer:?}");
     assert!(footer.trim_end().ends_with("● Ready"), "{footer:?}");
     assert!(!footer.contains("/model"));
-    assert!(rows[n - 1].contains("/ for commands"), "{:?}", rows[n - 1]);
 }
 
 fn type_text(app: &mut crate::App, text: &str) {
@@ -1694,7 +1693,7 @@ fn test_long_input_wraps_inside_the_chat_and_grows_upward() {
     let n = rows.len();
     let (_, chat_left, chat_right) = chat_panel(&rows);
 
-    assert!(rows[n - 2].contains("● Ready"), "{:?}", rows[n - 2]);
+    assert!(rows[n - 1].contains("● Ready"), "{:?}", rows[n - 1]);
     let input_rows: Vec<&String> = rows[..n - 3]
         .iter()
         .rev()
@@ -1781,7 +1780,7 @@ fn test_terminal_input_is_highlighted_as_a_command() {
     let mut app = app_with_model(None);
     type_text(&mut app, "$ls -la");
     let buffer = render_buffer(&mut app, 120);
-    let y = buffer.area.height - 4;
+    let y = buffer.area.height - 3;
 
     let (_, program) = find_cell(&buffer, y, "ls -la").unwrap();
     assert_eq!(program.fg, Some(theme.colors.success));
@@ -1931,7 +1930,7 @@ fn test_outer_text_is_inset_to_panel_borders() {
     assert!(rows[0].starts_with(" AURA"), "{:?}", rows[0]);
     assert_eq!(last_col(&rows[0]), inner_right, "{:?}", rows[0]);
     let (_, _, chat_right) = chat_panel(&rows);
-    let status: Vec<char> = rows[rows.len() - 2].chars().collect();
+    let status: Vec<char> = rows[rows.len() - 1].chars().collect();
     assert_eq!(status[chat_right - 1], 'y', "{status:?}");
     assert_eq!(status[chat_right], ' ', "{status:?}");
 }
@@ -2027,20 +2026,10 @@ fn test_input_shows_gate_instead_of_its_pick() {
         plans: Vec::new(),
     });
     let rows = render_rows(&mut app, 120);
-    let status = &rows[rows.len() - 2];
+    let status = &rows[rows.len() - 1];
     assert!(status.contains("GATE"), "{status:?}");
     assert!(status.contains("● Ready"), "{status:?}");
     assert!(!status.contains("claude-sonnet-4-6"), "{status:?}");
-}
-
-#[test]
-fn test_footer_drops_trailing_hints_when_narrow() {
-    let rows = render_with_user(None, 46);
-    let n = rows.len();
-    assert!(rows[n - 2].contains("● Ready"), "{:?}", rows[n - 2]);
-    let hints = &rows[n - 1];
-    assert!(hints.contains("/ for commands"), "{hints:?}");
-    assert!(!hints.contains("Ctrl+O"), "{hints:?}");
 }
 
 // ========================================================================
@@ -2857,7 +2846,7 @@ fn test_prose_input_is_in_the_reply_color() {
     type_text(&mut app, "please explain");
     let buffer = render_buffer(&mut app, 120);
 
-    let (_, style) = find_cell(&buffer, buffer.area.height - 4, "please").unwrap();
+    let (_, style) = find_cell(&buffer, buffer.area.height - 3, "please").unwrap();
     assert_eq!(style.fg, Some(theme.colors.text));
 }
 
@@ -3125,7 +3114,7 @@ fn test_status_line_shows_context_cache_and_cost() {
     app.process_command(UiCommand::SetQueued(1));
 
     let rows = render_rows(&mut app, 160);
-    let status = &rows[rows.len() - 2];
+    let status = &rows[rows.len() - 1];
     assert!(status.contains("62% context used"), "{status:?}");
     assert!(status.contains("96% cached"), "{status:?}");
     assert!(status.contains("$3.42"), "{status:?}");
@@ -3145,7 +3134,7 @@ fn test_status_line_drops_trailing_parts_when_narrow() {
         ..CallStats::default()
     }));
     let rows = render_rows(&mut app, 90);
-    let status = &rows[rows.len() - 2];
+    let status = &rows[rows.len() - 1];
     assert!(status.contains("5% context used"), "{status:?}");
     assert!(!status.contains("call"), "{status:?}");
 }
@@ -3263,7 +3252,7 @@ fn test_status_line_leads_with_the_mode() {
 
     let mut app = crate::App::new();
     let rows = render_rows(&mut app, 160);
-    assert!(!rows[rows.len() - 2].contains("mode"), "unknown until told");
+    assert!(!rows[rows.len() - 1].contains("mode"), "unknown until told");
 
     app.process_command(UiCommand::SetMode(crate::PermissionMode::ReadOnly));
     app.process_command(UiCommand::CallStats(CallStats {
@@ -3272,7 +3261,7 @@ fn test_status_line_leads_with_the_mode() {
         ..CallStats::default()
     }));
     let rows = render_rows(&mut app, 160);
-    let status = &rows[rows.len() - 2];
+    let status = &rows[rows.len() - 1];
     let mode = status.find("read-only mode").expect(status);
     let ctx = status.find("5% context used").expect(status);
     assert!(mode < ctx, "{status:?}");

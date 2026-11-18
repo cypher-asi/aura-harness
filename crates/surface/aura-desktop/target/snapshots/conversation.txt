@@ -3,14 +3,15 @@
  │                                  │ │                                                                             │ │                                  │ 
  ├──────────────────────────────────┤ ├─────────────────────────────────────────────────────────────────────────────┤ ├──────────────────────────────────┤ 
  │ 🗁  aura-harness                + │ │                                                                             │ │                                  │ 
- │    Agent01                       │ │  Here's what I found for the crates:                                             │ │  No records yet.                 │ 
- │   ⠐⠀ Reviewer                    │ │                                                                             │ │                                  │ 
- │                                  │ │  Layout                                                                     │ │  Records will appear             │ 
- │                                  │ │                                                                             │ │  as they are created.            │ 
+ │    Agent01                       │ │                                                                             │ │  No records yet.                 │ 
+ │   ⠐⠀ Reviewer                    │ │  Here's what I found for the crates:                                             │ │                                  │ 
+ │                                  │ │                                                                             │ │  Records will appear             │ 
+ │                                  │ │  Layout                                                                     │ │  as they are created.            │ 
+ │                                  │ │                                                                             │ │                                  │ 
  │                                  │ │  ┌──────────────────┬─────────────────────────────────────────┐             │ │                                  │ 
  │                                  │ │  │ Crate            │ Role                                    │             │ │                                  │ 
- │                                  │ │  ├──────────────────┼─────────────────────────────────────────┤             │ │                                  │ 
- │                                  │ │  │ aura-ui          │ event protocol shared by the frontends  │             │ │                                  │ 
+ │                                  │ │  ├──────────────────┼─────────────────────────────────────────┤             ┃ │                                  │ 
+ │                                  │ │  │ aura-ui          │ event protocol shared by the frontends  │             ┃ │                                  │ 
  │                                  │ │  │ aura-ui-terminal │ the ratatui terminal UI                 │             ┃ │                                  │ 
  │                                  │ │  │ aura-desktop     │ this window, drawn on the GPU with wgpu │             ┃ │                                  │ 
  │                                  │ │  └──────────────────┴─────────────────────────────────────────┘             ┃ │                                  │ 
@@ -42,4 +43,3 @@
  │ +  New project                   │ │ → Add a follow-up                                                           │ │                                  │ 
  └──────────────────────────────────┘ └─────────────────────────────────────────────────────────────────────────────┘ └──────────────────────────────────┘ 
                                        Qwen3 Coder                                                           ● Ready                                       
-                                       / for commands · @ for files · $ for a terminal · Shift+Tab approval                                                

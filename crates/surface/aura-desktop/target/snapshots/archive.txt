@@ -3,14 +3,15 @@
  │                                  │ │                                                                             │ │                                  │ 
  ├──────────────────────────────────┤ ├─────────────────────────────────────────────────────────────────────────────┤ ├──────────────────────────────────┤ 
  │  No archived agents.             │ │                                                                             │ │                                  │ 
- │  Delete on an agent in PROJECTS  │ │  Here's what I found for the crates:                                             │ │  No records yet.                 │ 
- │  archives it.                    │ │                                                                             │ │                                  │ 
- │                                  │ │  Layout                                                                     │ │  Records will appear             │ 
- │                                  │ │                                                                             │ │  as they are created.            │ 
+ │  Delete on an agent in PROJECTS  │ │                                                                             │ │  No records yet.                 │ 
+ │  archives it.                    │ │  Here's what I found for the crates:                                             │ │                                  │ 
+ │                                  │ │                                                                             │ │  Records will appear             │ 
+ │                                  │ │  Layout                                                                     │ │  as they are created.            │ 
+ │                                  │ │                                                                             │ │                                  │ 
  │                                  │ │  ┌──────────────────┬─────────────────────────────────────────┐             │ │                                  │ 
  │                                  │ │  │ Crate            │ Role                                    │             │ │                                  │ 
- │                                  │ │  ├──────────────────┼─────────────────────────────────────────┤             │ │                                  │ 
- │                                  │ │  │ aura-ui          │ event protocol shared by the frontends  │             │ │                                  │ 
+ │                                  │ │  ├──────────────────┼─────────────────────────────────────────┤             ┃ │                                  │ 
+ │                                  │ │  │ aura-ui          │ event protocol shared by the frontends  │             ┃ │                                  │ 
  │                                  │ │  │ aura-ui-terminal │ the ratatui terminal UI                 │             ┃ │                                  │ 
  │                                  │ │  │ aura-desktop     │ this window, drawn on the GPU with wgpu │             ┃ │                                  │ 
  │                                  │ │  └──────────────────┴─────────────────────────────────────────┘             ┃ │                                  │ 
@@ -42,4 +43,3 @@
  │                                  │ │ → Add a follow-up                                                           │ │                                  │ 
  └──────────────────────────────────┘ └─────────────────────────────────────────────────────────────────────────────┘ └──────────────────────────────────┘ 
                                        Qwen3 Coder                                                           ● Ready                                       
-                                       / for commands · @ for files · $ for a terminal · Shift+Tab approval                                                

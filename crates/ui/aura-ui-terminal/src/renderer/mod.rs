@@ -69,10 +69,9 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     // The input grows upward as it wraps inside the Chat column, so its
     // height comes from where the columns fall.
     let (swarm, column, right) = columns(content, app);
-    let footer_rows = hud::footer_rows(content.height);
     let max_input_rows = content
         .height
-        .saturating_sub(footer_rows + input::BOX_ROWS + 3)
+        .saturating_sub(hud::FOOTER_ROWS + input::BOX_ROWS + 3)
         .max(1);
     let input_rows = input::input_rows(column, app, theme, max_input_rows);
     let chat_column = Layout::default()
@@ -80,11 +79,11 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
         .constraints([
             Constraint::Min(3),
             Constraint::Length(input_rows + input::BOX_ROWS),
-            Constraint::Length(footer_rows),
+            Constraint::Length(hud::FOOTER_ROWS),
         ])
         .split(column);
     let above_footer = |side: Rect| Rect {
-        height: side.height.saturating_sub(footer_rows),
+        height: side.height.saturating_sub(hud::FOOTER_ROWS),
         ..side
     };
     let (swarm, right) = (swarm.map(above_footer), right.map(above_footer));

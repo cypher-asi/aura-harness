@@ -3,28 +3,29 @@
  │                                  │ │                                                                             │ │                                  │ 
  ├──────────────────────────────────┤ ├─────────────────────────────────────────────────────────────────────────────┤ ├──────────────────────────────────┤ 
  │ 🗁  aura-harness                + │ │                                                                             │ │                                  │ 
- │    Agent01                       │ │  Here's what I found for the crates:                                             │ │  No records yet.                 │ 
- │   ⠐⠀ Reviewer                    │ │                                                                             │ │                                  │ 
- │                                  │ │  Layout                                                                     │ │  Records will appear             │ 
- │                                  │ │                                                                             │ │  as they are created.            │ 
+ │    Agent01                       │ │                                                                             │ │  No records yet.                 │ 
+ │   ⠐⠀ Reviewer                    │ │  Here's what I found for the crates:                                             │ │                                  │ 
+ │                                  │ │                                                                             │ │  Records will appear             │ 
+ │                                  │ │  Layout                                                                     │ │  as they are created.            │ 
+ │                                  │ │                                                                             │ │                                  │ 
  │                                  │ │  ┌──────────────────┬─────────────────────────────────────────┐             │ │                                  │ 
  │                                  │ │  │ Crate            │ Role                                    │             │ │                                  │ 
- │                                  │ │  ├──────────────────┼─────────────────────────────────────────┤             │ │                                  │ 
- │                                  │ │  │ aura-ui          │ event protocol shared by the frontends  │             │ │                                  │ 
+ │                                  │ │  ├──────────────────┼─────────────────────────────────────────┤             ┃ │                                  │ 
+ │                                  │ │  │ aura-ui          │ event protocol shared by the frontends  │             ┃ │                                  │ 
  │                                  │ │  │ aura-ui-terminal │ the ratatui terminal UI                 │             ┃ │                                  │ 
  │                                  │ │  │ aura-desktop     │ this window, drawn on the GPU with wgpu │             ┃ │                                  │ 
  │                                  │ │  └──────────────────┴─────────────────────────────────────────┘             ┃ │                                  │ 
- │                                  │ │                                                                             ┃ │                                  │ 
- │                                  │ │  The tests ┌ Select model ────────────────────────────────────┐             ┃ │                                  │ 
- │                                  │ │            │Local                                             │             ┃ │                                  │ 
- │                                  │ │  ╭─ Rust ──│› ● Qwen3 Coder                                   │───╮         ┃ │                                  │ 
- │                                  │ │  │ let sess│    gpt-oss 20B                                   │?; │         ┃ │                                  │ 
- │                                  │ │  ╰─────────│                                                  │───╯         ┃ └──────────────────────────────────┘ 
- │                                  │ │            │Claude plan                                       │             ┃ ┌──────────────────────────────────┐ 
- │                                  │ │  • Both UIs│    Claude Opus  /login claude                    │             ┃ │                                  │ 
- │                                  │ │  • Fonts ar│                                                  │             ┃ ├──────────────────────────────────┤ 
- │                                  │ │            │↑/↓ move  Enter select  Esc close                 │             ┃ │  No sandbox yet.                 │ 
- │                                  │ │  See wgpu └──────────────────────────────────────────────────┘             ┃ │                                  │ 
+ │                                  │ │            ┌ Select model ────────────────────────────────────┐             ┃ │                                  │ 
+ │                                  │ │  The tests │Local                                             │             ┃ │                                  │ 
+ │                                  │ │            │› ● Qwen3 Coder                                   │             ┃ │                                  │ 
+ │                                  │ │  ╭─ Rust ──│    gpt-oss 20B                                   │───╮         ┃ │                                  │ 
+ │                                  │ │  │ let sess│                                                  │?; │         ┃ │                                  │ 
+ │                                  │ │  ╰─────────│Claude plan                                       │───╯         ┃ └──────────────────────────────────┘ 
+ │                                  │ │            │    Claude Opus  /login claude                    │             ┃ ┌──────────────────────────────────┐ 
+ │                                  │ │  • Both UIs│                                                  │             ┃ │                                  │ 
+ │                                  │ │  • Fonts ar│↑/↓ move  Enter select  Esc close                 │             ┃ ├──────────────────────────────────┤ 
+ │                                  │ │            └──────────────────────────────────────────────────┘             ┃ │  No sandbox yet.                 │ 
+ │                                  │ │  See wgpu (https://wgpu.rs) for the renderer.                                    ┃ │                                  │ 
  │                                  │ │  [local/qwen3-coder · 4.8k tok]                                             ┃ │                                  │ 
  │                                  │ │                                                                             ┃ │                                  │ 
  │                                  │ │                                                                             ┃ │                                  │ 
@@ -42,4 +43,3 @@
  │ +  New project                   │ │ → Add a follow-up                                                           │ │                                  │ 
  └──────────────────────────────────┘ └─────────────────────────────────────────────────────────────────────────────┘ └──────────────────────────────────┘ 
                                        Qwen3 Coder                                                           ● Ready                                       
-                                       / for commands · @ for files · $ for a terminal · Shift+Tab approval                                                

@@ -17,7 +17,7 @@ for status.
 | Light gray | `#e6e6e6` | `(230, 230, 230)` | `LIGHT_GRAY`  | Reply text                             |
 | Silver     | `#b3b3b3` | `(179, 179, 179)` | `SILVER`      | Hovered labels, to-do counts           |
 | Gray       | `#808080` | `(128, 128, 128)` | `GRAY`        | Secondary text, prompts                |
-| Dim gray   | `#5a5a5a` | `(90, 90, 90)`    | `DIM_GRAY`    | Borders at rest, markers, key hints    |
+| Dim gray   | `#5a5a5a` | `(90, 90, 90)`    | `DIM_GRAY`    | Borders at rest, markers, separators   |
 | Black      | `#191919` | `(25, 25, 25)`    | `BLACK`       | Background                             |
 | Dark gray  | `#242424` | `(36, 36, 36)`    | `DARK_GRAY`   | Raised surfaces (user prompt band)     |
 | Graphite   | `#2e2e2e` | `(46, 46, 46)`    | `GRAPHITE`    | Hover fill                             |
@@ -40,7 +40,7 @@ themes keep working:
 | `error`         | Red        | Errors, failed steps, danger actions                 |
 | `pending`       | White      | Pending states                                       |
 | `muted`         | Gray       | Secondary text, prompts                              |
-| `faint`         | Dim gray   | Borders at rest, step markers, separators, key hints |
+| `faint`         | Dim gray   | Borders at rest, step markers, separators            |
 | `surface`       | Dark gray  | Raised rows                                          |
 | `surface_hover` | Graphite   | Hovered rows and tabs                                |
 | `selection`     | Slate      | The selected row and the focused active tab          |
@@ -123,7 +123,6 @@ under three columns.
 │ → Add a follow-up                            │
 └──────────────────────────────────────────────┘
  qwen3:4b · 23% context used · 2 calls  ● Ready
- / for commands · @ for files · $ for a terminal
 ```
 
 - The conversation is inset two columns, starts a row below the border
@@ -141,8 +140,8 @@ under three columns.
   `Add a follow-up`). Shell and login prompts replace the arrow.
 - **Footer**: the mode outside agent mode, the approval level, the model
   and what the agent has used in `muted`, separated by `faint` dots,
-  with the status at the right; then key hints in `faint` when the
-  screen has room. Parts that don't fit drop from the right.
+  with the status at the right, on the screen's last row. Parts that
+  don't fit drop from the right.
 
 ### Interactive Elements
 
