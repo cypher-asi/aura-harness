@@ -40,7 +40,8 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   model (the plan first) and tiers them `local`, `fast`, `standard` and
   `frontier`. A model whose route refuses the sign-in is dropped and the
   turn carries on with the next pick. Each turn shows
-  `gate → <model> (<route>) · <category>, <reason>`.
+  `gate → <model> (<route>) · <category>, <reason>`, and the status line
+  at the bottom right shows `GATE` in place of the model.
 - Every prompt is classified into one of 8 categories by the cheapest
   fast-tier model, through the agent's kernel. Every turn ends with an
   `Outcome` (`error`, `checks_failed`, `checks_passed` or `none`), and

@@ -1954,7 +1954,7 @@ fn test_header_shows_zos_user_and_plans() {
 }
 
 #[test]
-fn test_input_shows_gates_pick() {
+fn test_input_shows_gate_instead_of_its_pick() {
     use crate::events::{ModelOptionView, UiCommand};
 
     let mut app = app_with_model(None);
@@ -1975,10 +1975,8 @@ fn test_input_shows_gates_pick() {
     });
     let rows = render_rows(&mut app, 120);
     let input_row = &rows[rows.len() - 2];
-    assert!(
-        input_row.contains("Gate → claude-sonnet-4-6 (claude plan)"),
-        "{input_row:?}"
-    );
+    assert!(input_row.contains(" GATE  ● Ready"), "{input_row:?}");
+    assert!(!input_row.contains("claude-sonnet-4-6"), "{input_row:?}");
 }
 
 #[test]
