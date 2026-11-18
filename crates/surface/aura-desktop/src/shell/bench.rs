@@ -1,54 +1,32 @@
-//! The bare window's timings, on the scenes the canvas renderer's
-//! benchmarks in [`crate::snapshot`] time, to set the two side by side
-//! on one build:
+//! The window's timings on the scenes of [`super::snapshot`]:
 //! `cargo test --release -p aura-desktop -- --ignored --nocapture timings`.
 //!
-//! The canvas window renders the terminal UI in every update. This one
-//! applies what happens when it happens and renders once per frame of
-//! the display, so its updates are reported with the frames they lead
-//! to.
+//! The window applies what happens when it happens and renders once per
+//! frame of the display, so updates are reported with the frames they
+//! lead to.
 
 use super::keys::Press;
-use super::tests::{stage, Stage};
+use super::snapshot::{agent, report, seed, steps};
+use super::tests::stage;
 use crate::demo::{LISTING, REPLY};
 use crate::raster;
-use crate::snapshot::{agent, report, seed, steps, Driven};
 use crate::text;
 use aura_ui::events::{ToolData, UiCommand};
 use std::time::{Duration, Instant};
-use winit::keyboard::NamedKey;
 
 /// Frames a display shows in a second.
 const REFRESH: usize = 60;
-
-impl Driven for Stage {
-    fn apply(&mut self, commands: impl IntoIterator<Item = UiCommand>) {
-        self.shell.commands(commands);
-        self.shell.frame(self.now);
-    }
-
-    fn submit(&mut self, text: &str) {
-        let mut buffer = [0; 4];
-        for ch in text.chars() {
-            let key = Press::typing(ch.encode_utf8(&mut buffer));
-            self.shell.key_pressed(&key, self.now);
-        }
-        self.shell
-            .key_pressed(&Press::of(NamedKey::Enter), self.now);
-        self.shell.frame(self.now);
-    }
-}
 
 fn sum(samples: &[Duration]) -> f64 {
     samples.iter().sum::<Duration>().as_secs_f64() * 1e3
 }
 
-/// As `snapshot::replay_timings`: a long reply streaming in small
+/// A session replayed the way a model streams it: a long reply in small
 /// chunks with a frame after each, typing, and whole frames rasterized
 /// on the CPU as they are where there is no GPU.
 #[test]
 #[ignore = "benchmark"]
-fn bare_replay_timings() {
+fn replay_timings() {
     let started = Instant::now();
     let mut stage = stage();
     stage.shell.frame(stage.now);
@@ -109,13 +87,13 @@ fn bare_replay_timings() {
     report("whole frame rasterized on the CPU", &mut rasters);
 }
 
-/// As `snapshot::swarm_timings`: one second of thirty agents streaming
-/// at once, arriving a command at a time, about a frame's worth at a
-/// time, and all at once, with the frames a display shows in that
-/// second.
+/// One second of a swarm streaming at once: the agent in front writes a
+/// reply while the others think, call tools and write theirs. The
+/// commands arrive one at a time, about a frame's worth at a time, and
+/// all at once, with the frames a display shows in that second.
 #[test]
 #[ignore = "benchmark"]
-fn bare_swarm_timings() {
+fn swarm_timings() {
     const AGENTS: usize = 30;
     const COMMANDS_PER_AGENT: usize = 100;
     let reply: Vec<char> = REPLY.replace("{prompt}", "the crates").chars().collect();

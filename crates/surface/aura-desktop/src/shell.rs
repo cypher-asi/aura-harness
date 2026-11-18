@@ -17,22 +17,24 @@
 
 #[cfg(test)]
 mod bench;
+mod editor;
 mod keys;
 mod pointer;
 mod screen;
+#[cfg(test)]
+mod snapshot;
 mod stats;
 mod window;
 
 pub use window::run;
 
-use crate::app::{self, Options, BLINK, IDLE_REDRAW_TICKS, TICK, WINDOW};
 use crate::chrome::{self, Chrome};
 use crate::geom::Size;
 use crate::grid::{Metrics, Palette};
 use crate::paint::{Painter, View};
 use crate::router::{self, Arrangement, Tabs};
 use crate::scene::Scene;
-use crate::tab::{Settings, Tab, Watch};
+use crate::tab::{Settings, Tab};
 use crate::tab_bar::{self, Bar};
 use crate::{text, theme};
 use aura_ui::events::{UiCommand, UiEvent};
@@ -42,15 +44,38 @@ use ratatui::buffer::Cell;
 use ratatui::layout::Position;
 use stats::Stats;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use winit::keyboard::ModifiersState;
 use winit::window::ResizeDirection;
 
+/// The terminal UI's tick; its spinners advance one frame per tick.
+const TICK: Duration = Duration::from_millis(50);
+/// While no agent works, ticks redraw only this often, for the few things
+/// that change with time alone (notices expiring).
+const IDLE_REDRAW_TICKS: u32 = 20;
+/// Half a cursor blink.
+const BLINK: Duration = Duration::from_millis(530);
+/// The window's size when it opens, before the display's scale.
+const WINDOW: Size = Size::new(1320.0, 860.0);
 /// Most ticks made up for at once: after the machine slept, the UI's
 /// animations pick up where they were instead of spinning through the
 /// night.
 const MAX_OWED: u128 = 40;
+
+/// The channel pair connecting the UI to an agent session.
+pub struct Handles {
+    pub events: mpsc::Sender<UiEvent>,
+    pub commands: mpsc::Receiver<UiCommand>,
+}
+
+/// Startup choices from the command line.
+pub struct Options {
+    pub theme: String,
+    pub verbose: bool,
+    /// Where the split of projects over tabs is kept between runs.
+    pub tabs_file: Option<PathBuf>,
+}
 
 /// What the shell asks of the window it is in.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -261,7 +286,7 @@ impl Shell {
                 for _ in 0..ticks {
                     tab.tui.tick();
                 }
-                app::poll_watch(tab, now);
+                editor::poll_watch(tab, now);
             }
             self.raise_alerts();
             self.settle(started);
@@ -423,7 +448,7 @@ impl Shell {
 
         for tab in self.tabs.iter_mut() {
             if let Some(path) = tab.tui.take_editor_request() {
-                self.effects.extend(open_editor(tab, path, now));
+                self.effects.extend(editor::open(tab, path, now));
             }
         }
 
@@ -478,31 +503,6 @@ impl Shell {
         }
         out
     }
-}
-
-/// Hand a file to the user's editor for `tab`. Editors that need a
-/// terminal can't run in a window, so those (and no editor at all) fall
-/// back to the system's default app, and saving the file counts as
-/// closing it.
-fn open_editor(tab: &mut Tab, path: PathBuf, now: Instant) -> Option<Effect> {
-    let editor = std::env::var("VISUAL")
-        .or_else(|_| std::env::var("EDITOR"))
-        .ok()
-        .filter(|e| !e.trim().is_empty() && !app::is_terminal_editor(e));
-    let Some(editor) = editor else {
-        app::open_external(&path.display().to_string());
-        tab.watch = Some(Watch {
-            modified: app::modified(&path),
-            path,
-            checked: now,
-        });
-        return None;
-    };
-    Some(Effect::Edit {
-        tab: tab.id,
-        editor,
-        path,
-    })
 }
 
 #[cfg(test)]

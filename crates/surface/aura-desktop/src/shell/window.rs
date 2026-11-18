@@ -13,7 +13,7 @@
 use super::keys::Press;
 use super::screen::Screen;
 use super::{Effect, Shell};
-use crate::app::{Handles, Options, MAX_BATCH, WINDOW};
+use super::{Handles, Options, WINDOW};
 use crate::geom::{Point, Size};
 use crate::scene::Scene;
 use crate::text;
@@ -32,6 +32,8 @@ use winit::keyboard::SmolStr;
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::{CursorIcon, UserAttentionType, Window, WindowId};
 
+/// Most commands taken from the session at once.
+const MAX_BATCH: usize = 1024;
 /// Commands the inbox holds before the session is made to wait for the
 /// window to take them.
 const INBOX_ROOM: usize = 4 * MAX_BATCH;

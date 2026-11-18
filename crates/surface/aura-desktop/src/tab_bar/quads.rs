@@ -1,7 +1,6 @@
-//! The tab bar as quads, for the bare renderer: what [`super::paint`]
-//! draws on an iced canvas.
+//! The tab bar as quads.
 
-use super::{label_size, mix, unit, Bar, Hit, CONTROLS};
+use super::{label_size, unit, Bar, Hit, CONTROLS};
 use crate::geom::{rgba, Color, Point, Rectangle};
 use crate::scene::{fill, Layers, Quad};
 use crate::shapes::{self, LineCap, LineJoin, Outline};
@@ -22,7 +21,7 @@ impl Bar {
         let palette = model.palette;
         let unit = unit(&model.metrics);
         let line = (model.metrics.font_size / 14.0).round().max(1.0);
-        let idle = mix(palette.muted, palette.bg, 0.35);
+        let idle = palette.muted.mix(palette.bg, 0.35);
         let size = label_size(&model.metrics);
         let plain = Label {
             text: "",
@@ -111,7 +110,7 @@ impl Bar {
         if let Some(title) = &layout.title {
             outline(&mut out.under, title.rect, idle, line);
             if !title.text.is_empty() {
-                let ink = mix(palette.fg, palette.muted, 0.4);
+                let ink = palette.fg.mix(palette.muted, 0.4);
                 let at = Point::new(title.center, title.rect.center_y());
                 let label = Label {
                     text: &title.text,

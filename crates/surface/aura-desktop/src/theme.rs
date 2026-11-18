@@ -9,8 +9,7 @@
 //! installed families, `AURA_DESKTOP_FONT_FILES` loads extra font files
 //! (separated like `PATH`) and `AURA_DESKTOP_FONT_SIZE` sets the size.
 
-use iced::font::{Family, Weight};
-use iced::{Font, Size};
+use crate::geom::Size;
 use std::borrow::Cow;
 use std::sync::OnceLock;
 
@@ -45,12 +44,17 @@ fn named(var: &str, default: &'static str) -> &'static str {
     }
 }
 
-fn family() -> &'static str {
+/// The family of the grid's monospace face.
+pub fn mono_family() -> &'static str {
     static FAMILY: OnceLock<&'static str> = OnceLock::new();
     FAMILY.get_or_init(|| named("AURA_DESKTOP_MONO_FONT", "Geist Mono"))
 }
 
-fn sans_family() -> &'static str {
+/// The family of the proportional face the chat's prose is set in. Its
+/// regular weight is Medium: light text on a dark background renders
+/// thin without the stem darkening other platforms apply, and Medium
+/// matches how body text in chat apps reads.
+pub fn sans_family() -> &'static str {
     static FAMILY: OnceLock<&'static str> = OnceLock::new();
     FAMILY.get_or_init(|| named("AURA_DESKTOP_SANS_FONT", "Inter"))
 }
@@ -78,38 +82,6 @@ pub fn initial_font_size() -> f32 {
         .ok()
         .and_then(|v| v.trim().parse::<f32>().ok())
         .map_or(DEFAULT_FONT_SIZE, |s| s.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE))
-}
-
-pub fn mono() -> Font {
-    Font {
-        family: Family::Name(family()),
-        ..Font::MONOSPACE
-    }
-}
-
-pub fn mono_bold() -> Font {
-    Font {
-        weight: Weight::Bold,
-        ..mono()
-    }
-}
-
-/// The proportional face the chat's prose is set in. Medium rather than
-/// Regular: light text on a dark background renders thin without the
-/// stem darkening other platforms apply, and Medium matches how body
-/// text in chat apps reads.
-pub fn sans() -> Font {
-    Font {
-        weight: Weight::Medium,
-        ..Font::with_name(sans_family())
-    }
-}
-
-pub fn sans_bold() -> Font {
-    Font {
-        weight: Weight::Bold,
-        ..sans()
-    }
 }
 
 /// Size of one cell at `font_size`. Rows are whole pixels so lines and

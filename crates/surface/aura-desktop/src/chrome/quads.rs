@@ -1,5 +1,4 @@
-//! The title bars as quads, for the bare renderer: what [`super::paint`]
-//! draws on an iced canvas.
+//! The title bars as quads.
 
 use super::{Chrome, Hit, Kind};
 use crate::geom::{rgba, Point};
@@ -8,7 +7,7 @@ use crate::tab_bar::{label_size, quads::outline};
 use crate::text::{Align, Face, Label, Shaping, TextSystem, LABEL_LINE_EM};
 
 impl Chrome {
-    /// The bars' quads, the grid's canvas starting `top` pixels down the
+    /// The bars' quads, the grid starting `top` pixels down the
     /// window.
     pub fn quads(&self, text: &mut TextSystem, out: &mut Layers, top: f32) {
         let Some(model) = &self.model else {

@@ -1,8 +1,7 @@
 //! Characters drawn as shapes instead of font glyphs, as quads: box
 //! drawing, block elements, braille and the status symbols the UI uses.
 //!
-//! The same shapes as [`crate::glyphs`], which draws them on an iced
-//! canvas. Lines and blocks are rectangles, so they become solid quads.
+//! Lines and blocks are rectangles, so they become solid quads.
 //! Anything with a curve or a slant is drawn once, with tiny-skia, into
 //! the atlas and stamped from there like a glyph: once per cell size and
 //! per place a cell starts within a pixel, since both change which
@@ -278,12 +277,11 @@ fn bars(out: &mut Vec<Quad>, cell: Rectangle, color: [u8; 4]) {
     }
 }
 
-/// A path being built: tiny-skia's builder, with the arcs of iced's.
+/// A path being built: tiny-skia's builder, with arcs.
 ///
-/// iced builds its paths with lyon, which turns every arc into
-/// quadratic curves of an eighth of a turn at most. The arcs here are
-/// cut into the same curves by the same arithmetic, so a thin stroke,
-/// which shows how a curve was cut, covers the pixels it covers there.
+/// An arc is cut into quadratic curves of an eighth of a turn at most.
+/// How a curve is cut shows in a thin stroke, so the cut is always the
+/// same one: a symbol looks the same at every size it is drawn.
 pub struct Outline {
     path: PathBuilder,
     /// Where the path is, once it has started
@@ -338,7 +336,7 @@ impl Outline {
         outline
     }
 
-    /// A full circle, left open where it starts and ends as iced's is.
+    /// A full circle, left open where it starts and ends.
     pub fn circle(center: Point, radius: f32) -> Self {
         let mut outline = Self::new();
         outline.arc(center, radius, 0.0, 2.0 * PI);
@@ -975,7 +973,7 @@ mod tests {
     }
 
     #[test]
-    fn every_shape_the_canvas_draws_is_drawn_here() {
+    fn every_shape_the_ui_uses_is_drawn_and_letters_are_left_to_the_font() {
         let mut text = TextSystem::new();
         let mut quads = Vec::new();
         let shapes = "─━│┃┌┐└┘┏┓┗┛├┤┬┴┼╭╮╯╰═║╔╗╚╝▀▄█▌▐░▒▓▖▟⠿⣿🗀🗁\

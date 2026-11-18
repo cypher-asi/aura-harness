@@ -11,17 +11,12 @@
 // Cell coordinates become pixel positions.
 #![allow(clippy::cast_precision_loss)]
 
-#[allow(dead_code)] // until the bare shell draws with it
 mod quads;
 
+use crate::geom::{Color, Point, Rectangle, Size};
 use crate::grid::{self, Metrics, Palette};
-use crate::tab_bar::{label_size, outline, unit};
-use crate::theme;
+use crate::tab_bar::unit;
 use aura_ui_terminal::{Pane, PaneChrome, PaneSplits, PaneTab};
-use iced::alignment::Vertical;
-use iced::widget::canvas::{self, Cache, Frame, Geometry};
-use iced::widget::text::{Alignment, Shaping};
-use iced::{Color, Pixels, Point, Rectangle, Renderer, Size};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
@@ -309,33 +304,27 @@ fn bar_layout(model: &Model, pane: &PaneChrome) -> BarLayout {
     }
 }
 
-/// The bars as last drawn: repainted only when what they show changes.
+/// The bars as they are shown, and what the pointer is over.
 #[derive(Default)]
 pub struct Chrome {
     model: Option<Model>,
     layout: Layout,
     hover: Option<Hit>,
-    cache: Cache,
 }
 
 impl Chrome {
-    /// Show `model`, with the pointer at `pointer` (on the grid's canvas)
-    /// when it is over the grid.
+    /// Show `model`, with the pointer at `pointer` (from the grid's
+    /// corner of the window) when it is over the grid.
     pub fn update(&mut self, model: Model, pointer: Option<Point>) {
         if self.model.as_ref() != Some(&model) {
             self.layout = Layout::of(&model);
             self.model = Some(model);
-            self.cache.clear();
         }
         self.point(pointer);
     }
 
     pub fn point(&mut self, pointer: Option<Point>) {
-        let hover = pointer.and_then(|at| self.layout.hit(at));
-        if hover != self.hover {
-            self.hover = hover;
-            self.cache.clear();
-        }
+        self.hover = pointer.and_then(|at| self.layout.hit(at));
     }
 
     /// What the pointer was over when last told where it is.
@@ -343,7 +332,8 @@ impl Chrome {
         self.hover
     }
 
-    /// `splits` with `divider` moved to `at`, on the grid's canvas.
+    /// `splits` with `divider` moved to `at`, from the grid's corner of
+    /// the window.
     pub fn drag(&self, divider: Divider, at: Point, mut splits: PaneSplits) -> PaneSplits {
         let Some(model) = &self.model else {
             return splits;
@@ -370,13 +360,6 @@ impl Chrome {
         splits
     }
 
-    pub fn draw(&self, renderer: &Renderer, size: Size) -> Option<Geometry> {
-        let model = self.model.as_ref()?;
-        Some(self.cache.draw(renderer, size, |frame| {
-            paint(frame, model, &self.layout, self.hover);
-        }))
-    }
-
     /// The middle of the box of `tab`, if it is drawn.
     #[cfg(test)]
     pub fn spot(&self, tab: PaneTab) -> Option<Point> {
@@ -398,60 +381,6 @@ impl Chrome {
             .iter()
             .find(|band| band.divider == divider)
             .map(|band| Point::new(band.rect.center_x(), band.rect.center_y()))
-    }
-}
-
-fn paint(frame: &mut Frame, model: &Model, layout: &Layout, hover: Option<Hit>) {
-    let palette = model.palette;
-    let line = (model.metrics.font_size / 14.0).round().max(1.0);
-    let text = |content: &str, position: Point, color: Color, bold: bool| canvas::Text {
-        content: content.to_string(),
-        position,
-        color,
-        size: Pixels(label_size(&model.metrics)),
-        font: if bold {
-            theme::mono_bold()
-        } else {
-            theme::mono()
-        },
-        align_x: Alignment::Center,
-        align_y: Vertical::Center,
-        shaping: Shaping::Advanced,
-        ..canvas::Text::default()
-    };
-
-    for bar in &layout.bars {
-        let fill = if bar.focused {
-            palette.accent
-        } else {
-            palette.muted
-        };
-        for boxed in &bar.boxes {
-            let rect = boxed.rect;
-            let filled = match boxed.kind {
-                Kind::Title => true,
-                Kind::Tab(tab) => bar.active == Some(tab),
-            };
-            let over = matches!(boxed.kind, Kind::Tab(tab) if hover == Some(Hit::Tab(tab)));
-            let ink = if filled {
-                frame.fill_rectangle(rect.position(), rect.size(), fill);
-                palette.bg
-            } else if over {
-                outline(frame, rect, palette.accent, line);
-                palette.fg
-            } else {
-                outline(frame, rect, palette.muted, line);
-                palette.muted
-            };
-            let middle = Point::new(rect.center_x(), rect.center_y());
-            frame.fill_text(text(&boxed.text, middle, ink, filled));
-        }
-        if let Some(info) = &bar.info {
-            frame.fill_text(canvas::Text {
-                align_x: Alignment::Right,
-                ..text(&info.text, info.end, info.color, false)
-            });
-        }
     }
 }
 
@@ -603,7 +532,7 @@ mod tests {
     #[test]
     fn covered_bars_are_left_to_what_covers_them() {
         let Model { panes, palette, .. } = four_panes();
-        let at = (Point::ORIGIN, Metrics::new(14.0), palette);
+        let at = (Point::default(), Metrics::new(14.0), palette);
         let mut buffer = Buffer::empty(Rect::new(0, 0, 140, 40));
         let model = Model::new(&panes, &buffer, at);
         assert_eq!(model.panes.len(), 4);

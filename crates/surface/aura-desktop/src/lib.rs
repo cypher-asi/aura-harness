@@ -6,26 +6,23 @@
 //! terminal UI (`aura_app::session`), and the UI itself is the
 //! terminal one (`aura_ui_terminal::App`), drawn on a cell grid with Geist
 //! Mono instead of through a terminal emulator.
+//!
+//! The window is winit's and has no toolkit in it. Each frame the tabs
+//! of terminal UI become one list of quads (`paint`), which the GPU
+//! draws in one call (`gpu`), or the CPU where there is none (`raster`).
+//! `shell` holds what the window shows and decides when a frame is due.
 
-mod app;
 mod chrome;
 mod demo;
 mod geom;
-mod glyphs;
 mod gpu;
 mod grid;
-mod input;
 mod paint;
-#[cfg(test)]
-mod parity;
-mod perf;
 mod raster;
 mod router;
 mod scene;
 mod shapes;
 mod shell;
-#[cfg(test)]
-mod snapshot;
 mod tab;
 mod tab_bar;
 mod text;
@@ -99,7 +96,7 @@ pub fn run(args: DesktopOptions, mode: Option<AgentMode>) -> anyhow::Result<()> 
         .thread_name("aura-agent")
         .build()
         .context("starting the async runtime")?;
-    // Widgets that spawn futures (e.g. file reads) run on this runtime too.
+    // The window pumps the session's commands and runs editors on it.
     let _guard = runtime.enter();
 
     let tabs_file = (!args.demo).then(|| router::arrangement_file(args.dir.as_deref()));
@@ -113,60 +110,34 @@ pub fn run(args: DesktopOptions, mode: Option<AgentMode>) -> anyhow::Result<()> 
             approval: args.approval,
         };
         let session = runtime.block_on(aura_app::session::start(&options, mode))?;
-        let handles = app::Handles {
+        let handles = shell::Handles {
             events: session.events,
             commands: session.commands,
         };
         (handles, Some(session.task))
     };
 
-    let options = app::Options {
+    let options = shell::Options {
         theme: args.theme,
         verbose: args.verbose,
         tabs_file,
     };
-    let asked = std::env::var("AURA_DESKTOP_SHELL").ok();
-    let result = if iced_shell(asked.as_deref()) {
-        app::run(handles, options, launched).map_err(anyhow::Error::from)
-    } else {
-        shell::run(handles, &options, launched)
-    };
+    let result = shell::run(handles, &options, launched);
     if let Some(task) = task {
         runtime.block_on(task.finish())?;
     }
     result.context("desktop window failed")
 }
 
-/// Whether the window is the iced one, which `AURA_DESKTOP_SHELL=iced`
-/// (`asked`) still opens while the two are compared. Otherwise it is
-/// the bare one, drawn without a toolkit.
-fn iced_shell(asked: Option<&str>) -> bool {
-    asked.is_some_and(|shell| shell.trim().eq_ignore_ascii_case("iced"))
-}
-
 fn init_tracing(verbose: bool) {
     let default = if verbose {
         "aura=debug,aura_desktop=debug"
     } else {
-        "aura=info,aura_desktop=info,wgpu=warn,iced=warn"
+        "aura=info,aura_desktop=info,wgpu=warn"
     };
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .init();
-}
-
-#[cfg(test)]
-mod tests {
-    use super::iced_shell;
-
-    #[test]
-    fn the_bare_window_opens_unless_iced_is_asked_for() {
-        assert!(!iced_shell(None));
-        assert!(!iced_shell(Some("bare")));
-        assert!(!iced_shell(Some("")));
-        assert!(iced_shell(Some("iced")));
-        assert!(iced_shell(Some(" Iced\n")));
-    }
 }

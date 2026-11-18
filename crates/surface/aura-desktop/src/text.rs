@@ -1,9 +1,8 @@
-//! Text for the bare renderer: the fonts, shaped runs, and the atlas the
-//! glyphs are drawn into.
+//! Text: the fonts, shaped runs, and the atlas the glyphs are drawn
+//! into.
 //!
-//! Shaping and glyph rasterization are cosmic-text's, the library iced
-//! draws text with, so a run comes out with the same glyphs at the same
-//! places. Shaped runs and measured widths are kept in bounded
+//! Shaping and glyph rasterization are cosmic-text's. Shaped runs and
+//! measured widths are kept in bounded
 //! least-recently-used stores: a run is shaped once however many frames
 //! show it. Each glyph is rasterized once per size and sub-pixel position
 //! into the [`Atlas`], which drawn shapes share.
@@ -29,10 +28,9 @@ const MAX_RUNS: usize = 4096;
 /// Measured widths kept.
 const MAX_WIDTHS: usize = 8192;
 /// Line height prose is measured at, in ems. A width doesn't depend on
-/// it; it is the one iced measures with.
+/// it.
 const LINE_EM: f32 = 1.3;
-/// Line height of a label on a title bar or the tab bar, in ems: what
-/// text drawn on an iced canvas gets unless it names another.
+/// Line height of a label on a title bar or the tab bar, in ems.
 pub const LABEL_LINE_EM: f32 = 1.2;
 
 /// Which of the two families a run is set in.
@@ -61,24 +59,16 @@ impl Face {
         }
     }
 
-    /// The family's name and regular weight, as [`crate::theme`] names
-    /// them for iced.
+    /// The family by the name [`crate::theme`] gives it, at its regular
+    /// or bold weight.
     fn attrs(self) -> Attrs<'static> {
-        let font = match (self.family, self.bold) {
-            (Family::Mono, false) => theme::mono(),
-            (Family::Mono, true) => theme::mono_bold(),
-            (Family::Sans, false) => theme::sans(),
-            (Family::Sans, true) => theme::sans_bold(),
+        let (family, weight) = match (self.family, self.bold) {
+            (Family::Mono, false) => (theme::mono_family(), Weight::NORMAL),
+            (Family::Sans, false) => (theme::sans_family(), Weight::MEDIUM),
+            (Family::Mono, true) => (theme::mono_family(), Weight::BOLD),
+            (Family::Sans, true) => (theme::sans_family(), Weight::BOLD),
         };
-        let family = match font.family {
-            iced::font::Family::Name(name) => FontFamily::Name(name),
-            _ => FontFamily::Monospace,
-        };
-        let weight = match font.weight {
-            iced::font::Weight::Medium => Weight::MEDIUM,
-            iced::font::Weight::Bold => Weight::BOLD,
-            _ => Weight::NORMAL,
-        };
+        let family = FontFamily::Name(family);
         let style = if self.italic {
             Style::Italic
         } else {
@@ -526,10 +516,10 @@ impl TextSystem {
 
     /// The glyphs of `label` as quads, written at `at`.
     ///
-    /// Glyphs land on the pixels iced puts them on. Each is placed by
-    /// cutting its height down to a whole pixel, which for a height
-    /// below 0 rounds the other way; a row's text is at 0 here and far
-    /// below it on screen, so it is placed that far down and moved back.
+    /// A glyph is placed by cutting its height down to a whole pixel,
+    /// which for a height below 0 rounds the other way. So that a row's
+    /// text lands on the same pixels wherever the row is, it is placed
+    /// far below 0 and moved back.
     #[allow(clippy::cast_possible_truncation)]
     pub fn write(&mut self, out: &mut Vec<Quad>, label: &Label<'_>, at: Point) {
         /// How far down a row's text is placed, in whole pixels

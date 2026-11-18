@@ -3,21 +3,17 @@
 //! after the last, a wide box with the name of what the tab in front
 //! shows, and the minimize, maximize and close boxes at the right end.
 //!
-//! One [`Layout`] places the boxes for both the painter and the pointer,
-//! so a click lands on what is drawn.
+//! One [`Layout`] places the boxes for both the painter ([`quads`]) and
+//! the pointer, so a click lands on what is drawn.
 
 // Label lengths become pixel widths.
 #![allow(clippy::cast_precision_loss)]
 
-#[allow(dead_code)] // until the bare shell draws with it
 pub(crate) mod quads;
 
+use crate::geom::{Point, Rectangle, Size};
 use crate::grid::{Metrics, Palette};
 use crate::theme;
-use iced::alignment::Vertical;
-use iced::widget::canvas::{self, Cache, Frame, Geometry, Path, Stroke};
-use iced::widget::text::{Alignment, Shaping};
-use iced::{mouse, Color, Pixels, Point, Rectangle, Renderer, Size, Theme};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Label characters of padding on each side of a label.
@@ -198,13 +194,12 @@ fn fit(label: &str, cells: usize) -> String {
     out
 }
 
-/// The bar as last drawn: repainted only when what it shows changes.
+/// The bar as it is shown, and what the pointer is over.
 #[derive(Default)]
 pub struct Bar {
     model: Option<Model>,
     layout: Layout,
     hover: Option<Hit>,
-    cache: Cache,
 }
 
 impl Bar {
@@ -213,18 +208,13 @@ impl Bar {
         if self.model.as_ref() != Some(&model) {
             self.layout = Layout::of(&model);
             self.model = Some(model);
-            self.cache.clear();
         }
         self.point(pointer);
     }
 
     /// The pointer is at `pointer`, when it is over the bar.
     pub fn point(&mut self, pointer: Option<Point>) {
-        let hover = pointer.and_then(|at| self.layout.hit(at));
-        if hover != self.hover {
-            self.hover = hover;
-            self.cache.clear();
-        }
+        self.hover = pointer.and_then(|at| self.layout.hit(at));
     }
 
     /// What the pointer was over at the last [`Self::update`].
@@ -243,178 +233,6 @@ impl Bar {
     #[cfg(test)]
     pub fn title(&self) -> Option<&str> {
         self.layout.title.as_ref().map(|title| title.text.as_str())
-    }
-}
-
-impl<Message> canvas::Program<Message> for Bar {
-    type State = ();
-
-    fn draw(
-        &self,
-        _state: &(),
-        renderer: &Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        _cursor: mouse::Cursor,
-    ) -> Vec<Geometry> {
-        let Some(model) = &self.model else {
-            return Vec::new();
-        };
-        let bar = self.cache.draw(renderer, bounds.size(), |frame| {
-            frame.fill_rectangle(Point::ORIGIN, bounds.size(), model.palette.bg);
-            paint(frame, model, &self.layout, self.hover);
-        });
-        vec![bar]
-    }
-
-    fn mouse_interaction(
-        &self,
-        _state: &(),
-        bounds: Rectangle,
-        cursor: mouse::Cursor,
-    ) -> mouse::Interaction {
-        match cursor
-            .position_in(bounds)
-            .and_then(|at| self.layout.hit(at))
-        {
-            Some(_) => mouse::Interaction::Pointer,
-            None => mouse::Interaction::default(),
-        }
-    }
-}
-
-fn paint(frame: &mut Frame, model: &Model, layout: &Layout, hover: Option<Hit>) {
-    let palette = model.palette;
-    let unit = unit(&model.metrics);
-    let line = (model.metrics.font_size / 14.0).round().max(1.0);
-    let idle = mix(palette.muted, palette.bg, 0.35);
-    let label = |text: &str, rect: Rectangle, color: Color, bold: bool| canvas::Text {
-        content: text.to_string(),
-        position: Point::new(rect.center_x(), rect.center_y()),
-        color,
-        size: Pixels(label_size(&model.metrics)),
-        font: if bold {
-            theme::mono_bold()
-        } else {
-            theme::mono()
-        },
-        align_x: Alignment::Center,
-        align_y: Vertical::Center,
-        shaping: Shaping::Advanced,
-        ..canvas::Text::default()
-    };
-
-    for (index, (rect, item)) in layout.tabs.iter().zip(&model.items).enumerate() {
-        let front = index == model.front;
-        let ink = if front {
-            frame.fill_rectangle(rect.position(), rect.size(), palette.fg);
-            palette.bg
-        } else if hover == Some(Hit::Tab(index)) {
-            outline(frame, *rect, palette.accent, line);
-            palette.fg
-        } else {
-            outline(frame, *rect, idle, line);
-            palette.muted
-        };
-        frame.fill_text(label(&item.label, *rect, ink, front));
-        if item.busy {
-            // A bar along the bottom, inside the outline.
-            let inset = 2.0 * line + 1.0;
-            let thick = 2.0 * line;
-            frame.fill_rectangle(
-                Point::new(rect.x + inset, rect.y + rect.height - inset - thick),
-                Size::new((rect.width - 2.0 * inset).max(0.0), thick),
-                palette.accent,
-            );
-        }
-    }
-
-    let over = hover == Some(Hit::New);
-    let (edge, ink) = if over {
-        (palette.accent, palette.fg)
-    } else {
-        (idle, palette.muted)
-    };
-    outline(frame, layout.plus, edge, line);
-    let arm = (unit * 0.55).round();
-    let (cx, cy) = (
-        layout.plus.center_x().round(),
-        layout.plus.center_y().round(),
-    );
-    let half = (line / 2.0).floor();
-    frame.fill_rectangle(
-        Point::new(cx - arm, cy - half),
-        Size::new(2.0 * arm + line, line),
-        ink,
-    );
-    frame.fill_rectangle(
-        Point::new(cx - half, cy - arm),
-        Size::new(line, 2.0 * arm + line),
-        ink,
-    );
-
-    if let Some(title) = &layout.title {
-        outline(frame, title.rect, idle, line);
-        if !title.text.is_empty() {
-            let ink = mix(palette.fg, palette.muted, 0.4);
-            frame.fill_text(canvas::Text {
-                position: Point::new(title.center, title.rect.center_y()),
-                ..label(&title.text, title.rect, ink, false)
-            });
-        }
-    }
-
-    for (rect, control) in layout.controls.iter().zip(CONTROLS) {
-        let (edge, ink) = if hover == Some(control) {
-            (palette.accent, palette.fg)
-        } else {
-            (idle, palette.muted)
-        };
-        outline(frame, *rect, edge, line);
-        let (cx, cy) = (rect.center_x().round(), rect.center_y().round());
-        match control {
-            Hit::Minimize => frame.fill_rectangle(
-                Point::new(cx - arm, cy + arm - line),
-                Size::new(2.0 * arm + line, line),
-                ink,
-            ),
-            Hit::Maximize => {
-                let side = 2.0 * arm + line;
-                let square = Rectangle::new(Point::new(cx - arm, cy - arm), Size::new(side, side));
-                outline(frame, square, ink, line);
-            }
-            _ => {
-                let stroke = Stroke::default().with_color(ink).with_width(line * 1.25);
-                let (a, b) = (cx - arm + half, cx + arm + half);
-                let (top, bottom) = (cy - arm + half, cy + arm + half);
-                frame.stroke(
-                    &Path::line(Point::new(a, top), Point::new(b, bottom)),
-                    stroke,
-                );
-                frame.stroke(
-                    &Path::line(Point::new(a, bottom), Point::new(b, top)),
-                    stroke,
-                );
-            }
-        }
-    }
-}
-
-/// A box outline `line` pixels thick, on whole pixels inside `rect`.
-pub(crate) fn outline(frame: &mut Frame, rect: Rectangle, color: Color, line: f32) {
-    let (x, y, w, h) = (rect.x, rect.y, rect.width, rect.height);
-    frame.fill_rectangle(Point::new(x, y), Size::new(w, line), color);
-    frame.fill_rectangle(Point::new(x, y + h - line), Size::new(w, line), color);
-    frame.fill_rectangle(Point::new(x, y), Size::new(line, h), color);
-    frame.fill_rectangle(Point::new(x + w - line, y), Size::new(line, h), color);
-}
-
-fn mix(a: Color, b: Color, t: f32) -> Color {
-    Color {
-        r: a.r + (b.r - a.r) * t,
-        g: a.g + (b.g - a.g) * t,
-        b: a.b + (b.b - a.b) * t,
-        a: a.a,
     }
 }
 

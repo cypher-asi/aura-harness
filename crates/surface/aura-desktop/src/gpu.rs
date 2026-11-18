@@ -4,7 +4,7 @@
 //! The picture is the one [`crate::raster`] paints. Quads are whole
 //! pixels and the atlas is read texel for pixel, so nothing is filtered,
 //! and the target is not an sRGB one: colors are blended as the bytes
-//! they are, which is how the canvas renderer blended them.
+//! they are, as the CPU rasterizer blends them.
 
 use crate::scene::{Fill, Quad, Scene};
 use crate::text::Atlas;

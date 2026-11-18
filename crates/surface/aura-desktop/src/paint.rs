@@ -1,18 +1,15 @@
 //! The window as quads: the tab bar, the grid's rows, the panels' title
 //! bars and the cursor, laid out into one [`Scene`] a frame.
 //!
-//! Rows are painted the way [`crate::grid`] paints them on an iced
-//! canvas, to the pixel: one rectangle per run of background color, one
-//! shaped run per stretch of same-styled ASCII, box, block, braille and
-//! status characters as shapes, and the chat's prose flowing in the
-//! proportional face. What differs is what a frame costs. A row's quads
-//! are kept by what the row holds ([`RowCache`]), so a frame shapes only
-//! the rows whose content is new, and a row that scrolled is the same
-//! quads lower down.
+//! A row is one rectangle per run of background color, one shaped run
+//! per stretch of same-styled ASCII, box, block, braille and status
+//! characters as shapes, and the chat's prose flowing in the
+//! proportional face. A row's quads are kept by what the row holds
+//! ([`RowCache`]), so a frame shapes only the rows whose content is new,
+//! and a row that scrolled is the same quads lower down.
 //!
 //! Every background, line and shape of the frame comes before any of its
-//! text, as iced orders a canvas: text is never covered by the background
-//! of the row below it.
+//! text: text is never covered by the background of the row below it.
 
 // Cell coordinates become pixel positions.
 #![allow(clippy::cast_precision_loss)]
@@ -192,7 +189,7 @@ impl Look {
             std::mem::swap(&mut fg, &mut bg);
         }
         if m.contains(Modifier::DIM) {
-            fg = mix(fg, bg, 0.45);
+            fg = fg.mix(bg, 0.45);
         }
         let underline = m
             .contains(Modifier::UNDERLINED)
@@ -214,15 +211,6 @@ impl Look {
             bold: self.bold,
             italic: self.italic,
         }
-    }
-}
-
-fn mix(a: Color, b: Color, t: f32) -> Color {
-    Color {
-        r: a.r + (b.r - a.r) * t,
-        g: a.g + (b.g - a.g) * t,
-        b: a.b + (b.b - a.b) * t,
-        a: a.a,
     }
 }
 

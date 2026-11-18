@@ -271,13 +271,13 @@ mod tests {
     impl Stage {
         /// Press `press` with `held` down.
         #[allow(clippy::needless_pass_by_value)]
-        fn key(&mut self, held: ModifiersState, press: Press) {
+        pub fn key(&mut self, held: ModifiersState, press: Press) {
             self.shell.modifiers_changed(held);
             self.shell.key_pressed(&press, self.now);
             self.shell.modifiers_changed(NONE);
         }
 
-        fn type_text(&mut self, text: &str) {
+        pub fn type_text(&mut self, text: &str) {
             let mut buffer = [0; 4];
             for ch in text.chars() {
                 self.key(NONE, Press::typing(ch.encode_utf8(&mut buffer)));
@@ -356,7 +356,7 @@ mod tests {
     fn a_key_brings_the_cursor_back() {
         let mut stage = stage();
         stage.seed(false);
-        stage.pass(crate::app::BLINK);
+        stage.pass(super::super::BLINK);
         stage.shell.frame(stage.now);
         assert!(!stage.shell.cursor_shown, "half a blink in");
         stage.type_text("a");

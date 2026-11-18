@@ -5,16 +5,21 @@
 //! it and its edges resize it.
 
 use super::{Effect, Shell};
-use crate::app::{CORNER, DOUBLE_CLICK, EDGE};
 use crate::chrome::{self, Divider};
 use crate::geom::{Point, Size};
 use crate::tab_bar::{self, Hit};
 use crossterm::event::{MouseButton as Button, MouseEvent, MouseEventKind};
 use ratatui::layout::Position;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use winit::event::{MouseButton, MouseScrollDelta};
 use winit::window::{CursorIcon, ResizeDirection};
 
+/// Width of the band along the window's sides that resizes it.
+const EDGE: f32 = 6.0;
+/// How far along a side from a corner the band resizes both ways.
+const CORNER: f32 = 16.0;
+/// Two presses on empty tab bar space this close together maximize.
+const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 /// Most lines one turn of the wheel scrolls, whatever the device says.
 const MOST_LINES: f32 = 200.0;
 
@@ -306,7 +311,7 @@ const fn mouse_button(button: MouseButton) -> Option<Button> {
 mod tests {
     use super::super::tests::{stage, Stage};
     use super::*;
-    use crate::app::WINDOW;
+    use crate::shell::WINDOW;
     use aura_ui::events::UiCommand;
     use aura_ui_terminal::{ChatTab, Pane, PaneChrome, PaneTab};
     use std::time::Duration;
@@ -319,7 +324,7 @@ mod tests {
         }
 
         /// Press and let go of `button` on a box of the tab bar.
-        fn click(&mut self, hit: Hit, button: MouseButton) {
+        pub fn click(&mut self, hit: Hit, button: MouseButton) {
             self.draw();
             let at = self.shell.bar.spot(hit).expect("the box is drawn");
             self.shell.pointer_moved(at);
@@ -330,7 +335,7 @@ mod tests {
 
         /// Press the left button at `from` on the grid's part of the
         /// window and let go at `to`.
-        fn drag(&mut self, from: Point, to: Point) {
+        pub fn drag(&mut self, from: Point, to: Point) {
             self.draw();
             let bar = tab_bar::height(&self.shell.metrics);
             let on_window = |at: Point| Point::new(at.x, at.y + bar);
