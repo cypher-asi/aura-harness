@@ -63,7 +63,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(3)])
         .split(area);
-    let content = rows[1];
+    let content = inset_edges(rows[1]);
 
     // The input grows upward as it wraps inside the Chat column, so its
     // height comes from where the columns fall.
@@ -150,7 +150,8 @@ fn columns(area: Rect, app: &App) -> (Option<Rect>, Rect, Option<Rect>) {
     let right_visible = right_column_visible(app);
     let splits = app.pane_splits();
 
-    let room = area.width.saturating_sub(MIN_CHAT_WIDTH);
+    let gutters = GUTTER * (u16::from(swarm_visible) + u16::from(right_visible));
+    let room = area.width.saturating_sub(MIN_CHAT_WIDTH + gutters);
     let side = |split: Option<f32>, percent: u16| match split {
         Some(split) => [
             Constraint::Length(dragged(area.width, split).min(room)),
@@ -172,6 +173,7 @@ fn columns(area: Rect, app: &App) -> (Option<Rect>, Rect, Option<Rect>) {
             });
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
+                .spacing(GUTTER)
                 .constraints([
                     Constraint::Length(left),
                     Constraint::Fill(1),
@@ -183,6 +185,7 @@ fn columns(area: Rect, app: &App) -> (Option<Rect>, Rect, Option<Rect>) {
         (true, false) => {
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
+                .spacing(GUTTER)
                 .constraints(side(splits.agents, 25))
                 .split(area);
             (Some(chunks[0]), chunks[1], None)
@@ -191,6 +194,7 @@ fn columns(area: Rect, app: &App) -> (Option<Rect>, Rect, Option<Rect>) {
             let [right, chat] = side(splits.right, 35);
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
+                .spacing(GUTTER)
                 .constraints([chat, right])
                 .split(area);
             (None, chunks[0], Some(chunks[1]))
@@ -201,6 +205,11 @@ fn columns(area: Rect, app: &App) -> (Option<Rect>, Rect, Option<Rect>) {
 
 /// Columns the Chat panel keeps however far the dividers are dragged.
 const MIN_CHAT_WIDTH: u16 = 30;
+
+/// Blank columns between panels side by side. Cells are about twice as
+/// tall as they are wide, so one column matches the gap between panels
+/// stacked on rows that touch.
+const GUTTER: u16 = 1;
 
 /// Rows each panel of the right column keeps when they share it.
 const MIN_STACKED_HEIGHT: u16 = 6;

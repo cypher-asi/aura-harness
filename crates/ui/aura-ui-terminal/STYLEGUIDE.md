@@ -70,6 +70,9 @@ themes keep working:
 - **Menus and the `/todos` list**: `muted` border
 - **Approval dialog**: `warning` border
 - **Code blocks and step rules**: `faint`
+- **Spacing**: panels side by side sit one blank column apart and one
+  column in from the screen's edges. A cell is about twice as tall as it
+  is wide, so that matches panels stacked on rows that touch.
 
 ### Panel Headers
 

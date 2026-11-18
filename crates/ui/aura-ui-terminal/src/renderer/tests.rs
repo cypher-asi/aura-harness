@@ -306,13 +306,13 @@ fn test_default_layout_shows_agents_column() {
     // Projects and agents are one line each, with one blank line between projects.
     assert_eq!(terminal_agent, terminal_project + 1);
     assert_eq!(researcher_project, terminal_agent + 2);
-    let panel_text = |row: usize| rows[row].chars().skip(1).take(20).collect::<String>();
+    let panel_text = |row: usize| rows[row].chars().skip(2).take(20).collect::<String>();
     assert_eq!(panel_text(terminal_agent + 1).trim(), "");
     assert_eq!(researcher_agent, researcher_project + 1);
     // "+ New project" takes the panel's bottom row in place of a key hint.
     assert!(!screen.contains("space fold") && !screen.contains("^N new"));
     assert!(
-        rows[new_project + 1].starts_with('└'),
+        rows[new_project + 1].starts_with(" └"),
         "New project should sit on the panel's last row: {:?}",
         &rows[new_project..=new_project + 1]
     );
@@ -372,7 +372,7 @@ fn test_default_layout_shows_agents_column() {
     // "+ New agent" takes the panel's bottom row, like "+ New project".
     let new_agent = rows.iter().position(|r| r.contains("New agent")).unwrap();
     assert!(
-        rows[new_agent + 1].starts_with('└'),
+        rows[new_agent + 1].starts_with(" └"),
         "New agent should sit on the panel's last row: {:?}",
         &rows[new_agent..=new_agent + 1]
     );
@@ -524,10 +524,12 @@ fn test_project_rows_are_cells_with_a_blue_selection() {
 
     // The selected cell runs from one panel border to the other; nothing
     // else has a background.
-    let right_border = (1..buffer.area.width)
+    let left_border = 1;
+    assert_eq!(buffer[(left_border, selected_row)].symbol(), "│");
+    let right_border = (left_border + 1..buffer.area.width)
         .find(|&x| buffer[(x, selected_row)].symbol() == "│")
         .unwrap();
-    let (left, right) = (1, right_border - 1);
+    let (left, right) = (left_border + 1, right_border - 1);
     let bg = |x: u16, y: u16| buffer[(x, y)].style().bg;
     for x in left..=right {
         assert_eq!(bg(x, selected_row), Some(colors.selection), "column {x}");
@@ -1390,8 +1392,9 @@ fn test_hosted_panels_leave_their_title_bars_to_the_front_end() {
         ..PaneSplits::default()
     });
     render_rows(&mut app, 150);
-    assert_eq!(app.pane_chrome()[0].area.width, 15);
-    assert_eq!(app.pane_chrome()[1].area.x, 15);
+    let [agents, chat] = [0, 1].map(|i| app.pane_chrome()[i].area);
+    assert_eq!((agents.x, agents.width), (1, 15), "inside the edge column");
+    assert_eq!(chat.x, agents.right() + 1, "a column between panels");
 
     app.set_pane_splits(PaneSplits {
         agents: Some(0.9),
@@ -1706,7 +1709,7 @@ fn test_prompt_pushes_typing_right_without_gutter() {
     let rows = render_rows(&mut app, 120);
     let input_row = &rows[rows.len() - INPUT_FROM_BOTTOM];
 
-    assert!(input_row.starts_with("│ → hello"), "{input_row:?}");
+    assert!(input_row.starts_with(" │ → hello"), "{input_row:?}");
 }
 
 /// Draw `app` and return the screen rows and where the cursor is.
