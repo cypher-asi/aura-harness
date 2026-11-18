@@ -307,7 +307,7 @@ fn tabs_are_workspaces_with_their_own_projects() {
     h.joined("a3", "Agent03");
     assert_eq!(h.shell.tabs.len(), 2);
     assert_eq!(h.shell.bar.title(), Some("AGENT03"));
-    assert!(!h.screen().contains("Summarise the crates"));
+    assert!(!h.screen().contains("Here's what I found"));
     assert!(
         !h.screen().contains("Reviewer"),
         "a project of the first tab"
@@ -321,7 +321,7 @@ fn tabs_are_workspaces_with_their_own_projects() {
     assert_eq!(h.asked(), [r#"FocusAgent("a1")"#]);
     assert_eq!(h.shell.tabs.front_index(), 0);
     let first = h.screen();
-    assert!(first.contains("Summarise the crates"));
+    assert!(first.contains("Here's what I found"));
     assert!(first.contains("Reviewer"));
     assert!(!first.contains("Agent03"), "a project of the second tab");
     assert!(!first.contains("a draft for the new agent"));
@@ -333,7 +333,7 @@ fn tabs_are_workspaces_with_their_own_projects() {
     h.key(ModifiersState::ALT, Press::typing("1"));
     assert_eq!(h.asked(), [r#"FocusAgent("a1")"#]);
     assert_eq!(h.shell.tabs.front_index(), 0);
-    assert!(h.screen().contains("Summarise the crates"));
+    assert!(h.screen().contains("Here's what I found"));
 }
 
 #[test]
@@ -418,7 +418,7 @@ fn an_empty_archive_says_how_agents_get_there() {
 fn conversation() {
     let mut h = stage();
     session(&mut h);
-    assert!(h.screen().contains("Summarise the crates"));
+    assert!(h.screen().contains("Here's what I found"));
     snapshot("conversation", &mut h);
 }
 
