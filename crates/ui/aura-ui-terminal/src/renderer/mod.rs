@@ -108,6 +108,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     overlays::render_overlays(frame, app, theme);
     app.drop_covered_prose(frame.buffer_mut());
     app.drop_covered_chat(frame.buffer_mut());
+    app.flow_mut().take_canvas_marks(frame.buffer_mut());
 }
 
 /// Whether the right column (Record above Sandbox) has anything to show.
@@ -125,6 +126,7 @@ fn render_content_panels(
     theme: &Theme,
 ) -> Rect {
     app.clear_pane_chrome();
+    app.flow_mut().set_view(None, false);
     let (records, sandbox) = split_right_column(right, app);
     let areas = PanelAreas {
         swarm,

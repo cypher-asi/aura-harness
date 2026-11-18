@@ -189,17 +189,26 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
 
 - The chat panel has a third tab, GRAPH, next to CHAT and TERMINAL
   (Shift+←/→ or a click). It shows the flow between the agent on screen
-  and every agent below it as their kernels recorded it: a lane per
-  agent, a box per prompt, model call, tool call, reply, spawn, message
-  and finished process, in time order, with arrows from each `task`
-  call or spawn to the agent it started and from that agent's reply
-  back to its caller. Agents that work in turn share a column.
-- The tab follows the agents live. Arrow keys move through the boxes
-  and across lanes, `[` / `]` jump between prompts, `f` follows an
-  arrow to the other agent, Space and `z` fold turns down to their
-  prompt, Enter opens a step as JSON, `r` opens its record entry and
-  `o` switches to its agent. See
-  [The GRAPH tab](docs/cli.md#the-graph-tab).
+  and every agent below it as their kernels recorded it, as cards wired
+  together on a canvas that runs left to right in time: a card per
+  model call with its tool calls as rows, and cards for each prompt,
+  reply, message and `task` result. Each agent's cards run along a row
+  under its name; agents that work in turn share a row. Wires join each
+  card to the agent's next one, each `task` row or spawn to the agent
+  it started, and that agent's reply back to its caller, and never run
+  backwards.
+- The tab follows the agents live. `↑`/`↓` go through a card's lines and
+  on to the row above or below, `←`/`→` along the agent's cards,
+  `[` / `]` jump between prompts, `f` follows a wire to the other
+  agent, Space and `z` fold turns down to their prompt, Enter or a
+  second click opens a step as JSON, `r` opens its record entry and
+  `o` switches to its agent. Dragging empty canvas or the wheel pans
+  the view. See [The GRAPH tab](docs/cli.md#the-graph-tab).
+- The desktop app draws the canvas itself (`App::set_host_canvas`):
+  rounded cards on a dot grid, curved wires, and a view that drags by
+  the pixel and pans smoothly on a touchpad. The terminal UI leaves the
+  canvas cells blank and says which of them no menu or dialog covers
+  (`App::flow_canvas_clip`), so those stay on top.
 - `UiEvent::OpenFlow` asks the session for an agent's flow;
   `UiCommand::FlowLoad` and `UiCommand::FlowUpsert` carry it as
   `FlowLane`s and `FlowNode`s (`aura_ui::flow`). The session builds it

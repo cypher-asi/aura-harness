@@ -15,6 +15,7 @@
 // Cell coordinates become pixel positions.
 #![allow(clippy::cast_precision_loss)]
 
+use crate::canvas::Canvas;
 use crate::chrome::Chrome;
 use crate::geom::{rgba, Color, Point, Rectangle, Size};
 use crate::grid::{self, Metrics, Palette};
@@ -54,6 +55,8 @@ pub struct View<'a> {
     /// The chat's body drawn higher than its cells, while it scrolls by
     /// pixels
     pub slide: Option<Slide<'a>>,
+    /// The GRAPH tab's canvas, over the blank cells left for it
+    pub canvas: Option<Canvas<'a>>,
 }
 
 /// The chat's body, part of a row up from where its cells are.
@@ -199,6 +202,10 @@ impl Painter {
             }
         }
 
+        if let Some(canvas) = &view.canvas {
+            let grid = Point::new(origin.x, bar + origin.y);
+            canvas.quads(brush.text, metrics, grid, &mut self.frame);
+        }
         view.chrome.quads(brush.text, &mut self.frame, bar);
 
         let on_grid = |at: &Position| at.x < view.cols && at.y < view.rows;
@@ -678,6 +685,7 @@ mod tests {
                 bar: &self.bar,
                 chrome: &self.chrome,
                 slide: None,
+                canvas: None,
             }
         }
     }
