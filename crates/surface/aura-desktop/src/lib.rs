@@ -125,10 +125,11 @@ pub fn run(args: DesktopOptions, mode: Option<AgentMode>) -> anyhow::Result<()> 
         verbose: args.verbose,
         tabs_file,
     };
-    let result = if bare_shell() {
-        shell::run(handles, &options, launched)
-    } else {
+    let asked = std::env::var("AURA_DESKTOP_SHELL").ok();
+    let result = if iced_shell(asked.as_deref()) {
         app::run(handles, options, launched).map_err(anyhow::Error::from)
+    } else {
+        shell::run(handles, &options, launched)
     };
     if let Some(task) = task {
         runtime.block_on(task.finish())?;
@@ -136,10 +137,11 @@ pub fn run(args: DesktopOptions, mode: Option<AgentMode>) -> anyhow::Result<()> 
     result.context("desktop window failed")
 }
 
-/// Whether the window is the bare one, drawn without a toolkit, which
-/// `AURA_DESKTOP_SHELL=bare` asks for while the two are compared.
-fn bare_shell() -> bool {
-    std::env::var("AURA_DESKTOP_SHELL").is_ok_and(|shell| shell.trim() == "bare")
+/// Whether the window is the iced one, which `AURA_DESKTOP_SHELL=iced`
+/// (`asked`) still opens while the two are compared. Otherwise it is
+/// the bare one, drawn without a toolkit.
+fn iced_shell(asked: Option<&str>) -> bool {
+    asked.is_some_and(|shell| shell.trim().eq_ignore_ascii_case("iced"))
 }
 
 fn init_tracing(verbose: bool) {
@@ -153,4 +155,18 @@ fn init_tracing(verbose: bool) {
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::iced_shell;
+
+    #[test]
+    fn the_bare_window_opens_unless_iced_is_asked_for() {
+        assert!(!iced_shell(None));
+        assert!(!iced_shell(Some("bare")));
+        assert!(!iced_shell(Some("")));
+        assert!(iced_shell(Some("iced")));
+        assert!(iced_shell(Some(" Iced\n")));
+    }
 }
