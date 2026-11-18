@@ -260,6 +260,7 @@ fn render_chat_lines(
     let blank = Line::default();
     let mut visible = Vec::with_capacity(height);
     let mut prose = Vec::new();
+    let mut user_rows = Vec::new();
     let mut line_index = 0usize;
     for (i, block) in cache.blocks().enumerate() {
         if i > 0 {
@@ -281,6 +282,9 @@ fn render_chat_lines(
                 }
                 if let Some(Some(indent)) = block.prose.get(offset).filter(|_| line.width() > 0) {
                     prose.push((visible.len(), *indent));
+                }
+                if block.user {
+                    user_rows.push(visible.len());
                 }
                 visible.push(line);
             }
@@ -321,6 +325,7 @@ fn render_chat_lines(
         })
         .collect();
     app.set_prose_rows(prose);
+    paint_user_band(frame.buffer_mut(), padded, &user_rows, theme);
 
     let hovered_image = match app.hover() {
         Some(HoverTarget::ChatImage(message, index)) => Some((message, index)),
@@ -457,6 +462,26 @@ fn pack_prose(
         }
     }
     (cell, code)
+}
+
+/// Shade the rows of the user's messages across the chat, one column
+/// into the inset on each side. Painted after prose is packed, since a
+/// span with the surface background reads as inline code.
+fn paint_user_band(buffer: &mut Buffer, padded: Rect, rows: &[usize], theme: &Theme) {
+    let style = Style::default().bg(theme.colors.surface);
+    for &row in rows {
+        let Ok(offset) = u16::try_from(row) else {
+            continue;
+        };
+        let band = Rect {
+            x: padded.x.saturating_sub(1),
+            y: padded.y + offset,
+            width: padded.width + 2,
+            height: 1,
+        }
+        .intersection(buffer.area);
+        buffer.set_style(band, style);
+    }
 }
 
 /// Keep `line` when it falls inside the chat viewport.
