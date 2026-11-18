@@ -18,6 +18,7 @@
 #[cfg(test)]
 mod bench;
 mod editor;
+mod glide;
 mod keys;
 mod pointer;
 mod screen;
@@ -41,7 +42,7 @@ use aura_ui::events::{UiCommand, UiEvent};
 use aura_ui_terminal::ProseRow;
 use pointer::Pointer;
 use ratatui::buffer::Cell;
-use ratatui::layout::Position;
+use ratatui::layout::{Position, Rect};
 use stats::Stats;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -124,6 +125,8 @@ pub struct Shell {
     rows: u16,
     /// Its rows of chat prose, set in the proportional face
     prose: Vec<ProseRow>,
+    /// Where its panels are, in cells
+    panes: Vec<Rect>,
     cursor: Option<Position>,
     chrome: Chrome,
     bar: Bar,
@@ -131,6 +134,7 @@ pub struct Shell {
     /// The modifier keys held
     modifiers: ModifiersState,
     pointer: Pointer,
+    glide: glide::Glide,
     focused: bool,
     blink_from: Instant,
     /// Whether the last frame showed the cursor
@@ -174,12 +178,14 @@ impl Shell {
             cols: 0,
             rows: 0,
             prose: Vec::new(),
+            panes: Vec::new(),
             cursor: None,
             chrome: Chrome::default(),
             bar: Bar::default(),
             painter: Painter::default(),
             modifiers: ModifiersState::empty(),
             pointer: Pointer::default(),
+            glide: glide::Glide::default(),
             focused: true,
             blink_from: now,
             cursor_shown: true,
@@ -190,9 +196,10 @@ impl Shell {
         }
     }
 
-    /// Whether the window looks different from the last frame drawn.
+    /// Whether the window looks different from the last frame drawn, or
+    /// the chat is sliding.
     pub const fn dirty(&self) -> bool {
-        self.dirty
+        self.dirty || self.glide.moved
     }
 
     /// What the window is asked to do since this was last called.
@@ -238,6 +245,7 @@ impl Shell {
             // Selections are in cells, which move when the grid changes
             // size.
             self.clear_selections();
+            self.glide.stop();
         }
         self.dirty = true;
     }
@@ -317,27 +325,36 @@ impl Shell {
 
     /// The window as it is at `now`: the terminal UI of the tab in front
     /// rendered into the grid, and the grid, the tab bar and the panels'
-    /// title bars painted as quads.
+    /// title bars painted as quads. A frame that only slides the chat is
+    /// painted from the grid as it was.
     pub fn frame(&mut self, now: Instant) -> &Scene {
         let started = Instant::now();
-        self.refresh(now);
-        self.tabs.forward_events();
+        self.ease(now);
+        let slid_only = self.glide.moved && !self.dirty && !self.cells.is_empty();
+        if !slid_only {
+            self.refresh(now);
+            self.tabs.forward_events();
+            self.fit_glide();
+        }
         let rendered = started.elapsed();
 
         let cursor_on = self.cursor_on(now);
         self.cursor_shown = cursor_on;
         self.dirty = false;
+        self.glide.moved = self.easing();
         let view = View {
             size: self.window,
             cells: &self.cells,
             cols: self.cols,
             rows: self.rows,
             prose: &self.prose,
+            panes: &self.panes,
             cursor: self.cursor.filter(|_| cursor_on),
             metrics: self.metrics,
             palette: self.palette,
             bar: &self.bar,
             chrome: &self.chrome,
+            slide: self.glide.slide(&self.tabs.front().tui),
         };
         // After the UI is rendered: it measures prose with the same
         // fonts.
@@ -438,6 +455,9 @@ impl Shell {
                 self.cells.clone_from(&frame.buffer.content);
                 (self.cols, self.rows) = (cols, rows);
                 tui.prose_rows().clone_into(&mut self.prose);
+                self.panes.clear();
+                self.panes
+                    .extend(tui.pane_chrome().iter().map(|chrome| chrome.area));
                 let at = (
                     self.metrics.origin(area, cols, rows),
                     self.metrics,
@@ -626,18 +646,20 @@ mod tests {
     }
 
     /// What `shell` last drew, painted again with nothing kept.
-    fn afresh(shell: &Shell) -> Vec<u8> {
+    pub(super) fn afresh(shell: &Shell) -> Vec<u8> {
         let view = View {
             size: shell.window,
             cells: &shell.cells,
             cols: shell.cols,
             rows: shell.rows,
             prose: &shell.prose,
+            panes: &shell.panes,
             cursor: shell.cursor.filter(|_| shell.cursor_shown),
             metrics: shell.metrics,
             palette: shell.palette,
             bar: &shell.bar,
             chrome: &shell.chrome,
+            slide: shell.glide.slide(&shell.tabs.front().tui),
         };
         let mut pixels = Vec::new();
         text::with(|text| {

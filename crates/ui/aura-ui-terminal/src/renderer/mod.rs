@@ -86,6 +86,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     render_header(frame, inset_edges(rows[0]), app, theme);
 
     app.set_prose_rows(Vec::new());
+    app.clear_chat_scroll();
     let chat = render_content_panels(frame, (swarm, chat_column[0], right), app, theme);
     images::render_pending_images(frame, chat, app, theme);
     detail::render_detail_view(frame, chat, app, theme);
@@ -101,6 +102,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     overlays::render_folder_picker(frame, app, theme);
     overlays::render_overlays(frame, app, theme);
     app.drop_covered_prose(frame.buffer_mut());
+    app.drop_covered_chat(frame.buffer_mut());
 }
 
 /// Whether the right column (Record above Sandbox) has anything to show.

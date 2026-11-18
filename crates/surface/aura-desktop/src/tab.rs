@@ -50,6 +50,7 @@ impl Tab {
             .with_alert_settings(settings.alerts);
         tui.set_host_chrome(true);
         tui.set_prose_measure(settings.measure);
+        tui.set_smooth_scroll(true);
         if settings.verbose {
             tui.set_verbose(true);
         }

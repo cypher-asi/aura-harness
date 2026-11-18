@@ -4,9 +4,10 @@
 //! A row is one rectangle per run of background color, one shaped run
 //! per stretch of same-styled ASCII, box, block, braille and status
 //! characters as shapes, and the chat's prose flowing in the
-//! proportional face. A row's quads are kept by what the row holds
-//! ([`RowCache`]), so a frame shapes only the rows whose content is new,
-//! and a row that scrolled is the same quads lower down.
+//! proportional face. A row is painted in pieces, cut at the panels'
+//! borders, and a piece's quads are kept by what it holds ([`RowCache`]),
+//! so a frame shapes only the pieces whose content is new, and a piece
+//! that scrolled is the same quads lower down.
 //!
 //! Every background, line and shape of the frame comes before any of its
 //! text: text is never covered by the background of the row below it.
@@ -24,7 +25,7 @@ use crate::text::{self, Align, Face, Family, Label, Shaping, TextSystem};
 use crate::theme;
 use aura_ui_terminal::ProseRow;
 use ratatui::buffer::Cell;
-use ratatui::layout::Position;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::Modifier;
 use std::ops::Range;
 use unicode_width::UnicodeWidthStr;
@@ -39,6 +40,9 @@ pub struct View<'a> {
     pub rows: u16,
     /// Rows of chat prose, set in the proportional face
     pub prose: &'a [ProseRow],
+    /// The panels, in cells: rows are painted in pieces cut at their
+    /// borders
+    pub panes: &'a [Rect],
     /// The cell the cursor is on, while it shows
     pub cursor: Option<Position>,
     pub metrics: Metrics,
@@ -47,6 +51,22 @@ pub struct View<'a> {
     pub bar: &'a Bar,
     /// The panels' title bars, over the cells
     pub chrome: &'a Chrome,
+    /// The chat's body drawn higher than its cells, while it scrolls by
+    /// pixels
+    pub slide: Option<Slide<'a>>,
+}
+
+/// The chat's body, part of a row up from where its cells are.
+#[derive(Clone, Copy)]
+pub struct Slide<'a> {
+    /// The body, in cells
+    pub body: Rect,
+    /// Pixels higher, less than a row
+    pub by: i32,
+    /// The row below the body's last, which comes into view: its cells,
+    /// as wide as the grid, and its prose
+    pub next: &'a [Cell],
+    pub next_prose: Option<&'a ProseRow>,
 }
 
 /// What the kept rows were painted for, besides their cells.
@@ -68,6 +88,8 @@ pub struct Painter {
     scratch: Layers,
     scene: Scene,
     built: usize,
+    /// Where the row being painted is cut
+    cuts: Vec<usize>,
 }
 
 impl Painter {
@@ -102,7 +124,7 @@ impl Painter {
         &self.scene
     }
 
-    /// How many rows the last frame had to paint anew.
+    /// How many pieces of rows the last frame had to paint anew.
     pub const fn built(&self) -> usize {
         self.built
     }
@@ -144,14 +166,37 @@ impl Painter {
         };
         let width = usize::from(view.cols).max(1);
         let lines = view.cells.chunks_exact(width).take(usize::from(view.rows));
+        let slide = view.slide.filter(|slide| slide.by > 0);
+        let sliding = slide.map(|slide| {
+            let body = slide.body;
+            let clip = top + i32::from(body.y) * height..top + i32::from(body.bottom()) * height;
+            (body, slide.by, clip)
+        });
         let mut row_top = top;
         for (index, cells) in lines.enumerate() {
-            let prose = prose_at(view.prose, index);
-            let row = self
-                .rows
-                .row(cells, prose, |out| brush.row(out, cells, prose));
-            self.frame.extend_lowered(row, row_top);
+            let y = u16::try_from(index).unwrap_or(u16::MAX);
+            let body = sliding
+                .clone()
+                .filter(|(body, ..)| body.y <= y && y < body.bottom());
+            let row = Painted {
+                cells,
+                prose: prose_at(view.prose, index),
+                top: row_top,
+                y,
+            };
+            self.paint_row(&mut brush, &row, view.panes, (body, false));
             row_top += height;
+        }
+        if let (Some(slide), Some(sliding)) = (slide, sliding) {
+            if slide.next.len() == width {
+                let row = Painted {
+                    cells: slide.next,
+                    prose: slide.next_prose,
+                    top: top + i32::from(slide.body.bottom()) * height,
+                    y: 0,
+                };
+                self.paint_row(&mut brush, &row, &[], (Some(sliding), true));
+            }
         }
 
         view.chrome.quads(brush.text, &mut self.frame, bar);
@@ -166,6 +211,69 @@ impl Painter {
         }
         self.built = self.rows.finish_frame();
     }
+
+    /// Paint `row` piece by piece, cut at the borders of the `panes` that
+    /// cross it. The pieces inside a sliding `body` go up by its slide,
+    /// cut to its pixel rows; with `only_body`, the others are left out.
+    fn paint_row(
+        &mut self,
+        brush: &mut Brush<'_>,
+        row: &Painted<'_>,
+        panes: &[Rect],
+        (body, only_body): (Option<Sliding>, bool),
+    ) {
+        let cells = row.cells;
+        let flow = row
+            .prose
+            .map(|p| prose_columns(p, cells.len()))
+            .filter(|columns| !columns.is_empty());
+        let edges = body.as_ref().map(|(body, ..)| *body);
+        cut(
+            &mut self.cuts,
+            (panes, edges),
+            row.y,
+            cells.len(),
+            flow.as_ref(),
+        );
+        let mut looks = None;
+        for piece in self.cuts.windows(2) {
+            let columns = piece[0]..piece[1];
+            let inside = body.as_ref().filter(|(body, ..)| {
+                usize::from(body.x) <= columns.start && columns.end <= usize::from(body.right())
+            });
+            if only_body && inside.is_none() {
+                continue;
+            }
+            let prose = row.prose.filter(|_| {
+                flow.as_ref()
+                    .is_some_and(|f| columns.start <= f.start && f.end <= columns.end)
+            });
+            let quads = self
+                .rows
+                .row(columns.start, &cells[columns.clone()], prose, |out| {
+                    let looks = looks.get_or_insert_with(|| brush.looks(cells));
+                    brush.piece(out, &Row { cells, looks }, columns, prose);
+                });
+            match inside {
+                Some((_, by, clip)) => self.frame.extend_clipped(quads, row.top - by, clip.clone()),
+                None => self.frame.extend_lowered(quads, row.top),
+            }
+        }
+    }
+}
+
+/// A sliding body: its cells, how many pixels up it is drawn, and the
+/// pixel rows it is cut to.
+type Sliding = (Rect, i32, Range<i32>);
+
+/// A row of cells to paint.
+struct Painted<'a> {
+    cells: &'a [Cell],
+    prose: Option<&'a ProseRow>,
+    /// Its top on the window, in pixels
+    top: i32,
+    /// Its screen row
+    y: u16,
 }
 
 /// How one cell is painted, after modifiers are applied.
@@ -219,6 +327,39 @@ fn prose_at(prose: &[ProseRow], y: usize) -> Option<&ProseRow> {
     prose.iter().find(|p| usize::from(p.y) == y)
 }
 
+/// The columns of a row of `len` cells that `prose` flows in, after its
+/// indent.
+fn prose_columns(prose: &ProseRow, len: usize) -> Range<usize> {
+    let start = usize::from(prose.x + prose.indent).min(len);
+    start..usize::from(prose.x + prose.width).clamp(start, len)
+}
+
+/// The columns where screen row `y` of `len` cells is cut into pieces,
+/// first and last included: each side of the borders of the panels it
+/// crosses and the edges of a sliding `body`, except inside the prose
+/// `flow`, which is one run.
+fn cut(
+    cuts: &mut Vec<usize>,
+    (panes, body): (&[Rect], Option<Rect>),
+    y: u16,
+    len: usize,
+    flow: Option<&Range<usize>>,
+) {
+    cuts.clear();
+    cuts.push(0);
+    for pane in panes.iter().filter(|p| p.y <= y && y < p.bottom()) {
+        let (left, right) = (usize::from(pane.x), usize::from(pane.right()));
+        cuts.extend([left, left + 1, right.saturating_sub(1), right]);
+    }
+    if let Some(body) = body {
+        cuts.extend([usize::from(body.x), usize::from(body.right())]);
+    }
+    cuts.push(len);
+    cuts.retain(|&c| c <= len && !flow.is_some_and(|f| f.start < c && c < f.end));
+    cuts.sort_unstable();
+    cuts.dedup();
+}
+
 /// One printable ASCII character, which every monospace font has at the
 /// cell's advance.
 fn is_plain(symbol: &str) -> bool {
@@ -242,22 +383,27 @@ struct Brush<'a> {
 }
 
 impl Brush<'_> {
-    fn row(&mut self, out: &mut Layers, cells: &[Cell], prose: Option<&ProseRow>) {
-        let looks: Vec<Look> = cells.iter().map(|c| Look::of(c, self.palette)).collect();
-        let row = Row {
-            cells,
-            looks: &looks,
-        };
-        let columns = prose.map_or(0..0, |p| {
-            let start = usize::from(p.x + p.indent).min(cells.len());
-            start..usize::from(p.x + p.width).clamp(start, cells.len())
+    fn looks(&self, cells: &[Cell]) -> Vec<Look> {
+        cells.iter().map(|c| Look::of(c, self.palette)).collect()
+    }
+
+    /// The `columns` of `row`, with the `prose` that flows inside them.
+    fn piece(
+        &mut self,
+        out: &mut Layers,
+        row: &Row<'_>,
+        columns: Range<usize>,
+        prose: Option<&ProseRow>,
+    ) {
+        let flow = prose.map_or(columns.end..columns.end, |p| {
+            prose_columns(p, row.cells.len())
         });
-        for grid in [0..columns.start, columns.end..cells.len()] {
-            self.backgrounds(out, &row, grid.clone());
-            self.cells(out, &row, grid);
+        for grid in [columns.start..flow.start, flow.end..columns.end] {
+            self.backgrounds(out, row, grid.clone());
+            self.cells(out, row, grid);
         }
         if let Some(prose) = prose {
-            self.prose(out, &row, columns, &prose.code);
+            self.prose(out, row, flow, &prose.code);
         }
     }
 
@@ -525,11 +671,13 @@ mod tests {
                 cols: COLS,
                 rows: ROWS,
                 prose: &[],
+                panes: &[],
                 cursor: self.cursor,
                 metrics: Metrics::new(14.0),
                 palette: self.palette,
                 bar: &self.bar,
                 chrome: &self.chrome,
+                slide: None,
             }
         }
     }
@@ -621,6 +769,68 @@ mod tests {
         view.metrics = Metrics::new(16.0);
         painter.paint_with(&view, &mut text);
         assert_eq!(painter.built(), 3);
+    }
+
+    #[test]
+    fn a_panel_that_scrolls_leaves_the_one_beside_it_painted() {
+        let mut text = TextSystem::new();
+        let mut stage = Stage::new();
+        let panes = [Rect::new(0, 0, 8, ROWS), Rect::new(8, 0, 12, ROWS)];
+        let write = |stage: &mut Stage, left: [&str; 2]| {
+            stage.buffer = Buffer::empty(Rect::new(0, 0, COLS, ROWS));
+            for y in 0..ROWS {
+                stage.buffer.set_string(0, y, "│", Style::default());
+                stage.buffer.set_string(7, y, "││", Style::default());
+                stage
+                    .buffer
+                    .set_string(10, y, format!("right {y}"), Style::default());
+            }
+            for (y, line) in (0..).zip(left) {
+                stage.buffer.set_string(2, y, line, Style::default());
+            }
+        };
+        let mut painter = Painter::default();
+        write(&mut stage, ["one", "two"]);
+        painter.paint_with(
+            &View {
+                panes: &panes,
+                ..stage.view()
+            },
+            &mut text,
+        );
+
+        write(&mut stage, ["two", "three"]);
+        let scene = painter
+            .paint_with(
+                &View {
+                    panes: &panes,
+                    ..stage.view()
+                },
+                &mut text,
+            )
+            .clone();
+        assert_eq!(painter.built(), 1, "only the left panel's new line");
+
+        let mut pieces = Vec::new();
+        raster::paint(&scene, text.atlas(), &mut pieces);
+        let mut whole = Vec::new();
+        let scene = Painter::default()
+            .paint_with(&stage.view(), &mut text)
+            .clone();
+        raster::paint(&scene, text.atlas(), &mut whole);
+        assert!(pieces == whole, "the same picture as whole rows");
+    }
+
+    #[test]
+    fn rows_are_cut_at_borders_but_never_inside_prose() {
+        let panes = [Rect::new(0, 0, 10, 4), Rect::new(10, 2, 10, 2)];
+        let mut cuts = Vec::new();
+        cut(&mut cuts, (&panes, None), 0, 20, None);
+        assert_eq!(cuts, [0, 1, 9, 10, 20]);
+        cut(&mut cuts, (&panes, None), 3, 20, None);
+        assert_eq!(cuts, [0, 1, 9, 10, 11, 19, 20]);
+        cut(&mut cuts, (&panes, None), 3, 20, Some(&(2..12)));
+        assert_eq!(cuts, [0, 1, 19, 20], "prose across the border");
     }
 
     #[test]

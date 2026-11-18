@@ -919,11 +919,13 @@ mod tests {
                 cols: COLS,
                 rows: ROWS,
                 prose: &[],
+                panes: &[],
                 cursor: Some(ratatui::layout::Position::new(3, 2)),
                 metrics,
                 palette,
                 bar: &bar,
                 chrome: &chrome,
+                slide: None,
             };
             painter.paint_with(&view, &mut text);
             generations.push(text.atlas().generation());

@@ -401,6 +401,46 @@ fn prose_is_set_in_inter_and_code_stays_on_the_grid() {
 }
 
 #[test]
+fn the_chat_slides_half_a_row_up() {
+    use winit::dpi::PhysicalPosition;
+    use winit::event::MouseScrollDelta;
+
+    let mut h = stage();
+    seed(&mut h);
+    let conversation: Vec<MessageData> = (0..30)
+        .flat_map(|turn| {
+            [
+                MessageData::new(
+                    MessageRole::User,
+                    format!("Question {turn}: what runs next?"),
+                ),
+                MessageData::new(
+                    MessageRole::Assistant,
+                    format!(
+                        "Turn {turn}: the kernel records the step, checks it against the \
+                         policy and runs it. Then `cargo test` passes.\n\n- one\n- two"
+                    ),
+                ),
+            ]
+        })
+        .collect();
+    h.apply([UiCommand::LoadConversation(conversation)]);
+    let (width, height) = (h.shell.window.width, h.shell.window.height);
+    h.shell.pointer_moved(Point::new(width / 2.0, height / 2.0));
+    h.shell.frame(h.now);
+    let row = f64::from(h.shell.metrics.cell.height / super::glide::TOUCHPAD_GAIN);
+    for _ in 0..41 {
+        h.shell.wheel(
+            MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, row * 1.5)),
+            h.now,
+        );
+        h.shell.frame(h.now);
+    }
+    assert!(h.shell.tabs.front().tui.scroll_offset() > 0);
+    snapshot("chat-sliding", &mut h);
+}
+
+#[test]
 fn welcome_screen() {
     let mut h = stage();
     seed(&mut h);

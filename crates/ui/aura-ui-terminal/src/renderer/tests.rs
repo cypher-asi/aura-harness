@@ -2584,6 +2584,95 @@ fn test_policy_lines_follow_a_star_and_stack() {
 }
 
 #[test]
+fn test_a_scrolled_projects_list_draws_the_rows_it_shows() {
+    use crate::app::ProjectListRow;
+    use crate::events::{AgentSummary, UiCommand};
+    use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let mut app = crate::App::new().with_event_sender(tx);
+    let agent = |id: String, name: String, depth: usize| AgentSummary {
+        zns_id: format!("0://terminal/{id}"),
+        id,
+        name,
+        depth,
+        ..AgentSummary::default()
+    };
+    let mut agents = Vec::new();
+    for project in 0..12 {
+        agents.push(agent(format!("p{project}"), format!("Lead{project:02}"), 0));
+        for helper in 0..3 {
+            agents.push(agent(
+                format!("p{project}h{helper}"),
+                format!("Helper{project:02}-{helper}"),
+                1,
+            ));
+        }
+    }
+    app.process_command(UiCommand::SetAgents(agents));
+    app.process_command(UiCommand::SetActiveAgent("p0".to_string()));
+
+    let buffer = render_buffer(&mut app, 120);
+    let top = row_of(&buffer, "Lead00");
+    let label = |app: &crate::App, row: usize| match app.project_rows()[row] {
+        ProjectListRow::Project { root, .. } => Some(app.agents()[root].name.clone()),
+        ProjectListRow::Agent { index } => Some(app.agents()[index].name.clone()),
+        _ => None,
+    };
+    for _ in 0..30 {
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 4,
+            row: top,
+            modifiers: KeyModifiers::empty(),
+        });
+        let buffer = render_buffer(&mut app, 120);
+        let first = app.agents_scroll();
+        for offset in 0..3 {
+            let y = top + u16::try_from(offset).unwrap();
+            if let Some(name) = label(&app, first + offset) {
+                assert!(find_cell(&buffer, y, &name).is_some(), "{name} at {y}");
+            }
+        }
+        assert!(row_of(&buffer, "New project") > top);
+    }
+    assert!(app.agents_scroll() > 0);
+}
+
+#[test]
+fn test_smooth_scrolling_draws_the_chat_row_below_the_body() {
+    use crate::events::UiCommand;
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let mut app = crate::App::new().with_event_sender(tx);
+    let lines: String = (0..80).map(|n| format!("line {n}\n\n")).collect();
+    app.process_command(UiCommand::StartStreaming);
+    app.process_command(UiCommand::AppendText(lines));
+    render_buffer(&mut app, 120);
+    assert_eq!(app.chat_scroll(), None, "only when the front end asks");
+
+    app.set_smooth_scroll(true);
+    app.scroll_chat_rows(21);
+    render_buffer(&mut app, 120);
+    let view = app.chat_scroll().expect("the chat is drawn");
+    assert_eq!(view.below, 21);
+    let (cells, _) = app.chat_row_below();
+    let next: String = cells.iter().map(ratatui::buffer::Cell::symbol).collect();
+
+    app.scroll_chat_rows(-1);
+    let buffer = render_buffer(&mut app, 120);
+    let view = app.chat_scroll().expect("the chat is drawn");
+    assert_eq!(view.below, 20);
+    let last = view.body.bottom() - 1;
+    let row: String = (view.body.left()..view.body.right())
+        .map(|x| buffer[(x, last)].symbol())
+        .collect();
+    let body = usize::from(view.body.x)..usize::from(view.body.right());
+    assert_eq!(row, next[body].to_string(), "the row that scrolls in");
+    assert!(row.contains("line"), "{row:?}");
+}
+
+#[test]
 fn test_truncate_record_info_zero_width() {
     assert_eq!(truncate_record_info("anything", 0), "");
     assert_eq!(truncate_record_info("", 20), "");
