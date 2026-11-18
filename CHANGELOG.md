@@ -338,7 +338,10 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   `AURA_DESKTOP_GPU=1` checks the GPU draws the same pixels. Ignored
   `replay_timings` and `swarm_timings` tests report boot, streaming,
   keystroke and frame timings, and a second of thirty agents streaming
-  at once.
+  at once; `history_timings` reports frames of a 2,000-message
+  conversation and of a long reply streaming after it, and
+  `aura-ui-terminal` has `history_timings` and `streaming_timings` for
+  the UI alone.
 - `aura_terminal::render`, `App::paste_from_clipboard` and
   `alerts::desktop_notify` are public so other frontends can draw the UI
   and share its clipboard and notifications.
@@ -355,6 +358,13 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
 
 - The CI MSRV check skips `aura-desktop`, which needs Rust 1.88.
 - The window's clipboard is `arboard`'s.
+- A reply is laid out a part at a time while it streams, in both
+  frontends: what comes before its last blank line or closed code block
+  is kept, and only the paragraph, list, table or code block still being
+  written is wrapped again. A frame after a chunk costs the same however
+  long the reply is: about 0.5 ms in the window at 76,000 characters,
+  where it was 3.9 ms. The reply is laid out whole once more when it
+  ends.
 - The chat reads like a terminal in both frontends: it starts at the
   panel's left edge, prompts are echoed as `> text`, replies follow
   without `YOU` / `AURA` headers, a dim `[model · tokens · cost]` line
