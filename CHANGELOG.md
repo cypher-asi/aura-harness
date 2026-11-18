@@ -14,7 +14,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The default `cyber` theme is graphite and gray. The cyan accent is kept
   for status (`● Ready`, the working `⬢`, busy tabs) and the focused
   panel's border; other borders, tabs, selections and menus are neutral. Themes gain a `faint` color for
-  borders at rest, markers and separators.
+  borders at rest, markers and separators. Errors and failed counts use a
+  softer red (`#e06c75`).
 - The input is a box under the Chat panel, as wide as it, with a `→`
   prompt and an `Ask anything` / `Add a follow-up` placeholder. The model,
   approval level, usage (`23% context used`) and status moved to a footer

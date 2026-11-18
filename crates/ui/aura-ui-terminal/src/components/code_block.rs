@@ -6,7 +6,7 @@
 //! - Cyan (#01f4cb): Strings, types
 //! - Blue (#01a4f4): Functions, numbers
 //! - Purple (#cb01f4): Keywords
-//! - Red (#f4012a): Operators
+//! - Red (#e06c75): Operators
 //! - Gray (#888888): Comments
 
 use crate::themes::{Theme, BLUE, CYAN, GRAY, PURPLE, RED};
@@ -24,7 +24,7 @@ use ratatui::{
 /// - Numbers: Blue (#01a4f4)
 /// - Functions: Blue (#01a4f4)
 /// - Types: Cyan (#01f4cb)
-/// - Operators: Red (#f4012a)
+/// - Operators: Red (#e06c75)
 #[derive(Debug, Clone, Copy)]
 pub struct LanguageConfig {
     /// Keywords
@@ -52,7 +52,7 @@ impl Default for LanguageConfig {
             number: BLUE,    // #01a4f4 - blue for numbers
             function: BLUE,  // #01a4f4 - blue for functions
             r#type: CYAN,    // #01f4cb - cyan for types
-            operator: RED,   // #f4012a - red for operators
+            operator: RED,   // #e06c75 - red for operators
         }
     }
 }

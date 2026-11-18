@@ -9,7 +9,7 @@
 //! | Cyan/Green  | #01f4cb  | `CYAN`     | The accent: status, success        |
 //! | Blue        | #01a4f4  | `BLUE`     | Info, links                        |
 //! | Purple      | #cb01f4  | `PURPLE`   | Code block keywords                |
-//! | Red         | #f4012a  | `RED`      | Errors, danger                     |
+//! | Red         | #e06c75  | `RED`      | Errors, danger                     |
 //! | White       | #ffffff  | `WHITE`    | Titles, emphasized text            |
 //! | Gray        | #808080  | `GRAY`     | Muted text, secondary info         |
 //! | Dim gray    | #5a5a5a  | `DIM_GRAY` | Borders, markers, the footer       |

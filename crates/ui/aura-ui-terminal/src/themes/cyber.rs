@@ -7,7 +7,7 @@
 //! | Cyan/Green  | #01f4cb  | (1, 244, 203)  | Status glyphs, success, diff additions  |
 //! | Blue        | #01a4f4  | (1, 164, 244)  | Info, links, mode badges                |
 //! | Purple      | #cb01f4  | (203, 1, 244)  | Code block keywords                     |
-//! | Red         | #f4012a  | (244, 1, 42)   | Errors, danger                          |
+//! | Red         | #e06c75  | (224, 108, 117)| Errors, danger                          |
 //! | White       | #ffffff  | (255, 255, 255)| Titles, the user's text, the current item |
 //! | Light gray  | #e6e6e6  | (230, 230, 230)| Body text of chat replies               |
 //! | Silver      | #b3b3b3  | (179, 179, 179)| Secondary text, the verb of a step      |
@@ -34,8 +34,8 @@ pub const BLUE: Color = Color::Rgb(1, 164, 244);
 /// Purple - Code block keywords (#cb01f4)
 pub const PURPLE: Color = Color::Rgb(203, 1, 244);
 
-/// Red - Errors, danger (#f4012a)
-pub const RED: Color = Color::Rgb(244, 1, 42);
+/// Red - Errors, danger (#e06c75)
+pub const RED: Color = Color::Rgb(224, 108, 117);
 
 /// White - Titles and emphasized text (#ffffff)
 pub const WHITE: Color = Color::White;
@@ -93,7 +93,7 @@ pub fn cyber_theme() -> Theme {
             // Semantic colors
             success: CYAN,  // #01f4cb - the accent: status and success
             warning: BLUE,  // #01a4f4 - info/warning
-            error: RED,     // #f4012a - errors/danger
+            error: RED,     // #e06c75 - errors/danger
             pending: WHITE, // #ffffff - pending states
 
             // Muted text and borders
@@ -135,6 +135,6 @@ mod tests {
         assert_eq!(CYAN, Color::Rgb(1, 244, 203));
         assert_eq!(BLUE, Color::Rgb(1, 164, 244));
         assert_eq!(PURPLE, Color::Rgb(203, 1, 244));
-        assert_eq!(RED, Color::Rgb(244, 1, 42));
+        assert_eq!(RED, Color::Rgb(224, 108, 117));
     }
 }

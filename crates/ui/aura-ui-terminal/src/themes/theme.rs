@@ -156,7 +156,7 @@ impl Default for Theme {
 /// |-------------|----------|------------------------------------|
 /// | Cyan/Green  | #01f4cb  | The accent: status, success        |
 /// | Blue        | #01a4f4  | Info, links                        |
-/// | Red         | #f4012a  | Errors, danger                     |
+/// | Red         | #e06c75  | Errors, danger                     |
 /// | White       | #ffffff  | Titles, emphasized text            |
 /// | Light gray  | #e6e6e6  | Body text of chat replies          |
 /// | Silver      | #b3b3b3  | Secondary text                     |
@@ -183,7 +183,7 @@ pub struct ThemeColors {
     pub success: Color,
     /// Warning/info color - blue (#01a4f4)
     pub warning: Color,
-    /// Error/danger color - red (#f4012a)
+    /// Error/danger color - red (#e06c75)
     pub error: Color,
     /// Pending state color (#ffffff white)
     pub pending: Color,

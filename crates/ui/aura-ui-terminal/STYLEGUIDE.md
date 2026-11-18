@@ -12,7 +12,7 @@ for status.
 | Cyan/Green | `#01f4cb` | `(1, 244, 203)`   | `CYAN`        | Status, the focused panel's border     |
 | Blue       | `#01a4f4` | `(1, 164, 244)`   | `BLUE`        | Warnings, waiting states, flags        |
 | Purple     | `#cb01f4` | `(203, 1, 244)`   | `PURPLE`      | Syntax highlighting only               |
-| Red        | `#f4012a` | `(244, 1, 42)`    | `RED`         | Errors, danger                         |
+| Red        | `#e06c75` | `(224, 108, 117)` | `RED`         | Errors, danger                         |
 | White      | terminal  | `Color::White`    | `WHITE`       | Titles, what the user typed            |
 | Light gray | `#e6e6e6` | `(230, 230, 230)` | `LIGHT_GRAY`  | Reply text                             |
 | Silver     | `#b3b3b3` | `(179, 179, 179)` | `SILVER`      | Hovered labels, to-do counts           |
