@@ -2679,7 +2679,9 @@ fn test_chat_bottom_leaves_room_below_a_long_reply() {
         .iter()
         .position(|row| row.contains("line 59"))
         .unwrap_or_else(|| panic!("last line not in:\n{screen}"));
-    let column = rows[last][..rows[last].find("line 59").unwrap()].chars().count();
+    let column = rows[last][..rows[last].find("line 59").unwrap()]
+        .chars()
+        .count();
     let blank_below = rows[last + 1..]
         .iter()
         .take_while(|row| row.chars().skip(column).take(7).all(char::is_whitespace))
