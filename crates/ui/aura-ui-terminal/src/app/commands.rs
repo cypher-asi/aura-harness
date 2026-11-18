@@ -415,7 +415,7 @@ impl App {
     }
 
     /// Handle `/build [path]`: run the given plan, or the latest one.
-    fn request_build(&mut self, arg: &str) {
+    pub(super) fn request_build(&mut self, arg: &str) {
         if self.turn_running() {
             self.notification = Some((
                 "Wait for the current turn to finish before building".to_string(),
@@ -437,6 +437,38 @@ impl App {
                 path,
             });
         }
+    }
+
+    /// Whether `text` asks a plan-mode agent with a plan to build it, the
+    /// way `/build` does: a bare "implement", "build it", "go ahead"...
+    /// Anything longer is feedback on the plan and goes to the agent.
+    pub(super) fn wants_build(&self, text: &str) -> bool {
+        const PHRASES: &[&str] = &[
+            "implement",
+            "implement it",
+            "implement this",
+            "implement plan",
+            "implement the plan",
+            "build",
+            "build it",
+            "build the plan",
+            "go ahead",
+            "go ahead and implement",
+            "go ahead and implement it",
+            "do it",
+            "proceed",
+        ];
+        if self.hud.mode != Some(PermissionMode::Plan) || self.active_plan.is_none() {
+            return false;
+        }
+        let text = text
+            .trim()
+            .trim_end_matches(|c: char| matches!(c, '.' | '!'))
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase();
+        PHRASES.contains(&text.as_str())
     }
 
     /// Handle `/spawn <permanent agent>`.

@@ -207,7 +207,8 @@ async fn switch(
         if to.mode == PermissionMode::Plan {
             ui.send(system_message(
                 "Plan mode: the agent researches and writes a plan instead of changing code. \
-                 /plan again returns to the previous mode. /build implements the plan."
+                 /plan again returns to the previous mode. Say \"implement\" or run /build to \
+                 implement the plan."
                     .to_string(),
             ))
             .await;
