@@ -411,7 +411,7 @@ fn finish_tool_call(message: &mut MessageData, execution: &ToolExecution, took_m
 
 /// The tool execution in `entry`, with its output read from the entry's
 /// effects (the kernel no longer copies it into the payload).
-fn tool_execution(entry: &RecordEntry) -> Option<ToolExecution> {
+pub(crate) fn tool_execution(entry: &RecordEntry) -> Option<ToolExecution> {
     let mut execution = serde_json::from_slice::<ToolExecution>(&entry.tx.payload).ok()?;
     if execution.result.is_none() {
         if let Some(effect) = entry.effects.first() {
@@ -523,7 +523,7 @@ fn summarize(
     }
 }
 
-fn scan_tail(
+pub(crate) fn scan_tail(
     store: &dyn ReadStore,
     agent_id: AgentId,
     limit: usize,
@@ -906,7 +906,7 @@ fn reasoning_columns(payload: &Value) -> RecordColumns {
 }
 
 /// The error of a failed model call; `None` when the call succeeded.
-fn reasoning_error(payload: &Value) -> Option<&str> {
+pub(crate) fn reasoning_error(payload: &Value) -> Option<&str> {
     (payload.get("status").and_then(Value::as_str) == Some("failed"))
         .then(|| payload.get("error").and_then(Value::as_str).unwrap_or(""))
 }
@@ -1036,7 +1036,7 @@ pub fn summarize_record(tx: &Transaction) -> String {
     truncate_chars(&collapse_whitespace(&summary), MAX_INFO_CHARS)
 }
 
-fn summarize_tool_call(tool: &str, args: &Value) -> String {
+pub(crate) fn summarize_tool_call(tool: &str, args: &Value) -> String {
     let target = tool_target(tool, args);
     if target.is_empty() {
         tool.to_string()
@@ -1064,7 +1064,7 @@ fn summarize_tool_execution(execution: &ToolExecution) -> String {
 }
 
 /// How a tool call ended, e.g. `ok 5B` or `denied: reason`.
-fn tool_outcome(execution: &ToolExecution) -> String {
+pub(crate) fn tool_outcome(execution: &ToolExecution) -> String {
     match execution.decision {
         ToolGateVerdict::Denied => match execution.reason.as_deref() {
             Some(reason) if !reason.is_empty() => format!("denied: {reason}"),
@@ -1090,7 +1090,7 @@ fn tool_outcome(execution: &ToolExecution) -> String {
     }
 }
 
-fn summarize_policy_decision(decision: &PolicyDecision) -> String {
+pub(crate) fn summarize_policy_decision(decision: &PolicyDecision) -> String {
     format!(
         "{} · {} · {}",
         decision.tool,
@@ -1107,7 +1107,7 @@ const fn policy_verdict(verdict: ToolGateVerdict) -> &'static str {
     }
 }
 
-fn summarize_action_result(result: &ActionResultPayload) -> String {
+pub(crate) fn summarize_action_result(result: &ActionResultPayload) -> String {
     let outcome = if result.success { "ok" } else { "failed" };
     let duration = format_duration_ms(result.duration_ms);
     match result.exit_code {
@@ -1134,7 +1134,7 @@ fn summarize_reasoning(payload: &Value) -> String {
 }
 
 /// Input/output token counts of a model call, e.g. `1.2k/300 tok`.
-fn reasoning_tokens(payload: &Value) -> Option<String> {
+pub(crate) fn reasoning_tokens(payload: &Value) -> Option<String> {
     let input = payload.get("input_tokens").and_then(Value::as_u64);
     let output = payload.get("output_tokens").and_then(Value::as_u64);
     (input.is_some() || output.is_some()).then(|| {
@@ -1147,7 +1147,7 @@ fn reasoning_tokens(payload: &Value) -> Option<String> {
 }
 
 /// Tools a model call asked for, e.g. `tools: read_file, run_command`.
-fn reasoning_tools(payload: &Value) -> Option<String> {
+pub(crate) fn reasoning_tools(payload: &Value) -> Option<String> {
     let tools: Vec<&str> = payload
         .get("tool_uses")
         .and_then(Value::as_array)
@@ -1156,7 +1156,7 @@ fn reasoning_tools(payload: &Value) -> Option<String> {
     (!tools.is_empty()).then(|| format!("tools: {}", tools.join(", ")))
 }
 
-fn summarize_system(payload: &Value) -> String {
+pub(crate) fn summarize_system(payload: &Value) -> String {
     let kind = system_kind(payload);
     let mode = |key: &str| payload.get(key).and_then(Value::as_str);
     if let (Some(from), Some(to)) = (mode("from"), mode("to")) {
@@ -1273,7 +1273,7 @@ pub fn extract_tool_info(tx: &Transaction) -> String {
     }
 }
 
-fn json_payload(tx: &Transaction) -> Option<Value> {
+pub(crate) fn json_payload(tx: &Transaction) -> Option<Value> {
     serde_json::from_slice::<Value>(&tx.payload)
         .ok()
         .filter(Value::is_object)
@@ -1305,17 +1305,17 @@ fn outcome_detail(outcome: &aura_core_types::OutcomePayload) -> Vec<String> {
     ]
 }
 
-fn payload_text(tx: &Transaction) -> String {
+pub(crate) fn payload_text(tx: &Transaction) -> String {
     std::str::from_utf8(&tx.payload)
         .map(str::to_string)
         .unwrap_or_default()
 }
 
-fn collapse_whitespace(text: &str) -> String {
+pub(crate) fn collapse_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn truncate_chars(text: &str, max_chars: usize) -> String {
+pub(crate) fn truncate_chars(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
         return text.to_string();
     }
@@ -1364,7 +1364,7 @@ fn proposal_source_label(source: &str) -> Option<String> {
     Some(label.to_string())
 }
 
-fn format_duration_ms(ms: u64) -> String {
+pub(crate) fn format_duration_ms(ms: u64) -> String {
     if ms < 1000 {
         format!("{ms}ms")
     } else {

@@ -181,12 +181,14 @@ pub async fn start(
     ));
     let record_panel = event_loop::RecordPanelAgent::default();
     let record_router = Arc::new(aura_agent_trace::RecordRouter::new());
+    let (flow, flow_inbox) = event_loop::FlowFeed::new();
     let record_observer: Arc<dyn RecordObserver> = Arc::new(event_loop::FanoutObserver(vec![
         Arc::new(event_loop::UiRecordObserver::new(
             cmd_tx.clone(),
             record_panel.clone(),
         )),
         Arc::clone(&record_router) as Arc<dyn RecordObserver>,
+        Arc::clone(&flow) as Arc<dyn RecordObserver>,
     ]));
     let Harness { hub, background } = build_hub(HubSetup {
         data_dir: data_dir.clone(),
@@ -220,6 +222,7 @@ pub async fn start(
     });
     hub.processes
         .keep_history(data_dir.join(PROCESS_HISTORY_FILE));
+    flow_inbox.serve(&hub, cmd_tx.clone());
     let _ = cmd_tx.try_send(UiCommand::SetAgents(hub.agent_summaries()));
     let _ = cmd_tx.try_send(UiCommand::SetActiveAgent(identity.agent_id.to_hex()));
     let _ = cmd_tx.try_send(UiCommand::SetAgentDefinitions(hub.definition_summaries()));
@@ -241,6 +244,7 @@ pub async fn start(
             models,
             auth,
             approvals,
+            flow: Some(flow),
         };
         event_loop::run_event_loop(ctx).await
     });

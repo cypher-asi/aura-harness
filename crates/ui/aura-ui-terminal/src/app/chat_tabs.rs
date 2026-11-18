@@ -1,5 +1,6 @@
-//! The chat panel's tabs: the conversation, or the terminal that runs the
-//! session's shell commands.
+//! The chat panel's tabs: the conversation, the terminal that runs the
+//! session's shell commands, or the graph of what the agent and the
+//! agents it spawned did.
 
 use super::{tab_at, tab_bar::TabLayout, App, HoverTarget};
 use ratatui::layout::Rect;
@@ -12,16 +13,20 @@ pub enum ChatTab {
     Chat,
     /// Shell commands run this session; the input line runs commands.
     Terminal,
+    /// The flow between the active agent and the agents it spawned, from
+    /// the kernel record.
+    Graph,
 }
 
 impl ChatTab {
-    pub const ALL: [Self; 2] = [Self::Chat, Self::Terminal];
+    pub const ALL: [Self; 3] = [Self::Chat, Self::Terminal, Self::Graph];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Chat => "CHAT",
             Self::Terminal => "TERMINAL",
+            Self::Graph => "GRAPH",
         }
     }
 
@@ -31,13 +36,23 @@ impl ChatTab {
         match self {
             Self::Chat => "CHT",
             Self::Terminal => "TRM",
+            Self::Graph => "GRP",
         }
     }
 
-    const fn other(self) -> Self {
+    const fn next(self) -> Self {
         match self {
             Self::Chat => Self::Terminal,
+            Self::Terminal => Self::Graph,
+            Self::Graph => Self::Chat,
+        }
+    }
+
+    const fn prev(self) -> Self {
+        match self {
+            Self::Chat => Self::Graph,
             Self::Terminal => Self::Chat,
+            Self::Graph => Self::Terminal,
         }
     }
 
@@ -53,7 +68,9 @@ impl App {
     /// Which view the chat panel shows.
     #[must_use]
     pub const fn chat_tab(&self) -> ChatTab {
-        if self.terminal_mode {
+        if self.flow.is_open() {
+            ChatTab::Graph
+        } else if self.terminal_mode {
             ChatTab::Terminal
         } else {
             ChatTab::Chat
@@ -65,15 +82,24 @@ impl App {
         self.areas.chat_tabs = Some(area);
     }
 
-    /// Show `tab`, opening it at its bottom with its own input history.
+    /// Show `tab`. The conversation and the terminal open at their bottom
+    /// with their own input history; the graph asks for the flow of the
+    /// agent on screen.
     pub(super) fn show_chat_tab(&mut self, tab: ChatTab) {
         self.terminal_mode = tab == ChatTab::Terminal;
+        self.flow.set_open(tab == ChatTab::Graph);
         self.history().reset();
         self.scroll_chat_to_bottom();
+        if tab == ChatTab::Graph {
+            self.request_flow();
+        }
     }
 
-    pub(super) fn toggle_chat_tab(&mut self) {
-        self.show_chat_tab(self.chat_tab().other());
+    /// Show the tab after the open one, or the one before it, wrapping
+    /// around.
+    pub(super) fn shift_chat_tab(&mut self, forward: bool) {
+        let tab = self.chat_tab();
+        self.show_chat_tab(if forward { tab.next() } else { tab.prev() });
     }
 
     /// Clicking a tab of the chat panel shows it. Returns whether the click

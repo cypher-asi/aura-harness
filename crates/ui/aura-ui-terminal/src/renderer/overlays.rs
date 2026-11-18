@@ -367,7 +367,7 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "↑/↓        Navigate / History",
         "Ctrl+N     New project (pick its folder)",
         "Space      Fold the selected project",
-        "Shift+←/→  Side panel tabs",
+        "Shift+←/→  Panel tabs (chat: TERMINAL, GRAPH)",
         "o / k / l  Process: open agent, kill, log",
         "Alt+↑/↓    Switch agent",
         "Mouse      Wheel/click agents to switch",

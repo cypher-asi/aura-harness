@@ -22,9 +22,10 @@ use ratatui::{
 };
 use std::ops::Range;
 
-/// Render the Chat panel: a CHAT | TERMINAL header bar over the
-/// conversation or the shell commands run this session. While a record,
-/// file, process or the run graph covers the body, the bar names it.
+/// Render the Chat panel: a CHAT | TERMINAL | GRAPH header bar over the
+/// conversation, the shell commands run this session, or the flow between
+/// the agent and the agents it spawned. While a record, file, process or
+/// the run graph covers the body, the bar names it.
 pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Chat;
     let hosted = app.host_chrome();
@@ -59,6 +60,11 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
             hosted,
         };
         header::show(frame, app, (Pane::Chat, panel, bar), &header, theme);
+    }
+
+    if app.chat_tab() == ChatTab::Graph {
+        super::flow::render_flow(frame, area, app, theme, is_focused);
+        return;
     }
 
     let Some(body) = render_body_block(frame, area, (is_focused, hosted), theme) else {

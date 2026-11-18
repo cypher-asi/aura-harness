@@ -402,7 +402,8 @@ mod tests {
             chrome.tabs,
             [
                 PaneTab::Chat(ChatTab::Chat),
-                PaneTab::Chat(ChatTab::Terminal)
+                PaneTab::Chat(ChatTab::Terminal),
+                PaneTab::Chat(ChatTab::Graph)
             ]
         );
         assert_eq!(chrome.active, Some(PaneTab::Chat(ChatTab::Terminal)));

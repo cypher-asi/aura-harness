@@ -22,6 +22,7 @@ use tokio::sync::Semaphore;
 
 mod compare_runs;
 mod delegation;
+mod flow;
 mod subtasks;
 
 /// Model whose route refuses the sign-in, for Gate's re-routing.
@@ -436,6 +437,7 @@ fn loop_state<'a>(fixture: &'a Fixture, b: &'a mut Borrowed) -> LoopState<'a> {
             fixture._dirs[0].path().join("compare"),
             aura_agent_gate::compare::DEFAULT_CONCURRENCY,
         ),
+        flow: None,
     }
 }
 

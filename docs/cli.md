@@ -174,6 +174,21 @@ Set `AURA_PROJECT_INSTRUCTIONS=off` to stop loading these files.
 - **Ctrl+G** opens the input in your editor (`$VISUAL`, then `$EDITOR`, then `vi`; see [Terminal editor](configuration.md#terminal-editor)). When the editor exits, what you saved replaces the input, newlines included, ready to edit further or send with Enter. If the editor fails, the input stays as it was.
 - **Pasting.** Pasted text arrives in one piece when the terminal supports bracketed paste: newlines stay in the input (shown as `↵`) instead of sending the message line by line.
 
+## The GRAPH tab
+
+The chat panel has three tabs: CHAT, TERMINAL and GRAPH. Shift+←/→ moves between them while the panel has the focus, and so does clicking one. GRAPH shows what the agent on screen and every agent below it did, as their kernels recorded it, oldest at the top.
+
+- **Lanes.** Each agent has a lane, named at the top. The agent on screen is in the first column; agents that work one after another share a column, and agents that work at the same time get one each.
+- **Boxes.** Each box is one step: a `prompt`, a `model` call (model, tokens, time), a `tool` call with its policy decision and result, a `reply`, a `spawn`, a `message` from another agent, a finished background `process`, or the `result` a `task` came back with. The mark before the kind is the step's state: `●` running or waiting, `✓` done, `!` held up, `✗` failed or denied. A prompt takes the state its turn ended in.
+- **Arrows** join lanes: from a `task` call to the prompt of the agent that took the work, from that agent's last step back to the `result` in the caller's lane, from a `spawn` to the first step of the agent it started, and from an agent's reply or message to where the other agent got it.
+- **Moving.** `↑`/`↓` (or `k`/`j`) step through the boxes in time order, `←`/`→` (or `h`/`l`) go to the nearest box in the next lane, `[` and `]` jump between prompts, PgUp/PgDn page, and Home/End go to the first and last box. `f` follows the selected box's arrow to the other agent, and again to come back. The view follows new boxes until you move off the last one; End follows again.
+- **Folding.** Space folds the selected turn down to its prompt (the box then says how many steps it hides, and the turn's arrows move to it); `z` folds or unfolds every turn. Clicking the `▾` on a prompt does the same.
+- **Opening.** Enter (or a second click on the selected box) opens everything known about the step as JSON: the agent, the time, the transaction hash, and the prompt, arguments, result or reply, each cut to 1,200 characters. `r` opens the step's entry in the RECORD panel, which has the rest; the panel lists the agent on screen, so for another agent's box press `o` first. `o` switches to the agent the box belongs to (agents started with `spawn_agent` have no chat to switch to). Esc goes back to CHAT.
+
+The keys work while the input line is empty; typing a message or a `/command` works as in CHAT.
+
+The flow is read from the record store when the tab opens: the last 1,500 entries of each agent, for up to 48 agents (of more, the ones that worked last), keeping the newest 4,000 boxes. It then follows the agents live, dropping the oldest boxes as new ones arrive. Agents started with `task` and with `spawn_agent` both appear; an agent above the one on screen does not, so open the lead agent to see a whole delegation.
+
 ## `aura -p`: one prompt without the terminal
 
 `aura -p "prompt"` (or `--print`) runs one prompt to the end, prints the result, and exits. It is meant for scripts, CI and evals.

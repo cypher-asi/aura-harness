@@ -5,6 +5,7 @@ mod chat_lines;
 mod command;
 mod detail;
 mod diff;
+mod flow;
 mod graph;
 mod header;
 mod hud;
