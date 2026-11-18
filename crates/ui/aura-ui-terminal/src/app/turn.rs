@@ -20,18 +20,6 @@ impl App {
             .map(Message::timestamp_ms)
     }
 
-    /// Whether the agent has shown anything in the chat since the latest
-    /// prompt, so the turn's `AURA` header is already drawn.
-    #[must_use]
-    pub fn turn_has_agent_block(&self) -> bool {
-        self.messages
-            .iter()
-            .rev()
-            .filter(|m| m.shell_run().is_none() && !m.is_empty_reply())
-            .take_while(|m| m.role() != MessageRole::User)
-            .any(|m| m.role() == MessageRole::Assistant)
-    }
-
     /// Highlight the first kernel record of the turn whose prompt was sent
     /// at `started_ms`, with the records panel focused so the arrow keys
     /// step through the turn's records in order.

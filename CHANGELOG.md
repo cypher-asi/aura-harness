@@ -21,11 +21,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   under it, followed by key hints when the screen has room.
 - While a turn runs, its to-do checklist (`☒ ▣ ☐`) and a `⬢ Thinking…`
   line follow the conversation, replacing the progress strip on the Chat
-  panel's border. `/todos` uses the same boxes.
+  panel's border. The current to-do is bold, finished ones fade, and past
+  ten the rest are counted (`3 more`). `/todos` uses the same boxes.
 - The chat is inset two columns, starts a row below the border and stops
-  at 110 columns. User prompts start with `→`. Steps, hints and notices
-  are no longer italic, and project names and code block labels are no
-  longer bold.
+  at 110 columns. User prompts start with `→`. Steps are gray throughout
+  and a collapsed group reads `6 steps (click to expand)`. Inline code is
+  light gray like the reply. Steps, hints and notices are no longer
+  italic, and project names and code block labels are no longer bold.
 - The desktop window's title bars and tabs fill the selected box in gray
   instead of the accent, and it draws `⬢ ☐ ☒ ▣` itself.
 

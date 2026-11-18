@@ -24,7 +24,7 @@ pub(crate) fn parse_inline(text: &str, base: Style, theme: &Theme) -> Vec<Span<'
 }
 
 fn code_style(base: Style, theme: &Theme) -> Style {
-    base.fg(theme.colors.primary).bg(theme.colors.surface)
+    base.fg(theme.colors.text).bg(theme.colors.surface)
 }
 
 /// Bold body text is drawn brighter than the body so it reads as emphasis;

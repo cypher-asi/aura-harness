@@ -15,7 +15,7 @@ for status.
 | Red        | `#f4012a` | `(244, 1, 42)`    | `RED`         | Errors, danger                         |
 | White      | terminal  | `Color::White`    | `WHITE`       | Titles, what the user typed            |
 | Light gray | `#e6e6e6` | `(230, 230, 230)` | `LIGHT_GRAY`  | Reply text                             |
-| Silver     | `#b3b3b3` | `(179, 179, 179)` | `SILVER`      | Step verbs, hovered labels             |
+| Silver     | `#b3b3b3` | `(179, 179, 179)` | `SILVER`      | Hovered labels, to-do counts           |
 | Gray       | `#808080` | `(128, 128, 128)` | `GRAY`        | Secondary text, focused borders        |
 | Dim gray   | `#5a5a5a` | `(90, 90, 90)`    | `DIM_GRAY`    | Borders at rest, markers, key hints    |
 | Black      | `#191919` | `(25, 25, 25)`    | `BLACK`       | Background                             |
@@ -34,7 +34,7 @@ themes keep working:
 | `foreground`    | White      | Titles, the user's messages, the item being worked on |
 | `text`          | Light gray | The agent's replies, what is being typed             |
 | `primary`       | White      | Headings and emphasis                                |
-| `secondary`     | Silver     | Step verbs, the working line, hovered labels         |
+| `secondary`     | Silver     | Hovered labels, the to-do count                      |
 | `success`       | Cyan       | Live and working status (`●`, `⬢`), success          |
 | `warning`       | Blue       | Warnings, waiting on approval, non-agent modes       |
 | `error`         | Red        | Errors, failed steps, danger actions                 |
@@ -52,16 +52,18 @@ themes keep working:
 
 - No italics in UI chrome: steps, hints, notices and counts are upright.
   Italics are kept for markdown emphasis in replies.
-- Bold is for headings and the active tab only. Prompts, project names
-  and code block labels are regular weight.
+- Bold is for headings, the active tab, the live tail's `Working` and
+  status label, and the to-do being worked on. Prompts, project names and
+  code block labels are regular weight.
 
 ### Status Indicators
 
 - **Ready (`●`)** and **working (`⬢`)**: `success`
 - **Waiting (`◐`)**: `warning`
 - **Error (`✗`)**: `error`
-- **To-dos**: `☒` done in `muted`, `▣` in progress in `foreground`, `☐`
-  pending in `secondary`, cancelled `☐` struck through in `faint`
+- **To-dos**: `☒` done in `faint`, `▣` in progress in bold `foreground`,
+  `☐` pending in `muted`, cancelled `☐` struck through in `faint`. Past
+  ten, the rest are counted on a `muted` `N more` row.
 
 ### Borders and Panels
 
@@ -106,6 +108,7 @@ under three columns.
 │  → fix the login bug                         │
 │                                              │
 │    ▸ Explored 4 files, 2 searches            │
+│      2 steps (click to expand)               │
 │                                              │
 │  ⬢ Working on 2 to-dos                       │
 │    ☒ Read the handler                        │
@@ -123,10 +126,13 @@ under three columns.
 - The conversation is inset two columns, starts a row below the border
   and runs at most 110 columns wide.
 - **User messages**: a `muted` `→ ` prompt, then `foreground` text
-- **Replies**: `text`, list markers `muted`
-- **Steps**: markers `faint`, the verb `secondary`, the rest `muted`
-- **Live tail**: while a turn runs, the to-do checklist and then the
-  working line, whose `⬢` is `success`
+- **Replies**: `text`, list markers `muted`, inline code `text` on
+  `surface`
+- **Steps**: markers `faint`, the whole line `muted`
+- **Live tail**: while a turn runs, the to-do checklist (`⬢` `faint`,
+  `Working` bold `foreground`, the count `secondary`), then the working
+  line flush with the reply: `⬢` in `success`, the label bold
+  `foreground`, the elapsed time `muted`
 - **Input box**: as wide as the Chat panel, bordered like it, with a
   `muted` `→ ` prompt and a `muted` placeholder (`Ask anything`, then
   `Add a follow-up`). Shell and login prompts replace the arrow.

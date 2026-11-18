@@ -611,22 +611,20 @@ fn live_tail(app: &App, width: usize, theme: &Theme) -> LiveTail {
     LiveTail { lines, status_row }
 }
 
-/// `⬢ Thinking… 12s` — shown below the conversation while a turn is in
-/// flight and no reply text is streaming. Once the agent has shown
-/// something this turn, it sits in line with the steps:
-/// `  ⬢ Thinking… 12s`.
+/// `⬢ Thinking… 12s` — shown below the conversation, flush with the
+/// prose, while a turn is in flight and no reply text is streaming.
 pub(super) fn working_indicator_line<'a>(app: &App, theme: &Theme) -> Option<Line<'a>> {
     if app.has_live_activity() || app.ends_in_live_group() {
         return None;
     }
     let label = app.working_label()?;
-    let lead = if app.turn_has_agent_block() { "  " } else { "" };
     let mut spans = vec![
-        Span::raw(lead),
         Span::styled("⬢ ", Style::default().fg(theme.colors.success)),
         Span::styled(
             format!("{}…", capitalized(&label)),
-            Style::default().fg(theme.colors.secondary),
+            Style::default()
+                .fg(theme.colors.foreground)
+                .add_modifier(Modifier::BOLD),
         ),
     ];
     if let Some(elapsed) = app.processing_elapsed().filter(|e| e.as_secs() > 0) {

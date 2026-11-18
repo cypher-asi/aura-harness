@@ -2426,14 +2426,14 @@ fn test_live_steps_are_numbered_in_order_then_condense() {
     app.process_command(UiCommand::Complete);
     let done = render_rows(&mut app, 120).join("\n");
     assert!(done.contains("▸ Explored 6 files"), "{done}");
-    assert!(done.contains("… 6 steps, click to show"), "{done}");
+    assert!(done.contains("6 steps (click to expand)"), "{done}");
     assert!(!done.contains("Read f1.rs"), "{done}");
 
-    click_text(&mut app, "6 steps, click to show");
+    click_text(&mut app, "6 steps (click to expand)");
     let open = render_rows(&mut app, 120).join("\n");
     assert!(open.contains("▾ Explored 6 files"), "{open}");
     assert!(open.contains("1 ▸ Read f1.rs"), "{open}");
-    assert!(!open.contains("click to show"), "{open}");
+    assert!(!open.contains("click to expand"), "{open}");
 }
 
 fn record_at(seq: u64, ts_ms: u64) -> crate::events::RecordSummary {
@@ -2476,7 +2476,7 @@ fn test_open_thinking_shows_its_reasoning_and_jumps_to_turn_records() {
     read_tool(&mut app, "t1", "src/main.rs");
     app.process_command(UiCommand::Complete);
 
-    click_text(&mut app, "click to show");
+    click_text(&mut app, "click to expand");
     click_text(&mut app, "Thought");
     let open = render_rows(&mut app, 120).join("\n");
     assert!(

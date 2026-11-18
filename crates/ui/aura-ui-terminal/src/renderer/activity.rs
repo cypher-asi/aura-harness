@@ -96,11 +96,11 @@ pub(super) fn records_link(number: Option<usize>, width: usize, theme: &Theme) -
     )
 }
 
-/// `… 5 steps, click to show` under a collapsed group's summary line.
+/// `5 steps (click to expand)` under a collapsed group's summary line.
 pub(super) fn collapsed_hint(steps: usize, theme: &Theme) -> Line<'static> {
     Line::from(Span::styled(
         format!(
-            "{}… {}, click to show",
+            "{}{} (click to expand)",
             " ".repeat(NUMBER_WIDTH + 2),
             count(steps, "step", "steps")
         ),
@@ -141,7 +141,10 @@ pub(super) fn group_header(
     );
     let summary = truncate(&tally.summary(live), room);
     let mut spans = vec![marker];
-    spans.extend(verb_spans(&summary, theme));
+    spans.push(Span::styled(
+        summary,
+        Style::default().fg(theme.colors.muted),
+    ));
     spans.push(Span::styled(
         progress.to_string(),
         Style::default().fg(theme.colors.muted),
@@ -289,20 +292,6 @@ fn thought_label(duration_ms: Option<u64>) -> String {
         Some(ms) if ms < 60_000 => format!("Thought {}s", ms / 1000),
         Some(ms) => format!("Thought {}", format_elapsed(Duration::from_millis(ms))),
     }
-}
-
-/// `text` with its first word brighter than the rest: `Read` stands out
-/// from `main.rs L1-80`.
-fn verb_spans(text: &str, theme: &Theme) -> Vec<Span<'static>> {
-    let split = text.find(' ').unwrap_or(text.len());
-    let (verb, rest) = text.split_at(split);
-    vec![
-        Span::styled(
-            verb.to_string(),
-            Style::default().fg(theme.colors.secondary),
-        ),
-        Span::styled(rest.to_string(), Style::default().fg(theme.colors.muted)),
-    ]
 }
 
 /// Where a block's body lines go: the `│` rule under its marker.
@@ -511,7 +500,7 @@ fn tool_header(
         marker,
         Span::styled(icon.to_string(), Style::default().fg(icon_color)),
     ];
-    spans.extend(verb_spans(&label, theme));
+    spans.push(Span::styled(label, Style::default().fg(theme.colors.muted)));
     spans.extend(stat);
     spans.push(Span::styled(meta, Style::default().fg(theme.colors.muted)));
     Line::from(spans)
@@ -925,7 +914,7 @@ mod tests {
         let theme = Theme::default();
         assert_eq!(
             text(&collapsed_hint(5, &theme)),
-            "       … 5 steps, click to show"
+            "       5 steps (click to expand)"
         );
     }
 

@@ -243,7 +243,13 @@ pub(super) fn todo_checklist(hud: &Hud, width: usize, theme: &Theme) -> Vec<Line
     let mut lines = vec![Line::from(vec![
         Span::styled("⬢ ", Style::default().fg(theme.colors.faint)),
         Span::styled(
-            format!("Working on {total} to-do{plural}"),
+            "Working",
+            Style::default()
+                .fg(theme.colors.foreground)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" on {total} to-do{plural}"),
             Style::default().fg(theme.colors.secondary),
         ),
     ])];
@@ -254,6 +260,13 @@ pub(super) fn todo_checklist(hud: &Hud, width: usize, theme: &Theme) -> Vec<Line
             .take(MAX_TODO_ROWS)
             .map(|todo| todo_line(todo, room, theme)),
     );
+    let more = hud.todos.len().saturating_sub(MAX_TODO_ROWS);
+    if more > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("    {more} more"),
+            Style::default().fg(theme.colors.muted),
+        )));
+    }
     lines
 }
 
@@ -262,18 +275,20 @@ fn todo_line(todo: &TodoView, room: usize, theme: &Theme) -> Line<'static> {
     let (mark, mark_color, text_style) = match todo.state {
         TodoState::Completed => (
             "☒",
-            theme.colors.muted,
-            Style::default().fg(theme.colors.muted),
+            theme.colors.faint,
+            Style::default().fg(theme.colors.faint),
         ),
         TodoState::InProgress => (
             "▣",
             theme.colors.foreground,
-            Style::default().fg(theme.colors.foreground),
+            Style::default()
+                .fg(theme.colors.foreground)
+                .add_modifier(Modifier::BOLD),
         ),
         TodoState::Pending => (
             "☐",
-            theme.colors.secondary,
-            Style::default().fg(theme.colors.text),
+            theme.colors.muted,
+            Style::default().fg(theme.colors.muted),
         ),
         TodoState::Cancelled => (
             "☐",
@@ -337,6 +352,65 @@ mod tests {
     fn footer_hints_need_room() {
         assert_eq!(footer_rows(MIN_HEIGHT_FOR_HINTS - 1), 1);
         assert_eq!(footer_rows(MIN_HEIGHT_FOR_HINTS), 2);
+    }
+
+    #[test]
+    fn checklist_boxes_each_state() {
+        let theme = Theme::default();
+        let todo = |content: &str, state| TodoView {
+            content: content.to_string(),
+            state,
+        };
+        let hud = Hud {
+            todos: vec![
+                todo("read", TodoState::Completed),
+                todo("fix", TodoState::InProgress),
+                todo("test", TodoState::Pending),
+                todo("drop", TodoState::Cancelled),
+            ],
+            ..Hud::default()
+        };
+        let lines = todo_checklist(&hud, 40, &theme);
+        let text = |line: &Line<'_>| -> String { line.spans.iter().map(|s| &*s.content).collect() };
+        let rows: Vec<String> = lines.iter().map(text).collect();
+        assert_eq!(
+            rows,
+            [
+                "⬢ Working on 3 to-dos",
+                "  ☒ read",
+                "  ▣ fix",
+                "  ☐ test",
+                "  ☐ drop"
+            ]
+        );
+        let item = |row: usize| lines[row].spans[1].style;
+        assert_eq!(item(1).fg, Some(theme.colors.faint));
+        assert_eq!(item(2).fg, Some(theme.colors.foreground));
+        assert!(item(2).add_modifier.contains(Modifier::BOLD));
+        assert_eq!(item(3).fg, Some(theme.colors.muted));
+        assert!(item(4).add_modifier.contains(Modifier::CROSSED_OUT));
+    }
+
+    #[test]
+    fn checklist_counts_what_it_leaves_out() {
+        let theme = Theme::default();
+        let hud = Hud {
+            todos: (0..MAX_TODO_ROWS + 2)
+                .map(|i| TodoView {
+                    content: format!("step {i}"),
+                    state: TodoState::Pending,
+                })
+                .collect(),
+            ..Hud::default()
+        };
+        let lines = todo_checklist(&hud, 40, &theme);
+        assert_eq!(lines.len(), MAX_TODO_ROWS + 2);
+        let last: String = lines[MAX_TODO_ROWS + 1]
+            .spans
+            .iter()
+            .map(|s| &*s.content)
+            .collect();
+        assert_eq!(last.trim(), "2 more");
     }
 
     #[test]
