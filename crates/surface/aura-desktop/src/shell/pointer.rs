@@ -4,7 +4,7 @@
 //! the window, which has no frame from the system: empty bar space moves
 //! it and its edges resize it.
 
-use super::{Effect, Shell};
+use super::{glide, Effect, Shell};
 use crate::chrome::{self, Divider};
 use crate::geom::{Point, Size};
 use crate::tab_bar::{self, Hit};
@@ -21,13 +21,13 @@ const CORNER: f32 = 16.0;
 /// Two presses on empty tab bar space this close together maximize.
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 /// Most lines one turn of the wheel scrolls, whatever the device says.
-const MOST_LINES: f32 = 200.0;
+pub(super) const MOST_LINES: f32 = 200.0;
 
 /// Where the pointer is and what it is doing.
 #[derive(Default)]
 pub struct Pointer {
     /// The grid cell under it
-    cell: Option<Position>,
+    pub(super) cell: Option<Position>,
     /// Where it is on the grid's part of the window, while over it
     pub(super) on_grid: Option<Point>,
     /// Where it is while over the tab bar
@@ -90,19 +90,19 @@ impl Shell {
             self.chrome.point(Some(in_grid));
         }
         self.dirty |= hovers != (self.bar.hover(), self.chrome.hover());
-        let cell = self
-            .metrics
-            .cell_at(self.grid_area(), self.cols, self.rows, in_grid);
+        let cell = self.cell_at(in_grid);
         if self.pointer.cell == Some(cell) {
             return;
         }
         self.pointer.cell = Some(cell);
-        self.send_mouse(if self.pointer.left_down {
+        let changed = self.send_mouse(if self.pointer.left_down {
             MouseEventKind::Drag(Button::Left)
         } else {
             MouseEventKind::Moved
         });
-        self.settle(started);
+        if changed {
+            self.settle(started);
+        }
     }
 
     /// The pointer left the window.
@@ -138,6 +138,10 @@ impl Shell {
             let Some(button) = mouse_button(button) else {
                 return;
             };
+            // The chat may have slid under a pointer that kept still.
+            if let Some(at) = self.pointer.on_grid {
+                self.pointer.cell = Some(self.cell_at(at));
+            }
             self.pointer.left_down |= button == Button::Left;
             MouseEventKind::Down(button)
         } else {
@@ -163,16 +167,18 @@ impl Shell {
     }
 
     /// The wheel turned, or two fingers moved on a touchpad.
-    pub fn wheel(&mut self, delta: MouseScrollDelta) {
-        if self.pointer.on_bar.is_some() {
+    pub fn wheel(&mut self, delta: MouseScrollDelta, now: Instant) {
+        if self.pointer.on_bar.is_some() || self.glide_wheel(delta, now) {
             return;
         }
         let started = Instant::now();
         #[allow(clippy::cast_possible_truncation)]
         let lines = match delta {
             MouseScrollDelta::LineDelta(_, y) => y,
-            MouseScrollDelta::PixelDelta(by) => by.y as f32 / self.metrics.cell.height,
-        };
+            MouseScrollDelta::PixelDelta(by) => {
+                by.y as f32 * glide::TOUCHPAD_GAIN / self.metrics.cell.height
+            }
+        } * glide::speed();
         if !lines.is_finite() {
             return;
         }
@@ -266,9 +272,11 @@ impl Shell {
         }
     }
 
-    fn send_mouse(&mut self, kind: MouseEventKind) {
+    /// Hand the terminal UI a mouse event at the pointer's cell, and say
+    /// whether the screen may look different for it.
+    fn send_mouse(&mut self, kind: MouseEventKind) -> bool {
         let Some(at) = self.pointer.cell else {
-            return;
+            return false;
         };
         let modifiers = super::keys::modifiers(self.modifiers);
         self.tabs.front_mut().tui.handle_mouse(MouseEvent {
@@ -276,7 +284,7 @@ impl Shell {
             column: at.x,
             row: at.y,
             modifiers,
-        });
+        })
     }
 }
 
@@ -541,7 +549,7 @@ mod tests {
     }
 
     #[test]
-    fn the_wheel_scrolls_the_chat_by_whole_lines() {
+    fn the_wheel_scrolls_the_chat_by_pixels() {
         let mut stage = stage();
         stage.seed(false);
         stage.shell.commands([UiCommand::StartStreaming]);
@@ -555,27 +563,93 @@ mod tests {
             .pointer_moved(Point::new(width / 2.0, height / 2.0));
         stage.draw();
 
-        // A touchpad: a third of a line at a time moves nothing twice.
-        let third = f64::from(stage.shell.metrics.cell.height) / 3.0;
-        let nudge = MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, third + 0.01));
-        stage.shell.wheel(nudge);
-        stage.shell.wheel(nudge);
-        assert!(!stage.shell.dirty());
-        stage.shell.wheel(nudge);
-        assert!(stage.shell.dirty(), "the third makes a line");
+        // Moving over plain text changes nothing on screen.
+        let cell = stage.shell.metrics.cell;
+        stage.shell.pointer_moved(Point::new(
+            width / 2.0 + 2.0 * cell.width,
+            height / 2.0 + cell.height,
+        ));
+        assert!(
+            !stage.shell.dirty(),
+            "no frame for a move that shows nothing"
+        );
+
+        // A touchpad: a third of a row up from the bottom is the row above
+        // drawn two thirds of a row higher.
+        let offset = |stage: &Stage| stage.shell.tabs.front().tui.scroll_offset();
+        let third = f64::from(cell.height / glide::TOUCHPAD_GAIN) / 3.0;
+        let nudge = MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, third));
+        stage.shell.wheel(nudge, stage.now);
+        assert!(stage.shell.dirty());
+        assert_eq!(offset(&stage), 1);
         stage.draw();
 
-        stage.shell.wheel(MouseScrollDelta::LineDelta(0.0, 30.0));
-        stage.draw();
+        // Another third slides the same rows.
+        let rows = stage.shell.text();
+        stage.shell.wheel(nudge, stage.now);
+        assert!(stage.shell.dirty(), "the body slides");
+        assert_eq!(offset(&stage), 1);
+        let slid = stage.pixels();
+        assert_eq!(stage.shell.painter.built(), 0, "painted from kept rows");
+        assert_eq!(stage.shell.text(), rows);
+        assert!(slid == crate::shell::tests::afresh(&stage.shell));
+
+        // A notch eases out over frames.
+        let settle = |stage: &mut Stage| {
+            let mut frames = 0;
+            while stage.shell.dirty() && frames < 200 {
+                stage.now += Duration::from_millis(16);
+                stage.draw();
+                frames += 1;
+            }
+            frames
+        };
+        let notch = |notches| MouseScrollDelta::LineDelta(0.0, notches);
+        let before = offset(&stage);
+        stage.now += Duration::from_secs(1);
+        stage.shell.wheel(notch(4.0), stage.now);
+        let frames = settle(&mut stage);
+        assert!((4..100).contains(&frames), "{frames} frames");
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let rows = (4.0 * glide::NOTCH_ROWS) as usize;
+        let moved = offset(&stage) - before;
+        assert!((rows - 1..=rows + 1).contains(&moved), "{moved} rows");
         assert!(!stage.shell.text().contains("line 199"), "scrolled up");
-        stage.shell.wheel(MouseScrollDelta::LineDelta(0.0, -400.0));
-        stage.draw();
-        assert!(stage.shell.text().contains("line 199"), "and back down");
+        assert!(stage.pixels() == crate::shell::tests::afresh(&stage.shell));
+
+        // Notches of a spin go further each time.
+        let before = offset(&stage);
+        stage.now += Duration::from_secs(1);
+        for _ in 0..4 {
+            stage.shell.wheel(notch(1.0), stage.now);
+            stage.now += Duration::from_millis(30);
+            stage.draw();
+        }
+        settle(&mut stage);
+        let spun = offset(&stage) - before;
+        assert!(
+            spun > moved + 2,
+            "a spin of 4 went {spun} rows, 4 notches {moved}"
+        );
+
+        // Turning back stops what is easing out.
+        stage.now += Duration::from_secs(1);
+        stage.shell.wheel(notch(4.0), stage.now);
+        let before = offset(&stage);
+        stage.shell.wheel(notch(-1.0), stage.now);
+        settle(&mut stage);
+        assert!(offset(&stage) < before, "went back down");
+
+        stage.shell.wheel(notch(-400.0), stage.now);
+        settle(&mut stage);
+        assert_eq!(offset(&stage), 0, "and back to the bottom, on its rows");
+        assert!(stage.shell.text().contains("line 199"));
+        assert!(stage.pixels() == crate::shell::tests::afresh(&stage.shell));
 
         // Not over the tab bar.
         stage.shell.pointer_moved(Point::new(width / 2.0, 4.0));
         stage.draw();
-        stage.shell.wheel(MouseScrollDelta::LineDelta(0.0, 30.0));
+        stage.shell.wheel(notch(30.0), stage.now);
         assert!(!stage.shell.dirty());
     }
 

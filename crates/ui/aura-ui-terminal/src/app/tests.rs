@@ -1502,8 +1502,11 @@ fn test_wheel_over_agents_scrolls_without_switching() {
     assert_eq!(app.focus(), PanelFocus::Chat);
     assert_eq!(app.scroll_offset(), 0);
 
+    // Three rows a notch, as in the chat.
     app.handle_mouse(mouse(MouseEventKind::ScrollUp, 5, 5));
-    assert_eq!(app.agents_scroll(), 2);
+    assert_eq!(app.agents_scroll(), 0);
+    app.handle_mouse(mouse(MouseEventKind::ScrollDown, 5, 5));
+    assert_eq!(app.agents_scroll(), 3);
 
     // A key brings the highlight back into view. Up from the first agent
     // has no agent to reach, so the highlight stays where it is.

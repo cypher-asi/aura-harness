@@ -52,8 +52,8 @@ mod terminal;
 // Re-exports for convenience
 pub use alerts::AlertSettings;
 pub use app::{
-    AgentsTab, App, AppState, ChatTab, Pane, PaneChrome, PaneSplits, PaneTab, ProseMeasure,
-    ProseRow, SidePanelTab,
+    AgentsTab, App, AppState, ChatScroll, ChatTab, Pane, PaneChrome, PaneSplits, PaneTab,
+    ProseMeasure, ProseRow, SidePanelTab,
 };
 pub use events::{UiCommand, UiEvent};
 pub use mode_command::{ApprovalLevel, ModeCommandError, PermissionMode, SlashModeCommand};

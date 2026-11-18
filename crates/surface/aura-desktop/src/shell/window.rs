@@ -377,7 +377,7 @@ impl ApplicationHandler<Wake> for Handler {
                 self.shell
                     .button(button, state.is_pressed(), Instant::now());
             }
-            WindowEvent::MouseWheel { delta, .. } => self.shell.wheel(delta),
+            WindowEvent::MouseWheel { delta, .. } => self.shell.wheel(delta, Instant::now()),
             _ => {}
         }
     }

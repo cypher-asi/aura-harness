@@ -372,7 +372,8 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   `replay_timings` and `swarm_timings` tests report boot, streaming,
   keystroke and frame timings, and a second of thirty agents streaming
   at once; `history_timings` reports frames of a 2,000-message
-  conversation and of a long reply streaming after it, and
+  conversation and of a long reply streaming after it, `scroll_timings`
+  reports frames of a long chat and 400 agents scrolling, and
   `aura-ui-terminal` has `history_timings` and `streaming_timings` for
   the UI alone.
 - `aura_terminal::render`, `App::paste_from_clipboard` and
@@ -404,6 +405,29 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   closes each reply, and notices start with `*`.
 - The window draws everything in Geist Mono, chat prose included, with
   a block cursor; the proportional Geist faces are no longer bundled.
+- The chat scrolls by pixels in the window. A touchpad moves it twice
+  as far as the fingers do, and a notch of the wheel eases five rows
+  over a few frames; notches in quick succession go further each time,
+  up to three times as far, and turning the wheel back stops what is
+  easing out. `AURA_DESKTOP_SCROLL_SPEED` scales all of it. The
+  projects list scrolls three rows a notch, like the other panels.
+  The terminal UI still scrolls by whole rows. Between
+  rows, the window draws the chat's body higher than its cells, cut to
+  the body, and shows the row below the body coming in. A frame that
+  only slides the body is painted from the rows already rendered, with
+  no render of the terminal UI. A click goes to the row drawn under
+  the pointer. Other panels still scroll by whole rows.
+  `App::set_smooth_scroll`, `App::chat_scroll`, `App::chat_row_below`
+  and `App::scroll_chat_rows` let other frontends do the same.
+- Rows are painted and kept in pieces, cut at the panels' borders. A
+  panel that scrolls leaves the pieces of the panels beside it as they
+  were. A notch of the wheel over the chat used to paint 2,161 rows
+  anew over 160 frames; now it paints 322 pieces.
+- The projects list and the archive format only the rows on screen, so
+  hundreds of agents cost what fits in the panel.
+- Moving the pointer only asks for a frame when what is under it
+  changes: a highlight, or a selection being dragged.
+  `App::handle_mouse` returns whether the screen may look different.
 
 ### Surface — UI protocol and agent session shared by every frontend
 

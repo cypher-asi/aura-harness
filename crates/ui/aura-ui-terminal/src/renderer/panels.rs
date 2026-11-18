@@ -7,8 +7,8 @@ use super::text::{display_width, wrap_words, Measure};
 use crate::{
     animation::AURA_WIDTH,
     app::{
-        tab_bar::TabLayout, AgentsTab, ChatTab, HoverTarget, ImageHit, Pane, PanelFocus,
-        ProjectListRow, ProseRow, ToggleRow, ToggleTarget,
+        tab_bar::TabLayout, AgentsTab, ChatScroll, ChatTab, HoverTarget, ImageHit, Pane,
+        PanelFocus, ProjectListRow, ProseRow, ToggleRow, ToggleTarget,
     },
     App, Theme,
 };
@@ -17,7 +17,9 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
+    widgets::{
+        Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Widget, Wrap,
+    },
     Frame,
 };
 use std::ops::Range;
@@ -88,7 +90,7 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     }
     let tail: Vec<Line<'static>> = working_line.into_iter().collect();
 
-    let rows = render_chat_lines(frame, padded, app, theme, &tail);
+    let rows = render_chat_lines(frame, (body, padded), app, theme, &tail);
     render_scrollbar(
         frame,
         area,
@@ -200,10 +202,12 @@ pub(super) fn render_scrollbar(
 
 /// Draw the rows of the conversation that fall in `padded` at the current
 /// scroll position, cloning only those rows out of the line cache, then
-/// `tail` (the working indicator) a blank row below them.
+/// `tail` (the working indicator) a blank row below them. With smooth
+/// scrolling on, the row below `padded` is drawn on its own too, and
+/// `body` is what the front end slides.
 fn render_chat_lines(
     frame: &mut Frame,
-    padded: Rect,
+    (body, padded): (Rect, Rect),
     app: &mut App,
     theme: &Theme,
     tail: &[Line<'static>],
@@ -262,16 +266,18 @@ fn render_chat_lines(
     let start = app.sync_chat_scroll(total, height, reflowed);
     app.set_chat_layout(toggle_rows, start);
 
+    let smooth = app.smooth_scroll();
+    let rows = height + usize::from(smooth);
     let (_, cache, _) = app.chat_line_cache();
     let blank = Line::default();
-    let mut visible = Vec::with_capacity(height);
+    let mut visible = Vec::with_capacity(rows);
     let mut prose = Vec::new();
     let mut user_rows = Vec::new();
     let mut line_index = 0usize;
     for (i, block) in cache.blocks().enumerate() {
         if i > 0 {
             for _ in 0..gap {
-                push_visible(&mut visible, &mut line_index, start, height, blank.clone());
+                push_visible(&mut visible, &mut line_index, start, rows, blank.clone());
             }
         }
         let hovered = |offset: usize| {
@@ -281,7 +287,7 @@ fn render_chat_lines(
                 .any(|toggle| toggle.line == offset && hovered_activity == Some(toggle.target))
         };
         for (offset, line) in block.lines.iter().enumerate() {
-            if line_index >= start && visible.len() < height {
+            if line_index >= start && visible.len() < rows {
                 let mut line = line.clone();
                 if hovered(offset) {
                     apply_activity_hover(&mut line, theme);
@@ -298,15 +304,23 @@ fn render_chat_lines(
         }
     }
     if tail_gap > 0 {
-        push_visible(&mut visible, &mut line_index, start, height, blank);
+        push_visible(&mut visible, &mut line_index, start, rows, blank);
     }
     for (row, line) in tail.iter().enumerate() {
         let mut line = line.clone();
         if row == 0 && tail_toggle.is_some_and(|t| hovered_activity == Some(t.target)) {
             apply_activity_hover(&mut line, theme);
         }
-        push_visible(&mut visible, &mut line_index, start, height, line);
+        push_visible(&mut visible, &mut line_index, start, rows, line);
     }
+    let next = (visible.len() > height).then(|| visible.pop()).flatten();
+    let next_prose = prose
+        .last()
+        .filter(|(row, _)| *row == height)
+        .map(|&(_, indent)| indent.min(padded.width));
+    prose.retain(|(row, _)| *row < height);
+    let next_user = user_rows.last() == Some(&height);
+    user_rows.retain(|row| *row < height);
     let prose_lines: Vec<(usize, u16, Line<'static>)> = prose
         .into_iter()
         .map(|(row, indent)| (row, indent.min(padded.width), visible[row].clone()))
@@ -354,11 +368,58 @@ fn render_chat_lines(
         }
     }
     app.set_chat_images(image_hits);
+    if smooth {
+        let width = frame.buffer_mut().area.width;
+        let below = row_below(width, padded, next, (next_prose, next_user), measure, theme);
+        let view = ChatScroll {
+            body,
+            above: start,
+            below: app.scroll_offset(),
+        };
+        app.set_chat_scroll(view, frame.buffer_mut(), below);
+    }
     ChatRows {
         total,
         first: start,
         padding,
     }
+}
+
+/// The chat's `line` below `padded`, drawn alone into a buffer a row high
+/// and `width` wide, with its prose when it has an indent (`prose`), and
+/// the band of a user's message under it when it is one (`user`).
+fn row_below(
+    width: u16,
+    padded: Rect,
+    line: Option<Line<'static>>,
+    (prose, user): (Option<u16>, bool),
+    measure: Measure,
+    theme: &Theme,
+) -> (Buffer, Option<ProseRow>) {
+    let mut buffer = Buffer::empty(Rect::new(0, 0, width, 1));
+    let row = Rect {
+        y: 0,
+        height: 1,
+        ..padded
+    }
+    .intersection(buffer.area);
+    let Some(line) = line else {
+        return (buffer, None);
+    };
+    let prose_line = prose.map(|indent| (indent, line.clone()));
+    Paragraph::new(line).render(row, &mut buffer);
+    let prose = prose_line.map(|(indent, line)| {
+        let (width, code) = if measure.is_grid() {
+            prose_columns(&line, row, theme)
+        } else {
+            pack_prose(&mut buffer, &line, (row, indent), measure, theme)
+        };
+        ProseRow::new(&buffer, (row.x, row.y), (width, indent), code)
+    });
+    if user {
+        paint_user_band(&mut buffer, row, &[0], theme);
+    }
+    (buffer, prose)
 }
 
 /// How the chat's rows fell in the last frame.
@@ -664,14 +725,14 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
             app.set_agent_rows_area(rows_area);
             app.set_new_project_area(bottom_row);
             app.sync_agents_scroll(visible);
-            let mut lines = build_swarm_lines(app, body, theme);
-            let new_project = lines.pop().unwrap_or_default();
+            let first = app.agents_scroll();
+            let (lines, new_project, total) =
+                build_swarm_lines(app, body, first..first + visible, theme);
             let view = ScrollView {
-                total: lines.len(),
+                total,
                 visible,
-                first: app.agents_scroll(),
+                first,
             };
-            let lines: Vec<Line> = lines.into_iter().skip(view.first).take(visible).collect();
             frame.render_widget(Paragraph::new(lines), rows_area);
             frame.render_widget(Paragraph::new(new_project), bottom_row);
             render_scrollbar(frame, area, rows_area, view, is_focused, theme);
@@ -701,13 +762,13 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
             let visible = body.height as usize;
             app.set_archived_rows_area(body);
             app.sync_archived_scroll(visible);
-            let lines = build_archived_lines(app, body, theme);
+            let first = app.archived_scroll();
+            let (lines, total) = build_archived_lines(app, body, first..first + visible, theme);
             let view = ScrollView {
-                total: lines.len(),
+                total,
                 visible,
-                first: app.archived_scroll(),
+                first,
             };
-            let lines: Vec<Line> = lines.into_iter().skip(view.first).take(visible).collect();
             frame.render_widget(Paragraph::new(lines), body);
             render_scrollbar(frame, area, body, view, is_focused, theme);
         }
@@ -720,8 +781,14 @@ const EMPTY_INDENT: usize = 2;
 
 /// Archive rows: each archived agent with the project it came from on the
 /// right, and the agents under it indented below. Empty, it says how
-/// agents get there, wrapped to the panel inside its padding.
-fn build_archived_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>> {
+/// agents get there, wrapped to the panel inside its padding. Only the
+/// rows in `window` are drawn; the total comes with them.
+fn build_archived_lines<'a>(
+    app: &App,
+    inner: Rect,
+    window: Range<usize>,
+    theme: &Theme,
+) -> (Vec<Line<'a>>, usize) {
     let archived = app.archived();
     if archived.is_empty() {
         let muted = Style::default().fg(theme.colors.muted);
@@ -729,7 +796,7 @@ fn build_archived_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'
             .saturating_sub(2 * EMPTY_INDENT)
             .max(1);
         let indent = " ".repeat(EMPTY_INDENT);
-        return [
+        let lines: Vec<Line> = [
             "No archived agents.",
             "Delete on an agent in PROJECTS archives it.",
         ]
@@ -737,13 +804,22 @@ fn build_archived_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'
         .flat_map(|sentence| wrap_words(sentence, room))
         .map(|line| Line::from(Span::styled(format!("{indent}{line}"), muted)))
         .collect();
+        let total = lines.len();
+        let shown = lines
+            .into_iter()
+            .skip(window.start)
+            .take(window.len())
+            .collect();
+        return (shown, total);
     }
     let is_focused = app.focus() == PanelFocus::Swarm;
     let width = inner.width as usize;
     let now_ms = now_ms();
-    archived
+    let shown = archived
         .iter()
         .enumerate()
+        .skip(window.start)
+        .take(window.len())
         .map(|(index, agent)| {
             let selected = is_focused && index == app.selected_archived();
             let hovered = matches!(app.hover(), Some(HoverTarget::ArchivedRow(i)) if i == index);
@@ -768,7 +844,8 @@ fn build_archived_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'
                 side.as_deref(),
             )
         })
-        .collect()
+        .collect();
+    (shown, archived.len())
 }
 
 /// A project is its own row under a folder icon, with a "+" on the right
@@ -793,7 +870,16 @@ fn build_archived_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'
 ///  …
 ///  +  New project
 /// ```
-fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>> {
+///
+/// Returns the rows in `window` of the ones that scroll, the pinned last
+/// row, and how many rows scroll. Only those rows are formatted, so a
+/// long list costs what fits on screen.
+fn build_swarm_lines<'a>(
+    app: &App,
+    inner: Rect,
+    window: Range<usize>,
+    theme: &Theme,
+) -> (Vec<Line<'a>>, Line<'a>, usize) {
     let is_focused = app.focus() == PanelFocus::Swarm;
     let selected = app.selected_agent();
     let active_id = app.active_agent_id();
@@ -806,9 +892,28 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
         .fg(theme.colors.muted)
         .add_modifier(Modifier::BOLD);
     let agent_name = Style::default().fg(theme.colors.foreground);
-    let mut lines = Vec::new();
+    let rows = app.project_rows();
+    let listed = rows.len().saturating_sub(1);
+    // A project's agents run up to the next project's root.
+    let roots: Vec<usize> = rows
+        .iter()
+        .filter_map(|row| match row {
+            ProjectListRow::Project { root, .. } => Some(*root),
+            _ => None,
+        })
+        .collect();
+    let mut projects_seen = 0;
+    let mut lines = Vec::with_capacity(window.len());
+    let mut new_project = Line::default();
 
-    for (row_index, row) in app.project_rows().into_iter().enumerate() {
+    for (row_index, row) in rows.into_iter().enumerate() {
+        if matches!(row, ProjectListRow::Project { .. }) {
+            projects_seen += 1;
+        }
+        let pinned = matches!(row, ProjectListRow::NewProject);
+        if !pinned && (row_index >= listed || !window.contains(&row_index)) {
+            continue;
+        }
         let is_selected = match row {
             ProjectListRow::Project { .. } | ProjectListRow::Gap => false,
             _ if is_focused => row_index == selected,
@@ -821,7 +926,10 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
             || matches!(app.hover(), Some(HoverTarget::ProjectRow(index)) if index == row_index);
         match row {
             ProjectListRow::Project { root, expanded } => {
-                let end = app_project_end(app, root);
+                let end = roots
+                    .get(projects_seen)
+                    .copied()
+                    .unwrap_or(app.agents().len());
                 let agents = &app.agents()[root..end];
                 let icon = if !expanded && agents.iter().any(is_thinking) {
                     aura_icon(app)
@@ -868,12 +976,12 @@ fn build_swarm_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>>
                     Style::default().fg(theme.colors.muted),
                 );
                 let icon = StatusIcon::new("+", cell.text.fg.unwrap_or(theme.colors.muted));
-                lines.push(list_row(width, 0, icon, "New project", cell, None));
+                new_project = list_row(width, 0, icon, "New project", cell, None);
             }
             ProjectListRow::Gap => lines.push(Line::default()),
         }
     }
-    lines
+    (lines, new_project, listed)
 }
 
 /// What sits in the icon column of a projects-list row.
@@ -1031,15 +1139,6 @@ pub(super) fn format_ago(then_ms: u64, now_ms: u64) -> String {
         s if s < WEEK => format!("{}d", s / DAY),
         s => format!("{}w", s / WEEK),
     }
-}
-
-/// First index past the agents belonging to the project rooted at `root`.
-fn app_project_end(app: &App, root: usize) -> usize {
-    app.agents()
-        .iter()
-        .skip(root + 1)
-        .position(|agent| agent.heads_project())
-        .map_or(app.agents().len(), |offset| root + 1 + offset)
 }
 
 fn project_label(agent: &crate::events::AgentSummary) -> String {
