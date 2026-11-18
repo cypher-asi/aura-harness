@@ -56,7 +56,8 @@ fn inset_edges(area: Rect) -> Rect {
 }
 
 /// Render the full application UI: the header row, then the panels, with
-/// the input box and the footer under the Chat panel.
+/// the input box and the footer under the Chat panel. The side columns end
+/// level with the input box.
 pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     let area = frame.area();
     let rows = Layout::default()
@@ -82,6 +83,11 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
             Constraint::Length(footer_rows),
         ])
         .split(column);
+    let above_footer = |side: Rect| Rect {
+        height: side.height.saturating_sub(footer_rows),
+        ..side
+    };
+    let (swarm, right) = (swarm.map(above_footer), right.map(above_footer));
 
     render_header(frame, inset_edges(rows[0]), app, theme);
 

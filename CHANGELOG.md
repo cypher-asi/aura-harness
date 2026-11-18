@@ -12,13 +12,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ##### Changed
 
 - The default `cyber` theme is graphite and gray. The cyan accent is kept
-  for status (`● Ready`, the working `⬢`, busy tabs); borders, tabs,
-  selections and menus are neutral. Themes gain a `faint` color for
+  for status (`● Ready`, the working `⬢`, busy tabs) and the focused
+  panel's border; other borders, tabs, selections and menus are neutral. Themes gain a `faint` color for
   borders at rest, markers and hints.
 - The input is a box under the Chat panel, as wide as it, with a `→`
   prompt and an `Ask anything` / `Add a follow-up` placeholder. The model,
   approval level, usage (`23% context used`) and status moved to a footer
-  under it, followed by key hints when the screen has room.
+  under it, followed by key hints when the screen has room. The side
+  panels end level with the input box.
 - While a turn runs, its to-do checklist (`☒ ▣ ☐`) and a `⬢ Thinking…`
   line follow the conversation, replacing the progress strip on the Chat
   panel's border. The current to-do is bold, finished ones fade, and past

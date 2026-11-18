@@ -358,7 +358,7 @@ mod tests {
         assert_eq!(idle.bg, Some(Color::Reset));
         assert_eq!(idle.fg, Some(colors.muted));
         assert_eq!(unfocused[(0, 0)].style().fg, Some(colors.faint));
-        assert_eq!(focused[(0, 0)].style().fg, Some(colors.muted));
+        assert_eq!(focused[(0, 0)].style().fg, Some(colors.success));
     }
 
     #[test]

@@ -139,10 +139,10 @@ pub(super) fn body_block<'a>((is_focused, hosted): (bool, bool), theme: &Theme) 
         .border_style(Style::default().fg(border_color))
 }
 
-/// A panel's border: gray while it has focus, dim gray otherwise.
+/// A panel's border: the accent while it has focus, dim gray otherwise.
 pub(super) const fn border_color(is_focused: bool, theme: &Theme) -> Color {
     if is_focused {
-        theme.colors.muted
+        theme.colors.success
     } else {
         theme.colors.faint
     }

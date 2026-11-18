@@ -9,14 +9,14 @@ for status.
 
 | Color      | Hex Code  | RGB               | Rust Constant | Usage                                  |
 |------------|-----------|-------------------|---------------|----------------------------------------|
-| Cyan/Green | `#01f4cb` | `(1, 244, 203)`   | `CYAN`        | Status: ready, working, success        |
+| Cyan/Green | `#01f4cb` | `(1, 244, 203)`   | `CYAN`        | Status, the focused panel's border     |
 | Blue       | `#01a4f4` | `(1, 164, 244)`   | `BLUE`        | Warnings, waiting states, flags        |
 | Purple     | `#cb01f4` | `(203, 1, 244)`   | `PURPLE`      | Syntax highlighting only               |
 | Red        | `#f4012a` | `(244, 1, 42)`    | `RED`         | Errors, danger                         |
 | White      | terminal  | `Color::White`    | `WHITE`       | Titles, what the user typed            |
 | Light gray | `#e6e6e6` | `(230, 230, 230)` | `LIGHT_GRAY`  | Reply text                             |
 | Silver     | `#b3b3b3` | `(179, 179, 179)` | `SILVER`      | Hovered labels, to-do counts           |
-| Gray       | `#808080` | `(128, 128, 128)` | `GRAY`        | Secondary text, focused borders        |
+| Gray       | `#808080` | `(128, 128, 128)` | `GRAY`        | Secondary text, prompts                |
 | Dim gray   | `#5a5a5a` | `(90, 90, 90)`    | `DIM_GRAY`    | Borders at rest, markers, key hints    |
 | Black      | `#191919` | `(25, 25, 25)`    | `BLACK`       | Background                             |
 | Dark gray  | `#242424` | `(36, 36, 36)`    | `DARK_GRAY`   | Raised surfaces (user prompt band)     |
@@ -35,11 +35,11 @@ themes keep working:
 | `text`          | Light gray | The agent's replies, what is being typed             |
 | `primary`       | White      | Headings and emphasis                                |
 | `secondary`     | Silver     | Hovered labels, the to-do count                      |
-| `success`       | Cyan       | Live and working status (`●`, `⬢`), success          |
+| `success`       | Cyan       | Live and working status (`●`, `⬢`), focused borders  |
 | `warning`       | Blue       | Warnings, waiting on approval, non-agent modes       |
 | `error`         | Red        | Errors, failed steps, danger actions                 |
 | `pending`       | White      | Pending states                                       |
-| `muted`         | Gray       | Secondary text, focused borders, prompts             |
+| `muted`         | Gray       | Secondary text, prompts                              |
 | `faint`         | Dim gray   | Borders at rest, step markers, separators, key hints |
 | `surface`       | Dark gray  | Raised rows                                          |
 | `surface_hover` | Graphite   | Hovered rows and tabs                                |
@@ -67,14 +67,17 @@ themes keep working:
 
 ### Borders and Panels
 
-- **Focused panel**: `muted` border
+- **Focused panel**: `success` border, and the input box's while the
+  Chat panel has focus
 - **Unfocused panel**: `faint` border
 - **Menus and the `/todos` list**: `muted` border
 - **Approval dialog**: `warning` border
 - **Code blocks and step rules**: `faint`
 - **Spacing**: panels side by side sit one blank column apart and one
   column in from the screen's edges. A cell is about twice as tall as it
-  is wide, so that matches panels stacked on rows that touch.
+  is wide, so that matches panels stacked on rows that touch. The side
+  columns end level with the input box; the footer sits under the Chat
+  column alone.
 
 ### Panel Headers
 

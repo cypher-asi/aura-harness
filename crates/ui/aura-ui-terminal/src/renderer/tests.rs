@@ -1408,6 +1408,20 @@ fn test_hosted_panels_leave_their_title_bars_to_the_front_end() {
 /// input box's bottom border and the footer's two rows.
 const INPUT_FROM_BOTTOM: usize = 4;
 
+#[test]
+fn test_side_panels_end_level_with_the_input_box() {
+    let mut app = crate::App::new();
+    let rows = render_rows(&mut app, 120);
+    let input_bottom = rows.len() - INPUT_FROM_BOTTOM + 1;
+    let bottom = &rows[input_bottom];
+    assert!(bottom.starts_with(" └"), "{bottom:?}");
+    assert!(bottom.trim_end().ends_with('┘'), "{bottom:?}");
+    assert_eq!(bottom.matches('└').count(), 3, "{bottom:?}");
+    for footer in &rows[input_bottom + 1..] {
+        assert!(!footer.contains('│'), "{footer:?}");
+    }
+}
+
 fn render_rows(app: &mut crate::App, width: u16) -> Vec<String> {
     let mut terminal =
         ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 30)).unwrap();
