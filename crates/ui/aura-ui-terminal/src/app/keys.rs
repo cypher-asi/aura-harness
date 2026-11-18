@@ -702,6 +702,10 @@ impl App {
         if text.starts_with('/') {
             return self.handle_command(&text);
         }
+        if !busy && self.wants_build(&text) {
+            self.request_build("");
+            return KeyResult::continue_running();
+        }
         let (images, previews) = self.take_images(&text);
 
         // A busy agent reads the message before its next step, or once its

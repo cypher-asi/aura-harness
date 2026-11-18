@@ -281,6 +281,6 @@ Plan mode lets the agent research a task and write a plan before it touches code
 | `/approval <level>` | Switch approval level (`yolo`, `ask`, `strict`). |
 | `/build [plan path]` | Leave plan mode and implement the latest plan, or the given one. |
 
-In plan mode, ask for what you want; the agent may ask a question or two, then saves a plan to `.aura/plans/<name>_<id>.plan.md` in its workspace: YAML frontmatter (`name`, `overview`, `todos`) followed by the plan in Markdown. Keep chatting to revise it. While you build, the agent marks todos `in_progress` and `completed` with `todo_write`, and the strip above the input shows its progress. The mode badge next to the model name shows any mode other than agent.
+In plan mode, ask for what you want; the agent may ask a question or two, then saves a plan to `.aura/plans/<name>_<id>.plan.md` in its workspace: YAML frontmatter (`name`, `overview`, `todos`) followed by the plan in Markdown. Keep chatting to revise it. Once there is a plan, a message that is just "implement" (or "implement it", "build it", "go ahead", "do it", "proceed") does what `/build` does; anything longer goes to the agent as feedback on the plan. While you build, the agent marks todos `in_progress` and `completed` with `todo_write`, and the strip above the input shows its progress. The mode badge next to the model name shows any mode other than agent.
 
 Every mode switch is written to the agent's record as a `mode_change` entry, and the kernel enforces the new mode from then on. A mode can't be changed while a turn is running.

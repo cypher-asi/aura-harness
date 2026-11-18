@@ -3240,6 +3240,37 @@ fn test_build_needs_a_plan() {
 }
 
 #[test]
+fn saying_implement_in_plan_mode_builds_the_plan() {
+    let (mut app, mut rx) = app_with_events();
+    app.process_command(UiCommand::SetMode(crate::PermissionMode::Plan));
+
+    // No plan yet: the agent gets the message.
+    submit(&mut app, "implement");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::UserMessage { text, .. }) if text == "implement"
+    ));
+    app.state = AppState::Idle;
+
+    app.process_command(UiCommand::SetPlan(Some(sample_plan())));
+    submit(&mut app, "  Implement it! ");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::BuildPlan { path: None, .. })
+    ));
+
+    // Longer messages are feedback on the plan.
+    submit(&mut app, "implement it with a trait instead");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::UserMessage { .. })));
+    app.state = AppState::Idle;
+
+    // Outside plan mode "implement" is an ordinary message.
+    app.process_command(UiCommand::SetMode(crate::PermissionMode::Agent));
+    submit(&mut app, "implement");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::UserMessage { .. })));
+}
+
+#[test]
 fn a_plan_for_an_agent_off_screen_leaves_the_active_plan_alone() {
     let mut app = App::new();
     app.process_command(UiCommand::SetActiveAgent("a1".to_string()));

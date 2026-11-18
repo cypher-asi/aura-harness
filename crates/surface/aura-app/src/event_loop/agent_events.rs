@@ -181,7 +181,7 @@ impl UiCommandSink {
             return;
         };
         let note = format!(
-            "Plan ready: {} ({path}). Keep chatting to revise it, or run /build to implement it.",
+            "Plan ready: {} ({path}). Keep chatting to revise it, or say \"implement\" (or run /build) to build it.",
             view.name
         );
         self.ui
