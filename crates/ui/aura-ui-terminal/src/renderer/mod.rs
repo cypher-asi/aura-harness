@@ -5,6 +5,7 @@ mod chat_lines;
 mod command;
 mod detail;
 mod diff;
+mod flow;
 mod graph;
 mod header;
 mod hud;
@@ -304,9 +305,9 @@ fn header_status_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
 }
 
 /// `ASK · qwen3:4b`: the approval level, then a `PLAN` / `READ-ONLY` /
-/// `DEBUG` badge outside agent mode, then the model, or `Gate → <model>
-/// (<route>)` when Gate picks it. The level and the model are left out
-/// until the kernel reports them.
+/// `DEBUG` badge outside agent mode, then the model, or `GATE` when Gate
+/// picks it. The level and the model are left out until the kernel
+/// reports them.
 pub(super) fn model_indicator_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
     let mut spans = Vec::new();
     let separator = || Span::styled(" · ", Style::default().fg(theme.colors.muted));
@@ -339,13 +340,16 @@ pub(super) fn model_indicator_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span
     if !spans.is_empty() {
         spans.push(separator());
     }
+    if app.current_model() == "gate" {
+        spans.push(Span::styled(
+            "GATE",
+            Style::default().fg(theme.colors.primary),
+        ));
+        return spans;
+    }
     let label = app
         .current_model_option()
         .map_or_else(|| app.current_model(), |m| m.label.as_str());
-    let label = match app.model_route() {
-        Some(route) => format!("{label} → {route}"),
-        None => label.to_string(),
-    };
     spans.push(Span::styled(label, Style::default().fg(theme.colors.muted)));
     spans
 }

@@ -12,6 +12,7 @@
 #![warn(clippy::all)]
 
 pub mod events;
+pub mod flow;
 pub mod format;
 pub mod history;
 pub mod mode_command;

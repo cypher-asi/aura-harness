@@ -389,7 +389,14 @@ impl App {
             && key.modifiers.contains(KeyModifiers::SHIFT)
             && matches!(key.code, KeyCode::Left | KeyCode::Right)
         {
-            self.toggle_chat_tab();
+            self.shift_chat_tab(key.code == KeyCode::Right);
+            return KeyResult::continue_running();
+        }
+        if self.focus == PanelFocus::Chat
+            && self.chat_tab() == ChatTab::Graph
+            && self.input.is_empty()
+            && self.handle_flow_key(key)
+        {
             return KeyResult::continue_running();
         }
         if self.focus == PanelFocus::Sandbox

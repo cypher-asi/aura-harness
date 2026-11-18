@@ -17,6 +17,8 @@ pub mod auth;
 mod compare;
 mod compare_run;
 mod compare_view;
+pub(crate) mod flow;
+mod flow_builder;
 pub(crate) mod gate_live;
 pub(crate) mod gate_record;
 pub(crate) mod gate_subtask;
@@ -44,6 +46,7 @@ pub(crate) mod turns;
 pub(crate) use agent_events::forward_agent_events;
 pub use agents::{AgentSession, KernelBuilder, KernelFactory};
 pub use approvals::TerminalApprovals;
+pub use flow::{FlowFeed, FlowInbox};
 pub use gate_live::GateLive;
 pub use gate_subtask::GateBase;
 pub use host::{TerminalAgents, TerminalChildKernels};
@@ -96,6 +99,8 @@ pub struct EventLoopContext<'a> {
     pub auth: Arc<AuthManager>,
     /// Tool calls waiting for the user's answer.
     pub approvals: Arc<TerminalApprovals>,
+    /// Feed of the GRAPH tab, when the kernels report to one.
+    pub flow: Option<Arc<FlowFeed>>,
 }
 
 /// Mutable state threaded through all event handlers.
@@ -124,6 +129,8 @@ pub(super) struct LoopState<'a> {
     pub(super) approvals: Arc<TerminalApprovals>,
     /// The comparison waiting for `/compare go`, and the one running.
     pub(super) compare: compare::CompareState,
+    /// Feed of the GRAPH tab.
+    pub(super) flow: Option<Arc<FlowFeed>>,
 }
 
 impl LoopState<'_> {
@@ -180,6 +187,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         models,
         auth,
         approvals,
+        flow,
     } = ctx;
     let processes = Arc::clone(&hub.processes);
     let publisher = processes::spawn_publisher(Arc::clone(&processes), commands.clone());
@@ -208,6 +216,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
                 .unwrap_or_default()
                 .join("aura_data"),
         ),
+        flow,
     };
     let mut notice_rx = state.hub.take_notices();
     state.hub.name_agents();
@@ -460,6 +469,11 @@ async fn handle_ui_event(
         UiEvent::ShowStatus => trace::status_report(state).await,
         UiEvent::ShowGate => gate_view::show(state).await,
         UiEvent::OpenGraph(id) => trace::open_graph(state, id).await,
+        UiEvent::OpenFlow(agent_id) => {
+            if let Some(flow) = &state.flow {
+                flow.open(state.agent_or_active(&agent_id));
+            }
+        }
         UiEvent::ListRuns => trace::list(state).await,
         UiEvent::LabelStep { run_id, seq, value } => {
             trace::label(state, &run_id, seq, value).await;

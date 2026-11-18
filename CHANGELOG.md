@@ -40,7 +40,8 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   model (the plan first) and tiers them `local`, `fast`, `standard` and
   `frontier`. A model whose route refuses the sign-in is dropped and the
   turn carries on with the next pick. Each turn shows
-  `gate → <model> (<route>) · <category>, <reason>`.
+  `gate → <model> (<route>) · <category>, <reason>`, and the status line
+  at the bottom right shows `GATE` in place of the model.
 - Every prompt is classified into one of 8 categories by the cheapest
   fast-tier model, through the agent's kernel. Every turn ends with an
   `Outcome` (`error`, `checks_failed`, `checks_passed` or `none`), and
@@ -145,6 +146,30 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
 - `aura-app`'s `isolation` module holds the worktree and copy helpers
   `/compare` runs in and the change carrying, diffing and scratch-index
   snapshots `/compare` and the escalation use.
+
+### Terminal — GRAPH tab
+
+##### Added
+
+- The chat panel has a third tab, GRAPH, next to CHAT and TERMINAL
+  (Shift+←/→ or a click). It shows the flow between the agent on screen
+  and every agent below it as their kernels recorded it: a lane per
+  agent, a box per prompt, model call, tool call, reply, spawn, message
+  and finished process, in time order, with arrows from each `task`
+  call or spawn to the agent it started and from that agent's reply
+  back to its caller. Agents that work in turn share a column.
+- The tab follows the agents live. Arrow keys move through the boxes
+  and across lanes, `[` / `]` jump between prompts, `f` follows an
+  arrow to the other agent, Space and `z` fold turns down to their
+  prompt, Enter opens a step as JSON, `r` opens its record entry and
+  `o` switches to its agent. See
+  [The GRAPH tab](docs/cli.md#the-graph-tab).
+- `UiEvent::OpenFlow` asks the session for an agent's flow;
+  `UiCommand::FlowLoad` and `UiCommand::FlowUpsert` carry it as
+  `FlowLane`s and `FlowNode`s (`aura_ui::flow`). The session builds it
+  in `event_loop/flow.rs` from a record observer on every kernel and
+  the record store, off the kernels' and the event loop's tasks. Only
+  the boxes on screen are drawn.
 
 ### Many agents at once
 

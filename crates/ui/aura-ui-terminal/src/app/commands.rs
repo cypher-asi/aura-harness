@@ -821,6 +821,16 @@ impl App {
                 self.trace_feed.push(&run_id, &nodes);
                 self.upsert_graph(&run_id, nodes);
             }
+            UiCommand::FlowLoad {
+                agent_id,
+                lanes,
+                nodes,
+            } => self.load_flow(&agent_id, lanes, nodes),
+            UiCommand::FlowUpsert {
+                agent_id,
+                lanes,
+                nodes,
+            } => self.upsert_flow(&agent_id, lanes, nodes),
             UiCommand::SetApiStatus { url, active } => {
                 self.api_url = url;
                 self.api_active = active;
@@ -1150,6 +1160,10 @@ impl App {
 
     fn cmd_set_active_agent(&mut self, agent_id: &str) {
         self.show_agent_chat(agent_id);
+        if self.flow.is_open() {
+            // The GRAPH tab follows the agent on screen.
+            self.request_flow();
+        }
         for agent in &mut self.agents {
             agent.is_active = agent.id == self.active_agent_id;
         }
