@@ -23,6 +23,7 @@ mod line_edit;
 pub mod mentions;
 mod panes;
 pub mod plans;
+pub mod tasks;
 mod processes;
 mod prose;
 pub use aura_ui::sandbox;
@@ -372,6 +373,8 @@ pub struct App {
     pub(super) trace_feed: trace_feed::TraceFeed,
     /// Plans of the PLANS tab
     pub(super) plan_list: plans::PlanList,
+    /// Tasks of the TASKS tab
+    pub(super) task_list: tasks::TaskList,
     /// Node to select once the requested graph loads.
     pub(super) pending_graph_node: Option<String>,
     /// Flow between agents shown by the chat panel's GRAPH tab
@@ -425,6 +428,10 @@ pub struct PanelAreas {
     pub plan_rows: Option<Rect>,
     /// Plans row shown at the top of `plan_rows`
     pub plans_scroll: usize,
+    /// Rows of the Tasks tab inside the panel
+    pub task_rows: Option<Rect>,
+    /// Tasks row shown at the top of `task_rows`
+    pub tasks_scroll: usize,
 }
 
 /// What is shown over the chat panel.
@@ -469,6 +476,8 @@ pub(crate) enum HoverTarget {
     TraceRow(usize),
     /// A row in the Plans tab.
     PlanRow(usize),
+    /// A row in the Tasks tab.
+    TaskRow(usize),
     /// A chat row that expands or collapses agent activity.
     Activity(ToggleTarget),
     /// An image thumbnail in the chat: message id, which of its images.
@@ -692,6 +701,7 @@ impl App {
             graph: graph::GraphState::default(),
             trace_feed: trace_feed::TraceFeed::default(),
             plan_list: plans::PlanList::default(),
+            task_list: tasks::TaskList::default(),
             pending_graph_node: None,
             flow: flow::FlowState::default(),
         }
@@ -1053,6 +1063,7 @@ impl App {
                     SidePanelTab::Processes => self.scroll_processes(delta),
                     SidePanelTab::Trace => self.trace_feed.move_by(delta),
                     SidePanelTab::Plans => self.plan_list.move_by(delta),
+                    SidePanelTab::Tasks => self.task_list.move_by(delta),
                 }
             }
         }
@@ -1096,6 +1107,7 @@ impl App {
                     SidePanelTab::Processes => self.scroll_processes(delta),
                     SidePanelTab::Trace => self.trace_feed.move_by(delta),
                     SidePanelTab::Plans => self.plan_list.move_by(delta),
+                    SidePanelTab::Tasks => self.task_list.move_by(delta),
                 }
             }
         }

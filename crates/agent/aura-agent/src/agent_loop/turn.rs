@@ -707,6 +707,7 @@ mod tests {
                     id: i.to_string(),
                     content: format!("step {i}"),
                     status: *status,
+                    assignee: None,
                 })
                 .collect(),
             ..AgentLoopConfig::for_agent("claude-test-model")

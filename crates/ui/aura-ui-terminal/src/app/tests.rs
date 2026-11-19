@@ -3168,6 +3168,8 @@ fn sample_plan() -> crate::events::PlanView {
         todos: vec![TodoView {
             content: "Add login".to_string(),
             state: TodoState::Pending,
+            assignee: None,
+            task: None,
         }],
     }
 }

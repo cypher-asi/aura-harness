@@ -972,7 +972,7 @@ fn test_sandbox_panel_sits_below_record() {
     let rows = render_rows(&mut app, 150);
 
     let (record, _) = header_bar(&rows, "│ KERNEL");
-    let (sandbox, _) = header_bar(&rows, "SANDBOX");
+    let (sandbox, _) = header_bar(&rows, "SBX");
     assert!(sandbox > record + 10, "record={record} sandbox={sandbox}");
     let column = |row: &str, title: &str| row[..row.find(title).unwrap()].chars().count();
     let kernel_border = column(&rows[record], "│ KERNEL");
@@ -1000,13 +1000,13 @@ fn test_sandbox_panel_sits_below_record() {
 fn test_side_panel_header_matches_the_agents_header() {
     let mut app = crate::App::new();
     let rows = render_rows(&mut app, 150);
-    let (tabs, widths) = header_bar(&rows, "SANDBOX");
+    let (tabs, widths) = header_bar(&rows, "SBX");
     assert!(
-        rows[tabs].contains(" PRC ") && rows[tabs].contains(" PLANS "),
+        rows[tabs].contains(" PRC ") && rows[tabs].contains("│TASKS│"),
         "full labels where they fit: {}",
         rows[tabs]
     );
-    assert_eq!(widths.len(), 4, "the tabs fill the bar: {widths:?}");
+    assert_eq!(widths.len(), 5, "the tabs fill the bar: {widths:?}");
     assert!(
         widths.iter().all(|w| w.abs_diff(widths[0]) <= 1),
         "{widths:?}"
@@ -1017,10 +1017,10 @@ fn test_side_panel_header_matches_the_agents_header() {
         "top bars line up"
     );
 
-    let rows = render_rows(&mut app, 200);
+    let rows = render_rows(&mut app, 260);
     let (tabs, widths) = header_bar(&rows, "SANDBOX");
     assert!(rows[tabs].contains(" PROCESSES "), "{}", rows[tabs]);
-    assert_eq!(widths.len(), 4, "{widths:?}");
+    assert_eq!(widths.len(), 5, "{widths:?}");
 }
 
 #[test]
@@ -1049,13 +1049,13 @@ fn test_side_panel_tabs_fill_the_bar_without_counts() {
     ]));
 
     let theme = test_theme();
-    let buffer = render_buffer(&mut app, 200);
+    let buffer = render_buffer(&mut app, 260);
     let row = row_of(&buffer, " PROCESSES ");
     let (label, label_style) = find_cell(&buffer, row, "SANDBOX").unwrap();
     assert!(label_style.add_modifier.contains(Modifier::BOLD));
     assert_eq!(label_style.bg, Some(Color::Reset), "active, unfocused");
     assert_eq!(label_style.fg, Some(theme.colors.foreground));
-    let screen = render_rows(&mut app, 200).join("\n");
+    let screen = render_rows(&mut app, 260).join("\n");
     assert!(!screen.contains("FILES"), "{screen}");
 
     let (processes, process_style) = find_cell(&buffer, row, "PROCESSES").unwrap();
@@ -1073,7 +1073,7 @@ fn test_side_panel_tabs_fill_the_bar_without_counts() {
         });
     }
     assert_eq!(app.side_tab(), SidePanelTab::Processes);
-    let screen = render_rows(&mut app, 200).join("\n");
+    let screen = render_rows(&mut app, 260).join("\n");
     assert!(!screen.contains("LIVE"), "{screen}");
 }
 
@@ -1144,7 +1144,7 @@ fn test_trace_tab_lists_live_steps() {
     while app.focus() != PanelFocus::Sandbox {
         let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
-    for _ in 0..2 {
+    for _ in 0..3 {
         let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
     }
     let screen = render_rows(&mut app, 160).join("\n");
@@ -1164,11 +1164,11 @@ fn test_files_command_toggles_sandbox_panel() {
     submit(&mut app, "/files");
     let screen = render_rows(&mut app, 150).join("\n");
     assert!(!screen.contains(" KERNEL "));
-    assert!(!screen.contains("SANDBOX"));
+    assert!(!screen.contains("PLANS"));
 
     submit(&mut app, "/files");
     let screen = render_rows(&mut app, 150).join("\n");
-    assert!(screen.contains("SANDBOX"));
+    assert!(screen.contains("PLANS"));
     assert!(!screen.contains(" KERNEL "));
 }
 
@@ -1181,6 +1181,8 @@ fn test_plans_tab_lists_plans_with_their_todos() {
     let todo = |content: &str, state| TodoView {
         content: content.into(),
         state,
+        assignee: None,
+        task: None,
     };
     let mut app = crate::App::new();
     app.process_command(UiCommand::SetPlans(vec![
@@ -1201,7 +1203,9 @@ fn test_plans_tab_lists_plans_with_their_todos() {
     while app.focus() != PanelFocus::Sandbox {
         let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
-    let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    for _ in 0..2 {
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    }
     let rows = render_rows(&mut app, 160);
     let row_with = |text: &str| {
         rows.iter()
@@ -3166,6 +3170,8 @@ fn todo(content: &str, state: crate::events::TodoState) -> crate::events::TodoVi
     crate::events::TodoView {
         content: content.to_string(),
         state,
+        assignee: None,
+        task: None,
     }
 }
 
@@ -3436,4 +3442,113 @@ fn test_context_command_lists_project_instructions() {
         "{texts:?}"
     );
     assert!(last.contains("~/repo/AGENTS.md  500"), "{texts:?}");
+}
+
+#[test]
+fn test_spawn_guides_join_each_agent_to_its_parent() {
+    use super::panels::spawn_guides;
+    use crate::events::AgentSummary;
+
+    let agents: Vec<AgentSummary> = [0, 1, 2, 1, 2, 0, 1]
+        .into_iter()
+        .map(|depth| AgentSummary {
+            depth,
+            ..AgentSummary::default()
+        })
+        .collect();
+    let guides: Vec<String> = (0..agents.len())
+        .map(|index| spawn_guides(&agents, index))
+        .collect();
+    // Each level's line drops from under its parent's icon.
+    let lead = " ".repeat(crate::animation::AURA_WIDTH + 1);
+    let at = |marks: &[&str]| {
+        marks
+            .iter()
+            .map(|mark| format!("{lead}{mark}"))
+            .collect::<String>()
+    };
+    assert_eq!(
+        guides,
+        [
+            String::new(),
+            at(&["├"]),
+            at(&["│", "└"]),
+            at(&["└"]),
+            at(&[" ", "└"]),
+            String::new(),
+            at(&["└"]),
+        ]
+    );
+}
+
+#[test]
+fn test_tasks_tab_lists_requests_with_their_parts() {
+    use crate::app::PanelFocus;
+    use crate::events::{TaskState, TaskView, TodoState, TodoView, UiCommand};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let todo = |content: &str, state, assignee: Option<&str>| TodoView {
+        content: content.into(),
+        state,
+        assignee: assignee.map(str::to_string),
+        task: None,
+    };
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetTasks(vec![
+        TaskView {
+            id: "part".into(),
+            title: "Parse the source".into(),
+            state: TaskState::Completed,
+            agent_name: "coder #1".into(),
+            assignee: Some("coder".into()),
+            parent: Some("request".into()),
+            ..TaskView::default()
+        },
+        TaskView {
+            id: "request".into(),
+            title: "Build the compiler".into(),
+            state: TaskState::Open,
+            agent_name: "Lead".into(),
+            items: vec![
+                todo("Write the parser", TodoState::Completed, Some("coder")),
+                todo("Write the checker", TodoState::Pending, None),
+            ],
+            ..TaskView::default()
+        },
+    ]));
+    while app.focus() != PanelFocus::Sandbox {
+        let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
+    }
+    let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    let rows = render_rows(&mut app, 200);
+    let row_with = |text: &str| {
+        rows.iter()
+            .position(|r| r.contains(text))
+            .unwrap_or_else(|| panic!("no {text} in:\n{}", rows.join("\n")))
+    };
+    let request = row_with("Build the compiler");
+    assert!(
+        rows[request].contains("Lead") && rows[request].contains("1/2"),
+        "{}",
+        rows[request]
+    );
+    assert!(
+        rows[request + 1].contains("✓  Write the parser  → coder"),
+        "{}",
+        rows[request + 1]
+    );
+    assert!(
+        rows[request + 2].contains("○  Write the checker"),
+        "{}",
+        rows[request + 2]
+    );
+    let part = row_with("Parse the source  → coder");
+    assert!(
+        part > request + 2,
+        "the part sits under the request's items"
+    );
+    assert!(
+        rows.iter().any(|r| r.contains("p plan")),
+        "the hint names the plan key"
+    );
 }

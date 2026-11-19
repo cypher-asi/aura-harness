@@ -492,6 +492,8 @@ fn agent_working() {
     let todo = |content: &str, state| TodoView {
         content: content.into(),
         state,
+        assignee: None,
+        task: None,
     };
     h.apply([
         UiCommand::SetTodos(vec![

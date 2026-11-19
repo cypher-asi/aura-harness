@@ -288,6 +288,10 @@ pub struct FlowLayout {
     pub spans: Vec<LaneSpan>,
     /// Wires, sorted by the card they go to
     pub wires: Vec<Wire>,
+    /// Agents' reports back to the agent that asked them, which run back
+    /// in time and so are not wired: the card the report leaves from and
+    /// the node it went to, by card
+    pub reports: Vec<(usize, usize)>,
     /// Block columns in use
     pub columns: usize,
     /// Size of the canvas, in cells
@@ -706,6 +710,7 @@ pub(super) fn build_layout(
 
     // Links between cards, as wires before they have a track.
     let mut links: Vec<Wire> = Vec::new();
+    let mut returns: Vec<(usize, usize, usize)> = Vec::new();
     for (at, node) in nodes.iter().enumerate() {
         for (kind, other) in &node.links {
             let Some(&other) = index.get(other) else {
@@ -714,6 +719,9 @@ pub(super) fn build_layout(
             let (from, to) = (card_of[at], card_of[other]);
             if from == NONE || to == NONE || cards[from].lane == cards[to].lane {
                 continue;
+            }
+            if WireKind::of(kind) == WireKind::Return {
+                returns.push((from, to, other));
             }
             let row = (row_of[at] != NONE).then_some(row_of[at]);
             links.push(Wire {
@@ -816,6 +824,13 @@ pub(super) fn build_layout(
     );
     wires.sort_unstable_by_key(|wire| (wire.to, wire.from, wire.row, wire.kind));
     wires.dedup_by_key(|wire| (wire.to, wire.from, wire.row));
+    let mut reports: Vec<(usize, usize)> = returns
+        .into_iter()
+        .filter(|&(from, to, _)| cards[from].column >= cards[to].column)
+        .map(|(from, _, node)| (from, node))
+        .collect();
+    reports.sort_unstable();
+    reports.dedup_by_key(|report| report.0);
 
     let newest = (0..nodes.len())
         .filter(|&node| card_of[node] != NONE)
@@ -827,6 +842,7 @@ pub(super) fn build_layout(
         bands,
         spans,
         wires,
+        reports,
         columns,
         width: 0,
         height: 0,

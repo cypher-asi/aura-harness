@@ -297,9 +297,17 @@ fn todo_line(todo: &TodoView, room: usize, theme: &Theme) -> Line<'static> {
                 .add_modifier(Modifier::CROSSED_OUT),
         ),
     };
+    let agent = todo
+        .assignee
+        .as_deref()
+        .map(|agent| format!("  → {agent}"))
+        .filter(|agent| display_width(agent) + 8 <= room)
+        .unwrap_or_default();
+    let room = room.saturating_sub(display_width(&agent));
     Line::from(vec![
         Span::styled(format!("  {mark} "), Style::default().fg(mark_color)),
         Span::styled(truncate(&todo.content, room), text_style),
+        Span::styled(agent, Style::default().fg(theme.colors.faint)),
     ])
 }
 
@@ -353,6 +361,8 @@ mod tests {
         let todo = |content: &str, state| TodoView {
             content: content.to_string(),
             state,
+            assignee: None,
+            task: None,
         };
         let hud = Hud {
             todos: vec![
@@ -392,6 +402,8 @@ mod tests {
                 .map(|i| TodoView {
                     content: format!("step {i}"),
                     state: TodoState::Pending,
+                    assignee: None,
+                    task: None,
                 })
                 .collect(),
             ..Hud::default()

@@ -456,6 +456,10 @@ impl App {
                     self.handle_plans_key(key);
                     KeyResult::continue_running()
                 }
+                SidePanelTab::Tasks => {
+                    self.handle_tasks_key(key);
+                    KeyResult::continue_running()
+                }
             },
         }
     }

@@ -16,6 +16,7 @@ use super::run_command::run_user_command;
 use super::steering::{SteerSource, Steering};
 use super::subagents::LeadProfile;
 use super::task_check::takeover_prompt;
+use super::tasks::{request_state, summary_of};
 use crate::long_run::LongRunSettings;
 use crate::model_selection::ModelLimits;
 use aura_agent::{AgentLoop, CompactHistoryError};
@@ -367,6 +368,16 @@ async fn run_prompt(
     cancel: &CancellationToken,
 ) -> Outcome {
     drain_stale_inbox(session).await;
+    session.tasks.begin_request(
+        session.agent_id(),
+        session.kernel.agent_workspace(),
+        &session.identity.name,
+        &prompt.text,
+        session
+            .active_plan
+            .clone()
+            .filter(|_| session.building_plan),
+    );
     let started = Instant::now();
     let model = turn.agent_loop.config().model.clone();
     gate_record::note_retry(session, &prompt.text, &model).await;
@@ -477,6 +488,19 @@ async fn run_prompt(
         ended_signal(&process_result, turn_start)
     };
 
+    let summary = process_result
+        .as_ref()
+        .ok()
+        .and_then(|result| summary_of(&result.total_text));
+    let failed = process_result.is_err() && !cancelled;
+    session
+        .tasks
+        .end_request(
+            session.agent_id(),
+            |items| request_state(cancelled, failed, items),
+            summary,
+        )
+        .await;
     let mut title = None;
     let failure = match process_result {
         Ok(result) => {

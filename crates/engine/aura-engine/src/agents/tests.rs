@@ -231,6 +231,7 @@ fn task_request(root: AgentId, prompt: &str) -> SubagentDispatchRequest {
         council_index: None,
         council_parent_tool_use_id: None,
         check: None,
+        todo_id: None,
     }
 }
 

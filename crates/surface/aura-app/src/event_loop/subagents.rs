@@ -42,6 +42,7 @@ use super::processes::{now_ms, task_id, ProcessTable};
 use super::record_ui::RecordPanelAgent;
 use super::steering::Steering;
 use super::task_check;
+use super::tasks::{Spawned, TaskBoard};
 use super::trace::Traces;
 use super::turns::ended_signal;
 use crate::agent_definitions::{AgentDefinition, AgentDefinitions};
@@ -62,11 +63,12 @@ use aura_agent_trace::{RunMeta, RunRecorder, RunSource};
 use aura_context_skills::SkillManager;
 use aura_core_types::{
     AgentId, Hash, ModelTokens, OutcomePayload, OutcomeSignal, PromptCategory, RecordEntry,
-    RouteLevel, SpawnMode, SubagentDispatchRequest, SubagentExit, SubagentResult,
+    RouteLevel, SpawnMode, SubagentDispatchRequest, SubagentExit, SubagentResult, Transaction,
+    TransactionType,
 };
 use aura_exec_tools::agents::task::TASK_TOOL_NAME;
 use aura_exec_tools::jobs::{JOB_KILL_TOOL_NAME, JOB_OUTPUT_TOOL_NAME};
-use aura_exec_tools::todo::TODO_WRITE_TOOL_NAME;
+use aura_exec_tools::todo::{task_report_line, TODO_WRITE_TOOL_NAME};
 use aura_exec_tools::SubagentDispatchHook;
 use aura_model::{Message, ToolDefinition};
 use aura_ui_terminal::events::{
@@ -182,6 +184,22 @@ impl LeadProfile {
     }
 }
 
+/// Whether a user turn coordinates (gets the `<coordinator>` section): the
+/// user's own agent, not an instance of a permanent agent, in agent mode,
+/// with agents to spawn, and not leading under Gate, whose `<gate_lead>`
+/// says how to delegate instead.
+fn coordinates(
+    definition: Option<&str>,
+    mode: PermissionMode,
+    leads: bool,
+    tools: &[ToolDefinition],
+) -> bool {
+    definition.is_none()
+        && mode == PermissionMode::Agent
+        && !leads
+        && tools.iter().any(|tool| tool.name == TASK_TOOL_NAME)
+}
+
 /// What every turn starts from before a permanent agent's settings apply.
 pub struct TurnBase {
     /// The terminal's agent-loop config (selected model, auth, prompt).
@@ -288,9 +306,15 @@ impl AgentHub {
         if let Some(approvals) = &parts.approvals {
             approvals.set_default_level(parts.approval);
         }
+        let tasks = Arc::new(TaskBoard::new(
+            parts.commands.clone(),
+            parts.record_panel.clone(),
+        ));
         Arc::new_cyclic(|hub: &Weak<Self>| {
             let dispatcher: Arc<dyn SubagentDispatchHook> =
                 Arc::new(TerminalSubagentDispatcher { hub: hub.clone() });
+            let mut factory = factory(dispatcher);
+            factory.tasks = tasks;
             Self {
                 registry: Mutex::new(parts.registry),
                 definitions: Mutex::new(parts.definitions),
@@ -299,7 +323,7 @@ impl AgentHub {
                 running: Mutex::new(HashMap::new()),
                 finished: Mutex::new(Vec::new()),
                 spawn_finished: Notify::new(),
-                factory: factory(dispatcher),
+                factory,
                 commands: parts.commands,
                 long_run: parts.long_run,
                 permissions: Mutex::new(HashMap::new()),
@@ -464,11 +488,22 @@ impl AgentHub {
         let workspace = session.kernel.agent_workspace();
         let agent_id = session.agent_id();
         let definition = session.definition.clone();
-        let (config, tools) = self.agent_turn(agent_id, definition.as_deref(), &workspace);
+        let (mut config, tools) = self.agent_turn(agent_id, definition.as_deref(), &workspace);
         session.lead = false;
         let lead = self
             .leads(agent_id, definition.as_deref())
             .map(|enforced| LeadProfile { enforced });
+        if coordinates(
+            definition.as_deref(),
+            self.mode_of(agent_id),
+            lead.is_some(),
+            &tools,
+        ) {
+            config.system_prompt.push_str("\n\n");
+            config
+                .system_prompt
+                .push_str(&aura_context_prompts::system::sections::coordinator::render());
+        }
         (config, tools, lead)
     }
 
@@ -805,6 +840,22 @@ impl AgentHub {
         }
         let name = first.name.clone();
         let detached = request.spawn_mode == Some(SpawnMode::Detached);
+        self.record_spawn(&request, &definition, child_id, &name)
+            .await;
+        self.factory
+            .tasks
+            .begin_spawn(Spawned {
+                parent,
+                child: child_id,
+                workspace: first.session.kernel.agent_workspace(),
+                name: &name,
+                assignee: &definition.name,
+                prompt: &request.prompt,
+                tool_use_id: request.tool_call_id.clone(),
+                todo_id: request.todo_id.clone(),
+            })
+            .await;
+        let todo = request.todo_id.clone();
         let subtask = Subtask {
             request,
             definition,
@@ -817,9 +868,16 @@ impl AgentHub {
             let shown = name.clone();
             tokio::spawn(async move {
                 let report = hub.run_subtask(subtask).await;
-                let _ = hub
-                    .notices
-                    .send(task_notice(parent, &shown, report.outcome()));
+                hub.factory
+                    .tasks
+                    .finish_spawn(child_id, report.outcome())
+                    .await;
+                let _ = hub.notices.send(task_notice(
+                    parent,
+                    &shown,
+                    todo.as_deref(),
+                    report.outcome(),
+                ));
             });
             return Ok(SubagentResult::completed(
                 child_id,
@@ -831,10 +889,54 @@ impl AgentHub {
         }
 
         let report = self.run_subtask(subtask).await;
+        self.factory
+            .tasks
+            .finish_spawn(child_id, report.outcome())
+            .await;
         if let Err(reason) = &report.last().reply {
             warn!(child = %report.last().name, %reason, "Permanent agent failed");
         }
         Ok(report.result())
+    }
+
+    /// Write on the parent's record that `request` went to `child`, an
+    /// instance of `definition` shown as `name`: which `task` call it
+    /// answers, and the todo it does. A failure is logged; the child's
+    /// own record still says who spawned it.
+    async fn record_spawn(
+        &self,
+        request: &SubagentDispatchRequest,
+        definition: &AgentDefinition,
+        child: AgentId,
+        name: &str,
+    ) {
+        let parent = request.parent_agent_id;
+        let Some(kernel) = self.running_kernel(parent) else {
+            return;
+        };
+        let mode = if request.spawn_mode == Some(SpawnMode::Detached) {
+            "detached"
+        } else {
+            "wait"
+        };
+        let payload = serde_json::json!({
+            "parent_agent_id": parent.to_hex(),
+            "child_agent_id": child.to_hex(),
+            "spawn_mode": mode,
+            "subagent_type": definition.name,
+            "child_name": name,
+            "tool_use_id": request.tool_call_id,
+            "todo_id": request.todo_id,
+        });
+        let tx = Transaction::new_chained(
+            parent,
+            TransactionType::SubagentSpawn,
+            payload.to_string().into_bytes(),
+            None,
+        );
+        if let Err(e) = kernel.process_direct(tx).await {
+            warn!(%parent, %child, error = %e, "Could not record the spawn");
+        }
     }
 
     /// Register and open an instance of `definition` for `request`, set up
@@ -1538,20 +1640,31 @@ fn reads_only(definition: &AgentDefinition) -> bool {
 }
 
 /// What `parent` is told when its background agent `name` finishes.
-fn task_notice(parent: AgentId, name: &str, outcome: Result<String, String>) -> Notice {
+fn task_notice(
+    parent: AgentId,
+    name: &str,
+    todo: Option<&str>,
+    outcome: Result<String, String>,
+) -> Notice {
+    let report = |ok| {
+        todo.map(|todo| format!("\n\n{}", task_report_line(todo, ok)))
+            .unwrap_or_default()
+    };
     match outcome {
         Ok(reply) => Notice {
             to: parent,
             shown: format!("{name} finished its background task"),
             prompt: format!(
-                "{name} finished the task you gave it in the background. Its reply:\n\n{reply}"
+                "{name} finished the task you gave it in the background. Its reply:\n\n{reply}{}",
+                report(true)
             ),
         },
         Err(reason) => Notice {
             to: parent,
             shown: format!("{name} did not finish its background task: {reason}"),
             prompt: format!(
-                "{name} did not finish the task you gave it in the background: {reason}"
+                "{name} did not finish the task you gave it in the background: {reason}{}",
+                report(false)
             ),
         },
     }
@@ -1565,15 +1678,12 @@ pub fn task_tool_definition(definitions: &AgentDefinitions) -> Option<ToolDefini
         return None;
     }
     let names: Vec<&str> = definitions.all().iter().map(|d| d.name.as_str()).collect();
-    let catalog: Vec<String> = definitions
-        .all()
-        .iter()
-        .map(|d| format!("- {}: {}", d.name, d.description))
-        .collect();
+    let catalog: Vec<String> = definitions.all().iter().map(catalog_entry).collect();
     Some(ToolDefinition::new(
         TASK_TOOL_NAME,
         format!(
-            "Spawn a permanent agent to do a task and wait for its final reply. \
+            "Spawn the permanent agent best suited to a task and wait for its final reply. \
+             Pick it by matching the job against the descriptions below. \
              It works in the same workspace but with its own rules, tools and \
              context, so give it a complete, self-contained prompt. With \
              spawn_mode `detached` the call returns at once and the agent's \
@@ -1606,11 +1716,32 @@ pub fn task_tool_definition(definitions: &AgentDefinitions) -> Option<ToolDefini
                 "check": {
                     "type": "string",
                     "description": "Command run in the workspace when the agent finishes, such as `cargo test -p parser`; exit status 0 means the task passed."
+                },
+                "todo_id": {
+                    "type": "string",
+                    "description": "Id of the todo this task does. The todo shows the agent and goes in progress now; when the agent reports back it is marked done, or pending again when the task failed."
                 }
             },
             "required": ["subagent_type", "prompt"]
         }),
     ))
+}
+
+/// `- name: description (model: m; tools: a, b)`: one agent of the `task`
+/// tool's catalog, with what it runs on when that is set.
+fn catalog_entry(definition: &AgentDefinition) -> String {
+    let mut facts = Vec::new();
+    if let Some(model) = &definition.model {
+        facts.push(format!("model: {model}"));
+    }
+    if let Some(tools) = definition.tools.as_ref().filter(|tools| !tools.is_empty()) {
+        facts.push(format!("tools: {}", tools.join(", ")));
+    }
+    let mut entry = format!("- {}: {}", definition.name, definition.description);
+    if !facts.is_empty() {
+        entry.push_str(&format!(" ({})", facts.join("; ")));
+    }
+    entry
 }
 
 /// Processes tab row for the `task` spawn running as `child`, asked

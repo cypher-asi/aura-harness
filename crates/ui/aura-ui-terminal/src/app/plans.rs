@@ -244,6 +244,47 @@ impl App {
         self.open_detail(DetailView::File(Box::new(view)));
     }
 
+    /// Open the plan at workspace-relative `path` over the chat panel,
+    /// with the cursor on its todo with id `todo` when there is one.
+    pub(super) fn open_plan_at(&mut self, path: &str, todo: Option<&str>) {
+        let Some(root) = self.sandbox.root() else {
+            return;
+        };
+        let mut view = FileView::load(&root.join(path), Some(root));
+        let line = todo.and_then(|id| {
+            view.body
+                .lines()
+                .iter()
+                .position(|line| line.trim_start_matches(['-', ' ']) == format!("id: {id}"))
+        });
+        if let Some(line) = line {
+            view.jump_to(line);
+        }
+        self.open_detail(DetailView::File(Box::new(view)));
+    }
+
+    /// Show the task doing the highlighted todo in the TASKS tab.
+    pub(super) fn jump_to_todo_task(&mut self) {
+        let task = match (
+            self.plan_list.selected_plan(),
+            self.plan_list.rows.get(self.plan_list.selected),
+        ) {
+            (Some(plan), Some(PlanRow::Todo { todo, .. })) => {
+                plan.todos.get(*todo).and_then(|todo| todo.task.clone())
+            }
+            _ => None,
+        };
+        let Some(task) = task else {
+            self.notification = Some((
+                "No task is doing this todo".to_string(),
+                super::NotificationType::Warning,
+            ));
+            return;
+        };
+        self.show_side_tab(super::SidePanelTab::Tasks);
+        self.task_list.select_task(&task);
+    }
+
     /// Clicking a plan's fold glyph folds or opens it; clicking anywhere
     /// else on a row opens the plan, at the todo when one was clicked.
     pub(super) fn click_plan_row(&mut self, column: u16, row: u16) {
@@ -287,6 +328,8 @@ mod tests {
                 .map(|(i, &state)| TodoView {
                     content: format!("{path} {i}"),
                     state,
+                    assignee: None,
+                    task: None,
                 })
                 .collect(),
         }
@@ -422,6 +465,43 @@ mod tests {
         assert_eq!(shape(app.plan_list()), ["+a"], "Space folds");
         app.handle_key(KeyEvent::from(KeyCode::Enter));
         assert!(matches!(app.detail_view(), Some(DetailView::File(_))));
+    }
+
+    #[test]
+    fn t_on_a_todo_shows_the_task_doing_it() {
+        use crate::events::{TaskState, TaskView};
+
+        let mut app = App::new();
+        let mut planned = plan("a", &[I]);
+        planned.todos[0].task = Some("t1".to_string());
+        app.process_command(UiCommand::SetPlans(vec![planned]));
+        app.process_command(UiCommand::SetTasks(vec![
+            TaskView {
+                id: "t2".to_string(),
+                ..TaskView::default()
+            },
+            TaskView {
+                id: "t1".to_string(),
+                state: TaskState::Running,
+                ..TaskView::default()
+            },
+        ]));
+        app.focus = super::super::PanelFocus::Sandbox;
+        app.show_side_tab(super::super::SidePanelTab::Plans);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('t')));
+        assert_eq!(
+            app.side_tab(),
+            super::super::SidePanelTab::Plans,
+            "a plan row has no task"
+        );
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        app.handle_key(KeyEvent::from(KeyCode::Char('t')));
+        assert_eq!(app.side_tab(), super::super::SidePanelTab::Tasks);
+        assert_eq!(
+            app.task_list().selected_task().map(|t| t.id.as_str()),
+            Some("t1")
+        );
     }
 
     #[test]

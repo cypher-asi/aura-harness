@@ -1,5 +1,5 @@
 //! Pieces shared by the tabs of the side panel (SANDBOX, PROCESSES, TRACE,
-//! PLANS), so every tab draws its empty state, its rows area and its key
+//! PLANS, TASKS), so every tab draws its empty state, its rows area and its key
 //! hint the same way.
 //!
 //! Every tab follows the same rules: rows are drawn with
@@ -24,7 +24,9 @@ pub(super) const PROCESSES_HINT: &str = "⏎ open  o agent  k kill  l log  ⇧�
 /// Hint of the TRACE tab.
 pub(super) const TRACE_HINT: &str = "⏎ open  g graph  ⇧←→ tabs";
 /// Hint of the PLANS tab.
-pub(super) const PLANS_HINT: &str = "⏎ open  ←→ fold  ⇧←→ tabs";
+pub(super) const PLANS_HINT: &str = "⏎ open  t task  ←→ fold  ⇧←→ tabs";
+/// Hint of the TASKS tab.
+pub(super) const TASKS_HINT: &str = "⏎ open  p plan  ←→ fold  ⇧←→ tabs";
 
 /// Whether a side-panel row is still in play. This alone decides white
 /// versus gray text in every tab, so the tabs read the same way:
@@ -35,6 +37,7 @@ pub(super) const PLANS_HINT: &str = "⏎ open  ←→ fold  ⇧←→ tabs";
 /// | PROCESSES | running, idle, paused        | exited, failed, killed       |
 /// | TRACE     | steps still pending          | finished steps               |
 /// | PLANS     | open plans and todos         | done plans, closed todos     |
+/// | TASKS     | running and open tasks       | done, failed, stopped tasks  |
 ///
 /// Status (ok, warning, error) is shown by the row's icon color only, never
 /// by its text.
@@ -114,7 +117,13 @@ mod tests {
 
     #[test]
     fn hints_share_one_format() {
-        for hint in [SANDBOX_HINT, PROCESSES_HINT, TRACE_HINT, PLANS_HINT] {
+        for hint in [
+            SANDBOX_HINT,
+            PROCESSES_HINT,
+            TRACE_HINT,
+            PLANS_HINT,
+            TASKS_HINT,
+        ] {
             assert!(hint.starts_with("⏎ open  "), "{hint}");
             assert!(hint.ends_with("  ⇧←→ tabs"), "{hint}");
         }

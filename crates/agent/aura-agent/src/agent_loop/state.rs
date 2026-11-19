@@ -113,6 +113,9 @@ pub(crate) struct LoopState {
     /// Tool results the streaming pump already sent to the client as each
     /// call finished; the dispatch tail skips them and clears the set.
     pub(crate) reported_tool_results: std::collections::HashSet<String>,
+    /// Messages before this index were looked through for the reports
+    /// of detached tasks (see [`Self::observe_task_reports`]).
+    task_reports_seen: usize,
 }
 
 impl LoopState {
@@ -121,6 +124,10 @@ impl LoopState {
     }
 
     pub(super) fn new(config: &AgentLoopConfig, messages: Vec<Message>) -> Self {
+        let task_reports_seen = messages
+            .iter()
+            .rposition(|m| m.role == Role::Assistant)
+            .map_or(0, |at| at + 1);
         Self {
             result: AgentLoopResult {
                 todos: config.initial_todos.clone(),
@@ -165,22 +172,32 @@ impl LoopState {
             todos_at_last_nudge: None,
             stalled_todo_nudges: 0,
             reported_tool_results: std::collections::HashSet::new(),
+            task_reports_seen,
         }
     }
 
-    /// Apply every `todo_write` call in `response` to the tracked list
-    /// and tell the client about the new list.
+    /// Apply every `todo_write` call in `response` to the tracked list,
+    /// give the todo of every `task` call to its agent, and tell the
+    /// client about the new list.
     pub(super) fn observe_todo_writes(
         &mut self,
         response: &aura_model::ModelResponse,
         event_tx: Option<&tokio::sync::mpsc::Sender<crate::events::AgentLoopEvent>>,
     ) {
-        use aura_exec_tools::todo::{apply_todo_write, TODO_WRITE_TOOL_NAME};
-        let mut changed = false;
+        use aura_exec_tools::agents::task::TASK_TOOL_NAME;
+        use aura_exec_tools::todo::{apply_todo_write, assign_task, TODO_WRITE_TOOL_NAME};
+        let mut changed = self.observe_task_reports();
         for block in &response.message.content {
             let aura_model::ContentBlock::ToolUse { name, input, .. } = block else {
                 continue;
             };
+            if name == TASK_TOOL_NAME {
+                if let Some(next) = assign_task(&self.result.todos, input) {
+                    self.result.todos = next;
+                    changed = true;
+                }
+                continue;
+            }
             if name != TODO_WRITE_TOOL_NAME {
                 continue;
             }
@@ -192,9 +209,76 @@ impl LoopState {
                 Err(err) => tracing::debug!(%err, "ignoring malformed todo_write call"),
             }
         }
-        if !changed {
-            return;
+        if changed {
+            self.emit_todos(event_tx);
         }
+    }
+
+    /// Close the todos of the `task` calls in `calls` that reported back
+    /// in `results`: done when the agent finished, pending again when it
+    /// failed. Detached tasks report later, in a notice.
+    pub(super) fn observe_task_results(
+        &mut self,
+        calls: &[crate::types::ToolCallInfo],
+        results: &[crate::types::ToolCallResult],
+        event_tx: Option<&tokio::sync::mpsc::Sender<crate::events::AgentLoopEvent>>,
+    ) {
+        use aura_exec_tools::agents::task::TASK_TOOL_NAME;
+        use aura_exec_tools::todo::{report_task, task_todo};
+        let mut changed = false;
+        for result in results {
+            let Some(call) = calls
+                .iter()
+                .find(|call| call.id == result.tool_use_id && call.name == TASK_TOOL_NAME)
+            else {
+                continue;
+            };
+            let Some((id, true)) = task_todo(&call.input) else {
+                continue;
+            };
+            if let Some(next) = report_task(&self.result.todos, id, !result.is_error) {
+                self.result.todos = next;
+                changed = true;
+            }
+        }
+        if changed {
+            self.emit_todos(event_tx);
+        }
+    }
+
+    /// Close the todos of detached tasks whose reports (see
+    /// [`aura_exec_tools::todo::task_report_line`]) came in since the
+    /// last look, as a prompt or a message steered into the turn.
+    /// Returns whether any todo changed.
+    fn observe_task_reports(&mut self) -> bool {
+        use aura_exec_tools::todo::{report_task, task_reports};
+        let start = self.task_reports_seen.min(self.messages.len());
+        self.task_reports_seen = self.messages.len();
+        let mut changed = false;
+        for message in self.messages[start..]
+            .iter()
+            .filter(|m| m.role == Role::User)
+        {
+            for block in &message.content {
+                let aura_model::ContentBlock::Text { text } = block else {
+                    continue;
+                };
+                for (id, ok) in task_reports(text) {
+                    if let Some(next) = report_task(&self.result.todos, &id, ok) {
+                        self.result.todos = next;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        changed
+    }
+
+    fn emit_todos(
+        &self,
+        event_tx: Option<&tokio::sync::mpsc::Sender<crate::events::AgentLoopEvent>>,
+    ) {
+        use aura_exec_tools::todo::TODO_WRITE_TOOL_NAME;
         if let Ok(json) = serde_json::to_string(&self.result.todos) {
             super::streaming::emit(
                 event_tx,

@@ -1001,9 +1001,9 @@ fn build_swarm_lines<'a>(
                 };
                 let ago = agent.last_active_ms.map(|ms| format_ago(ms, now_ms));
                 let state = CellState::of(is_selected, is_hovered);
-                lines.push(list_row(
+                lines.push(tree_row(
                     width,
-                    agent.depth,
+                    (&spawn_guides(app.agents(), index), theme.colors.muted),
                     icon,
                     &agent.name,
                     cell_style(theme, state, agent_name),
@@ -1074,12 +1074,80 @@ pub(super) fn list_row_with_detail<'a>(
     let fill = cell
         .bg
         .map_or_else(Style::default, |bg| Style::default().bg(bg));
-    let indent = format!(" {}", "  ".repeat(depth));
+    let indent = Span::styled(format!(" {}", "  ".repeat(depth)), fill);
+    indented_row(width, indent, icon, (name, detail), cell, time)
+}
+
+/// [`list_row`] for an agent in a project's tree: indented by `guides`,
+/// the lines from the agent that spawned it, drawn in their color. A
+/// spawn with no icon has its elbow run on through the icon column.
+pub(super) fn tree_row<'a>(
+    width: usize,
+    (guides, color): (&str, Color),
+    icon: StatusIcon,
+    name: &str,
+    mut cell: CellStyle,
+    time: Option<&str>,
+) -> Line<'a> {
+    let fill = cell
+        .bg
+        .map_or_else(Style::default, |bg| Style::default().bg(bg));
+    let icon = if icon.glyph.is_empty() && !guides.is_empty() {
+        cell.icon = None;
+        StatusIcon::new(&"─".repeat(AURA_WIDTH), color)
+    } else {
+        icon
+    };
+    let indent = Span::styled(format!(" {guides}"), fill.fg(color));
+    indented_row(width, indent, icon, (name, None), cell, time)
+}
+
+/// `   │   ├`: the tree lines before the agent at `index` in `agents`.
+/// Each level's line drops from the first column of its parent's name.
+/// Each level the agent is under has a line down while the agent at that
+/// level has more spawns below; the agent's own level ends in an elbow
+/// onto it, `└` for the last of its parent's spawns. Agents at the top of
+/// the tree have none.
+pub(super) fn spawn_guides(agents: &[crate::events::AgentSummary], index: usize) -> String {
+    let depth = agents[index].depth;
+    let continues = |level: usize| {
+        agents[index + 1..]
+            .iter()
+            .map(|agent| agent.depth)
+            .take_while(|&depth| depth >= level)
+            .any(|depth| depth == level)
+    };
+    let lead = " ".repeat(AURA_WIDTH + 1);
+    let mut guides = String::with_capacity(depth * (lead.len() + 3));
+    for level in 1..=depth {
+        let more = continues(level);
+        guides.push_str(&lead);
+        guides.push_str(match (level == depth, more) {
+            (false, true) => "│",
+            (false, false) => " ",
+            (true, true) => "├",
+            (true, false) => "└",
+        });
+    }
+    guides
+}
+
+fn indented_row<'a>(
+    width: usize,
+    indent: Span<'a>,
+    icon: StatusIcon,
+    (name, detail): (&str, Option<&str>),
+    cell: CellStyle,
+    time: Option<&str>,
+) -> Line<'a> {
+    let fill = cell
+        .bg
+        .map_or_else(Style::default, |bg| Style::default().bg(bg));
     let icon_pad = AURA_WIDTH.saturating_sub(display_width(&icon.glyph)) + 1;
     let time = time.map(|time| format!(" {time} ")).unwrap_or_default();
     let name_width = width
         .saturating_sub(
-            display_width(&indent) + display_width(&icon.glyph) + icon_pad + display_width(&time),
+            indent.width() + display_width(&icon.glyph) + icon_pad + display_width(&time),
         )
         .max(1);
     let name = truncate_agent_name(name, name_width);
@@ -1091,7 +1159,7 @@ pub(super) fn list_row_with_detail<'a>(
     let padding = rest.saturating_sub(display_width(&detail));
     let icon_color = cell.icon.unwrap_or(icon.color);
     Line::from(vec![
-        Span::styled(indent, fill),
+        indent,
         Span::styled(icon.glyph, fill.fg(icon_color)),
         Span::styled(" ".repeat(icon_pad), fill),
         Span::styled(name, fill.patch(cell.text)),

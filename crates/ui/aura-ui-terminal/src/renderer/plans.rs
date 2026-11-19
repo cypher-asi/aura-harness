@@ -8,7 +8,9 @@
 //!  ▸  Parser cleanup           5/5
 //! ```
 
-use super::panels::{cell_style, list_row, render_scrollbar, CellState, ScrollView, StatusIcon};
+use super::panels::{
+    cell_style, list_row, list_row_with_detail, render_scrollbar, CellState, ScrollView, StatusIcon,
+};
 use super::side_list::{name_style, render_empty, render_hint, split_hint, Tone, PLANS_HINT};
 use crate::app::plans::PlanRow;
 use crate::app::{HoverTarget, PanelFocus};
@@ -22,7 +24,7 @@ use ratatui::{
     Frame,
 };
 
-const fn marker(status: TodoState) -> &'static str {
+pub(super) const fn marker(status: TodoState) -> &'static str {
     match status {
         TodoState::Pending => "○",
         TodoState::InProgress => "▸",
@@ -32,7 +34,7 @@ const fn marker(status: TodoState) -> &'static str {
 }
 
 /// Color of a todo's marker: the status color, as on every side-panel icon.
-const fn marker_color(state: TodoState, theme: &Theme) -> Color {
+pub(super) const fn marker_color(state: TodoState, theme: &Theme) -> Color {
     match state {
         TodoState::InProgress => theme.colors.pending,
         TodoState::Pending | TodoState::Cancelled => theme.colors.muted,
@@ -42,7 +44,7 @@ const fn marker_color(state: TodoState, theme: &Theme) -> Color {
 
 /// How a todo's text is drawn: the shared tone (open todos `Active`,
 /// closed ones `Settled`), struck through when cancelled.
-fn todo_style(state: TodoState, theme: &Theme) -> Style {
+pub(super) fn todo_style(state: TodoState, theme: &Theme) -> Style {
     let style = name_style(Tone::active_if(!state.is_closed()), theme);
     if state == TodoState::Cancelled {
         style.add_modifier(Modifier::CROSSED_OUT)
@@ -107,11 +109,12 @@ pub(super) fn render_plans(
                     let todo = &plan.todos[todo];
                     let icon = StatusIcon::new(marker(todo.state), marker_color(todo.state, theme));
                     let content = todo.content.lines().next().unwrap_or("");
-                    list_row(
+                    let agent = todo.assignee.as_deref().map(|agent| format!("→ {agent}"));
+                    list_row_with_detail(
                         width,
                         1,
                         icon,
-                        content,
+                        (content, agent.as_deref()),
                         cell_style(theme, state, todo_style(todo.state, theme)),
                         None,
                     )

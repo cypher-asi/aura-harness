@@ -360,6 +360,7 @@ pub(crate) async fn process_tool_results(
         &tool_calls,
         &all_results,
     ));
+    state.observe_task_results(&tool_calls, &all_results, ctx.event_tx);
 
     if any_write_success && state.build_cooldown == 0 {
         let changed: Vec<String> = all_results

@@ -269,6 +269,7 @@ mod tests {
                 id: "1".to_string(),
                 content: "ship it".to_string(),
                 status: TodoStatus::InProgress,
+                assignee: None,
             }],
             SessionUsage {
                 calls: 3,

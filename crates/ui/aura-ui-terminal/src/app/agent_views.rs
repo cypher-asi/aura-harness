@@ -165,9 +165,11 @@ impl App {
                 | UiCommand::SetSandboxRoot(_)
                 | UiCommand::SetPlan(_)
                 | UiCommand::SetPlans(_)
+                | UiCommand::SetTasks(_)
+                | UiCommand::UpsertTask(_)
         ) {
             // The Record and Sandbox panels, the plan strip and the Plans
-            // tab show the active agent only.
+            // and Tasks tabs show the active agent only.
             return;
         }
 

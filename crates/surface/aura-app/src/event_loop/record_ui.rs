@@ -40,6 +40,11 @@ impl RecordPanelAgent {
         *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(agent_id);
     }
 
+    /// The agent on screen, once one is set.
+    pub(crate) fn get(&self) -> Option<AgentId> {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Whether `agent_id` is the agent on screen (any agent before one
     /// is set).
     pub(crate) fn shows(&self, agent_id: AgentId) -> bool {

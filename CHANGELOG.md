@@ -7,6 +7,40 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Terminal and desktop — coordinating agent and tasks
+
+##### Added
+
+- In `agent` mode the main agent coordinates: its prompt has it plan with
+  `todo_write`, hand each non-trivial item to the best-fitting permanent
+  agent with `task`, and keep small edits and simple answers to itself. The
+  `task` tool lists each permanent agent with its description, model and
+  tools.
+- `task` takes a `todo_id`. The item goes in progress, assigned to the agent
+  it was handed to (`TodoItem.assignee`, shown as `→ coder`), as soon as the
+  call is made. It is done, or pending again on failure, when the agent
+  reports back. A detached task reports back through a
+  `<task_report todo_id=… ok=…/>` line on its notice. The assignee is
+  mirrored into the plan file and replayed from history.
+- The parent's record gets a `SubagentSpawn` entry for each `task` call,
+  with its `tool_use_id`, `subagent_type`, child name and `todo_id`.
+- A TASKS tab next to PLANS in the side panel. Each request whose turn
+  calls a tool is a task, and each `task` call is a task under it, done by
+  the spawned agent. A task's items follow its agent's todo list. Tasks
+  link to the plan and todo they work on, and are kept in
+  `.aura/tasks/<id>.json` across restarts. Enter shows the task's agent,
+  `p` opens its plan; `t` on a PLANS todo jumps to its task.
+
+##### Changed
+
+- Spawned agents in the projects list are joined to the agent that spawned
+  them by tree lines.
+- In the GRAPH tab a `task` row's wire runs to the agent doing it, colored
+  by how the task went. The agent's card ends `↩ reported to <agent>`, or
+  `↩ failed for <agent>`, where its report runs back to the caller.
+- With five tabs, the side panel shows short labels (`SBX`, `PRC`) for
+  tabs whose full label doesn't fit its cell.
+
 ### Terminal and desktop — chat restyle
 
 ##### Changed

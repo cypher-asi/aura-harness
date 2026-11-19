@@ -68,6 +68,9 @@ pub struct TodoItem {
     pub content: String,
     /// Current status.
     pub status: TodoStatus,
+    /// The permanent agent a `task` call gave it to, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -89,8 +92,9 @@ struct TodoPatch {
 /// Apply one `todo_write` call to `current` and return the new list.
 ///
 /// With `merge: false` the call replaces the list, so every item needs
-/// content. With `merge: true` items are matched by id: matching items
-/// get the supplied fields, unknown ids are appended.
+/// content; an item keeping the id of one it replaces keeps its assignee.
+/// With `merge: true` items are matched by id: matching items get the
+/// supplied fields, unknown ids are appended.
 ///
 /// # Errors
 /// Returns a message for the model when the arguments are malformed.
@@ -122,13 +126,90 @@ pub fn apply_todo_write(
         let Some(content) = patch.content.filter(|c| !c.trim().is_empty()) else {
             return Err(format!("new todo '{}' needs content", patch.id));
         };
+        let assignee = current
+            .iter()
+            .find(|item| item.id == patch.id)
+            .and_then(|item| item.assignee.clone());
         next.push(TodoItem {
             id: patch.id,
             content,
             status: patch.status.unwrap_or(TodoStatus::Pending),
+            assignee,
         });
     }
     Ok(next)
+}
+
+/// The todo a `task` call with `args` does (its `todo_id`), and whether
+/// the call's result is the agent's report: `false` for a detached task,
+/// whose report arrives later in a notice.
+#[must_use]
+pub fn task_todo(args: &serde_json::Value) -> Option<(&str, bool)> {
+    let id = args
+        .get("todo_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())?;
+    let detached = args.get("spawn_mode").and_then(serde_json::Value::as_str) == Some("detached");
+    Some((id, !detached))
+}
+
+/// `current` with the todo a `task` call with `args` does given to its
+/// agent and in progress, or `None` when the call names no listed todo.
+#[must_use]
+pub fn assign_task(current: &[TodoItem], args: &serde_json::Value) -> Option<Vec<TodoItem>> {
+    let (id, _) = task_todo(args)?;
+    let agent = args
+        .get("subagent_type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let mut next = current.to_vec();
+    let item = next.iter_mut().find(|item| item.id == id)?;
+    item.status = TodoStatus::InProgress;
+    if !agent.is_empty() {
+        item.assignee = Some(agent.to_string());
+    }
+    Some(next)
+}
+
+/// `current` with todo `id` done when its agent reported back having
+/// finished (`ok`), else pending again for the lead to plan anew; its
+/// assignee stays. `None` when `id` isn't listed or was closed meanwhile.
+#[must_use]
+pub fn report_task(current: &[TodoItem], id: &str, ok: bool) -> Option<Vec<TodoItem>> {
+    let mut next = current.to_vec();
+    let item = next
+        .iter_mut()
+        .find(|item| item.id == id && item.status.is_open())?;
+    item.status = if ok {
+        TodoStatus::Completed
+    } else {
+        TodoStatus::Pending
+    };
+    Some(next)
+}
+
+const TASK_REPORT_OPEN: &str = "<task_report todo_id=\"";
+
+/// The line a detached task's report carries so its todo is updated when
+/// the report arrives: `<task_report todo_id="t1" ok="true"/>`.
+#[must_use]
+pub fn task_report_line(id: &str, ok: bool) -> String {
+    let id: String = id.chars().filter(|c| *c != '"').collect();
+    format!("{TASK_REPORT_OPEN}{id}\" ok=\"{ok}\"/>")
+}
+
+/// The todo ids and outcomes of the [`task_report_line`]s in `text`.
+#[must_use]
+pub fn task_reports(text: &str) -> Vec<(String, bool)> {
+    text.lines()
+        .filter_map(|line| {
+            let rest = line.trim().strip_prefix(TASK_REPORT_OPEN)?;
+            let (id, rest) = rest.split_once('"')?;
+            let ok = rest.trim_start().strip_prefix("ok=\"")?.starts_with("true");
+            Some((id.to_string(), ok))
+        })
+        .collect()
 }
 
 /// Check a `todo_write` call without knowing the current list. A merge
@@ -170,6 +251,10 @@ pub fn render_todos(todos: &[TodoItem]) -> String {
         out.push_str(&item.content);
         out.push_str(" (id: ");
         out.push_str(&item.id);
+        if let Some(agent) = &item.assignee {
+            out.push_str(", agent: ");
+            out.push_str(agent);
+        }
         out.push_str(")\n");
     }
     out
@@ -247,7 +332,64 @@ mod tests {
             id: id.into(),
             content: content.into(),
             status,
+            assignee: None,
         }
+    }
+
+    #[test]
+    fn a_task_assigns_its_todo_and_the_report_closes_it() {
+        let current = vec![
+            item("1", "read", TodoStatus::Pending),
+            item("2", "edit", TodoStatus::Pending),
+        ];
+        let args = json!({"subagent_type": "explorer", "prompt": "p", "todo_id": "1"});
+        assert_eq!(task_todo(&args), Some(("1", true)));
+        let assigned = assign_task(&current, &args).unwrap();
+        assert_eq!(assigned[0].status, TodoStatus::InProgress);
+        assert_eq!(assigned[0].assignee.as_deref(), Some("explorer"));
+
+        let done = report_task(&assigned, "1", true).unwrap();
+        assert_eq!(done[0].status, TodoStatus::Completed);
+        assert!(
+            report_task(&done, "1", false).is_none(),
+            "a closed todo stays closed"
+        );
+        let failed = report_task(&assigned, "1", false).unwrap();
+        assert_eq!(failed[0].status, TodoStatus::Pending);
+        assert_eq!(failed[0].assignee.as_deref(), Some("explorer"));
+
+        assert!(assign_task(&current, &json!({"subagent_type": "x", "todo_id": "9"})).is_none());
+        assert!(assign_task(&current, &json!({"subagent_type": "x"})).is_none());
+    }
+
+    #[test]
+    fn a_detached_task_reports_in_a_line_of_its_notice() {
+        let args = json!({"subagent_type": "tests", "todo_id": "t", "spawn_mode": "detached"});
+        assert_eq!(task_todo(&args), Some(("t", false)));
+        let text = format!(
+            "tests finished.\n{}\n{}",
+            task_report_line("t", true),
+            task_report_line("u", false)
+        );
+        assert_eq!(
+            task_reports(&text),
+            [("t".to_string(), true), ("u".to_string(), false)]
+        );
+        assert!(task_reports("no report here").is_empty());
+    }
+
+    #[test]
+    fn replacing_the_list_keeps_assignees_of_kept_ids() {
+        let mut current = vec![item("1", "a", TodoStatus::InProgress)];
+        current[0].assignee = Some("implement".into());
+        let next = apply_todo_write(
+            &current,
+            &json!({"todos": [{"id": "1", "content": "a2"}, {"id": "2", "content": "b"}]}),
+        )
+        .unwrap();
+        assert_eq!(next[0].assignee.as_deref(), Some("implement"));
+        assert_eq!(next[1].assignee, None);
+        assert!(render_todos(&next).contains("(id: 1, agent: implement)"));
     }
 
     #[test]

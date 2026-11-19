@@ -285,12 +285,20 @@ impl Pen<'_, '_> {
         self.text.write(&mut self.out.over, &label, at);
     }
 
-    fn wire_color(&self, kind: WireKind, hot: bool) -> Color {
+    /// A wire's color: the selection's when it joins the selected card;
+    /// for a wire giving an agent its work, how the work went once it
+    /// came back; else its kind's.
+    fn wire_color(&self, wire: &Wire, hot: bool) -> Color {
         let colors = self.colors();
         if hot {
             return colors.primary;
         }
-        match kind {
+        match self.canvas.flow.wire_status(wire) {
+            Some(TraceNodeStatus::Ok) => return colors.success,
+            Some(TraceNodeStatus::Error) => return colors.error,
+            _ => {}
+        }
+        match wire.kind {
             WireKind::Next | WireKind::Spine => colors.muted.mix(colors.bg, 0.25),
             WireKind::Spawn | WireKind::Link => colors.secondary,
             WireKind::Return => colors.success,
@@ -318,7 +326,7 @@ impl Pen<'_, '_> {
         if gutter < from_x + 3 {
             return;
         }
-        let color = self.wire_color(wire.kind, hot);
+        let color = self.wire_color(&wire, hot);
         let width = self.line();
         let (start, end) = (self.column_px(from_x), self.column_px(to_x));
         let (sy, ey) = (self.row_px(from_y), self.row_px(to_y));
@@ -340,7 +348,7 @@ impl Pen<'_, '_> {
     fn spine(&mut self, wire: Wire, hot: bool) {
         let main = self.layout.card_rect(wire.from);
         let (to_x, to_y) = self.layout.port_in(wire.to);
-        let color = self.wire_color(wire.kind, hot);
+        let color = self.wire_color(&wire, hot);
         let width = self.line();
         let x = self.column_px(self.layout.spine_x(wire.from));
         let (top, ey) = (self.card_bottom(main), self.row_px(to_y));
@@ -385,7 +393,7 @@ impl Pen<'_, '_> {
     /// The dot a wire leaves its card from.
     fn port(&mut self, wire: Wire, hot: bool) {
         let (x, y) = self.layout.port_out(wire.from, wire.row);
-        let color = self.wire_color(wire.kind, hot);
+        let color = self.wire_color(&wire, hot);
         let width = self.line();
         let middle = width / 2.0 - (width / 2.0).floor();
         let center = Point::new(self.column_px(x) + middle, self.row_px(y) + middle);
@@ -453,6 +461,7 @@ impl Pen<'_, '_> {
         fill(out, right - edge, top, edge, bottom - top, border);
 
         self.title(card, rect);
+        self.report(card, rect);
 
         let selected_place = flow.selected_place().filter(|(at, _)| *at == card);
         let head_selected = selected_place == Some((card, None));
@@ -497,6 +506,38 @@ impl Pen<'_, '_> {
             let is_selected = selected_place == Some((card, Some(row)));
             self.row(card, row, line, is_selected, (left + edge, right - edge));
         }
+    }
+
+    /// `↩ reported to Agent`: over the bottom edge of the card at `rect`
+    /// an agent reported back from, to whom and how it went.
+    fn report(&mut self, card: usize, rect: CellRect) {
+        let Some((label, status)) = self.canvas.flow.card_report(card) else {
+            return;
+        };
+        let colors = self.colors();
+        let label = fit(&label, rect.width.saturating_sub(6));
+        if label.is_empty() {
+            return;
+        }
+        let color = if status == TraceNodeStatus::Error {
+            colors.error
+        } else {
+            colors.success
+        };
+        let right = rect.right() as f32 - 3.0;
+        let left = right - label.width() as f32 - 1.0;
+        let y = rect.bottom() as f32 - 1.0;
+        let (top, bottom) = (self.y(y).round(), self.y(y + 1.0).round());
+        let (x0, x1) = (self.x(left).round(), self.x(right + 1.0).round());
+        fill(
+            &mut self.out.under,
+            x0,
+            top,
+            x1 - x0,
+            bottom - top,
+            colors.bg,
+        );
+        self.write(&label, (right, y), color, false, Align::Right);
     }
 
     /// The selection's fill across a card's line from canvas row `y`.

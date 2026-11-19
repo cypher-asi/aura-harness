@@ -37,6 +37,9 @@ pub struct PlanTodo {
     pub content: String,
     #[serde(default)]
     pub status: TodoStatus,
+    /// The agent building the plan gave the todo to, if any
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<String>,
 }
 
 /// Frontmatter of a plan file.
@@ -248,10 +251,15 @@ pub fn create_plan(sandbox: &Sandbox, args: &serde_json::Value) -> Result<ToolRe
                 .and_then(|p| p.meta.todos.iter().find(|t| t.id == todo.id))
                 .map_or(TodoStatus::Pending, |t| t.status)
         });
+        let assignee = previous
+            .as_ref()
+            .and_then(|p| p.meta.todos.iter().find(|t| t.id == todo.id))
+            .and_then(|t| t.assignee.clone());
         planned.push(PlanTodo {
             id: todo.id,
             content,
             status,
+            assignee,
         });
     }
 
@@ -288,6 +296,7 @@ pub fn todo_items(plan: &PlanFile) -> Vec<TodoItem> {
             id: todo.id.clone(),
             content: todo.content.clone(),
             status: todo.status,
+            assignee: todo.assignee.clone(),
         })
         .collect()
 }
@@ -306,6 +315,7 @@ pub fn sync_todo_list(path: &Path, items: &[TodoItem]) -> Result<bool, String> {
             id: item.id.clone(),
             content: item.content.clone(),
             status: item.status,
+            assignee: item.assignee.clone(),
         })
         .collect();
     if plan.meta.todos == todos {
@@ -482,6 +492,7 @@ mod tests {
             id: "c".into(),
             content: "third".into(),
             status: TodoStatus::Pending,
+            assignee: None,
         });
 
         assert!(sync_todo_list(&file, &items).unwrap());

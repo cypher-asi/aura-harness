@@ -56,6 +56,8 @@ pub(super) async fn run_agent_turn(
         cost_cap,
         agent_loop.config().max_context_tokens,
         TurnPlan {
+            agent: session.agent_id(),
+            tasks: std::sync::Arc::clone(&session.tasks),
             workspace: session.kernel.agent_workspace(),
             building: session
                 .building_plan

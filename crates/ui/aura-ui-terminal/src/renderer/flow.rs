@@ -23,7 +23,7 @@ use super::panels::{body_block, render_scrollbar, truncate_record_info, ScrollVi
 use super::text::display_width;
 use crate::app::flow::layout::{FlowLayout, Wire, WireKind, CARD_WIDTH};
 use crate::app::flow::{FlowState, FlowView};
-use crate::events::FlowKind;
+use crate::events::{FlowKind, TraceNodeStatus};
 use crate::{App, Theme};
 use ratatui::{
     buffer::Buffer,
@@ -229,7 +229,7 @@ impl Canvas<'_> {
         wires.sort_by_key(|(hot, _)| *hot);
         for (hot, wire) in &wires {
             if !self.layout.stacked(wire) {
-                self.wire(*wire, self.wire_style(wire.kind, *hot));
+                self.wire(*wire, self.wire_style(wire, *hot));
             }
         }
         let linked = self.flow.linked_cards();
@@ -244,7 +244,7 @@ impl Canvas<'_> {
             self.card(card, standing);
         }
         for (hot, wire) in &wires {
-            let style = self.wire_style(wire.kind, *hot);
+            let style = self.wire_style(wire, *hot);
             if self.layout.stacked(wire) {
                 self.spine(*wire, style);
                 continue;
@@ -273,11 +273,19 @@ impl Canvas<'_> {
         }
     }
 
-    fn wire_style(&self, kind: WireKind, hot: bool) -> Style {
+    /// A wire's color: the selection's when it joins the selected card;
+    /// for a wire giving an agent its work, how the work went once it
+    /// came back; else its kind's.
+    fn wire_style(&self, wire: &Wire, hot: bool) -> Style {
         if hot {
             return Style::default().fg(self.theme.colors.primary);
         }
-        Style::default().fg(match kind {
+        match self.flow.wire_status(wire) {
+            Some(TraceNodeStatus::Ok) => return Style::default().fg(self.theme.colors.success),
+            Some(TraceNodeStatus::Error) => return Style::default().fg(self.theme.colors.error),
+            _ => {}
+        }
+        Style::default().fg(match wire.kind {
             WireKind::Next | WireKind::Spine => self.theme.colors.muted,
             WireKind::Spawn | WireKind::Link => self.theme.colors.secondary,
             WireKind::Return => self.theme.colors.success,
@@ -396,6 +404,7 @@ impl Canvas<'_> {
             self.put(x + w - 1, line, right, border);
         }
         self.title(card, border);
+        self.report(card);
 
         let placed = &self.layout.cards[card];
         let selected = self.flow.selected_place().filter(|(at, _)| *at == card);
@@ -472,6 +481,31 @@ impl Canvas<'_> {
             self.text(start + 1, rect.y, &facts, width, self.muted());
             self.put(start + 1 + width, rect.y, " ", self.muted());
         }
+    }
+
+    /// `└─ ↩ reported to Agent ─┘`: on the bottom border of the card an
+    /// agent reported back from, to whom and how it went.
+    fn report(&mut self, card: usize) {
+        let Some((label, status)) = self.flow.card_report(card) else {
+            return;
+        };
+        let rect = self.layout.card_rect(card);
+        let color = if status == TraceNodeStatus::Error {
+            self.theme.colors.error
+        } else {
+            self.theme.colors.success
+        };
+        let room = rect.width.saturating_sub(6);
+        let label = truncate_record_info(&label, room);
+        let width = display_width(&label);
+        if width == 0 {
+            return;
+        }
+        let y = rect.bottom() - 1;
+        let start = rect.right() - 3 - width;
+        self.put(start - 1, y, " ", self.muted());
+        self.text(start, y, &label, width, Style::default().fg(color));
+        self.put(start + width, y, " ", self.muted());
     }
 
     /// Paint line `line` of card `card`, inside its borders, in `style`.
@@ -735,7 +769,7 @@ mod tests {
             "│                                        │ ┌ ✓ turn ────────────── coder #1 ┐      │",
             "│                                        └─┤ write greet()                  │      │",
             "│                                          │ ↳ done                         │      │",
-            "│                                          └────────────────────────────────┘      │",
+            "│                                          └─────────── ↩ reported to Lead ─┘      │",
         ];
         assert_eq!(rows[1..=20], expected, "\n{}", rows.join("\n"));
     }
@@ -820,7 +854,11 @@ mod tests {
         let rows = screen(&mut app, 80, 10).join("\n");
         assert!(!rows.contains("add a greeting"));
         assert!(rows.contains("coder #1"), "{rows}");
-        assert!(!rows.contains("Lead"), "{rows}");
+        assert!(
+            rows.lines()
+                .all(|row| !row.contains("Lead") || row.contains("↩ reported to Lead")),
+            "only the report back names the agent on screen\n{rows}"
+        );
     }
 
     #[test]

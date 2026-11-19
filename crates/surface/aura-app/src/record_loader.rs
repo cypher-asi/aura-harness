@@ -1199,9 +1199,17 @@ fn summarize_spawn(payload: &Value) -> String {
     parts.join(" · ")
 }
 
-/// Child agent and override count of a spawn, without the spawn mode.
+/// Child agent, the permanent agent it is an instance of, the todo it
+/// does and the override count of a spawn, without the spawn mode.
 fn spawn_detail(payload: &Value) -> Vec<String> {
     let mut parts = Vec::new();
+    let text = |key| payload.get(key).and_then(Value::as_str);
+    if let Some(name) = text("child_name").or_else(|| text("subagent_type")) {
+        parts.push(name.to_string());
+    }
+    if let Some(todo) = text("todo_id") {
+        parts.push(format!("todo {todo}"));
+    }
     if let Some(child) = payload.get("child_agent_id").and_then(Value::as_str) {
         let short: String = child.chars().take(8).collect();
         parts.push(format!("child {short}"));

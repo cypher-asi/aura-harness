@@ -13,6 +13,7 @@ pub mod agent_skills;
 pub mod agent_system_prompt;
 pub mod agents_md;
 pub mod chat_capabilities;
+pub mod coordinator;
 pub mod dev_loop_workflow;
 pub mod editing_etiquette;
 pub mod frontend_design;

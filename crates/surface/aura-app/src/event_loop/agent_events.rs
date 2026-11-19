@@ -111,8 +111,11 @@ pub(crate) struct CostCap {
     pub stop: CancellationToken,
 }
 
-/// The plans a turn works with.
+/// The plans a turn works with, and the task it does.
 pub(crate) struct TurnPlan {
+    /// The agent whose turn it is, and where its task is kept
+    pub agent: AgentId,
+    pub tasks: std::sync::Arc<super::tasks::TaskBoard>,
     /// Folder the agent's tools resolve paths against
     pub workspace: PathBuf,
     /// Workspace-relative plan the agent is building, whose todos follow
@@ -173,6 +176,7 @@ impl UiCommandSink {
         self.state.plan_path = Some(path.to_string());
         // A new plan is not the one being built.
         self.plan.building = None;
+        self.plan.tasks.set_plan(self.plan.agent, path).await;
         let Some(view) = plan_view(&self.plan.workspace, path) else {
             return;
         };
@@ -300,6 +304,7 @@ impl TurnEventSink for UiCommandSink {
     async fn on_tool_start(&mut self, id: String, name: String) {
         self.finish_thinking_if_active().await;
         self.finish_streaming_if_active().await;
+        self.plan.tasks.touch(self.plan.agent).await;
         self.open_tools.push(id.clone());
         self.ui
             .send(UiCommand::ShowTool(ToolData {
@@ -456,7 +461,12 @@ impl TurnEventSink for UiCommandSink {
             (PROGRESS_TODOS_UPDATED, Some(message)) => {
                 match serde_json::from_str::<Vec<TodoItem>>(&message) {
                     Ok(todos) => {
-                        self.ui.send(UiCommand::SetTodos(todo_views(&todos))).await;
+                        let views = todo_views(&todos);
+                        self.plan
+                            .tasks
+                            .set_items(self.plan.agent, views.clone())
+                            .await;
+                        self.ui.send(UiCommand::SetTodos(views)).await;
                         self.sync_plan(&todos).await;
                     }
                     Err(e) => debug!(error = %e, "Unreadable todo list update"),

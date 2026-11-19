@@ -75,6 +75,9 @@ struct TaskCall {
     prompt: String,
     children: Vec<AgentId>,
     returned: bool,
+    /// Whether it runs in the background: its result only says so, and
+    /// the agent reports back in a notice
+    detached: bool,
 }
 
 /// The flow of one agent and the agents below it, built entry by entry.
@@ -93,6 +96,9 @@ pub(crate) struct FlowBuilder {
     /// Prompts with no reply yet, per agent
     open_prompts: HashMap<AgentId, Vec<String>>,
     tasks: VecDeque<TaskCall>,
+    /// The `task` call each child's spawn entry says it answers, until
+    /// the child's first prompt takes it
+    bound: HashMap<AgentId, String>,
     /// Spawn nodes whose child has written nothing yet
     spawns: HashMap<AgentId, String>,
     /// `send_to_agent` calls whose message the target hasn't recorded yet
@@ -129,6 +135,7 @@ impl FlowBuilder {
             last_node: HashMap::new(),
             open_prompts: HashMap::new(),
             tasks: VecDeque::new(),
+            bound: HashMap::new(),
             spawns: HashMap::new(),
             sends: HashMap::new(),
             seen: HashMap::new(),
@@ -294,6 +301,9 @@ impl FlowBuilder {
         subtask: bool,
         text: &str,
     ) -> Option<(String, &'static str)> {
+        if let Some(call) = self.bound.remove(&agent) {
+            return Some((call, LINK_SPAWN));
+        }
         if subtask {
             let parent = self.lanes[*self.lane_of.get(&agent)?].parent;
             if let Some(call) = self.claim_task(parent, agent, text) {
@@ -469,6 +479,7 @@ impl FlowBuilder {
                     prompt: arg(&proposal.args, "prompt").to_string(),
                     children: Vec::new(),
                     returned: false,
+                    detached: arg(&proposal.args, "spawn_mode") == "detached",
                 });
                 if self.tasks.len() > MAX_TASK_CALLS {
                     self.tasks.pop_front();
@@ -562,7 +573,7 @@ impl FlowBuilder {
         };
         task.returned = true;
         let children = task.children.clone();
-        if children.is_empty() {
+        if children.is_empty() || task.detached {
             return;
         }
         let names: Vec<&str> = children
@@ -598,6 +609,11 @@ impl FlowBuilder {
     fn spawn(&mut self, entry: &RecordEntry) {
         let payload = json_payload(&entry.tx).unwrap_or(Value::Null);
         let child = spawned_child(entry);
+        if let Some(child) = child {
+            if self.bind_task(entry.tx.agent_id, child, &payload) {
+                return;
+            }
+        }
         let name = child
             .and_then(|child| self.lane_of.get(&child))
             .map(|lane| self.lanes[*lane].name.clone())
@@ -616,6 +632,41 @@ impl FlowBuilder {
         if let Some(child) = child {
             self.spawns.insert(child, id);
         }
+    }
+
+    /// Tie `child` to the `task` call of `parent` its spawn entry
+    /// `payload` names by tool-use id: the call's row is what the child's
+    /// work wires to, so the spawn needs no box of its own. Returns
+    /// whether the call was found.
+    fn bind_task(&mut self, parent: AgentId, child: AgentId, payload: &Value) -> bool {
+        let tool_use = arg(payload, "tool_use_id");
+        if tool_use.is_empty() {
+            return false;
+        }
+        let Some(call) = self.tools.get(&(parent, tool_use.to_string())).cloned() else {
+            return false;
+        };
+        let Some(task) = self.tasks.iter_mut().find(|task| task.node == call) else {
+            return false;
+        };
+        if !task.children.contains(&child) {
+            task.children.push(child);
+        }
+        let agent = arg(payload, "child_name");
+        let todo = arg(payload, "todo_id");
+        self.update(&call, |node| {
+            if !agent.is_empty() {
+                set_meta(node, "agent", agent.to_string());
+            }
+            if !todo.is_empty() {
+                set_meta(node, "todo", todo.to_string());
+            }
+            set_meta(node, "child", child.to_hex());
+        });
+        if !self.last_node.contains_key(&child) {
+            self.bound.insert(child, call);
+        }
+        true
     }
 
     fn system(&mut self, entry: &RecordEntry) {

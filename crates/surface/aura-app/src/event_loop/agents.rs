@@ -9,6 +9,7 @@
 
 use super::agent_events::AgentUi;
 use super::subagents::lock;
+use super::tasks::TaskBoard;
 use super::LoopState;
 use crate::agent_registry::RegisteredAgent;
 use crate::file_checkpoints::FileCheckpoints;
@@ -22,10 +23,15 @@ use aura_agent::{
 };
 use aura_agent_kernel::Kernel;
 use aura_core_types::{AgentId, Identity};
-use aura_exec_tools::todo::{apply_todo_write, TodoItem, TODO_WRITE_TOOL_NAME};
-use aura_model::{ContentBlock, Message};
+use aura_exec_tools::agents::task::TASK_TOOL_NAME;
+use aura_exec_tools::todo::{
+    apply_todo_write, assign_task, report_task, task_reports, task_todo, TodoItem,
+    TODO_WRITE_TOOL_NAME,
+};
+use aura_model::{ContentBlock, Message, Role};
 use aura_store_record::ReadStore;
 use aura_ui_terminal::UiCommand;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -64,6 +70,8 @@ pub struct AgentSession {
     /// enforced (see [`super::lead`]); set where the turn's tools are put
     /// together.
     pub lead: bool,
+    /// Where its work is kept as tasks
+    pub tasks: Arc<TaskBoard>,
 }
 
 impl AgentSession {
@@ -129,15 +137,46 @@ impl AgentSession {
     }
 }
 
-/// The todo list left by the `todo_write` calls in `messages`.
+/// The todo list left by the `todo_write` calls in `messages`, with the
+/// todos `task` calls gave to agents assigned and, once the agents
+/// reported back (in the call's result, or a detached task's notice),
+/// closed: the list the agent loop kept as the turns ran.
 pub(crate) fn todos_from_history(messages: &[Message]) -> Vec<TodoItem> {
     let mut todos = Vec::new();
-    for block in messages.iter().flat_map(|m| m.content.iter()) {
-        if let ContentBlock::ToolUse { name, input, .. } = block {
-            if name == TODO_WRITE_TOOL_NAME {
-                if let Ok(next) = apply_todo_write(&todos, input) {
-                    todos = next;
+    let mut tasks: HashMap<&str, &serde_json::Value> = HashMap::new();
+    for message in messages {
+        for block in &message.content {
+            let next = match block {
+                ContentBlock::ToolUse { name, input, .. } if name == TODO_WRITE_TOOL_NAME => {
+                    apply_todo_write(&todos, input).ok()
                 }
+                ContentBlock::ToolUse { id, name, input } if name == TASK_TOOL_NAME => {
+                    tasks.insert(id, input);
+                    assign_task(&todos, input)
+                }
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    is_error,
+                    ..
+                } => tasks
+                    .get(tool_use_id.as_str())
+                    .and_then(|input| task_todo(input))
+                    .filter(|(_, reports)| *reports)
+                    .and_then(|(id, _)| report_task(&todos, id, !is_error)),
+                ContentBlock::Text { text } if message.role == Role::User => {
+                    let mut next = None;
+                    for (id, ok) in task_reports(text) {
+                        let current = next.as_ref().unwrap_or(&todos);
+                        if let Some(reported) = report_task(current, &id, ok) {
+                            next = Some(reported);
+                        }
+                    }
+                    next
+                }
+                _ => None,
+            };
+            if let Some(next) = next {
+                todos = next;
             }
         }
     }
@@ -157,6 +196,8 @@ pub struct KernelFactory {
     pub(super) checkpoints: Option<Checkpoints>,
     pub(super) file_checkpoints: Option<FileCheckpoints>,
     post_edit_check: Option<(PostEditCheckConfig, mpsc::Sender<UiCommand>)>,
+    /// Every agent's current task; the hub gives it a way to show them
+    pub(crate) tasks: Arc<TaskBoard>,
 }
 
 impl KernelFactory {
@@ -168,6 +209,7 @@ impl KernelFactory {
             checkpoints: None,
             file_checkpoints: None,
             post_edit_check: None,
+            tasks: Arc::default(),
         }
     }
 
@@ -258,6 +300,7 @@ impl KernelFactory {
             active_plan,
             building_plan: false,
             lead: false,
+            tasks: Arc::clone(&self.tasks),
         };
         if let Some(checkpoint) = self.restore(session.agent_id()) {
             info!(agent = %session.agent_id(), "Resuming session from checkpoint");

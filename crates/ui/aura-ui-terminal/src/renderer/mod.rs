@@ -18,6 +18,7 @@ mod overlays;
 mod panels;
 mod plans;
 mod processes;
+mod tasks;
 mod sandbox;
 mod segments;
 mod side_list;

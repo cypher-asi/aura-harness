@@ -78,6 +78,9 @@ pub struct TaskInput {
     /// passed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<String>,
+    /// Optional id of the caller's todo the subtask does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub todo_id: Option<String>,
 }
 
 pub struct TaskTool;
@@ -145,6 +148,10 @@ impl TaskTool {
                     "check": {
                         "type": "string",
                         "description": "Optional command run in the workspace after the subagent finishes, such as `cargo test -p foo`. Exit status 0 means the subtask passed."
+                    },
+                    "todo_id": {
+                        "type": "string",
+                        "description": "Optional id of the caller's todo the subtask does; it is marked done when the subagent finishes."
                     }
                 },
                 "required": ["subagent_type", "prompt"]
@@ -243,6 +250,12 @@ impl TaskTool {
                 .map(str::trim)
                 .filter(|check| !check.is_empty())
                 .map(str::to_string),
+            todo_id: input
+                .todo_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string),
         })
     }
 }
@@ -337,6 +350,7 @@ mod tests {
             tool_call_id: None,
             spawn_mode: None,
             check: None,
+            todo_id: None,
         }
     }
 

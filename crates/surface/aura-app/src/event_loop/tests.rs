@@ -1095,6 +1095,7 @@ fn todo(content: &str) -> aura_exec_tools::todo::TodoItem {
         id: "1".to_string(),
         content: content.to_string(),
         status: aura_exec_tools::todo::TodoStatus::InProgress,
+        assignee: None,
     }
 }
 

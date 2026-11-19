@@ -19,7 +19,7 @@ mod tests;
 use super::file_view::FileView;
 use super::trace_json::{node_json, NodeLink};
 use super::{App, ChatTab, DetailView, NotificationType, PanelFocus};
-use crate::events::{FlowKind, FlowLane, FlowNode, TraceNode, UiEvent};
+use crate::events::{FlowKind, FlowLane, FlowNode, TraceNode, TraceNodeStatus, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use layout::{build_layout, CardKind, FlowLayout, Folds, Spot};
 use ratatui::buffer::{Buffer, Cell};
@@ -280,6 +280,37 @@ impl FlowState {
             Some((selected, Some(row))) if selected == card && row >= shown => Some(row),
             _ => None,
         }
+    }
+
+    /// What card `card`'s bottom border says when its agent reported back
+    /// to the agent that asked it from there: `↩ reported to Agent`, or
+    /// `↩ failed for Agent`, and whether the work went well.
+    #[must_use]
+    pub fn card_report(&self, card: usize) -> Option<(String, TraceNodeStatus)> {
+        let &(_, node) = self.layout.reports.iter().find(|(from, _)| *from == card)?;
+        let to = &self.nodes[node];
+        let failed = to.status == TraceNodeStatus::Error
+            || (to.kind == FlowKind::Prompt && to.label.contains(" did not finish the task "));
+        let parent = self.lane_name(&to.agent_id);
+        if failed {
+            Some((format!("↩ failed for {parent}"), TraceNodeStatus::Error))
+        } else {
+            Some((format!("↩ reported to {parent}"), TraceNodeStatus::Ok))
+        }
+    }
+
+    /// How the `task` call wire `wire` leaves from went, for a wire that
+    /// gives an agent its work: pending while the agent works, then done
+    /// or failed. `None` for any other wire.
+    #[must_use]
+    pub fn wire_status(&self, wire: &layout::Wire) -> Option<TraceNodeStatus> {
+        if wire.kind != layout::WireKind::Spawn {
+            return None;
+        }
+        let row = wire.row?;
+        let node = *self.layout.cards[wire.from].rows.get(row)?;
+        let node = &self.nodes[node];
+        (node.kind == FlowKind::Tool).then_some(node.status)
     }
 
     /// What the last line of card `card` says of the rows it leaves out.

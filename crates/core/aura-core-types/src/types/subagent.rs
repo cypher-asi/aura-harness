@@ -170,6 +170,10 @@ pub struct SubagentDispatchRequest {
     /// leaves the verdict to the last check the child ran itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<String>,
+    /// Id of the parent's todo the subtask does, which the parent's todo
+    /// list and task record follow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub todo_id: Option<String>,
 }
 
 /// Terminal state of a foreground subagent task.

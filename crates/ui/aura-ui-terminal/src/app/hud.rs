@@ -359,6 +359,8 @@ mod tests {
         let todo = |content: &str, state| TodoView {
             content: content.to_string(),
             state,
+            assignee: None,
+            task: None,
         };
         let hud = Hud {
             todos: vec![

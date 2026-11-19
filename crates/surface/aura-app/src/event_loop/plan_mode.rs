@@ -32,7 +32,7 @@ pub(crate) fn plan_view(workspace: &Path, path: &str) -> Option<PlanView> {
         return None;
     }
     match PlanFile::load(&workspace.join(path)) {
-        Ok(plan) => Some(view_of(path, plan)),
+        Ok(plan) => Some(view_of(workspace, path, plan)),
         Err(e) => {
             warn!(%path, error = %e, "Could not read plan");
             None
@@ -60,7 +60,8 @@ pub(crate) fn plan_views(workspace: &Path) -> Vec<PlanView> {
     plans.into_iter().map(|(_, view)| view).collect()
 }
 
-fn view_of(path: &str, plan: PlanFile) -> PlanView {
+fn view_of(workspace: &Path, path: &str, plan: PlanFile) -> PlanView {
+    let tasks = super::tasks::plan_tasks(workspace, path);
     PlanView {
         path: path.to_string(),
         name: plan.meta.name,
@@ -71,12 +72,14 @@ fn view_of(path: &str, plan: PlanFile) -> PlanView {
             .map(|todo| TodoView {
                 content: todo.content,
                 state: todo_state(todo.status),
+                assignee: todo.assignee,
+                task: tasks.get(&todo.id).cloned(),
             })
             .collect(),
     }
 }
 
-const fn todo_state(status: TodoStatus) -> TodoState {
+pub(super) const fn todo_state(status: TodoStatus) -> TodoState {
     match status {
         TodoStatus::Pending => TodoState::Pending,
         TodoStatus::InProgress => TodoState::InProgress,
@@ -120,15 +123,17 @@ pub(super) async fn send_plan_of(state: &LoopState<'_>, agent_id: AgentId) {
         .await;
 }
 
-/// Show the Plans tab every plan in `agent_id`'s workspace.
+/// Show the Plans and Tasks tabs every plan and task in `agent_id`'s
+/// workspace.
 pub(super) async fn send_plans_of(state: &LoopState<'_>, agent_id: AgentId) {
     let Some(kernel) = state.kernel_for(agent_id) else {
         return;
     };
-    let plans = plan_views(&kernel.agent_workspace());
+    let workspace = kernel.agent_workspace();
     AgentUi::new(state.commands.clone(), agent_id)
-        .send(UiCommand::SetPlans(plans))
+        .send(UiCommand::SetPlans(plan_views(&workspace)))
         .await;
+    state.hub.factory.tasks.send_all(agent_id, &workspace).await;
 }
 
 /// Get `session` ready to build the plan at `path`, or its latest plan:
@@ -171,7 +176,7 @@ pub(super) async fn start_build(
     session.todos = todo_items(&plan);
     session.active_plan = Some(path.clone());
     session.building_plan = true;
-    let view = view_of(&path, plan);
+    let view = view_of(&workspace, &path, plan);
     ui.send(system_message(format!("Building {}", view.name)))
         .await;
     ui.send(UiCommand::SetTodos(todo_views(&session.todos)))
@@ -232,6 +237,7 @@ mod tests {
             id: id.into(),
             content: "anything".into(),
             status,
+            assignee: None,
         };
 
         // Status and content may change while building; the ids decide.

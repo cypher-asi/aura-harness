@@ -49,6 +49,7 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
             super::trace_feed::render_trace_feed(frame, area, body, app, theme);
         }
         SidePanelTab::Plans => super::plans::render_plans(frame, area, body, app, theme),
+        SidePanelTab::Tasks => super::tasks::render_tasks(frame, area, body, app, theme),
     }
 }
 

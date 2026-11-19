@@ -8,9 +8,10 @@ use super::LoopState;
 use crate::session_checkpoint::SessionUsage;
 use aura_agent::AgentLoopResult;
 use aura_core_types::AgentId;
-use aura_exec_tools::todo::{TodoItem, TodoStatus};
+use aura_exec_tools::todo::TodoItem;
 use aura_model::{model_catalog, Usage};
-use aura_ui_terminal::events::{CallStats, ContextView, SessionTotals, TodoState, TodoView};
+use aura_ui_terminal::events::{CallStats, ContextView, SessionTotals, TodoView};
+use super::plan_mode::todo_state;
 use aura_ui_terminal::UiCommand;
 
 /// `todos` as the UI shows them.
@@ -19,12 +20,9 @@ pub(super) fn todo_views(todos: &[TodoItem]) -> Vec<TodoView> {
         .iter()
         .map(|todo| TodoView {
             content: todo.content.clone(),
-            state: match todo.status {
-                TodoStatus::Pending => TodoState::Pending,
-                TodoStatus::InProgress => TodoState::InProgress,
-                TodoStatus::Completed => TodoState::Completed,
-                TodoStatus::Cancelled => TodoState::Cancelled,
-            },
+            state: todo_state(todo.status),
+            assignee: todo.assignee.clone(),
+            task: None,
         })
         .collect()
 }
@@ -128,10 +126,13 @@ mod tests {
 
     #[test]
     fn todo_states_map_one_to_one() {
+        use aura_exec_tools::todo::TodoStatus;
+        use aura_ui_terminal::events::TodoState;
         let item = |status| TodoItem {
             id: "1".to_string(),
             content: "x".to_string(),
             status,
+            assignee: None,
         };
         let views = todo_views(&[item(TodoStatus::InProgress), item(TodoStatus::Cancelled)]);
         assert_eq!(views[0].state, TodoState::InProgress);

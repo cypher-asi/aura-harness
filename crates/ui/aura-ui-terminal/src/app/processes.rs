@@ -25,10 +25,18 @@ pub enum SidePanelTab {
     Trace,
     /// The workspace's plans, each with its todos.
     Plans,
+    /// Work agents did or are doing, each with what is done and left.
+    Tasks,
 }
 
 impl SidePanelTab {
-    pub const ALL: [Self; 4] = [Self::Sandbox, Self::Processes, Self::Trace, Self::Plans];
+    pub const ALL: [Self; 5] = [
+        Self::Sandbox,
+        Self::Processes,
+        Self::Trace,
+        Self::Plans,
+        Self::Tasks,
+    ];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
@@ -37,6 +45,7 @@ impl SidePanelTab {
             Self::Processes => "PROCESSES",
             Self::Trace => "TRACE",
             Self::Plans => "PLANS",
+            Self::Tasks => "TASKS",
         }
     }
 
@@ -48,6 +57,7 @@ impl SidePanelTab {
             Self::Processes => "PRC",
             Self::Trace => "TRC",
             Self::Plans => "PLN",
+            Self::Tasks => "TSK",
         }
     }
 
@@ -63,16 +73,18 @@ impl SidePanelTab {
             Self::Sandbox => Self::Processes,
             Self::Processes => Self::Trace,
             Self::Trace => Self::Plans,
-            Self::Plans => Self::Sandbox,
+            Self::Plans => Self::Tasks,
+            Self::Tasks => Self::Sandbox,
         }
     }
 
     pub(super) const fn prev(self) -> Self {
         match self {
-            Self::Sandbox => Self::Plans,
+            Self::Sandbox => Self::Tasks,
             Self::Processes => Self::Sandbox,
             Self::Trace => Self::Processes,
             Self::Plans => Self::Trace,
+            Self::Tasks => Self::Plans,
         }
     }
 }
@@ -209,10 +221,14 @@ impl App {
                     SidePanelTab::Processes => self.select_process(index),
                     SidePanelTab::Trace => self.trace_feed.select(index),
                     SidePanelTab::Plans => self.plan_list.select(index),
+                    SidePanelTab::Tasks => self.task_list.select(index),
                 }
             }
             (SidePanelTab::Sandbox, KeyCode::Char(' ')) => self.sandbox.toggle_selected(),
             (SidePanelTab::Plans, KeyCode::Char(' ')) => self.plan_list.toggle_selected(),
+            (SidePanelTab::Plans, KeyCode::Char('t')) => self.jump_to_todo_task(),
+            (SidePanelTab::Tasks, KeyCode::Char(' ')) => self.task_list.toggle_selected(),
+            (SidePanelTab::Tasks, KeyCode::Char('p')) => self.open_selected_task_plan(),
             (SidePanelTab::Processes, KeyCode::Char('o')) => self.jump_to_selected_owner(),
             (SidePanelTab::Processes, KeyCode::Char('k') | KeyCode::Delete) => {
                 self.request_kill_selected();
@@ -343,6 +359,7 @@ impl App {
                 }
             }
             SidePanelTab::Plans => self.click_plan_row(column, row),
+            SidePanelTab::Tasks => self.click_task_row(column, row),
         }
     }
 
@@ -392,6 +409,7 @@ impl App {
                 .map(HoverTarget::ProcessRow),
             SidePanelTab::Trace => self.trace_row_at(column, row).map(HoverTarget::TraceRow),
             SidePanelTab::Plans => self.plan_row_at(column, row).map(HoverTarget::PlanRow),
+            SidePanelTab::Tasks => self.task_row_at(column, row).map(HoverTarget::TaskRow),
         }
     }
 }
@@ -455,13 +473,16 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
         assert_eq!(app.side_tab(), SidePanelTab::Sandbox);
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+        assert_eq!(app.side_tab(), SidePanelTab::Tasks);
+        app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
         assert_eq!(app.side_tab(), SidePanelTab::Plans);
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
         assert_eq!(app.side_tab(), SidePanelTab::Trace);
         app.handle_key(key(KeyCode::Right));
         assert_eq!(app.side_tab(), SidePanelTab::Trace);
-        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
-        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+        for _ in 0..3 {
+            app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+        }
         assert_eq!(app.side_tab(), SidePanelTab::Sandbox);
     }
 

@@ -374,6 +374,7 @@ async fn dispatch_members(
                 council_index: Some(u32::try_from(index).unwrap_or(u32::MAX)),
                 council_parent_tool_use_id: Some(group_id.clone()),
                 check: None,
+                todo_id: None,
             };
             async move {
                 let outcome = hook.dispatch(request).await;
