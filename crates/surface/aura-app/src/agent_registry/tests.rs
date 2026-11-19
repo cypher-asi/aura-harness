@@ -765,3 +765,38 @@ fn compare_runs_work_in_their_own_folder_under_the_comparison() {
         .collect();
     assert_eq!(names, ["Compare #1", "Compare #2"]);
 }
+
+#[test]
+fn compare_runs_list_by_run_number_then_arm() {
+    let dir = tempfile::tempdir().unwrap();
+    let launch = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let mut registry = open(dir.path(), launch.path());
+    let (root, _) = registry.open_project(project.path()).unwrap();
+    let compare = registry.create_compare(&root.zns_id).unwrap();
+    for name in ["b-1", "b-2", "a-1", "a-10", "b-10", "a-2"] {
+        registry.create_child(name, &compare.zns_id, None).unwrap();
+    }
+    let a1 = registry
+        .tree()
+        .iter()
+        .find(|(a, _)| a.name == "a-1")
+        .unwrap()
+        .0
+        .clone();
+    registry
+        .create_instance("implement", Some(a1.zns_id.clone()))
+        .unwrap();
+
+    let names: Vec<&str> = registry
+        .tree()
+        .into_iter()
+        .skip_while(|(a, _)| a.zns_id != compare.zns_id)
+        .skip(1)
+        .map(|(a, _)| a.name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        ["a-1", "implement #1", "b-1", "a-2", "b-2", "a-10", "b-10"]
+    );
+}

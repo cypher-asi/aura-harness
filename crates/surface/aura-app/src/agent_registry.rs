@@ -154,6 +154,15 @@ fn is_placeholder_name(name: &str) -> bool {
         .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
+/// Where a `/compare` run named `<arm>-<n>` goes among its comparison's
+/// runs: by run number, then arm, with other names after them.
+fn run_order(name: &str) -> (bool, Option<(u32, &str)>) {
+    let order = name
+        .rsplit_once('-')
+        .and_then(|(arm, n)| Some((n.parse().ok()?, arm)));
+    (order.is_none(), order)
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct RegistryFile {
     #[serde(default)]
@@ -887,12 +896,17 @@ impl AgentRegistry {
             return;
         }
         out.push((agent, depth));
-        let spawned = self
+        let mut spawned: Vec<&RegisteredAgent> = self
             .file
             .agents
             .iter()
             .filter(|a| a.parent.as_deref() == Some(agent.zns_id.as_str()))
-            .filter(|a| with_archived || !(a.archived || a.removed));
+            .filter(|a| with_archived || !(a.archived || a.removed))
+            .collect();
+        if agent.is_compare() {
+            // Runs register as their copies become ready, in no set order.
+            spawned.sort_by(|x, y| run_order(&x.name).cmp(&run_order(&y.name)));
+        }
         for child in spawned {
             self.visit(child, depth + 1, with_archived, out);
         }
