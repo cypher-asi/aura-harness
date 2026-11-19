@@ -752,8 +752,8 @@ fn render_notification(
         }
     }
     let text_width = lines.iter().map(|l| display_width(l)).max().unwrap_or(0);
-    let width = (u16::try_from(text_width).unwrap_or(u16::MAX) + lead_width + FRAME_WIDTH)
-        .min(max_width);
+    let width =
+        (u16::try_from(text_width).unwrap_or(u16::MAX) + lead_width + FRAME_WIDTH).min(max_width);
     let rows = u16::try_from(lines.len()).unwrap_or(1);
     let height = (rows + 2).min(bottom.saturating_sub(area.y));
 

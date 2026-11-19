@@ -129,7 +129,8 @@ fn status_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
             theme.colors.muted,
         )
     } else {
-        ("◐".to_string(), theme.colors.warning, theme.colors.warning)
+        // In-progress status (iterations, tool runs): the theme's accent.
+        ("◐".to_string(), theme.colors.success, theme.colors.success)
     };
     vec![
         Span::styled(format!("{mark} "), Style::default().fg(mark_color)),
