@@ -1,7 +1,12 @@
-//! What `/compare` records: one [`ComparePayload`] per state change of a
-//! comparison (started, finished, picked, applied, dismissed), written as
-//! a [`SystemKind::Compare`] system transaction on the comparison's own
-//! agent. The latest one is the comparison as it stands.
+//! What `/compare` and the BENCH tab record: one [`ComparePayload`] per
+//! state change of a comparison (started, finished, picked, applied,
+//! dismissed), written as a [`SystemKind::Compare`] system transaction on
+//! the comparison's own agent. The latest one is the comparison as it
+//! stands.
+//!
+//! A comparison runs the same work on two arms, A and B, each either
+//! Gate or a pinned model. The work is one prompt, a plan to build, or
+//! the prompts of an earlier session replayed in order.
 //!
 //! The runs themselves are ordinary agents with ordinary prompt and
 //! `Outcome` records; this payload only says which runs belong to which
@@ -10,6 +15,7 @@
 
 use std::path::PathBuf;
 
+use super::gate::OutcomeSignal;
 use super::plan_usage::PlanShare;
 use super::transaction::SystemKind;
 use crate::ids::{AgentId, Hash};
@@ -17,24 +23,26 @@ use serde::{Deserialize, Serialize};
 
 /// Which side of a comparison a run is on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum CompareArm {
-    /// Gate routes the run, with exploration off.
-    Gate,
-    /// The run is pinned to the model Gate is compared with.
-    Other,
+    /// The first arm; Gate in comparisons recorded before arms were
+    /// chosen freely.
+    #[serde(rename = "a", alias = "gate")]
+    A,
+    /// The second arm; the model Gate was compared with in older records.
+    #[serde(rename = "b", alias = "other")]
+    B,
 }
 
 impl CompareArm {
-    /// Both arms, Gate first.
-    pub const BOTH: [Self; 2] = [Self::Gate, Self::Other];
+    /// Both arms, A first.
+    pub const BOTH: [Self; 2] = [Self::A, Self::B];
 
-    /// The arm's name in run names and commands: `gate` or `other`.
+    /// The arm's name in run names and commands: `a` or `b`.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Gate => "gate",
-            Self::Other => "other",
+            Self::A => "a",
+            Self::B => "b",
         }
     }
 
@@ -42,8 +50,17 @@ impl CompareArm {
     #[must_use]
     pub const fn opposite(self) -> Self {
         match self {
-            Self::Gate => Self::Other,
-            Self::Other => Self::Gate,
+            Self::A => Self::B,
+            Self::B => Self::A,
+        }
+    }
+
+    /// 0 for A, 1 for B.
+    #[must_use]
+    pub const fn index(self) -> usize {
+        match self {
+            Self::A => 0,
+            Self::B => 1,
         }
     }
 }
@@ -51,6 +68,50 @@ impl CompareArm {
 impl std::fmt::Display for CompareArm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+/// What one arm runs on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum ArmSpec {
+    /// Gate routes every turn and subtask, with exploration off;
+    /// `delegate` says whether its lead must delegate.
+    Gate { delegate: bool },
+    /// Every turn and subtask runs on `model`.
+    Model { model: String },
+}
+
+impl ArmSpec {
+    /// How [`ArmSpec::label`] names Gate whose lead need not delegate.
+    pub const NO_DELEGATE: &'static str = "gate:nodelegate";
+
+    /// `gate`, [`Self::NO_DELEGATE`], or the model.
+    #[must_use]
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Gate { delegate: true } => "gate",
+            Self::Gate { delegate: false } => Self::NO_DELEGATE,
+            Self::Model { model } => model,
+        }
+    }
+
+    /// The arm a label from [`Self::label`] names.
+    #[must_use]
+    pub fn from_label(label: &str) -> Self {
+        match label {
+            "gate" => Self::Gate { delegate: true },
+            Self::NO_DELEGATE => Self::Gate { delegate: false },
+            model => Self::Model {
+                model: model.to_string(),
+            },
+        }
+    }
+
+    /// Whether Gate routes the arm.
+    #[must_use]
+    pub const fn is_gate(&self) -> bool {
+        matches!(self, Self::Gate { .. })
     }
 }
 
@@ -90,34 +151,50 @@ pub struct CompareCopy {
     pub baseline: String,
 }
 
+/// One prompt of a run: what it cost and how it ended.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunTurn {
+    /// Model that ran the turn.
+    pub model: String,
+    /// List-price cost of the turn's model calls, subtasks included.
+    pub cost_usd: f64,
+    /// Wall time of the turn.
+    pub wall_ms: u64,
+    /// How the turn ended, as its `Outcome` records it.
+    pub signal: OutcomeSignal,
+}
+
 /// One run of a comparison.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompareRun {
-    /// `gate-1`, `other-2`, ...
+    /// `a-1`, `b-2`, ... (`gate-1`, `other-2` in older records)
     pub name: String,
     /// The arm it belongs to.
     pub arm: CompareArm,
     /// The agent that ran it.
     pub agent_id: AgentId,
-    /// Its prompt transaction, once recorded.
+    /// Its first prompt transaction, once recorded.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         with = "crate::serde_helpers::option_hex_hash"
     )]
     pub prompt_tx: Option<Hash>,
-    /// Model that ran the turn.
+    /// Model that ran the first turn.
     pub model: String,
     /// Its workspace copy.
     pub copy: CompareCopy,
-    /// Wall time from the prompt to the end of the turn, subtasks
-    /// included.
+    /// Wall time from the first prompt to the end of the last turn,
+    /// subtasks included.
     pub wall_ms: u64,
-    /// List-price cost of every model call: the turn, its classifier,
-    /// and the subtasks it dispatched.
+    /// List-price cost of every model call: the turns, their classifier,
+    /// and the subtasks they dispatched.
     pub cost_usd: f64,
     /// Tokens and cost per model, most expensive first.
     pub tokens: Vec<ModelTokens>,
+    /// Each prompt's turn, in order; empty in older records.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turns: Vec<RunTurn>,
     /// Share of each plan window the run used, when its calls ran on a
     /// plan whose provider reports usage.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -132,26 +209,135 @@ pub struct CompareRun {
     pub error: Option<String>,
 }
 
-/// The blind judge's verdict on one Gate run paired with one run of the
-/// other arm.
+/// How the judge rated an attempt against the reference: what the user
+/// kept from the session that was replayed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefVerdict {
+    Better,
+    AsGood,
+    Worse,
+}
+
+impl RefVerdict {
+    /// `better`, `as good`, `worse`.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Better => "better",
+            Self::AsGood => "as good",
+            Self::Worse => "worse",
+        }
+    }
+}
+
+/// The blind judge's verdict on one run of arm A paired with one run of
+/// arm B.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompareJudgment {
-    /// Name of the Gate run.
-    pub gate_run: String,
-    /// Name of the other arm's run.
-    pub other_run: String,
-    /// Whether the judge saw the Gate run as attempt A.
-    pub gate_first: bool,
+    /// Name of the arm A run.
+    #[serde(alias = "gate_run")]
+    pub a_run: String,
+    /// Name of the arm B run.
+    #[serde(alias = "other_run")]
+    pub b_run: String,
+    /// Whether the judge saw the arm A run as attempt A.
+    #[serde(alias = "gate_first")]
+    pub a_first: bool,
     /// The better arm; `None` for a tie. Meaningless when not `parsed`.
     pub winner: Option<CompareArm>,
     /// Whether the judge gave a verdict that could be read.
     pub parsed: bool,
+    /// How the arm A run compares with the reference, when there is one
+    /// and the judge said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub a_vs_reference: Option<RefVerdict>,
+    /// How the arm B run compares with the reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub b_vs_reference: Option<RefVerdict>,
     /// Model that judged.
     pub model: String,
     /// List-price cost of the judge call.
     pub cost_usd: f64,
     /// The judge's reasoning, cut short.
     pub reasoning: String,
+}
+
+impl CompareJudgment {
+    /// How `arm`'s run compares with the reference.
+    #[must_use]
+    pub const fn vs_reference(&self, arm: CompareArm) -> Option<RefVerdict> {
+        match arm {
+            CompareArm::A => self.a_vs_reference,
+            CompareArm::B => self.b_vs_reference,
+        }
+    }
+}
+
+/// What a replayed session cost when it ran.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SessionBaseline {
+    /// Model calls.
+    pub calls: u32,
+    /// List-price cost in USD.
+    pub cost_usd: f64,
+    /// Whether any call had a price.
+    pub priced: bool,
+    /// Models the calls went to, first use first.
+    pub models: Vec<String>,
+}
+
+/// What the user kept from a replayed session, for the judge to measure
+/// the runs against.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reference {
+    /// The files the session changed, as a unified diff; empty when it
+    /// changed none.
+    pub diff: String,
+    /// The session's last reply.
+    pub reply: String,
+}
+
+/// Where a comparison's prompts came from.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum BenchSource {
+    /// One prompt (or the build prompt of a plan).
+    #[default]
+    Prompt,
+    /// The prompts of an earlier session of `agent_id`, replayed in order
+    /// from the files as they were when it started.
+    Session {
+        agent_id: AgentId,
+        started_ms: u64,
+        /// Its first prompt, cut short.
+        title: String,
+        /// What it cost when it ran.
+        baseline: SessionBaseline,
+        /// What it left; `None` when nothing could be read.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reference: Option<Reference>,
+    },
+}
+
+impl BenchSource {
+    /// The reference to judge runs against, if any.
+    #[must_use]
+    pub const fn reference(&self) -> Option<&Reference> {
+        match self {
+            Self::Session { reference, .. } => reference.as_ref(),
+            Self::Prompt => None,
+        }
+    }
+
+    /// What the replayed session cost, if this is one.
+    #[must_use]
+    pub const fn baseline(&self) -> Option<&SessionBaseline> {
+        match self {
+            Self::Session { baseline, .. } => Some(baseline),
+            Self::Prompt => None,
+        }
+    }
 }
 
 /// Where a comparison stands.
@@ -186,14 +372,25 @@ impl CompareStatus {
 pub struct ComparePayload {
     /// Always [`SystemKind::Compare`].
     pub system_kind: SystemKind,
-    /// The prompt every run got.
+    /// What the comparison is about: its prompt, or the first prompt of
+    /// a replayed session.
     pub task: String,
     /// Plan file the runs built instead of a prompt, relative to the
     /// workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
-    /// Model the other arm is pinned to.
+    /// What arm A runs on; Gate in older records.
+    pub arm_a: ArmSpec,
+    /// What arm B runs on.
+    pub arm_b: ArmSpec,
+    /// Label of arm B, as older readers expect it.
     pub against: String,
+    /// The prompts every run gets, in order; `[task]` in older records.
+    #[serde(default)]
+    pub prompts: Vec<String>,
+    /// Where the prompts came from.
+    #[serde(default)]
+    pub source: BenchSource,
     /// Runs requested per arm.
     pub repeats: u32,
     /// Command run in each copy after its run; exit 0 passes.
@@ -233,6 +430,15 @@ impl ComparePayload {
         self.runs.iter().filter(move |run| run.arm == arm)
     }
 
+    /// What `arm` runs on.
+    #[must_use]
+    pub const fn spec(&self, arm: CompareArm) -> &ArmSpec {
+        match arm {
+            CompareArm::A => &self.arm_a,
+            CompareArm::B => &self.arm_b,
+        }
+    }
+
     /// The payload as stored on the transaction.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -242,11 +448,32 @@ impl ComparePayload {
     }
 
     /// Read a stored payload; `None` for any other system payload.
+    /// Records from before arms were chosen freely get arm A as Gate and
+    /// arm B from `against`; those from before replays get `[task]` as
+    /// their prompts.
     #[must_use]
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        serde_json::from_slice::<Self>(bytes)
+        let mut value = serde_json::from_slice::<serde_json::Value>(bytes).ok()?;
+        let object = value.as_object_mut()?;
+        if object.get("system_kind")?.as_str()? != "compare" {
+            return None;
+        }
+        if !object.contains_key("arm_a") {
+            let gate = serde_json::to_value(ArmSpec::Gate { delegate: true }).ok()?;
+            object.insert("arm_a".to_string(), gate);
+        }
+        if !object.contains_key("arm_b") {
+            let against = object.get("against")?.as_str()?;
+            let other = serde_json::to_value(ArmSpec::from_label(against)).ok()?;
+            object.insert("arm_b".to_string(), other);
+        }
+        let mut payload = serde_json::from_value::<Self>(value)
             .ok()
-            .filter(|payload| payload.system_kind == SystemKind::Compare)
+            .filter(|payload| payload.system_kind == SystemKind::Compare)?;
+        if payload.prompts.is_empty() {
+            payload.prompts.push(payload.task.clone());
+        }
+        Some(payload)
     }
 }
 
@@ -259,7 +486,13 @@ mod tests {
             system_kind: SystemKind::Compare,
             task: "fix the parser".to_string(),
             plan: None,
+            arm_a: ArmSpec::Gate { delegate: true },
+            arm_b: ArmSpec::Model {
+                model: "claude/claude-opus-4-7".to_string(),
+            },
             against: "claude/claude-opus-4-7".to_string(),
+            prompts: vec!["fix the parser".to_string()],
+            source: BenchSource::Prompt,
             repeats: 3,
             check: Some("cargo test".to_string()),
             budget_usd: Some(2.5),
@@ -267,14 +500,14 @@ mod tests {
             apply_root: PathBuf::from("/work/repo"),
             started_ms: 1_000,
             runs: vec![CompareRun {
-                name: "gate-1".to_string(),
-                arm: CompareArm::Gate,
+                name: "a-1".to_string(),
+                arm: CompareArm::A,
                 agent_id: AgentId::generate(),
                 prompt_tx: Some(Hash::from_content(b"prompt")),
                 model: "claude/claude-sonnet-4-6".to_string(),
                 copy: CompareCopy {
-                    root: PathBuf::from("/home/.aura/compare/c1/gate-1"),
-                    workdir: PathBuf::from("/home/.aura/compare/c1/gate-1/app"),
+                    root: PathBuf::from("/home/.aura/compare/c1/a-1"),
+                    workdir: PathBuf::from("/home/.aura/compare/c1/a-1/app"),
                     git_dir: None,
                     baseline: "abc123".to_string(),
                 },
@@ -288,6 +521,12 @@ mod tests {
                     cost_usd: 0.12,
                     ..ModelTokens::default()
                 }],
+                turns: vec![RunTurn {
+                    model: "claude/claude-sonnet-4-6".to_string(),
+                    cost_usd: 0.12,
+                    wall_ms: 42_000,
+                    signal: OutcomeSignal::ChecksPassed,
+                }],
                 plan_usage: vec![PlanShare {
                     plan: crate::Plan::Claude,
                     window: "5h".to_string(),
@@ -300,17 +539,19 @@ mod tests {
                 error: None,
             }],
             judgments: vec![CompareJudgment {
-                gate_run: "gate-1".to_string(),
-                other_run: "other-1".to_string(),
-                gate_first: false,
+                a_run: "a-1".to_string(),
+                b_run: "b-1".to_string(),
+                a_first: false,
                 winner: None,
                 parsed: true,
+                a_vs_reference: None,
+                b_vs_reference: None,
                 model: "claude/claude-opus-4-7".to_string(),
                 cost_usd: 0.03,
                 reasoning: "Both are fine.".to_string(),
             }],
             notes: Vec::new(),
-            status: CompareStatus::Picked(CompareArm::Gate),
+            status: CompareStatus::Picked(CompareArm::A),
         }
     }
 
@@ -321,21 +562,105 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(json["system_kind"], "compare");
         assert_eq!(json["status"]["state"], "picked");
-        assert_eq!(json["status"]["detail"], "gate");
-        assert_eq!(json["runs"][0]["arm"], "gate");
+        assert_eq!(json["status"]["detail"], "a");
+        assert_eq!(json["runs"][0]["arm"], "a");
+        assert_eq!(json["arm_a"]["kind"], "gate");
+        assert_eq!(json["arm_b"]["model"], "claude/claude-opus-4-7");
+        assert_eq!(json["runs"][0]["turns"][0]["signal"], "checks_passed");
         assert!(json["runs"][0].get("error").is_none());
+        assert!(json["judgments"][0].get("a_vs_reference").is_none());
         assert_eq!(json["runs"][0]["plan_usage"][0]["plan"], "claude");
         assert_eq!(ComparePayload::from_bytes(&bytes), Some(payload.clone()));
 
         let mut without = serde_json::to_value(&payload).unwrap();
-        without["runs"][0]
-            .as_object_mut()
-            .unwrap()
-            .remove("plan_usage");
+        let run = without["runs"][0].as_object_mut().unwrap();
+        run.remove("plan_usage");
+        run.remove("turns");
         let older = ComparePayload::from_bytes(&serde_json::to_vec(&without).unwrap()).unwrap();
         assert!(
-            older.runs[0].plan_usage.is_empty(),
+            older.runs[0].plan_usage.is_empty() && older.runs[0].turns.is_empty(),
             "older records still load"
+        );
+    }
+
+    #[test]
+    fn records_from_before_free_arms_read_as_gate_against_the_other() {
+        let old = serde_json::json!({
+            "system_kind": "compare",
+            "task": "fix the parser",
+            "against": "gate:nodelegate",
+            "repeats": 1,
+            "requested_by": AgentId::generate(),
+            "apply_root": "/work",
+            "started_ms": 1,
+            "runs": [{
+                "name": "gate-1",
+                "arm": "gate",
+                "agent_id": AgentId::generate(),
+                "model": "m",
+                "copy": {"root": "/c", "workdir": "/c", "baseline": "t"},
+                "wall_ms": 1,
+                "cost_usd": 0.1,
+                "tokens": [],
+                "check_passed": null,
+                "files_changed": 0
+            }],
+            "judgments": [{
+                "gate_run": "gate-1",
+                "other_run": "other-1",
+                "gate_first": true,
+                "winner": "other",
+                "parsed": true,
+                "model": "judge",
+                "cost_usd": 0.01,
+                "reasoning": ""
+            }],
+            "status": {"state": "picked", "detail": "gate"}
+        });
+        let payload = ComparePayload::from_bytes(&serde_json::to_vec(&old).unwrap()).unwrap();
+        assert_eq!(payload.arm_a, ArmSpec::Gate { delegate: true });
+        assert_eq!(payload.arm_b, ArmSpec::Gate { delegate: false });
+        assert_eq!(payload.prompts, ["fix the parser"]);
+        assert_eq!(payload.source, BenchSource::Prompt);
+        assert_eq!(payload.runs[0].arm, CompareArm::A);
+        let judgment = &payload.judgments[0];
+        assert_eq!(
+            (judgment.a_run.as_str(), judgment.b_run.as_str()),
+            ("gate-1", "other-1")
+        );
+        assert!(judgment.a_first);
+        assert_eq!(judgment.winner, Some(CompareArm::B));
+        assert_eq!(payload.status, CompareStatus::Picked(CompareArm::A));
+    }
+
+    #[test]
+    fn a_replayed_session_keeps_its_baseline_and_reference() {
+        let mut payload = payload();
+        payload.prompts = vec!["one".to_string(), "two".to_string()];
+        payload.source = BenchSource::Session {
+            agent_id: AgentId::generate(),
+            started_ms: 7,
+            title: "one".to_string(),
+            baseline: SessionBaseline {
+                calls: 4,
+                cost_usd: 0.8,
+                priced: true,
+                models: vec!["opus".to_string()],
+            },
+            reference: Some(Reference {
+                diff: "+x".to_string(),
+                reply: "done".to_string(),
+            }),
+        };
+        payload.judgments[0].a_vs_reference = Some(RefVerdict::AsGood);
+        payload.judgments[0].b_vs_reference = Some(RefVerdict::Worse);
+        let back = ComparePayload::from_bytes(&payload.to_bytes()).unwrap();
+        assert_eq!(back, payload);
+        assert_eq!(back.source.reference().unwrap().reply, "done");
+        assert!((back.source.baseline().unwrap().cost_usd - 0.8).abs() < 1e-9);
+        assert_eq!(
+            back.judgments[0].vs_reference(CompareArm::B),
+            Some(RefVerdict::Worse)
         );
     }
 
@@ -357,18 +682,36 @@ mod tests {
     #[test]
     fn copies_exist_until_applied_or_dismissed() {
         assert!(CompareStatus::Done.has_copies());
-        assert!(CompareStatus::Picked(CompareArm::Other).has_copies());
-        assert!(!CompareStatus::Applied("gate-1".to_string()).has_copies());
+        assert!(CompareStatus::Picked(CompareArm::B).has_copies());
+        assert!(!CompareStatus::Applied("a-1".to_string()).has_copies());
         assert!(!CompareStatus::Dismissed.has_copies());
-        assert_eq!(CompareArm::Gate.opposite(), CompareArm::Other);
+        assert_eq!(CompareArm::A.opposite(), CompareArm::B);
     }
 
     #[test]
     fn runs_are_found_by_name_and_arm() {
         let payload = payload();
-        assert_eq!(payload.run("gate-1").map(|r| r.wall_ms), Some(42_000));
-        assert!(payload.run("other-1").is_none());
-        assert_eq!(payload.arm_runs(CompareArm::Gate).count(), 1);
-        assert_eq!(payload.arm_runs(CompareArm::Other).count(), 0);
+        assert_eq!(payload.run("a-1").map(|r| r.wall_ms), Some(42_000));
+        assert!(payload.run("b-1").is_none());
+        assert_eq!(payload.arm_runs(CompareArm::A).count(), 1);
+        assert_eq!(payload.arm_runs(CompareArm::B).count(), 0);
+        assert_eq!(
+            payload.spec(CompareArm::B).label(),
+            "claude/claude-opus-4-7"
+        );
+    }
+
+    #[test]
+    fn arm_labels_read_back() {
+        for spec in [
+            ArmSpec::Gate { delegate: true },
+            ArmSpec::Gate { delegate: false },
+            ArmSpec::Model {
+                model: "aura-claude-opus-4-7".to_string(),
+            },
+        ] {
+            assert_eq!(ArmSpec::from_label(spec.label()), spec);
+        }
+        assert!(ArmSpec::Gate { delegate: false }.is_gate());
     }
 }

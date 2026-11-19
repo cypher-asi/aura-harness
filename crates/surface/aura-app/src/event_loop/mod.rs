@@ -14,6 +14,8 @@ pub(crate) mod agents;
 pub(crate) mod approvals;
 mod attachments;
 pub mod auth;
+mod bench;
+mod bench_source;
 mod compare;
 mod compare_run;
 mod compare_view;
@@ -585,6 +587,10 @@ async fn handle_ui_event(
         UiEvent::Compare { agent_id, args } => {
             let agent_id = state.agent_or_active(&agent_id);
             compare::handle(state, agent_id, &args).await;
+        }
+        UiEvent::Bench { agent_id, request } => {
+            let agent_id = state.agent_or_active(&agent_id);
+            bench::handle(state, agent_id, request).await;
         }
         UiEvent::KillProcess(id) => handlers::handle_kill_process(state, &id).await,
         UiEvent::BuildPlan { agent_id, path } => {

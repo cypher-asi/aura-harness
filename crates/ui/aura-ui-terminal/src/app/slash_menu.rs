@@ -53,8 +53,14 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     command("gate", "What Gate learned and how it routed lately"),
     SlashCommand {
         name: "compare",
-        args: "[prompt | --plan f] [--against m] [--repeats n] [--check cmd] [--budget $]",
-        description: "Run a task with Gate and another model side by side",
+        args: "[prompt | --plan f | --session current|ms] [--a m] [--b m] [--repeats n] [--check cmd] [--budget $]",
+        description: "Run a task on two arms (Gate or a model) side by side",
+        needs_args: false,
+    },
+    SlashCommand {
+        name: "bench",
+        args: "[new]",
+        description: "Benchmark two models, or Gate and a model, on the same work",
         needs_args: false,
     },
     SlashCommand {

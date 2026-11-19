@@ -21,8 +21,8 @@ mod transaction;
 
 pub use action::{Action, ActionKind};
 pub use compare::{
-    CompareArm, CompareCopy, CompareJudgment, ComparePayload, CompareRun, CompareStatus,
-    ModelTokens,
+    ArmSpec, BenchSource, CompareArm, CompareCopy, CompareJudgment, ComparePayload, CompareRun,
+    CompareStatus, ModelTokens, RefVerdict, Reference, RunTurn, SessionBaseline,
 };
 pub use context_hash::ContextHash;
 pub use effect::{Effect, EffectKind, EffectStatus};

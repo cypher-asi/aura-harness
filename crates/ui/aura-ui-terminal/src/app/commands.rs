@@ -171,6 +171,12 @@ impl App {
                     });
                 }
             }
+            "bench" | "benchmarks" => {
+                self.show_chat_tab(super::ChatTab::Bench);
+                if arg.trim() == "new" {
+                    self.open_bench_form();
+                }
+            }
             "new" | "n" => {
                 self.messages.clear();
                 self.scroll_offset = 0;
@@ -832,6 +838,15 @@ impl App {
                 lanes,
                 nodes,
             } => self.upsert_flow(&agent_id, lanes, nodes),
+            UiCommand::BenchList(benches) => self.cmd_bench_list(benches),
+            UiCommand::BenchUpsert(view) => self.cmd_bench_upsert(*view),
+            UiCommand::BenchSessions { agent_id, sessions } => {
+                self.cmd_bench_sessions(&agent_id, sessions);
+            }
+            UiCommand::BenchEstimate { agent_id, estimate } => {
+                self.cmd_bench_estimate(&agent_id, estimate);
+            }
+            UiCommand::BenchNotice(notice) => self.cmd_bench_notice(notice),
             UiCommand::SetApiStatus { url, active } => {
                 self.api_url = url;
                 self.api_active = active;
@@ -1162,6 +1177,10 @@ impl App {
         if self.flow.is_open() {
             // The GRAPH tab follows the agent on screen.
             self.request_flow();
+        }
+        if self.bench.is_open() {
+            // Its form offers the sessions of the agent on screen.
+            self.request_benchmarks();
         }
         for agent in &mut self.agents {
             agent.is_active = agent.id == self.active_agent_id;

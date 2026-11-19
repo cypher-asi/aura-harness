@@ -1,13 +1,17 @@
-//! The blind judge of `/compare`: a frontier model sees one Gate run and
-//! one run of the other arm (the task, each run's diff and final reply)
-//! in random order, without arm or model names, and picks the better one
-//! or calls a tie. Ported from `evals/gate_cost/judge.py`.
+//! The blind judge of `/compare` and the BENCH tab: a frontier model sees
+//! one run of arm A and one of arm B (the task, each run's diff and final
+//! reply) in random order, without arm or model names, and picks the
+//! better one or calls a tie. Ported from `evals/gate_cost/judge.py`.
+//!
+//! When the work replays an earlier session, the judge also sees what the
+//! user kept from it (its diff and last reply) as a reference, and rates
+//! each attempt against it: better, as good, or worse.
 //!
 //! This module builds the request, decides the order and reads the
 //! verdict; the caller sends the request through an agent's kernel, so
 //! the call is recorded like any other model call.
 
-use aura_core_types::CompareArm;
+use aura_core_types::{CompareArm, RefVerdict};
 use aura_model::{
     Message, ModelCallPurpose, ModelRequest, ModelRequestKind, ModelResponse, ReasonerError,
     ThinkingEffort, ToolChoice,
@@ -58,10 +62,24 @@ pub(crate) fn cut(text: &str, max: usize, what: &str) -> String {
     format!("{kept}\n... ({what} cut)")
 }
 
-/// The judge's message for the attempts at `task`, `first` shown as A.
-/// Nothing in it says which arm or model made either attempt.
+/// What the judge is told when there is a reference.
+const REFERENCE_INSTRUCTIONS: &str = "\
+The reference below is what the user kept when this work was first done: a known-acceptable \
+result, not necessarily the only correct one. Besides the winner, rate each attempt against it. \
+Before the WINNER line, add two lines, each exactly `A_VS_REFERENCE: BETTER`, `AS_GOOD` or \
+`WORSE`, and the same for `B_VS_REFERENCE`.";
+
+/// The judge's message for the attempts at `task`, `first` shown as A,
+/// with what the user kept from the original work when there is a
+/// `reference`. Nothing in it says which arm or model made either
+/// attempt.
 #[must_use]
-pub fn prompt(task: &str, first: &Attempt, second: &Attempt) -> String {
+pub fn prompt(
+    task: &str,
+    first: &Attempt,
+    second: &Attempt,
+    reference: Option<&Attempt>,
+) -> String {
     let diff = |attempt: &Attempt| {
         if attempt.diff.trim().is_empty() {
             "(no changes)".to_string()
@@ -76,8 +94,16 @@ pub fn prompt(task: &str, first: &Attempt, second: &Attempt) -> String {
             cut(&attempt.reply, MAX_REPLY, "reply")
         }
     };
+    let reference = reference.map_or_else(String::new, |reference| {
+        format!(
+            "{REFERENCE_INSTRUCTIONS}\n\n## Reference (what the user kept)\n\n\
+             ### Changes\n```diff\n{}\n```\n\n### Final reply\n{}\n\n",
+            diff(reference),
+            reply(reference),
+        )
+    });
     format!(
-        "## The user's message\n\n{task}\n\n\
+        "## The user's message\n\n{task}\n\n{reference}\
          ## Attempt A\n\n### Changes\n```diff\n{}\n```\n\n### Final reply\n{}\n\n\
          ## Attempt B\n\n### Changes\n```diff\n{}\n```\n\n### Final reply\n{}",
         diff(first),
@@ -87,11 +113,11 @@ pub fn prompt(task: &str, first: &Attempt, second: &Attempt) -> String {
     )
 }
 
-/// Whether the Gate run of pair `pair` is shown as attempt A. The order
+/// Whether the arm A run of pair `pair` is shown as attempt A. The order
 /// is random but the same for the same `seed` and pair, so a judgment can
 /// be repeated.
 #[must_use]
-pub fn gate_first(seed: u64, pair: usize) -> bool {
+pub fn a_first(seed: u64, pair: usize) -> bool {
     let pair = u64::try_from(pair).unwrap_or(u64::MAX);
     let mut rng = SplitMix64::seeded(seed ^ pair.wrapping_mul(0x9E37_79B9_7F4A_7C15));
     rng.unit() < 0.5
@@ -114,17 +140,7 @@ pub enum Verdict {
 #[must_use]
 pub fn parse(reply: &str) -> Option<Verdict> {
     reply.lines().rev().find_map(|line| {
-        let line = line.trim().trim_matches('*').trim();
-        let (label, value) = line.split_once(':')?;
-        if !label.trim().eq_ignore_ascii_case("winner") {
-            return None;
-        }
-        match value
-            .trim()
-            .trim_matches(|c: char| c == '*' || c == '`' || c == '.')
-            .to_ascii_uppercase()
-            .as_str()
-        {
+        match labelled(line, "winner")?.to_ascii_uppercase().as_str() {
             "A" => Some(Verdict::A),
             "B" => Some(Verdict::B),
             "TIE" => Some(Verdict::Tie),
@@ -133,38 +149,71 @@ pub fn parse(reply: &str) -> Option<Verdict> {
     })
 }
 
-/// The arm `verdict` favours when the Gate run was shown first or not;
+/// The arm `verdict` favours when the arm A run was shown first or not;
 /// `None` for a tie.
 #[must_use]
-pub const fn winner(verdict: Verdict, gate_first: bool) -> Option<CompareArm> {
-    match (verdict, gate_first) {
+pub const fn winner(verdict: Verdict, a_first: bool) -> Option<CompareArm> {
+    match (verdict, a_first) {
         (Verdict::Tie, _) => None,
-        (Verdict::A, true) | (Verdict::B, false) => Some(CompareArm::Gate),
-        (Verdict::A, false) | (Verdict::B, true) => Some(CompareArm::Other),
+        (Verdict::A, true) | (Verdict::B, false) => Some(CompareArm::A),
+        (Verdict::A, false) | (Verdict::B, true) => Some(CompareArm::B),
     }
 }
 
-/// The request asking `model` to judge `gate` against `other` on
-/// `task`, in the order `gate_first` says, sent with the user's
-/// `auth_token` when the route needs one.
+/// The value of the last line of `reply` labelled `label` (`LABEL: value`,
+/// in any case, optionally in bold or backticks).
+fn labelled<'a>(reply: &'a str, label: &str) -> Option<&'a str> {
+    reply.lines().rev().find_map(|line| {
+        let line = line.trim().trim_matches('*').trim();
+        let (name, value) = line.split_once(':')?;
+        name.trim().eq_ignore_ascii_case(label).then(|| {
+            value
+                .trim()
+                .trim_matches(|c: char| c == '*' || c == '`' || c == '.')
+        })
+    })
+}
+
+fn ref_verdict(value: &str) -> Option<RefVerdict> {
+    match value.to_ascii_uppercase().replace([' ', '-'], "_").as_str() {
+        "BETTER" => Some(RefVerdict::Better),
+        "AS_GOOD" => Some(RefVerdict::AsGood),
+        "WORSE" => Some(RefVerdict::Worse),
+        _ => None,
+    }
+}
+
+/// How the judge rated each arm against the reference, as `(arm A, arm
+/// B)`, given whether the arm A run was shown first. Either is `None`
+/// when its line is missing or unreadable.
+#[must_use]
+pub fn reference_verdicts(reply: &str, a_first: bool) -> (Option<RefVerdict>, Option<RefVerdict>) {
+    let shown_a = labelled(reply, "A_VS_REFERENCE").and_then(ref_verdict);
+    let shown_b = labelled(reply, "B_VS_REFERENCE").and_then(ref_verdict);
+    if a_first {
+        (shown_a, shown_b)
+    } else {
+        (shown_b, shown_a)
+    }
+}
+
+/// The request asking `model` to judge `a` against `b` on `task`, in the
+/// order `a_first` says, against `reference` when there is one, sent with
+/// the user's `auth_token` when the route needs one.
 ///
 /// # Errors
 /// Returns the builder's error when `model` is empty.
 pub fn request(
     model: &str,
     task: &str,
-    gate: &Attempt,
-    other: &Attempt,
-    gate_first: bool,
+    (a, b): (&Attempt, &Attempt),
+    a_first: bool,
+    reference: Option<&Attempt>,
     auth_token: Option<String>,
 ) -> Result<ModelRequest, ReasonerError> {
-    let (first, second) = if gate_first {
-        (gate, other)
-    } else {
-        (other, gate)
-    };
+    let (first, second) = if a_first { (a, b) } else { (b, a) };
     ModelRequest::builder(model, SYSTEM_PROMPT)
-        .message(Message::user(prompt(task, first, second)))
+        .message(Message::user(prompt(task, first, second, reference)))
         .tool_choice(ToolChoice::None)
         .max_tokens(MAX_REPLY_TOKENS)
         .thinking_effort(Some(ThinkingEffort::Off))
@@ -209,24 +258,24 @@ mod tests {
 
     #[test]
     fn the_winner_follows_the_order_the_judge_saw() {
-        assert_eq!(winner(Verdict::A, true), Some(CompareArm::Gate));
-        assert_eq!(winner(Verdict::A, false), Some(CompareArm::Other));
-        assert_eq!(winner(Verdict::B, true), Some(CompareArm::Other));
-        assert_eq!(winner(Verdict::B, false), Some(CompareArm::Gate));
+        assert_eq!(winner(Verdict::A, true), Some(CompareArm::A));
+        assert_eq!(winner(Verdict::A, false), Some(CompareArm::B));
+        assert_eq!(winner(Verdict::B, true), Some(CompareArm::B));
+        assert_eq!(winner(Verdict::B, false), Some(CompareArm::A));
         assert_eq!(winner(Verdict::Tie, true), None);
     }
 
     #[test]
     fn the_order_is_random_per_pair_and_repeatable() {
-        let orders: Vec<bool> = (0..64).map(|pair| gate_first(42, pair)).collect();
+        let orders: Vec<bool> = (0..64).map(|pair| a_first(42, pair)).collect();
         let first = orders.iter().filter(|g| **g).count();
         assert!(
             (16..=48).contains(&first),
-            "about half the pairs show Gate first: {first}/64"
+            "about half the pairs show arm A first: {first}/64"
         );
-        let again: Vec<bool> = (0..64).map(|pair| gate_first(42, pair)).collect();
+        let again: Vec<bool> = (0..64).map(|pair| a_first(42, pair)).collect();
         assert_eq!(orders, again, "the same seed gives the same order");
-        let other_seed: Vec<bool> = (0..64).map(|pair| gate_first(43, pair)).collect();
+        let other_seed: Vec<bool> = (0..64).map(|pair| a_first(43, pair)).collect();
         assert_ne!(orders, other_seed);
     }
 
@@ -234,13 +283,13 @@ mod tests {
     fn the_judge_sees_no_arm_or_model_names() {
         let gate = attempt("+fn parse() {}", "Fixed the parser.");
         let other = attempt("+fn parse_all() {}", "Rewrote parsing.");
-        for gate_first in [true, false] {
+        for a_first in [true, false] {
             let built = request(
                 "claude/claude-opus-4-7",
                 "fix the parser",
-                &gate,
-                &other,
-                gate_first,
+                (&gate, &other),
+                a_first,
+                None,
                 None,
             )
             .unwrap();
@@ -249,7 +298,8 @@ mod tests {
                 assert!(!sent.contains(name), "{name:?} leaked into:\n{sent}");
             }
             let (a, b) = sent.split_once("## Attempt B").unwrap();
-            let (shown_a, shown_b) = if gate_first {
+            assert!(!sent.contains("Reference"));
+            let (shown_a, shown_b) = if a_first {
                 (&gate, &other)
             } else {
                 (&other, &gate)
@@ -263,11 +313,58 @@ mod tests {
     #[test]
     fn long_diffs_and_replies_are_cut_and_empty_ones_named() {
         let long = attempt(&"+x\n".repeat(MAX_DIFF), &"y".repeat(MAX_REPLY * 2));
-        let text = prompt("task", &long, &attempt("", " "));
+        let text = prompt("task", &long, &attempt("", " "), None);
         assert!(text.contains("... (diff cut)"));
         assert!(text.contains("... (reply cut)"));
         assert!(text.contains("(no changes)"));
         assert!(text.contains("(no reply)"));
         assert!(text.len() < 2 * (MAX_DIFF + MAX_REPLY) + 1_000);
+    }
+
+    #[test]
+    fn a_reference_goes_before_the_attempts_and_asks_for_ratings() {
+        let kept = attempt("+fn kept() {}", "Kept this.");
+        let text = prompt(
+            "fix the parser",
+            &attempt("+a", "A"),
+            &attempt("+b", "B"),
+            Some(&kept),
+        );
+        let reference = text.find("## Reference (what the user kept)").unwrap();
+        assert!(reference < text.find("## Attempt A").unwrap());
+        assert!(text.contains("+fn kept() {}") && text.contains("Kept this."));
+        assert!(text.contains("A_VS_REFERENCE") && text.contains("B_VS_REFERENCE"));
+        let empty = prompt("t", &kept, &kept, Some(&attempt("", "")));
+        assert!(empty.contains("(no changes)"), "{empty}");
+    }
+
+    #[test]
+    fn reference_ratings_follow_the_order_the_judge_saw() {
+        let reply = "A matches what was kept.\nA_VS_REFERENCE: AS_GOOD\n**B_VS_REFERENCE: worse**\nWINNER: A";
+        assert_eq!(parse(reply), Some(Verdict::A));
+        assert_eq!(
+            reference_verdicts(reply, true),
+            (Some(RefVerdict::AsGood), Some(RefVerdict::Worse))
+        );
+        assert_eq!(
+            reference_verdicts(reply, false),
+            (Some(RefVerdict::Worse), Some(RefVerdict::AsGood)),
+            "arm A was shown as B"
+        );
+        assert_eq!(
+            reference_verdicts("A_VS_REFERENCE: as good\nB_VS_REFERENCE: better", true),
+            (Some(RefVerdict::AsGood), Some(RefVerdict::Better))
+        );
+    }
+
+    #[test]
+    fn a_reply_without_reference_lines_still_has_a_winner() {
+        let reply = "B is cleaner.\nWINNER: B";
+        assert_eq!(parse(reply), Some(Verdict::B));
+        assert_eq!(reference_verdicts(reply, true), (None, None));
+        assert_eq!(
+            reference_verdicts("A_VS_REFERENCE: maybe\nWINNER: TIE", true),
+            (None, None)
+        );
     }
 }

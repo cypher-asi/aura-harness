@@ -1,5 +1,6 @@
-//! Running a `/compare`: every run of both arms in its own copy of the
-//! workspace, then the blind judge, then the record and the view.
+//! Running a `/compare` (a benchmark): every run of both arms in its own
+//! copy of the workspace, then the blind judge, then the record and the
+//! view.
 //!
 //! Each run is an agent of its own, registered under the comparison's
 //! agent with the copy as its folder, so it shows in the Agents panel
@@ -7,12 +8,14 @@
 //! copy, and its records feed Gate's table like any turn. Its turn runs
 //! on the same turn driver as the terminal's turns and `task` spawns:
 //!
-//! - the Gate arm's turn goes where Gate sends it with exploration off,
-//!   and its subtasks are routed the same way;
-//! - the other arm's turn and subtasks run on the model it is pinned to.
+//! - a Gate arm's turns go where Gate sends them with exploration off,
+//!   and their subtasks are routed the same way;
+//! - a pinned arm's turns and subtasks run on the model it is pinned to.
 //!
-//! The prompt is recorded with route reason `compare` and the turn ends
-//! with its `Outcome`; the check command then runs in the copy as a
+//! A run sends its prompts one after the other on the same conversation,
+//! as a replayed session did. Each prompt is recorded with route reason
+//! `compare` and its turn ends with its `Outcome`; what each turn cost is
+//! kept per prompt. After the last turn the check command runs in the copy as a
 //! `run_command` call through the run's kernel, so it is in the run's log,
 //! and its verdict is recorded as a later `Outcome`, so it counts in the
 //! table.
@@ -23,6 +26,7 @@
 
 use super::agent_events::AgentUi;
 use super::agents::AgentSession;
+use super::bench_source::{self, StartFile};
 use super::compare_view::{duration, money, render};
 use super::gate_record;
 use super::handlers::{handle_agent_success, run_agent_turn, system_message, turn_summary};
@@ -38,15 +42,13 @@ use crate::isolation::{
     CopyIsolation, IsolatedWorkspace, Isolation, IsolationStrategy, WorktreeIsolation,
 };
 use aura_agent::AgentLoop;
-use aura_agent_gate::compare::{
-    list_price, plan_shares, run_name, Opponent, PlanReading, Schedule,
-};
+use aura_agent_gate::compare::{list_price, plan_shares, run_name, PlanReading, Schedule};
 use aura_agent_gate::{judge, Candidate};
 use aura_agent_kernel::Kernel;
 use aura_core_types::{
-    AgentId, CompareArm, CompareCopy, CompareJudgment, ComparePayload, CompareRun, CompareStatus,
-    OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, Route, RouteLevel, RouteReason,
-    SystemKind, Transaction,
+    AgentId, ArmSpec, BenchSource, CompareArm, CompareCopy, CompareJudgment, ComparePayload,
+    CompareRun, CompareStatus, Hash, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload,
+    Route, RouteLevel, RouteReason, RunTurn, SystemKind, Transaction,
 };
 use aura_exec_tools::plan_tools::{is_plan_path, todo_items, PlanFile};
 use aura_model::Message;
@@ -73,20 +75,27 @@ const MAX_REASONING: usize = 2_000;
 /// A comparison as the user confirmed it.
 #[derive(Debug, Clone)]
 pub(super) struct ComparePlan {
-    /// The prompt every run gets (the build prompt for a plan)
+    /// What it is about: its prompt, or a replayed session's first one
     pub task: String,
+    /// The prompts each run sends in order (the build prompt for a plan)
+    pub prompts: Vec<String>,
     /// Plan file each run builds, relative to the workspace
     pub plan: Option<String>,
-    /// What the other arm runs on
-    pub against: Opponent,
-    /// Whether the Gate arm's lead must delegate
-    pub delegate: bool,
+    /// What arm A and arm B run on
+    pub arms: [ArmSpec; 2],
+    /// Where the work comes from
+    pub source: BenchSource,
+    /// Files put in each copy before its run: a replayed session's files
+    /// as they were when it started
+    pub start: Arc<Vec<StartFile>>,
+    /// What setting it up found out, for the record
+    pub notes: Vec<String>,
     /// Model that judges
     pub judge: String,
     pub repeats: u32,
     pub check: Option<String>,
     pub budget_usd: Option<f64>,
-    /// What Gate routes the Gate arm among
+    /// What Gate routes a Gate arm among
     pub candidates: Vec<Candidate>,
     /// Model that classifies the runs' prompts
     pub classifier: String,
@@ -125,14 +134,16 @@ struct Ran {
     readings: Vec<PlanReading>,
 }
 
-/// Write `payload` to the record of the comparison's agent `agent_id`.
-/// A failure is logged.
-pub(super) async fn write_record(
+/// Write `payload` to the record of the comparison's agent `agent_id`
+/// (named `name`) and show it in the BENCH tab. A failure to record is
+/// logged.
+pub(super) async fn save(
     kernel: &Kernel,
-    agent_id: AgentId,
+    commands: &mpsc::Sender<UiCommand>,
+    (agent_id, name): (AgentId, &str),
     payload: &ComparePayload,
 ) -> bool {
-    match kernel
+    let recorded = match kernel
         .process_direct(Transaction::compare(agent_id, payload))
         .await
     {
@@ -141,7 +152,10 @@ pub(super) async fn write_record(
             warn!(%agent_id, error = %e, "Failed to record the comparison");
             false
         }
-    }
+    };
+    let view = super::bench::view(agent_id, name, payload);
+    let _ = commands.send(UiCommand::BenchUpsert(Box::new(view))).await;
+    recorded
 }
 
 /// Run the comparison `plan` on the agent `host`, until it ends or
@@ -180,7 +194,11 @@ pub(super) async fn run(
         system_kind: SystemKind::Compare,
         task: plan.task.clone(),
         plan: plan.plan.clone(),
-        against: plan.against.label().to_string(),
+        arm_a: plan.arms[0].clone(),
+        arm_b: plan.arms[1].clone(),
+        against: plan.arms[1].label().to_string(),
+        prompts: plan.prompts.clone(),
+        source: plan.source.clone(),
         repeats: plan.repeats,
         check: plan.check.clone(),
         budget_usd: plan.budget_usd,
@@ -189,7 +207,7 @@ pub(super) async fn run(
         started_ms: now_ms(),
         runs: Vec::new(),
         judgments: Vec::new(),
-        notes: Vec::new(),
+        notes: plan.notes.clone(),
         status: CompareStatus::Running,
     };
     if dir.starts_with(&payload.apply_root) {
@@ -199,10 +217,10 @@ pub(super) async fn run(
             payload.apply_root.display()
         ));
         payload.status = CompareStatus::Cancelled;
-        finish(&hub, &user_ui, &host, session, &payload).await;
+        finish(&hub, &commands, &user_ui, &host, session, &payload).await;
         return;
     }
-    write_record(&session.kernel, host_id, &payload).await;
+    save(&session.kernel, &commands, (host_id, &host.name), &payload).await;
 
     let ctx = Arc::new(Context {
         hub: Arc::clone(&hub),
@@ -234,18 +252,25 @@ pub(super) async fn run(
         payload.judgments = judge_all(&ctx, &session, &ran).await;
         payload.status = CompareStatus::Done;
     }
-    finish(&hub, &user_ui, &host, session, &payload).await;
+    finish(&hub, &ctx.commands, &user_ui, &host, session, &payload).await;
 }
 
 /// Record how the comparison ended, show it, and hand its agent back.
 async fn finish(
     hub: &AgentHub,
+    commands: &mpsc::Sender<UiCommand>,
     user_ui: &AgentUi,
     host: &RegisteredAgent,
     session: AgentSession,
     payload: &ComparePayload,
 ) {
-    write_record(&session.kernel, host.agent_id(), payload).await;
+    save(
+        &session.kernel,
+        commands,
+        (host.agent_id(), &host.name),
+        payload,
+    )
+    .await;
     info!(compare = %host.name, runs = payload.runs.len(), "Comparison ended");
     user_ui
         .send(system_message(render(&host.name, payload)))
@@ -285,7 +310,13 @@ async fn run_all(
             .send(system_message(progress(&ctx.host.name, &done.run)))
             .await;
         payload.runs.push(done.run.clone());
-        write_record(&session.kernel, ctx.host.agent_id(), payload).await;
+        save(
+            &session.kernel,
+            &ctx.commands,
+            (ctx.host.agent_id(), &ctx.host.name),
+            payload,
+        )
+        .await;
         ran.push(done);
     }
     let skipped = schedule.drop_pending().len();
@@ -337,6 +368,7 @@ fn not_run(ctx: &Context, arm: CompareArm, n: u32, error: String) -> Ran {
             cost_usd: 0.0,
             tokens: Vec::new(),
             plan_usage: Vec::new(),
+            turns: Vec::new(),
             check_passed: None,
             files_changed: 0,
             error: Some(error),
@@ -351,13 +383,14 @@ fn not_run(ctx: &Context, arm: CompareArm, n: u32, error: String) -> Ran {
 
 /// Make the copy run `name` works in: a detached worktree of the user's
 /// repository with their uncommitted work carried over, else a copy of
-/// their folder without build output. Returns it with a note when the
-/// uncommitted work could not be carried.
+/// their folder without build output, with `start` put in it. Returns it
+/// with a note when the uncommitted work could not be carried.
 fn prepare_copy(
     dir: &Path,
     workspace: &Path,
     repo: Option<&Path>,
     plan_file: Option<&str>,
+    start: &[StartFile],
     name: &str,
 ) -> Result<(CompareCopy, Option<String>), String> {
     let problem = |e: crate::isolation::IsolationError| format!("preparing the copy: {e}");
@@ -405,6 +438,7 @@ fn prepare_copy(
                 .map_err(|e| format!("copying the plan: {e}"))?;
         }
     }
+    bench_source::restore(&copy.workdir, start)?;
     let baseline = changes::baseline(&copy.root, copy.git_dir.as_deref()).map_err(problem)?;
     Ok((CompareCopy { baseline, ..copy }, note))
 }
@@ -417,13 +451,18 @@ async fn run_one(ctx: Arc<Context>, arm: CompareArm, n: u32) -> Ran {
         ctx.plan.workspace.clone(),
         ctx.repo.clone(),
     );
-    let (plan_file, copy_name) = (ctx.plan.plan.clone(), name.clone());
+    let (plan_file, start, copy_name) = (
+        ctx.plan.plan.clone(),
+        Arc::clone(&ctx.plan.start),
+        name.clone(),
+    );
     let prepared = tokio::task::spawn_blocking(move || {
         prepare_copy(
             &dir,
             &workspace,
             repo.as_deref(),
             plan_file.as_deref(),
+            &start,
             &copy_name,
         )
     })
@@ -454,7 +493,28 @@ async fn run_one(ctx: Arc<Context>, arm: CompareArm, n: u32) -> Ran {
     ran
 }
 
-/// Run the turn of the run `name` on `session` and measure it.
+/// One turn of a run: what its prompt got.
+struct Turned {
+    prompt_tx: Option<Hash>,
+    model: String,
+    signal: OutcomeSignal,
+    reply: String,
+    error: Option<String>,
+    wall_ms: u64,
+    /// Its outcome as recorded, for the check's verdict to follow
+    ended: Option<OutcomePayload>,
+}
+
+/// What `agent`'s calls and its subtasks' have cost so far.
+fn spent(hub: &AgentHub, agent: AgentId) -> f64 {
+    hub.tokens_by_model(agent)
+        .iter()
+        .map(|row| row.cost_usd)
+        .sum()
+}
+
+/// Run the prompts of the run `name` on `session` one after the other,
+/// then its check, and measure it.
 async fn run_turn(
     ctx: &Context,
     mut session: AgentSession,
@@ -470,19 +530,16 @@ async fn run_turn(
     let permissions = Permissions::new(PermissionMode::Agent, ApprovalLevel::Yolo);
     hub.set_permissions(agent_id, permissions);
     super::modes::apply(&session.kernel, permissions, &hub.tool_names());
-    let gate_routed = |delegate| ArmRouting::Gate {
-        candidates: plan.candidates.clone(),
-        delegate,
-    };
-    let routing = match (arm, &plan.against) {
-        (CompareArm::Gate, _) => gate_routed(plan.delegate),
-        (CompareArm::Other, Opponent::GateNoDelegate) => gate_routed(false),
-        (CompareArm::Other, Opponent::Model(model)) => ArmRouting::Pinned(model.clone()),
+    let spec = &plan.arms[arm.index()];
+    let routing = match spec {
+        ArmSpec::Gate { delegate } => ArmRouting::Gate {
+            candidates: plan.candidates.clone(),
+            delegate: *delegate,
+        },
+        ArmSpec::Model { model } => ArmRouting::Pinned(model.clone()),
     };
     hub.begin_compare_run(agent_id, routing.clone());
     let workdir = session.kernel.agent_workspace();
-    let (mut config, mut tools, lead) = hub.user_turn(&mut session);
-    config.observers.clear();
     if let Some(path) = plan.plan.as_deref().filter(|path| is_plan_path(path)) {
         if let Ok(plan_file) = PlanFile::load(&workdir.join(path)) {
             session.todos = todo_items(&plan_file);
@@ -490,126 +547,56 @@ async fn run_turn(
             session.building_plan = true;
         }
     }
-    config.initial_todos.clone_from(&session.todos);
 
     let cancel = ctx.cancel.child_token();
     let ui = AgentUi::new(ctx.commands.clone(), agent_id);
-    let category = if plan.classifier.is_empty() {
-        PromptCategory::Unclassified
-    } else {
-        gate_record::classify_prompt(
-            &session.kernel,
-            &plan.classifier,
-            &plan.task,
-            config.auth_token.clone(),
-        )
-        .await
-    };
-    let routed_to = match routing {
-        ArmRouting::Gate { .. } => hub
-            .gate
-            .redecide(RouteLevel::Turn, category, &plan.candidates)
-            .map(|decision| decision.model.id),
-        ArmRouting::Pinned(model) => Some(model),
-    };
-    if let Some(model) = routed_to.filter(|model| *model != config.model) {
-        hub.model_limits().configure(&mut config, &model);
-    }
-    let model = config.model.clone();
-    if let Some(lead) = lead {
-        hub.gate.note_model(agent_id, &model);
-        session.lead = lead.apply(category, &mut config, &mut tools);
-    }
-    let prompt = PromptPayload {
-        category,
-        classifier: plan.classifier.clone(),
-        route: Route::turn(model.clone(), RouteReason::Compare),
-        ..PromptPayload::new(plan.task.clone())
-    };
-
-    hub.register_root(agent_id, name, workdir.clone(), &config);
-    let mut row = turn_summary(agent_id, &plan.task, &model);
+    let mut row = turn_summary(agent_id, &plan.task, spec.label());
     row.label = format!("{} {name}: {}", ctx.host.name, row.label);
     hub.processes.start(row, Some(cancel.clone()));
     hub.start_running(agent_id, Arc::clone(&session.kernel), cancel.clone(), None);
-    hub.send_agent_list().await;
-    ui.send(UiCommand::TurnStarted {
-        prompt: Some(plan.task.clone()),
-    })
-    .await;
-    ui.send(system_message(format!(
-        "{} {name} · {} → {} · {category}",
-        ctx.host.name,
-        arm,
-        aura_model::model_catalog::route_label(&model)
-    )))
-    .await;
 
     let started = Instant::now();
-    let prompt_tx = match record_prompt(&session, &prompt).await {
-        Ok((tx, _)) => Some(tx.hash),
-        Err(problem) => {
-            warn!(%agent_id, %problem, "Failed to record a compare run's prompt");
-            None
+    let mut turns = Vec::with_capacity(plan.prompts.len());
+    let mut first: Option<(Option<Hash>, String)> = None;
+    let (mut reply, mut error, mut last) = (String::new(), None, None);
+    for (i, prompt) in plan.prompts.iter().enumerate() {
+        if cancel.is_cancelled() {
+            error = Some("stopped by the user".to_string());
+            break;
         }
-    };
-    let turn_start = session.messages.len();
-    session.messages.push(Message::user(plan.task.clone()));
-    let agent_loop = AgentLoop::new(config);
-    let steering = Steering::new(&cancel);
-    let (result, forwarded) = run_agent_turn(
-        &session,
-        &agent_loop,
-        tools,
-        &ui,
-        &cancel,
-        &steering,
-        hub.long_run,
-        None,
-    )
-    .await;
-    steering.finish(&[]);
+        let before = spent(hub, agent_id);
+        let turned = run_prompt(
+            ctx,
+            &mut session,
+            (arm, name),
+            &routing,
+            (i, prompt),
+            &cancel,
+            &ui,
+        )
+        .await;
+        turns.push(RunTurn {
+            model: turned.model.clone(),
+            cost_usd: (spent(hub, agent_id) - before).max(0.0),
+            wall_ms: turned.wall_ms,
+            signal: turned.signal,
+        });
+        first.get_or_insert_with(|| (turned.prompt_tx, turned.model.clone()));
+        reply = turned.reply;
+        last = turned.ended;
+        if turned.error.is_some() {
+            error = turned.error;
+            break;
+        }
+    }
     let wall_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    let cancelled = cancel.is_cancelled();
-    let signal = if cancelled || forwarded.credentials_rejected {
-        OutcomeSignal::None
-    } else {
-        ended_signal(&result, turn_start)
-    };
-    let (reply, mut error) = match result {
-        Ok(result) => {
-            let text = result.total_text.clone();
-            let llm_error = result.llm_error.clone().filter(|_| text.trim().is_empty());
-            handle_agent_success(&mut session, result, &forwarded, &ui, &[]).await;
-            (text, llm_error)
-        }
-        Err(e) => {
-            ui.send(UiCommand::ShowWarning(e.to_string())).await;
-            ui.send(UiCommand::Complete).await;
-            (String::new(), Some(e.to_string()))
-        }
-    };
-    if cancelled {
-        error = Some("stopped by the user".to_string());
-    }
-    let ended = prompt_tx.map(|prompt_tx| OutcomePayload {
-        prompt_tx,
-        category,
-        model: model.clone(),
-        success: signal.success(),
-        signal,
-        cost_usd: forwarded.usage.cost_usd,
-        latency_ms: wall_ms,
-    });
-    if let Some(ended) = &ended {
-        gate_record::record(&session.kernel, agent_id, ended).await;
-    }
+    let (prompt_tx, model) = first.unwrap_or_default();
 
     let check_passed = match plan.check.as_deref() {
-        Some(check) if !cancelled => {
+        Some(check) if !cancel.is_cancelled() && !turns.is_empty() => {
             let run = task_check::run_script(&session, check, CHECK_SOURCE).await;
             ui.send(system_message(run.describe())).await;
-            if let (Some(signal), Some(ended)) = (run.signal(), &ended) {
+            if let (Some(signal), Some(ended)) = (run.signal(), &last) {
                 gate_record::record(&session.kernel, agent_id, &ended.with_signal(signal)).await;
             }
             run.passed
@@ -661,6 +648,7 @@ async fn run_turn(
             cost_usd,
             tokens,
             plan_usage: Vec::new(),
+            turns,
             check_passed,
             error,
         },
@@ -672,6 +660,147 @@ async fn run_turn(
     }
 }
 
+/// Send prompt `i` of the run `name` on `session` and run its turn.
+async fn run_prompt(
+    ctx: &Context,
+    session: &mut AgentSession,
+    (arm, name): (CompareArm, &str),
+    routing: &ArmRouting,
+    (i, text): (usize, &str),
+    cancel: &CancellationToken,
+    ui: &AgentUi,
+) -> Turned {
+    let hub = &ctx.hub;
+    let plan = &ctx.plan;
+    let agent_id = session.agent_id();
+    let workdir = session.kernel.agent_workspace();
+    let (mut config, mut tools, lead) = hub.user_turn(session);
+    config.observers.clear();
+    config.initial_todos.clone_from(&session.todos);
+    let category = if plan.classifier.is_empty() {
+        PromptCategory::Unclassified
+    } else {
+        gate_record::classify_prompt(
+            &session.kernel,
+            &plan.classifier,
+            text,
+            config.auth_token.clone(),
+        )
+        .await
+    };
+    let routed_to = match routing {
+        ArmRouting::Gate { .. } => hub
+            .gate
+            .redecide(RouteLevel::Turn, category, &plan.candidates)
+            .map(|decision| decision.model.id),
+        ArmRouting::Pinned(model) => Some(model.clone()),
+    };
+    if let Some(model) = routed_to.filter(|model| *model != config.model) {
+        hub.model_limits().configure(&mut config, &model);
+    }
+    let model = config.model.clone();
+    if let Some(lead) = lead {
+        hub.gate.note_model(agent_id, &model);
+        session.lead = lead.apply(category, &mut config, &mut tools);
+    }
+    let prompt = PromptPayload {
+        category,
+        classifier: plan.classifier.clone(),
+        route: Route::turn(model.clone(), RouteReason::Compare),
+        ..PromptPayload::new(text.to_string())
+    };
+
+    if i == 0 {
+        hub.register_root(agent_id, name, workdir, &config);
+        hub.send_agent_list().await;
+    }
+    ui.send(UiCommand::TurnStarted {
+        prompt: Some(text.to_string()),
+    })
+    .await;
+    let step = if plan.prompts.len() > 1 {
+        format!(" · prompt {} of {}", i + 1, plan.prompts.len())
+    } else {
+        String::new()
+    };
+    ui.send(system_message(format!(
+        "{} {name} · {} → {} · {category}{step}",
+        ctx.host.name,
+        plan.arms[arm.index()].label(),
+        aura_model::model_catalog::route_label(&model)
+    )))
+    .await;
+
+    let started = Instant::now();
+    let prompt_tx = match record_prompt(session, &prompt).await {
+        Ok((tx, _)) => Some(tx.hash),
+        Err(problem) => {
+            warn!(%agent_id, %problem, "Failed to record a compare run's prompt");
+            None
+        }
+    };
+    let turn_start = session.messages.len();
+    session.messages.push(Message::user(text.to_string()));
+    let agent_loop = AgentLoop::new(config);
+    let steering = Steering::new(cancel);
+    let (result, forwarded) = run_agent_turn(
+        session,
+        &agent_loop,
+        tools,
+        ui,
+        cancel,
+        &steering,
+        hub.long_run,
+        None,
+    )
+    .await;
+    steering.finish(&[]);
+    let wall_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let cancelled = cancel.is_cancelled();
+    let signal = if cancelled || forwarded.credentials_rejected {
+        OutcomeSignal::None
+    } else {
+        ended_signal(&result, turn_start)
+    };
+    let (reply, mut error) = match result {
+        Ok(result) => {
+            let text = result.total_text.clone();
+            let llm_error = result.llm_error.clone().filter(|_| text.trim().is_empty());
+            handle_agent_success(session, result, &forwarded, ui, &[]).await;
+            (text, llm_error)
+        }
+        Err(e) => {
+            ui.send(UiCommand::ShowWarning(e.to_string())).await;
+            ui.send(UiCommand::Complete).await;
+            (String::new(), Some(e.to_string()))
+        }
+    };
+    if cancelled {
+        error = Some("stopped by the user".to_string());
+    }
+    let ended = prompt_tx.map(|prompt_tx| OutcomePayload {
+        prompt_tx,
+        category,
+        model: model.clone(),
+        success: signal.success(),
+        signal,
+        cost_usd: forwarded.usage.cost_usd,
+        latency_ms: wall_ms,
+    });
+    if let Some(ended) = &ended {
+        gate_record::record(&session.kernel, agent_id, ended).await;
+    }
+    Turned {
+        prompt_tx,
+        model,
+        signal,
+        reply,
+        error,
+        wall_ms,
+        ended,
+    }
+}
+
 /// A number from `agent` to seed the judge's order with.
 fn seed(agent: AgentId) -> u64 {
     let mut bytes = [0u8; 8];
@@ -679,49 +808,72 @@ fn seed(agent: AgentId) -> u64 {
     u64::from_le_bytes(bytes)
 }
 
-/// Have the judge compare each Gate run with the other arm's run of the
-/// same number, through the comparison's own kernel.
+/// What the judge is told the runs were asked: the prompt, or every
+/// prompt in order.
+fn judge_task(prompts: &[String]) -> String {
+    match prompts {
+        [only] => only.clone(),
+        _ => {
+            let mut task = String::from("The user sent these messages in order:\n");
+            for (i, prompt) in prompts.iter().enumerate() {
+                task.push_str(&format!("\n### Message {}\n{prompt}\n", i + 1));
+            }
+            task
+        }
+    }
+}
+
+/// Have the judge compare each run of arm A with arm B's run of the same
+/// number, through the comparison's own kernel, and rate each against
+/// what the user kept when the work is a replayed session.
 async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<CompareJudgment> {
     let finished = |arm: CompareArm| -> Vec<&Ran> {
         ran.iter()
             .filter(|r| r.run.arm == arm && r.run.error.is_none())
             .collect()
     };
-    let pairs: Vec<(&Ran, &Ran)> = finished(CompareArm::Gate)
+    let pairs: Vec<(&Ran, &Ran)> = finished(CompareArm::A)
         .into_iter()
-        .zip(finished(CompareArm::Other))
+        .zip(finished(CompareArm::B))
         .collect();
     if pairs.is_empty() || ctx.plan.judge.is_empty() {
         return Vec::new();
     }
     let auth_token = ctx.hub.turn(None, &ctx.plan.workspace).0.auth_token;
     let seed = seed(ctx.host.agent_id());
+    let task = judge_task(&ctx.plan.prompts);
+    let reference = ctx.plan.source.reference().map(|r| judge::Attempt {
+        diff: r.diff.clone(),
+        reply: r.reply.clone(),
+    });
     let attempt = |r: &Ran| judge::Attempt {
         diff: r.patch.clone(),
         reply: r.reply.clone(),
     };
     let mut judgments = Vec::with_capacity(pairs.len());
-    for (i, (gate, other)) in pairs.into_iter().enumerate() {
+    for (i, (a, b)) in pairs.into_iter().enumerate() {
         if ctx.cancel.is_cancelled() {
             break;
         }
-        let gate_first = judge::gate_first(seed, i);
+        let a_first = judge::a_first(seed, i);
         let mut judgment = CompareJudgment {
-            gate_run: gate.run.name.clone(),
-            other_run: other.run.name.clone(),
-            gate_first,
+            a_run: a.run.name.clone(),
+            b_run: b.run.name.clone(),
+            a_first,
             winner: None,
             parsed: false,
+            a_vs_reference: None,
+            b_vs_reference: None,
             model: ctx.plan.judge.clone(),
             cost_usd: 0.0,
             reasoning: String::new(),
         };
         let request = judge::request(
             &ctx.plan.judge,
-            &ctx.plan.task,
-            &attempt(gate),
-            &attempt(other),
-            gate_first,
+            &task,
+            (&attempt(a), &attempt(b)),
+            a_first,
+            reference.as_ref(),
             auth_token.clone(),
         );
         let reply = match request {
@@ -742,7 +894,11 @@ async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<Co
             Ok(text) => {
                 if let Some(verdict) = judge::parse(&text) {
                     judgment.parsed = true;
-                    judgment.winner = judge::winner(verdict, gate_first);
+                    judgment.winner = judge::winner(verdict, a_first);
+                }
+                if reference.is_some() {
+                    (judgment.a_vs_reference, judgment.b_vs_reference) =
+                        judge::reference_verdicts(&text, a_first);
                 }
                 judgment.reasoning = text.chars().take(MAX_REASONING).collect();
             }

@@ -82,6 +82,10 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
         super::flow::render_flow(frame, area, app, theme, is_focused);
         return;
     }
+    if app.chat_tab() == ChatTab::Bench {
+        super::benchmarks::render_benchmarks(frame, area, app, theme, is_focused);
+        return;
+    }
 
     let Some(body) = render_body_block(frame, area, (is_focused, hosted), theme) else {
         return;

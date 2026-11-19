@@ -510,7 +510,8 @@ mod tests {
             [
                 PaneTab::Chat(ChatTab::Chat),
                 PaneTab::Chat(ChatTab::Terminal),
-                PaneTab::Chat(ChatTab::Graph)
+                PaneTab::Chat(ChatTab::Graph),
+                PaneTab::Chat(ChatTab::Bench)
             ]
         );
         assert_eq!(chrome.active, Some(PaneTab::Chat(ChatTab::Terminal)));

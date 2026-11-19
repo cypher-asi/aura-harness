@@ -34,7 +34,9 @@ const REFUSING_MODEL: &str = "claude/claude-sonnet-4-6";
 /// [`REFUSING_MODEL`]. Auxiliary calls, like the chat title, quote the
 /// prompt and are answered at once. Gate's judge of failed work blames
 /// the model when the work's request says "judge: blame", excuses it
-/// when it says "judge: excuse", and gives no verdict otherwise.
+/// when it says "judge: excuse", and gives no verdict otherwise. The
+/// comparison judge prefers the first attempt, and, given what the user
+/// kept, rates it as good as that and the second worse.
 struct GatedProvider {
     inner: MockProvider,
     gate: Arc<Semaphore>,
@@ -69,14 +71,21 @@ impl ModelProvider for GatedProvider {
             return MockProvider::simple_response(reply).complete(request).await;
         }
         if request.system == aura_agent_gate::judge::SYSTEM_PROMPT {
-            return MockProvider::simple_response("A is tidier.\nWINNER: A")
-                .complete(request)
-                .await;
+            let reply = if last.as_deref().is_some_and(|t| t.contains("## Reference")) {
+                "A is tidier.\nA_VS_REFERENCE: AS_GOOD\nB_VS_REFERENCE: WORSE\nWINNER: A"
+            } else {
+                "A is tidier.\nWINNER: A"
+            };
+            return MockProvider::simple_response(reply).complete(request).await;
         }
-        if request
-            .messages
-            .iter()
-            .any(|m| m.text_content().contains("write the answer"))
+        let runs_check = last.as_deref().is_some_and(|text| {
+            text.contains("run failing check") || text.contains("run passing check")
+        });
+        if !runs_check
+            && request
+                .messages
+                .iter()
+                .any(|m| m.text_content().contains("write the answer"))
         {
             return answer(request, last.as_deref()).await;
         }

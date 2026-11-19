@@ -654,7 +654,8 @@ mod tests {
     fn app_with_flow_and(more: Vec<FlowNode>) -> App {
         let mut app = App::new();
         app.process_command(UiCommand::SetActiveAgent(LEAD.into()));
-        app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
         assert_eq!(app.chat_tab(), ChatTab::Graph);
         let mut model = node(LEAD, 2, 105, FlowKind::Model, "sonnet");
         model.detail = "1.2k/300 · 4s".into();
@@ -958,12 +959,12 @@ mod tests {
         assert_eq!(app.flow().selected_node().unwrap().id, "aa:2");
 
         // Away from the tab, there is no canvas to draw.
-        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
-        assert_eq!(app.chat_tab(), ChatTab::Chat);
+        app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+        assert_eq!(app.chat_tab(), ChatTab::Terminal);
         let _ = whole_screen(&mut app);
         assert!(app.flow_canvas().is_none());
         assert!(app.flow_canvas_clip().is_empty());
-        app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
 
         // A menu over the canvas is left out of where it is drawn.
         app.handle_key(KeyEvent::from(KeyCode::Char('/')));
@@ -985,7 +986,8 @@ mod tests {
     fn says_so_while_loading_and_when_nothing_is_recorded() {
         let mut app = App::new();
         app.process_command(UiCommand::SetActiveAgent(LEAD.into()));
-        app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
         let rows = screen(&mut app, 60, 8).join("\n");
         assert!(rows.contains("Loading the graph"), "{rows}");
 

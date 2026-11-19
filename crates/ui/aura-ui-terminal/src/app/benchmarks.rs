@@ -1,0 +1,638 @@
+//! The chat panel's BENCH tab: benchmarks that run the same work on two
+//! arms (Gate or a pinned model) and compare what they cost and how well
+//! they did. The tab lists them, sets a new one up with a form, and shows
+//! one's numbers; the event loop runs them as `/compare` comparisons.
+
+use super::{App, ChatTab, NotificationType};
+use crate::events::{
+    BenchRequest, BenchSession, BenchSpec, BenchStatus, BenchView, BenchWork, UiEvent,
+};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+/// What the BENCH tab shows.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum BenchMode {
+    /// Every benchmark, newest first
+    #[default]
+    List,
+    /// The benchmark with this id
+    Detail(String),
+    /// The form that sets a new one up
+    Form,
+}
+
+/// Rows of the new-benchmark form, top to bottom.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FormField {
+    #[default]
+    Work,
+    Prompt,
+    A,
+    B,
+    Repeats,
+    Check,
+    Budget,
+    Go,
+}
+
+impl FormField {
+    pub const ALL: [Self; 8] = [
+        Self::Work,
+        Self::Prompt,
+        Self::A,
+        Self::B,
+        Self::Repeats,
+        Self::Check,
+        Self::Budget,
+        Self::Go,
+    ];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Work => "Work",
+            Self::Prompt => "Prompt",
+            Self::A => "Arm A",
+            Self::B => "Arm B",
+            Self::Repeats => "Runs per arm",
+            Self::Check => "Check",
+            Self::Budget => "Budget (USD)",
+            Self::Go => "",
+        }
+    }
+
+    /// Whether its value is typed in the input line.
+    #[must_use]
+    pub const fn is_text(self) -> bool {
+        matches!(self, Self::Prompt | Self::Check | Self::Budget)
+    }
+
+    fn index(self) -> usize {
+        Self::ALL.iter().position(|f| *f == self).unwrap_or(0)
+    }
+}
+
+/// What a new benchmark's runs work on, as the form offers it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WorkChoice<'a> {
+    LastPrompt,
+    Prompt,
+    Session(&'a BenchSession),
+}
+
+/// Most runs per arm the form offers.
+const MAX_REPEATS: u32 = 10;
+
+/// The new-benchmark form.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BenchForm {
+    pub field: FormField,
+    /// Index into [`BenchState::work_choices`]
+    pub work: usize,
+    pub prompt: String,
+    /// `gate`, `gate:nodelegate` or a model id
+    pub a: String,
+    /// As `a`; empty for the strongest Opus
+    pub b: String,
+    pub repeats: u32,
+    /// Empty for the project's check
+    pub check: String,
+    pub budget: String,
+    /// What the set-up benchmark should cost, or why it can't run
+    pub estimate: Option<Result<String, String>>,
+    /// Whether an estimate was asked for and hasn't arrived
+    pub waiting: bool,
+}
+
+impl Default for BenchForm {
+    fn default() -> Self {
+        Self {
+            field: FormField::Work,
+            work: 0,
+            prompt: String::new(),
+            a: "gate".to_string(),
+            b: String::new(),
+            repeats: 3,
+            check: String::new(),
+            budget: String::new(),
+            estimate: None,
+            waiting: false,
+        }
+    }
+}
+
+impl BenchForm {
+    /// Whether the benchmark it set up can start.
+    #[must_use]
+    pub const fn ready(&self) -> bool {
+        matches!(self.estimate, Some(Ok(_)))
+    }
+}
+
+/// The BENCH tab's state.
+#[derive(Debug, Clone, Default)]
+pub struct BenchState {
+    open: bool,
+    /// Whether the list asked for has arrived
+    loaded: bool,
+    /// Benchmarks, newest first
+    pub benches: Vec<BenchView>,
+    /// Sessions of the agent on screen, to replay
+    pub sessions: Vec<BenchSession>,
+    pub mode: BenchMode,
+    /// Row of the list
+    pub selected: usize,
+    /// Run picked in the detail view, for diff and apply
+    pub run: Option<usize>,
+    /// Lines scrolled down in the detail view
+    pub scroll: u16,
+    pub form: BenchForm,
+}
+
+impl BenchState {
+    #[must_use]
+    pub const fn is_open(&self) -> bool {
+        self.open
+    }
+
+    pub(super) fn set_open(&mut self, open: bool) {
+        self.open = open;
+    }
+
+    #[must_use]
+    pub const fn loaded(&self) -> bool {
+        self.loaded
+    }
+
+    /// The benchmark the detail view shows.
+    #[must_use]
+    pub fn shown(&self) -> Option<&BenchView> {
+        match &self.mode {
+            BenchMode::Detail(id) => self.benches.iter().find(|b| &b.id == id),
+            _ => None,
+        }
+    }
+
+    /// What the form's work row cycles through.
+    #[must_use]
+    pub fn work_choices(&self) -> Vec<WorkChoice<'_>> {
+        let mut choices = vec![WorkChoice::LastPrompt, WorkChoice::Prompt];
+        choices.extend(self.sessions.iter().map(WorkChoice::Session));
+        choices
+    }
+
+    /// The work the form has chosen.
+    #[must_use]
+    pub fn work(&self) -> WorkChoice<'_> {
+        self.work_choices()
+            .get(self.form.work)
+            .copied()
+            .unwrap_or(WorkChoice::LastPrompt)
+    }
+
+    fn list(&mut self, mut benches: Vec<BenchView>) {
+        benches.reverse();
+        self.benches = benches;
+        self.loaded = true;
+        self.selected = self.selected.min(self.benches.len().saturating_sub(1));
+    }
+
+    fn upsert(&mut self, view: BenchView) {
+        match self.benches.iter_mut().find(|b| b.id == view.id) {
+            Some(known) => *known = view,
+            None => {
+                self.benches.insert(0, view);
+                if self.mode == BenchMode::List {
+                    self.selected = 0;
+                }
+            }
+        }
+    }
+
+    fn move_selection(&mut self, down: bool) {
+        let last = self.benches.len().saturating_sub(1);
+        self.selected = if down {
+            (self.selected + 1).min(last)
+        } else {
+            self.selected.saturating_sub(1)
+        };
+    }
+
+    /// Scroll the detail view, or move along the list.
+    pub(super) fn scroll_by(&mut self, lines: isize) {
+        match self.mode {
+            BenchMode::Detail(_) => {
+                let by = u16::try_from(lines.unsigned_abs()).unwrap_or(u16::MAX);
+                self.scroll = if lines < 0 {
+                    self.scroll.saturating_sub(by)
+                } else {
+                    self.scroll.saturating_add(by)
+                };
+            }
+            BenchMode::List => {
+                for _ in 0..lines.unsigned_abs() {
+                    self.move_selection(lines > 0);
+                }
+            }
+            BenchMode::Form => {}
+        }
+    }
+}
+
+/// `values` cycled from `current` one step forward or back.
+fn cycle(values: &[String], current: &str, forward: bool) -> String {
+    if values.is_empty() {
+        return current.to_string();
+    }
+    let at = values.iter().position(|v| v == current);
+    let next = match (at, forward) {
+        (None, _) => 0,
+        (Some(i), true) => (i + 1) % values.len(),
+        (Some(i), false) => (i + values.len() - 1) % values.len(),
+    };
+    values[next].clone()
+}
+
+impl App {
+    /// The BENCH tab's state.
+    #[must_use]
+    pub const fn bench(&self) -> &BenchState {
+        &self.bench
+    }
+
+    fn send_bench(&self, request: BenchRequest) {
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::Bench {
+                agent_id: self.active_agent_id.clone(),
+                request,
+            });
+        }
+    }
+
+    /// Ask for the benchmarks and for the sessions of the agent on screen.
+    pub(super) fn request_benchmarks(&mut self) {
+        self.send_bench(BenchRequest::List);
+        self.send_bench(BenchRequest::Sessions);
+    }
+
+    /// What the form's arm rows cycle through: Gate both ways, then every
+    /// model that can run. Arm B also offers its default.
+    #[must_use]
+    pub fn bench_arm_choices(&self, arm_b: bool) -> Vec<String> {
+        let mut choices = Vec::new();
+        if arm_b {
+            choices.push(String::new());
+        }
+        choices.push("gate".to_string());
+        choices.push("gate:nodelegate".to_string());
+        choices.extend(
+            self.models
+                .iter()
+                .filter(|m| m.available && m.id != "gate" && (!m.local || m.installed))
+                .map(|m| m.id.clone()),
+        );
+        choices
+    }
+
+    pub(super) fn cmd_bench_list(&mut self, benches: Vec<BenchView>) {
+        self.bench.list(benches);
+    }
+
+    pub(super) fn cmd_bench_upsert(&mut self, view: BenchView) {
+        self.bench.upsert(view);
+    }
+
+    pub(super) fn cmd_bench_sessions(&mut self, agent_id: &str, sessions: Vec<BenchSession>) {
+        if agent_id == self.active_agent_id {
+            self.bench.sessions = sessions;
+            let choices = self.bench.work_choices().len();
+            self.bench.form.work = self.bench.form.work.min(choices.saturating_sub(1));
+        }
+    }
+
+    pub(super) fn cmd_bench_estimate(&mut self, agent_id: &str, estimate: Result<String, String>) {
+        if agent_id == self.active_agent_id {
+            self.bench.form.waiting = false;
+            if estimate.is_ok() {
+                self.bench.form.field = FormField::Go;
+            }
+            self.bench.form.estimate = Some(estimate);
+        }
+    }
+
+    pub(super) fn cmd_bench_notice(&mut self, notice: Result<String, String>) {
+        let started = self.bench.mode == BenchMode::Form && notice.is_ok();
+        self.notification = Some(match notice {
+            Ok(text) => (text, NotificationType::Success),
+            Err(problem) => (problem, NotificationType::Warning),
+        });
+        if started {
+            self.bench.form = BenchForm::default();
+            self.bench.mode = BenchMode::List;
+            self.bench.selected = 0;
+        }
+    }
+
+    /// Enter with text in the input line while the form's focused row is
+    /// typed: the text becomes its value. Returns whether it did.
+    pub(super) fn bench_fill_field(&mut self) -> bool {
+        let form = &mut self.bench.form;
+        if self.bench.mode != BenchMode::Form || !form.field.is_text() || self.input.is_empty() {
+            return false;
+        }
+        let text = std::mem::take(&mut self.input);
+        self.cursor_pos = 0;
+        match form.field {
+            FormField::Prompt => {
+                form.prompt = text;
+                form.work = 1;
+            }
+            FormField::Check => form.check = text.trim().to_string(),
+            FormField::Budget => form.budget = text.trim().trim_start_matches('$').to_string(),
+            _ => {}
+        }
+        form.estimate = None;
+        true
+    }
+
+    /// A key in the BENCH tab with nothing typed. Returns whether it used
+    /// the key.
+    pub(super) fn handle_bench_key(&mut self, key: KeyEvent) -> bool {
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            return false;
+        }
+        match self.bench.mode.clone() {
+            BenchMode::List => self.bench_list_key(key),
+            BenchMode::Detail(id) => self.bench_detail_key(key, &id),
+            BenchMode::Form => self.bench_form_key(key),
+        }
+    }
+
+    fn bench_list_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc => self.show_chat_tab(ChatTab::Chat),
+            KeyCode::Up | KeyCode::Char('k') => self.bench.move_selection(false),
+            KeyCode::Down | KeyCode::Char('j') => self.bench.move_selection(true),
+            KeyCode::Enter => {
+                if let Some(view) = self.bench.benches.get(self.bench.selected) {
+                    self.bench.mode = BenchMode::Detail(view.id.clone());
+                    self.bench.scroll = 0;
+                    self.bench.run = None;
+                }
+            }
+            KeyCode::Char('n') => self.open_bench_form(),
+            KeyCode::Char('r') => self.request_benchmarks(),
+            KeyCode::Char('c') => self.send_bench(BenchRequest::Cancel),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Open the form, asking for the sessions it offers.
+    pub(super) fn open_bench_form(&mut self) {
+        self.bench.mode = BenchMode::Form;
+        self.bench.form.estimate = None;
+        self.bench.form.waiting = false;
+        self.send_bench(BenchRequest::Sessions);
+    }
+
+    fn bench_detail_key(&mut self, key: KeyEvent, id: &str) -> bool {
+        let Some(view) = self.bench.shown() else {
+            self.bench.mode = BenchMode::List;
+            return true;
+        };
+        let runs = view.runs.len();
+        let has_copies = view.status.has_copies() && view.status != BenchStatus::Running;
+        let run = self
+            .bench
+            .run
+            .and_then(|i| view.runs.get(i))
+            .map(|r| r.name.clone());
+        let id = id.to_string();
+        match key.code {
+            KeyCode::Esc | KeyCode::Backspace => {
+                self.bench.mode = BenchMode::List;
+            }
+            KeyCode::Up | KeyCode::Char('k') => self.bench.scroll_by(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.bench.scroll_by(1),
+            KeyCode::PageUp => self.bench.scroll_by(-10),
+            KeyCode::PageDown => self.bench.scroll_by(10),
+            KeyCode::Home | KeyCode::Char('g') => self.bench.scroll = 0,
+            KeyCode::Left | KeyCode::Char('h') if runs > 0 => {
+                self.bench.run = Some(self.bench.run.map_or(runs - 1, |i| i.saturating_sub(1)));
+            }
+            KeyCode::Right | KeyCode::Char('l') if runs > 0 => {
+                self.bench.run = Some(self.bench.run.map_or(0, |i| (i + 1).min(runs - 1)));
+            }
+            KeyCode::Char('d') if has_copies => {
+                self.send_bench(BenchRequest::Diff { id, run });
+            }
+            KeyCode::Char(c @ ('a' | 'b')) if has_copies => {
+                let arm = usize::from(c == 'b');
+                self.send_bench(BenchRequest::Pick { id, arm });
+            }
+            KeyCode::Char('y') if has_copies => match run {
+                Some(run) => self.send_bench(BenchRequest::Apply { id, run }),
+                None => {
+                    self.notification = Some((
+                        "Pick a run with ←/→ first, then y applies it".to_string(),
+                        NotificationType::Warning,
+                    ));
+                }
+            },
+            KeyCode::Char('x') if has_copies => self.send_bench(BenchRequest::Dismiss { id }),
+            KeyCode::Char('c') => self.send_bench(BenchRequest::Cancel),
+            _ => return false,
+        }
+        true
+    }
+
+    fn bench_form_key(&mut self, key: KeyEvent) -> bool {
+        let field = self.bench.form.field;
+        match key.code {
+            KeyCode::Esc => {
+                if self.bench.form.ready() {
+                    self.send_bench(BenchRequest::Cancel);
+                }
+                self.bench.form.estimate = None;
+                self.bench.mode = BenchMode::List;
+            }
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::BackTab => self.move_form_field(false),
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => self.move_form_field(true),
+            KeyCode::Left | KeyCode::Char('h') => self.change_form_value(false),
+            KeyCode::Right | KeyCode::Char('l') => self.change_form_value(true),
+            KeyCode::Delete | KeyCode::Backspace if field.is_text() => {
+                let form = &mut self.bench.form;
+                match field {
+                    FormField::Prompt => form.prompt.clear(),
+                    FormField::Check => form.check.clear(),
+                    FormField::Budget => form.budget.clear(),
+                    _ => {}
+                }
+                form.estimate = None;
+            }
+            KeyCode::Enter if field == FormField::Go => self.submit_bench_form(),
+            KeyCode::Enter => self.move_form_field(true),
+            _ => return false,
+        }
+        true
+    }
+
+    fn move_form_field(&mut self, down: bool) {
+        let form = &mut self.bench.form;
+        let at = form.field.index();
+        let next = if down {
+            (at + 1).min(FormField::ALL.len() - 1)
+        } else {
+            at.saturating_sub(1)
+        };
+        form.field = FormField::ALL[next];
+    }
+
+    fn change_form_value(&mut self, forward: bool) {
+        let field = self.bench.form.field;
+        match field {
+            FormField::Work => {
+                let count = self.bench.work_choices().len();
+                let form = &mut self.bench.form;
+                form.work = if forward {
+                    (form.work + 1) % count
+                } else {
+                    (form.work + count - 1) % count
+                };
+            }
+            FormField::A | FormField::B => {
+                let choices = self.bench_arm_choices(field == FormField::B);
+                let form = &mut self.bench.form;
+                let value = if field == FormField::A {
+                    &mut form.a
+                } else {
+                    &mut form.b
+                };
+                *value = cycle(&choices, value, forward);
+            }
+            FormField::Repeats => {
+                let form = &mut self.bench.form;
+                form.repeats = if forward {
+                    (form.repeats + 1).min(MAX_REPEATS)
+                } else {
+                    form.repeats.saturating_sub(1).max(1)
+                };
+            }
+            _ => return,
+        }
+        self.bench.form.estimate = None;
+    }
+
+    /// Enter on the form's last row: ask what the benchmark should cost,
+    /// or start it once that came back.
+    fn submit_bench_form(&mut self) {
+        if self.bench.form.waiting {
+            return;
+        }
+        if self.bench.form.ready() {
+            self.send_bench(BenchRequest::Start);
+            return;
+        }
+        let form = self.bench.form.clone();
+        let work = match self.bench.work() {
+            WorkChoice::LastPrompt => Some(BenchWork::LastPrompt),
+            WorkChoice::Prompt if form.prompt.trim().is_empty() => None,
+            WorkChoice::Prompt => Some(BenchWork::Prompt(form.prompt.clone())),
+            WorkChoice::Session(session) if session.current => Some(BenchWork::CurrentSession),
+            WorkChoice::Session(session) => Some(BenchWork::Session(session.started_ms)),
+        };
+        let Some(work) = work else {
+            self.bench.form.field = FormField::Prompt;
+            self.notification = Some((
+                "Type the prompt in the input line and press Enter".to_string(),
+                NotificationType::Warning,
+            ));
+            return;
+        };
+        let budget_usd = match form.budget.trim() {
+            "" => None,
+            text => match text.parse::<f64>() {
+                Ok(usd) if usd > 0.0 => Some(usd),
+                _ => {
+                    self.notification = Some((
+                        format!("Budget {text:?} is not an amount in USD"),
+                        NotificationType::Warning,
+                    ));
+                    return;
+                }
+            },
+        };
+        let spec = BenchSpec {
+            work,
+            a: form.a.clone(),
+            b: form.b.clone(),
+            repeats: form.repeats,
+            check: Some(form.check.clone()).filter(|c| !c.is_empty()),
+            budget_usd,
+        };
+        self.bench.form.waiting = true;
+        self.send_bench(BenchRequest::Prepare(spec));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::BenchArm;
+
+    fn view(id: &str) -> BenchView {
+        BenchView {
+            id: id.to_string(),
+            name: format!("Compare {id}"),
+            arms: [BenchArm::default(), BenchArm::default()],
+            ..BenchView::default()
+        }
+    }
+
+    #[test]
+    fn the_list_is_newest_first_and_upserts_replace_in_place() {
+        let mut state = BenchState::default();
+        state.list(vec![view("1"), view("2")]);
+        assert_eq!(state.benches[0].id, "2");
+        assert!(state.loaded());
+        let mut changed = view("1");
+        changed.title = "changed".to_string();
+        state.upsert(changed);
+        assert_eq!(state.benches.len(), 2);
+        assert_eq!(state.benches[1].title, "changed");
+        state.upsert(view("3"));
+        assert_eq!(state.benches[0].id, "3");
+    }
+
+    #[test]
+    fn values_cycle_both_ways() {
+        let values: Vec<String> = ["gate", "x", "y"].iter().map(ToString::to_string).collect();
+        assert_eq!(cycle(&values, "gate", true), "x");
+        assert_eq!(cycle(&values, "gate", false), "y");
+        assert_eq!(cycle(&values, "unknown", true), "gate");
+    }
+
+    #[test]
+    fn work_choices_offer_the_sessions_after_the_prompts() {
+        let mut state = BenchState {
+            sessions: vec![BenchSession {
+                started_ms: 5,
+                title: "fix it".to_string(),
+                prompts: 3,
+                cost_usd: Some(0.4),
+                models: Vec::new(),
+                current: true,
+            }],
+            ..BenchState::default()
+        };
+        let choices = state.work_choices();
+        assert_eq!(choices.len(), 3);
+        assert!(matches!(choices[2], WorkChoice::Session(s) if s.started_ms == 5));
+        state.form.work = 2;
+        assert!(matches!(state.work(), WorkChoice::Session(_)));
+    }
+}

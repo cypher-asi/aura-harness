@@ -94,6 +94,10 @@ pub struct Turn {
     pub manifest: TurnManifest,
 }
 
+/// What a file held at a checkpoint: its content, `None` when it did not
+/// exist, or why the checkpoint can't be read.
+pub type Held = Result<Option<Vec<u8>>, String>;
+
 /// What putting files back did.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct RestoreReport {
@@ -445,6 +449,31 @@ impl FileCheckpoints {
             }
         }
         report
+    }
+
+    /// What each file `manifests` changed held before the earliest of them
+    /// changed it.
+    #[must_use]
+    pub fn before<'a>(
+        &self,
+        agent: AgentId,
+        manifests: impl IntoIterator<Item = &'a TurnManifest>,
+    ) -> Vec<(PathBuf, Held)> {
+        let blobs = self.blobs(agent);
+        earliest(manifests)
+            .into_iter()
+            .map(|(path, blob)| {
+                let content = match blob {
+                    Some(key) => match blobs.get(key) {
+                        Ok(Some(bytes)) => Ok(Some(bytes.to_vec())),
+                        Ok(None) => Err("its checkpoint is missing".to_string()),
+                        Err(e) => Err(e.to_string()),
+                    },
+                    None => Ok(None),
+                };
+                (path.clone(), content)
+            })
+            .collect()
     }
 
     /// Mark `turns` as no longer in the conversation. Their checkpoints stay

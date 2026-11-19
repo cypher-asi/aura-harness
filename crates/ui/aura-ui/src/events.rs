@@ -4,6 +4,10 @@
 //! - `UiEvent`: Events from the UI to the kernel (user actions)
 //! - `UiCommand`: Commands from the kernel to the UI (state updates)
 
+pub use crate::benchmarks::{
+    arm_letter, BenchArm, BenchBaseline, BenchJudge, BenchRequest, BenchRun, BenchSession,
+    BenchSpec, BenchStatus, BenchTokens, BenchTurn, BenchVerdict, BenchView, BenchWork,
+};
 pub use crate::flow::{FlowKind, FlowLane, FlowNode, FlowUsage};
 use crate::mode_command::{ApprovalLevel, PermissionMode};
 use serde::{Deserialize, Serialize};
@@ -274,6 +278,13 @@ pub enum UiEvent {
         agent_id: String,
         /// Everything after `/compare`
         args: String,
+    },
+
+    /// The BENCH tab asked for something
+    Bench {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        request: BenchRequest,
     },
 }
 
@@ -590,6 +601,31 @@ pub enum UiCommand {
         /// New nodes and updates to earlier ones ([`FlowNode::merge`])
         nodes: Vec<FlowNode>,
     },
+
+    /// Replace the BENCH tab's list of benchmarks, oldest first
+    BenchList(Vec<BenchView>),
+
+    /// A benchmark started or changed; add it to the BENCH tab or replace
+    /// it there
+    BenchUpsert(Box<BenchView>),
+
+    /// The sessions of `agent_id` the BENCH tab can replay, newest first.
+    /// Ignored by a UI showing another agent.
+    BenchSessions {
+        agent_id: String,
+        sessions: Vec<BenchSession>,
+    },
+
+    /// What the benchmark the BENCH tab set up for `agent_id` should cost,
+    /// waiting to be started; or why it could not be set up
+    BenchEstimate {
+        agent_id: String,
+        estimate: Result<String, String>,
+    },
+
+    /// What a BENCH tab action did (pick, apply, dismiss, ...), or why it
+    /// could not
+    BenchNotice(Result<String, String>),
 
     /// Set the API status (URL and whether it's active)
     SetApiStatus {

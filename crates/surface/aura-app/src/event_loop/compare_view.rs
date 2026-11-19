@@ -1,12 +1,13 @@
 //! What `/compare` shows: the estimate before a comparison starts, the
-//! per-arm view once it ends, the list of past comparisons, and run
+//! per-arm (and, for a replayed session, per-prompt) view once it ends, the list of past comparisons, and run
 //! diffs split per file for the diff view.
 
 use aura_agent_gate::compare::{
-    judge_cost_usd, summarize, too_close, ArmSummary, Estimate, NO_DELEGATE,
+    judge_cost_usd, summarize, too_close, turn_cells, ArmSummary, Estimate, TurnCell, NO_DELEGATE,
 };
 use aura_core_types::{
-    CompareArm, ComparePayload, CompareRun, CompareStatus, ModelTokens, Plan, PlanShare,
+    ArmSpec, BenchSource, CompareArm, ComparePayload, CompareRun, CompareStatus, ModelTokens, Plan,
+    PlanShare,
 };
 use aura_model::model_catalog::route_label;
 use aura_ui_terminal::events::FileDiffData;
@@ -70,41 +71,53 @@ pub(super) fn headline(text: &str, max: usize) -> String {
     format!("{cut}…")
 }
 
-/// How the other arm, `against` as the comparison records it, reads:
-/// its model and route, or Gate with delegation off.
-fn arm_label(against: &str) -> String {
-    if against == NO_DELEGATE {
-        format!("gate without enforced delegation ({NO_DELEGATE})")
-    } else {
-        route_label(against)
+/// How an arm reads: its model and route, or Gate and whether its lead
+/// must delegate.
+pub(super) fn arm_label(spec: &ArmSpec) -> String {
+    match spec {
+        ArmSpec::Gate { delegate: true } => "gate".to_string(),
+        ArmSpec::Gate { delegate: false } => {
+            format!("gate without enforced delegation ({NO_DELEGATE})")
+        }
+        ArmSpec::Model { model } => route_label(model),
     }
 }
 
 /// What the user is asked to confirm before a comparison starts.
 pub(super) struct EstimateView<'a> {
     pub task: &'a str,
-    /// Model Gate is expected to pick for the task
-    pub gate_model: Option<&'a str>,
-    pub against: &'a str,
+    /// Prompts each run sends
+    pub prompts: usize,
+    /// The replayed session's title, when the work is one
+    pub session: Option<&'a str>,
+    /// Arm A as it reads, with Gate's likely pick when Gate routes it
+    pub a: String,
+    pub b: String,
     pub judge: &'a str,
     pub repeats: u32,
     pub check: Option<&'a str>,
     pub budget_usd: Option<f64>,
     pub concurrency: usize,
     pub estimate: Estimate,
+    pub notes: &'a [String],
 }
 
 impl EstimateView<'_> {
     pub(super) fn render(&self) -> String {
-        let mut out = format!("Compare: \"{}\"", headline(self.task, 80));
-        let gate = self.gate_model.map_or_else(
-            || "gate".to_string(),
-            |m| format!("gate (likely {})", route_label(m)),
-        );
+        let mut out = match self.session {
+            Some(title) => format!(
+                "Benchmark: replay the session \"{}\", {} prompt{} in order",
+                headline(title, 72),
+                self.prompts,
+                if self.prompts == 1 { "" } else { "s" },
+            ),
+            None => format!("Compare: \"{}\"", headline(self.task, 80)),
+        };
         let _ = write!(
             out,
-            "\n  {gate} vs {}, {} run{} each, up to {} at a time, each in its own copy of the workspace",
-            arm_label(self.against),
+            "\n  A {} vs B {}, {} run{} each, up to {} at a time, each in its own copy of the workspace",
+            self.a,
+            self.b,
             self.repeats,
             if self.repeats == 1 { "" } else { "s" },
             self.concurrency,
@@ -120,10 +133,10 @@ impl EstimateView<'_> {
         let part = |usd: Option<f64>| usd.map_or_else(|| "unknown".to_string(), money);
         let _ = write!(
             out,
-            "\n  Estimated at list prices: ~{} (gate ~{}, other ~{}, judge ~{} on {}), for runs of about 150k input and 6k output tokens{}",
+            "\n  Estimated at list prices: ~{} (A ~{}, B ~{}, judge ~{} on {}), for turns of about 150k input and 6k output tokens{}",
             money(self.estimate.known_usd()),
-            part(self.estimate.gate_usd),
-            part(self.estimate.other_usd),
+            part(self.estimate.a_usd),
+            part(self.estimate.b_usd),
             part(self.estimate.judge_usd),
             route_label(self.judge),
             if self.estimate.fully_priced() {
@@ -139,7 +152,9 @@ impl EstimateView<'_> {
                 money(budget)
             );
         }
-        out.push_str("\n  /compare go starts it · /compare cancel drops it");
+        for note in self.notes {
+            let _ = write!(out, "\n  Note: {note}");
+        }
         out
     }
 }
@@ -158,19 +173,20 @@ pub(super) fn list(comparisons: &[(String, Option<ComparePayload>)]) -> String {
             let _ = write!(out, "\n  {}. {name} · no record", i + 1);
             continue;
         };
-        let gate = summarize(payload, CompareArm::Gate);
-        let other = summarize(payload, CompareArm::Other);
+        let a = summarize(payload, CompareArm::A);
+        let b = summarize(payload, CompareArm::B);
         let _ = write!(
             out,
-            "\n  {}. {} · {} · \"{}\" · gate vs {} · {} · gate {} / other {}",
+            "\n  {}. {} · {} · \"{}\" · {} vs {} · {} · A {} / B {}",
             i + 1,
             name,
             crate::record_loader::format_local_time(payload.started_ms),
             headline(&payload.task, 48),
-            arm_label(&payload.against),
+            arm_label(&payload.arm_a),
+            arm_label(&payload.arm_b),
             status(&payload.status),
-            arm_line(&gate),
-            arm_line(&other),
+            arm_line(&a),
+            arm_line(&b),
         );
     }
     out
@@ -193,25 +209,57 @@ fn status(status: &CompareStatus) -> String {
         CompareStatus::Running => "running".to_string(),
         CompareStatus::Done => "done".to_string(),
         CompareStatus::Cancelled => "stopped".to_string(),
-        CompareStatus::Picked(arm) => format!("you picked {arm}"),
+        CompareStatus::Picked(arm) => format!("you picked {}", arm.as_str().to_uppercase()),
         CompareStatus::Applied(run) => format!("applied {run}"),
         CompareStatus::Dismissed => "dismissed".to_string(),
     }
 }
 
+/// `$0.05, 2 pass, 1 fail` for one arm's turns on one prompt.
+fn turn_cell(cell: &TurnCell) -> String {
+    if cell.runs == 0 {
+        return "-".to_string();
+    }
+    let mut text = cell.mean_cost_usd.map_or_else(|| "-".to_string(), money);
+    for (n, what) in [
+        (cell.passed, "pass"),
+        (cell.failed, "fail"),
+        (cell.errors, "error"),
+    ] {
+        if n > 0 {
+            let _ = write!(text, ", {n} {what}");
+        }
+    }
+    text
+}
+
 /// The view of one comparison.
 pub(super) fn render(name: &str, payload: &ComparePayload) -> String {
-    let gate = summarize(payload, CompareArm::Gate);
-    let other = summarize(payload, CompareArm::Other);
-    let against = arm_label(&payload.against);
+    let a = summarize(payload, CompareArm::A);
+    let b = summarize(payload, CompareArm::B);
+    let (a_label, b_label) = (
+        format!("A {}", payload.arm_a.label()),
+        format!("B {}", payload.arm_b.label()),
+    );
     let mut out = format!(
         "{name} · \"{}\" · {}",
         headline(&payload.task, 72),
         status(&payload.status)
     );
+    if let BenchSource::Session { title, .. } = &payload.source {
+        let _ = write!(
+            out,
+            "\n  Replays the session \"{}\": {} prompt{} in order",
+            headline(title, 60),
+            payload.prompts.len(),
+            if payload.prompts.len() == 1 { "" } else { "s" },
+        );
+    }
     let _ = write!(
         out,
-        "\n  gate vs {against}, {} run{} each{}",
+        "\n  A {} vs B {}, {} run{} each{}",
+        arm_label(&payload.arm_a),
+        arm_label(&payload.arm_b),
         payload.repeats,
         if payload.repeats == 1 { "" } else { "s" },
         payload.check.as_deref().map_or_else(
@@ -220,23 +268,23 @@ pub(super) fn render(name: &str, payload: &ComparePayload) -> String {
         ),
     );
 
-    let width = against.chars().count().max(16);
-    let row = |out: &mut String, label: &str, g: String, o: String| {
-        let _ = write!(out, "\n  {label:<14}{g:<width$}  {o}");
+    let width = a_label.chars().count().max(24);
+    let row = |out: &mut String, label: &str, a: String, b: String| {
+        let _ = write!(out, "\n  {label:<14}{a:<width$}  {b}");
     };
-    let _ = write!(out, "\n\n  {:<14}{:<width$}  {against}", "", "gate");
+    let _ = write!(out, "\n\n  {:<14}{a_label:<width$}  {b_label}", "");
     let runs = |arm: &ArmSummary| format!("{}/{}", arm.finished, arm.runs);
-    row(&mut out, "finished", runs(&gate), runs(&other));
+    row(&mut out, "finished", runs(&a), runs(&b));
     let wall = |arm: &ArmSummary| arm.median_wall_ms.map_or_else(|| "-".to_string(), duration);
-    row(&mut out, "median time", wall(&gate), wall(&other));
+    row(&mut out, "median time", wall(&a), wall(&b));
     row(
         &mut out,
         "total cost",
-        money(gate.total_cost_usd),
-        money(other.total_cost_usd),
+        money(a.total_cost_usd),
+        money(b.total_cost_usd),
     );
     let median = |arm: &ArmSummary| arm.median_cost_usd.map_or_else(|| "-".to_string(), money);
-    row(&mut out, "median cost", median(&gate), median(&other));
+    row(&mut out, "median cost", median(&a), median(&b));
     let checks = |arm: &ArmSummary| {
         if arm.checks_run == 0 {
             "-".to_string()
@@ -244,7 +292,7 @@ pub(super) fn render(name: &str, payload: &ComparePayload) -> String {
             format!("{}/{} passed", arm.checks_passed, arm.checks_run)
         }
     };
-    row(&mut out, "check", checks(&gate), checks(&other));
+    row(&mut out, "check", checks(&a), checks(&b));
     let judged = |arm: &ArmSummary| {
         format!(
             "{} won, {} lost, {} tied",
@@ -252,35 +300,81 @@ pub(super) fn render(name: &str, payload: &ComparePayload) -> String {
         )
     };
     if !payload.judgments.is_empty() {
-        row(&mut out, "judge", judged(&gate), judged(&other));
+        row(&mut out, "judge", judged(&a), judged(&b));
+    }
+    let rated = |arm: &ArmSummary| arm.ref_better + arm.ref_as_good + arm.ref_worse;
+    if rated(&a) + rated(&b) > 0 {
+        let vs = |arm: &ArmSummary| {
+            format!(
+                "{} better, {} as good, {} worse",
+                arm.ref_better, arm.ref_as_good, arm.ref_worse
+            )
+        };
+        row(&mut out, "vs yours", vs(&a), vs(&b));
     }
 
     let runs_each = payload.repeats;
-    if gate.checks_run > 0
-        && other.checks_run > 0
-        && too_close(gate.checks_passed, other.checks_passed)
-    {
+    if a.checks_run > 0 && b.checks_run > 0 && too_close(a.checks_passed, b.checks_passed) {
         let _ = write!(
             out,
             "\n  Too close to call with {runs_each} runs: check passes are within one of each other."
         );
     }
-    if !payload.judgments.is_empty() && too_close(gate.judge_wins, other.judge_wins) {
+    if !payload.judgments.is_empty() && too_close(a.judge_wins, b.judge_wins) {
         let _ = write!(
             out,
             "\n  Too close to call with {runs_each} runs: judge wins are within one of each other."
         );
     }
+    if let Some(baseline) = payload.source.baseline() {
+        let _ = write!(
+            out,
+            "\n  The session itself: {} call{}, {}{}",
+            baseline.calls,
+            if baseline.calls == 1 { "" } else { "s" },
+            if baseline.priced {
+                money(baseline.cost_usd)
+            } else {
+                "no price".to_string()
+            },
+            if baseline.models.is_empty() {
+                String::new()
+            } else {
+                format!(" on {}", baseline.models.join(", "))
+            },
+        );
+    }
+
+    if payload.prompts.len() > 1 {
+        out.push_str(
+            "\n\n  Per prompt (mean turn cost; test or build commands that passed or failed)",
+        );
+        let (a_cells, b_cells) = (
+            turn_cells(payload, CompareArm::A),
+            turn_cells(payload, CompareArm::B),
+        );
+        for (i, prompt) in payload.prompts.iter().enumerate() {
+            let cell = |cells: &[TurnCell]| cells.get(i).map_or_else(|| "-".to_string(), turn_cell);
+            let _ = write!(
+                out,
+                "\n    {:<10}{:<width$}  {}  \"{}\"",
+                format!("{}.", i + 1),
+                cell(&a_cells),
+                cell(&b_cells),
+                headline(prompt, 40),
+            );
+        }
+    }
 
     out.push_str("\n\n  Tokens per model");
-    for (arm, summary) in [("gate", &gate), ("other", &other)] {
+    for (arm, summary) in [("A", &a), ("B", &b)] {
         let _ = write!(out, "\n    {arm}: {}", model_tokens(&summary.tokens));
     }
-    if gate.plan_usage.is_empty() && other.plan_usage.is_empty() {
+    if a.plan_usage.is_empty() && b.plan_usage.is_empty() {
         let _ = write!(out, "\n  {PLAN_USAGE_NOTE}");
     } else {
         out.push_str("\n\n  Plan usage, share of each window's limit");
-        for (arm, summary) in [("gate", &gate), ("other", &other)] {
+        for (arm, summary) in [("A", &a), ("B", &b)] {
             let _ = write!(out, "\n    {arm}: {}", plan_shares(&summary.plan_usage));
         }
         let _ = write!(out, "\n  {PLAN_SHARE_NOTE}");
@@ -315,7 +409,7 @@ pub(super) fn render(name: &str, payload: &ComparePayload) -> String {
     }
     if payload.status.has_copies() && payload.status != CompareStatus::Running {
         out.push_str(
-            "\n\n  /compare diff [run] · /compare pick gate|other · /compare apply <run> · /compare dismiss",
+            "\n\n  /compare diff [run] · /compare pick a|b · /compare apply <run> · /compare dismiss",
         );
     }
     out
@@ -430,7 +524,10 @@ pub(super) fn split_patch(patch: &str) -> Vec<FileDiffData> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core_types::{AgentId, CompareCopy, CompareJudgment, SystemKind};
+    use aura_core_types::{
+        AgentId, CompareCopy, CompareJudgment, OutcomeSignal, RefVerdict, RunTurn, SessionBaseline,
+        SystemKind,
+    };
     use std::path::PathBuf;
 
     fn run(arm: CompareArm, n: u32, model: &str, cost: f64, check: bool) -> CompareRun {
@@ -457,6 +554,7 @@ mod tests {
                 ..ModelTokens::default()
             }],
             plan_usage: Vec::new(),
+            turns: Vec::new(),
             check_passed: Some(check),
             files_changed: 2,
             error: None,
@@ -470,7 +568,13 @@ mod tests {
             system_kind: SystemKind::Compare,
             task: "fix the flaky parser test\nmore detail".to_string(),
             plan: None,
+            arm_a: ArmSpec::Gate { delegate: true },
+            arm_b: ArmSpec::Model {
+                model: opus.to_string(),
+            },
             against: opus.to_string(),
+            prompts: vec!["fix the flaky parser test\nmore detail".to_string()],
+            source: BenchSource::Prompt,
             repeats: 3,
             check: Some("cargo test".to_string()),
             budget_usd: None,
@@ -478,19 +582,21 @@ mod tests {
             apply_root: PathBuf::from("/repo"),
             started_ms: 0,
             runs: vec![
-                run(CompareArm::Gate, 1, sonnet, 0.05, true),
-                run(CompareArm::Other, 1, opus, 0.40, true),
-                run(CompareArm::Gate, 2, sonnet, 0.07, true),
-                run(CompareArm::Other, 2, opus, 0.50, true),
-                run(CompareArm::Gate, 3, sonnet, 0.06, false),
-                run(CompareArm::Other, 3, opus, 0.45, true),
+                run(CompareArm::A, 1, sonnet, 0.05, true),
+                run(CompareArm::B, 1, opus, 0.40, true),
+                run(CompareArm::A, 2, sonnet, 0.07, true),
+                run(CompareArm::B, 2, opus, 0.50, true),
+                run(CompareArm::A, 3, sonnet, 0.06, false),
+                run(CompareArm::B, 3, opus, 0.45, true),
             ],
             judgments: vec![CompareJudgment {
-                gate_run: "gate-1".to_string(),
-                other_run: "other-1".to_string(),
-                gate_first: true,
-                winner: Some(CompareArm::Other),
+                a_run: "a-1".to_string(),
+                b_run: "b-1".to_string(),
+                a_first: true,
+                winner: Some(CompareArm::B),
                 parsed: true,
+                a_vs_reference: None,
+                b_vs_reference: None,
                 model: opus.to_string(),
                 cost_usd: 0.03,
                 reasoning: String::new(),
@@ -514,6 +620,10 @@ mod tests {
     fn the_view_shows_both_arms_side_by_side() {
         let text = render("Compare #1", &payload());
         assert!(text.starts_with("Compare #1 · \"fix the flaky parser test\" · done"));
+        assert!(
+            text.contains("A gate vs B aura-claude-opus-4-7 (cloud), 3 runs each"),
+            "{text}"
+        );
         assert_eq!(line(&text, "median time"), ["median time", "42s", "42s"]);
         assert_eq!(line(&text, "total cost"), ["total cost", "$0.18", "$1.35"]);
         assert_eq!(
@@ -530,7 +640,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("gate: claude-sonnet-4-6 9 calls, 126k in / 5k out, $0.18"),
+            text.contains("A: claude-sonnet-4-6 9 calls, 126k in / 5k out, $0.18"),
             "{text}"
         );
         assert!(text.contains("Plan usage: no call reported a plan's usage"));
@@ -540,9 +650,11 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("Note: the budget stopped 2 runs"));
-        assert!(text.contains("/compare pick gate|other"));
-        let gate_3 = line(&text, "gate-3");
-        assert!(gate_3.contains(&"check failed"), "{gate_3:?}");
+        assert!(text.contains("/compare pick a|b"));
+        assert!(!text.contains("Per prompt"), "{text}");
+        assert!(!text.contains("vs yours"), "{text}");
+        let a_3 = line(&text, "a-3");
+        assert!(a_3.contains(&"check failed"), "{a_3:?}");
     }
 
     fn share(plan: Plan, window: &str, used: f64) -> PlanShare {
@@ -569,11 +681,11 @@ mod tests {
         ];
         let text = render("Compare #1", &with_plan);
         assert!(
-            text.contains("gate: Claude plan 5h window +3.1%, 7d opus window +0.2%"),
+            text.contains("A: Claude plan 5h window +3.1%, 7d opus window +0.2%"),
             "{text}"
         );
         assert!(
-            text.contains("other: Claude plan 5h window +9.0%; ChatGPT plan 5h window +1.2%"),
+            text.contains("B: Claude plan 5h window +9.0%; ChatGPT plan 5h window +1.2%"),
             "{text}"
         );
         assert!(text.contains("don't count it twice"), "{text}");
@@ -582,15 +694,15 @@ mod tests {
         let mut one_arm = payload();
         one_arm.runs[0].plan_usage = vec![share(Plan::Claude, "5h", 0.05)];
         let text = render("Compare #1", &one_arm);
-        assert!(text.contains("other: no plan usage reported"), "{text}");
+        assert!(text.contains("B: no plan usage reported"), "{text}");
     }
 
     #[test]
     fn applied_comparisons_offer_nothing_more_and_list_compactly() {
         let mut applied = payload();
-        applied.status = CompareStatus::Applied("gate-2".to_string());
+        applied.status = CompareStatus::Applied("a-2".to_string());
         let text = render("Compare #1", &applied);
-        assert!(text.contains("applied gate-2"));
+        assert!(text.contains("applied a-2"));
         assert!(!text.contains("/compare apply"));
         let listed = list(&[
             ("Compare #1".to_string(), Some(applied)),
@@ -602,38 +714,124 @@ mod tests {
             first.contains("gate vs aura-claude-opus-4-7 (cloud)"),
             "{first}"
         );
-        assert!(first.contains("gate $0.06 median, 2/3 pass"), "{first}");
+        assert!(first.contains("A $0.06 median, 2/3 pass"), "{first}");
         assert!(listed.contains("2. Compare #2 · no record"));
         assert!(list(&[]).starts_with("No comparisons yet"));
     }
 
     #[test]
-    fn the_estimate_names_the_models_runs_and_budget() {
+    fn the_estimate_names_the_arms_runs_and_budget() {
         let text = EstimateView {
             task: "fix it",
-            gate_model: Some("aura-claude-sonnet-4-6"),
-            against: "aura-claude-opus-4-7",
+            prompts: 1,
+            session: None,
+            a: "gate (likely aura-claude-sonnet-4-6 (cloud))".to_string(),
+            b: "aura-claude-opus-4-7 (cloud)".to_string(),
             judge: "aura-claude-opus-4-7",
             repeats: 3,
             check: None,
             budget_usd: Some(2.0),
             concurrency: 4,
             estimate: Estimate {
-                gate_usd: Some(1.5),
-                other_usd: Some(4.0),
+                a_usd: Some(1.5),
+                b_usd: Some(4.0),
                 judge_usd: None,
             },
+            notes: &[],
         }
         .render();
-        assert!(text.contains("gate (likely aura-claude-sonnet-4-6 (cloud)) vs aura-claude-opus-4-7 (cloud), 3 runs each"), "{text}");
+        assert!(text.starts_with("Compare: \"fix it\""), "{text}");
+        assert!(text.contains("A gate (likely aura-claude-sonnet-4-6 (cloud)) vs B aura-claude-opus-4-7 (cloud), 3 runs each"), "{text}");
         assert!(
-            text.contains("~$5.50 (gate ~$1.50, other ~$4.00, judge ~unknown"),
+            text.contains("~$5.50 (A ~$1.50, B ~$4.00, judge ~unknown"),
             "{text}"
         );
         assert!(text.contains("some prices are unknown"));
         assert!(text.contains("No check command"));
         assert!(text.contains("Budget $2.00"));
-        assert!(text.contains("/compare go"));
+    }
+
+    #[test]
+    fn a_session_estimate_says_what_it_replays_with_its_notes() {
+        let notes = vec!["shell changes are not undone".to_string()];
+        let text = EstimateView {
+            task: "fix it",
+            prompts: 4,
+            session: Some("fix the parser"),
+            a: "claude-sonnet-4-6".to_string(),
+            b: "claude-opus-4-7".to_string(),
+            judge: "claude-opus-4-7",
+            repeats: 2,
+            check: Some("cargo test"),
+            budget_usd: None,
+            concurrency: 4,
+            estimate: Estimate {
+                a_usd: Some(1.0),
+                b_usd: Some(2.0),
+                judge_usd: Some(0.5),
+            },
+            notes: &notes,
+        }
+        .render();
+        assert!(
+            text.starts_with(
+                "Benchmark: replay the session \"fix the parser\", 4 prompts in order"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("A claude-sonnet-4-6 vs B claude-opus-4-7, 2 runs each"));
+        assert!(text.contains("Note: shell changes are not undone"));
+    }
+
+    #[test]
+    fn a_replayed_session_shows_each_prompt_its_cost_and_the_reference() {
+        let mut replay = payload();
+        replay.prompts = vec!["fix the parser".to_string(), "now the docs".to_string()];
+        replay.source = BenchSource::Session {
+            agent_id: AgentId::generate(),
+            started_ms: 1,
+            title: "fix the parser".to_string(),
+            baseline: SessionBaseline {
+                calls: 12,
+                cost_usd: 0.9,
+                priced: true,
+                models: vec!["claude-opus-4-7".to_string()],
+            },
+            reference: None,
+        };
+        let turn = |cost: f64, signal: OutcomeSignal| RunTurn {
+            model: String::new(),
+            cost_usd: cost,
+            wall_ms: 1,
+            signal,
+        };
+        for run in &mut replay.runs {
+            run.turns = vec![
+                turn(0.02, OutcomeSignal::ChecksPassed),
+                turn(0.04, OutcomeSignal::ChecksFailed),
+            ];
+        }
+        replay.judgments[0].a_vs_reference = Some(RefVerdict::Worse);
+        replay.judgments[0].b_vs_reference = Some(RefVerdict::Better);
+        let text = render("Compare #1", &replay);
+        assert!(
+            text.contains("Replays the session \"fix the parser\": 2 prompts in order"),
+            "{text}"
+        );
+        assert!(text.contains("The session itself: 12 calls, $0.90 on claude-opus-4-7"));
+        assert_eq!(
+            line(&text, "vs yours"),
+            [
+                "vs yours",
+                "0 better, 0 as good, 1 worse",
+                "1 better, 0 as good, 0 worse"
+            ]
+        );
+        assert!(text.contains("Per prompt"), "{text}");
+        let first = line(&text, "1.");
+        assert!(first.contains(&"$0.02, 3 pass"), "{first:?}");
+        let second = line(&text, "2.");
+        assert!(second.contains(&"$0.04, 3 fail"), "{second:?}");
     }
 
     #[test]

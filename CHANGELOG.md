@@ -7,6 +7,33 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Benchmarks — two arms on the same work
+
+##### Added
+
+- The chat panel has a BENCH tab (`/bench`, `/bench new`) that lists every
+  comparison and sets new ones up with a form: the work (your last prompt,
+  a typed prompt, or one of this chat's sessions), arm A, arm B, runs per
+  arm, check and budget, then the estimate and a confirmation. Opening one
+  shows both arms side by side, each prompt's cost and checks, the judge's
+  verdicts, and the runs to diff, apply or pick.
+- `/compare --session current|<ms>` replays a session prompt by prompt in
+  each copy, starting from the files as they were when the session started
+  (put back from its file checkpoints). The view shows the session's own
+  cost, each arm's cost per prompt, and how many of each prompt's turns
+  passed or failed their tests.
+- For a replayed session, the blind judge also sees what you kept (the
+  session's diff and last reply) and rates each run better than, as good
+  as, or worse than it.
+
+##### Changed
+
+- `/compare` arms are A and B, each `gate`, `gate:nodelegate` or a model
+  (`--a`, `--b`; `--against` still names arm B), so two models can be
+  compared without Gate. Runs are named `a-1`, `b-2`, … and `/compare pick`
+  takes `a` or `b`. Older comparisons read as Gate (A) against their other
+  arm (B).
+
 ### Terminal and desktop — coordinating agent and tasks
 
 ##### Added

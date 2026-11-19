@@ -5,6 +5,7 @@
 
 mod agent_views;
 mod archive;
+pub mod benchmarks;
 mod chat_tabs;
 mod commands;
 mod context_menu;
@@ -390,6 +391,8 @@ pub struct App {
     pub(super) pending_graph_node: Option<String>,
     /// Flow between agents shown by the chat panel's GRAPH tab
     pub(super) flow: flow::FlowState,
+    /// Benchmarks shown by the chat panel's BENCH tab
+    pub(super) bench: benchmarks::BenchState,
 }
 
 /// Screen areas of the content panels from the last rendered frame.
@@ -729,6 +732,7 @@ impl App {
             task_list: tasks::TaskList::default(),
             pending_graph_node: None,
             flow: flow::FlowState::default(),
+            bench: benchmarks::BenchState::default(),
         }
     }
 
@@ -1063,6 +1067,10 @@ impl App {
             PanelFocus::Chat if self.flow.is_open() => {
                 self.scroll_flow(MouseEventKind::ScrollUp, KeyModifiers::NONE, lines);
             }
+            PanelFocus::Chat if self.bench.is_open() => {
+                self.bench
+                    .scroll_by(-isize::try_from(lines).unwrap_or(isize::MAX));
+            }
             PanelFocus::Chat => {
                 self.scroll_offset = self.scroll_offset.saturating_add(lines);
             }
@@ -1098,6 +1106,10 @@ impl App {
         match panel {
             PanelFocus::Chat if self.flow.is_open() => {
                 self.scroll_flow(MouseEventKind::ScrollDown, KeyModifiers::NONE, lines);
+            }
+            PanelFocus::Chat if self.bench.is_open() => {
+                self.bench
+                    .scroll_by(isize::try_from(lines).unwrap_or(isize::MAX));
             }
             PanelFocus::Chat => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(lines);

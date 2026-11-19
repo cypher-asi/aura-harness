@@ -418,6 +418,14 @@ impl App {
         {
             return KeyResult::continue_running();
         }
+        if self.focus == PanelFocus::Chat && self.chat_tab() == ChatTab::Bench {
+            if key.code == KeyCode::Enter && key.modifiers.is_empty() && self.bench_fill_field() {
+                return KeyResult::continue_running();
+            }
+            if self.input.is_empty() && self.handle_bench_key(key) {
+                return KeyResult::continue_running();
+            }
+        }
         if self.focus == PanelFocus::Sandbox
             && self.input.is_empty()
             && !word_motion

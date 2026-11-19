@@ -214,10 +214,15 @@ impl Tabs {
                 self.send_processes();
             }
             // Each tab's GRAPH shows the flow of its own agent and ignores
-            // the others'.
+            // the others'; so does its BENCH with sessions and estimates.
+            // Every tab lists every benchmark.
             UiCommand::GraphUpsert { .. }
             | UiCommand::FlowLoad { .. }
             | UiCommand::FlowUpsert { .. }
+            | UiCommand::BenchList(_)
+            | UiCommand::BenchUpsert(_)
+            | UiCommand::BenchSessions { .. }
+            | UiCommand::BenchEstimate { .. }
             | UiCommand::EndLink
             | UiCommand::SetAgentDefinitions(_)
             | UiCommand::SetArchivedAgents(_)
@@ -815,6 +820,15 @@ mod tests {
             active: true,
         });
         assert!(tabs.iter().all(|tab| tab.tui.api_active()));
+
+        // Benchmarks: every tab lists them.
+        tabs.apply(UiCommand::BenchUpsert(Box::new(
+            aura_ui_terminal::events::BenchView {
+                id: "c1".into(),
+                ..Default::default()
+            },
+        )));
+        assert!(tabs.iter().all(|tab| tab.tui.bench().benches.len() == 1));
     }
 
     #[test]

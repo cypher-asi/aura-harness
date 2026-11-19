@@ -1,17 +1,20 @@
-//! `/compare`: running the user's own task with Gate and with another
-//! model, side by side, and reading the result.
+//! `/compare` and the BENCH tab: running the same work on two arms, each
+//! Gate or a pinned model, side by side, and reading the result.
 //!
 //! This module holds the parts that need no I/O: reading the command's
-//! arguments, choosing the model Gate is compared with, the cost
-//! estimate shown before anything runs, the order runs start in and when
-//! the budget stops them, the tokens and cost per model of a run, the
-//! share of each plan window the runs used, and the per-arm medians,
-//! pass counts and judge tallies the view shows.
+//! arguments, choosing what each arm runs on, the cost estimate shown
+//! before anything runs, the order runs start in and when the budget
+//! stops them, the tokens and cost per model of a run, the share of each
+//! plan window the runs used, and the per-arm medians, pass counts,
+//! judge tallies and per-prompt results the views show.
 //! Running the arms, the check command and the judge live with the app.
 
 use std::collections::{BTreeMap, VecDeque};
 
-use aura_core_types::{CompareArm, ComparePayload, ModelTokens, Plan, PlanShare, PlanUsage};
+use aura_core_types::{
+    ArmSpec, CompareArm, ComparePayload, ModelTokens, OutcomeSignal, Plan, PlanShare, PlanUsage,
+    RefVerdict,
+};
 use aura_model::model_catalog::{
     backend_for, estimate_cost_usd, model_key, ModelBackend, ModelTier,
 };
@@ -45,14 +48,28 @@ pub const REFERENCE_JUDGE: Usage = Usage {
     cache_read_input_tokens: None,
 };
 
+/// Which earlier session a comparison replays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionPick {
+    /// The session the agent is in.
+    Current,
+    /// The session that started at this Unix millisecond.
+    Started(u64),
+}
+
 /// What a comparison runs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompareRequest {
-    /// The prompt; `None` uses the user's last prompt (or `plan`).
+    /// The prompt; `None` uses the user's last prompt (or `plan`, or
+    /// `session`).
     pub prompt: Option<String>,
     /// A plan file to `/build` in each copy instead of a prompt.
     pub plan: Option<String>,
-    /// Model to compare Gate with; `None` for the strongest Opus.
+    /// A session whose prompts each run replays instead of a prompt.
+    pub session: Option<SessionPick>,
+    /// What arm A runs on; `None` for Gate.
+    pub a: Option<String>,
+    /// What arm B runs on; `None` for the strongest Opus.
     pub against: Option<String>,
     /// Runs per arm.
     pub repeats: u32,
@@ -67,6 +84,8 @@ impl Default for CompareRequest {
         Self {
             prompt: None,
             plan: None,
+            session: None,
+            a: None,
             against: None,
             repeats: DEFAULT_REPEATS,
             check: None,
@@ -100,9 +119,9 @@ pub enum CompareCommand {
 }
 
 /// How `/compare` is used, for error messages.
-pub const USAGE: &str = "Usage: /compare [prompt | --plan <file>] \
-[--against <model> | gate:nodelegate] [--repeats N] [--check <cmd>] [--budget $] · /compare go | cancel | show [n] | \
-diff [run] | pick <gate|other> | apply <run> | dismiss";
+pub const USAGE: &str = "Usage: /compare [prompt | --plan <file> | --session current|<started_ms>] \
+[--a <model|gate>] [--against <model|gate|gate:nodelegate>] [--repeats N] [--check <cmd>] [--budget $] · \
+/compare go | cancel | show [n] | diff [run] | pick <a|b> | apply <run> | dismiss";
 
 /// One word of the arguments: its text with quotes removed, and where it
 /// sits in the raw arguments.
@@ -219,9 +238,14 @@ pub fn parse(args: &str) -> Result<CompareCommand, String> {
     }
     let prompt = prompt.join(" ");
     let prompt = prompt.trim();
+    if request.plan.is_some() && request.session.is_some() {
+        return Err(format!("Give --plan or --session, not both. {USAGE}"));
+    }
     if !prompt.is_empty() {
-        if request.plan.is_some() {
-            return Err(format!("Give a prompt or --plan, not both. {USAGE}"));
+        if request.plan.is_some() || request.session.is_some() {
+            return Err(format!(
+                "Give a prompt, --plan or --session, not more than one. {USAGE}"
+            ));
         }
         request.prompt = Some(prompt.to_string());
     }
@@ -268,7 +292,18 @@ fn set_flag(request: &mut CompareRequest, name: &str, value: &str) -> Result<(),
     };
     match name {
         "plan" => request.plan = Some(value_of(name)?),
-        "against" | "vs" => request.against = Some(value_of(name)?),
+        "session" => {
+            let value = value_of(name)?;
+            request.session = Some(if value.eq_ignore_ascii_case("current") {
+                SessionPick::Current
+            } else {
+                SessionPick::Started(value.parse().map_err(|_| {
+                    format!("--session takes `current` or a session's start time, not `{value}`")
+                })?)
+            });
+        }
+        "a" => request.a = Some(value_of(name)?),
+        "against" | "vs" | "b" => request.against = Some(value_of(name)?),
         "check" => request.check = Some(value_of(name)?),
         "repeats" | "runs" | "n" => {
             let repeats = value.trim().parse::<u32>().ok();
@@ -368,41 +403,55 @@ pub fn resolve_against<'a>(
 
 /// What `--against` takes to compare Gate with Gate whose lead does not
 /// have to delegate (as with `AURA_GATE_DELEGATE=off`).
-pub const NO_DELEGATE: &str = "gate:nodelegate";
+pub const NO_DELEGATE: &str = ArmSpec::NO_DELEGATE;
 
-/// What the other arm of a comparison runs on.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Opponent {
-    /// Every turn and subtask on this model.
-    Model(String),
-    /// Routed by Gate like the Gate arm, but the lead keeps its own file
-    /// tools and commands.
-    GateNoDelegate,
-}
+/// What `--a` takes for Gate whose lead must delegate, whatever
+/// `AURA_GATE_DELEGATE` says.
+pub const DELEGATE: &str = "gate:delegate";
 
-impl Opponent {
-    /// How the comparison names the other arm: the model, or
-    /// [`NO_DELEGATE`].
-    #[must_use]
-    pub fn label(&self) -> &str {
-        match self {
-            Self::Model(model) => model,
-            Self::GateNoDelegate => NO_DELEGATE,
-        }
-    }
-}
-
-/// The other arm `query` (the `--against` value) names among
-/// `candidates`: [`NO_DELEGATE`], else a model as [`resolve_against`]
-/// finds it.
+/// The arm `query` (an `--a` or `--against` value) names among
+/// `candidates`: Gate (whose lead delegates as `delegate` says, unless
+/// the query says), else a model as [`resolve_against`] finds it.
 ///
 /// # Errors
 /// As [`resolve_against`].
-pub fn resolve_opponent(query: &str, candidates: &[Candidate]) -> Result<Opponent, String> {
-    if query.trim().eq_ignore_ascii_case(NO_DELEGATE) {
-        return Ok(Opponent::GateNoDelegate);
+pub fn resolve_arm(
+    query: &str,
+    candidates: &[Candidate],
+    delegate: bool,
+) -> Result<ArmSpec, String> {
+    let trimmed = query.trim().to_ascii_lowercase();
+    match trimmed.as_str() {
+        "gate" => Ok(ArmSpec::Gate { delegate }),
+        NO_DELEGATE => Ok(ArmSpec::Gate { delegate: false }),
+        DELEGATE => Ok(ArmSpec::Gate { delegate: true }),
+        _ => resolve_against(query, candidates).map(|c| ArmSpec::Model {
+            model: c.id.clone(),
+        }),
     }
-    resolve_against(query, candidates).map(|c| Opponent::Model(c.id.clone()))
+}
+
+/// Both arms of a comparison from their queries. Plain `gate` delegates
+/// as `delegate` says, except against [`NO_DELEGATE`], where it always
+/// delegates so the comparison measures delegation itself.
+///
+/// # Errors
+/// As [`resolve_arm`], or when both arms run on the same thing.
+pub fn resolve_arms(
+    (a, b): (&str, &str),
+    candidates: &[Candidate],
+    delegate: bool,
+) -> Result<(ArmSpec, ArmSpec), String> {
+    let off = |query: &str| query.trim().eq_ignore_ascii_case(NO_DELEGATE);
+    let a_spec = resolve_arm(a, candidates, delegate || off(b))?;
+    let b_spec = resolve_arm(b, candidates, delegate || off(a))?;
+    if a_spec == b_spec {
+        return Err(format!(
+            "Both arms run on {}; pick two different ones",
+            a_spec.label()
+        ));
+    }
+    Ok((a_spec, b_spec))
 }
 
 /// List price of `usage` on `model`: 0 for local models, `None` when the
@@ -418,10 +467,10 @@ pub fn list_price(model: &str, usage: &Usage) -> Option<f64> {
 /// What a comparison is expected to cost at list prices, before it runs.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Estimate {
-    /// Every Gate run; `None` when the model's price is unknown.
-    pub gate_usd: Option<f64>,
-    /// Every run of the other arm.
-    pub other_usd: Option<f64>,
+    /// Every run of arm A; `None` when the model's price is unknown.
+    pub a_usd: Option<f64>,
+    /// Every run of arm B.
+    pub b_usd: Option<f64>,
     /// Every judge call.
     pub judge_usd: Option<f64>,
 }
@@ -430,7 +479,7 @@ impl Estimate {
     /// The parts whose price is known, added up.
     #[must_use]
     pub fn known_usd(&self) -> f64 {
-        [self.gate_usd, self.other_usd, self.judge_usd]
+        [self.a_usd, self.b_usd, self.judge_usd]
             .into_iter()
             .flatten()
             .sum()
@@ -439,26 +488,32 @@ impl Estimate {
     /// Whether every part has a price.
     #[must_use]
     pub const fn fully_priced(&self) -> bool {
-        self.gate_usd.is_some() && self.other_usd.is_some() && self.judge_usd.is_some()
+        self.a_usd.is_some() && self.b_usd.is_some() && self.judge_usd.is_some()
     }
 }
 
-/// The estimate for `repeats` runs per arm, with the Gate arm on
-/// `gate_model` (its expected pick), the other on `other_model`, and one
-/// judge call per pair on `judge_model`, each run the size of
-/// [`REFERENCE_RUN`].
+/// The estimate for `repeats` runs per arm of `prompts` prompts each,
+/// with arm A on `a_model` (Gate's expected pick when Gate routes it),
+/// arm B on `b_model`, and one judge call per pair on `judge_model`, each
+/// prompt's turn the size of [`REFERENCE_RUN`].
 #[must_use]
-pub fn estimate(gate_model: &str, other_model: &str, judge_model: &str, repeats: u32) -> Estimate {
+pub fn estimate(
+    a_model: &str,
+    b_model: &str,
+    judge_model: &str,
+    repeats: u32,
+    prompts: usize,
+) -> Estimate {
     let runs = f64::from(repeats);
+    let turns = runs * f64::from(u32::try_from(prompts.max(1)).unwrap_or(u32::MAX));
     Estimate {
-        gate_usd: list_price(gate_model, &REFERENCE_RUN).map(|usd| usd * runs),
-        other_usd: list_price(other_model, &REFERENCE_RUN).map(|usd| usd * runs),
+        a_usd: list_price(a_model, &REFERENCE_RUN).map(|usd| usd * turns),
+        b_usd: list_price(b_model, &REFERENCE_RUN).map(|usd| usd * turns),
         judge_usd: list_price(judge_model, &REFERENCE_JUDGE).map(|usd| usd * runs),
     }
 }
 
-/// Which runs start when: the arms alternate (`gate-1`, `other-1`,
-/// `gate-2`, ...) so a budget that runs out leaves them balanced; at most
+/// Which runs start when: the arms alternate (`a-1`, `b-1`, `a-2`, ...) so a budget that runs out leaves them balanced; at most
 /// `cap` work at once; and once what the finished runs cost reaches the
 /// budget, no new run starts.
 #[derive(Debug, Clone)]
@@ -534,7 +589,7 @@ impl Schedule {
     }
 }
 
-/// The name of run `n` of `arm`: `gate-1`, `other-2`.
+/// The name of run `n` of `arm`: `a-1`, `b-2`.
 #[must_use]
 pub fn run_name(arm: CompareArm, n: u32) -> String {
     format!("{arm}-{n}")
@@ -751,6 +806,12 @@ pub struct ArmSummary {
     pub judge_losses: usize,
     /// Pairs the judge called even.
     pub judge_ties: usize,
+    /// Runs the judge rated better than the reference.
+    pub ref_better: usize,
+    /// Runs the judge rated as good as the reference.
+    pub ref_as_good: usize,
+    /// Runs the judge rated worse than the reference.
+    pub ref_worse: usize,
 }
 
 /// What `payload` says about `arm`.
@@ -763,6 +824,12 @@ pub fn summarize(payload: &ComparePayload, arm: CompareArm) -> ArmSummary {
     let walls: Vec<f64> = finished.iter().map(|run| run.wall_ms as f64).collect();
     let costs: Vec<f64> = finished.iter().map(|run| run.cost_usd).collect();
     let judged: Vec<_> = payload.judgments.iter().filter(|j| j.parsed).collect();
+    let rated = |verdict: RefVerdict| {
+        judged
+            .iter()
+            .filter(|j| j.vs_reference(arm) == Some(verdict))
+            .count()
+    };
     ArmSummary {
         arm,
         runs: runs.len(),
@@ -780,7 +847,48 @@ pub fn summarize(payload: &ComparePayload, arm: CompareArm) -> ArmSummary {
             .filter(|j| j.winner == Some(arm.opposite()))
             .count(),
         judge_ties: judged.iter().filter(|j| j.winner.is_none()).count(),
+        ref_better: rated(RefVerdict::Better),
+        ref_as_good: rated(RefVerdict::AsGood),
+        ref_worse: rated(RefVerdict::Worse),
     }
+}
+
+/// How the runs of one arm did on one prompt.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TurnCell {
+    /// Runs that got to the prompt.
+    pub runs: usize,
+    /// Mean cost of their turns.
+    pub mean_cost_usd: Option<f64>,
+    /// Turns whose last test or build command passed.
+    pub passed: usize,
+    /// Turns whose last test or build command failed.
+    pub failed: usize,
+    /// Turns that ended in an error.
+    pub errors: usize,
+}
+
+/// One cell per prompt of `payload`, for the runs of `arm`.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn turn_cells(payload: &ComparePayload, arm: CompareArm) -> Vec<TurnCell> {
+    (0..payload.prompts.len())
+        .map(|i| {
+            let turns: Vec<_> = payload
+                .arm_runs(arm)
+                .filter_map(|run| run.turns.get(i))
+                .collect();
+            let count = |signal: OutcomeSignal| turns.iter().filter(|t| t.signal == signal).count();
+            TurnCell {
+                runs: turns.len(),
+                mean_cost_usd: (!turns.is_empty())
+                    .then(|| turns.iter().map(|t| t.cost_usd).sum::<f64>() / turns.len() as f64),
+                passed: count(OutcomeSignal::ChecksPassed),
+                failed: count(OutcomeSignal::ChecksFailed),
+                errors: count(OutcomeSignal::Error),
+            }
+        })
+        .collect()
 }
 
 /// What every judge call of `payload` cost.
@@ -802,7 +910,7 @@ mod tests {
     use crate::router::candidates;
     use aura_core_auth::ProviderKind;
     use aura_core_types::{
-        AgentId, CompareCopy, CompareJudgment, CompareRun, CompareStatus, SystemKind,
+        AgentId, CompareCopy, CompareJudgment, CompareRun, CompareStatus, RunTurn, SystemKind,
     };
     use aura_model::model_catalog::catalog;
     use std::path::PathBuf;
@@ -830,6 +938,8 @@ mod tests {
             CompareRequest {
                 prompt: Some(r#"fix the "flaky" parser test"#.to_string()),
                 plan: None,
+                session: None,
+                a: None,
                 against: Some("opus".to_string()),
                 repeats: 5,
                 check: Some("cargo test -p parser".to_string()),
@@ -891,7 +1001,9 @@ mod tests {
         assert!(error("--budget -1").contains("USD"));
         assert!(error("--colour red x").contains("Unknown option --colour"));
         assert!(error("fix it --check").contains("needs a value"));
-        assert!(error("fix it --plan p.plan.md").contains("not both"));
+        assert!(error("fix it --plan p.plan.md").contains("not more than one"));
+        assert!(error("--plan p.plan.md --session current").contains("not both"));
+        assert!(error("--session yesterday").contains("start time"));
         assert!(error("\"unclosed").contains("Unclosed quote"));
     }
 
@@ -965,26 +1077,73 @@ mod tests {
     }
 
     #[test]
-    fn gate_nodelegate_compares_gate_with_delegation_off() {
+    fn arms_name_gate_with_or_without_delegation_or_a_model() {
         let all = with_claude_plan();
         assert_eq!(
             start("fix it --against gate:nodelegate").against.as_deref(),
             Some(NO_DELEGATE)
         );
+        let request = start("fix it --a sonnet --b opus");
+        assert_eq!(request.a.as_deref(), Some("sonnet"));
+        assert_eq!(request.against.as_deref(), Some("opus"));
+        assert_eq!(
+            start("--session current").session,
+            Some(SessionPick::Current)
+        );
+        assert_eq!(
+            start("--session=1700000000000").session,
+            Some(SessionPick::Started(1_700_000_000_000))
+        );
         for query in [NO_DELEGATE, " Gate:NoDelegate "] {
             assert_eq!(
-                resolve_opponent(query, &all),
-                Ok(Opponent::GateNoDelegate),
+                resolve_arm(query, &all, true),
+                Ok(ArmSpec::Gate { delegate: false }),
                 "{query}"
             );
         }
-        assert_eq!(Opponent::GateNoDelegate.label(), NO_DELEGATE);
-        let opus = resolve_opponent("opus", &all).unwrap();
-        assert_eq!(opus, Opponent::Model("claude/claude-opus-5-5".to_string()));
-        assert_eq!(opus.label(), "claude/claude-opus-5-5");
-        assert!(resolve_opponent("gate", &all)
+        assert_eq!(
+            resolve_arm("gate", &all, false),
+            Ok(ArmSpec::Gate { delegate: false }),
+            "plain gate follows the setting"
+        );
+        assert_eq!(
+            resolve_arm(DELEGATE, &all, false),
+            Ok(ArmSpec::Gate { delegate: true })
+        );
+        assert_eq!(
+            resolve_arm("opus", &all, true),
+            Ok(ArmSpec::Model {
+                model: "claude/claude-opus-5-5".to_string()
+            })
+        );
+        assert!(resolve_arm("llama", &all, true).is_err());
+    }
+
+    #[test]
+    fn gate_against_gate_without_delegation_always_delegates() {
+        let all = with_claude_plan();
+        let nodelegate = ArmSpec::Gate { delegate: false };
+        assert_eq!(
+            resolve_arms(("gate", NO_DELEGATE), &all, false),
+            Ok((ArmSpec::Gate { delegate: true }, nodelegate.clone()))
+        );
+        assert_eq!(
+            resolve_arms((NO_DELEGATE, "gate"), &all, false),
+            Ok((nodelegate.clone(), ArmSpec::Gate { delegate: true }))
+        );
+        assert_eq!(
+            resolve_arms(("gate", "opus"), &all, false),
+            Ok((
+                nodelegate,
+                ArmSpec::Model {
+                    model: "claude/claude-opus-5-5".to_string()
+                }
+            ))
+        );
+        assert!(resolve_arms(("opus", "opus"), &all, true)
             .unwrap_err()
-            .contains(NO_DELEGATE));
+            .contains("Both arms run on claude/claude-opus-5-5"));
+        assert!(resolve_arms(("gate", "gate"), &all, true).is_err());
     }
 
     #[test]
@@ -994,19 +1153,36 @@ mod tests {
             "aura-claude-opus-4-7",
             "aura-claude-opus-4-7",
             3,
+            1,
         );
         let one_sonnet = estimate_cost_usd("aura-claude-sonnet-4-6", &REFERENCE_RUN).unwrap();
         let one_opus = estimate_cost_usd("aura-claude-opus-4-7", &REFERENCE_RUN).unwrap();
         let one_judge = estimate_cost_usd("aura-claude-opus-4-7", &REFERENCE_JUDGE).unwrap();
-        assert!((estimate.gate_usd.unwrap() - 3.0 * one_sonnet).abs() < 1e-9);
-        assert!((estimate.other_usd.unwrap() - 3.0 * one_opus).abs() < 1e-9);
+        assert!((estimate.a_usd.unwrap() - 3.0 * one_sonnet).abs() < 1e-9);
+        assert!((estimate.b_usd.unwrap() - 3.0 * one_opus).abs() < 1e-9);
         assert!((estimate.judge_usd.unwrap() - 3.0 * one_judge).abs() < 1e-9);
         assert!(estimate.fully_priced());
-        assert!(estimate.other_usd > estimate.gate_usd);
+        assert!(estimate.b_usd > estimate.a_usd);
 
-        let local = super::estimate("local/qwen3:4b", "mystery-model", "local/qwen3:4b", 2);
-        assert_eq!(local.gate_usd, Some(0.0));
-        assert_eq!(local.other_usd, None);
+        let replay = super::estimate(
+            "aura-claude-sonnet-4-6",
+            "aura-claude-opus-4-7",
+            "aura-claude-opus-4-7",
+            3,
+            4,
+        );
+        assert!(
+            (replay.a_usd.unwrap() - 12.0 * one_sonnet).abs() < 1e-9,
+            "each prompt is a turn"
+        );
+        assert!(
+            (replay.judge_usd.unwrap() - 3.0 * one_judge).abs() < 1e-9,
+            "but each pair is judged once"
+        );
+
+        let local = super::estimate("local/qwen3:4b", "mystery-model", "local/qwen3:4b", 2, 1);
+        assert_eq!(local.a_usd, Some(0.0));
+        assert_eq!(local.b_usd, None);
         assert!(!local.fully_priced());
         assert!(local.known_usd().abs() < f64::EPSILON);
     }
@@ -1021,28 +1197,28 @@ mod tests {
         assert_eq!(
             drain(&mut schedule),
             [
-                (CompareArm::Gate, 1),
-                (CompareArm::Other, 1),
-                (CompareArm::Gate, 2),
-                (CompareArm::Other, 2),
+                (CompareArm::A, 1),
+                (CompareArm::B, 1),
+                (CompareArm::A, 2),
+                (CompareArm::B, 2),
             ]
         );
         assert_eq!(schedule.running(), 4);
         schedule.finished(0.1);
-        assert_eq!(drain(&mut schedule), [(CompareArm::Gate, 3)]);
+        assert_eq!(drain(&mut schedule), [(CompareArm::A, 3)]);
         schedule.finished(0.1);
-        assert_eq!(drain(&mut schedule), [(CompareArm::Other, 3)]);
+        assert_eq!(drain(&mut schedule), [(CompareArm::B, 3)]);
         assert!(drain(&mut schedule).is_empty());
         assert!(schedule.drop_pending().is_empty());
-        assert_eq!(run_name(CompareArm::Other, 3), "other-3");
+        assert_eq!(run_name(CompareArm::B, 3), "b-3");
     }
 
     #[test]
     fn the_budget_stops_new_runs_once_spent() {
         let mut schedule = Schedule::new(3, 1, Some(0.25));
-        assert_eq!(drain(&mut schedule), [(CompareArm::Gate, 1)]);
+        assert_eq!(drain(&mut schedule), [(CompareArm::A, 1)]);
         schedule.finished(0.10);
-        assert_eq!(drain(&mut schedule), [(CompareArm::Other, 1)]);
+        assert_eq!(drain(&mut schedule), [(CompareArm::B, 1)]);
         schedule.finished(0.20);
         assert!(schedule.over_budget());
         assert!(
@@ -1127,6 +1303,7 @@ mod tests {
                 cost_usd: cost,
                 ..ModelTokens::default()
             }],
+            turns: Vec::new(),
             plan_usage: Vec::new(),
             check_passed: check,
             files_changed: 1,
@@ -1253,13 +1430,15 @@ mod tests {
         assert!((claude.used - 0.15).abs() < 1e-9);
     }
 
-    fn judged(gate_run: &str, winner: Option<CompareArm>, parsed: bool) -> CompareJudgment {
+    fn judged(a_run: &str, winner: Option<CompareArm>, parsed: bool) -> CompareJudgment {
         CompareJudgment {
-            gate_run: gate_run.to_string(),
-            other_run: gate_run.replace("gate", "other"),
-            gate_first: true,
+            a_run: a_run.to_string(),
+            b_run: a_run.replacen('a', "b", 1),
+            a_first: true,
             winner,
             parsed,
+            a_vs_reference: None,
+            b_vs_reference: None,
             model: "judge".to_string(),
             cost_usd: 0.01,
             reasoning: String::new(),
@@ -1268,13 +1447,17 @@ mod tests {
 
     #[test]
     fn summaries_give_medians_pass_counts_and_judge_tallies_per_arm() {
-        let mut failed = run(CompareArm::Other, 3, 1, 0.5, None);
+        let mut failed = run(CompareArm::B, 3, 1, 0.5, None);
         failed.error = Some("model fell over".to_string());
         let payload = ComparePayload {
             system_kind: SystemKind::Compare,
             task: "fix it".to_string(),
             plan: None,
+            arm_a: ArmSpec::Gate { delegate: true },
+            arm_b: ArmSpec::from_label("opus"),
             against: "opus".to_string(),
+            prompts: vec!["fix it".to_string()],
+            source: aura_core_types::BenchSource::Prompt,
             repeats: 3,
             check: Some("true".to_string()),
             budget_usd: None,
@@ -1282,24 +1465,24 @@ mod tests {
             apply_root: PathBuf::new(),
             started_ms: 0,
             runs: vec![
-                run(CompareArm::Gate, 1, 30_000, 0.10, Some(true)),
-                run(CompareArm::Other, 1, 60_000, 0.90, Some(true)),
-                run(CompareArm::Gate, 2, 10_000, 0.20, Some(false)),
-                run(CompareArm::Other, 2, 50_000, 1.10, Some(true)),
-                run(CompareArm::Gate, 3, 20_000, 0.30, Some(true)),
+                run(CompareArm::A, 1, 30_000, 0.10, Some(true)),
+                run(CompareArm::B, 1, 60_000, 0.90, Some(true)),
+                run(CompareArm::A, 2, 10_000, 0.20, Some(false)),
+                run(CompareArm::B, 2, 50_000, 1.10, Some(true)),
+                run(CompareArm::A, 3, 20_000, 0.30, Some(true)),
                 failed,
             ],
             judgments: vec![
-                judged("gate-1", Some(CompareArm::Gate), true),
-                judged("gate-2", Some(CompareArm::Other), true),
-                judged("gate-3", None, true),
-                judged("gate-4", Some(CompareArm::Gate), false),
+                judged("a-1", Some(CompareArm::A), true),
+                judged("a-2", Some(CompareArm::B), true),
+                judged("a-3", None, true),
+                judged("a-4", Some(CompareArm::A), false),
             ],
             notes: Vec::new(),
             status: CompareStatus::Done,
         };
 
-        let gate = summarize(&payload, CompareArm::Gate);
+        let gate = summarize(&payload, CompareArm::A);
         assert_eq!((gate.runs, gate.finished), (3, 3));
         assert_eq!(gate.median_wall_ms, Some(20_000));
         assert!((gate.total_cost_usd - 0.60).abs() < 1e-9);
@@ -1313,7 +1496,7 @@ mod tests {
         assert_eq!(gate.tokens[0].calls, 6);
         assert!(gate.plan_usage.is_empty());
 
-        let other = summarize(&payload, CompareArm::Other);
+        let other = summarize(&payload, CompareArm::B);
         assert_eq!((other.runs, other.finished), (3, 2));
         assert_eq!(
             other.median_wall_ms,
@@ -1329,5 +1512,74 @@ mod tests {
         assert!((judge_cost_usd(&payload) - 0.04).abs() < 1e-9);
         assert!(too_close(gate.checks_passed, other.checks_passed));
         assert!(!too_close(3, 1));
+        assert_eq!(
+            (gate.ref_better, gate.ref_as_good, gate.ref_worse),
+            (0, 0, 0)
+        );
+    }
+
+    fn turn(cost: f64, signal: OutcomeSignal) -> RunTurn {
+        RunTurn {
+            model: "m".to_string(),
+            cost_usd: cost,
+            wall_ms: 1,
+            signal,
+        }
+    }
+
+    #[test]
+    fn replays_show_each_prompts_cost_and_outcome_per_arm_and_the_reference_tally() {
+        let mut a1 = run(CompareArm::A, 1, 1, 0.3, None);
+        a1.turns = vec![
+            turn(0.1, OutcomeSignal::ChecksPassed),
+            turn(0.2, OutcomeSignal::ChecksFailed),
+        ];
+        let mut a2 = run(CompareArm::A, 2, 1, 0.5, None);
+        a2.turns = vec![
+            turn(0.3, OutcomeSignal::ChecksPassed),
+            turn(0.2, OutcomeSignal::Error),
+        ];
+        let mut b1 = run(CompareArm::B, 1, 1, 0.9, None);
+        b1.turns = vec![turn(0.9, OutcomeSignal::None)];
+        let mut first = judged("a-1", Some(CompareArm::A), true);
+        first.a_vs_reference = Some(RefVerdict::AsGood);
+        first.b_vs_reference = Some(RefVerdict::Worse);
+        let mut second = judged("a-2", None, true);
+        second.a_vs_reference = Some(RefVerdict::Better);
+        let payload = ComparePayload {
+            system_kind: SystemKind::Compare,
+            task: "one".to_string(),
+            plan: None,
+            arm_a: ArmSpec::from_label("sonnet"),
+            arm_b: ArmSpec::from_label("opus"),
+            against: "opus".to_string(),
+            prompts: vec!["one".to_string(), "two".to_string()],
+            source: aura_core_types::BenchSource::Prompt,
+            repeats: 2,
+            check: None,
+            budget_usd: None,
+            requested_by: AgentId::generate(),
+            apply_root: PathBuf::new(),
+            started_ms: 0,
+            runs: vec![a1, b1, a2],
+            judgments: vec![first, second],
+            notes: Vec::new(),
+            status: CompareStatus::Done,
+        };
+
+        let a = turn_cells(&payload, CompareArm::A);
+        assert_eq!(a.len(), 2);
+        assert_eq!((a[0].runs, a[0].passed, a[0].failed), (2, 2, 0));
+        assert!((a[0].mean_cost_usd.unwrap() - 0.2).abs() < 1e-9);
+        assert_eq!((a[1].passed, a[1].failed, a[1].errors), (0, 1, 1));
+        let b = turn_cells(&payload, CompareArm::B);
+        assert_eq!(b[0].runs, 1);
+        assert_eq!(b[1].runs, 0, "b-1 stopped after the first prompt");
+        assert_eq!(b[1].mean_cost_usd, None);
+
+        let a = summarize(&payload, CompareArm::A);
+        assert_eq!((a.ref_better, a.ref_as_good, a.ref_worse), (1, 1, 0));
+        let b = summarize(&payload, CompareArm::B);
+        assert_eq!((b.ref_better, b.ref_as_good, b.ref_worse), (0, 0, 1));
     }
 }

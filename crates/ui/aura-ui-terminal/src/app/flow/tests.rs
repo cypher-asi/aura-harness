@@ -558,7 +558,8 @@ fn opening_the_tab_asks_for_the_flow_of_the_agent_on_screen() {
     app.process_command(UiCommand::SetActiveAgent(LEAD.into()));
     assert!(rx.try_recv().is_err(), "nothing asked while on CHAT");
 
-    app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+    app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
     assert_eq!(app.chat_tab(), ChatTab::Graph);
     assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenFlow(id)) if id == LEAD));
     assert!(!app.flow().loaded());

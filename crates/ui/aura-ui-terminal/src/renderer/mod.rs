@@ -1,6 +1,7 @@
 //! Simple IRC-style renderer for the terminal UI.
 
 mod activity;
+mod benchmarks;
 mod chat_lines;
 mod command;
 mod context_menu;
