@@ -250,7 +250,8 @@ pub struct Wire {
 /// What a cell of the canvas is part of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Spot {
-    /// A card's title; `fold` when it is on the card's fold marker
+    /// A card's title; `fold` when it is on the card's fold button, the
+    /// marker and the cell each side of it
     Title { card: usize, fold: bool },
     /// A card's head
     Head(usize),
@@ -269,9 +270,8 @@ impl Spot {
 
 /// What is folded, by the id of the head of what folds.
 pub(super) struct Folds<'a> {
-    /// Turns opened or folded by hand; the rest are open when they are
-    /// their agent's newest
-    pub turns: &'a HashMap<String, bool>,
+    /// Turns whose subcards are folded away
+    pub turns: &'a HashSet<String>,
     /// Model calls whose rows are folded away
     pub calls: &'a HashSet<String>,
 }
@@ -443,7 +443,7 @@ impl FlowLayout {
         Some(match y - rect.y {
             0 => Spot::Title {
                 card,
-                fold: placed.folds() && x == rect.x + 2,
+                fold: placed.folds() && (rect.x + 1..=rect.x + 3).contains(&x),
             },
             line if line >= 2 && line < 2 + placed.lines() => Spot::Row(card, line - 2),
             _ => Spot::Head(card),
@@ -491,6 +491,12 @@ struct TurnDraft {
     key: (u64, usize, u64),
 }
 
+/// Whether `kind` is a model call the harness made around the agent's
+/// work: Gate's, or the chat's title.
+const fn harness_call(kind: FlowKind) -> bool {
+    matches!(kind, FlowKind::Gate | FlowKind::Judge | FlowKind::Title)
+}
+
 /// Group the nodes into turns and place them, to fit a view `room` rows
 /// tall; 0 when there is no view yet, and columns go down as far as they
 /// need.
@@ -533,6 +539,14 @@ pub(super) fn build_layout(
         list.sort_by_key(|&at| (nodes[at].seq, at));
         let first = drafts.len();
         let mut clock = 0;
+        let call = |head| SubDraft {
+            kind: CardKind::Call,
+            head,
+            rows: Vec::new(),
+        };
+        // Gate classifies a prompt before the prompt is recorded; its call
+        // is the first step of the turn the prompt starts.
+        let mut routing: Vec<usize> = Vec::new();
         for &at in list.iter() {
             let node = &nodes[at];
             clock = clock.max(node.at_ms);
@@ -540,38 +554,61 @@ pub(super) fn build_layout(
             if answered[at] != NONE {
                 continue;
             }
+            if node.kind == FlowKind::Gate {
+                routing.push(at);
+                continue;
+            }
             if node.kind == FlowKind::Prompt || drafts.len() == first {
                 drafts.push(TurnDraft {
                     head: at,
                     rows: Vec::new(),
-                    subs: Vec::new(),
+                    subs: routing.drain(..).map(call).collect(),
                     lane,
                     key: (clock, lane, node.seq),
                 });
                 continue;
             }
             let turn = drafts.last_mut().expect("a turn was started");
-            let sub = |kind| SubDraft {
-                kind,
-                head: at,
-                rows: Vec::new(),
-            };
             match node.kind {
                 FlowKind::Reply => turn.rows.push(at),
-                FlowKind::Model => turn.subs.push(sub(CardKind::Call)),
-                FlowKind::Message | FlowKind::Result => turn.subs.push(sub(CardKind::Note)),
-                _ => match turn.subs.last_mut() {
+                kind if kind.is_model_call() => turn.subs.push(call(at)),
+                FlowKind::Message | FlowKind::Result => turn.subs.push(SubDraft {
+                    kind: CardKind::Note,
+                    head: at,
+                    rows: Vec::new(),
+                }),
+                // What the agent did goes under the agent's own last step,
+                // never under a call the harness made around its work.
+                _ => match turn
+                    .subs
+                    .iter_mut()
+                    .rev()
+                    .find(|sub| !harness_call(nodes[sub.head].kind))
+                {
                     Some(sub) => sub.rows.push(at),
                     None => turn.rows.push(at),
                 },
             }
         }
+        // A prompt classified and not yet recorded: until it is, its call
+        // waits in the turn before it.
+        if !routing.is_empty() {
+            match drafts.get_mut(first..).and_then(<[TurnDraft]>::last_mut) {
+                Some(turn) => turn.subs.extend(routing.drain(..).map(call)),
+                None => {
+                    let head = routing.remove(0);
+                    drafts.push(TurnDraft {
+                        head,
+                        rows: Vec::new(),
+                        subs: routing.drain(..).map(call).collect(),
+                        lane,
+                        key: (clock_of[head], lane, nodes[head].seq),
+                    });
+                }
+            }
+        }
     }
     drafts.sort_by_key(|draft| (draft.key, draft.head));
-    let mut newest_turn = vec![NONE; lane_count];
-    for (at, draft) in drafts.iter().enumerate() {
-        newest_turn[draft.lane] = at;
-    }
 
     let mut cards: Vec<Card> = Vec::new();
     let mut blocks: Vec<Block> = Vec::new();
@@ -580,13 +617,8 @@ pub(super) fn build_layout(
     let mut row_of = vec![NONE; nodes.len()];
     let mut turn_head = vec![NONE; nodes.len()];
     let mut call_head = vec![NONE; nodes.len()];
-    for (at, draft) in drafts.iter().enumerate() {
-        let open = folds
-            .turns
-            .get(&nodes[draft.head].id)
-            .copied()
-            .unwrap_or(newest_turn[draft.lane] == at);
-        let folded = !draft.subs.is_empty() && !open;
+    for draft in &drafts {
+        let folded = !draft.subs.is_empty() && folds.turns.contains(&nodes[draft.head].id);
         let main = cards.len();
         let block = blocks.len();
         let card = |kind, head, rows: Vec<usize>, steps, folded| Card {

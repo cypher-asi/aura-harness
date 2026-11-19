@@ -50,6 +50,22 @@ impl Default for Zoom {
     }
 }
 
+/// Agents whose folds, selection and view are kept for when their flow is
+/// shown again.
+const MAX_KEPT: usize = 32;
+
+/// What the GRAPH tab keeps of an agent's flow while another's is shown.
+#[derive(Debug, Default)]
+struct Kept {
+    turn_folded: HashSet<String>,
+    call_folded: HashSet<String>,
+    selected: Option<String>,
+    follow_tail: bool,
+    pan: (f32, f32),
+    zoom: Zoom,
+    detached: bool,
+}
+
 /// Where the canvas was drawn in the last frame, for the mouse.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlowView {
@@ -91,9 +107,8 @@ pub struct FlowState {
     /// Nodes in arrival order
     nodes: Vec<FlowNode>,
     index: HashMap<String, usize>,
-    /// Turns opened (`true`) or folded by hand, by the id of their head;
-    /// the rest are open while they are their agent's newest
-    turn_open: HashMap<String, bool>,
+    /// Turns whose subcards are folded away, by the id of their head
+    turn_folded: HashSet<String>,
     /// Model calls whose rows are folded away, by node id
     call_folded: HashSet<String>,
     selected: Option<String>,
@@ -101,13 +116,17 @@ pub struct FlowState {
     follow_tail: bool,
     /// The node `f` last jumped from, so the next `f` goes somewhere else
     came_from: Option<String>,
-    /// Canvas cell at the top left of the view
+    /// Canvas cell at the top left of the view; anywhere, on the canvas
+    /// or off it
     pan: (f32, f32),
     /// How large the front end draws the canvas; always 1 in a terminal
     zoom: Zoom,
     /// The view was panned off the selection; it stays there until the
     /// selection moves
     detached: bool,
+    /// The folds, selection and view of the flows of agents shown before,
+    /// the most recent last
+    kept: Vec<(String, Kept)>,
     layout: FlowLayout,
     stale: bool,
     /// Rows of the view the layout fits its columns to; 0 before there
@@ -338,15 +357,44 @@ impl FlowState {
     }
 
     /// Show the flow of `agent_id` from now on. Another agent's flow is
-    /// dropped; the same agent's stays on screen until the new one arrives.
+    /// dropped, though not its folds, selection and view, which come back
+    /// with it; the same agent's stays on screen until the new one arrives.
     fn watch(&mut self, agent_id: &str) {
         if self.agent_id == agent_id {
             return;
         }
-        let open = self.open;
+        let mut kept = std::mem::take(&mut self.kept);
+        if !self.agent_id.is_empty() {
+            let state = Kept {
+                turn_folded: std::mem::take(&mut self.turn_folded),
+                call_folded: std::mem::take(&mut self.call_folded),
+                selected: self.selected.take(),
+                follow_tail: self.follow_tail,
+                pan: self.pan,
+                zoom: self.zoom,
+                detached: self.detached,
+            };
+            kept.push((std::mem::take(&mut self.agent_id), state));
+        }
+        let state = kept
+            .iter()
+            .position(|(id, _)| id == agent_id)
+            .map(|at| kept.remove(at).1)
+            .unwrap_or_default();
+        if kept.len() > MAX_KEPT {
+            kept.drain(..kept.len() - MAX_KEPT);
+        }
         *self = Self {
-            open,
+            open: self.open,
             agent_id: agent_id.to_string(),
+            turn_folded: state.turn_folded,
+            call_folded: state.call_folded,
+            selected: state.selected,
+            follow_tail: state.follow_tail,
+            pan: state.pan,
+            zoom: state.zoom,
+            detached: state.detached,
+            kept,
             ..Self::default()
         };
     }
@@ -359,7 +407,7 @@ impl FlowState {
         self.loaded = true;
         self.upsert(lanes, nodes);
         let index = &self.index;
-        self.turn_open.retain(|id, _| index.contains_key(id));
+        self.turn_folded.retain(|id| index.contains_key(id));
         self.call_folded.retain(|id| index.contains_key(id));
     }
 
@@ -427,7 +475,7 @@ impl FlowState {
         }
         self.stale = false;
         let folds = Folds {
-            turns: &self.turn_open,
+            turns: &self.turn_folded,
             calls: &self.call_folded,
         };
         self.layout = build_layout(
@@ -507,11 +555,15 @@ impl FlowState {
     }
 
     /// Keep the selection inside a view `width` × `height` screen cells,
-    /// unless the view was panned off it, and the view on the canvas.
-    /// Returns the canvas cell at the view's top left.
+    /// and that view on the canvas, unless the view was panned off it:
+    /// then it stays wherever it was taken. Returns the canvas cell at the
+    /// view's top left.
     pub fn sync_view(&mut self, width: f32, height: f32) -> (f32, f32) {
         let (width, height) = (width / self.zoom(), height / self.zoom());
-        if let Some((card, row)) = self.selected_place().filter(|_| !self.detached) {
+        if self.detached {
+            return self.pan;
+        }
+        if let Some((card, row)) = self.selected_place() {
             let rect = self.layout.card_rect(card);
             let (left, right) = (cells(rect.x) - ROOM, cells(rect.right()) + ROOM);
             if right - left > width || left < self.pan.0 {
@@ -546,32 +598,23 @@ impl FlowState {
         self.pan.1 = self.pan.1.clamp(0.0, most_y);
     }
 
-    /// Canvas cells the view shows across and down.
-    fn view_cells(&self) -> Option<(f32, f32)> {
-        let area = self.view?.area;
-        let zoom = self.zoom();
-        Some((f32::from(area.width) / zoom, f32::from(area.height) / zoom))
-    }
-
-    fn clamp_to_view(&mut self) {
-        if let Some((width, height)) = self.view_cells() {
-            self.clamp_pan(width, height);
-        }
+    /// Move the view the mouse maps through to where the view now is.
+    fn move_view(&mut self) {
         if let Some(view) = &mut self.view {
             view.pan = self.pan;
         }
     }
 
-    /// Move the view `dx` × `dy` canvas cells over the canvas; it leaves
-    /// the selection where it is.
+    /// Move the view `dx` × `dy` canvas cells over the canvas, or off it
+    /// any distance; it leaves the selection where it is.
     pub fn pan_by(&mut self, dx: f32, dy: f32) {
-        if !(dx.is_finite() && dy.is_finite()) {
+        let pan = (self.pan.0 + dx, self.pan.1 + dy);
+        if !(pan.0.is_finite() && pan.1.is_finite()) {
             return;
         }
-        self.pan.0 += dx;
-        self.pan.1 += dy;
+        self.pan = pan;
         self.detached = true;
-        self.clamp_to_view();
+        self.move_view();
     }
 
     /// Zoom by `factor`, keeping the canvas point at `anchor` where it is
@@ -593,7 +636,7 @@ impl FlowState {
         self.pan.1 += ay / before - ay / after;
         self.zoom = Zoom(after);
         self.detached = true;
-        self.clamp_to_view();
+        self.move_view();
     }
 
     fn select_node(&mut self, node: usize) {
@@ -731,15 +774,12 @@ impl FlowState {
             return;
         }
         let id = self.nodes[placed.head].id.clone();
-        match placed.kind {
-            CardKind::Turn => {
-                self.turn_open.insert(id.clone(), placed.folded);
-            }
-            _ => {
-                if !self.call_folded.remove(&id) {
-                    self.call_folded.insert(id.clone());
-                }
-            }
+        let folded = match placed.kind {
+            CardKind::Turn => &mut self.turn_folded,
+            _ => &mut self.call_folded,
+        };
+        if !folded.remove(&id) {
+            folded.insert(id.clone());
         }
         self.selected = Some(id);
         self.follow_tail = false;
@@ -756,9 +796,10 @@ impl FlowState {
             .filter(|card| card.kind == CardKind::Turn && card.folds())
             .map(|card| (self.nodes[card.head].id.clone(), card.folded))
             .collect();
-        let open = turns.iter().all(|(_, folded)| *folded);
-        for (id, _) in turns {
-            self.turn_open.insert(id, open);
+        if turns.iter().all(|(_, folded)| *folded) {
+            self.turn_folded.clear();
+        } else {
+            self.turn_folded.extend(turns.into_iter().map(|(id, _)| id));
         }
         self.follow_tail = false;
         self.detached = false;
@@ -769,7 +810,7 @@ impl FlowState {
     fn unfold_to(&mut self, node: usize) {
         let (turn, call) = self.layout.folds_over(node);
         if let Some(turn) = turn {
-            self.turn_open.insert(self.nodes[turn].id.clone(), true);
+            self.turn_folded.remove(&self.nodes[turn].id);
         }
         if let Some(call) = call {
             self.call_folded.remove(&self.nodes[call].id);
@@ -1014,9 +1055,10 @@ impl App {
             KeyCode::Char('o') => self.open_flow_agent(),
             KeyCode::Char('+' | '=') if self.host_canvas => self.zoom_flow(ZOOM_STEP, None),
             KeyCode::Char('-') if self.host_canvas => self.zoom_flow(1.0 / ZOOM_STEP, None),
-            KeyCode::Char('0') if self.host_canvas => {
+            KeyCode::Char('0') => {
                 let back = 1.0 / self.flow.zoom();
                 self.zoom_flow(back, None);
+                self.flow.detached = false;
             }
             _ => return false,
         }

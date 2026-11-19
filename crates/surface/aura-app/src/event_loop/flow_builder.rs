@@ -21,6 +21,7 @@ use aura_core_types::{
 };
 use aura_exec_tools::agents::send_to_agent::SEND_TO_AGENT_TOOL_NAME;
 use aura_exec_tools::agents::task::TASK_TOOL_NAME;
+use aura_model::ModelCallPurpose;
 use aura_ui_terminal::events::{FlowKind, FlowLane, FlowNode, TraceNodeStatus};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -405,11 +406,17 @@ impl FlowBuilder {
     fn model_call(&mut self, entry: &RecordEntry) {
         let payload = json_payload(&entry.tx).unwrap_or(Value::Null);
         let text = |key: &str| payload.get(key).and_then(Value::as_str);
-        let mut node = new_node(
-            entry,
-            FlowKind::Model,
-            text("model").unwrap_or("model call"),
-        );
+        let purpose = payload
+            .get("purpose")
+            .cloned()
+            .and_then(|purpose| serde_json::from_value(purpose).ok());
+        let kind = match purpose {
+            Some(ModelCallPurpose::Classify) => FlowKind::Gate,
+            Some(ModelCallPurpose::Judge) => FlowKind::Judge,
+            Some(ModelCallPurpose::Title) => FlowKind::Title,
+            None => FlowKind::Model,
+        };
+        let mut node = new_node(entry, kind, text("model").unwrap_or("model call"));
         node.status = TraceNodeStatus::Ok;
         let mut facts = Vec::new();
         if let Some(tokens) = reasoning_tokens(&payload) {
@@ -1054,6 +1061,38 @@ mod tests {
         assert_eq!(node(&nodes, &id(coder, 1)).status, TraceNodeStatus::Ok);
         assert_eq!(node(&nodes, &id(coder, 1)).detail, "haiku");
         assert!(flow.drain().is_none());
+    }
+
+    #[test]
+    fn calls_the_harness_makes_are_told_apart_by_their_purpose() {
+        let lead = agent(1);
+        let mut records = Records::default();
+        let mut flow = FlowBuilder::new(lead, "Lead");
+        let call = |records: &mut Records, purpose: Option<&str>| {
+            let mut payload = json!({"model": "haiku", "input_tokens": 170, "output_tokens": 3});
+            if let Some(purpose) = purpose {
+                payload["purpose"] = json!(purpose);
+            }
+            records.json(lead, TransactionType::Reasoning, &payload)
+        };
+        flow.push(&call(&mut records, Some("classify")));
+        flow.push(&records.prompt(lead, "hello"));
+        flow.push(&call(&mut records, None));
+        flow.push(&call(&mut records, Some("judge")));
+        flow.push(&call(&mut records, Some("title")));
+        let (_, nodes) = flow.snapshot();
+        let kinds: Vec<FlowKind> = nodes.iter().map(|n| n.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                FlowKind::Gate,
+                FlowKind::Prompt,
+                FlowKind::Model,
+                FlowKind::Judge,
+                FlowKind::Title
+            ]
+        );
+        assert_eq!(node(&nodes, &id(lead, 1)).detail, "170/3 tok");
     }
 
     #[test]

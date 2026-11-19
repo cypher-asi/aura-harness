@@ -206,6 +206,57 @@ fn a_result_no_row_stands_for_and_a_message_are_subcards_of_their_own() {
 }
 
 #[test]
+fn the_harness_calls_are_steps_of_the_turn_they_are_for() {
+    let app = app_with(
+        vec![lane(LEAD, "Lead", None)],
+        vec![
+            node(LEAD, 1, 100, FlowKind::Gate, "haiku"),
+            node(LEAD, 2, 101, FlowKind::Prompt, "go"),
+            node(LEAD, 3, 110, FlowKind::Model, "sonnet"),
+            node(LEAD, 4, 120, FlowKind::Reply, "went"),
+            node(LEAD, 5, 130, FlowKind::Title, "haiku"),
+            node(LEAD, 6, 140, FlowKind::Gate, "haiku"),
+            node(LEAD, 7, 141, FlowKind::Prompt, "again"),
+            node(LEAD, 8, 150, FlowKind::Model, "sonnet"),
+            node(LEAD, 9, 155, FlowKind::Judge, "haiku"),
+            node(LEAD, 10, 160, FlowKind::Tool, "read_file a.rs"),
+        ],
+    );
+    assert_eq!(
+        cards(&app),
+        [
+            vec!["go", "went"],
+            vec!["haiku"],
+            vec!["sonnet"],
+            vec!["haiku"],
+            vec!["again"],
+            vec!["haiku"],
+            vec!["sonnet", "read_file a.rs"],
+            vec!["haiku"],
+        ],
+        "each prompt's classifier opens its turn; tools go to the agent's call"
+    );
+    let flow = app.flow();
+    let kinds: Vec<&str> = (0..8).map(|card| flow.card_kind_label(card)).collect();
+    assert_eq!(
+        kinds,
+        ["turn", "gate", "model", "title", "turn", "gate", "model", "judge"]
+    );
+
+    // Classified, the next prompt not yet recorded: its call waits at the
+    // end of the turn before.
+    let mut app = app;
+    app.process_command(UiCommand::FlowUpsert {
+        agent_id: LEAD.into(),
+        lanes: Vec::new(),
+        nodes: vec![node(LEAD, 11, 170, FlowKind::Gate, "haiku")],
+    });
+    app.flow_mut().ensure_layout();
+    assert_eq!(heads(&app).len(), 9);
+    assert_eq!(app.flow().layout().blocks.len(), 2);
+}
+
+#[test]
 fn a_turns_cards_go_down_its_spine_and_no_wire_runs_backwards() {
     let app = app_with_flow();
     let layout = app.flow().layout();
@@ -246,22 +297,57 @@ fn a_turns_cards_go_down_its_spine_and_no_wire_runs_backwards() {
 }
 
 #[test]
-fn the_newest_turn_of_each_agent_is_open_and_the_rest_are_folded() {
+fn turns_are_open_until_folded_and_stay_folded_as_the_flow_grows() {
     let (lanes, nodes) = three_turns();
-    let app = app_with(lanes, nodes);
-    assert_eq!(
-        heads(&app),
-        ["first", "code", "second", "third", "sonnet", "test"]
-    );
+    let mut app = app_with(lanes, nodes);
+    let all_open = [
+        "first", "sonnet", "code", "second", "sonnet", "third", "sonnet", "test",
+    ];
+    assert_eq!(heads(&app), all_open);
+    assert!(app.flow().layout().cards.iter().all(|card| !card.folded));
+
+    press(&mut app, KeyCode::Home);
+    press(&mut app, KeyCode::Char(' '));
     let layout = app.flow().layout();
-    let folded: Vec<bool> = layout.cards.iter().map(|card| card.folded).collect();
-    assert_eq!(folded, [true, false, true, false, false, false]);
+    assert!(layout.cards[0].folded);
     assert_eq!(app.flow().card_facts(0), "+1 step");
     // A folded turn's task row is gone; its wire leaves from the turn.
     assert!(layout
         .wires
         .iter()
         .any(|wire| (wire.from, wire.row, wire.to, wire.kind) == (0, None, 1, WireKind::Spawn)));
+
+    // A new turn comes in open and leaves the others as they were.
+    app.process_command(UiCommand::FlowUpsert {
+        agent_id: LEAD.into(),
+        lanes: Vec::new(),
+        nodes: vec![
+            node(LEAD, 20, 400, FlowKind::Prompt, "fourth"),
+            node(LEAD, 21, 410, FlowKind::Model, "sonnet"),
+        ],
+    });
+    app.flow_mut().ensure_layout();
+    let folded = |app: &App| -> Vec<bool> {
+        let layout = app.flow().layout();
+        layout.cards.iter().map(|card| card.folded).collect()
+    };
+    let expected = [true, false, false, false, false, false, false, false, false];
+    assert_eq!(folded(&app), expected);
+
+    // So does showing another agent and coming back to this one.
+    app.process_command(UiCommand::SetActiveAgent(CODER.into()));
+    app.process_command(UiCommand::SetActiveAgent(LEAD.into()));
+    let (lanes, mut nodes) = three_turns();
+    nodes.push(node(LEAD, 20, 400, FlowKind::Prompt, "fourth"));
+    nodes.push(node(LEAD, 21, 410, FlowKind::Model, "sonnet"));
+    app.process_command(UiCommand::FlowLoad {
+        agent_id: LEAD.into(),
+        lanes,
+        nodes,
+    });
+    app.flow_mut().ensure_layout();
+    assert_eq!(folded(&app), expected);
+    assert_eq!(selected(&app), "aa:1", "the selection came back too");
 }
 
 #[test]
@@ -270,10 +356,10 @@ fn agents_that_take_turns_share_a_band_when_the_view_is_short() {
     let mut app = app_with(lanes, nodes);
     // Every lead turn in one column: the tester starts where the coder
     // did, so it needs a band of its own.
-    assert_eq!(bands(&app), [0, 1, 0, 0, 0, 2]);
+    assert_eq!(bands(&app), [0, 0, 1, 0, 0, 0, 0, 2]);
     let layout = app.flow().layout();
     assert_eq!(layout.bands.len(), 3);
-    let lead = &layout.blocks[layout.cards[3].block];
+    let lead = &layout.blocks[layout.cards[5].block];
     assert_eq!(layout.bands[0].height, lead.top + lead.height + 2);
     assert_eq!(layout.height, layout.bands[2].y + layout.bands[2].height);
 
@@ -281,7 +367,7 @@ fn agents_that_take_turns_share_a_band_when_the_view_is_short() {
     // tester starts well after the coder ended.
     app.flow_mut().set_room(20);
     app.flow_mut().ensure_layout();
-    assert_eq!(bands(&app), [0, 1, 0, 0, 0, 1]);
+    assert_eq!(bands(&app), [0, 0, 1, 0, 0, 0, 0, 1]);
     let layout = app.flow().layout();
     assert!(layout.height <= 20, "{}", layout.height);
     assert!(layout
@@ -622,16 +708,15 @@ fn the_view_follows_the_selection_until_it_is_panned() {
     press(&mut app, KeyCode::Home);
     assert_eq!(app.flow_mut().sync_view(40.0, 20.0), (0.0, 0.0));
 
-    // Panned, the view stays put; moving the selection brings it back.
+    // Panned, the view stays put, off the canvas as well as on it; moving
+    // the selection brings it back.
     app.pan_flow(30.5, 4.0);
     assert_eq!(app.flow_mut().sync_view(40.0, 5.0), (30.5, 4.0));
     app.pan_flow(-1000.0, 1000.0);
-    let most_y = cells(app.flow().layout().height) - 5.0;
-    assert_eq!(
-        app.flow_mut().sync_view(40.0, 5.0),
-        (0.0, most_y),
-        "never off the canvas"
-    );
+    assert_eq!(app.flow_mut().sync_view(40.0, 5.0), (-969.5, 1004.0));
+    press(&mut app, KeyCode::Char('0'));
+    assert_eq!(app.flow_mut().sync_view(40.0, 20.0), (0.0, 0.0), "back");
+    app.pan_flow(-50.0, -50.0);
     press(&mut app, KeyCode::Char(']'));
     let (x, _) = app.flow_mut().sync_view(40.0, 20.0);
     let flow = app.flow();
@@ -666,10 +751,11 @@ fn zoom_keeps_the_point_under_the_pointer_where_it_is() {
     flow.pan_by(-4.0, 0.0);
     assert_eq!(flow.pan(), (6.0, 3.0));
 
-    // Out to the least, where the canvas fits the view.
+    // Out to the least, around the view's middle, which may take the view
+    // off the canvas.
     app.zoom_flow(0.01, None);
     assert_eq!(app.flow().zoom(), MIN_ZOOM);
-    assert_eq!(app.flow().pan(), (0.0, 0.0), "never off the canvas");
+    assert_eq!(app.flow().pan(), (-64.0, -14.5));
     app.zoom_flow(100.0, None);
     assert_eq!(app.flow().zoom(), MAX_ZOOM);
 }

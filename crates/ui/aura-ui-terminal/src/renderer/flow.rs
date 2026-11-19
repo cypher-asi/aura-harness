@@ -7,10 +7,10 @@
 //!   └─┬──────────────────────────────┘
 //!     │ ┌ ▾ ✓ model ── 1.2k/300 · 4s ┐
 //!     ├─┤ sonnet                     │
-//!     │ │ ✓ task coder · write… 4.2s ●────╮
+//!     │ │ ✓ task coder · write… 4.2s ●────┐
 //!     │ └────────────────────────────┘    │ coder #1
 //!     │ ┌ ● model ───────────────────┐    │ ┌ ✓ turn ────────────── coder #1 ┐
-//!     ╰─┤ sonnet                     │    ╰─┤ write greet()                  │
+//!     └─┤ sonnet                     │    └─┤ write greet()                  │
 //!       └────────────────────────────┘      │ ↳ done                         │
 //! ```
 //!
@@ -33,9 +33,8 @@ use ratatui::{
     widgets::{Paragraph, Wrap},
     Frame,
 };
+use std::ops::Range;
 use unicode_width::UnicodeWidthChar;
-
-const HINT: &str = "←→ turn  ↑↓ line  [ ] prompt  ⏎ open  Space fold  z all  f link  o agent  r record  drag pan  Esc chat";
 
 /// Draw the GRAPH tab in `area`, the chat panel below its header bar.
 pub(super) fn render_flow(
@@ -46,17 +45,7 @@ pub(super) fn render_flow(
     is_focused: bool,
 ) {
     let muted = Style::default().fg(theme.colors.muted);
-    let mut block = body_block((is_focused, app.host_chrome()), theme);
-    let hint = if app.host_canvas() {
-        let percent = (app.flow().zoom() * 100.0).round();
-        format!("{percent}%  +/- zoom  {HINT}")
-    } else {
-        HINT.to_string()
-    };
-    let hint = truncate_record_info(&hint, usize::from(area.width).saturating_sub(4));
-    if is_focused && !hint.is_empty() {
-        block = block.title_bottom(Line::from(Span::styled(format!(" {hint} "), muted)));
-    }
+    let block = body_block((is_focused, app.host_chrome()), theme);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -94,7 +83,7 @@ pub(super) fn render_flow(
     let hosted = app.host_canvas();
     app.flow_mut()
         .set_view(Some(FlowView { area: inner, pan }), hosted);
-    let first = (whole(pan.0), whole(pan.1));
+    let first = (cell_of(pan.0), cell_of(pan.1));
     if hosted {
         let buffer = frame.buffer_mut();
         for y in inner.top()..inner.bottom() {
@@ -119,24 +108,30 @@ pub(super) fn render_flow(
     }
 
     let total = app.flow().layout().height;
+    let visible = usize::from(inner.height);
     render_scrollbar(
         frame,
         area,
         inner,
         ScrollView {
             total,
-            visible: usize::from(inner.height),
-            first: first.1,
+            visible,
+            first: whole(first.1).min(total.saturating_sub(visible)),
         },
         is_focused,
         theme,
     );
 }
 
-/// The whole cells in a canvas position.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn whole(at: f32) -> usize {
-    at.max(0.0).floor() as usize
+/// The cell a canvas position is in, left of or above the canvas too.
+#[allow(clippy::cast_possible_truncation)]
+fn cell_of(at: f32) -> i64 {
+    at.floor() as i64
+}
+
+/// A canvas cell, or the canvas's first for one off its top or left.
+fn whole(at: i64) -> usize {
+    usize::try_from(at).unwrap_or(0)
 }
 
 /// How a card stands to the selection.
@@ -155,15 +150,24 @@ struct Canvas<'a> {
     flow: &'a FlowState,
     layout: &'a FlowLayout,
     area: Rect,
-    /// Canvas cell at the top left of `area`
-    first: (usize, usize),
+    /// Canvas cell at the top left of `area`, which may be off the canvas
+    first: (i64, i64),
 }
 
 impl Canvas<'_> {
+    /// The canvas columns and rows on screen.
+    fn shown(&self) -> (Range<usize>, Range<usize>) {
+        let span = |first: i64, cells: u16| whole(first)..whole(first + i64::from(cells));
+        (
+            span(self.first.0, self.area.width),
+            span(self.first.1, self.area.height),
+        )
+    }
+
     /// The screen cell of canvas cell `(x, y)`, when it is on screen.
     fn screen(&self, x: usize, y: usize) -> Option<(u16, u16)> {
-        let dx = u16::try_from(x.checked_sub(self.first.0)?).ok()?;
-        let dy = u16::try_from(y.checked_sub(self.first.1)?).ok()?;
+        let from = |at: usize, first: i64| u16::try_from(i64::try_from(at).ok()? - first).ok();
+        let (dx, dy) = (from(x, self.first.0)?, from(y, self.first.1)?);
         (dx < self.area.width && dy < self.area.height)
             .then(|| (self.area.x + dx, self.area.y + dy))
     }
@@ -208,8 +212,7 @@ impl Canvas<'_> {
 
     fn draw(&mut self) {
         self.names();
-        let xs = self.first.0..self.first.0 + usize::from(self.area.width);
-        let ys = self.first.1..self.first.1 + usize::from(self.area.height);
+        let (xs, ys) = self.shown();
         let selected = self.flow.selected_card();
         let mut wires: Vec<(bool, Wire)> = self
             .layout
@@ -265,16 +268,14 @@ impl Canvas<'_> {
             let end = FlowLayout::column_x(span.last) + CARD_WIDTH;
             let name = truncate_record_info(&self.flow.lanes()[span.lane].name, end - start);
             let width = display_width(&name);
-            let x = (self.first.0 + 1).clamp(start, end - width);
+            let x = whole(self.first.0 + 1).clamp(start, end - width);
             self.text(x, y, &name, width, style);
         }
     }
 
     fn wire_style(&self, kind: WireKind, hot: bool) -> Style {
         if hot {
-            return Style::default()
-                .fg(self.theme.colors.primary)
-                .add_modifier(Modifier::BOLD);
+            return Style::default().fg(self.theme.colors.primary);
         }
         Style::default().fg(match kind {
             WireKind::Next | WireKind::Spine => self.theme.colors.muted,
@@ -337,7 +338,7 @@ impl Canvas<'_> {
     }
 
     /// A piece of wire with `ends` at `(x, y)`, joined to any wire already
-    /// there: `─` over `│` makes `┼`, over `╭` makes `┬`.
+    /// there: `─` over `│` makes `┼`, over `┌` makes `┬`.
     fn join(&mut self, x: usize, y: usize, ends: u8, style: Style) {
         let ends = ends | ends_of(self.symbol(x, y));
         self.put(x, y, glyph_of(ends), style);
@@ -345,9 +346,7 @@ impl Canvas<'_> {
 
     fn border(&self, standing: Standing) -> Style {
         match standing {
-            Standing::Selected => Style::default()
-                .fg(self.theme.colors.primary)
-                .add_modifier(Modifier::BOLD),
+            Standing::Selected => Style::default().fg(self.theme.colors.primary),
             Standing::Linked => Style::default().fg(self.theme.colors.secondary),
             Standing::Other => self.muted(),
         }
@@ -362,10 +361,11 @@ impl Canvas<'_> {
 
     fn card(&mut self, card: usize, standing: Standing) {
         let rect = self.layout.card_rect(card);
-        let on_screen = rect.right() > self.first.0
-            && rect.x < self.first.0 + usize::from(self.area.width)
-            && rect.bottom() > self.first.1
-            && rect.y < self.first.1 + usize::from(self.area.height);
+        let (xs, ys) = self.shown();
+        let on_screen = rect.right() > xs.start
+            && rect.x < xs.end
+            && rect.bottom() > ys.start
+            && rect.y < ys.end;
         if !on_screen {
             return;
         }
@@ -530,15 +530,10 @@ const DOWN: u8 = 2;
 const LEFT: u8 = 4;
 const RIGHT: u8 = 8;
 
-/// Box glyphs by the ends they join. A card's corners are square, a
-/// wire's round.
-const GLYPHS: [(&str, u8); 15] = [
+/// Box glyphs by the ends they join.
+const GLYPHS: [(&str, u8); 11] = [
     ("─", LEFT | RIGHT),
     ("│", UP | DOWN),
-    ("╭", DOWN | RIGHT),
-    ("╮", DOWN | LEFT),
-    ("╰", UP | RIGHT),
-    ("╯", UP | LEFT),
     ("├", UP | DOWN | RIGHT),
     ("┤", UP | DOWN | LEFT),
     ("┬", DOWN | LEFT | RIGHT),
@@ -577,7 +572,7 @@ fn kind_color(kind: FlowKind, theme: &Theme) -> Color {
         FlowKind::Model | FlowKind::Spawn | FlowKind::Message | FlowKind::Result => {
             theme.colors.secondary
         }
-        FlowKind::Event => theme.colors.muted,
+        FlowKind::Gate | FlowKind::Judge | FlowKind::Title | FlowKind::Event => theme.colors.muted,
         FlowKind::Tool | FlowKind::Reply | FlowKind::Process => theme.colors.foreground,
     }
 }
@@ -729,16 +724,16 @@ mod tests {
             "│    │ ┌ ▾ ✓ model ── 1.2k/300 · 4s ┐                                              │",
             "│    ├─┤ sonnet                     │                                              │",
             "│    │ │ ✓ read_file src/lib.… 12ms │                                              │",
-            "│    │ │ ✓ task coder · write… 4.2s ●────╮                                         │",
+            "│    │ │ ✓ task coder · write… 4.2s ●────┐                                         │",
             "│    │ └────────────────────────────┘    │                                         │",
             "│    │                                   │                                         │",
             "│    │ ┌ ● model ───────────────────┐    │                                         │",
-            "│    ╰─┤ sonnet                     │    │                                         │",
+            "│    └─┤ sonnet                     │    │                                         │",
             "│      └────────────────────────────┘    │                                         │",
             "│                                        │                                         │",
             "│                                        │ coder #1                                │",
             "│                                        │ ┌ ✓ turn ────────────── coder #1 ┐      │",
-            "│                                        ╰─┤ write greet()                  │      │",
+            "│                                        └─┤ write greet()                  │      │",
             "│                                          │ ↳ done                         │      │",
             "│                                          └────────────────────────────────┘      │",
         ];
@@ -784,10 +779,10 @@ mod tests {
         );
         assert!(!rows.contains("sonnet"), "{rows}");
         assert!(
-            rows.contains("add a greeting                 ●────╮"),
+            rows.contains("add a greeting                 ●────┐"),
             "the spawn comes from the main card\n{rows}"
         );
-        assert!(rows.contains("╰─┤ write greet()"), "{rows}");
+        assert!(rows.contains("└─┤ write greet()"), "{rows}");
     }
 
     #[test]
@@ -801,7 +796,7 @@ mod tests {
         assert!(rows.contains("┌ ▸ ✓ model ─ +2 tools · "), "{rows}");
         assert!(!rows.contains("read_file"), "{rows}");
         assert!(
-            rows.contains("├─┤ sonnet                     ●────╮"),
+            rows.contains("├─┤ sonnet                     ●────┐"),
             "the spawn comes from the model call\n{rows}"
         );
         press(&mut app, KeyCode::Char(' '));

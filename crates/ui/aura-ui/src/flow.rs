@@ -18,6 +18,13 @@ pub enum FlowKind {
     Prompt,
     /// A model call
     Model,
+    /// Gate asking a model what a prompt is, to pick the model that takes
+    /// it; recorded before that prompt
+    Gate,
+    /// Gate's judge reviewing failed work
+    Judge,
+    /// A model naming the chat
+    Title,
     /// A tool call, with its policy decision and result once they exist
     Tool,
     /// The agent's reply
@@ -42,6 +49,9 @@ impl FlowKind {
         match self {
             Self::Prompt => "prompt",
             Self::Model => "model",
+            Self::Gate => "gate",
+            Self::Judge => "judge",
+            Self::Title => "title",
             Self::Tool => "tool",
             Self::Reply => "reply",
             Self::Spawn => "spawn",
@@ -50,6 +60,13 @@ impl FlowKind {
             Self::Result => "result",
             Self::Event => "event",
         }
+    }
+
+    /// Whether it is a model call: the agent's own, or one the harness
+    /// made around its work.
+    #[must_use]
+    pub const fn is_model_call(self) -> bool {
+        matches!(self, Self::Model | Self::Gate | Self::Judge | Self::Title)
     }
 }
 

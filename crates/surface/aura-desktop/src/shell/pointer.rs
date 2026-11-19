@@ -983,15 +983,20 @@ mod tests {
             "{before:?} {after:?}"
         );
 
-        // A pinch zooms too, no further out than the least.
+        // A pinch zooms too, no further out than the least, and around
+        // the pointer though that takes the view off the canvas.
         stage.shell.modifiers = ModifiersState::empty();
         for _ in 0..10 {
             stage.shell.pinch(-0.5);
         }
         stage.draw();
-        let flow = stage.shell.tabs.front().tui.flow();
-        assert_eq!(flow.zoom(), FLOW_MIN_ZOOM);
-        assert_eq!(flow.pan(), (0.0, 0.0), "the canvas fits the view");
+        assert_eq!(stage.shell.tabs.front().tui.flow().zoom(), FLOW_MIN_ZOOM);
+        let after = under(&stage);
+        assert!(
+            (after.0 - before.0).abs() < 1e-3 && (after.1 - before.1).abs() < 1e-3,
+            "{before:?} {after:?}"
+        );
+        assert!(pan(&stage).0 < 0.0, "{:?}", pan(&stage));
 
         // Without Ctrl, the wheel pans.
         stage
