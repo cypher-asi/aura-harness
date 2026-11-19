@@ -686,6 +686,10 @@ pub struct ModelOptionView {
     pub provider: Option<String>,
     /// Whether the required sign-in is present
     pub available: bool,
+    /// Context window in tokens; `None` for `gate`, whose window is that
+    /// of each turn's pick
+    #[serde(default)]
+    pub context_window: Option<u64>,
 }
 
 /// Data for displaying a message.
@@ -726,8 +730,10 @@ pub struct CallUsage {
 }
 
 /// Tokens and cost of one model call, for the session totals.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct CallStats {
+    /// Model the call went to
+    pub model: String,
     /// Prompt tokens neither read from nor written to the cache
     pub input_tokens: u64,
     /// Prompt tokens read from the cache
@@ -751,7 +757,7 @@ impl CallStats {
 }
 
 /// Usage of a session so far.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SessionTotals {
     /// Model calls made
     pub calls: u32,
@@ -767,6 +773,8 @@ pub struct SessionTotals {
     pub cost_usd: Option<f64>,
     /// Prompt of the latest call
     pub context_tokens: u64,
+    /// Models the calls went to, first use first
+    pub models: Vec<String>,
 }
 
 /// Status of a todo item.

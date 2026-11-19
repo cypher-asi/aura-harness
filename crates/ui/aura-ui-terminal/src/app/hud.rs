@@ -32,6 +32,8 @@ pub struct SessionStats {
     pub context_limit: Option<u64>,
     /// Times older history was summarized
     pub compactions: u32,
+    /// Models the calls went to, first use first
+    pub models: Vec<String>,
 }
 
 impl SessionStats {
@@ -50,6 +52,9 @@ impl SessionStats {
         if call.context_limit.is_some() {
             self.context_limit = call.context_limit;
         }
+        if !call.model.is_empty() && !self.models.contains(&call.model) {
+            self.models.push(call.model.clone());
+        }
     }
 
     /// Take the totals of a session opened or resumed, keeping what is
@@ -66,6 +71,7 @@ impl SessionStats {
             context_tokens: totals.context_tokens,
             context_limit: self.context_limit,
             compactions: 0,
+            models: totals.models.clone(),
         };
     }
 
@@ -80,7 +86,13 @@ impl SessionStats {
     /// How full the context window is, in percent, when the window is known.
     #[must_use]
     pub fn context_percent(&self) -> Option<u64> {
-        let limit = self.context_limit.filter(|l| *l > 0)?;
+        self.context_percent_in(self.context_limit)
+    }
+
+    /// How full a context window of `limit` tokens would be, in percent.
+    #[must_use]
+    pub fn context_percent_in(&self, limit: Option<u64>) -> Option<u64> {
+        let limit = limit.filter(|l| *l > 0)?;
         Some((self.context_tokens * 100 / limit).min(100))
     }
 }
@@ -248,6 +260,7 @@ mod tests {
 
     fn call(input: u64, read: u64, write: u64, cost: Option<f64>) -> CallStats {
         CallStats {
+            model: "aura-claude-sonnet-4-6".to_string(),
             input_tokens: input,
             cache_read_tokens: read,
             cache_write_tokens: write,
@@ -255,6 +268,25 @@ mod tests {
             cost_usd: cost,
             context_limit: Some(200_000),
         }
+    }
+
+    #[test]
+    fn models_are_counted_once_and_kept_on_restore() {
+        let mut stats = SessionStats::default();
+        stats.add(&call(10, 0, 0, None));
+        stats.add(&CallStats {
+            model: "aura-claude-haiku-4-5".to_string(),
+            ..call(10, 0, 0, None)
+        });
+        stats.add(&call(10, 0, 0, None));
+        assert_eq!(stats.models, ["aura-claude-sonnet-4-6", "aura-claude-haiku-4-5"]);
+
+        stats.restore(&SessionTotals {
+            calls: 7,
+            models: vec!["claude/claude-opus-4-7".to_string()],
+            ..SessionTotals::default()
+        });
+        assert_eq!(stats.models, ["claude/claude-opus-4-7"]);
     }
 
     #[test]

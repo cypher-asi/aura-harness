@@ -26,7 +26,7 @@ const CURRENT: &str = "current";
 const TITLE_CHARS: usize = 80;
 
 /// Model calls and tokens of a session.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SessionUsage {
     pub calls: u32,
     pub input_tokens: u64,
@@ -39,6 +39,9 @@ pub struct SessionUsage {
     /// Prompt of the latest call: what was in the context window
     #[serde(default)]
     pub context_tokens: u64,
+    /// Models the calls went to, first use first
+    #[serde(default)]
+    pub models: Vec<String>,
 }
 
 impl SessionUsage {
@@ -53,6 +56,11 @@ impl SessionUsage {
         self.priced |= other.priced;
         if other.calls > 0 {
             self.context_tokens = other.context_tokens;
+        }
+        for model in &other.models {
+            if !self.models.contains(model) {
+                self.models.push(model.clone());
+            }
         }
     }
 }

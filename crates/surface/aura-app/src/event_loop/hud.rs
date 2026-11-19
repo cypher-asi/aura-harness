@@ -33,6 +33,7 @@ pub(super) fn todo_views(todos: &[TodoItem]) -> Vec<TodoView> {
 pub(crate) fn call_stats(model: &str, usage: &Usage, context_limit: Option<u64>) -> CallStats {
     let tokens = model_catalog::billed_tokens(model, usage);
     CallStats {
+        model: model.to_string(),
         input_tokens: tokens.uncached_input,
         cache_read_tokens: tokens.cache_read,
         cache_write_tokens: tokens.cache_write,
@@ -65,6 +66,7 @@ pub(super) fn session_totals(usage: &SessionUsage) -> SessionTotals {
         output_tokens: usage.output_tokens,
         cost_usd: usage.priced.then_some(usage.cost_usd),
         context_tokens: usage.context_tokens,
+        models: usage.models.clone(),
     }
 }
 

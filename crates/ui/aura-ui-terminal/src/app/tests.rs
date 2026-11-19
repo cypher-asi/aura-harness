@@ -1952,6 +1952,7 @@ fn app_with_models(user: Option<&str>) -> (App, mpsc::Receiver<UiEvent>) {
                 group: "Local (no login)".to_string(),
                 provider: None,
                 available: true,
+                context_window: Some(32_768),
             },
             ModelOptionView {
                 id: "aura-claude-sonnet-4-6".to_string(),
@@ -1961,6 +1962,7 @@ fn app_with_models(user: Option<&str>) -> (App, mpsc::Receiver<UiEvent>) {
                 group: "Cloud (aura-router)".to_string(),
                 provider: Some("zos".to_string()),
                 available: user.is_some(),
+                context_window: Some(1_000_000),
             },
             ModelOptionView {
                 id: "claude/claude-sonnet-4-6".to_string(),
@@ -1970,6 +1972,7 @@ fn app_with_models(user: Option<&str>) -> (App, mpsc::Receiver<UiEvent>) {
                 group: "Claude plan (direct)".to_string(),
                 provider: Some("claude".to_string()),
                 available: false,
+                context_window: Some(1_000_000),
             },
         ],
         current: "local/qwen3:4b".to_string(),

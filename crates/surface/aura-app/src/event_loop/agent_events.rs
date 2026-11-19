@@ -437,9 +437,10 @@ impl TurnEventSink for UiCommandSink {
                 cost_usd: stats.cost_usd.unwrap_or(0.0),
                 priced: stats.cost_usd.is_some(),
                 context_tokens: stats.prompt_tokens(),
+                models: vec![model],
             });
-            self.ui.send(UiCommand::CallStats(stats)).await;
             self.state.turn_cost_usd += stats.cost_usd.unwrap_or(0.0);
+            self.ui.send(UiCommand::CallStats(stats)).await;
             self.enforce_cost_cap().await;
         }
     }

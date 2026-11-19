@@ -254,7 +254,7 @@ impl Headless {
                     prompt,
                     limits,
                     deadline,
-                    totals.usage,
+                    totals.usage.clone(),
                     escalation.take(),
                     output,
                     interrupt,

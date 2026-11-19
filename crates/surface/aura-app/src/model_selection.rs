@@ -289,6 +289,7 @@ impl ModelSelection {
             group: GATE_LABEL.to_string(),
             provider: None,
             available: true,
+            context_window: None,
         };
         std::iter::once(gate)
             .chain(options.into_iter().map(|o| ModelOptionView {
@@ -296,6 +297,7 @@ impl ModelSelection {
                 group: group_heading(o.backend).to_string(),
                 provider: o.required_provider().map(|p| p.id().to_string()),
                 available: self.usable(&o.id),
+                context_window: Some(aura_engine::model_context::context_window_for_model(&o.id)),
                 id: o.id,
                 label: o.label,
                 installed: o.installed,

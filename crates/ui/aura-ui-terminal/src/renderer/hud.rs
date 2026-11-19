@@ -31,8 +31,32 @@ const SEPARATOR: &str = " · ";
 /// Rows the footer takes under the input box.
 pub(super) const FOOTER_ROWS: u16 = 1;
 
+/// What the status line reports usage against: `gate`, or one model and
+/// its context window when known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FooterModel {
+    Gate,
+    Model { window: Option<u64> },
+}
+
+impl FooterModel {
+    fn of(app: &App) -> Self {
+        if app.current_model() == "gate" {
+            Self::Gate
+        } else {
+            Self::Model {
+                window: app.current_model_option().and_then(|m| m.context_window),
+            }
+        }
+    }
+}
+
 /// The parts of the status line after the model, most important first.
-pub(super) fn status_parts(hud: &Hud, theme: &Theme) -> Vec<(String, Color)> {
+/// On one model the context share is of that model's window, so it is
+/// right as soon as the model is picked. Under `gate` it is left out,
+/// since each turn may run on a model with a different window, and the
+/// models used are counted instead.
+pub(super) fn status_parts(hud: &Hud, model: FooterModel, theme: &Theme) -> Vec<(String, Color)> {
     let stats = &hud.stats;
     let mut parts = Vec::new();
     match hud.mode {
@@ -45,10 +69,14 @@ pub(super) fn status_parts(hud: &Hud, theme: &Theme) -> Vec<(String, Color)> {
         }
         Some(mode) => parts.push((format!("{mode} mode"), theme.colors.warning)),
     }
-    if stats.context_tokens > 0 {
+    let window = match model {
+        FooterModel::Gate => None,
+        FooterModel::Model { window } => Some(window),
+    };
+    if let Some(window) = window.filter(|_| stats.context_tokens > 0) {
         let mut text = format!("{} context", format_tokens(stats.context_tokens));
         let mut color = theme.colors.muted;
-        if let Some(percent) = stats.context_percent() {
+        if let Some(percent) = stats.context_percent_in(window.or(stats.context_limit)) {
             text = format!("{percent}% context used");
             color = match percent {
                 90.. => theme.colors.error,
@@ -63,6 +91,11 @@ pub(super) fn status_parts(hud: &Hud, theme: &Theme) -> Vec<(String, Color)> {
     }
     if stats.priced {
         parts.push((format_cost(stats.cost_usd), theme.colors.muted));
+    }
+    if model == FooterModel::Gate && !stats.models.is_empty() {
+        let models = stats.models.len();
+        let plural = if models == 1 { "" } else { "s" };
+        parts.push((format!("{models} model{plural}"), theme.colors.muted));
     }
     if stats.calls > 0 {
         let plural = if stats.calls == 1 { "" } else { "s" };
@@ -141,7 +174,7 @@ pub(super) fn render_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Th
     let status_width: usize = status.iter().map(|s| display_width(&s.content)).sum();
     let room = usize::from(row.width).saturating_sub(status_width + STATUS_GAP);
 
-    let mut stats = status_parts(app.hud(), theme).into_iter();
+    let mut stats = status_parts(app.hud(), FooterModel::of(app), theme).into_iter();
     let mut parts = Vec::new();
     if app.mode() != PermissionMode::Agent {
         if let Some((text, color)) = stats.next() {
@@ -300,7 +333,7 @@ mod tests {
             mode: Some(PermissionMode::Plan),
             ..crate::app::hud::Hud::default()
         };
-        let parts = status_parts(&hud, &theme);
+        let parts = status_parts(&hud, FooterModel::Model { window: None }, &theme);
         assert_eq!(parts[0].0, "plan mode (/plan to leave)");
     }
 
@@ -311,7 +344,7 @@ mod tests {
             mode: Some(PermissionMode::Agent),
             ..crate::app::hud::Hud::default()
         };
-        assert!(status_parts(&hud, &theme).is_empty());
+        assert!(status_parts(&hud, FooterModel::Model { window: None }, &theme).is_empty());
     }
 
     #[test]

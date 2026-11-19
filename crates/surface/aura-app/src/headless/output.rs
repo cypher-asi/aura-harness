@@ -293,6 +293,7 @@ mod tests {
             cost_usd: 0.01,
             priced: true,
             context_tokens: 0,
+            models: Vec::new(),
         };
         let report = UsageReport::from(&usage);
         assert_eq!(report.cache_hit_rate, Some(0.8));

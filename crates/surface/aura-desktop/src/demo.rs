@@ -184,6 +184,7 @@ impl Demo {
                 group: group.into(),
                 provider: provider.map(Into::into),
                 available,
+                context_window: None,
             }
         };
         UiCommand::SetModels {

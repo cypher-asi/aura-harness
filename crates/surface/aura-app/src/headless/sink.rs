@@ -90,7 +90,7 @@ impl HeadlessSink {
         if self.tally.limit_hit.is_some() {
             return;
         }
-        let mut run = self.before;
+        let mut run = self.before.clone();
         run.add(&self.tally.usage);
         let hit = if self.limits.max_calls.is_some_and(|max| run.calls >= max) {
             Some(ExitReason::MaxTurns)
@@ -229,6 +229,7 @@ impl TurnEventSink for HeadlessSink {
             cost_usd: stats.cost_usd.unwrap_or(0.0),
             priced: stats.cost_usd.is_some(),
             context_tokens: stats.prompt_tokens(),
+            models: vec![model.clone()],
         });
         self.output.event(&StreamEvent::Usage {
             model: &model,

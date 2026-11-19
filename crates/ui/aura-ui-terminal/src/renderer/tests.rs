@@ -1302,6 +1302,7 @@ fn app_with_auth(user: Option<&str>, plans: &[&str]) -> crate::App {
             group: "Local (no login)".to_string(),
             provider: None,
             available: true,
+            context_window: None,
         }],
         current: "local/qwen3:4b".to_string(),
         route: None,
@@ -2019,6 +2020,7 @@ fn test_input_shows_gate_instead_of_its_pick() {
             group: "Gate".to_string(),
             provider: None,
             available: true,
+            context_window: None,
         }],
         current: "gate".to_string(),
         route: Some("claude-sonnet-4-6 (claude plan)".to_string()),
@@ -2030,6 +2032,75 @@ fn test_input_shows_gate_instead_of_its_pick() {
     assert!(status.contains("GATE"), "{status:?}");
     assert!(status.contains("● Ready"), "{status:?}");
     assert!(!status.contains("claude-sonnet-4-6"), "{status:?}");
+}
+
+#[test]
+fn test_status_line_under_gate_counts_models_instead_of_context() {
+    use crate::events::{CallStats, ModelOptionView, UiCommand};
+
+    let mut app = app_with_model(None);
+    app.process_command(UiCommand::SetModels {
+        options: vec![ModelOptionView {
+            id: "gate".to_string(),
+            label: "Gate".to_string(),
+            local: false,
+            installed: true,
+            group: "Gate".to_string(),
+            provider: None,
+            available: true,
+            context_window: None,
+        }],
+        current: "gate".to_string(),
+        route: None,
+        user: None,
+        plans: Vec::new(),
+    });
+    for model in ["aura-claude-haiku-4-5", "aura-claude-sonnet-4-6"] {
+        app.process_command(UiCommand::CallStats(CallStats {
+            model: model.to_string(),
+            input_tokens: 40_000,
+            cost_usd: Some(0.1),
+            context_limit: Some(200_000),
+            ..CallStats::default()
+        }));
+    }
+    let rows = render_rows(&mut app, 160);
+    let status = &rows[rows.len() - 1];
+    assert!(!status.contains("context"), "{status:?}");
+    assert!(status.contains("$0.200 · 2 models · 2 calls"), "{status:?}");
+}
+
+#[test]
+fn test_status_line_on_one_model_measures_context_against_its_window() {
+    use crate::events::{CallStats, ModelOptionView, UiCommand};
+
+    let mut app = app_with_model(None);
+    app.process_command(UiCommand::CallStats(CallStats {
+        model: "aura-claude-sonnet-4-6".to_string(),
+        input_tokens: 40_000,
+        context_limit: Some(1_000_000),
+        ..CallStats::default()
+    }));
+    app.process_command(UiCommand::SetModels {
+        options: vec![ModelOptionView {
+            id: "aura-claude-haiku-4-5".to_string(),
+            label: "Claude Haiku 4.5".to_string(),
+            local: false,
+            installed: true,
+            group: "Cloud (aura-router)".to_string(),
+            provider: Some("zos".to_string()),
+            available: true,
+            context_window: Some(200_000),
+        }],
+        current: "aura-claude-haiku-4-5".to_string(),
+        route: None,
+        user: None,
+        plans: Vec::new(),
+    });
+    let rows = render_rows(&mut app, 160);
+    let status = &rows[rows.len() - 1];
+    assert!(status.contains("Claude Haiku 4.5 · 20% context used"), "{status:?}");
+    assert!(!status.contains("model"), "{status:?}");
 }
 
 // ========================================================================
@@ -3104,6 +3175,7 @@ fn test_status_line_shows_context_cache_and_cost() {
 
     let mut app = crate::App::new();
     app.process_command(UiCommand::CallStats(CallStats {
+        model: "aura-claude-sonnet-4-6".to_string(),
         input_tokens: 4_000,
         cache_read_tokens: 120_000,
         cache_write_tokens: 0,

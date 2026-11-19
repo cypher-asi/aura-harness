@@ -121,7 +121,7 @@ impl AgentSession {
             record_seq,
             self.messages.clone(),
             self.todos.clone(),
-            self.usage,
+            self.usage.clone(),
         );
         if let Err(e) = checkpoints.save(agent_id, &checkpoint).await {
             warn!(%agent_id, error = %e, "Failed to save session checkpoint");

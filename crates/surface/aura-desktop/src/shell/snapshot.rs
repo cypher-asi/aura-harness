@@ -98,6 +98,7 @@ pub fn seed(h: &mut Stage) {
             group: group.into(),
             provider: provider.map(Into::into),
             available,
+            context_window: None,
         };
     let process = |id: &str, label: &str, status, kind, started_ms, ended_ms| ProcessSummary {
         id: id.into(),
