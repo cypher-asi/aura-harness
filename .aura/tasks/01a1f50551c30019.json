@@ -1,7 +1,7 @@
 {
   "id": "01a1f50551c30019",
   "title": "Fix a leak in the Aura terminal app (Rust workspace at /home/n3o/code/aura-harness) where a spawned subagent stays mark…",
-  "state": "running",
+  "state": "open",
   "agent_id": "065ee5282032ed5131a52e010ef4859c69c6c3bc5ee78b5a5a13381007087c41",
   "agent_name": "rust-engineer #7",
   "assignee": "rust-engineer",

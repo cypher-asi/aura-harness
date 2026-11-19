@@ -1,0 +1,11 @@
+{
+  "id": "01a1f51cbc480007",
+  "title": "you should impl this feature directly nad have it be able to right click on an archived agent in archive panel and then…",
+  "state": "completed",
+  "agent_id": "60c146cafadf43e015154501278ffc48be384eace86576afec7f837c6ba5ca59",
+  "agent_name": "reviewer #1",
+  "items": [],
+  "summary": "I'll go ahead, since you've asked directly, even though it falls outside the reviewer role. I'll make the change, add tests, and run fmt, clippy and the tests. First I need the rest of the menu code and the mouse routing, and I need to check whether the desktop app has its own Archive panel.Everything is in one file, plus `archive.rs`. There's no edit tool here, so I'll apply the edits with a Pyt…",
+  "updated_ms": 1795113787822,
+  "created_ms": 1795113663560
+}

@@ -1,10 +1,11 @@
 {
   "id": "01a1f4fca595000c",
   "title": "fix correctly",
-  "state": "running",
+  "state": "cancelled",
   "agent_id": "f761c2bdef49a16423a9d2cac61dde2158b6f106667310f77ac50478ae6e0f80",
   "agent_name": "Agent 23",
   "items": [],
-  "updated_ms": 1795111567873,
+  "summary": "This is a real feature, not a one-line tweak — doing it properly means adding actual terminal graphics-protocol rendering (Kitty's image protocol is the one with the broadest support in modern terminals: kitty, WezTerm, Ghostty, Konsole, foot, rio) with correct capability detection, placement tracking across scroll/resize, and a safe fallback to the existing half-block renderer everywhere else. I…",
+  "updated_ms": 1795112977571,
   "created_ms": 1795111560597
 }

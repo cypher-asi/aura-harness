@@ -1,0 +1,11 @@
+{
+  "id": "01a1f51ddae80008",
+  "title": "it should always be restored in the same project, if that project isn't there you add it back",
+  "state": "completed",
+  "agent_id": "e1605925f84f5e561c9c78e24272c5cdc6245ee18e22c2aa877d29db89e12ebe",
+  "agent_name": "Agent 8",
+  "items": [],
+  "summary": "Now the field, and hiding removed agents from the list.Now I'll rewrite the tests to match: the agent comes back in its original project, and there is no folder matching.Registry tests and clippy pass. Now I'll run the full `aura-app` suite, since the event loop also calls into this code.An unarchived agent now always goes back into its original project. If that project was removed, unarchiving b…",
+  "updated_ms": 1795113871038,
+  "created_ms": 1795113736936
+}
