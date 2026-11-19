@@ -1,6 +1,7 @@
 //! The menu a right click opens on a project or an agent in the projects
-//! list. Its items are the list's own actions (add an agent, rename, fold,
-//! archive, remove), gathered where the pointer is.
+//! list, or on an agent in the Archive. Its items are the list's own
+//! actions (add an agent, rename, fold, archive, remove, unarchive),
+//! gathered where the pointer is.
 //!
 //! The menu keeps the ids of what it was opened on, not list positions, so
 //! the list may change under it. A click on an item or Enter runs it; Esc,
@@ -17,6 +18,10 @@ pub(crate) enum MenuTarget {
     Project(String),
     /// An agent, by id
     Agent(String),
+    /// An agent in the Archive, by id. Kept apart from [`Self::Agent`]
+    /// because archived agents are not in the projects list, so its
+    /// items must not look the id up there.
+    Archived(String),
 }
 
 /// An entry of the menu.
@@ -28,6 +33,7 @@ pub(crate) enum MenuItem {
     Open,
     Archive,
     RemoveProject,
+    Restore,
 }
 
 /// The open menu.
@@ -94,16 +100,19 @@ impl App {
             MenuItem::Open => "Open",
             MenuItem::Archive => "Archive",
             MenuItem::RemoveProject => "Remove project…",
+            MenuItem::Restore => "Unarchive",
         }
     }
 
-    /// A right click on the projects list: highlight the project or agent
+    /// A right click on the agents panel: highlight the project or agent
     /// under the pointer and open its menu there. Returns whether a menu
     /// opened.
     pub(super) fn open_context_menu(&mut self, column: u16, row: u16) -> bool {
         self.context_menu = None;
-        if self.agents_tab != AgentsTab::Projects {
-            return false;
+        match self.agents_tab {
+            AgentsTab::Projects => {}
+            AgentsTab::Archive => return self.open_archive_menu(column, row),
+            AgentsTab::Roster => return false,
         }
         let Some(index) = self.project_row_at(column, row) else {
             return false;
@@ -130,6 +139,27 @@ impl App {
         self.context_menu = Some(ContextMenu {
             target,
             items,
+            anchor: Position::new(column, row),
+            selected: 0,
+            area: None,
+        });
+        true
+    }
+
+    /// A right click on an Archive row: highlight it and offer to bring
+    /// it back.
+    fn open_archive_menu(&mut self, column: u16, row: u16) -> bool {
+        let Some(index) = self.archived_row_at(column, row) else {
+            return false;
+        };
+        let Some(id) = self.archived.get(index).map(|a| a.id.clone()) else {
+            return false;
+        };
+        self.focus = PanelFocus::Swarm;
+        self.select_archived_row(index);
+        self.context_menu = Some(ContextMenu {
+            target: MenuTarget::Archived(id),
+            items: vec![MenuItem::Restore],
             anchor: Position::new(column, row),
             selected: 0,
             area: None,
@@ -220,7 +250,15 @@ impl App {
         let Some(&item) = menu.items.get(menu.selected) else {
             return;
         };
-        let (MenuTarget::Project(id) | MenuTarget::Agent(id)) = menu.target;
+        let id = match menu.target {
+            MenuTarget::Archived(id) => {
+                if item == MenuItem::Restore {
+                    self.restore_agent(id);
+                }
+                return;
+            }
+            MenuTarget::Project(id) | MenuTarget::Agent(id) => id,
+        };
         let Some(index) = self.agents.iter().position(|agent| agent.id == id) else {
             return;
         };
@@ -234,6 +272,7 @@ impl App {
             MenuItem::Open => self.request_agent_switch(id),
             MenuItem::Archive => self.archive_agent(id),
             MenuItem::RemoveProject => self.request_remove_project(id),
+            MenuItem::Restore => self.restore_agent(id),
         }
     }
 }
@@ -368,6 +407,60 @@ mod tests {
         app.handle_key(key(KeyCode::Enter));
         assert!(app.context_menu().is_none());
         assert!(matches!(rx.try_recv(), Ok(UiEvent::ArchiveAgent(id)) if id == "bb"));
+    }
+
+    /// The app with two archived agents, showing the Archive tab.
+    fn archive_app() -> (App, mpsc::Receiver<UiEvent>) {
+        let (mut app, rx) = app();
+        app.process_command(UiCommand::SetArchivedAgents(vec![
+            agent("dd", 0),
+            agent("ee", 1),
+        ]));
+        // Left switches the agents panel's tab only while it has focus.
+        app.focus = PanelFocus::Swarm;
+        app.handle_key(key(KeyCode::Left));
+        assert_eq!(app.agents_tab(), AgentsTab::Archive);
+        (app, rx)
+    }
+
+    #[test]
+    fn right_clicking_an_archived_agent_unarchives_it() {
+        let (mut app, mut rx) = archive_app();
+        let rows = screen(&mut app, 30);
+        press(&mut app, MouseButton::Right, cell_of(&rows, "EE"));
+        let menu = app.context_menu().expect("the menu opened");
+        assert_eq!(menu.target, MenuTarget::Archived("ee".into()));
+        assert_eq!(menu.items, vec![MenuItem::Restore]);
+        assert_eq!(app.selected_archived(), 1, "the row is highlighted");
+        assert!(rx.try_recv().is_err(), "opening the menu runs nothing");
+
+        let rows = screen(&mut app, 30);
+        press(&mut app, MouseButton::Left, cell_of(&rows, "Unarchive"));
+        assert!(app.context_menu().is_none());
+        assert!(matches!(rx.try_recv(), Ok(UiEvent::RestoreAgent(id)) if id == "ee"));
+        assert_eq!(app.agents_tab(), AgentsTab::Projects);
+    }
+
+    #[test]
+    fn the_archive_menu_unarchives_from_the_keys() {
+        let (mut app, mut rx) = archive_app();
+        let rows = screen(&mut app, 30);
+        press(&mut app, MouseButton::Right, cell_of(&rows, "DD"));
+        assert!(app.context_menu().is_some());
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.context_menu().is_none());
+        assert!(matches!(rx.try_recv(), Ok(UiEvent::RestoreAgent(id)) if id == "dd"));
+    }
+
+    #[test]
+    fn right_clicking_empty_archive_space_opens_no_menu() {
+        let (mut app, mut rx) = archive_app();
+        let rows = screen(&mut app, 30);
+        let (column, row) = cell_of(&rows, "EE");
+        // Several rows below the last archived agent, still in the panel.
+        press(&mut app, MouseButton::Right, (column, row + 4));
+        assert!(app.context_menu().is_none());
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

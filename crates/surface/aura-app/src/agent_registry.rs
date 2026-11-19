@@ -51,6 +51,11 @@ pub struct RegisteredAgent {
     /// the agents it spawned, until restored.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub archived: bool,
+    /// Its project was removed from the list while agents under it sat in
+    /// the Archive. Kept, hidden, so restoring one of them puts the same
+    /// project back.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub removed: bool,
     /// Short title of what the agent's chat is about, written by the model
     /// after its first turn. Shown instead of `name`, which stays the
     /// agent's identity.
@@ -536,6 +541,7 @@ impl AgentRegistry {
             project: None,
             folder: None,
             archived: false,
+            removed: false,
             title: None,
         }
     }
@@ -554,7 +560,7 @@ impl AgentRegistry {
     #[must_use]
     pub fn tree(&self) -> Vec<(&RegisteredAgent, usize)> {
         let mut out = Vec::with_capacity(self.file.agents.len());
-        for root in self.roots().filter(|a| !a.archived) {
+        for root in self.roots().filter(|a| !a.archived && !a.removed) {
             self.visit(root, 0, false, &mut out);
         }
         out
@@ -589,7 +595,7 @@ impl AgentRegistry {
         out: &mut Vec<(&'a RegisteredAgent, usize)>,
     ) {
         out.push((agent, depth));
-        let listed = |a: &&RegisteredAgent| with_archived || !a.archived;
+        let listed = |a: &&RegisteredAgent| with_archived || !(a.archived || a.removed);
         let spawned = self
             .file
             .agents
@@ -622,10 +628,15 @@ impl AgentRegistry {
         out
     }
 
-    /// Whether `agent` is in the Archive: archived itself or under an
-    /// archived agent.
+    /// Whether `agent` is off the list: archived itself, under an archived
+    /// agent, or left behind by a removed project.
     fn is_hidden(&self, agent: &RegisteredAgent) -> bool {
-        agent.archived || self.ancestors(agent).iter().any(|p| p.archived)
+        agent.archived
+            || agent.removed
+            || self
+                .ancestors(agent)
+                .iter()
+                .any(|p| p.archived || p.removed)
     }
 
     /// `agent_id` and every agent under it.
@@ -661,7 +672,8 @@ impl AgentRegistry {
     }
 
     /// Bring `agent_id` back from the Archive, with the agents above it so
-    /// it has a place in the list.
+    /// it has its old place in the list. When its project was removed in
+    /// the meantime, that same project comes back with it.
     ///
     /// # Errors
     /// Returns an error if the agent is unknown or the registry cannot be
@@ -679,14 +691,18 @@ impl AgentRegistry {
         for agent in &mut self.file.agents {
             if restoring.contains(&agent.zns_id) {
                 agent.archived = false;
+                agent.removed = false;
             }
         }
         self.save()
     }
 
-    /// Drop the project that contains `agent_id` from the registry: its
-    /// root and every agent under it, archived or not. Records and the
-    /// project's folder are left alone. Returns the removed agents.
+    /// Take the project that contains `agent_id` off the list: its root
+    /// and every agent under it. Agents in the Archive stay there, so the
+    /// root and the agents between it and them are kept, hidden, to put
+    /// the project back when one is restored. Everything else is dropped
+    /// from the registry; records and the project's folder are left alone.
+    /// Returns the agents that left the list.
     ///
     /// # Errors
     /// Returns an error if the agent is unknown, the project holds every
@@ -695,17 +711,46 @@ impl AgentRegistry {
         let Some(root) = self.project_root(agent_id).map(RegisteredAgent::agent_id) else {
             anyhow::bail!("no such agent");
         };
-        let removing = self.subtree(root);
+        let mut gone = self.subtree(root);
         if self
             .tree()
             .iter()
-            .all(|(agent, _)| removing.contains(&agent.agent_id()))
+            .all(|(agent, _)| gone.contains(&agent.agent_id()))
         {
             anyhow::bail!("it is the last project in the list; create another one first");
         }
+        // Archived agents heading their own part of the Archive. None when
+        // the root itself is archived: then the whole project goes.
+        let heads: Vec<&RegisteredAgent> = gone
+            .iter()
+            .filter_map(|&id| self.find(id))
+            .filter(|a| {
+                a.agent_id() != root && a.archived && !self.ancestors(a).iter().any(|p| p.archived)
+            })
+            .collect();
+        let hiding: Vec<AgentId> = heads
+            .iter()
+            .flat_map(|head| self.ancestors(head))
+            .map(RegisteredAgent::agent_id)
+            .collect();
+        let archived: Vec<AgentId> = heads
+            .iter()
+            .flat_map(|head| self.subtree(head.agent_id()))
+            .collect();
+        gone.retain(|id| !archived.contains(id));
+        let dropping: Vec<AgentId> = gone
+            .iter()
+            .copied()
+            .filter(|id| !hiding.contains(id))
+            .collect();
+        for agent in &mut self.file.agents {
+            if hiding.contains(&agent.agent_id()) {
+                agent.removed = true;
+            }
+        }
         self.file
             .agents
-            .retain(|agent| !removing.contains(&agent.agent_id()));
+            .retain(|agent| !dropping.contains(&agent.agent_id()));
         if self
             .file
             .active
@@ -715,7 +760,7 @@ impl AgentRegistry {
             self.file.active = None;
         }
         self.save()?;
-        Ok(removing)
+        Ok(gone)
     }
 
     fn position(&self, agent_id: AgentId) -> Option<usize> {
@@ -1014,8 +1059,95 @@ mod tests {
         assert_eq!(names(registry.archived_tree()), [(added.name.clone(), 0)]);
 
         let removed = registry.remove_project(added.agent_id()).unwrap();
-        assert_eq!(removed, [root.agent_id(), added.agent_id()]);
+        assert_eq!(removed, [root.agent_id()]);
         assert_eq!(names(registry.tree()), [(legacy.name, 0)]);
+        assert_eq!(names(registry.archived_tree()), [(added.name.clone(), 0)]);
+    }
+
+    #[test]
+    fn restoring_an_agent_whose_project_was_removed_puts_that_project_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let mut registry = AgentRegistry::load_or_init(dir.path()).unwrap();
+        let legacy = registry.active().clone();
+        let site = registry.create_project("Site", folder.path()).unwrap();
+        let added = registry.create_in_project(site.agent_id()).unwrap();
+        let other = registry.create_in_project(site.agent_id()).unwrap();
+        let spawned = registry
+            .create_instance("reviewer", Some(added.zns_id.clone()))
+            .unwrap();
+        // Archived under a listed agent: that agent is kept too.
+        let nested = registry
+            .create_instance("tests", Some(other.zns_id.clone()))
+            .unwrap();
+        registry.archive(added.agent_id()).unwrap();
+        registry.archive(nested.agent_id()).unwrap();
+
+        let gone = registry.remove_project(site.agent_id()).unwrap();
+        assert_eq!(gone, [site.agent_id(), other.agent_id()]);
+        assert_eq!(names(registry.tree()), [(legacy.name.clone(), 0)]);
+        assert_eq!(
+            names(registry.archived_tree()),
+            [
+                (added.name.clone(), 0),
+                (spawned.name.clone(), 1),
+                (nested.name.clone(), 0)
+            ]
+        );
+
+        // Survives a reload, then comes back in the same project.
+        let mut registry = AgentRegistry::load_or_init(dir.path()).unwrap();
+        assert_eq!(registry.active(), &legacy);
+        registry.restore(added.agent_id()).unwrap();
+        assert_eq!(
+            names(registry.tree()),
+            [
+                (legacy.name.clone(), 0),
+                (site.name.clone(), 0),
+                (added.name.clone(), 0),
+                (spawned.name.clone(), 1)
+            ]
+        );
+        assert_eq!(
+            registry.project_root(added.agent_id()),
+            registry.find(site.agent_id())
+        );
+        assert_eq!(registry.find(site.agent_id()).unwrap(), &site);
+        assert_eq!(
+            registry.project_folder(spawned.agent_id()),
+            Some(folder.path().canonicalize().unwrap())
+        );
+        assert_eq!(names(registry.archived_tree()), [(nested.name.clone(), 0)]);
+
+        registry.restore(nested.agent_id()).unwrap();
+        assert_eq!(
+            names(registry.tree()),
+            [
+                (legacy.name.clone(), 0),
+                (site.name.clone(), 0),
+                (added.name.clone(), 0),
+                (spawned.name.clone(), 1),
+                (other.name.clone(), 0),
+                (nested.name.clone(), 1)
+            ]
+        );
+        assert!(registry.archived_tree().is_empty());
+    }
+
+    #[test]
+    fn removing_an_archived_project_drops_all_of_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let mut registry = AgentRegistry::load_or_init(dir.path()).unwrap();
+        let legacy = registry.active().clone();
+        let site = registry.create_project("Site", folder.path()).unwrap();
+        let child = registry.create_in_project(site.agent_id()).unwrap();
+        registry.archive(child.agent_id()).unwrap();
+        registry.archive(site.agent_id()).unwrap();
+
+        let removed = registry.remove_project(site.agent_id()).unwrap();
+        assert_eq!(removed, [site.agent_id(), child.agent_id()]);
+        assert_eq!(registry.agents(), std::slice::from_ref(&legacy));
     }
 
     #[test]
@@ -1090,13 +1222,17 @@ mod tests {
         let legacy = registry.active().clone();
         let site = registry.create_project("Site", folder.path()).unwrap();
         let child = registry.create_in_project(site.agent_id()).unwrap();
+        let listed = registry.create_in_project(site.agent_id()).unwrap();
         registry.archive(child.agent_id()).unwrap();
         registry.set_active(site.agent_id()).unwrap();
 
         let removed = registry.remove_project(child.agent_id()).unwrap();
-        assert_eq!(removed, [site.agent_id(), child.agent_id()]);
+        assert_eq!(removed, [site.agent_id(), listed.agent_id()]);
         let reloaded = AgentRegistry::load_or_init(dir.path()).unwrap();
-        assert_eq!(reloaded.agents(), std::slice::from_ref(&legacy));
+        assert_eq!(names(reloaded.tree()), [(legacy.name.clone(), 0)]);
+        assert_eq!(names(reloaded.archived_tree()), [(child.name.clone(), 0)]);
+        assert!(reloaded.find(listed.agent_id()).is_none());
+        assert!(reloaded.find(site.agent_id()).unwrap().removed);
         assert_eq!(reloaded.active(), &legacy);
         assert!(registry.remove_project(legacy.agent_id()).is_err());
     }

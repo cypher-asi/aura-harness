@@ -91,13 +91,21 @@ impl App {
 
     /// Bring the highlighted archived agent back to the projects list.
     fn restore_selected(&mut self) {
-        let Some(id) = self
+        if let Some(id) = self
             .archived
             .get(self.selected_archived)
             .map(|a| a.id.clone())
-        else {
+        {
+            self.restore_agent(id);
+        }
+    }
+
+    /// Bring the archived agent with hex id `id` back to the projects
+    /// list and show that list.
+    pub(super) fn restore_agent(&mut self, id: String) {
+        if id.is_empty() {
             return;
-        };
+        }
         self.send_event(UiEvent::RestoreAgent(id));
         self.show_agents_tab(super::AgentsTab::Projects);
     }
