@@ -1,0 +1,11 @@
+{
+  "id": "01a1f59199760003",
+  "title": "this should be formatted when messaging goes back [image 1]",
+  "state": "completed",
+  "agent_id": "234afb8bef351cb07540db26d17d5b7ad6ea7bd5129ed04306205b1d6dc24531",
+  "agent_name": "Agent 29",
+  "items": [],
+  "summary": "Messages that show up with the `→` prompt in the terminal UI, like the task prompts in your screenshot, are now rendered as markdown instead of plain text. Before, only the agent's replies were formatted, so backticks, `**bold**` and list markers showed up raw.",
+  "updated_ms": 1795121493925,
+  "created_ms": 1795121322358
+}
