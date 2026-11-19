@@ -538,7 +538,7 @@ pub fn flow(h: &mut Stage) {
         ..FlowNode::default()
     };
     let linked = |mut node: FlowNode, kind: &str, to: &str| {
-        node.links = vec![(kind.into(), to.into())];
+        node.links.push((kind.into(), to.into()));
         node
     };
     let lane = |id: &str, name: &str, parent: Option<&str>| FlowLane {
@@ -560,14 +560,22 @@ pub fn flow(h: &mut Stage) {
             node("a1", 2, FlowKind::Model, "qwen3-coder", "1.2k/300 · 4s"),
             node("a1", 3, FlowKind::Tool, "list_files crates", "12ms"),
             linked(
-                node("a1", 4, FlowKind::Tool, "task coder · fix README", "8.1s"),
-                "spawn",
-                "c1:1",
+                linked(
+                    node("a1", 4, FlowKind::Tool, "task coder · fix README", "8.1s"),
+                    "spawn",
+                    "c1:1",
+                ),
+                "result",
+                "a1:7",
             ),
             linked(
-                node("a1", 5, FlowKind::Tool, "task tester · cargo test", "6.3s"),
-                "spawn",
-                "t1:1",
+                linked(
+                    node("a1", 5, FlowKind::Tool, "task tester · cargo test", "6.3s"),
+                    "spawn",
+                    "t1:1",
+                ),
+                "result",
+                "a1:8",
             ),
             node("c1", 1, FlowKind::Prompt, "fix README", ""),
             node("c1", 2, FlowKind::Model, "qwen3-coder", "800/120 · 2s"),
@@ -606,15 +614,22 @@ fn graph_canvas() {
     snapshot("graph", &mut h);
 
     h.shell.key_pressed(&Press::of(NamedKey::Home), h.now);
-    h.shell.key_pressed(&Press::of(NamedKey::ArrowRight), h.now);
-    h.shell.key_pressed(&Press::of(NamedKey::ArrowDown), h.now);
-    h.shell.key_pressed(&Press::of(NamedKey::ArrowDown), h.now);
+    for _ in 0..3 {
+        h.shell.key_pressed(&Press::of(NamedKey::ArrowDown), h.now);
+    }
     let tui = &h.shell.tabs.front().tui;
     assert_eq!(
         tui.flow().selected_node().map(|n| n.id.as_str()),
         Some("a1:4")
     );
     snapshot("graph-delegation", &mut h);
+
+    // Zoomed out, the whole flow fits; further out, text is bars.
+    h.shell.tabs.front_mut().tui.zoom_flow(0.5, None);
+    snapshot("graph-zoomed-out", &mut h);
+    h.shell.tabs.front_mut().tui.zoom_flow(0.5, None);
+    h.shell.frame(h.now);
+    h.shell.tabs.front_mut().tui.zoom_flow(4.0, None);
 
     // A menu over the canvas stays over it.
     h.type_text("/");

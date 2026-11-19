@@ -378,6 +378,8 @@ impl ApplicationHandler<Wake> for Handler {
                     .button(button, state.is_pressed(), Instant::now());
             }
             WindowEvent::MouseWheel { delta, .. } => self.shell.wheel(delta, Instant::now()),
+            #[allow(clippy::cast_possible_truncation)]
+            WindowEvent::PinchGesture { delta, .. } => self.shell.pinch(delta as f32),
             _ => {}
         }
     }

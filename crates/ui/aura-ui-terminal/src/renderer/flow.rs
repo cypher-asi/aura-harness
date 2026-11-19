@@ -2,17 +2,16 @@
 //! did, as cards wired together on a canvas, drawn with box characters.
 //!
 //! ```text
-//!   ┌ ▾ ✓ prompt ────────────────────┐
+//!   ┌ ▾ ✓ turn ───────────── 2 steps ┐
 //!   │ add a greeting                 │
-//!   └────────────────┬───────────────┘
-//!                    │
-//!   ┌ ✓ model ───────┴ 1.2k/300 · 4s ┐
-//!   │ sonnet                         │
-//!   │ ✓ task coder · write greet()   ●────╮
-//!   └────────────────────────────────┘    │ coder #1
-//!                                         │ ┌ ▾ ✓ prompt ────────── coder #1 ┐
-//!                                         ╰─┤ write greet()                  │
-//!                                           └────────────────────────────────┘
+//!   └─┬──────────────────────────────┘
+//!     │ ┌ ▾ ✓ model ── 1.2k/300 · 4s ┐
+//!     ├─┤ sonnet                     │
+//!     │ │ ✓ task coder · write… 4.2s ●────╮
+//!     │ └────────────────────────────┘    │ coder #1
+//!     │ ┌ ● model ───────────────────┐    │ ┌ ✓ turn ────────────── coder #1 ┐
+//!     ╰─┤ sonnet                     │    ╰─┤ write greet()                  │
+//!       └────────────────────────────┘      │ ↳ done                         │
 //! ```
 //!
 //! Only the part of the canvas on screen is drawn, so a long flow costs no
@@ -36,7 +35,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthChar;
 
-const HINT: &str = "←→ card  ↑↓ line  [ ] prompt  ⏎ open  Space fold  z all  f link  o agent  r record  drag pan  Esc chat";
+const HINT: &str = "←→ turn  ↑↓ line  [ ] prompt  ⏎ open  Space fold  z all  f link  o agent  r record  drag pan  Esc chat";
 
 /// Draw the GRAPH tab in `area`, the chat panel below its header bar.
 pub(super) fn render_flow(
@@ -48,7 +47,13 @@ pub(super) fn render_flow(
 ) {
     let muted = Style::default().fg(theme.colors.muted);
     let mut block = body_block((is_focused, app.host_chrome()), theme);
-    let hint = truncate_record_info(HINT, usize::from(area.width).saturating_sub(4));
+    let hint = if app.host_canvas() {
+        let percent = (app.flow().zoom() * 100.0).round();
+        format!("{percent}%  +/- zoom  {HINT}")
+    } else {
+        HINT.to_string()
+    };
+    let hint = truncate_record_info(&hint, usize::from(area.width).saturating_sub(4));
     if is_focused && !hint.is_empty() {
         block = block.title_bottom(Line::from(Span::styled(format!(" {hint} "), muted)));
     }
@@ -203,24 +208,29 @@ impl Canvas<'_> {
 
     fn draw(&mut self) {
         self.names();
+        let xs = self.first.0..self.first.0 + usize::from(self.area.width);
+        let ys = self.first.1..self.first.1 + usize::from(self.area.height);
         let selected = self.flow.selected_card();
         let mut wires: Vec<(bool, Wire)> = self
             .layout
-            .wires
-            .iter()
-            .map(|wire| {
+            .visible_wires(&xs, &ys)
+            .into_iter()
+            .map(|at| {
+                let wire = self.layout.wires[at];
                 (
                     Some(wire.from) == selected || Some(wire.to) == selected,
-                    *wire,
+                    wire,
                 )
             })
             .collect();
         wires.sort_by_key(|(hot, _)| *hot);
         for (hot, wire) in &wires {
-            self.wire(*wire, self.wire_style(wire.kind, *hot));
+            if !self.layout.stacked(wire) {
+                self.wire(*wire, self.wire_style(wire.kind, *hot));
+            }
         }
         let linked = self.flow.linked_cards();
-        for card in 0..self.layout.cards.len() {
+        for card in self.layout.visible_cards(&xs, &ys) {
             let standing = if selected == Some(card) {
                 Standing::Selected
             } else if linked.contains(&card) {
@@ -233,7 +243,7 @@ impl Canvas<'_> {
         for (hot, wire) in &wires {
             let style = self.wire_style(wire.kind, *hot);
             if self.layout.stacked(wire) {
-                self.drop(*wire, style);
+                self.spine(*wire, style);
                 continue;
             }
             let (x, y) = self.layout.port_out(wire.from, wire.row);
@@ -267,25 +277,27 @@ impl Canvas<'_> {
                 .add_modifier(Modifier::BOLD);
         }
         Style::default().fg(match kind {
-            WireKind::Next => self.theme.colors.muted,
+            WireKind::Next | WireKind::Spine => self.theme.colors.muted,
             WireKind::Spawn | WireKind::Link => self.theme.colors.secondary,
             WireKind::Return => self.theme.colors.success,
             WireKind::Message => self.theme.colors.warning,
         })
     }
 
-    /// One wire: out of its port, along to the gutter before the card it
-    /// goes to, up or down there, and into that card's side.
+    /// One wire: out of its port, along to the gutter before the block it
+    /// goes to, up or down there, and into its card's side (over the
+    /// block's spine, for a subcard).
     fn wire(&mut self, wire: Wire, style: Style) {
         let (from_x, from_y) = self.layout.port_out(wire.from, wire.row);
         let (to_x, to_y) = self.layout.port_in(wire.to);
-        if to_x < from_x + 3 || self.layout.stacked(&wire) {
+        let gutter = FlowLayout::column_x(self.layout.cards[wire.to].column);
+        if gutter < from_x + 3 {
             return;
         }
         if from_y == to_y {
             self.horizontal(from_x + 1..to_x, from_y, style);
         } else {
-            let turn = (to_x - 2 - wire.track).max(from_x + 1);
+            let turn = (gutter - 2 - wire.track).max(from_x + 1);
             self.horizontal(from_x + 1..turn, from_y, style);
             let (top, bottom) = (from_y.min(to_y), from_y.max(to_y));
             for y in top + 1..bottom {
@@ -302,21 +314,20 @@ impl Canvas<'_> {
         }
     }
 
-    /// A wire straight down from a card's bottom border to the top border
-    /// of the card under it, joined to both where they are lines.
-    fn drop(&mut self, wire: Wire, style: Style) {
-        let (from, to) = (
-            self.layout.card_rect(wire.from),
-            self.layout.card_rect(wire.to),
-        );
-        let x = FlowLayout::stack_x(self.layout.cards[wire.from].column);
-        self.join(x, from.bottom() - 1, DOWN, style);
-        for y in from.bottom()..to.y {
+    /// A spine wire: down from the main card's bottom border, then across
+    /// into the subcard's side. The wires of one block share the spine,
+    /// so it branches `├` at every subcard but the last.
+    fn spine(&mut self, wire: Wire, style: Style) {
+        let main = self.layout.card_rect(wire.from);
+        let (to_x, to_y) = self.layout.port_in(wire.to);
+        let x = self.layout.spine_x(wire.from);
+        self.join(x, main.bottom() - 1, DOWN, style);
+        for y in main.bottom()..to_y {
             self.join(x, y, UP | DOWN, style);
         }
-        if ends_of(self.symbol(x, to.y)) == LEFT | RIGHT {
-            self.join(x, to.y, UP, style);
-        }
+        self.join(x, to_y, UP | RIGHT, style);
+        self.horizontal(x + 1..to_x, to_y, style);
+        self.join(to_x, to_y, LEFT, style);
     }
 
     fn horizontal(&mut self, xs: std::ops::Range<usize>, y: usize, style: Style) {
@@ -420,21 +431,21 @@ impl Canvas<'_> {
         }
     }
 
-    /// `┌ ▾ ✓ model ─────── 1.2k/300 · 4s ┐`: fold marker (turns only),
-    /// status, kind, and the card's facts against the right corner.
+    /// `┌ ▾ ✓ model ─────── 1.2k/300 · 4s ┐`: fold marker (on cards that
+    /// fold), status, kind, and the card's facts against the right corner.
     fn title(&mut self, card: usize, border: Style) {
         let rect = self.layout.card_rect(card);
         let placed = &self.layout.cards[card];
         let node = &self.flow.nodes()[placed.head];
         let (glyph, glyph_color) = status_glyph(node.status, self.theme);
         let mut parts: Vec<(&str, Style)> = Vec::new();
-        if placed.steps > 0 {
+        if placed.folds() {
             let marker = if placed.folded { "▸" } else { "▾" };
             parts.push((marker, Style::default().fg(self.theme.colors.secondary)));
         }
         parts.push((glyph, Style::default().fg(glyph_color)));
         parts.push((
-            node.kind.label(),
+            self.flow.card_kind_label(card),
             Style::default()
                 .fg(kind_color(node.kind, self.theme))
                 .add_modifier(Modifier::BOLD),
@@ -476,7 +487,10 @@ impl Canvas<'_> {
     fn row(&mut self, card: usize, row: usize, line: usize, selected: bool) {
         let rect = self.layout.card_rect(card);
         let node = &self.flow.nodes()[self.layout.cards[card].rows[row]];
-        let (glyph, glyph_color) = status_glyph(node.status, self.theme);
+        let (glyph, glyph_color) = match node.kind {
+            FlowKind::Reply => ("↳", self.theme.colors.secondary),
+            _ => status_glyph(node.status, self.theme),
+        };
         let base = if selected {
             self.selection()
         } else {
@@ -596,6 +610,11 @@ mod tests {
 
     /// A lead whose model call gives a coder a task, and gets its reply.
     fn app_with_flow() -> App {
+        app_with_flow_and(Vec::new())
+    }
+
+    /// [`app_with_flow`], with `more` nodes after it.
+    fn app_with_flow_and(more: Vec<FlowNode>) -> App {
         let mut app = App::new();
         app.process_command(UiCommand::SetActiveAgent(LEAD.into()));
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
@@ -605,7 +624,10 @@ mod tests {
         let mut read = node(LEAD, 3, 108, FlowKind::Tool, "read_file src/lib.rs");
         read.detail = "12ms".into();
         let mut call = node(LEAD, 4, 110, FlowKind::Tool, "task coder · write greet()");
-        call.links = vec![("spawn".into(), "bb:1".into())];
+        call.links = vec![
+            ("spawn".into(), "bb:1".into()),
+            ("result".into(), "aa:5".into()),
+        ];
         call.detail = "4.2s".into();
         let mut reply = node(CODER, 2, 130, FlowKind::Reply, "done");
         reply.links = vec![("return".into(), "aa:5".into())];
@@ -625,7 +647,7 @@ mod tests {
                     parent: Some(LEAD.into()),
                 },
             ],
-            nodes: vec![
+            nodes: [
                 node(LEAD, 1, 100, FlowKind::Prompt, "add a greeting"),
                 model,
                 read,
@@ -634,7 +656,10 @@ mod tests {
                 reply,
                 node(LEAD, 5, 140, FlowKind::Result, "coder #1 replied"),
                 pending,
-            ],
+            ]
+            .into_iter()
+            .chain(more)
+            .collect(),
         });
         app
     }
@@ -691,88 +716,113 @@ mod tests {
     }
 
     #[test]
-    fn cards_stack_down_a_column_then_wrap_right_wired_port_to_port() {
+    fn a_turn_is_a_main_card_with_its_model_calls_on_a_spine() {
         let mut app = app_with_flow();
         press(&mut app, KeyCode::Home);
         let rows = screen(&mut app, 84, 24);
         let expected = [
             "│                                                                                  │",
-            "│  ┌ ▾ ✓ prompt ────────────────────┐                                              │",
-            "│  │ add a greeting                 │                                           ╭┬─│",
-            "│  └────────────────┬───────────────┘                                           ││ │",
-            "│                   │                                                           ││ │",
-            "│  ┌ ✓ model ───────┴ 1.2k/300 · 4s ┐                                           ││ │",
-            "│  │ sonnet                         ●───────────────────────────────────────────┼╯ │",
-            "│  │ ✓ read_file src/lib.rs    12ms │                                           │  │",
-            "│  │ ✓ task coder · write gre… 4.2s ●────╮                                      │  │",
-            "│  └────────────────────────────────┘    │                                      │  │",
-            "│                                        │                                      │  │",
-            "│                                        │ coder #1                             │  │",
-            "│                                        │ ┌ ▾ ✓ prompt ────────── coder #1 ┐   │  │",
-            "│                                        ╰─┤ write greet()                  │   │  │",
-            "│                                          └────────────────┬───────────────┘   │  │",
-            "│                                                           │                   │  │",
-            "│                                          ┌ ✓ reply ───────┴───────────────┐   │  │",
-            "│                                          │ done                           ●───╯  │",
+            "│  ┌ ▾ ✓ turn ───────────── 2 steps ┐                                              │",
+            "│  │ add a greeting                 │                                              │",
+            "│  └─┬──────────────────────────────┘                                              │",
+            "│    │                                                                             │",
+            "│    │ ┌ ▾ ✓ model ── 1.2k/300 · 4s ┐                                              │",
+            "│    ├─┤ sonnet                     │                                              │",
+            "│    │ │ ✓ read_file src/lib.… 12ms │                                              │",
+            "│    │ │ ✓ task coder · write… 4.2s ●────╮                                         │",
+            "│    │ └────────────────────────────┘    │                                         │",
+            "│    │                                   │                                         │",
+            "│    │ ┌ ● model ───────────────────┐    │                                         │",
+            "│    ╰─┤ sonnet                     │    │                                         │",
+            "│      └────────────────────────────┘    │                                         │",
+            "│                                        │                                         │",
+            "│                                        │ coder #1                                │",
+            "│                                        │ ┌ ✓ turn ────────────── coder #1 ┐      │",
+            "│                                        ╰─┤ write greet()                  │      │",
+            "│                                          │ ↳ done                         │      │",
             "│                                          └────────────────────────────────┘      │",
         ];
-        assert_eq!(rows[1..=19], expected, "\n{}", rows.join("\n"));
+        assert_eq!(rows[1..=20], expected, "\n{}", rows.join("\n"));
     }
 
     #[test]
-    fn a_short_view_splits_its_rows_between_the_bands() {
-        let mut app = app_with_flow();
-        press(&mut app, KeyCode::Home);
-        let rows = screen(&mut app, 84, 12).join("\n");
+    fn turns_go_down_a_column_while_it_has_room_then_wrap_right() {
+        let more = || {
+            vec![
+                node(LEAD, 7, 160, FlowKind::Prompt, "now say bye"),
+                node(LEAD, 8, 165, FlowKind::Model, "haiku"),
+            ]
+        };
+        let mut app = app_with_flow_and(more());
+        let rows = screen(&mut app, 84, 40);
         assert!(
-            rows.contains("add a greeting                 ●──────┤ sonnet"),
-            "no room to stack: the model call is beside the prompt\n{rows}"
+            rows.iter().any(|row| row.starts_with("│  │ now say bye")),
+            "under the first turn, folded now\n{}",
+            rows.join("\n")
+        );
+
+        let mut app = app_with_flow_and(more());
+        press(&mut app, KeyCode::Home);
+        let rows = screen(&mut app, 84, 12);
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("add a greeting") && row.contains("now say bye")),
+            "no room under it: the next column\n{}",
+            rows.join("\n")
         );
     }
 
     #[test]
-    fn wires_into_one_port_join() {
-        let mut app = app_with_flow();
-        press(&mut app, KeyCode::Home);
-        let rows = screen(&mut app, 200, 16).join("\n");
-        assert!(rows.contains("─┬─┤ coder #1 replied"), "{rows}");
-        // Drawn on top, the selection's wires still join the others.
-        press(&mut app, KeyCode::Right);
-        let rows = screen(&mut app, 200, 16).join("\n");
-        assert!(rows.contains("─┬─┤ coder #1 replied"), "{rows}");
-    }
-
-    #[test]
-    fn a_folded_turn_is_its_prompt_and_says_how_much_it_hides() {
+    fn a_folded_turn_is_its_main_card_and_says_how_much_it_hides() {
         let mut app = app_with_flow();
         press(&mut app, KeyCode::Home);
         press(&mut app, KeyCode::Char(' '));
         let rows = screen(&mut app, 120, 16).join("\n");
         assert!(
-            rows.contains("┌ ▸ ✓ prompt ────────── +3 steps ┐"),
+            rows.contains("┌ ▸ ✓ turn ──────────── +2 steps ┐"),
             "{rows}"
         );
         assert!(!rows.contains("sonnet"), "{rows}");
         assert!(
-            rows.contains("╰─┤ write greet()"),
-            "the spawn comes from the prompt\n{rows}"
+            rows.contains("add a greeting                 ●────╮"),
+            "the spawn comes from the main card\n{rows}"
         );
+        assert!(rows.contains("╰─┤ write greet()"), "{rows}");
+    }
+
+    #[test]
+    fn a_folded_model_call_hides_its_tool_calls() {
+        let mut app = app_with_flow();
+        press(&mut app, KeyCode::Home);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.flow().selected_node().unwrap().id, "aa:2");
+        press(&mut app, KeyCode::Char(' '));
+        let rows = screen(&mut app, 120, 24).join("\n");
+        assert!(rows.contains("┌ ▸ ✓ model ─ +2 tools · "), "{rows}");
+        assert!(!rows.contains("read_file"), "{rows}");
+        assert!(
+            rows.contains("├─┤ sonnet                     ●────╮"),
+            "the spawn comes from the model call\n{rows}"
+        );
+        press(&mut app, KeyCode::Char(' '));
+        let rows = screen(&mut app, 120, 24).join("\n");
+        assert!(rows.contains("read_file"), "{rows}");
     }
 
     #[test]
     fn the_view_follows_the_selection_across_the_canvas() {
         let mut app = app_with_flow();
-        let rows = screen(&mut app, 80, 16).join("\n");
+        let rows = screen(&mut app, 80, 10).join("\n");
         assert!(rows.contains("● model"), "the newest card, pending\n{rows}");
         assert!(!rows.contains("add a greeting"), "{rows}");
         press(&mut app, KeyCode::Home);
-        let rows = screen(&mut app, 80, 16).join("\n");
+        let rows = screen(&mut app, 80, 10).join("\n");
         assert!(rows.contains("add a greeting"), "{rows}");
 
         // Panned. Other agents are named over their cards; the agent on
         // screen goes unnamed.
-        app.pan_flow(50.0, 0.0);
-        let rows = screen(&mut app, 80, 16).join("\n");
+        app.pan_flow(40.0, 14.0);
+        let rows = screen(&mut app, 80, 10).join("\n");
         assert!(!rows.contains("add a greeting"));
         assert!(rows.contains("coder #1"), "{rows}");
         assert!(!rows.contains("Lead"), "{rows}");
@@ -784,7 +834,7 @@ mod tests {
         press(&mut app, KeyCode::Home);
         let buffer = whole_screen(&mut app);
         let label = find(&buffer, "sonnet").unwrap();
-        let marker = find(&buffer, "▾ ✓ prompt").unwrap();
+        let marker = find(&buffer, "▾ ✓ turn").unwrap();
         let down = MouseEventKind::Down(MouseButton::Left);
         mouse(&mut app, down, label);
         assert_eq!(app.flow().selected_node().unwrap().id, "aa:2");
@@ -797,9 +847,18 @@ mod tests {
         mouse(&mut app, down, marker);
         app.flow_mut().ensure_layout();
         assert!(app.flow().layout().cards[0].folded);
-        press(&mut app, KeyCode::Char(' '));
 
-        // A drag on empty canvas moves the view with the pointer.
+        // A drag on empty canvas moves the view with the pointer, over a
+        // flow wider than the screen.
+        let turns = (0..12).flat_map(|turn| {
+            let at = 200 + turn * 10;
+            [
+                node(LEAD, 7 + 2 * turn, at, FlowKind::Prompt, "and then"),
+                node(LEAD, 8 + 2 * turn, at + 5, FlowKind::Model, "haiku"),
+            ]
+        });
+        let mut app = app_with_flow_and(turns.collect());
+        press(&mut app, KeyCode::Home);
         let buffer = whole_screen(&mut app);
         // The gutter right of the prompt.
         let (x, y) = find(&buffer, "add a greeting").unwrap();

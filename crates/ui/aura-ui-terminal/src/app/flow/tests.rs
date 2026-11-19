@@ -1,4 +1,4 @@
-use super::layout::{WireKind, MAX_LINES};
+use super::layout::{CardKind, WireKind, MAX_LINES};
 use super::*;
 use crate::app::file_view::FileBody;
 use crate::events::{AgentSummary, TraceNodeStatus, UiCommand};
@@ -34,8 +34,21 @@ fn linked(mut from: FlowNode, kind: &str, to: &str) -> FlowNode {
     from
 }
 
-/// A lead that gives a coder a task, gets its reply, then gives a
-/// tester one.
+/// A `task` call at `seq` that starts `agent` and gets back `result`.
+fn task(seq: u64, at_ms: u64, label: &str, agent: &str, result: &str) -> FlowNode {
+    linked(
+        linked(
+            node(LEAD, seq, at_ms, FlowKind::Tool, label),
+            "spawn",
+            &format!("{agent}:1"),
+        ),
+        "result",
+        result,
+    )
+}
+
+/// A lead turn whose two model calls give a coder a task, get its reply,
+/// then give a tester one.
 fn delegation() -> (Vec<FlowLane>, Vec<FlowNode>) {
     let lanes = vec![
         lane(LEAD, "Lead", None),
@@ -45,11 +58,7 @@ fn delegation() -> (Vec<FlowLane>, Vec<FlowNode>) {
     let nodes = vec![
         node(LEAD, 1, 100, FlowKind::Prompt, "add a greeting"),
         node(LEAD, 2, 110, FlowKind::Model, "sonnet"),
-        linked(
-            node(LEAD, 3, 120, FlowKind::Tool, "task coder"),
-            "spawn",
-            "bb:1",
-        ),
+        task(3, 120, "task coder", CODER, "aa:6"),
         node(CODER, 1, 130, FlowKind::Prompt, "write greet()"),
         node(CODER, 2, 140, FlowKind::Tool, "write_file src/greet.rs"),
         linked(
@@ -59,11 +68,7 @@ fn delegation() -> (Vec<FlowLane>, Vec<FlowNode>) {
         ),
         node(LEAD, 6, 160, FlowKind::Result, "coder #1 replied"),
         node(LEAD, 7, 165, FlowKind::Model, "sonnet"),
-        linked(
-            node(LEAD, 8, 170, FlowKind::Tool, "task tester"),
-            "spawn",
-            "cc:1",
-        ),
+        task(8, 170, "task tester", TESTER, "aa:9"),
         node(TESTER, 1, 180, FlowKind::Prompt, "test greet()"),
         linked(
             node(TESTER, 2, 190, FlowKind::Reply, "passes"),
@@ -72,6 +77,30 @@ fn delegation() -> (Vec<FlowLane>, Vec<FlowNode>) {
         ),
         node(LEAD, 9, 200, FlowKind::Result, "tester #1 replied"),
         node(LEAD, 10, 210, FlowKind::Reply, "greeting added"),
+    ];
+    (lanes, nodes)
+}
+
+/// Three lead turns, the first starting a coder and the last a tester.
+fn three_turns() -> (Vec<FlowLane>, Vec<FlowNode>) {
+    let lanes = vec![
+        lane(LEAD, "Lead", None),
+        lane(CODER, "coder #1", Some(LEAD)),
+        lane(TESTER, "tester #1", Some(LEAD)),
+    ];
+    let nodes = vec![
+        node(LEAD, 1, 100, FlowKind::Prompt, "first"),
+        node(LEAD, 2, 110, FlowKind::Model, "sonnet"),
+        task(3, 120, "task coder", CODER, ""),
+        node(CODER, 1, 130, FlowKind::Prompt, "code"),
+        node(CODER, 2, 140, FlowKind::Reply, "coded"),
+        node(LEAD, 4, 200, FlowKind::Prompt, "second"),
+        node(LEAD, 5, 210, FlowKind::Model, "sonnet"),
+        node(LEAD, 6, 300, FlowKind::Prompt, "third"),
+        node(LEAD, 7, 310, FlowKind::Model, "sonnet"),
+        task(8, 320, "task tester", TESTER, ""),
+        node(TESTER, 1, 330, FlowKind::Prompt, "test"),
+        node(TESTER, 2, 340, FlowKind::Reply, "tested"),
     ];
     (lanes, nodes)
 }
@@ -124,38 +153,78 @@ fn heads(app: &App) -> Vec<&str> {
     cards(app).into_iter().map(|card| card[0]).collect()
 }
 
+fn bands(app: &App) -> Vec<usize> {
+    let layout = app.flow().layout();
+    layout.cards.iter().map(|card| card.band).collect()
+}
+
 #[test]
-fn a_model_call_is_a_card_with_its_tool_calls_as_rows() {
+fn a_turn_is_a_main_card_with_a_subcard_for_each_model_call() {
     let app = app_with_flow();
     assert_eq!(
         cards(&app),
         [
-            vec!["add a greeting"],
+            vec!["add a greeting", "greeting added"],
             vec!["sonnet", "task coder"],
-            vec!["write greet()", "write_file src/greet.rs"],
-            vec!["done"],
-            vec!["coder #1 replied"],
             vec!["sonnet", "task tester"],
-            vec!["test greet()"],
-            vec!["passes"],
-            vec!["tester #1 replied"],
-            vec!["greeting added"],
+            vec!["write greet()", "write_file src/greet.rs", "done"],
+            vec!["test greet()", "passes"],
         ]
     );
+    let layout = app.flow().layout();
+    let kinds: Vec<CardKind> = layout.cards.iter().map(|card| card.kind).collect();
+    use CardKind::{Call, Turn};
+    assert_eq!(kinds, [Turn, Call, Call, Turn, Turn]);
+    let blocks: Vec<_> = layout.blocks.iter().map(|b| b.cards.clone()).collect();
+    assert_eq!(blocks, [0..3, 3..4, 4..5]);
+    assert_eq!(app.flow().card_kind_label(0), "turn");
+    assert_eq!(app.flow().card_facts(0), "2 steps");
+
+    // What a task came back with is the task's row.
+    let result = app.flow().nodes().iter().position(|n| n.id == "aa:6");
+    let result = result.unwrap();
+    assert_eq!(layout.card_of(result), Some(1));
+    assert_eq!(layout.row_of(result), Some(0));
 }
 
 #[test]
-fn cards_go_down_a_column_and_no_wire_runs_backwards() {
+fn a_result_no_row_stands_for_and_a_message_are_subcards_of_their_own() {
+    let app = app_with(
+        vec![lane(LEAD, "Lead", None)],
+        vec![
+            node(LEAD, 1, 100, FlowKind::Prompt, "go"),
+            node(LEAD, 2, 110, FlowKind::Message, "from coder"),
+            node(LEAD, 3, 120, FlowKind::Result, "coder replied"),
+            node(LEAD, 4, 130, FlowKind::Model, "sonnet"),
+        ],
+    );
+    let layout = app.flow().layout();
+    let kinds: Vec<CardKind> = layout.cards.iter().map(|card| card.kind).collect();
+    use CardKind::{Call, Note, Turn};
+    assert_eq!(kinds, [Turn, Note, Note, Call]);
+    assert!(!layout.cards[1].folds());
+}
+
+#[test]
+fn a_turns_cards_go_down_its_spine_and_no_wire_runs_backwards() {
     let app = app_with_flow();
     let layout = app.flow().layout();
     let columns: Vec<usize> = layout.cards.iter().map(|card| card.column).collect();
-    assert_eq!(columns, [0, 0, 1, 1, 2, 2, 3, 3, 4, 4]);
+    assert_eq!(columns, [0, 0, 0, 1, 1]);
     let tops: Vec<usize> = layout.cards.iter().map(|card| card.top).collect();
-    assert_eq!(tops, [0, 4, 0, 5, 0, 4, 0, 4, 0, 4]);
+    assert_eq!(tops, [0, 5, 10, 0, 0]);
+    assert_eq!(bands(&app), [0, 0, 0, 1, 2]);
+    let main = layout.card_rect(0);
+    let sub = layout.card_rect(1);
+    assert_eq!(sub.x, main.x + layout::SUB_INDENT);
+    assert_eq!(sub.right(), main.right());
     for wire in &layout.wires {
         let (from, to) = (&layout.cards[wire.from], &layout.cards[wire.to]);
         if layout.stacked(wire) {
-            assert!(wire.kind == WireKind::Next && from.top < to.top, "{wire:?}");
+            assert!(
+                wire.kind == WireKind::Spine && from.top < to.top,
+                "{wire:?}"
+            );
         } else {
             assert!(from.column < to.column, "{wire:?}");
         }
@@ -168,39 +237,61 @@ fn cards_go_down_a_column_and_no_wire_runs_backwards() {
             .map(|wire| (wire.from, wire.row, wire.to))
             .collect()
     };
-    // The task calls start the agents from their rows; the replies come
-    // back to the results.
-    assert_eq!(between(WireKind::Spawn), [(1, Some(0), 2), (5, Some(0), 6)]);
-    assert_eq!(between(WireKind::Return), [(3, None, 4), (7, None, 8)]);
+    assert_eq!(between(WireKind::Spine), [(0, None, 1), (0, None, 2)]);
+    // The task calls start the agents from their rows; the replies back
+    // to them run back in time, so they are not drawn.
+    assert_eq!(between(WireKind::Spawn), [(1, Some(0), 3), (2, Some(0), 4)]);
+    assert!(between(WireKind::Return).is_empty());
+    assert!(between(WireKind::Next).is_empty());
+}
+
+#[test]
+fn the_newest_turn_of_each_agent_is_open_and_the_rest_are_folded() {
+    let (lanes, nodes) = three_turns();
+    let app = app_with(lanes, nodes);
     assert_eq!(
-        between(WireKind::Next),
-        [
-            (0, None, 1),
-            (2, None, 3),
-            (1, None, 4),
-            (4, None, 5),
-            (6, None, 7),
-            (5, None, 8),
-            (8, None, 9)
-        ]
+        heads(&app),
+        ["first", "code", "second", "third", "sonnet", "test"]
     );
-}
-
-#[test]
-fn agents_that_take_turns_share_a_band() {
-    let app = app_with_flow();
     let layout = app.flow().layout();
-    let bands: Vec<usize> = layout.cards.iter().map(|card| card.band).collect();
-    assert_eq!(bands, [0, 0, 1, 1, 0, 0, 1, 1, 0, 0]);
-    assert_eq!(layout.bands.len(), 2);
-    // A band is as tall as its tallest column, with its names above.
-    let column = layout.cards[1].top + layout.cards[1].height();
-    assert_eq!(layout.bands[0].height, column + 2);
-    assert_eq!(layout.height, layout.bands[1].y + layout.bands[1].height);
+    let folded: Vec<bool> = layout.cards.iter().map(|card| card.folded).collect();
+    assert_eq!(folded, [true, false, true, false, false, false]);
+    assert_eq!(app.flow().card_facts(0), "+1 step");
+    // A folded turn's task row is gone; its wire leaves from the turn.
+    assert!(layout
+        .wires
+        .iter()
+        .any(|wire| (wire.from, wire.row, wire.to, wire.kind) == (0, None, 1, WireKind::Spawn)));
 }
 
 #[test]
-fn a_column_wraps_right_when_the_view_has_no_room_for_the_next_card() {
+fn agents_that_take_turns_share_a_band_when_the_view_is_short() {
+    let (lanes, nodes) = three_turns();
+    let mut app = app_with(lanes, nodes);
+    // Every lead turn in one column: the tester starts where the coder
+    // did, so it needs a band of its own.
+    assert_eq!(bands(&app), [0, 1, 0, 0, 0, 2]);
+    let layout = app.flow().layout();
+    assert_eq!(layout.bands.len(), 3);
+    let lead = &layout.blocks[layout.cards[3].block];
+    assert_eq!(layout.bands[0].height, lead.top + lead.height + 2);
+    assert_eq!(layout.height, layout.bands[2].y + layout.bands[2].height);
+
+    // Too tall for the view: the lead's turns go side by side, and the
+    // tester starts well after the coder ended.
+    app.flow_mut().set_room(20);
+    app.flow_mut().ensure_layout();
+    assert_eq!(bands(&app), [0, 1, 0, 0, 0, 1]);
+    let layout = app.flow().layout();
+    assert!(layout.height <= 20, "{}", layout.height);
+    assert!(layout
+        .cards
+        .iter()
+        .all(|card| card.kind != CardKind::Turn || card.top == 0));
+}
+
+#[test]
+fn a_column_wraps_right_when_the_view_has_no_room_for_the_next_turn() {
     let nodes = (1..=5)
         .map(|seq| {
             let kind = if seq % 2 == 1 {
@@ -212,7 +303,7 @@ fn a_column_wraps_right_when_the_view_has_no_room_for_the_next_card() {
         })
         .collect();
     let mut app = app_with(vec![lane(LEAD, "Lead", None)], nodes);
-    // Ten rows for cards: two of three, and the row between.
+    // Ten rows for cards: two turns of four, and the row between.
     app.flow_mut().set_room(12);
     app.flow_mut().ensure_layout();
     let layout = app.flow().layout();
@@ -221,40 +312,21 @@ fn a_column_wraps_right_when_the_view_has_no_room_for_the_next_card() {
         .iter()
         .map(|card| (card.column, card.top))
         .collect();
-    assert_eq!(places, [(0, 0), (0, 4), (1, 0), (1, 4), (2, 0)]);
+    assert_eq!(places, [(0, 0), (0, 5), (1, 0)]);
     assert!(layout.height <= 12, "{}", layout.height);
-    let stacked: Vec<bool> = layout.wires.iter().map(|w| layout.stacked(w)).collect();
-    assert_eq!(stacked, [true, false, true, false]);
+    let wires: Vec<_> = layout
+        .wires
+        .iter()
+        .map(|w| (w.from, w.to, w.kind))
+        .collect();
+    assert_eq!(wires, [(1, 2, WireKind::Next)], "only the wrap is wired");
 
     // A taller view fits them all in one column.
     app.flow_mut().set_room(40);
     app.flow_mut().ensure_layout();
-    assert!(app
-        .flow()
-        .layout()
-        .cards
-        .iter()
-        .all(|card| card.column == 0));
-}
-
-#[test]
-fn bands_too_tall_for_the_view_share_its_rows() {
-    let mut app = app_with_flow();
-    app.flow_mut().set_room(30);
-    app.flow_mut().ensure_layout();
     let layout = app.flow().layout();
-    assert_eq!(layout.height, 20, "both fit as they are");
-    assert_eq!(layout.cards[1].top, 4);
-
-    app.flow_mut().set_room(16);
-    app.flow_mut().ensure_layout();
-    let layout = app.flow().layout();
-    assert_eq!(layout.bands.len(), 2);
-    assert!(layout.height <= 16, "{}", layout.height);
-    assert!(
-        layout.cards.iter().all(|card| card.top == 0),
-        "no room to stack"
-    );
+    assert!(layout.cards.iter().all(|card| card.column == 0));
+    assert!(layout.wires.is_empty());
 }
 
 #[test]
@@ -273,14 +345,8 @@ fn agents_working_at_once_get_a_band_each() {
             node(TESTER, 2, 140, FlowKind::Reply, "tested"),
         ],
     );
-    let bands: Vec<usize> = app
-        .flow()
-        .layout()
-        .cards
-        .iter()
-        .map(|card| card.band)
-        .collect();
-    assert_eq!(bands, [0, 1, 2, 1, 2]);
+    assert_eq!(heads(&app), ["do both", "code", "test"]);
+    assert_eq!(bands(&app), [0, 1, 2]);
 }
 
 #[test]
@@ -293,7 +359,7 @@ fn a_lane_keeps_its_record_order_when_clocks_disagree() {
             node(LEAD, 3, 95, FlowKind::Reply, "third"),
         ],
     );
-    assert_eq!(heads(&app), ["first", "second", "third"]);
+    assert_eq!(cards(&app), [vec!["first", "third"], vec!["second"]]);
 }
 
 #[test]
@@ -354,7 +420,7 @@ fn opening_the_tab_asks_for_the_flow_of_the_agent_on_screen() {
 #[test]
 fn the_selection_follows_new_cards_until_it_is_moved() {
     let mut app = app_with_flow();
-    assert_eq!(selected(&app), "aa:10", "starts on the newest card");
+    assert_eq!(selected(&app), "aa:10", "starts on the newest node");
 
     let more = |seq: u64| UiCommand::FlowUpsert {
         agent_id: LEAD.into(),
@@ -372,10 +438,10 @@ fn the_selection_follows_new_cards_until_it_is_moved() {
     assert_eq!(selected(&app), "aa:11");
 
     press(&mut app, KeyCode::Left);
-    assert_eq!(selected(&app), "aa:10");
+    assert_eq!(selected(&app), "aa:1", "the turn before");
     app.process_command(more(12));
     app.flow_mut().ensure_layout();
-    assert_eq!(selected(&app), "aa:10", "stays where it was put");
+    assert_eq!(selected(&app), "aa:1", "stays where it was put");
 
     press(&mut app, KeyCode::End);
     app.process_command(more(13));
@@ -411,36 +477,49 @@ fn an_update_changes_the_node_it_is_about() {
 }
 
 #[test]
-fn arrows_move_along_a_lane_through_a_card_and_between_bands() {
+fn arrows_move_down_a_turn_between_bands_and_along_turns() {
     let mut app = app_with_flow();
     press(&mut app, KeyCode::Home);
     assert_eq!(selected(&app), "aa:1");
     press(&mut app, KeyCode::Down);
-    assert_eq!(selected(&app), "aa:2", "the card under it");
-    press(&mut app, KeyCode::Up);
-    assert_eq!(selected(&app), "aa:1", "and over it");
-    press(&mut app, KeyCode::Right);
-    assert_eq!(selected(&app), "aa:2", "the next card of the lead");
+    assert_eq!(selected(&app), "aa:10", "the turn's reply");
+    press(&mut app, KeyCode::Down);
+    assert_eq!(selected(&app), "aa:2", "the model call under it");
     press(&mut app, KeyCode::Char('j'));
-    assert_eq!(selected(&app), "aa:3", "the card's first row");
+    assert_eq!(selected(&app), "aa:3", "the call's first row");
+    press(&mut app, KeyCode::Down);
+    assert_eq!(selected(&app), "aa:7");
+    press(&mut app, KeyCode::Down);
+    assert_eq!(selected(&app), "aa:8");
     press(&mut app, KeyCode::Down);
     assert_eq!(selected(&app), "bb:1", "the nearest card of the band below");
     press(&mut app, KeyCode::Up);
-    assert_eq!(selected(&app), "aa:3", "and back up, onto the last row");
+    assert_eq!(selected(&app), "aa:8", "and back up, onto the last row");
     press(&mut app, KeyCode::Char('k'));
-    assert_eq!(selected(&app), "aa:2");
+    assert_eq!(selected(&app), "aa:7");
     press(&mut app, KeyCode::Char(']'));
     assert_eq!(selected(&app), "bb:1", "the next prompt");
     press(&mut app, KeyCode::Char(']'));
     assert_eq!(selected(&app), "cc:1");
     press(&mut app, KeyCode::Char('['));
     assert_eq!(selected(&app), "bb:1");
-    press(&mut app, KeyCode::Char('l'));
-    assert_eq!(selected(&app), "bb:3");
-    press(&mut app, KeyCode::Char('h'));
-    assert_eq!(selected(&app), "bb:1");
     press(&mut app, KeyCode::Char('G'));
     assert_eq!(selected(&app), "aa:10");
+
+    // Sideways is turn to turn, from anywhere in a turn.
+    let (lanes, nodes) = three_turns();
+    let mut app = app_with(lanes, nodes);
+    press(&mut app, KeyCode::Home);
+    press(&mut app, KeyCode::Char('l'));
+    assert_eq!(selected(&app), "aa:4");
+    press(&mut app, KeyCode::Char('l'));
+    press(&mut app, KeyCode::Down);
+    assert_eq!(selected(&app), "aa:7");
+    press(&mut app, KeyCode::Char('h'));
+    assert_eq!(selected(&app), "aa:4");
+    press(&mut app, KeyCode::Char('h'));
+    press(&mut app, KeyCode::Char('h'));
+    assert_eq!(selected(&app), "aa:1");
 }
 
 #[test]
@@ -451,8 +530,10 @@ fn following_links_walks_the_delegation_and_back() {
     assert_eq!(selected(&app), "aa:1");
     assert!(app.notification().is_some(), "a prompt links nowhere");
 
-    press(&mut app, KeyCode::Right);
-    press(&mut app, KeyCode::Down);
+    for _ in 0..3 {
+        press(&mut app, KeyCode::Down);
+    }
+    assert_eq!(selected(&app), "aa:3");
     press(&mut app, KeyCode::Char('f'));
     assert_eq!(
         selected(&app),
@@ -464,45 +545,60 @@ fn following_links_walks_the_delegation_and_back() {
 }
 
 #[test]
-fn folding_a_turn_leaves_its_prompt_and_moves_its_wires_there() {
+fn folding_a_turn_or_a_call_moves_its_wires_and_links_open_them() {
     let mut app = app_with_flow();
     press(&mut app, KeyCode::Home);
-    press(&mut app, KeyCode::Right);
-    press(&mut app, KeyCode::Down);
-    assert_eq!(selected(&app), "aa:3");
-
     press(&mut app, KeyCode::Char(' '));
-    assert_eq!(selected(&app), "aa:1", "the selection moves to the prompt");
+    assert_eq!(selected(&app), "aa:1");
     let layout = app.flow().layout();
     assert!(layout.cards[0].folded);
-    assert_eq!(layout.cards[0].steps, 5);
+    assert_eq!(layout.cards[0].steps, 2);
+    assert_eq!(app.flow().card_facts(0), "+2 steps");
     assert_eq!(
         heads(&app),
-        [
-            "add a greeting",
-            "write greet()",
-            "done",
-            "test greet()",
-            "passes"
-        ]
+        ["add a greeting", "write greet()", "test greet()"]
     );
     let layout = app.flow().layout();
     assert!(
         layout
             .wires
             .iter()
-            .any(|wire| wire.from == 0 && wire.to == 1 && wire.kind == WireKind::Spawn),
-        "the task call's wire leaves from the prompt: {:?}",
+            .any(|wire| (wire.from, wire.row, wire.to, wire.kind) == (0, None, 1, WireKind::Spawn)),
+        "the task call's wire leaves from the turn: {:?}",
         layout.wires
     );
 
     // A link into the folded turn opens it again.
     press(&mut app, KeyCode::Char(']'));
-    press(&mut app, KeyCode::Right);
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Down);
     assert_eq!(selected(&app), "bb:3");
     press(&mut app, KeyCode::Char('f'));
     assert_eq!(selected(&app), "aa:6");
-    assert_eq!(app.flow().layout().cards.len(), 10);
+    assert_eq!(app.flow().layout().cards.len(), 5);
+    assert_eq!(
+        app.flow().selected_place(),
+        Some((1, Some(0))),
+        "on the task's row"
+    );
+
+    // On a model call, the call folds: its rows go, its wires leave from
+    // its head.
+    press(&mut app, KeyCode::Char(' '));
+    assert_eq!(selected(&app), "aa:2");
+    let layout = app.flow().layout();
+    assert!(layout.cards[1].folded && layout.cards[1].rows.is_empty());
+    assert_eq!(app.flow().card_facts(1), "+1 tool");
+    assert!(layout
+        .wires
+        .iter()
+        .any(|wire| (wire.from, wire.row, wire.to) == (1, None, 3)));
+    press(&mut app, KeyCode::Char(']'));
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Char('f'));
+    assert_eq!(selected(&app), "aa:6");
+    assert!(!app.flow().layout().cards[1].folded, "the link opened it");
 
     press(&mut app, KeyCode::Char('z'));
     assert_eq!(
@@ -512,35 +608,87 @@ fn folding_a_turn_leaves_its_prompt_and_moves_its_wires_there() {
     );
     assert_eq!(selected(&app), "aa:1");
     press(&mut app, KeyCode::Char('z'));
-    assert_eq!(app.flow().layout().cards.len(), 10);
+    assert_eq!(app.flow().layout().cards.len(), 5);
 }
 
 #[test]
 fn the_view_follows_the_selection_until_it_is_panned() {
     let mut app = app_with_flow();
     let flow = app.flow_mut();
-    let (x, _) = flow.sync_view(80.0, 20.0);
+    let (x, _) = flow.sync_view(40.0, 20.0);
     let rect = flow.layout().card_rect(flow.selected_card().unwrap());
-    assert!(x <= cells(rect.x) && cells(rect.right()) <= x + 80.0, "{x}");
+    assert!(x <= cells(rect.x) && cells(rect.right()) <= x + 40.0, "{x}");
 
     press(&mut app, KeyCode::Home);
-    assert_eq!(app.flow_mut().sync_view(80.0, 20.0), (0.0, 0.0));
+    assert_eq!(app.flow_mut().sync_view(40.0, 20.0), (0.0, 0.0));
 
     // Panned, the view stays put; moving the selection brings it back.
     app.pan_flow(30.5, 4.0);
-    assert_eq!(app.flow_mut().sync_view(80.0, 5.0), (30.5, 4.0));
+    assert_eq!(app.flow_mut().sync_view(40.0, 5.0), (30.5, 4.0));
     app.pan_flow(-1000.0, 1000.0);
     let most_y = cells(app.flow().layout().height) - 5.0;
     assert_eq!(
-        app.flow_mut().sync_view(80.0, 5.0),
+        app.flow_mut().sync_view(40.0, 5.0),
         (0.0, most_y),
         "never off the canvas"
     );
-    press(&mut app, KeyCode::Right);
-    let (x, _) = app.flow_mut().sync_view(80.0, 20.0);
+    press(&mut app, KeyCode::Char(']'));
+    let (x, _) = app.flow_mut().sync_view(40.0, 20.0);
     let flow = app.flow();
     let rect = flow.layout().card_rect(flow.selected_card().unwrap());
     assert!(x <= cells(rect.x), "{x}");
+}
+
+/// [`app_with_flow`] drawn by a front end in an 40 × 10 view.
+fn hosted_app() -> App {
+    let mut app = app_with_flow();
+    app.set_host_canvas(true);
+    press(&mut app, KeyCode::Home);
+    let area = Rect::new(0, 0, 40, 10);
+    let flow = app.flow_mut();
+    let pan = flow.sync_view(40.0, 10.0);
+    flow.set_view(Some(FlowView { area, pan }), true);
+    app
+}
+
+#[test]
+fn zoom_keeps_the_point_under_the_pointer_where_it_is() {
+    let mut app = hosted_app();
+    assert_eq!(app.flow().zoom(), 1.0);
+    app.zoom_flow(2.0, Some((20.0, 6.0)));
+    assert_eq!(app.flow().zoom(), 2.0);
+    assert_eq!(app.flow().pan(), (10.0, 3.0), "(20, 6) stays under it");
+
+    // Zoomed in, the view shows less of the canvas, and pans by canvas
+    // cells.
+    let flow = app.flow_mut();
+    assert_eq!(flow.sync_view(40.0, 10.0), (10.0, 3.0));
+    flow.pan_by(-4.0, 0.0);
+    assert_eq!(flow.pan(), (6.0, 3.0));
+
+    // Out to the least, where the canvas fits the view.
+    app.zoom_flow(0.01, None);
+    assert_eq!(app.flow().zoom(), MIN_ZOOM);
+    assert_eq!(app.flow().pan(), (0.0, 0.0), "never off the canvas");
+    app.zoom_flow(100.0, None);
+    assert_eq!(app.flow().zoom(), MAX_ZOOM);
+}
+
+#[test]
+fn the_zoom_keys_work_only_when_a_front_end_draws_the_canvas() {
+    let mut app = app_with_flow();
+    press(&mut app, KeyCode::Char('+'));
+    app.zoom_flow(2.0, None);
+    assert_eq!(app.flow().zoom(), 1.0, "the terminal does not zoom");
+
+    let mut app = hosted_app();
+    press(&mut app, KeyCode::Char('+'));
+    assert_eq!(app.flow().zoom(), ZOOM_STEP);
+    press(&mut app, KeyCode::Char('-'));
+    press(&mut app, KeyCode::Char('-'));
+    assert!((app.flow().zoom() - 1.0 / ZOOM_STEP).abs() < 1e-6);
+    press(&mut app, KeyCode::Char('0'));
+    assert!((app.flow().zoom() - 1.0).abs() < 1e-6);
 }
 
 #[test]
@@ -556,6 +704,12 @@ fn a_click_on_the_canvas_selects_a_line_then_opens_it_and_folds_at_the_marker() 
     assert!(app.detail_view().is_some(), "the second click opens it");
     app.handle_key(KeyEvent::from(KeyCode::Esc));
 
+    // The model call's marker folds the call; the turn's, the turn.
+    let rect = app.flow().layout().card_rect(1);
+    assert!(app.click_flow_at(cells(rect.x + 2) + 0.5, cells(rect.y) + 0.5));
+    app.flow_mut().ensure_layout();
+    assert!(app.flow().layout().cards[1].folded);
+    assert!(!app.flow().layout().cards[0].folded);
     let rect = app.flow().layout().card_rect(0);
     assert!(app.click_flow_at(cells(rect.x + 2) + 0.5, cells(rect.y) + 0.5));
     app.flow_mut().ensure_layout();
@@ -568,8 +722,9 @@ fn a_click_on_the_canvas_selects_a_line_then_opens_it_and_folds_at_the_marker() 
 fn enter_opens_the_node_as_json_and_closing_it_comes_back() {
     let mut app = app_with_flow();
     press(&mut app, KeyCode::Home);
-    press(&mut app, KeyCode::Right);
-    press(&mut app, KeyCode::Down);
+    for _ in 0..3 {
+        press(&mut app, KeyCode::Down);
+    }
     app.flow_mut().nodes[2].meta = vec![("args".into(), r#"{"agent":"coder"}"#.into())];
     press(&mut app, KeyCode::Enter);
     let Some(DetailView::File(file)) = app.detail_view() else {
@@ -658,4 +813,41 @@ fn old_nodes_go_once_the_flow_is_too_long() {
         flow.selected_node().map(|n| n.seq),
         u64::try_from(MAX_NODES + 1).ok()
     );
+}
+
+#[test]
+fn a_long_flow_draws_only_what_is_on_screen() {
+    let nodes: Vec<FlowNode> = (0..u64::try_from(MAX_NODES).unwrap() / 3)
+        .flat_map(|turn| {
+            let at = turn * 10;
+            [
+                node(LEAD, 3 * turn + 1, at, FlowKind::Prompt, "go"),
+                node(LEAD, 3 * turn + 2, at + 1, FlowKind::Model, "sonnet"),
+                node(LEAD, 3 * turn + 3, at + 2, FlowKind::Tool, "read_file"),
+            ]
+        })
+        .collect();
+    let mut app = app_with(vec![lane(LEAD, "Lead", None)], nodes);
+    app.flow_mut().set_room(40);
+    let started = std::time::Instant::now();
+    app.flow_mut().ensure_layout();
+    let laid_out = started.elapsed();
+    let layout = app.flow().layout();
+    assert_eq!(layout.blocks.len(), MAX_NODES / 3);
+    assert!(layout.columns > 100, "{}", layout.columns);
+
+    let (xs, ys) = (2000..2120, 0..40);
+    let cards = layout.visible_cards(&xs, &ys);
+    assert!(!cards.is_empty() && cards.len() < 40, "{}", cards.len());
+    for card in &cards {
+        assert!(layout.card_rect(*card).meets(&xs, &ys));
+    }
+    let wires = layout.visible_wires(&xs, &ys);
+    assert!(wires.len() < 20, "{}", wires.len());
+    let everything = (0..layout.width, 0..layout.height);
+    assert_eq!(
+        layout.visible_cards(&everything.0, &everything.1).len(),
+        layout.cards.len()
+    );
+    assert!(laid_out.as_millis() < 2000, "{laid_out:?}");
 }

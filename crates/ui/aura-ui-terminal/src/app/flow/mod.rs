@@ -1,11 +1,12 @@
 //! The chat panel's GRAPH tab: what the agent on screen and every agent
-//! it spawned did, as cards wired together on a canvas that pans.
+//! it spawned did, as turns of cards wired together on a canvas that pans
+//! (and, drawn by a front end, zooms).
 //!
 //! The nodes come from the kernel record ([`UiCommand::FlowLoad`], then
 //! [`UiCommand::FlowUpsert`] while agents work). This module keeps them,
-//! groups them into cards and places those ([`layout`]), moves the
-//! selection and the view; `renderer::flow` draws the part of the canvas
-//! that is on screen, or leaves it to the front end
+//! groups them into turns and places those ([`layout`]), folds them, moves
+//! the selection and the view; `renderer::flow` draws the part of the
+//! canvas that is on screen, or leaves it to the front end
 //! ([`App::set_host_canvas`]).
 //!
 //! [`UiCommand::FlowLoad`]: crate::events::UiCommand::FlowLoad
@@ -20,7 +21,7 @@ use super::trace_json::{node_json, NodeLink};
 use super::{App, ChatTab, DetailView, NotificationType, PanelFocus};
 use crate::events::{FlowKind, FlowLane, FlowNode, TraceNode, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
-use layout::{build_layout, FlowLayout, Spot};
+use layout::{build_layout, CardKind, FlowLayout, Folds, Spot};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::Rect;
 use ratatui::style::Color;
@@ -33,6 +34,21 @@ const MAX_NODES: usize = 6000;
 const ROOM: f32 = 2.0;
 /// Columns one turn of the wheel pans sideways.
 const WHEEL_COLUMNS: f32 = 8.0;
+/// How far the view zooms out and in.
+pub const MIN_ZOOM: f32 = 0.25;
+pub const MAX_ZOOM: f32 = 2.0;
+/// What one press of `+` or `-` zooms by.
+const ZOOM_STEP: f32 = 1.25;
+
+/// How large the canvas is drawn: 1 is a canvas cell to a screen cell.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Zoom(f32);
+
+impl Default for Zoom {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
 
 /// Where the canvas was drawn in the last frame, for the mouse.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -75,8 +91,11 @@ pub struct FlowState {
     /// Nodes in arrival order
     nodes: Vec<FlowNode>,
     index: HashMap<String, usize>,
-    /// Prompts whose turn is folded, by node id
-    collapsed: HashSet<String>,
+    /// Turns opened (`true`) or folded by hand, by the id of their head;
+    /// the rest are open while they are their agent's newest
+    turn_open: HashMap<String, bool>,
+    /// Model calls whose rows are folded away, by node id
+    call_folded: HashSet<String>,
     selected: Option<String>,
     /// Whether the selection moves to each new card as it arrives
     follow_tail: bool,
@@ -84,6 +103,8 @@ pub struct FlowState {
     came_from: Option<String>,
     /// Canvas cell at the top left of the view
     pan: (f32, f32),
+    /// How large the front end draws the canvas; always 1 in a terminal
+    zoom: Zoom,
     /// The view was panned off the selection; it stays there until the
     /// selection moves
     detached: bool,
@@ -169,6 +190,25 @@ impl FlowState {
         self.pan
     }
 
+    /// How large the canvas is drawn: screen cells to a canvas cell.
+    #[must_use]
+    pub const fn zoom(&self) -> f32 {
+        self.zoom.0
+    }
+
+    /// The kind card `card`'s title names: `turn` for a turn's main card
+    /// that starts at a prompt, else its head's kind.
+    #[must_use]
+    pub fn card_kind_label(&self, card: usize) -> &'static str {
+        let placed = &self.layout.cards[card];
+        let kind = self.nodes[placed.head].kind;
+        if placed.kind == CardKind::Turn && kind == FlowKind::Prompt {
+            "turn"
+        } else {
+            kind.label()
+        }
+    }
+
     /// Display name of the agent with hex id `agent_id`.
     #[must_use]
     pub fn lane_name(&self, agent_id: &str) -> &str {
@@ -178,19 +218,32 @@ impl FlowState {
     }
 
     /// What card `card`'s title says beside its kind: the agent for a
-    /// prompt in a spawned agent's lane, how many cards a folded turn
-    /// hides, and the head's own detail (model, tokens, time).
+    /// turn in a spawned agent's lane, how many model calls a turn has or
+    /// how many tool calls a folded call hides, and the head's own detail
+    /// (model, tokens, time).
     #[must_use]
     pub fn card_facts(&self, card: usize) -> String {
         let placed = &self.layout.cards[card];
         let node = &self.nodes[placed.head];
         let mut facts: Vec<String> = Vec::new();
-        if node.kind == FlowKind::Prompt && placed.lane != 0 {
+        if placed.kind == CardKind::Turn && placed.lane != 0 {
             facts.push(self.lanes[placed.lane].name.clone());
         }
-        if placed.folded {
-            let unit = if placed.steps == 1 { "step" } else { "steps" };
-            facts.push(format!("+{} {unit}", placed.steps));
+        let plural =
+            |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        match placed.kind {
+            CardKind::Turn if placed.steps > 0 => {
+                let calls = plural(placed.steps, "step", "steps");
+                facts.push(if placed.folded {
+                    format!("+{calls}")
+                } else {
+                    calls
+                });
+            }
+            CardKind::Call if placed.folded => {
+                facts.push(format!("+{}", plural(placed.steps, "tool", "tools")));
+            }
+            _ => {}
         }
         if !node.detail.is_empty() {
             facts.push(node.detail.clone());
@@ -306,7 +359,8 @@ impl FlowState {
         self.loaded = true;
         self.upsert(lanes, nodes);
         let index = &self.index;
-        self.collapsed.retain(|id| index.contains_key(id));
+        self.turn_open.retain(|id, _| index.contains_key(id));
+        self.call_folded.retain(|id| index.contains_key(id));
     }
 
     fn upsert(&mut self, lanes: Vec<FlowLane>, nodes: Vec<FlowNode>) {
@@ -365,18 +419,22 @@ impl FlowState {
     }
 
     /// Lay the flow out again if it changed, and keep the selection on
-    /// something shown: the newest card while following the end, the
-    /// prompt of a turn that was folded over it.
+    /// something shown: the newest node while following the end, the head
+    /// of what was folded over it.
     pub fn ensure_layout(&mut self) {
         if !self.stale {
             return;
         }
         self.stale = false;
+        let folds = Folds {
+            turns: &self.turn_open,
+            calls: &self.call_folded,
+        };
         self.layout = build_layout(
             &self.lane_index,
             &self.nodes,
             &self.index,
-            &self.collapsed,
+            &folds,
             self.room,
         );
         let selected = self
@@ -388,15 +446,11 @@ impl FlowState {
             return;
         };
         let node = match selected {
-            Some(node) if !self.follow_tail => {
-                if self.is_folded_away(node) {
-                    self.layout.turn_of(node).unwrap_or(newest)
-                } else if self.layout.card_of(node).is_some() {
-                    node
-                } else {
-                    newest
-                }
-            }
+            Some(node) if !self.follow_tail => match self.layout.card_of(node) {
+                Some(card) if self.is_folded_away(node) => self.layout.cards[card].head,
+                Some(_) => node,
+                None => newest,
+            },
             Some(_) => newest,
             None => {
                 self.follow_tail = true;
@@ -406,10 +460,9 @@ impl FlowState {
         self.selected = Some(self.nodes[node].id.clone());
     }
 
-    /// The node the newest card ends with.
+    /// The newest node shown.
     fn newest(&self) -> Option<usize> {
-        let card = self.layout.cards.last()?;
-        Some(card.rows.last().copied().unwrap_or(card.head))
+        self.layout.newest()
     }
 
     /// Cards with a wire to or from the selected one.
@@ -453,10 +506,11 @@ impl FlowState {
         links
     }
 
-    /// Keep the selection inside a view `width` × `height` cells, unless
-    /// the view was panned off it, and the view on the canvas. Returns the
-    /// canvas cell at the view's top left.
+    /// Keep the selection inside a view `width` × `height` screen cells,
+    /// unless the view was panned off it, and the view on the canvas.
+    /// Returns the canvas cell at the view's top left.
     pub fn sync_view(&mut self, width: f32, height: f32) -> (f32, f32) {
+        let (width, height) = (width / self.zoom(), height / self.zoom());
         if let Some((card, row)) = self.selected_place().filter(|_| !self.detached) {
             let rect = self.layout.card_rect(card);
             let (left, right) = (cells(rect.x) - ROOM, cells(rect.right()) + ROOM);
@@ -484,6 +538,7 @@ impl FlowState {
         self.pan
     }
 
+    /// Keep a view `width` × `height` canvas cells on the canvas.
     fn clamp_pan(&mut self, width: f32, height: f32) {
         let most_x = (cells(self.layout.width) - width).max(0.0);
         let most_y = (cells(self.layout.height) - height).max(0.0);
@@ -491,8 +546,24 @@ impl FlowState {
         self.pan.1 = self.pan.1.clamp(0.0, most_y);
     }
 
-    /// Move the view `dx` × `dy` cells over the canvas; it leaves the
-    /// selection where it is.
+    /// Canvas cells the view shows across and down.
+    fn view_cells(&self) -> Option<(f32, f32)> {
+        let area = self.view?.area;
+        let zoom = self.zoom();
+        Some((f32::from(area.width) / zoom, f32::from(area.height) / zoom))
+    }
+
+    fn clamp_to_view(&mut self) {
+        if let Some((width, height)) = self.view_cells() {
+            self.clamp_pan(width, height);
+        }
+        if let Some(view) = &mut self.view {
+            view.pan = self.pan;
+        }
+    }
+
+    /// Move the view `dx` × `dy` canvas cells over the canvas; it leaves
+    /// the selection where it is.
     pub fn pan_by(&mut self, dx: f32, dy: f32) {
         if !(dx.is_finite() && dy.is_finite()) {
             return;
@@ -500,13 +571,29 @@ impl FlowState {
         self.pan.0 += dx;
         self.pan.1 += dy;
         self.detached = true;
-        if let Some(view) = self.view {
-            self.clamp_pan(f32::from(view.area.width), f32::from(view.area.height));
-            self.view = Some(FlowView {
-                pan: self.pan,
-                ..view
-            });
+        self.clamp_to_view();
+    }
+
+    /// Zoom by `factor`, keeping the canvas point at `anchor` where it is
+    /// on screen: `anchor` in screen cells from the view's top left, or
+    /// its middle for `None`. It leaves the selection where it is.
+    pub fn zoom_at(&mut self, factor: f32, anchor: Option<(f32, f32)>) {
+        let before = self.zoom();
+        let after = (before * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+        if !after.is_finite() || after == before {
+            return;
         }
+        let (ax, ay) = anchor
+            .or_else(|| {
+                let area = self.view?.area;
+                Some((f32::from(area.width) / 2.0, f32::from(area.height) / 2.0))
+            })
+            .unwrap_or((0.0, 0.0));
+        self.pan.0 += ax / before - ax / after;
+        self.pan.1 += ay / before - ay / after;
+        self.zoom = Zoom(after);
+        self.detached = true;
+        self.clamp_to_view();
     }
 
     fn select_node(&mut self, node: usize) {
@@ -539,14 +626,15 @@ impl FlowState {
         }
     }
 
-    /// Move to the card before or after the selected one in its agent's
-    /// lane.
+    /// Move to the turn before or after the selected card's, in its
+    /// agent's lane.
     fn move_along(&mut self, forward: bool) {
         let Some(card) = self.selected_card() else {
             return self.select_first();
         };
-        let list = self.layout.lane_cards(self.layout.cards[card].lane);
-        let Some(at) = list.iter().position(|&c| c == card) else {
+        let main = self.layout.main_of(card);
+        let list = self.layout.lane_turns(self.layout.cards[card].lane);
+        let Some(at) = list.iter().position(|&c| c == main) else {
             return;
         };
         let next = if forward {
@@ -622,28 +710,36 @@ impl FlowState {
         }
     }
 
-    /// Fold or unfold the turn the selected card is in, leaving the
-    /// selection on its prompt.
+    /// Fold or unfold what the selection is in: the rows of a model call,
+    /// else its turn. The selection goes to the head of what folds.
     fn toggle_fold(&mut self) {
         let Some(card) = self.selected_card() else {
             return;
         };
-        let head = self.layout.cards[card].head;
-        let prompt = self.layout.turn_of(head).unwrap_or(head);
-        self.toggle_fold_of(prompt);
+        let placed = &self.layout.cards[card];
+        if placed.kind == CardKind::Call && placed.folds() {
+            self.toggle_card(card);
+        } else {
+            self.toggle_card(self.layout.main_of(card));
+        }
     }
 
-    fn toggle_fold_of(&mut self, prompt: usize) {
-        let has_steps = self
-            .layout
-            .card_of(prompt)
-            .is_some_and(|card| self.layout.cards[card].steps > 0);
-        if !has_steps {
+    /// Fold or unfold card `card`: a turn's subcards, a call's rows.
+    fn toggle_card(&mut self, card: usize) {
+        let placed = &self.layout.cards[card];
+        if !placed.folds() {
             return;
         }
-        let id = self.nodes[prompt].id.clone();
-        if !self.collapsed.remove(&id) {
-            self.collapsed.insert(id.clone());
+        let id = self.nodes[placed.head].id.clone();
+        match placed.kind {
+            CardKind::Turn => {
+                self.turn_open.insert(id.clone(), placed.folded);
+            }
+            _ => {
+                if !self.call_folded.remove(&id) {
+                    self.call_folded.insert(id.clone());
+                }
+            }
         }
         self.selected = Some(id);
         self.follow_tail = false;
@@ -653,21 +749,31 @@ impl FlowState {
 
     /// Fold every turn, or unfold them all when none is left open.
     fn toggle_fold_all(&mut self) {
-        let turns: Vec<&str> = self
+        let turns: Vec<(String, bool)> = self
             .layout
             .cards
             .iter()
-            .filter(|card| card.steps > 0)
-            .map(|card| self.nodes[card.head].id.as_str())
+            .filter(|card| card.kind == CardKind::Turn && card.folds())
+            .map(|card| (self.nodes[card.head].id.clone(), card.folded))
             .collect();
-        if turns.iter().all(|id| self.collapsed.contains(*id)) {
-            self.collapsed.clear();
-        } else {
-            self.collapsed = turns.into_iter().map(str::to_string).collect();
+        let open = turns.iter().all(|(_, folded)| *folded);
+        for (id, _) in turns {
+            self.turn_open.insert(id, open);
         }
         self.follow_tail = false;
         self.detached = false;
         self.stale = true;
+    }
+
+    /// Unfold whatever hides node `node`.
+    fn unfold_to(&mut self, node: usize) {
+        let (turn, call) = self.layout.folds_over(node);
+        if let Some(turn) = turn {
+            self.turn_open.insert(self.nodes[turn].id.clone(), true);
+        }
+        if let Some(call) = call {
+            self.call_folded.remove(&self.nodes[call].id);
+        }
     }
 
     /// Jump along a link of the selected node, to a node other than the
@@ -689,14 +795,13 @@ impl FlowState {
         let Some(target) = targets.into_iter().next() else {
             return false;
         };
-        if let Some(prompt) = self
+        if let Some(&node) = self
             .index
             .get(&target)
             .filter(|&&node| self.is_folded_away(node))
-            .and_then(|&node| self.layout.turn_of(node))
         {
-            // The node is folded away: open its turn to land on it.
-            self.collapsed.remove(&self.nodes[prompt].id);
+            // The node is folded away: open what hides it to land on it.
+            self.unfold_to(node);
         }
         self.selected = Some(target);
         self.came_from = Some(id);
@@ -728,8 +833,7 @@ impl FlowState {
     fn click(&mut self, spot: Spot) -> bool {
         let (card, row) = match spot {
             Spot::Title { card, fold: true } => {
-                let prompt = self.layout.cards[card].head;
-                self.toggle_fold_of(prompt);
+                self.toggle_card(card);
                 return false;
             }
             Spot::Title { card, .. } | Spot::Head(card) => (card, None),
@@ -793,6 +897,15 @@ impl App {
     /// Move the GRAPH tab's view `dx` × `dy` cells over its canvas.
     pub fn pan_flow(&mut self, dx: f32, dy: f32) {
         self.flow.pan_by(dx, dy);
+    }
+
+    /// Zoom the GRAPH tab's canvas by `factor` around `anchor`, in screen
+    /// cells from the top left of [`Self::flow_canvas`] (its middle for
+    /// `None`). Only a front end that draws the canvas zooms it.
+    pub fn zoom_flow(&mut self, factor: f32, anchor: Option<(f32, f32)>) {
+        if self.host_canvas {
+            self.flow.zoom_at(factor, anchor);
+        }
     }
 
     /// A click at canvas point `(x, y)`, in cells: see
@@ -872,7 +985,7 @@ impl App {
         }
         self.flow.ensure_layout();
         let page = self.flow.view.map_or(1.0, |view| {
-            f32::from(view.area.height.saturating_sub(2).max(1))
+            f32::from(view.area.height.saturating_sub(2).max(1)) / self.flow.zoom()
         });
         match key.code {
             KeyCode::Esc => self.show_chat_tab(ChatTab::Chat),
@@ -899,6 +1012,12 @@ impl App {
             }
             KeyCode::Char('r') => self.jump_to_flow_record(),
             KeyCode::Char('o') => self.open_flow_agent(),
+            KeyCode::Char('+' | '=') if self.host_canvas => self.zoom_flow(ZOOM_STEP, None),
+            KeyCode::Char('-') if self.host_canvas => self.zoom_flow(1.0 / ZOOM_STEP, None),
+            KeyCode::Char('0') if self.host_canvas => {
+                let back = 1.0 / self.flow.zoom();
+                self.zoom_flow(back, None);
+            }
             _ => return false,
         }
         true

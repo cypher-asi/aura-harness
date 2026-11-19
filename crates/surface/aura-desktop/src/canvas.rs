@@ -1,9 +1,13 @@
 //! The GRAPH tab's canvas as the window draws it, in place of the box
 //! characters the terminal draws it with (`App::set_host_canvas`): the
-//! same cards on the same grid of cells, with curved wires between them,
-//! panned by any fraction of a cell. It is drawn only where the terminal
-//! UI left the canvas blank (`App::flow_canvas_clip`), so menus and
-//! overlays stay over it.
+//! same cards on the same grid of cells, with rounded wires between them,
+//! panned by any fraction of a cell and zoomed (`FlowState::zoom`). It is
+//! drawn only where the terminal UI left the canvas blank
+//! (`App::flow_canvas_clip`), so menus and overlays stay over it.
+//!
+//! Only what is on screen is drawn, found through the layout's indexes.
+//! Text is set at sizes snapped to half a pixel and the shapes are few, so
+//! zooming does not fill the atlas; zoomed far out, text is a bar.
 
 // Cell coordinates become pixel positions.
 #![allow(clippy::cast_precision_loss)]
@@ -18,13 +22,18 @@ use aura_ui_terminal::flow_layout::{CellRect, FlowLayout, Wire, WireKind, CARD_W
 use aura_ui_terminal::FlowState;
 use ratatui::layout::Rect;
 use std::collections::HashSet;
+use std::f32::consts::{FRAC_PI_2, PI};
+use std::ops::Range;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// The canvas's shapes among those in the atlas: past the last character
 /// and the tab bar's cross.
 const PORT: u32 = 0x0012_0003;
-/// Plus 1 for a wire that goes down
-const BEND: u32 = 0x0012_0010;
+/// Plus the quarter it turns through, 0 to 3 clockwise from the right
+const CORNER: u32 = 0x0012_0020;
+
+/// Below this zoom, text is drawn as bars.
+const GREEK_BELOW: f32 = 0.5;
 
 /// The theme's colors the canvas is drawn in.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -77,6 +86,7 @@ impl Canvas<'_> {
     #[allow(clippy::cast_possible_truncation)]
     pub fn quads(&self, text: &mut TextSystem, metrics: Metrics, origin: Point, out: &mut Layers) {
         let cell = metrics.cell;
+        let zoom = self.flow.zoom();
         let mut drawn = Layers::default();
         Pen {
             canvas: self,
@@ -87,6 +97,8 @@ impl Canvas<'_> {
             left: origin.x + f32::from(self.area.x) * cell.width,
             top: origin.y + f32::from(self.area.y) * cell.height,
             pan: self.flow.pan(),
+            zoom,
+            size: (cell.width * zoom, cell.height * zoom),
         }
         .draw();
         let edge = |at: f32, cells: u16, size: f32| (at + f32::from(cells) * size).round() as i32;
@@ -139,6 +151,16 @@ enum Standing {
     Other,
 }
 
+/// The quarter of a circle a corner turns through, around its center.
+#[derive(Clone, Copy)]
+enum Quarter {
+    /// From its top to its right
+    TopRight,
+    BottomRight,
+    BottomLeft,
+    TopLeft,
+}
+
 struct Pen<'a, 'b> {
     canvas: &'a Canvas<'a>,
     layout: &'a FlowLayout,
@@ -150,6 +172,9 @@ struct Pen<'a, 'b> {
     top: f32,
     /// Canvas cell at the area's top left
     pan: (f32, f32),
+    zoom: f32,
+    /// Pixels of a canvas cell, across and down
+    size: (f32, f32),
 }
 
 impl Pen<'_, '_> {
@@ -159,93 +184,122 @@ impl Pen<'_, '_> {
 
     /// The pixel column of canvas column `x`, which may be a fraction.
     fn x(&self, x: f32) -> f32 {
-        self.left + (x - self.pan.0) * self.metrics.cell.width
+        self.left + (x - self.pan.0) * self.size.0
     }
 
     fn y(&self, y: f32) -> f32 {
-        self.top + (y - self.pan.1) * self.metrics.cell.height
+        self.top + (y - self.pan.1) * self.size.1
     }
 
-    /// Canvas cells on screen, with one to spare each side.
+    /// Canvas columns and rows on screen, with one to spare each side.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    fn shown(&self) -> ((usize, usize), (usize, usize)) {
+    fn shown(&self) -> (Range<usize>, Range<usize>) {
         let area = self.canvas.area;
         let first = |pan: f32| (pan.floor() - 1.0).max(0.0) as usize;
-        let last = |pan: f32, cells: u16| (pan + f32::from(cells) + 1.0).max(0.0).ceil() as usize;
+        let last = |pan: f32, cells: u16| {
+            (pan + f32::from(cells) / self.zoom + 1.0).max(0.0).ceil() as usize
+        };
         (
-            (first(self.pan.0), last(self.pan.0, area.width)),
-            (first(self.pan.1), last(self.pan.1, area.height)),
+            first(self.pan.0)..last(self.pan.0, area.width),
+            first(self.pan.1)..last(self.pan.1, area.height),
         )
     }
 
-    /// Width of the lines wires and edges are drawn with.
-    fn line(&self) -> f32 {
-        (self.metrics.font_size / 14.0).round().max(1.0)
+    /// Width of the lines wires and edges are drawn with: whole pixels,
+    /// so a corner is the same shape wherever the view is.
+    fn line(&self, hot: bool) -> f32 {
+        let line = (self.metrics.font_size * self.zoom / 14.0).round().max(1.0);
+        if hot {
+            line * 2.0
+        } else {
+            line
+        }
     }
 
     fn draw(&mut self) {
-        self.names();
+        let (xs, ys) = self.shown();
+        self.names(&xs);
         let selected = self.canvas.flow.selected_card();
         let mut wires: Vec<(bool, Wire)> = self
             .layout
-            .wires
-            .iter()
-            .map(|wire| {
+            .visible_wires(&xs, &ys)
+            .into_iter()
+            .map(|at| {
+                let wire = self.layout.wires[at];
                 (
                     Some(wire.from) == selected || Some(wire.to) == selected,
-                    *wire,
+                    wire,
                 )
             })
             .collect();
         wires.sort_by_key(|(hot, _)| *hot);
         for (hot, wire) in &wires {
-            self.wire(*wire, *hot);
+            if self.layout.stacked(wire) {
+                self.spine(*wire, *hot);
+            } else {
+                self.wire(*wire, *hot);
+            }
         }
         let linked = self.canvas.flow.linked_cards();
-        for card in 0..self.layout.cards.len() {
+        for card in self.layout.visible_cards(&xs, &ys) {
             self.card(card, selected, &linked);
         }
         for (hot, wire) in &wires {
-            if self.layout.stacked(wire) {
-                self.drop(*wire, *hot);
-            } else {
+            if !self.layout.stacked(wire) {
                 self.port(*wire, *hot);
             }
         }
     }
 
-    /// Each agent's name above its cards, kept on screen while any of
-    /// them is.
+    /// Each agent's name above its turns, kept on screen while any of
+    /// them is. The agent on screen goes unnamed; its name is the chat's.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    fn names(&mut self) {
+    fn names(&mut self, xs: &Range<usize>) {
         let flow = self.canvas.flow;
         let color = self.colors().secondary;
         for span in self.layout.spans.iter().filter(|span| span.lane != 0) {
+            let start = FlowLayout::column_x(span.first);
+            let end = FlowLayout::column_x(span.last) + CARD_WIDTH;
+            if end < xs.start || start > xs.end {
+                continue;
+            }
             let y = self.layout.bands[span.band].y;
-            let start = FlowLayout::column_x(span.first) as f32;
-            let end = (FlowLayout::column_x(span.last) + CARD_WIDTH) as f32;
-            let name = fit(&flow.lanes()[span.lane].name, (end - start) as usize);
+            let name = fit(&flow.lanes()[span.lane].name, end - start);
             let width = name.width() as f32;
+            let (start, end) = (start as f32, end as f32);
             let x = (self.pan.0 + 1.0).clamp(start, (end - width).max(start));
             self.write(&name, (x, y as f32), color, true, Align::Left);
         }
     }
 
     /// Text from canvas point `(x, y)`, the top of a row; in the mono face
-    /// a character is a cell wide, as in the terminal.
+    /// a character is a cell wide, as in the terminal. Zoomed far out, a
+    /// bar as long as the text.
     fn write(&mut self, text: &str, (x, y): (f32, f32), color: Color, bold: bool, align: Align) {
+        let at = Point::new(self.x(x).round(), self.y(y).round());
+        if self.zoom < GREEK_BELOW {
+            let width = (text.width() as f32 * self.size.0).round();
+            let height = (self.size.1 * 0.4).round().max(1.0);
+            let left = match align {
+                Align::Right => at.x - width,
+                _ => at.x,
+            };
+            let top = at.y + ((self.size.1 - height) / 2.0).round();
+            let color = color.mix(self.colors().bg, 0.4);
+            fill(&mut self.out.over, left, top, width, height, color);
+            return;
+        }
         let label = Label {
             text,
             face: Face::mono(bold),
-            size: self.metrics.font_size,
-            line_height: self.metrics.cell.height,
+            size: (self.metrics.font_size * self.zoom * 2.0).round() / 2.0,
+            line_height: self.size.1,
             shaping: Shaping::Advanced,
             align,
             middle: false,
             color: rgba(color),
             on_row: false,
         };
-        let at = Point::new(self.x(x).round(), self.y(y).round());
         self.text.write(&mut self.out.over, &label, at);
     }
 
@@ -255,127 +309,175 @@ impl Pen<'_, '_> {
             return colors.primary;
         }
         match kind {
-            WireKind::Next => colors.muted.mix(colors.bg, 0.25),
+            WireKind::Next | WireKind::Spine => colors.muted.mix(colors.bg, 0.25),
             WireKind::Spawn | WireKind::Link => colors.secondary,
             WireKind::Return => colors.success,
             WireKind::Message => colors.warning,
         }
     }
 
-    /// The pixel row a wire along canvas row `y` is centered on, and how
-    /// thick it is: whole pixels, so a bend is the same shape wherever
-    /// the view is.
-    fn row_line(&self, y: usize, hot: bool) -> (f32, f32) {
-        let width = self.line() * if hot { 2.0 } else { 1.0 };
-        let middle = self.y(y as f32 + 0.5).round();
-        (middle, width)
+    /// The pixel column a wire down canvas column `x` is drawn from.
+    fn column_px(&self, x: usize) -> f32 {
+        self.x(x as f32 + 0.5).round()
     }
 
-    /// One wire: out of its port, along its row, bending in the gutter
-    /// before the card it goes to onto that card's row, and into its
-    /// side.
+    /// The pixel row a wire along canvas row `y` is drawn from.
+    fn row_px(&self, y: usize) -> f32 {
+        self.y(y as f32 + 0.5).round()
+    }
+
+    /// The radius of a corner of a wire that turns through `room` pixels.
+    fn radius(&self, room: f32) -> f32 {
+        (self.size.1 * 0.5)
+            .round()
+            .min((room / 2.0).floor())
+            .max(0.0)
+    }
+
+    /// One wire: out of its port, along its row to the gutter before the
+    /// block it goes to, round a corner up or down there, round another
+    /// onto its card's row, and into its side (over the block's spine,
+    /// for a subcard).
     fn wire(&mut self, wire: Wire, hot: bool) {
         let (from_x, from_y) = self.layout.port_out(wire.from, wire.row);
         let (to_x, to_y) = self.layout.port_in(wire.to);
-        let ((x0, x1), (y0, y1)) = self.shown();
-        let off_screen = to_x < x0 || from_x > x1 || from_y.max(to_y) < y0 || from_y.min(to_y) > y1;
-        if to_x < from_x + 3 || off_screen || self.layout.stacked(&wire) {
+        let gutter = FlowLayout::column_x(self.layout.cards[wire.to].column);
+        if gutter < from_x + 3 {
             return;
         }
         let color = self.wire_color(wire.kind, hot);
-        let cell = self.metrics.cell;
-        let (sy, width) = self.row_line(from_y, hot);
-        let (ey, _) = self.row_line(to_y, hot);
-        let start = self.x(from_x as f32 + 0.5).round();
-        let end = self.x(to_x as f32 + 0.5).round();
+        let width = self.line(hot);
+        let (start, end) = (self.column_px(from_x), self.column_px(to_x));
+        let (sy, ey) = (self.row_px(from_y), self.row_px(to_y));
         if from_y == to_y {
             self.run(start, end, sy, width, color);
-        } else {
-            let bend_end = self
-                .x(to_x as f32 - 1.0 - wire.track as f32 * 0.5)
-                .round()
-                .min(end);
-            let reach = (4.0 * cell.width).max((ey - sy).abs() * 0.6);
-            let bend_start = (bend_end - reach).max(start);
-            self.run(start, bend_start, sy, width, color);
-            self.bend((bend_start, sy), (bend_end, ey), width, color);
-            self.run(bend_end, end, ey, width, color);
+            return;
+        }
+        let turn = self
+            .x(gutter as f32 - 1.5 - wire.track as f32 * 0.5)
+            .round()
+            .max(start);
+        let r = self.radius((ey - sy).abs()).min(turn - start);
+        self.run(start, turn - r, sy, width, color);
+        let (top, bottom) = (sy.min(ey), sy.max(ey));
+        self.rise(turn, top + r, bottom - r, width, color);
+        self.run(turn + r, end, ey, width, color);
+        if r >= 1.0 {
+            let (leave, arrive) = if ey > sy {
+                (Quarter::TopRight, Quarter::BottomLeft)
+            } else {
+                (Quarter::BottomRight, Quarter::TopLeft)
+            };
+            let down = if ey > sy { r } else { -r };
+            self.corner((turn - r, sy + down), leave, r, width, color);
+            self.corner((turn + r, ey - down), arrive, r, width, color);
         }
     }
 
-    /// A wire straight down from the bottom edge of a card to the top
-    /// edge of the card under it, with a port where it leaves.
-    fn drop(&mut self, wire: Wire, hot: bool) {
-        let (from, to) = (
-            self.layout.card_rect(wire.from),
-            self.layout.card_rect(wire.to),
-        );
-        let ((_, _), (y0, y1)) = self.shown();
-        if from.bottom() < y0 || to.y > y1 {
-            return;
-        }
+    /// A spine wire: down from the main card's bottom edge, then across
+    /// into the subcard's side. The wires of one block share the spine;
+    /// the last turns round a corner into its subcard.
+    fn spine(&mut self, wire: Wire, hot: bool) {
+        let main = self.layout.card_rect(wire.from);
+        let (to_x, to_y) = self.layout.port_in(wire.to);
+        let block = &self.layout.blocks[self.layout.cards[wire.to].block];
+        let last = wire.to + 1 == block.cards.end;
         let color = self.wire_color(wire.kind, hot);
-        let width = self.line() * if hot { 2.0 } else { 1.0 };
-        let column = FlowLayout::stack_x(self.layout.cards[wire.from].column);
-        let middle = self.x(column as f32 + 0.5).round();
-        let (top, bottom) = (self.card_bottom(from), self.card_top(to));
-        let left = middle - (width / 2.0).floor();
-        fill(&mut self.out.under, left, top, width, bottom - top, color);
-        let center = Point::new(left + width / 2.0, top);
-        self.dot(center, color);
-    }
-
-    /// A straight stretch of wire from `x0` to `x1`, centered on pixel
-    /// row `y`.
-    fn run(&mut self, x0: f32, x1: f32, y: f32, width: f32, color: Color) {
-        let top = y - (width / 2.0).floor();
-        fill(&mut self.out.under, x0, top, x1 - x0, width, color);
-    }
-
-    /// An S from `from` to `to`, leaving and arriving level.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    fn bend(&mut self, from: (f32, f32), to: (f32, f32), width: f32, color: Color) {
-        let (w, h) = (to.0 - from.0, (to.1 - from.1).abs());
-        if w < 1.0 {
-            return;
-        }
-        let down = to.1 > from.1;
-        let pad = width.ceil() + 1.0;
-        let key = ShapeKey {
-            shape: BEND + u32::from(down),
-            width: w as u32,
-            height: h as u32,
-            phase: [width as u8, 0],
+        let width = self.line(hot);
+        let x = self.column_px(self.layout.spine_x(wire.from));
+        let (top, ey) = (self.card_bottom(main), self.row_px(to_y));
+        let end = self.column_px(to_x);
+        let r = if last {
+            self.radius((ey - top).min(end - x) * 2.0)
+        } else {
+            0.0
         };
-        // Pixel row `y` is centered where its top is plus half a line.
-        let middle = (width / 2.0).floor();
-        let center = |y: f32| y - middle + width / 2.0;
-        let (a, b) = if down { (pad, pad + h) } else { (pad + h, pad) };
-        let (a, b) = (center(a), center(b));
-        let at = ((from.0 - pad) as i32, (from.1.min(to.1) - pad) as i32);
-        let size = ((w + 2.0 * pad) as u32, (h + 2.0 * pad) as u32 + 1);
+        self.rise(x, top, ey - r, width, color);
+        self.run(x + r, end, ey, width, color);
+        if r >= 1.0 {
+            self.corner((x + r, ey - r), Quarter::BottomLeft, r, width, color);
+        }
+    }
+
+    /// A straight stretch of wire from pixel column `x0` to `x1`, on the
+    /// line drawn from pixel row `y`.
+    fn run(&mut self, x0: f32, x1: f32, y: f32, width: f32, color: Color) {
+        if x1 > x0 {
+            let top = y - (width / 2.0).floor();
+            let left = x0 - (width / 2.0).floor();
+            fill(
+                &mut self.out.under,
+                left,
+                top,
+                x1 - x0 + width,
+                width,
+                color,
+            );
+        }
+    }
+
+    /// A straight stretch of wire from pixel row `y0` down to `y1`, on
+    /// the line drawn from pixel column `x`.
+    fn rise(&mut self, x: f32, y0: f32, y1: f32, width: f32, color: Color) {
+        if y1 > y0 {
+            let left = x - (width / 2.0).floor();
+            let top = y0 - (width / 2.0).floor();
+            fill(
+                &mut self.out.under,
+                left,
+                top,
+                width,
+                y1 - y0 + width,
+                color,
+            );
+        }
+    }
+
+    /// A quarter circle of radius `r` around the pixel `center` lines are
+    /// drawn from, joining a level stretch of wire to an upright one.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    fn corner(&mut self, center: (f32, f32), quarter: Quarter, r: f32, width: f32, color: Color) {
+        let pad = width.ceil() + 1.0;
+        let (right, below) = match quarter {
+            Quarter::TopRight => (true, false),
+            Quarter::BottomRight => (true, true),
+            Quarter::BottomLeft => (false, true),
+            Quarter::TopLeft => (false, false),
+        };
+        let start = match quarter {
+            Quarter::TopRight => -FRAC_PI_2,
+            Quarter::BottomRight => 0.0,
+            Quarter::BottomLeft => FRAC_PI_2,
+            Quarter::TopLeft => PI,
+        };
+        // The line drawn from a pixel is centered half its width on.
+        let middle = width / 2.0 - (width / 2.0).floor();
+        let local = Point::new(
+            if right { pad } else { pad + r } + middle,
+            if below { pad } else { pad + r } + middle,
+        );
+        let key = ShapeKey {
+            shape: CORNER + quarter as u32,
+            width: r as u32,
+            height: width as u32,
+            phase: [0, 0],
+        };
+        let at = (
+            (center.0 - local.x + middle) as i32,
+            (center.1 - local.y + middle) as i32,
+        );
+        let side = (r + 2.0 * pad) as u32 + 1;
         let atlas = self.text.atlas_mut();
         shapes::stamp(
             &mut self.out.under,
             atlas,
             key,
             at,
-            size,
+            (side, side),
             rgba(color),
             |pen| {
-                let (p0, p3) = (Point::new(pad, a), Point::new(pad + w, b));
-                let (p1, p2) = (Point::new(pad + w / 2.0, a), Point::new(pad + w / 2.0, b));
                 let mut outline = Outline::new();
-                outline.move_to(p0);
-                for i in 1..=32u8 {
-                    let t = f32::from(i) / 32.0;
-                    let u = 1.0 - t;
-                    let (c0, c1, c2, c3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
-                    outline.line_to(Point::new(
-                        c0 * p0.x + c1 * p1.x + c2 * p2.x + c3 * p3.x,
-                        c0 * p0.y + c1 * p1.y + c2 * p2.y + c3 * p3.y,
-                    ));
-                }
+                outline.arc(local, r, start, start + FRAC_PI_2);
                 pen.stroke(outline, width, LineCap::Butt, LineJoin::Round);
             },
         );
@@ -384,23 +486,17 @@ impl Pen<'_, '_> {
     /// The dot a wire leaves its card from.
     fn port(&mut self, wire: Wire, hot: bool) {
         let (x, y) = self.layout.port_out(wire.from, wire.row);
-        let ((x0, x1), (y0, y1)) = self.shown();
-        if !(x0..=x1).contains(&x) || !(y0..=y1).contains(&y) {
-            return;
-        }
         let color = self.wire_color(wire.kind, hot);
-        let (middle, width) = self.row_line(y, hot);
-        let center = Point::new(
-            self.x(x as f32 + 0.5).round(),
-            middle - (width / 2.0).floor() + width / 2.0,
-        );
+        let width = self.line(hot);
+        let middle = width / 2.0 - (width / 2.0).floor();
+        let center = Point::new(self.column_px(x) + middle, self.row_px(y) + middle);
         self.dot(center, color);
     }
 
     /// A port's dot, centered on pixel `center`.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn dot(&mut self, center: Point, color: Color) {
-        let radius = (self.metrics.cell.height * 0.18).max(2.5);
+        let radius = ((self.size.1 * 0.18).max(1.5) * 2.0).round() / 2.0;
         let size = (radius * 2.0).ceil() + 2.0;
         let key = ShapeKey {
             shape: PORT,
@@ -427,10 +523,6 @@ impl Pen<'_, '_> {
 
     fn card(&mut self, card: usize, selected: Option<usize>, linked: &HashSet<usize>) {
         let rect = self.layout.card_rect(card);
-        let ((x0, x1), (y0, y1)) = self.shown();
-        if rect.right() < x0 || rect.x > x1 || rect.bottom() < y0 || rect.y > y1 {
-            return;
-        }
         let standing = if selected == Some(card) {
             Standing::Selected
         } else if linked.contains(&card) {
@@ -448,12 +540,7 @@ impl Pen<'_, '_> {
         let left = self.x(rect.x as f32 + 0.5).round();
         let right = self.x(rect.right() as f32 - 0.5).round();
         let (top, bottom) = (self.card_top(rect), self.card_bottom(rect));
-        let edge = self.line()
-            * if standing == Standing::Selected {
-                2.0
-            } else {
-                1.0
-            };
+        let edge = self.line(standing == Standing::Selected);
         let border = match standing {
             Standing::Selected => colors.primary,
             Standing::Linked => colors.secondary.mix(colors.bg, 0.3),
@@ -466,7 +553,7 @@ impl Pen<'_, '_> {
         fill(out, left, top, edge, bottom - top, border);
         fill(out, right - edge, top, edge, bottom - top, border);
 
-        self.title(card, rect.x as f32, rect.right() as f32, rect.y as f32);
+        self.title(card, rect);
 
         let selected_place = flow.selected_place().filter(|(at, _)| *at == card);
         let head_selected = selected_place == Some((card, None));
@@ -480,7 +567,7 @@ impl Pen<'_, '_> {
             colors.fg
         };
         let bold = head_selected || matches!(node.kind, FlowKind::Prompt | FlowKind::Reply);
-        let label = fit(&node.label, CARD_WIDTH - 4);
+        let label = fit(&node.label, rect.width - 4);
         self.write(
             &label,
             (rect.x as f32 + 2.0, line_top(1)),
@@ -537,16 +624,17 @@ impl Pen<'_, '_> {
         self.y(rect.bottom() as f32 - 0.5).round()
     }
 
-    /// `▾ ✓ model ······ 1.2k/300 · 4s`: fold marker (turns only),
-    /// status, kind, and the card's facts against the right edge, on the
-    /// title row `y` of a card from column `x0` to `x1`.
-    fn title(&mut self, card: usize, x0: f32, x1: f32, y: f32) {
+    /// `▾ ✓ model ······ 1.2k/300 · 4s`: fold marker (on cards that
+    /// fold), status, kind, and the card's facts against the right edge,
+    /// on the title row of the card at `rect`.
+    fn title(&mut self, card: usize, rect: CellRect) {
         let colors = self.colors();
         let flow = self.canvas.flow;
         let placed = &self.layout.cards[card];
         let node = &flow.nodes()[placed.head];
-        let mut at = x0 + 2.0;
-        if placed.steps > 0 {
+        let (x1, y) = (rect.right() as f32, rect.y as f32);
+        let mut at = rect.x as f32 + 2.0;
+        if placed.folds() {
             let marker = if placed.folded { "▸" } else { "▾" };
             self.write(marker, (at, y), colors.secondary, false, Align::Left);
             at += 2.0;
@@ -554,7 +642,7 @@ impl Pen<'_, '_> {
         let (glyph, color) = status_glyph(node.status, colors);
         self.write(glyph, (at, y), color, false, Align::Left);
         at += 2.0;
-        let kind = node.kind.label();
+        let kind = flow.card_kind_label(card);
         self.write(
             kind,
             (at, y),
@@ -590,11 +678,14 @@ impl Pen<'_, '_> {
                 _ => colors.fg,
             }
         };
-        let (glyph, glyph_color) = status_glyph(node.status, colors);
+        let (glyph, glyph_color) = match node.kind {
+            FlowKind::Reply => ("↳", colors.secondary),
+            _ => status_glyph(node.status, colors),
+        };
         let glyph_color = if selected { text } else { glyph_color };
         let x = rect.x as f32;
         self.write(glyph, (x + 2.0, y), glyph_color, false, Align::Left);
-        let room = CARD_WIDTH - 4;
+        let room = rect.width - 4;
         let detail = fit(&node.detail, room / 3);
         let detail_width = detail.width();
         let label_room = room - 2 - detail_width - usize::from(detail_width > 0);

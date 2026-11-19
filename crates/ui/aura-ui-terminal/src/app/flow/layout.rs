@@ -1,79 +1,92 @@
 //! Where everything on the GRAPH tab's canvas goes, in cells.
 //!
-//! A model call is one card, and the tool calls, spawns, finished
-//! processes and events that follow it are its rows. Prompts, replies,
-//! messages from other agents and the results of `task` calls are cards
-//! of their own. An agent's cards go down a column, each under the one
-//! before, until the column has no room for the next; it starts the next
-//! column. A card is right of every card of another agent whose wire comes
-//! into it, so those wires always run forward. Each agent's cards are in a
-//! band; agents that worked one after the other share one, and the bands
-//! share the height of the view.
+//! A turn is a block: its main card (the prompt, with the turn's replies
+//! as rows) and, under it on a spine, a subcard for each model call with
+//! the tool calls, spawns, finished processes and events that followed it
+//! as rows. A message from another agent, and what a `task` call came back
+//! with when no row stands for it, are small subcards of their own; a
+//! result a `task` row links to is that row.
+//!
+//! An agent's turns go down a column, each under the one before, until
+//! the column has no room for the next; it starts the next column. A turn
+//! is right of every turn of another agent whose wire comes into it, so
+//! those wires always run forward: from a `task` row to the main card of
+//! the turn it started. Each agent's turns are in a band; agents that
+//! worked one after the other share one, and the bands share the height of
+//! the view.
 //!
 //! ```text
-//!   ┌ ✓ prompt ─────────┐
-//!   │ add a greeting    │
-//!   └─────────┬─────────┘
-//!             │
-//!   ┌ ✓ model ┴─ 4s ────┐
-//!   │ sonnet            │
-//!   │ ✓ task coder      ●──╮ coder #1
-//!   └───────────────────┘  │ ┌ ✓ prompt ─────────┐
-//!                          ╰─┤ write greet()     │
-//!                            └───────────────────┘
+//!   ┌ ▾ ✓ turn ─────────────── 2 calls ┐
+//!   │ add a greeting                   │
+//!   │ ↳ greeting added                 │
+//!   └─┬────────────────────────────────┘
+//!     │ ┌ ✓ model ───── 1.2k/300 · 4s ┐
+//!     ├─┤ sonnet                      │   coder #1
+//!     │ │ ✓ task coder · greet() 4.2s ●───┌ ✓ turn ─── coder #1 ┐
+//!     │ └─────────────────────────────┘   │ write greet()       │
 //! ```
 //!
 //! The terminal draws the layout with box characters and the desktop
-//! window with curves in pixels; both place it from these cells.
+//! window in pixels; both place it from these cells.
 
 use crate::events::{FlowKind, FlowNode};
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 
 /// Stands for "none" where an index is expected.
 pub(super) const NONE: usize = usize::MAX;
 
-/// Columns of a card, borders included.
+/// Columns of a turn's main card, borders included.
 pub const CARD_WIDTH: usize = 34;
-/// Columns between two cards side by side, where wires turn.
+/// Columns a turn's subcards are right of its main card.
+pub const SUB_INDENT: usize = 4;
+/// Columns right of a block's left edge its spine runs down.
+pub const SPINE: usize = 2;
+/// Columns between two blocks side by side, where wires turn.
 pub const GUTTER: usize = 6;
-/// Columns from one card column to the next.
+/// Columns from one block column to the next.
 pub const PITCH: usize = CARD_WIDTH + GUTTER;
-/// Empty columns left of the first card column.
+/// Empty columns left of the first block column.
 pub const MARGIN: usize = 2;
 /// Lines a card has at most below its head. A card with more rows lists
 /// one fewer and says how many it leaves out on the last.
 pub const MAX_LINES: usize = 10;
 /// Columns of a gutter a wire can turn down or up in.
 pub const TRACKS: usize = 4;
-/// Rows between a card and the one under it, where the wire between them
-/// runs.
+/// Rows between a card and the one under it, where the spine runs.
 pub const GAP: usize = 1;
 
-/// Whether a node of this kind starts a card of its own.
-const fn heads_card(kind: FlowKind) -> bool {
-    matches!(
-        kind,
-        FlowKind::Prompt | FlowKind::Model | FlowKind::Reply | FlowKind::Message | FlowKind::Result
-    )
+/// What a card stands for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardKind {
+    /// A turn's main card: its prompt, with its replies as rows
+    Turn,
+    /// A model call, with the tool calls it made as rows
+    Call,
+    /// A message from another agent, or a result no row stands for
+    Note,
 }
 
 /// One card: a node and the rows that follow it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Card {
+    pub kind: CardKind,
     /// Index into the flow's nodes
     pub head: usize,
-    /// Indices into the flow's nodes, in record order
+    /// Indices into the flow's nodes, in record order; none while folded
     pub rows: Vec<usize>,
     /// Index into the flow's lanes
     pub lane: usize,
+    /// Index into [`FlowLayout::blocks`]
+    pub block: usize,
     pub column: usize,
     /// Index into [`FlowLayout::bands`]
     pub band: usize,
     /// Rows above it in its column, from the band's first card row
     pub top: usize,
-    /// Other cards of the turn this prompt started; 0 for every other card
+    /// What folding it hides: a turn's subcards, a call's rows
     pub steps: usize,
-    /// Whether those cards are folded into this one
+    /// Whether those are folded away
     pub folded: bool,
 }
 
@@ -107,6 +120,41 @@ impl Card {
     pub fn line_of(&self, row: Option<usize>) -> usize {
         row.map_or(1, |row| 2 + row.min(self.lines().saturating_sub(1)))
     }
+
+    /// Columns right of its block's left edge.
+    #[must_use]
+    pub const fn indent(&self) -> usize {
+        match self.kind {
+            CardKind::Turn => 0,
+            CardKind::Call | CardKind::Note => SUB_INDENT,
+        }
+    }
+
+    /// Whether it folds: a turn with subcards, a call with rows.
+    #[must_use]
+    pub const fn folds(&self) -> bool {
+        self.steps > 0 && !matches!(self.kind, CardKind::Note)
+    }
+}
+
+/// A turn: its main card and its subcards, placed as one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Block {
+    /// Index into the flow's lanes
+    pub lane: usize,
+    /// Indices into [`FlowLayout::cards`]: the main card, then its subcards
+    pub cards: Range<usize>,
+    pub column: usize,
+    pub top: usize,
+    pub height: usize,
+}
+
+impl Block {
+    /// The turn's main card.
+    #[must_use]
+    pub const fn main(&self) -> usize {
+        self.cards.start
+    }
 }
 
 /// A rectangle of the canvas, in cells.
@@ -128,20 +176,26 @@ impl CellRect {
     pub const fn bottom(&self) -> usize {
         self.y + self.height
     }
+
+    /// Whether it overlaps columns `xs` and rows `ys`.
+    #[must_use]
+    pub const fn meets(&self, xs: &Range<usize>, ys: &Range<usize>) -> bool {
+        self.x < xs.end && self.right() > xs.start && self.y < ys.end && self.bottom() > ys.start
+    }
 }
 
-/// Where one agent's cards run.
+/// Where one agent's turns are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LaneSpan {
     /// Index into the flow's lanes
     pub lane: usize,
     pub band: usize,
-    /// First and last card column
+    /// First and last block column
     pub first: usize,
     pub last: usize,
 }
 
-/// A row of card columns across the canvas, with the names of its agents
+/// A row of block columns across the canvas, with the names of its agents
 /// above.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Band {
@@ -153,8 +207,10 @@ pub struct Band {
 /// What a wire stands for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WireKind {
-    /// To the next card of the same agent
+    /// To the agent's next turn
     Next,
+    /// From a turn's main card down its spine to one of its subcards
+    Spine,
     /// From a `task` call or a spawn to the agent it started
     Spawn,
     /// From an agent's last step back to the agent that asked it
@@ -176,8 +232,9 @@ impl WireKind {
     }
 }
 
-/// A wire from a card's row (or head) to another card's head, or from a
-/// card straight down to the one under it ([`FlowLayout::stacked`]).
+/// A wire from a card's row (or head) to another card's head. Within a
+/// column it runs down its block's spine into a subcard's side
+/// ([`FlowLayout::stacked`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Wire {
     /// Index into [`FlowLayout::cards`]
@@ -193,7 +250,7 @@ pub struct Wire {
 /// What a cell of the canvas is part of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Spot {
-    /// A card's title; `fold` when it is on the fold marker of a turn
+    /// A card's title; `fold` when it is on the card's fold marker
     Title { card: usize, fold: bool },
     /// A card's head
     Head(usize),
@@ -210,35 +267,53 @@ impl Spot {
     }
 }
 
+/// What is folded, by the id of the head of what folds.
+pub(super) struct Folds<'a> {
+    /// Turns opened or folded by hand; the rest are open when they are
+    /// their agent's newest
+    pub turns: &'a HashMap<String, bool>,
+    /// Model calls whose rows are folded away
+    pub calls: &'a HashSet<String>,
+}
+
 /// Where every card of the flow goes.
 #[derive(Debug, Default)]
 pub struct FlowLayout {
-    /// Cards in time order
+    /// Cards by block, blocks in time order
     pub cards: Vec<Card>,
+    /// Turns in time order
+    pub blocks: Vec<Block>,
     pub bands: Vec<Band>,
-    /// Lanes with a card, by band then first column
+    /// Lanes with a turn, by band then first column
     pub spans: Vec<LaneSpan>,
     /// Wires, sorted by the card they go to
     pub wires: Vec<Wire>,
-    /// Card columns in use
+    /// Block columns in use
     pub columns: usize,
     /// Size of the canvas, in cells
     pub width: usize,
     pub height: usize,
-    /// Each lane's cards, left to right
-    lane_cards: Vec<Vec<usize>>,
-    /// The card each node is shown in: its own, or for a node folded
-    /// away the prompt of its turn
+    /// Each lane's main cards, in order
+    lane_turns: Vec<Vec<usize>>,
+    /// Each column's cards, top to bottom
+    by_column: Vec<Vec<usize>>,
+    /// Where each wire is drawn, in the order of `wires`
+    wire_boxes: Vec<CellRect>,
+    /// The card each node is shown in: its own, or the card a fold put it
+    /// in
     card_of: Vec<usize>,
     /// Each node's row in its card; [`NONE`] for heads and folded nodes
     row_of: Vec<usize>,
-    /// The prompt that started each node's turn; [`NONE`] for prompts
-    /// and for nodes before a lane's first prompt
-    turn_of: Vec<usize>,
+    /// The head of each node's turn, and of its model call; [`NONE`] for
+    /// nodes outside one
+    turn_head: Vec<usize>,
+    call_head: Vec<usize>,
+    /// The newest node shown, by when it happened
+    newest: usize,
 }
 
 impl FlowLayout {
-    /// Left edge of card column `column`.
+    /// Left edge of block column `column`.
     #[must_use]
     pub const fn column_x(column: usize) -> usize {
         MARGIN + column * PITCH
@@ -249,26 +324,24 @@ impl FlowLayout {
     pub fn card_rect(&self, card: usize) -> CellRect {
         let placed = &self.cards[card];
         CellRect {
-            x: Self::column_x(placed.column),
+            x: Self::column_x(placed.column) + placed.indent(),
             y: self.bands[placed.band].y + 1 + placed.top,
-            width: CARD_WIDTH,
+            width: CARD_WIDTH - placed.indent(),
             height: placed.height(),
         }
     }
 
-    /// Whether `wire` runs straight down from its card to the one under
-    /// it, from [`Self::stack_x`] on the one's bottom border to the
-    /// other's top.
+    /// The canvas column the spine of card `card`'s block runs down.
+    #[must_use]
+    pub fn spine_x(&self, card: usize) -> usize {
+        Self::column_x(self.cards[card].column) + SPINE
+    }
+
+    /// Whether `wire` runs down the spine of its column rather than
+    /// across a gutter.
     #[must_use]
     pub fn stacked(&self, wire: &Wire) -> bool {
         self.cards[wire.from].column == self.cards[wire.to].column
-    }
-
-    /// The canvas column wires between stacked cards in card column
-    /// `column` run down.
-    #[must_use]
-    pub const fn stack_x(column: usize) -> usize {
-        Self::column_x(column) + CARD_WIDTH / 2
     }
 
     /// Canvas cell where a wire leaves card `card` from `row`, on its
@@ -300,16 +373,54 @@ impl FlowLayout {
         self.row_of.get(node).copied().filter(|&r| r != NONE)
     }
 
-    /// The prompt that started node `node`'s turn.
+    /// The heads of what node `node` is in that folds: its turn, and its
+    /// model call.
     #[must_use]
-    pub fn turn_of(&self, node: usize) -> Option<usize> {
-        self.turn_of.get(node).copied().filter(|&p| p != NONE)
+    pub fn folds_over(&self, node: usize) -> (Option<usize>, Option<usize>) {
+        let of = |heads: &[usize]| heads.get(node).copied().filter(|&h| h != NONE);
+        (of(&self.turn_head), of(&self.call_head))
     }
 
-    /// Lane `lane`'s cards, left to right.
+    /// The newest node shown.
     #[must_use]
-    pub fn lane_cards(&self, lane: usize) -> &[usize] {
-        self.lane_cards.get(lane).map_or(&[], Vec::as_slice)
+    pub fn newest(&self) -> Option<usize> {
+        (self.newest != NONE).then_some(self.newest)
+    }
+
+    /// Lane `lane`'s main cards, in order.
+    #[must_use]
+    pub fn lane_turns(&self, lane: usize) -> &[usize] {
+        self.lane_turns.get(lane).map_or(&[], Vec::as_slice)
+    }
+
+    /// The main card of card `card`'s turn.
+    #[must_use]
+    pub fn main_of(&self, card: usize) -> usize {
+        self.blocks[self.cards[card].block].main()
+    }
+
+    /// The cards that meet columns `xs` and rows `ys` of the canvas.
+    #[must_use]
+    pub fn visible_cards(&self, xs: &Range<usize>, ys: &Range<usize>) -> Vec<usize> {
+        let first = xs.start.saturating_sub(MARGIN + CARD_WIDTH) / PITCH;
+        let last = (xs.end / PITCH + 1).min(self.by_column.len());
+        (first.min(last)..last)
+            .flat_map(|column| &self.by_column[column])
+            .copied()
+            .filter(|&card| self.card_rect(card).meets(xs, ys))
+            .collect()
+    }
+
+    /// The wires that meet columns `xs` and rows `ys` of the canvas, as
+    /// indices into [`Self::wires`].
+    #[must_use]
+    pub fn visible_wires(&self, xs: &Range<usize>, ys: &Range<usize>) -> Vec<usize> {
+        self.wire_boxes
+            .iter()
+            .enumerate()
+            .filter(|(_, rect)| rect.meets(xs, ys))
+            .map(|(at, _)| at)
+            .collect()
     }
 
     /// What the canvas cell at `(x, y)` is part of.
@@ -321,45 +432,74 @@ impl FlowLayout {
         }
         let (x, y) = (x.floor() as usize, y.floor() as usize);
         let column = x.checked_sub(MARGIN)? / PITCH;
-        let card = self.cards.iter().enumerate().find_map(|(index, card)| {
-            if card.column != column {
-                return None;
-            }
-            let rect = self.card_rect(index);
-            (x < rect.right() && y >= rect.y && y < rect.bottom()).then_some(index)
-        })?;
+        let card = self
+            .by_column
+            .get(column)?
+            .iter()
+            .copied()
+            .find(|&card| self.card_rect(card).meets(&(x..x + 1), &(y..y + 1)))?;
         let rect = self.card_rect(card);
         let placed = &self.cards[card];
         Some(match y - rect.y {
             0 => Spot::Title {
                 card,
-                fold: placed.steps > 0 && x == rect.x + 2,
+                fold: placed.folds() && x == rect.x + 2,
             },
             line if line >= 2 && line < 2 + placed.lines() => Spot::Row(card, line - 2),
             _ => Spot::Head(card),
         })
     }
+
+    /// The cells wire `wire` is drawn in.
+    fn wire_box(&self, wire: &Wire) -> CellRect {
+        let (from, to) = (self.card_rect(wire.from), self.card_rect(wire.to));
+        if self.stacked(wire) {
+            let x = self.spine_x(wire.from);
+            let bottom = to.y + 2;
+            return CellRect {
+                x,
+                y: from.bottom() - 1,
+                width: to.x.max(x + 1) - x + 1,
+                height: bottom.saturating_sub(from.bottom() - 1),
+            };
+        }
+        let (out_x, out_y) = self.port_out(wire.from, wire.row);
+        let (in_x, in_y) = self.port_in(wire.to);
+        CellRect {
+            x: out_x,
+            y: out_y.min(in_y),
+            width: in_x.saturating_sub(out_x) + 1,
+            height: out_y.abs_diff(in_y) + 1,
+        }
+    }
 }
 
-/// A card before it is placed.
-struct Draft {
+/// A subcard before it is placed.
+struct SubDraft {
+    kind: CardKind,
     head: usize,
     rows: Vec<usize>,
-    lane: usize,
-    /// When it happened, then its lane and record order
-    key: (u64, usize, u64),
-    /// The draft of the prompt that started its turn
-    turn: usize,
 }
 
-/// Group the nodes into cards and place them, to fit a view `room` rows
+/// A turn before it is placed.
+struct TurnDraft {
+    head: usize,
+    rows: Vec<usize>,
+    subs: Vec<SubDraft>,
+    lane: usize,
+    /// When it started, then its lane and record order
+    key: (u64, usize, u64),
+}
+
+/// Group the nodes into turns and place them, to fit a view `room` rows
 /// tall; 0 when there is no view yet, and columns go down as far as they
 /// need.
+#[allow(clippy::too_many_lines)]
 pub(super) fn build_layout(
     lane_index: &HashMap<String, usize>,
     nodes: &[FlowNode],
     index: &HashMap<String, usize>,
-    collapsed: &HashSet<String>,
+    folds: &Folds<'_>,
     room: usize,
 ) -> FlowLayout {
     let lane_count = lane_index.len();
@@ -370,89 +510,167 @@ pub(super) fn build_layout(
         }
     }
 
+    // The row of the `task` call each result came back to.
+    let mut answered = vec![NONE; nodes.len()];
+    for (at, node) in nodes.iter().enumerate() {
+        if node.kind != FlowKind::Tool {
+            continue;
+        }
+        for (kind, other) in &node.links {
+            if let Some(&result) = index.get(other).filter(|_| kind == "result") {
+                if nodes[result].kind == FlowKind::Result {
+                    answered[result] = at;
+                }
+            }
+        }
+    }
+
     // Within a lane the record's order holds; across lanes, time does. A
     // lane's clock never runs backwards, so the two cannot disagree.
-    let mut drafts: Vec<Draft> = Vec::new();
-    let mut draft_of = vec![NONE; nodes.len()];
-    let mut turn_of = vec![NONE; nodes.len()];
+    let mut drafts: Vec<TurnDraft> = Vec::new();
+    let mut clock_of = vec![0u64; nodes.len()];
     for (lane, list) in per_lane.iter_mut().enumerate() {
         list.sort_by_key(|&at| (nodes[at].seq, at));
+        let first = drafts.len();
         let mut clock = 0;
-        let mut current = NONE;
-        let mut turn = NONE;
         for &at in list.iter() {
             let node = &nodes[at];
             clock = clock.max(node.at_ms);
-            if heads_card(node.kind) || current == NONE {
-                current = drafts.len();
-                if node.kind == FlowKind::Prompt {
-                    turn = current;
-                }
-                drafts.push(Draft {
+            clock_of[at] = clock;
+            if answered[at] != NONE {
+                continue;
+            }
+            if node.kind == FlowKind::Prompt || drafts.len() == first {
+                drafts.push(TurnDraft {
                     head: at,
                     rows: Vec::new(),
+                    subs: Vec::new(),
                     lane,
                     key: (clock, lane, node.seq),
-                    turn,
                 });
-            } else {
-                drafts[current].rows.push(at);
+                continue;
             }
-            draft_of[at] = current;
-            if turn != NONE && drafts[turn].head != at {
-                turn_of[at] = drafts[turn].head;
+            let turn = drafts.last_mut().expect("a turn was started");
+            let sub = |kind| SubDraft {
+                kind,
+                head: at,
+                rows: Vec::new(),
+            };
+            match node.kind {
+                FlowKind::Reply => turn.rows.push(at),
+                FlowKind::Model => turn.subs.push(sub(CardKind::Call)),
+                FlowKind::Message | FlowKind::Result => turn.subs.push(sub(CardKind::Note)),
+                _ => match turn.subs.last_mut() {
+                    Some(sub) => sub.rows.push(at),
+                    None => turn.rows.push(at),
+                },
             }
         }
     }
-
-    let mut steps = vec![0usize; drafts.len()];
+    drafts.sort_by_key(|draft| (draft.key, draft.head));
+    let mut newest_turn = vec![NONE; lane_count];
     for (at, draft) in drafts.iter().enumerate() {
-        if draft.turn != NONE && draft.turn != at {
-            steps[draft.turn] += 1;
-        }
+        newest_turn[draft.lane] = at;
     }
-    let folded = |draft: usize| collapsed.contains(&nodes[drafts[draft].head].id);
-    let hidden = |draft: usize| {
-        let turn = drafts[draft].turn;
-        turn != NONE && turn != draft && folded(turn)
-    };
 
-    let mut shown: Vec<usize> = (0..drafts.len()).filter(|&d| !hidden(d)).collect();
-    shown.sort_by_key(|&d| (drafts[d].key, drafts[d].head));
-    let mut card_of_draft = vec![NONE; drafts.len()];
-    for (card, &draft) in shown.iter().enumerate() {
-        card_of_draft[draft] = card;
-    }
+    let mut cards: Vec<Card> = Vec::new();
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut lane_turns: Vec<Vec<usize>> = vec![Vec::new(); lane_count];
     let mut card_of = vec![NONE; nodes.len()];
     let mut row_of = vec![NONE; nodes.len()];
-    for (draft_index, draft) in drafts.iter().enumerate() {
-        let card = match card_of_draft[draft_index] {
-            NONE => card_of_draft[draft.turn],
-            card => {
-                for (row, &node) in draft.rows.iter().enumerate() {
-                    row_of[node] = row;
-                }
-                card
-            }
-        };
-        card_of[draft.head] = card;
-        for &node in &draft.rows {
-            card_of[node] = card;
-        }
-    }
-    let mut cards: Vec<Card> = shown
-        .iter()
-        .map(|&d| Card {
-            head: drafts[d].head,
-            rows: drafts[d].rows.clone(),
-            lane: drafts[d].lane,
+    let mut turn_head = vec![NONE; nodes.len()];
+    let mut call_head = vec![NONE; nodes.len()];
+    for (at, draft) in drafts.iter().enumerate() {
+        let open = folds
+            .turns
+            .get(&nodes[draft.head].id)
+            .copied()
+            .unwrap_or(newest_turn[draft.lane] == at);
+        let folded = !draft.subs.is_empty() && !open;
+        let main = cards.len();
+        let block = blocks.len();
+        let card = |kind, head, rows: Vec<usize>, steps, folded| Card {
+            kind,
+            head,
+            rows,
+            lane: draft.lane,
+            block,
             column: 0,
             band: 0,
             top: 0,
-            steps: steps[d],
-            folded: steps[d] > 0 && folded(d),
-        })
-        .collect();
+            steps,
+            folded,
+        };
+        cards.push(card(
+            CardKind::Turn,
+            draft.head,
+            draft.rows.clone(),
+            draft.subs.len(),
+            folded,
+        ));
+        lane_turns[draft.lane].push(main);
+        card_of[draft.head] = main;
+        for (row, &node) in draft.rows.iter().enumerate() {
+            (card_of[node], row_of[node]) = (main, row);
+        }
+        for &node in std::iter::once(&draft.head).chain(&draft.rows) {
+            turn_head[node] = draft.head;
+        }
+        for sub in &draft.subs {
+            let all = std::iter::once(&sub.head).chain(&sub.rows);
+            for &node in all.clone() {
+                turn_head[node] = draft.head;
+                if sub.kind == CardKind::Call {
+                    call_head[node] = sub.head;
+                }
+            }
+            if folded {
+                for &node in all {
+                    card_of[node] = main;
+                }
+                continue;
+            }
+            let rows_folded = sub.kind == CardKind::Call
+                && !sub.rows.is_empty()
+                && folds.calls.contains(&nodes[sub.head].id);
+            let at = cards.len();
+            card_of[sub.head] = at;
+            for (row, &node) in sub.rows.iter().enumerate() {
+                card_of[node] = at;
+                if !rows_folded {
+                    row_of[node] = row;
+                }
+            }
+            let rows = if rows_folded {
+                Vec::new()
+            } else {
+                sub.rows.clone()
+            };
+            cards.push(card(sub.kind, sub.head, rows, sub.rows.len(), rows_folded));
+        }
+        blocks.push(Block {
+            lane: draft.lane,
+            cards: main..cards.len(),
+            column: 0,
+            top: 0,
+            height: 0,
+        });
+    }
+    for (result, &row) in answered.iter().enumerate() {
+        if row != NONE {
+            card_of[result] = card_of[row];
+            row_of[result] = row_of[row];
+            turn_head[result] = turn_head[row];
+            call_head[result] = call_head[row];
+        }
+    }
+    for block in &mut blocks {
+        block.height = cards[block.cards.clone()]
+            .iter()
+            .map(Card::height)
+            .sum::<usize>()
+            + GAP * (block.cards.len() - 1);
+    }
 
     // Links between cards, as wires before they have a track.
     let mut links: Vec<Wire> = Vec::new();
@@ -462,7 +680,7 @@ pub(super) fn build_layout(
                 continue;
             };
             let (from, to) = (card_of[at], card_of[other]);
-            if from == NONE || to == NONE || from == to {
+            if from == NONE || to == NONE || cards[from].lane == cards[to].lane {
                 continue;
             }
             let row = (row_of[at] != NONE).then_some(row_of[at]);
@@ -475,18 +693,18 @@ pub(super) fn build_layout(
             });
         }
     }
-    let mut incoming: Vec<Vec<usize>> = vec![Vec::new(); cards.len()];
+    let mut incoming: Vec<Vec<usize>> = vec![Vec::new(); blocks.len()];
     for link in &links {
+        let (from, to) = (cards[link.from].block, cards[link.to].block);
         // A link back in time is drawn when it can be, but places nothing.
-        if link.from < link.to {
-            incoming[link.to].push(link.from);
+        if from < to {
+            incoming[to].push(from);
         }
     }
 
-    let place = |cards: &mut [Card], budget: usize| {
-        let lane_cards = place_columns(cards, &incoming, lane_count, budget);
-        let (bands, spans) = place_bands(cards, &lane_cards);
-        (lane_cards, bands, spans)
+    let place = |blocks: &mut [Block], budget: usize| {
+        let lane_blocks = place_columns(blocks, &incoming, lane_count, budget);
+        place_bands(blocks, &lane_blocks)
     };
     let tall = |bands: &[Band]| bands.last().map_or(0, |band| band.y + band.height);
     // A band has its names above and a free row below.
@@ -494,26 +712,51 @@ pub(super) fn build_layout(
         0 => usize::MAX,
         room => room.saturating_sub(2).max(1),
     };
-    let (mut lane_cards, mut bands, mut spans) = place(&mut cards, full);
+    let (mut bands, mut spans) = place(&mut blocks, full);
     if room > 0 && bands.len() > 1 && tall(&bands) > room {
         // Bands too tall for the view together get the tallest columns
-        // they all fit it with; a card a column when none do.
+        // they all fit it with; a turn a column when none do.
         let (mut low, mut high) = (1, full);
         while high - low > 1 {
             let mid = (low + high) / 2;
-            if tall(&place(&mut cards, mid).1) <= room {
+            if tall(&place(&mut blocks, mid).0) <= room {
                 low = mid;
             } else {
                 high = mid;
             }
         }
-        (lane_cards, bands, spans) = place(&mut cards, low);
+        (bands, spans) = place(&mut blocks, low);
     }
-    let columns = cards.iter().map(|card| card.column + 1).max().unwrap_or(0);
+    let mut lane_band = vec![0; lane_count];
+    for span in &spans {
+        lane_band[span.lane] = span.band;
+    }
+    let columns = blocks
+        .iter()
+        .map(|block| block.column + 1)
+        .max()
+        .unwrap_or(0);
+    let mut by_column: Vec<Vec<usize>> = vec![Vec::new(); columns];
+    for block in &blocks {
+        let band = lane_band[block.lane];
+        let mut top = block.top;
+        for card in block.cards.clone() {
+            (cards[card].column, cards[card].band, cards[card].top) = (block.column, band, top);
+            top += cards[card].height() + GAP;
+            by_column[block.column].push(card);
+        }
+    }
+    for list in &mut by_column {
+        list.sort_by_key(|&card| (cards[card].band, cards[card].top));
+    }
 
+    // Down a column the order of turns is plain; only a wrap is wired.
     let mut wires: Vec<Wire> = Vec::new();
-    for list in &lane_cards {
-        for pair in list.windows(2) {
+    for list in &lane_turns {
+        for pair in list
+            .windows(2)
+            .filter(|pair| cards[pair[0]].column != cards[pair[1]].column)
+        {
             wires.push(Wire {
                 from: pair[0],
                 row: None,
@@ -523,59 +766,85 @@ pub(super) fn build_layout(
             });
         }
     }
-    wires.extend(links.into_iter().filter(|link| {
-        cards[link.from].lane != cards[link.to].lane
-            && cards[link.from].column < cards[link.to].column
-    }));
+    for block in &blocks {
+        for sub in block.cards.clone().skip(1) {
+            wires.push(Wire {
+                from: block.main(),
+                row: None,
+                to: sub,
+                kind: WireKind::Spine,
+                track: 0,
+            });
+        }
+    }
+    wires.extend(
+        links
+            .into_iter()
+            .filter(|link| cards[link.from].column < cards[link.to].column),
+    );
     wires.sort_unstable_by_key(|wire| (wire.to, wire.from, wire.row, wire.kind));
     wires.dedup_by_key(|wire| (wire.to, wire.from, wire.row));
 
+    let newest = (0..nodes.len())
+        .filter(|&node| card_of[node] != NONE)
+        .max_by_key(|&node| (clock_of[node], nodes[node].seq, node))
+        .unwrap_or(NONE);
     let mut layout = FlowLayout {
         cards,
+        blocks,
         bands,
         spans,
         wires,
         columns,
         width: 0,
         height: 0,
-        lane_cards,
+        lane_turns,
+        by_column,
+        wire_boxes: Vec::new(),
         card_of,
         row_of,
-        turn_of,
+        turn_head,
+        call_head,
+        newest,
     };
     layout.width = if columns == 0 {
         0
     } else {
         FlowLayout::column_x(columns) - GUTTER + MARGIN
     };
-    layout.height = layout.bands.last().map_or(0, |band| band.y + band.height);
+    layout.height = tall(&layout.bands);
     assign_tracks(&mut layout);
+    layout.wire_boxes = layout
+        .wires
+        .iter()
+        .map(|wire| layout.wire_box(wire))
+        .collect();
     layout
 }
 
-/// Give each card a column and its place down it: under the card before
+/// Give each turn a column and its place down it: under the turn before
 /// it in its lane while that column has room for it in `budget` rows,
-/// else at the top of the next. A card goes right of every card whose
-/// wire comes into it. Returns each lane's cards, in order.
+/// else at the top of the next. A turn goes right of every turn whose
+/// wire comes into it. Returns each lane's turns, in order.
 fn place_columns(
-    cards: &mut [Card],
+    blocks: &mut [Block],
     incoming: &[Vec<usize>],
     lanes: usize,
     budget: usize,
 ) -> Vec<Vec<usize>> {
-    let mut lane_cards: Vec<Vec<usize>> = vec![Vec::new(); lanes];
+    let mut lane_blocks: Vec<Vec<usize>> = vec![Vec::new(); lanes];
     let mut previous_column = 0;
-    for card in 0..cards.len() {
-        let lane = cards[card].lane;
-        let after_wires = incoming[card]
+    for block in 0..blocks.len() {
+        let lane = blocks[block].lane;
+        let after_wires = incoming[block]
             .iter()
-            .map(|&from| cards[from].column + 1)
+            .map(|&from| blocks[from].column + 1)
             .max();
-        let height = cards[card].height();
-        let (column, top) = match lane_cards[lane].last() {
+        let height = blocks[block].height;
+        let (column, top) = match lane_blocks[lane].last() {
             Some(&last) => {
-                let column = cards[last].column;
-                let below = cards[last].top + cards[last].height() + GAP;
+                let column = blocks[last].column;
+                let below = blocks[last].top + blocks[last].height + GAP;
                 if after_wires.is_none_or(|after| after <= column) && below + height <= budget {
                     (column, below)
                 } else {
@@ -588,26 +857,26 @@ fn place_columns(
             // An agent nothing points to starts about when it started.
             None => (after_wires.unwrap_or(previous_column), 0),
         };
-        (cards[card].column, cards[card].top) = (column, top);
+        (blocks[block].column, blocks[block].top) = (column, top);
         previous_column = column;
-        lane_cards[lane].push(card);
+        lane_blocks[lane].push(block);
     }
-    lane_cards
+    lane_blocks
 }
 
 /// Give each lane a band and each band its height. The agent the flow is
 /// of has the first band to itself; every other lane takes the first band
 /// whose last lane ended a column before it starts, so the two never touch.
-fn place_bands(cards: &mut [Card], lane_cards: &[Vec<usize>]) -> (Vec<Band>, Vec<LaneSpan>) {
-    let mut spans: Vec<LaneSpan> = lane_cards
+fn place_bands(blocks: &[Block], lane_blocks: &[Vec<usize>]) -> (Vec<Band>, Vec<LaneSpan>) {
+    let mut spans: Vec<LaneSpan> = lane_blocks
         .iter()
         .enumerate()
         .filter_map(|(lane, list)| {
             Some(LaneSpan {
                 lane,
                 band: 0,
-                first: cards[*list.first()?].column,
-                last: cards[*list.last()?].column,
+                first: blocks[*list.first()?].column,
+                last: blocks[*list.last()?].column,
             })
         })
         .collect();
@@ -632,9 +901,9 @@ fn place_bands(cards: &mut [Card], lane_cards: &[Vec<usize>]) -> (Vec<Band>, Vec
 
     let mut heights = vec![0usize; ends.len()];
     for span in &spans {
-        for &card in &lane_cards[span.lane] {
-            cards[card].band = span.band;
-            heights[span.band] = heights[span.band].max(cards[card].top + cards[card].height());
+        for &block in &lane_blocks[span.lane] {
+            let block = &blocks[block];
+            heights[span.band] = heights[span.band].max(block.top + block.height);
         }
     }
     let mut y = 0;

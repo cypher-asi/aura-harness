@@ -190,24 +190,31 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
 - The chat panel has a third tab, GRAPH, next to CHAT and TERMINAL
   (Shift+←/→ or a click). It shows the flow between the agent on screen
   and every agent below it as their kernels recorded it, as cards wired
-  together on a canvas: a card per model call with its tool calls as
-  rows, and cards for each prompt, reply, message and `task` result.
-  Each agent's cards go down a column under its name until the view has
-  no room for the next, then on at the top of the next column; agents
-  that work in turn share a band, and bands share the view's height.
-  Wires join each card to the agent's next one, each `task` row or
-  spawn to the agent it started, and that agent's reply back to its
-  caller, and never run backwards.
-- The tab follows the agents live. `↑`/`↓` go through a card's lines and
-  on to the row above or below, `←`/`→` along the agent's cards,
-  `[` / `]` jump between prompts, `f` follows a wire to the other
-  agent, Space and `z` fold turns down to their prompt, Enter or a
-  second click opens a step as JSON, `r` opens its record entry and
-  `o` switches to its agent. Dragging empty canvas or the wheel pans
-  the view. See [The GRAPH tab](docs/cli.md#the-graph-tab).
+  together on a canvas: a main card per turn, with its prompt and
+  replies, and under it on a spine a subcard per model call with its
+  tool calls as rows. A `task` row shows what came back from it, and
+  the agent that took the work has turns of its own, wired from that
+  row. Each agent's turns go down a column under its name until the
+  view has no room for the next, then on at the top of the next column;
+  agents that work in turn share a band, and bands share the view's
+  height. Wires never run backwards.
+- The tab follows the agents live. Each agent's newest turn is open and
+  older ones are folded to their main card. `↑`/`↓` go through a card's
+  lines and on to the card above or below, `←`/`→` along the agent's
+  turns, `[` / `]` jump between prompts, `f` follows a wire to the
+  other agent (opening what is folded over its end), Space folds a
+  model call's tool calls or a turn's model calls, `z` folds every
+  turn, Enter or a second click opens a step as JSON, `r` opens its
+  record entry and `o` switches to its agent. Dragging empty canvas or
+  the wheel pans the view. See
+  [The GRAPH tab](docs/cli.md#the-graph-tab).
 - The desktop app draws the canvas itself (`App::set_host_canvas`):
-  square cards on the window's background, curved wires, and a view
-  that drags by the pixel and pans smoothly on a touchpad. The terminal UI leaves the
+  square cards on the window's background, rounded right-angled wires,
+  and a view that drags by the pixel, pans smoothly on a touchpad and
+  zooms from 25% to 200% around the pointer (Ctrl+wheel, a pinch, or
+  `+`/`-`/`0`). Only what is on screen is drawn; text sizes snap to
+  half a pixel and turn to bars below 50%, so zooming stays fast. The
+  terminal UI leaves the
   canvas cells blank and says which of them no menu or dialog covers
   (`App::flow_canvas_clip`), so those stay on top.
 - `UiEvent::OpenFlow` asks the session for an agent's flow;
