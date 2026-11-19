@@ -88,8 +88,11 @@ const DEFAULT_COMMAND_COLUMNS: u16 = 80;
 /// Narrowest terminal a command is given.
 const MIN_COMMAND_COLUMNS: u16 = 20;
 
-/// How long "Copied…" stays centered on the AURA CLI line.
-const COPY_NOTICE_TTL: Duration = Duration::from_secs(2);
+/// How long a notification stays in the corner.
+const NOTIFICATION_TTL: Duration = Duration::from_secs(4);
+
+/// How long an error stays in the corner.
+const ERROR_NOTIFICATION_TTL: Duration = Duration::from_secs(6);
 
 /// Maximum number of records to keep in the list.
 const MAX_RECORDS: usize = 100;
@@ -197,8 +200,8 @@ pub struct App {
     pub(super) streaming_content: String,
     /// Notification message (ephemeral)
     pub(super) notification: Option<(String, NotificationType)>,
-    /// Copy confirmation drawn in the middle of the AURA CLI line until `Instant`.
-    pub(super) copy_notice: Option<(String, NotificationType, Instant)>,
+    /// The notification on screen and when it goes away.
+    pub(super) notification_shown: Option<((String, NotificationType), Instant)>,
     /// Which panel has focus
     pub(super) focus: PanelFocus,
     /// Whether the Record panel is visible
@@ -641,7 +644,7 @@ impl App {
             command_rx: None,
             streaming_content: String::new(),
             notification: None,
-            copy_notice: None,
+            notification_shown: None,
             focus: PanelFocus::default(),
             record_panel_visible: true,
             swarm_panel_visible: true,
@@ -1235,6 +1238,11 @@ impl App {
         }
     }
 
+    /// Open the folder browser for a new project, as Ctrl+N does.
+    pub fn ask_for_project_folder(&mut self) {
+        self.prompt_new_project();
+    }
+
     /// Close the folder browser and open the folder as a project.
     pub(super) fn choose_project_folder(&mut self, folder: PathBuf) {
         self.folder_picker = None;
@@ -1824,9 +1832,8 @@ impl App {
 
     /// Report the outcome of copying `chars` characters to the clipboard.
     ///
-    /// Shown centered on the AURA CLI line, then cleared after a couple of seconds.
     pub fn notify_copied(&mut self, chars: usize, result: &std::io::Result<()>) {
-        let (message, kind) = match result {
+        self.notification = Some(match result {
             Ok(()) => (
                 format!(
                     "Copied {chars} character{}",
@@ -1835,16 +1842,7 @@ impl App {
                 NotificationType::Success,
             ),
             Err(e) => (format!("Copy failed: {e}"), NotificationType::Error),
-        };
-        self.copy_notice = Some((message, kind, Instant::now() + COPY_NOTICE_TTL));
-    }
-
-    /// Copy confirmation currently shown on the AURA CLI line.
-    #[must_use]
-    pub fn copy_notice(&self) -> Option<(&str, NotificationType)> {
-        self.copy_notice
-            .as_ref()
-            .map(|(message, kind, _)| (message.as_str(), *kind))
+        });
     }
 
     /// Clicking a project folds or opens it and leaves the highlight where
@@ -2389,14 +2387,28 @@ impl App {
         self.notification = None;
     }
 
-    /// Drop the copy confirmation, if it has expired.
-    fn expire_copy_notice(&mut self) {
-        if self
-            .copy_notice
-            .as_ref()
-            .is_some_and(|(_, _, until)| Instant::now() >= *until)
-        {
-            self.copy_notice = None;
+    /// Start the timer of a notification seen for the first time, and drop
+    /// one whose time is up.
+    fn expire_notification(&mut self) {
+        let Some(current) = &self.notification else {
+            self.notification_shown = None;
+            return;
+        };
+        let now = Instant::now();
+        match &self.notification_shown {
+            Some((shown, until)) if shown == current => {
+                if now >= *until {
+                    self.notification = None;
+                    self.notification_shown = None;
+                }
+            }
+            _ => {
+                let ttl = match current.1 {
+                    NotificationType::Error => ERROR_NOTIFICATION_TTL,
+                    NotificationType::Success | NotificationType::Warning => NOTIFICATION_TTL,
+                };
+                self.notification_shown = Some((current.clone(), now + ttl));
+            }
         }
     }
 
@@ -2446,7 +2458,7 @@ impl App {
     /// Process pending updates from the command channel.
     pub fn tick(&mut self) {
         self.animation_frame = self.animation_frame.wrapping_add(1);
-        self.expire_copy_notice();
+        self.expire_notification();
 
         self.receive_commands();
         if std::mem::take(&mut self.sandbox_stale) && self.sandbox_panel_visible {

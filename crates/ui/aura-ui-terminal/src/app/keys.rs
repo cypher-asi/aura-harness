@@ -12,7 +12,6 @@ impl App {
     /// Handle a key event.
     pub fn handle_key(&mut self, key: KeyEvent) -> KeyResult {
         self.notification = None;
-        self.copy_notice = None;
         self.clear_selection();
 
         if self.context_menu.is_some() && self.handle_context_menu_key(key) {

@@ -1996,36 +1996,42 @@ fn test_outer_text_is_inset_to_panel_borders() {
 }
 
 #[test]
-fn test_copy_notice_is_centered_on_the_aura_cli_line() {
+fn test_notification_is_a_toast_above_the_footer_in_the_bottom_right() {
     let mut app = app_with_model(None);
+    let header = render_rows(&mut app, 120)[0].clone();
     app.notify_copied(4, &Ok(()));
     let rows = render_rows(&mut app, 120);
 
-    let row = &rows[0];
-    assert!(row.starts_with(" AURA CLI "), "{row:?}");
-    let notice = "✓ Copied 4 characters";
-    let start = row[..row.find(notice).expect(row)].chars().count();
-    let width = notice.chars().count();
-    assert_eq!(start, (120 - width) / 2, "{row:?}");
+    assert_eq!(rows[0], header, "the header is left alone");
+    let n = rows.len();
+    let text = &rows[n - 3];
     assert!(
-        row.trim_end().ends_with("● local  http://127.0.0.1:8080"),
-        "{row:?}"
+        text.trim_end().ends_with("│ ✓ Copied 4 characters │"),
+        "{text:?}"
     );
+    assert_eq!(text.trim_end().chars().count(), 119, "{text:?}");
+    assert!(rows[n - 4].trim_end().ends_with('┐'), "{:?}", rows[n - 4]);
+    assert!(rows[n - 2].trim_end().ends_with('┘'), "{:?}", rows[n - 2]);
+    assert!(!rows[n - 1].contains("Copied"), "the footer stays visible");
 }
 
 #[test]
-fn test_copy_notice_is_skipped_when_it_would_cover_the_header() {
+fn test_long_notification_wraps_inside_the_toast() {
     let mut app = app_with_model(None);
-    app.notify_copied(4, &Ok(()));
-    let rows = render_rows(&mut app, 60);
+    app.notification = Some((
+        "word ".repeat(30).trim_end().to_string(),
+        crate::app::NotificationType::Warning,
+    ));
+    let rows = render_rows(&mut app, 120);
 
-    let row = &rows[0];
-    assert!(!row.contains("Copied"), "{row:?}");
-    assert!(row.starts_with(" AURA CLI "), "{row:?}");
-    assert!(
-        row.trim_end().ends_with("● local  http://127.0.0.1:8080"),
-        "{row:?}"
-    );
+    let n = rows.len();
+    let lines: Vec<&String> = rows[n - 5..n - 2].iter().collect();
+    assert!(lines[0].contains("│ ! word"), "{lines:?}");
+    for line in &lines {
+        assert!(line.trim_end().ends_with('│'), "{line:?}");
+        assert!(line.chars().count() <= 120, "{line:?}");
+    }
+    assert!(rows[n - 6].trim_end().ends_with('┐'), "{:?}", rows[n - 6]);
 }
 
 #[test]

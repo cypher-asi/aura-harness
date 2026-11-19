@@ -1800,17 +1800,17 @@ fn test_copy_notice_sits_then_expires() {
     let mut app = App::new();
     app.notify_copied(4, &Ok(()));
     assert_eq!(
-        app.copy_notice(),
-        Some(("Copied 4 characters", NotificationType::Success))
+        app.notification(),
+        Some(&("Copied 4 characters".to_string(), NotificationType::Success))
     );
 
     app.tick();
-    assert!(app.copy_notice().is_some());
+    assert!(app.notification().is_some());
 
-    let notice = app.copy_notice.as_mut().unwrap();
-    notice.2 = std::time::Instant::now() - std::time::Duration::from_millis(1);
+    let (_, until) = app.notification_shown.as_mut().unwrap();
+    *until = std::time::Instant::now() - std::time::Duration::from_millis(1);
     app.tick();
-    assert!(app.copy_notice().is_none());
+    assert!(app.notification().is_none());
 }
 
 #[test]
@@ -1818,7 +1818,27 @@ fn test_keypress_clears_copy_notice() {
     let mut app = App::new();
     app.notify_copied(1, &Ok(()));
     app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::empty()));
-    assert!(app.copy_notice().is_none());
+    assert!(app.notification().is_none());
+}
+
+#[test]
+fn test_notification_expires_and_a_new_one_starts_its_own_timer() {
+    let mut app = App::new();
+    app.notification = Some(("first".to_string(), NotificationType::Warning));
+    app.tick();
+    let (_, until) = app.notification_shown.as_mut().unwrap();
+    *until = std::time::Instant::now() - std::time::Duration::from_millis(1);
+
+    app.notification = Some(("second".to_string(), NotificationType::Error));
+    app.tick();
+    assert_eq!(app.notification().unwrap().0, "second");
+    let (_, until) = app.notification_shown.as_ref().unwrap();
+    assert!(*until > std::time::Instant::now() + std::time::Duration::from_secs(5));
+
+    let (_, until) = app.notification_shown.as_mut().unwrap();
+    *until = std::time::Instant::now() - std::time::Duration::from_millis(1);
+    app.tick();
+    assert!(app.notification().is_none());
 }
 
 #[test]
