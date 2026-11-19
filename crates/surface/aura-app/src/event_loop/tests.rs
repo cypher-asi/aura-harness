@@ -1,6 +1,7 @@
 use super::*;
 use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
+use crate::record_loader::json_payload;
 use crate::session_helpers::{build_executor_router_with_config, default_agent_config_with_auth};
 use async_trait::async_trait;
 use aura_agent::AgentLoopConfig;
@@ -134,6 +135,15 @@ impl ModelProvider for GatedProvider {
                 status: 400,
                 message: "the model fell over".to_string(),
             });
+        }
+        if auxiliary {
+            // The chat title is written in the background while the turn
+            // runs, racing it on the same model. `inner`'s queue holds the
+            // one scripted answer for the turn itself, so an auxiliary
+            // call like this must not draw from it.
+            return MockProvider::simple_response("Mock title")
+                .complete(request)
+                .await;
         }
         self.inner.complete(request).await
     }
@@ -1920,17 +1930,35 @@ async fn gate_classifies_before_the_turn_and_records_its_default_route() {
         prompt.route,
         Route::turn("aura-claude-sonnet-4-6", RouteReason::Default)
     );
-    let calls: Vec<u64> = record_of(&state, first)
+    // The title is written in the background while the turn runs, so its
+    // call races the turn's own and is told apart by purpose, not by
+    // position in the record.
+    let calls: Vec<(u64, Option<aura_model::ModelCallPurpose>)> = record_of(&state, first)
         .iter()
         .filter(|e| e.tx.tx_type == aura_core_types::TransactionType::Reasoning)
-        .map(|e| e.seq)
+        .map(|e| {
+            let purpose = json_payload(&e.tx)
+                .and_then(|payload| payload.get("purpose").cloned())
+                .and_then(|purpose| serde_json::from_value(purpose).ok());
+            (e.seq, purpose)
+        })
         .collect();
     assert_eq!(
         calls.len(),
         3,
         "the classifier, the turn and the chat title"
     );
-    assert!(calls[0] < prompt_seq && prompt_seq < calls[1]);
+    let classifier_seq = calls
+        .iter()
+        .find(|(_, purpose)| *purpose == Some(aura_model::ModelCallPurpose::Classify))
+        .map(|(seq, _)| *seq)
+        .expect("the classifier call is recorded");
+    let turn_seq = calls
+        .iter()
+        .find(|(_, purpose)| purpose.is_none())
+        .map(|(seq, _)| *seq)
+        .expect("the turn's own call is recorded");
+    assert!(classifier_seq < prompt_seq && prompt_seq < turn_seq);
     let (_, outcome) = outcomes_of(&state, first).remove(0);
     assert_eq!(outcome.model, "aura-claude-sonnet-4-6");
 }
