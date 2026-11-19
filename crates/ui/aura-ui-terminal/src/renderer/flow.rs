@@ -2,7 +2,6 @@
 //! did, as cards wired together on a canvas, drawn with box characters.
 //!
 //! ```text
-//!   Lead
 //!   ┌ ▾ ✓ prompt ────────────────────┐
 //!   │ add a greeting                 │
 //!   └────────────────┬───────────────┘
@@ -245,24 +244,18 @@ impl Canvas<'_> {
     }
 
     /// Each agent's name above its cards, kept on screen while any of
-    /// them is.
+    /// them is. The agent on screen goes unnamed; its name is the chat's.
     fn names(&mut self) {
-        for span in &self.layout.spans {
+        let style = Style::default()
+            .fg(self.theme.colors.secondary)
+            .add_modifier(Modifier::BOLD);
+        for span in self.layout.spans.iter().filter(|span| span.lane != 0) {
             let y = self.layout.bands[span.band].y;
             let start = FlowLayout::column_x(span.first);
             let end = FlowLayout::column_x(span.last) + CARD_WIDTH;
             let name = truncate_record_info(&self.flow.lanes()[span.lane].name, end - start);
             let width = display_width(&name);
             let x = (self.first.0 + 1).clamp(start, end - width);
-            let style = if span.lane == 0 {
-                Style::default()
-                    .fg(self.theme.colors.primary)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-                    .fg(self.theme.colors.secondary)
-                    .add_modifier(Modifier::BOLD)
-            };
             self.text(x, y, &name, width, style);
         }
     }
@@ -703,7 +696,7 @@ mod tests {
         press(&mut app, KeyCode::Home);
         let rows = screen(&mut app, 84, 24);
         let expected = [
-            "│  Lead                                                                            │",
+            "│                                                                                  │",
             "│  ┌ ▾ ✓ prompt ────────────────────┐                                              │",
             "│  │ add a greeting                 │                                           ╭┬─│",
             "│  └────────────────┬───────────────┘                                           ││ │",
@@ -776,12 +769,13 @@ mod tests {
         let rows = screen(&mut app, 80, 16).join("\n");
         assert!(rows.contains("add a greeting"), "{rows}");
 
-        // Panned, the agent's name stays at the left while its cards are on
-        // screen.
+        // Panned. Other agents are named over their cards; the agent on
+        // screen goes unnamed.
         app.pan_flow(50.0, 0.0);
-        let rows = screen(&mut app, 80, 16);
-        assert!(rows[1].starts_with("│ Lead"), "{}", rows.join("\n"));
-        assert!(!rows.join("\n").contains("add a greeting"));
+        let rows = screen(&mut app, 80, 16).join("\n");
+        assert!(!rows.contains("add a greeting"));
+        assert!(rows.contains("coder #1"), "{rows}");
+        assert!(!rows.contains("Lead"), "{rows}");
     }
 
     #[test]

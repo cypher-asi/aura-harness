@@ -219,18 +219,14 @@ impl Pen<'_, '_> {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn names(&mut self) {
         let flow = self.canvas.flow;
-        for span in &self.layout.spans {
+        let color = self.colors().secondary;
+        for span in self.layout.spans.iter().filter(|span| span.lane != 0) {
             let y = self.layout.bands[span.band].y;
             let start = FlowLayout::column_x(span.first) as f32;
             let end = (FlowLayout::column_x(span.last) + CARD_WIDTH) as f32;
             let name = fit(&flow.lanes()[span.lane].name, (end - start) as usize);
             let width = name.width() as f32;
             let x = (self.pan.0 + 1.0).clamp(start, (end - width).max(start));
-            let color = if span.lane == 0 {
-                self.colors().primary
-            } else {
-                self.colors().secondary
-            };
             self.write(&name, (x, y as f32), color, true, Align::Left);
         }
     }

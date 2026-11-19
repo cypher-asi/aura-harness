@@ -11,7 +11,6 @@
 //! share the height of the view.
 //!
 //! ```text
-//!   Lead
 //!   ┌ ✓ prompt ─────────┐
 //!   │ add a greeting    │
 //!   └─────────┬─────────┘
