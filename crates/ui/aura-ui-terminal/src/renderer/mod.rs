@@ -3,6 +3,7 @@
 mod activity;
 mod chat_lines;
 mod command;
+mod context_menu;
 mod detail;
 mod diff;
 mod flow;
@@ -104,6 +105,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     hud::render_todo_panel(frame, chat, app, theme);
     slash_menu::render_slash_menu(frame, chat, app, theme);
     mention_menu::render_mention_menu(frame, chat, app, theme);
+    context_menu::render_context_menu(frame, app, theme);
     overlays::render_folder_picker(frame, app, theme);
     overlays::render_overlays(frame, app, theme);
     app.drop_covered_prose(frame.buffer_mut());

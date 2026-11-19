@@ -7,6 +7,7 @@ mod agent_views;
 mod archive;
 mod chat_tabs;
 mod commands;
+mod context_menu;
 mod definitions;
 pub mod file_view;
 pub mod flow;
@@ -346,6 +347,8 @@ pub struct App {
     pub(super) archived_scroll: usize,
     /// Folder browser for a new project, while it is open
     pub(super) folder_picker: Option<FolderPicker>,
+    /// Menu a right click opened on the projects list
+    pub(super) context_menu: Option<context_menu::ContextMenu>,
     /// Usage, todos and jobs of the agent on screen
     pub(super) hud: Hud,
     /// Whether the full todo list is shown above the input
@@ -676,6 +679,7 @@ impl App {
             selected_archived: 0,
             archived_scroll: 0,
             folder_picker: None,
+            context_menu: None,
             hud: Hud::default(),
             todos_open: false,
             alert_settings: AlertSettings::default(),
@@ -1399,13 +1403,27 @@ impl App {
     /// a drag that left the highlight and the selection as they were.
     pub fn handle_mouse(&mut self, mouse: MouseEvent) -> bool {
         let pointing = matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Drag(_));
-        let before = (self.hover, self.selection);
+        let menu = |app: &Self| app.context_menu.as_ref().map(|menu| menu.selected);
+        let before = (self.hover, self.selection, menu(self));
         self.mouse(mouse);
-        !pointing || before != (self.hover, self.selection)
+        !pointing || before != (self.hover, self.selection, menu(self))
     }
 
     fn mouse(&mut self, mouse: MouseEvent) {
         if self.state != AppState::Idle && self.state != AppState::Processing {
+            self.hover = None;
+            self.context_menu = None;
+            return;
+        }
+        if self.context_menu_mouse(mouse.kind, mouse.column, mouse.row) {
+            self.hover = None;
+            return;
+        }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Right)
+            && self.panel_at(mouse.column, mouse.row) == Some(PanelFocus::Swarm)
+            && self.open_context_menu(mouse.column, mouse.row)
+        {
+            self.clear_selection();
             self.hover = None;
             return;
         }

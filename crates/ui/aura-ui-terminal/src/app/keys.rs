@@ -15,6 +15,9 @@ impl App {
         self.copy_notice = None;
         self.clear_selection();
 
+        if self.context_menu.is_some() && self.handle_context_menu_key(key) {
+            return KeyResult::continue_running();
+        }
         if self.detail.is_some() {
             self.handle_detail_key(key);
             return KeyResult::continue_running();

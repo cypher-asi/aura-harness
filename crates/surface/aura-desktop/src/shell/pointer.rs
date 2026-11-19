@@ -1010,6 +1010,40 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn right_clicking_a_project_opens_its_menu() {
+        let mut stage = stage();
+        stage.seed(false);
+        stage.draw();
+        let text = stage.shell.text();
+        let row = text
+            .lines()
+            .position(|line| line.contains("agent01"))
+            .expect("the project is listed");
+        let line = text.lines().nth(row).unwrap_or_default();
+        let col = line
+            .find("agent01")
+            .map_or(0, |at| line[..at].chars().count());
+        let cell = stage.shell.metrics.cell;
+        let origin =
+            stage
+                .shell
+                .metrics
+                .origin(stage.shell.grid_area(), stage.shell.cols, stage.shell.rows);
+        let bar = tab_bar::height(&stage.shell.metrics);
+        stage.shell.pointer_moved(Point::new(
+            origin.x + (col as f32 + 0.5) * cell.width,
+            origin.y + (row as f32 + 0.5) * cell.height + bar,
+        ));
+        stage.shell.button(MouseButton::Right, true, stage.now);
+        stage.shell.button(MouseButton::Right, false, stage.now);
+        stage.draw();
+        let text = stage.shell.text();
+        assert!(text.contains("Add agent"), "{text}");
+        assert!(text.contains("Remove project…"), "{text}");
+    }
+
+    #[test]
     fn dragging_over_text_selects_it_for_the_clipboard() {
         let mut stage = stage();
         stage.seed(false);
