@@ -691,6 +691,40 @@ mod tests {
     }
 
     #[test]
+    fn picking_a_run_shows_its_chat_once() {
+        use super::super::ChatTab;
+        use crate::events::{AgentSummary, UiCommand};
+        let agent = |id: &str, bench_run: bool| AgentSummary {
+            id: id.to_string(),
+            name: id.to_string(),
+            bench_run,
+            ..AgentSummary::default()
+        };
+        let mut app = App::new();
+        app.process_command(UiCommand::SetAgents(vec![
+            agent("user", false),
+            agent("other", false),
+            agent("a-1", true),
+        ]));
+        app.process_command(UiCommand::SetActiveAgent("user".to_string()));
+        app.show_chat_tab(ChatTab::Bench);
+
+        app.process_command(UiCommand::SetActiveAgent("other".to_string()));
+        assert_eq!(app.chat_tab(), ChatTab::Bench, "another agent keeps BENCH");
+
+        app.process_command(UiCommand::SetActiveAgent("a-1".to_string()));
+        assert_eq!(app.chat_tab(), ChatTab::Chat, "a run is picked to watch it");
+
+        app.show_chat_tab(ChatTab::Bench);
+        app.process_command(UiCommand::SetActiveAgent("a-1".to_string()));
+        assert_eq!(
+            app.chat_tab(),
+            ChatTab::Bench,
+            "the list refreshing does not take BENCH away again"
+        );
+    }
+
+    #[test]
     fn the_tasks_row_counts_from_one_to_the_example_tasks() {
         let mut app = App::new();
         let id = app.active_agent_id.clone();

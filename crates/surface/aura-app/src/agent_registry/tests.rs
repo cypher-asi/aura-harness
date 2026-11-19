@@ -727,6 +727,10 @@ fn compare_runs_work_in_their_own_folder_under_the_comparison() {
             root.agent_id()
         ]
     );
+    assert!(registry.under_compare(run.agent_id()));
+    assert!(registry.under_compare(subtask.agent_id()));
+    assert!(!registry.under_compare(compare.agent_id()));
+    assert!(!registry.under_compare(root.agent_id()));
 
     let reloaded = open(dir.path(), launch.path());
     let names: Vec<&str> = reloaded

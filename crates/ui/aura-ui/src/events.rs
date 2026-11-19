@@ -1207,6 +1207,9 @@ pub struct AgentSummary {
     /// task for the agent that spawned it
     #[serde(default)]
     pub running: bool,
+    /// Whether it is a run of a benchmark, or works under one
+    #[serde(default)]
+    pub bench_run: bool,
     /// Id of the project it is in. A project's agents are listed together.
     #[serde(default)]
     pub project_id: Option<String>,

@@ -577,6 +577,7 @@ fn summarize(
         definition: agent.definition.clone(),
         depth,
         running: running.contains(&agent_id),
+        bench_run: registry.under_compare(agent_id),
         project_id: agent.project_id.clone(),
         project: registry
             .project_of(agent_id)

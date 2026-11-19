@@ -1172,7 +1172,16 @@ impl App {
     }
 
     fn cmd_set_active_agent(&mut self, agent_id: &str) {
+        let switched = agent_id != self.active_agent_id;
         self.show_agent_chat(agent_id);
+        let bench_run = self
+            .agents
+            .iter()
+            .any(|agent| agent.id == agent_id && agent.bench_run);
+        if switched && bench_run && self.bench.is_open() {
+            // A benchmark's run is picked to watch it work.
+            self.show_chat_tab(super::ChatTab::Chat);
+        }
         if self.flow.is_open() {
             // The GRAPH tab follows the agent on screen.
             self.request_flow();

@@ -608,6 +608,16 @@ impl AgentRegistry {
         out
     }
 
+    /// Whether `agent_id` works under a `/compare`: one of its runs, or a
+    /// subtask of one.
+    #[must_use]
+    pub fn under_compare(&self, agent_id: AgentId) -> bool {
+        self.ancestry(agent_id)
+            .into_iter()
+            .skip(1)
+            .any(|id| self.find(id).is_some_and(RegisteredAgent::is_compare))
+    }
+
     /// Register an agent named `name` under the agent with ZNS id
     /// `parent`, in its project, working in `folder` when given.
     ///
