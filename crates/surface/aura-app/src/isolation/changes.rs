@@ -208,7 +208,8 @@ fn stage(root: &Path, git_dir: Option<&Path>) -> Result<(), IsolationError> {
 }
 
 /// Everything that changed in `root` since the [`baseline`] `tree`, as a
-/// patch [`apply_patch`] can apply; empty when nothing did.
+/// patch [`apply_patch`] can apply; empty when nothing did. Folders named
+/// by the relative paths in `leave_out`, at any depth, are not in it.
 ///
 /// # Errors
 /// Fails when git can't stage or diff the tree.
@@ -216,6 +217,7 @@ pub fn diff_since(
     root: &Path,
     git_dir: Option<&Path>,
     tree: &str,
+    leave_out: &[&str],
 ) -> Result<String, IsolationError> {
     stage(root, git_dir)?;
     let mut diff = git(root, git_dir);
@@ -228,7 +230,13 @@ pub fn diff_since(
         "--no-ext-diff",
         tree,
         "--",
+        ".",
     ]);
+    diff.args(
+        leave_out
+            .iter()
+            .map(|path| format!(":(exclude,glob)**/{path}/**")),
+    );
     let patch = output(diff, "diff-index")?;
     Ok(String::from_utf8_lossy(&patch).into_owned())
 }
@@ -545,14 +553,22 @@ mod tests {
             !copy.path().join(".git").exists(),
             "the git dir sits beside"
         );
-        assert_eq!(diff_since(copy.path(), Some(&git_dir), &tree).unwrap(), "");
+        assert_eq!(
+            diff_since(copy.path(), Some(&git_dir), &tree, &[]).unwrap(),
+            ""
+        );
 
         std::fs::write(copy.path().join("lib.rs"), "fn a() { b() }\n").unwrap();
         std::fs::write(copy.path().join("new.rs"), "fn b() {}\n").unwrap();
         std::fs::write(copy.path().join("target/more"), "build").unwrap();
-        let patch = diff_since(copy.path(), Some(&git_dir), &tree).unwrap();
+        for records in [".aura/tasks", "sub/.aura/tasks"] {
+            std::fs::create_dir_all(copy.path().join(records)).unwrap();
+            std::fs::write(copy.path().join(records).join("1.json"), "{}").unwrap();
+        }
+        let patch = diff_since(copy.path(), Some(&git_dir), &tree, &[".aura/tasks"]).unwrap();
         assert_eq!(files_in(&patch), 2, "{patch}");
         assert!(!patch.contains("target/"), "build output stays out");
+        assert!(!patch.contains(".aura/tasks"), "so do the left-out folders");
 
         let user = TempDir::new().unwrap();
         std::fs::write(user.path().join("lib.rs"), "fn a() {}\n").unwrap();
@@ -608,7 +624,7 @@ mod tests {
 
         let tree = baseline(&worktree, None).unwrap();
         std::fs::write(worktree.join("lib.rs"), "fn a() { done() }\n").unwrap();
-        let patch = diff_since(&worktree, None, &tree).unwrap();
+        let patch = diff_since(&worktree, None, &tree, &[]).unwrap();
         assert_eq!(files_in(&patch), 1, "only the agent's change: {patch}");
         apply_patch(&root, &patch).unwrap();
         assert_eq!(

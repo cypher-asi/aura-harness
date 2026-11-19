@@ -35,6 +35,7 @@ use super::processes::{now_ms, turn_id};
 use super::steering::Steering;
 use super::subagents::{lock, AgentHub, ArmRouting};
 use super::task_check;
+use super::tasks::TASKS_DIR;
 use super::turns::{ended_signal, record_prompt};
 use crate::agent_registry::RegisteredAgent;
 use crate::bench_pack::{self, ExampleTask};
@@ -136,6 +137,41 @@ const FIXTURES: &str = "fixtures";
 /// Where `task`'s files are kept in the comparison's folder `dir`.
 fn fixture(dir: &Path, task: &ExampleTask) -> PathBuf {
     dir.join(FIXTURES).join(task.id.replace('/', "__"))
+}
+
+/// The task records a run's subtasks left in its copy, moved out of it
+/// while its check runs: they quote the prompts, so a check that greps the
+/// copy would find them.
+struct RecordsAside {
+    /// Where they were, and where they are meanwhile
+    moved: Option<(PathBuf, PathBuf)>,
+}
+
+impl RecordsAside {
+    /// Move the records under `workdir` beside the copy at `root`, which
+    /// the run `name` works in.
+    fn take(workdir: &Path, root: &Path, name: &str) -> Self {
+        let records = workdir.join(TASKS_DIR);
+        let aside = root.with_file_name(format!("{name}.tasks"));
+        let moved = records.is_dir() && !aside.exists();
+        let moved = match moved.then(|| std::fs::rename(&records, &aside)) {
+            Some(Ok(())) => Some((records, aside)),
+            Some(Err(e)) => {
+                warn!(run = name, error = %e, "Could not move the task records out of the check's way");
+                None
+            }
+            None => None,
+        };
+        Self { moved }
+    }
+
+    fn put_back(self) {
+        if let Some((records, aside)) = self.moved {
+            if let Err(e) = std::fs::rename(&aside, &records) {
+                warn!(error = %e, from = %aside.display(), "Could not put the task records back");
+            }
+        }
+    }
 }
 
 /// What the runs of one comparison share.
@@ -657,7 +693,9 @@ async fn run_turn(
             };
             match hidden {
                 Ok(hidden) => {
+                    let records = RecordsAside::take(&workdir, &copy.root, name);
                     let run = task_check::run_script(&session, check, CHECK_SOURCE).await;
+                    records.put_back();
                     bench_pack::remove_checks(&hidden);
                     ui.send(system_message(run.describe())).await;
                     if let (Some(signal), Some(ended)) = (run.signal(), &last) {
@@ -682,7 +720,7 @@ async fn run_turn(
         copy.baseline.clone(),
     );
     let patch = tokio::task::spawn_blocking(move || {
-        changes::diff_since(&root, git_dir.as_deref(), &baseline)
+        changes::diff_since(&root, git_dir.as_deref(), &baseline, &[TASKS_DIR])
     })
     .await
     .map_err(|e| e.to_string())
@@ -1066,12 +1104,44 @@ pub(super) fn patches(payload: &ComparePayload) -> HashMap<String, Result<String
         .map(|run| {
             let copy = &run.copy;
             let patch = if copy.root.exists() {
-                changes::diff_since(&copy.root, copy.git_dir.as_deref(), &copy.baseline)
-                    .map_err(|e| e.to_string())
+                changes::diff_since(
+                    &copy.root,
+                    copy.git_dir.as_deref(),
+                    &copy.baseline,
+                    &[TASKS_DIR],
+                )
+                .map_err(|e| e.to_string())
             } else {
                 Err(format!("the copy of {} was removed", run.name))
             };
             (run.name.clone(), patch)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_records_are_out_of_the_copy_while_its_check_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("a-3");
+        let records = root.join(TASKS_DIR);
+        std::fs::create_dir_all(&records).unwrap();
+        std::fs::write(records.join("1.json"), "rename calc_total").unwrap();
+
+        let aside = RecordsAside::take(&root, &root, "a-3");
+        assert!(!records.exists(), "a check grepping the copy can't see them");
+        aside.put_back();
+        assert_eq!(
+            std::fs::read_to_string(records.join("1.json")).unwrap(),
+            "rename calc_total"
+        );
+        assert!(!dir.path().join("a-3.tasks").exists());
+
+        let none = tempfile::tempdir().unwrap();
+        RecordsAside::take(none.path(), none.path(), "b-1").put_back();
+        assert!(!none.path().join(TASKS_DIR).exists());
+    }
 }
