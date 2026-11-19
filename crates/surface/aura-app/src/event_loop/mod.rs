@@ -146,10 +146,28 @@ impl LoopState<'_> {
     /// Keep the sessions of finished spawns so switching to them resumes
     /// their conversation on the kernel that wrote it, then start any work
     /// that was waiting for them.
+    ///
+    /// A spawn whose work was dropped mid-run (its parent's turn was
+    /// cancelled) lost its session with it. Its session is reopened from
+    /// the record here, so an agent with no work in flight has a session
+    /// in `idle` again once this has run. If that fails it stays without
+    /// one: `activate_agent` and `start_work` open a missing session
+    /// lazily, and the other handlers only warn.
     async fn park_finished_spawns(&mut self) {
         for session in self.hub.take_finished() {
             let agent_id = session.agent_id();
             self.idle.insert(agent_id, session);
+            start_next(self, agent_id).await;
+        }
+        for agent_id in self.hub.take_abandoned() {
+            if self.idle.contains_key(&agent_id) || self.hub.is_running(agent_id) {
+                continue;
+            }
+            // `open_session` logs why it failed; the queued work below
+            // retries the open and reports it in the agent's chat.
+            if let Ok(session) = agents::open_session(self, agent_id) {
+                self.idle.insert(agent_id, session);
+            }
             start_next(self, agent_id).await;
         }
     }

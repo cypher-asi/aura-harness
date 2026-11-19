@@ -592,3 +592,105 @@ async fn a_subtask_redone_while_still_running_fails_once_it_ends() {
     assert_eq!(outcomes[0].signal, OutcomeSignal::Redone);
     assert_eq!(outcomes[0].success, Some(false));
 }
+
+/// The status of the Processes tab row of `child`'s task, once it has one.
+fn task_row_status(hub: &AgentHub, child: AgentId) -> Option<ProcessStatus> {
+    let id = task_id(child);
+    hub.processes
+        .snapshot()
+        .into_iter()
+        .find(|row| row.id == id)
+        .map(|row| row.status)
+}
+
+#[tokio::test]
+async fn dropping_a_waiting_spawn_mid_run_stops_it_running() {
+    let fixture = slow_fixture("unused", 60_000);
+    let parent = lock(&fixture.hub.registry).active().agent_id();
+    let hub = Arc::clone(&fixture.hub);
+
+    // Stands in for the parent's tool call, which cancelling the parent's
+    // turn drops without cancelling the spawn's own token.
+    let dispatch = tokio::spawn({
+        let dispatcher = Arc::clone(&fixture.dispatcher);
+        async move {
+            dispatcher
+                .dispatch(request(parent, "reviewer", "Review it"))
+                .await
+        }
+    });
+    let child = loop {
+        let running = lock(&hub.running).keys().next().copied();
+        if let Some(child) = running.filter(|child| task_row_status(&hub, *child).is_some()) {
+            break child;
+        }
+        tokio::task::yield_now().await;
+    };
+    dispatch.abort();
+    let joined = dispatch.await;
+    assert!(joined.is_err_and(|e| e.is_cancelled()));
+
+    assert!(!hub.is_running(child));
+    assert_eq!(hub.take_abandoned(), [child]);
+    assert!(hub.take_finished().is_empty(), "its session went with it");
+    assert_eq!(task_row_status(&hub, child), Some(ProcessStatus::Killed));
+}
+
+#[tokio::test]
+async fn a_spawn_that_ends_normally_is_cleaned_up_once() {
+    let fixture = fixture("Looks good.");
+    let parent = lock(&fixture.hub.registry).active().agent_id();
+
+    let result = fixture
+        .dispatcher
+        .dispatch(request(parent, "reviewer", "Review the diff"))
+        .await
+        .unwrap();
+
+    let child = result.child_agent_id.unwrap();
+    assert!(!fixture.hub.is_running(child));
+    assert_eq!(fixture.hub.take_finished().len(), 1);
+    assert!(
+        fixture.hub.take_abandoned().is_empty(),
+        "the disarmed guard did nothing on drop"
+    );
+    assert_eq!(
+        task_row_status(&fixture.hub, child),
+        Some(ProcessStatus::Exited)
+    );
+}
+
+#[tokio::test]
+async fn an_armed_guard_ends_only_the_running_it_started() {
+    let fixture = fixture("unused");
+    let session = instance(&fixture, "explorer");
+    let agent = session.agent_id();
+    let kernel = || Arc::clone(&session.kernel);
+
+    let guard = fixture
+        .hub
+        .start_guarded(agent, kernel(), CancellationToken::new());
+    drop(guard);
+    assert!(!fixture.hub.is_running(agent));
+    assert_eq!(fixture.hub.take_abandoned(), [agent]);
+
+    // A stale guard whose agent started running again since.
+    let stale = fixture
+        .hub
+        .start_guarded(agent, kernel(), CancellationToken::new());
+    fixture
+        .hub
+        .start_running(agent, kernel(), CancellationToken::new(), None);
+    drop(stale);
+    assert!(fixture.hub.is_running(agent), "the newer turn survives");
+    assert!(fixture.hub.take_abandoned().is_empty());
+    fixture.hub.stop_running(agent);
+
+    // A disarmed guard leaves ending the running to its owner.
+    let disarmed = fixture
+        .hub
+        .start_guarded(agent, kernel(), CancellationToken::new());
+    disarmed.disarm();
+    assert!(fixture.hub.is_running(agent));
+    assert!(fixture.hub.take_abandoned().is_empty());
+}

@@ -75,8 +75,10 @@ use aura_ui_terminal::events::{
     AgentDefinitionSummary, AgentSummary, ProcessKind, ProcessStatus, ProcessSummary,
 };
 use aura_ui_terminal::{PermissionMode, UiCommand};
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Instant;
 use tokio::sync::{mpsc, Notify};
@@ -95,6 +97,72 @@ struct Running {
     steering: Option<Steering>,
     /// Subtasks this work dispatched, oldest first
     subtasks: Vec<Attempt>,
+    /// Which [`AgentHub::start_running`] call made this entry, so a
+    /// [`RunningGuard`] only ever removes the entry it started.
+    generation: RunGeneration,
+}
+
+/// Identifies one [`AgentHub::start_running`] call. Unique per hub, so an
+/// agent that starts running again gets a different one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RunGeneration(u64);
+
+/// Ends a spawn's work in flight if the future doing it is dropped before
+/// it hands the spawn's session back ([`AgentHub::park`]).
+///
+/// A waiting spawn runs inside its parent's tool call, and cancelling the
+/// parent's turn drops that call's future without ever cancelling the
+/// spawn's own token, so nothing after the drop point runs. Without this
+/// guard the spawn's `running` entry would stay forever: the agent would
+/// read as busy, block archiving and queue every message sent to it.
+///
+/// Invariants:
+/// - The guard removes only the entry its own `start_running` call made
+///   (same [`RunGeneration`]); a later turn on the same agent is left
+///   alone, however the drops and starts interleave.
+/// - Once disarmed (the normal end, where `park` stops the running) its
+///   drop does nothing, so cleanup happens exactly once.
+/// - It holds the hub weakly: guards are not stored in the hub, but a
+///   detached spawn's guard lives on a `tokio::spawn`ed task and must not
+///   keep a shut-down hub alive. With the hub gone there is nothing left
+///   to clean up.
+struct RunningGuard {
+    hub: Weak<AgentHub>,
+    agent: AgentId,
+    generation: RunGeneration,
+    armed: bool,
+}
+
+impl RunningGuard {
+    /// The work ended normally and whoever disarms takes over ending its
+    /// running (as [`AgentHub::park`] does).
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let Some(hub) = self.hub.upgrade() else {
+            return;
+        };
+        if !hub.stop_running_if(self.agent, self.generation) {
+            return;
+        }
+        info!(agent = %self.agent, "A spawn's work was dropped before it finished");
+        hub.processes
+            .finish(&task_id(self.agent), ProcessStatus::Killed);
+        // Pushed after the entry is gone, so the event loop never finds it
+        // still running and skips it. Its session went with the dropped
+        // future; the event loop reopens it from the record.
+        lock(&hub.abandoned).push(self.agent);
+        // Drop can't await to send the agent list; the `spawn_finished`
+        // arm of `run_event_loop` sends it after parking, and this wakes it.
+        hub.spawn_finished.notify_one();
+    }
 }
 
 /// A subtask an agent's work dispatched, kept to tell when the same
@@ -221,6 +289,12 @@ pub struct AgentHub {
     /// Agents with work in flight: turns the user started and spawns
     /// working on a task for their parent.
     running: Mutex<HashMap<AgentId, Running>>,
+    /// The [`RunGeneration`] the next `start_running` call gets.
+    next_generation: AtomicU64,
+    /// Spawns whose work was dropped mid-run, taking their sessions with
+    /// it (see [`RunningGuard`]), waiting for the event loop to reopen
+    /// them.
+    abandoned: Mutex<Vec<AgentId>>,
     /// Sessions of finished spawns, waiting for the event loop to park them.
     finished: Mutex<Vec<AgentSession>>,
     /// Wakes the event loop when a spawn finishes.
@@ -321,6 +395,8 @@ impl AgentHub {
                 skills: Mutex::new(parts.skills),
                 base: Mutex::new(parts.base),
                 running: Mutex::new(HashMap::new()),
+                next_generation: AtomicU64::new(0),
+                abandoned: Mutex::new(Vec::new()),
                 finished: Mutex::new(Vec::new()),
                 spawn_finished: Notify::new(),
                 factory,
@@ -366,10 +442,15 @@ impl AgentHub {
 
     /// Hand `session`, whose work ended, to the event loop to keep, and
     /// note that it stopped running.
+    ///
+    /// Parked before it stops running, so a spawn that ends normally is
+    /// never seen with neither a session nor work in flight. A spawn whose
+    /// work is dropped before it gets here loses its session with the
+    /// dropped future: its [`RunningGuard`] ends the running and lists it
+    /// in [`Self::take_abandoned`], and the event loop reopens its session
+    /// from the record (see `LoopState::park_finished_spawns`).
     pub(crate) fn park(&self, session: AgentSession) {
         let agent_id = session.agent_id();
-        // Parked before it stops running, so the event loop never sees the
-        // agent with neither a session nor work in flight.
         lock(&self.finished).push(session);
         self.stop_running(agent_id);
         self.spawn_finished.notify_one();
@@ -726,15 +807,23 @@ impl AgentHub {
         std::mem::take(&mut *lock(&self.finished))
     }
 
+    /// Spawns whose work was dropped mid-run since the last call. They no
+    /// longer run and have no session anywhere.
+    pub(crate) fn take_abandoned(&self) -> Vec<AgentId> {
+        std::mem::take(&mut *lock(&self.abandoned))
+    }
+
     /// Note that `agent_id` started work on `kernel` that `cancel` stops.
-    /// `steering` takes messages for it while it runs.
+    /// `steering` takes messages for it while it runs. Returns which start
+    /// this is, for [`Self::stop_running_if`].
     pub(crate) fn start_running(
         &self,
         agent_id: AgentId,
         kernel: Arc<Kernel>,
         cancel: CancellationToken,
         steering: Option<Steering>,
-    ) {
+    ) -> RunGeneration {
+        let generation = RunGeneration(self.next_generation.fetch_add(1, Ordering::Relaxed));
         lock(&self.running).insert(
             agent_id,
             Running {
@@ -742,8 +831,29 @@ impl AgentHub {
                 cancel,
                 steering,
                 subtasks: Vec::new(),
+                generation,
             },
         );
+        generation
+    }
+
+    /// [`Self::start_running`] for a spawn's task, returning the guard
+    /// that ends the running if the task's future is dropped first.
+    fn start_guarded(
+        self: &Arc<Self>,
+        agent_id: AgentId,
+        kernel: Arc<Kernel>,
+        cancel: CancellationToken,
+    ) -> RunningGuard {
+        // Messages for a spawn wait for its task to end: steering it
+        // mid-task would change the work its parent is waiting on.
+        let generation = self.start_running(agent_id, kernel, cancel, None);
+        RunningGuard {
+            hub: Arc::downgrade(self),
+            agent: agent_id,
+            generation,
+            armed: true,
+        }
     }
 
     /// Note that the work `parent` is doing dispatched `attempt`. Returns
@@ -814,6 +924,23 @@ impl AgentHub {
         lock(&self.running)
             .remove(&agent_id)
             .is_some_and(|running| running.cancel.is_cancelled())
+    }
+
+    /// Note that the work [`Self::start_running`] started as `generation`
+    /// on `agent_id` is no longer in flight. Work started on it since is
+    /// left running. Returns whether an entry was removed.
+    fn stop_running_if(&self, agent_id: AgentId, generation: RunGeneration) -> bool {
+        let removed = match lock(&self.running).entry(agent_id) {
+            Entry::Occupied(entry) if entry.get().generation == generation => {
+                entry.remove();
+                true
+            }
+            _ => false,
+        };
+        if removed {
+            self.gate.forget_model(agent_id);
+        }
+        removed
     }
 
     /// Whether `agent_id` has work in flight.
@@ -985,7 +1112,7 @@ impl AgentHub {
     /// to be asked `prompt`; `escalation` sends it where a failed first
     /// attempt is retried.
     async fn open_task(
-        &self,
+        self: &Arc<Self>,
         request: &SubagentDispatchRequest,
         definition: &AgentDefinition,
         prompt: String,
@@ -1014,9 +1141,9 @@ impl AgentHub {
         super::modes::apply(&session.kernel, permissions, &self.tool_names());
 
         let cancel = CancellationToken::new();
-        // Messages for a spawn wait for its task to end: steering it
-        // mid-task would change the work its parent is waiting on.
-        self.start_running(child_id, Arc::clone(&session.kernel), cancel.clone(), None);
+        // From here on the guard ends the running if this attempt never
+        // reaches `park`: an early return, or the future being dropped.
+        let running = self.start_guarded(child_id, Arc::clone(&session.kernel), cancel.clone());
         self.send_agent_list().await;
 
         let workspace = session.kernel.agent_workspace();
@@ -1062,6 +1189,7 @@ impl AgentHub {
             parent: request.parent_agent_id,
             check: request.check.clone(),
             trace,
+            running,
         })
     }
 
@@ -1075,7 +1203,7 @@ impl AgentHub {
     /// repository and the attempt had the workspace to itself: it took
     /// the write lock (so it is no read-only or nested subtask) and its
     /// caller waits for it rather than working on beside it.
-    async fn run_subtask(&self, subtask: Subtask) -> TaskReport {
+    async fn run_subtask(self: &Arc<Self>, subtask: Subtask) -> TaskReport {
         let Subtask {
             request,
             definition,
@@ -1376,6 +1504,7 @@ impl AgentHub {
             parent,
             check,
             mut trace,
+            running,
         } = run;
         let child_id = session.agent_id();
         let ui = AgentUi::new(self.commands.clone(), child_id);
@@ -1487,6 +1616,9 @@ impl AgentHub {
             redo.record().await;
         }
 
+        // `park` ends the running from here, and nothing can return or be
+        // dropped between the two.
+        running.disarm();
         self.park(session);
         self.send_agent_list().await;
         TaskDone {
@@ -1523,6 +1655,8 @@ struct TaskRun {
     check: Option<String>,
     /// Its run trace, started once Gate has picked its model
     trace: RunMeta,
+    /// Ends its running if the attempt is dropped before `park`
+    running: RunningGuard,
 }
 
 /// A `task` call being worked on.
