@@ -666,6 +666,27 @@ fn test_each_agent_has_its_own_trace_feed() {
 }
 
 #[test]
+fn enter_on_an_empty_prompt_sends_the_queued_message_now() {
+    let (mut app, mut rx) = app_with_agents();
+    submit(&mut app, "first");
+    assert!(rx.try_recv().is_ok());
+    submit(&mut app, "second");
+    assert!(rx.try_recv().is_ok());
+
+    // Nothing is queued yet as far as the status line knows.
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert!(rx.try_recv().is_err());
+
+    app.process_command(UiCommand::SetQueued(1));
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SendQueuedNow(id)) if id == "aa"
+    ));
+    assert_eq!(app.state(), AppState::Processing);
+}
+
+#[test]
 fn test_message_to_busy_agent_is_queued_not_shown() {
     let (mut app, mut rx) = app_with_agents();
     submit(&mut app, "first");
@@ -1146,6 +1167,7 @@ fn test_refolding_project_keeps_active_agent_selected() {
 
     // The active agent's project is on line 4: close it, then open it.
     app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 4));
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 5, 4));
     assert!(matches!(
         app.project_rows()[0],
         ProjectListRow::Project {
@@ -1154,6 +1176,7 @@ fn test_refolding_project_keeps_active_agent_selected() {
         }
     ));
     app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 4));
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 5, 4));
 
     assert_eq!(app.selected_agent(), active);
     assert!(rx.try_recv().is_err());
@@ -1223,6 +1246,31 @@ fn test_ctrl_n_picks_a_folder_then_names_the_project() {
         Ok(UiEvent::CreateProject { name, folder }) if name == "Website" && folder == expected
     ));
     assert_eq!(app.state(), AppState::Idle);
+}
+
+#[test]
+fn test_dropping_a_folder_creates_a_project_named_after_it() {
+    let (mut app, mut rx) = app_with_agents();
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("website");
+    std::fs::create_dir(&folder).unwrap();
+
+    assert!(app.drop_path(&folder));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::CreateProject { name, folder: got }) if name == "website" && got == folder
+    ));
+}
+
+#[test]
+fn test_dropping_a_file_is_refused() {
+    let (mut app, mut rx) = app_with_agents();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("notes.txt");
+    std::fs::write(&file, "").unwrap();
+
+    assert!(!app.drop_path(&file));
+    assert!(rx.try_recv().is_err());
 }
 
 #[test]
@@ -1303,6 +1351,7 @@ fn test_clicking_a_projects_plus_adds_an_agent_to_it() {
     // Rows span columns 1..19; the "+" takes the last three. Fold the
     // second project (line 7) so adding to it opens it again.
     app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 7));
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 5, 7));
     assert!(matches!(
         app.project_rows()[3],
         ProjectListRow::Project {
@@ -1328,7 +1377,11 @@ fn test_clicking_a_projects_plus_adds_an_agent_to_it() {
 }
 
 fn app_with_agent_areas() -> (App, mpsc::Receiver<UiEvent>) {
-    let (mut app, rx) = app_with_agents();
+    let (app, rx) = app_with_agents();
+    (with_agent_areas(app), rx)
+}
+
+fn with_agent_areas(mut app: App) -> App {
     let swarm = Rect::new(0, 3, 20, 13);
     app.set_panel_areas(crate::app::PanelAreas {
         swarm: Some(swarm),
@@ -1338,7 +1391,122 @@ fn app_with_agent_areas() -> (App, mpsc::Receiver<UiEvent>) {
     });
     app.set_agent_rows_area(Rect::new(1, 4, 18, 10));
     app.set_new_project_area(Rect::new(1, 14, 18, 1));
-    (app, rx)
+    app
+}
+
+/// Projects `aa` (with child `aa1`), `bb` and `cc`. Rows from line 4:
+/// aa 4, 5, 6; gap 7; bb 8, 9; gap 10; cc 11, 12.
+fn app_with_three_projects() -> App {
+    let mut app = App::new();
+    let child = crate::events::AgentSummary {
+        depth: 1,
+        ..agent("aa1", "Child")
+    };
+    app.process_command(UiCommand::SetAgents(vec![
+        agent("aa", "A"),
+        child,
+        agent("bb", "B"),
+        agent("cc", "C"),
+    ]));
+    with_agent_areas(app)
+}
+
+fn agent_ids(app: &App) -> Vec<&str> {
+    app.agents().iter().map(|a| a.id.as_str()).collect()
+}
+
+fn left(app: &mut App, kind: fn(MouseButton) -> MouseEventKind, row: u16) {
+    app.handle_mouse(mouse(kind(MouseButton::Left), 5, row));
+}
+
+#[test]
+fn test_dragging_a_project_reorders_the_list_live() {
+    let mut app = app_with_three_projects();
+    left(&mut app, MouseEventKind::Down, 4);
+
+    // Onto bb: aa, with its child, takes bb's place at once.
+    left(&mut app, MouseEventKind::Drag, 8);
+    assert_eq!(agent_ids(&app), ["bb", "aa", "aa1", "cc"]);
+    assert!(app.project_dragging());
+    assert_eq!(app.project_order(), ["bb", "aa", "cc"]);
+
+    // Onto cc, and back up to the top, still before the button is up.
+    left(&mut app, MouseEventKind::Drag, 12);
+    assert_eq!(agent_ids(&app), ["bb", "cc", "aa", "aa1"]);
+    left(&mut app, MouseEventKind::Drag, 4);
+    assert_eq!(agent_ids(&app), ["aa", "aa1", "bb", "cc"]);
+
+    left(&mut app, MouseEventKind::Drag, 11);
+    assert_eq!(agent_ids(&app), ["bb", "cc", "aa", "aa1"]);
+    left(&mut app, MouseEventKind::Up, 11);
+    assert!(!app.project_dragging());
+    assert_eq!(agent_ids(&app), ["bb", "cc", "aa", "aa1"]);
+    // Dropping a project does not fold it.
+    assert!(matches!(
+        app.project_rows()[app.project_rows().len() - 4],
+        ProjectListRow::Project { expanded: true, .. }
+    ));
+}
+
+#[test]
+fn test_a_redraw_is_asked_for_each_move_of_a_dragged_project() {
+    let mut app = app_with_three_projects();
+    left(&mut app, MouseEventKind::Down, 4);
+    let moved = app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 5, 8));
+    assert!(moved);
+    assert_eq!(agent_ids(&app), ["bb", "aa", "aa1", "cc"]);
+}
+
+#[test]
+fn test_a_click_without_movement_folds_and_does_not_reorder() {
+    let mut app = app_with_three_projects();
+    left(&mut app, MouseEventKind::Down, 4);
+    assert!(matches!(
+        app.project_rows()[0],
+        ProjectListRow::Project { expanded: true, .. }
+    ));
+    left(&mut app, MouseEventKind::Up, 4);
+    assert!(matches!(
+        app.project_rows()[0],
+        ProjectListRow::Project {
+            expanded: false,
+            ..
+        }
+    ));
+    assert_eq!(agent_ids(&app), ["aa", "aa1", "bb", "cc"]);
+    assert!(!app.project_dragging());
+}
+
+#[test]
+fn test_a_dragged_project_does_not_swap_back_under_a_still_pointer() {
+    let mut app = app_with_three_projects();
+    // cc is one row tall once folded; dragging it up over the taller aa
+    // must not flip between the two on the way.
+    left(&mut app, MouseEventKind::Down, 11);
+    left(&mut app, MouseEventKind::Drag, 8);
+    let once = agent_ids(&app).join(",");
+    left(&mut app, MouseEventKind::Drag, 9);
+    left(&mut app, MouseEventKind::Drag, 8);
+    assert_eq!(agent_ids(&app).join(","), once);
+    left(&mut app, MouseEventKind::Up, 8);
+    let mut order = app.project_order();
+    order.sort();
+    assert_eq!(order, ["aa", "bb", "cc"]);
+}
+
+#[test]
+fn test_dragging_keeps_the_highlight_on_its_agent() {
+    let mut app = app_with_three_projects();
+    app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
+    let highlighted = |app: &App| match app.project_rows()[app.selected_agent()] {
+        ProjectListRow::Agent { index } => app.agents()[index].id.clone(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(highlighted(&app), "bb");
+    left(&mut app, MouseEventKind::Down, 4);
+    left(&mut app, MouseEventKind::Drag, 8);
+    assert_eq!(agent_ids(&app), ["bb", "aa", "aa1", "cc"]);
+    assert_eq!(highlighted(&app), "bb");
 }
 
 #[test]
@@ -1391,6 +1559,7 @@ fn test_click_agent_row_switches_and_new_row_creates() {
     // Clicking a project folds it and leaves the highlighted agent alone.
     let bb = ProjectListRow::Agent { index: 1 };
     app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 4));
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 5, 4));
     assert!(matches!(
         app.project_rows()[0],
         ProjectListRow::Project {
@@ -1401,6 +1570,7 @@ fn test_click_agent_row_switches_and_new_row_creates() {
     assert_eq!(app.project_rows()[app.selected_agent()], bb);
     assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(0)));
     app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 4));
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 5, 4));
     assert_eq!(app.selected_agent(), 4);
     assert_eq!(app.project_rows()[4], bb);
     assert!(rx.try_recv().is_err());
@@ -2642,6 +2812,19 @@ fn cancel_while_awaiting_approval_cancels_the_turn() {
     assert!(matches!(rx.try_recv(), Ok(UiEvent::Cancel(id)) if id == "aa"));
     assert!(app.pending_approval().is_none());
     assert_eq!(app.state(), AppState::Idle);
+}
+
+#[test]
+fn ctrl_t_stops_the_command_and_keeps_the_turn() {
+    let (tx, mut rx) = mpsc::channel(10);
+    let mut app = App::new().with_event_sender(tx);
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    app.process_command(UiCommand::TurnStarted { prompt: None });
+    assert!(app.is_busy());
+    app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::StopCommand(id)) if id == "aa"));
+    assert!(app.is_busy());
+    assert!(app.input.is_empty());
 }
 
 #[test]

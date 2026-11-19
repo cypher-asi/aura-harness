@@ -125,7 +125,7 @@ impl Backend for GridBackend {
 pub struct Metrics {
     pub font_size: f32,
     pub cell: Size,
-    /// Space kept clear around the grid and above the tab bar
+    /// Space kept clear beside and below the grid and above the tab bar
     pub pad: f32,
 }
 
@@ -148,33 +148,33 @@ impl Metrics {
     /// Columns and rows that fit in a window of this size.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn grid(&self, window: Size) -> (u16, u16) {
-        let fit = |space: f32, cell: f32| {
-            ((space - 2.0 * self.pad) / cell)
-                .floor()
-                .clamp(1.0, f32::from(u16::MAX)) as u16
-        };
+        let fit =
+            |space: f32, cell: f32| (space / cell).floor().clamp(1.0, f32::from(u16::MAX)) as u16;
         (
-            fit(window.width, self.cell.width),
-            fit(window.height, self.cell.height),
+            fit(window.width - 2.0 * self.pad, self.cell.width),
+            fit(window.height - self.top() - self.pad, self.cell.height),
         )
     }
 
-    /// Top-left corner of a `cols` × `rows` grid centered in the window,
-    /// on a whole pixel.
-    pub fn origin(&self, window: Size, cols: u16, rows: u16) -> Point {
+    /// Space above the grid: half a row, so the middle of the first row
+    /// is as far from the tab bar as from the panels' top borders, drawn
+    /// through the middle of the second.
+    fn top(&self) -> f32 {
+        (self.cell.height / 2.0).round()
+    }
+
+    /// Top-left corner of a `cols` × `rows` grid centered across the
+    /// window and [`Self::top`] down it, on a whole pixel.
+    pub fn origin(&self, window: Size, cols: u16) -> Point {
         let w = f32::from(cols) * self.cell.width;
-        let h = f32::from(rows) * self.cell.height;
-        Point::new(
-            ((window.width - w) / 2.0).max(0.0).floor(),
-            ((window.height - h) / 2.0).max(0.0).floor(),
-        )
+        Point::new(((window.width - w) / 2.0).max(0.0).floor(), self.top())
     }
 
     /// The cell under a window position, clamped into the grid so drags
     /// past the edge keep selecting.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn cell_at(&self, window: Size, cols: u16, rows: u16, at: Point) -> Position {
-        let origin = self.origin(window, cols, rows);
+        let origin = self.origin(window, cols);
         let index = |offset: f32, cell: f32, count: u16| {
             ((offset / cell).floor().max(0.0) as u16).min(count.saturating_sub(1))
         };
@@ -319,9 +319,12 @@ mod tests {
         assert!((m.cell.height - 18.0).abs() < f32::EPSILON);
         let window = Size::new(1012.0, 732.0);
         let (cols, rows) = m.grid(window);
-        assert_eq!((cols, rows), (119, 40));
-        let origin = m.origin(window, cols, rows);
-        assert!(origin.x >= PAD && origin.y >= PAD);
+        assert_eq!((cols, rows), (119, 39));
+        let origin = m.origin(window, cols);
+        assert!(origin.x >= PAD);
+        assert!((origin.y - 9.0).abs() < f32::EPSILON, "half a row down");
+        let below = window.height - origin.y - f32::from(rows) * m.cell.height;
+        assert!(below >= PAD, "{below}");
         let inside = Point::new(origin.x + 8.4 * 3.5, origin.y + 18.0 * 2.5);
         assert_eq!(m.cell_at(window, cols, rows, inside), Position::new(3, 2));
         assert_eq!(

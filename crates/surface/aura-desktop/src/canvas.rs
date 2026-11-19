@@ -15,8 +15,7 @@
 use crate::geom::{rgba, Color, Point};
 use crate::grid::{self, Metrics, Palette};
 use crate::scene::{fill, Fill, Layers, Quad};
-use crate::shapes::{self, Outline};
-use crate::text::{Align, Face, Label, ShapeKey, Shaping, TextSystem};
+use crate::text::{Align, Face, Label, Shaping, TextSystem};
 use aura_ui::events::{FlowKind, TraceNodeStatus};
 use aura_ui_terminal::flow_layout::{CellRect, FlowLayout, Wire, WireKind, CARD_WIDTH};
 use aura_ui_terminal::FlowState;
@@ -24,10 +23,6 @@ use ratatui::layout::Rect;
 use std::collections::HashSet;
 use std::ops::Range;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-
-/// The canvas's shapes among those in the atlas: past the last character
-/// and the tab bar's cross.
-const PORT: u32 = 0x0012_0003;
 
 /// Below this zoom, text is drawn as bars.
 const GREEK_BELOW: f32 = 0.5;
@@ -226,11 +221,6 @@ impl Pen<'_, '_> {
         for card in self.layout.visible_cards(&xs, &ys) {
             self.card(card, selected, &linked);
         }
-        for (hot, wire) in &wires {
-            if !self.layout.stacked(wire) {
-                self.port(*wire, *hot);
-            }
-        }
     }
 
     /// Each agent's name above its turns, kept on screen while any of
@@ -390,44 +380,6 @@ impl Pen<'_, '_> {
         }
     }
 
-    /// The dot a wire leaves its card from.
-    fn port(&mut self, wire: Wire, hot: bool) {
-        let (x, y) = self.layout.port_out(wire.from, wire.row);
-        let color = self.wire_color(&wire, hot);
-        let width = self.line();
-        let middle = width / 2.0 - (width / 2.0).floor();
-        let center = Point::new(self.column_px(x) + middle, self.row_px(y) + middle);
-        self.dot(center, color);
-    }
-
-    /// A port's dot, centered on pixel `center`.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    fn dot(&mut self, center: Point, color: Color) {
-        let radius = ((self.size.1 * 0.18).max(1.5) * 2.0).round() / 2.0;
-        let size = (radius * 2.0).ceil() + 2.0;
-        let key = ShapeKey {
-            shape: PORT,
-            width: radius.to_bits(),
-            height: 0,
-            phase: [shapes::phase(center.y), 0],
-        };
-        let at = (
-            (center.x - size / 2.0).floor() as i32,
-            (center.y - size / 2.0).floor() as i32,
-        );
-        let local = Point::new(center.x - at.0 as f32, center.y - at.1 as f32);
-        let atlas = self.text.atlas_mut();
-        shapes::stamp(
-            &mut self.out.under,
-            atlas,
-            key,
-            at,
-            (size as u32 + 1, size as u32 + 1),
-            rgba(color),
-            |pen| pen.fill(Outline::circle(local, radius)),
-        );
-    }
-
     fn card(&mut self, card: usize, selected: Option<usize>, linked: &HashSet<usize>) {
         let rect = self.layout.card_rect(card);
         let standing = if selected == Some(card) {
@@ -483,10 +435,20 @@ impl Pen<'_, '_> {
             bold,
             Align::Left,
         );
+        if let Some((tokens, spent)) = flow.card_stats(card) {
+            let spent = fit(&spent, rect.width - 4);
+            let room = (rect.width - 4).saturating_sub(spent.width() + 1);
+            let tokens = fit(&tokens, room);
+            let y = line_top(2);
+            let color = colors.secondary;
+            self.write(&tokens, (rect.x as f32 + 2.0, y), color, false, Align::Left);
+            let right = rect.right() as f32 - 2.0;
+            self.write(&spent, (right, y), color, false, Align::Right);
+        }
 
         let shown = placed.shown_rows();
         for row in 0..placed.lines() {
-            let line = 2 + row;
+            let line = placed.first_row_line() + row;
             if row == shown {
                 match flow.last_line_row(card) {
                     Some(hidden) => self.row(card, hidden, line, true, (left + edge, right - edge)),
@@ -575,7 +537,9 @@ impl Pen<'_, '_> {
         let (x1, y) = (rect.right() as f32, rect.y as f32);
         let mut at = rect.x as f32 + 2.0;
         if placed.folds() {
-            self.fold_button(at, y);
+            if flow.fold_hovered(card) {
+                self.fold_button(at, y);
+            }
             let marker = if placed.folded { "▸" } else { "▾" };
             self.write(marker, (at, y), colors.secondary, false, Align::Left);
             at += 2.0;
@@ -600,8 +564,8 @@ impl Pen<'_, '_> {
         }
     }
 
-    /// The square a fold marker at canvas cell `(x, y)` sits on, over the
-    /// cells a click on it folds from.
+    /// The square under a fold marker at canvas cell `(x, y)` while the
+    /// pointer is over it, across the cells a click on it folds from.
     fn fold_button(&mut self, x: f32, y: f32) {
         if self.zoom < GREEK_BELOW {
             return;
@@ -609,17 +573,13 @@ impl Pen<'_, '_> {
         let colors = self.colors();
         let (left, right) = (self.x(x - 0.6).round(), self.x(x + 1.6).round());
         let (top, bottom) = (self.y(y + 0.05).round(), self.y(y + 0.95).round());
-        let edge = self.line();
-        let face = colors.muted.mix(colors.bg, 0.85);
-        let border = colors.muted.mix(colors.bg, 0.45);
-        let out = &mut self.out.under;
-        fill(out, left, top, right - left, bottom - top, border);
+        let face = colors.muted.mix(colors.bg, 0.7);
         fill(
-            out,
-            left + edge,
-            top + edge,
-            right - left - 2.0 * edge,
-            bottom - top - 2.0 * edge,
+            &mut self.out.under,
+            left,
+            top,
+            right - left,
+            bottom - top,
             face,
         );
     }

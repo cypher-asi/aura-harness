@@ -209,9 +209,7 @@ fn inside(stage: &super::tests::Stage, pane: aura_ui_terminal::Pane) -> crate::g
         .find(|c| c.pane == pane)
         .expect("the panel is drawn")
         .area;
-    let origin = shell
-        .metrics
-        .origin(shell.grid_area(), shell.cols, shell.rows);
+    let origin = shell.metrics.origin(shell.grid_area(), shell.cols);
     let cell = shell.metrics.cell;
     let bar = crate::tab_bar::height(&shell.metrics);
     crate::geom::Point::new(

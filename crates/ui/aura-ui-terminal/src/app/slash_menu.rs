@@ -91,6 +91,10 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     command("agents", "Toggle Agents panel"),
     command("kernel", "Toggle Kernel panel"),
     command("files", "Toggle Sandbox panel"),
+    command(
+        "expand",
+        "Expand the chat panel to fill the screen, or restore it",
+    ),
     SlashCommand {
         name: "model",
         args: "[id]",

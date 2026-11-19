@@ -1,0 +1,11 @@
+{
+  "id": "01a1f4f4349e0000",
+  "title": "keep going",
+  "state": "completed",
+  "agent_id": "31e05d1b9fc6ee2507716474a23a9be52b5a090fbe030327ddaaa8f6c85e294d",
+  "agent_name": "Agent 4",
+  "items": [],
+  "summary": "Drag-and-drop reordering of projects in the left section is in the working tree, but it's uncommitted and not fully verified. The drag code was already there, uncommitted, when the engineer started. The engineer wrote none of it and only fixed the tests it had broken.",
+  "updated_ms": 1795111166015,
+  "created_ms": 1795111007390
+}

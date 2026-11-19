@@ -5,14 +5,17 @@
 //! `Agent 2`. The call goes through the agent's kernel like every model
 //! call, after the turn, while the turn's task still owns the session.
 
-use aura_agent::AgentLoopConfig;
+use super::subagents::AgentHub;
+use aura_agent::{AgentLoopConfig, KernelModelGateway};
 use aura_context_prompts::auxiliary::chat_title::{
     chat_title_user_prompt, CHAT_TITLE_SYSTEM_PROMPT,
 };
+use aura_core_types::AgentId;
 use aura_model::{
     Message, ModelCallPurpose, ModelProvider, ModelRequest, ModelRequestKind, Role, ThinkingEffort,
     ToolChoice,
 };
+use std::sync::Arc;
 use tracing::{info, warn};
 
 /// Environment variable naming the model that writes titles.
@@ -36,6 +39,24 @@ fn title_model_with(classifier: String, configured: Option<&str>) -> String {
         .map(str::trim)
         .filter(|m| !m.is_empty())
         .map_or(classifier, str::to_string)
+}
+
+/// Title the chat of `agent` from its first `prompt` in the background,
+/// while the turn runs, so the Agents panel shows the name within a second
+/// or two instead of after the turn. Only the prompt is used: a turn can
+/// take minutes and the prompt already says what the chat is about.
+pub(super) fn spawn(
+    hub: Arc<AgentHub>,
+    agent: AgentId,
+    gateway: KernelModelGateway,
+    config: AgentLoopConfig,
+    model: String,
+    prompt: String,
+) {
+    tokio::spawn(async move {
+        let title = generate(&gateway, &config, &model, &prompt, &[]).await;
+        hub.apply_title(agent, &title).await;
+    });
 }
 
 /// A title for the chat that opened with `prompt` and got `messages` in

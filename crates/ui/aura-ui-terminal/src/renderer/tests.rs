@@ -254,15 +254,21 @@ fn test_default_layout_shows_agents_column() {
             .map(|(i, _)| i)
             .collect()
     };
-    // A project row and its first agent row share each name.
-    let [terminal_project, terminal_agent] = rows_with("Terminal Agent")[..] else {
-        panic!("expected a project row and an agent row for Terminal Agent");
+    // A project row shows its first agent's name in capitals.
+    let [terminal_project] = rows_with("TERMINAL AGENT")[..] else {
+        panic!("expected one project row for Terminal Agent");
     };
-    let [researcher_project, researcher_agent] = rows_with("Researcher")[..] else {
-        panic!("expected a project row and an agent row for Researcher");
+    let [terminal_agent] = rows_with("Terminal Agent")[..] else {
+        panic!("expected one agent row for Terminal Agent");
+    };
+    let [researcher_project] = rows_with("RESEARCHER")[..] else {
+        panic!("expected one project row for Researcher");
+    };
+    let [researcher_agent] = rows_with("Researcher")[..] else {
+        panic!("expected one agent row for Researcher");
     };
     let new_project = rows_with("New project")[0];
-    assert!(rows[terminal_project].contains("🗁  Terminal Agent"));
+    assert!(rows[terminal_project].contains("🗁  TERMINAL AGENT"));
     // An idle agent leaves the icon column blank, even when it is active.
     let agent_panel: String = rows[terminal_agent].chars().take(30).collect();
     assert!(
@@ -271,10 +277,10 @@ fn test_default_layout_shows_agents_column() {
     );
     assert_eq!(
         char_col(&rows[terminal_agent], "Terminal Agent"),
-        char_col(&rows[terminal_project], "Terminal Agent")
+        char_col(&rows[terminal_project], "TERMINAL AGENT")
     );
     assert!(rows[terminal_agent].contains(" 3m "));
-    assert!(rows[researcher_project].contains("🗁  Researcher"));
+    assert!(rows[researcher_project].contains("🗁  RESEARCHER"));
     assert!(!screen.contains("12│"));
     let above_footer = rows[..rows.len() - 1].join("\n");
     assert!(!above_footer.contains("# ") && !above_footer.contains("@ "));
@@ -301,7 +307,7 @@ fn test_default_layout_shows_agents_column() {
     assert_eq!(ring_col, char_col(&rows[terminal_project], "🗁"));
     assert_eq!(
         char_col(&rows[new_project], "New project"),
-        char_col(&rows[researcher_project], "Researcher")
+        char_col(&rows[researcher_project], "RESEARCHER")
     );
     // Projects and agents are one line each, with one blank line between projects.
     assert_eq!(terminal_agent, terminal_project + 1);
@@ -322,6 +328,12 @@ fn test_default_layout_shows_agents_column() {
         char_col(&rows[rows_with("reviewer #1")[0]], "reviewer #1")
             > char_col(&rows[researcher_agent], "Researcher")
     );
+    // The spawn's tree line drops from under its parent's name and runs
+    // through the empty icon column into the spawn's name.
+    let reviewer = &rows[rows_with("reviewer #1")[0]];
+    let elbow = char_col(reviewer, "└──");
+    assert_eq!(elbow, char_col(&rows[researcher_agent], "Researcher"));
+    assert_eq!(char_col(reviewer, "reviewer #1"), elbow + 4, "{reviewer:?}");
     assert!(!screen.contains("Reviews"));
 
     // Tab to the agents panel. Neither the selected row nor any other
@@ -479,13 +491,13 @@ fn test_project_rows_are_cells_with_a_blue_selection() {
     );
     // Lines from the first project: the selected agent, the gap, then the
     // next project and its agent.
-    let project_row = row_of(&buffer, "Terminal Agent");
+    let project_row = row_of(&buffer, "TERMINAL AGENT");
     let selected_row = project_row + 1;
     let gap_row = project_row + 2;
     let researcher_project = project_row + 3;
     let researcher_agent = project_row + 4;
     assert!(find_cell(&buffer, selected_row, "Terminal Agent").is_some());
-    assert!(find_cell(&buffer, researcher_project, "Researcher").is_some());
+    assert!(find_cell(&buffer, researcher_project, "RESEARCHER").is_some());
     assert!(find_cell(&buffer, researcher_agent, "Researcher").is_some());
     let hover = |app: &mut crate::App, row: u16| {
         app.handle_mouse(MouseEvent {
@@ -511,7 +523,7 @@ fn test_project_rows_are_cells_with_a_blue_selection() {
 
     hover(&mut app, researcher_project);
     let buffer = render_buffer(&mut app, 120);
-    let (_, project) = find_cell(&buffer, researcher_project, "Researcher").unwrap();
+    let (_, project) = find_cell(&buffer, researcher_project, "RESEARCHER").unwrap();
     assert_eq!(project.bg, Some(colors.surface_hover));
     assert_eq!(project.fg, Some(colors.muted));
     assert!(!project.add_modifier.contains(Modifier::BOLD));
@@ -559,7 +571,7 @@ fn test_project_rows_are_cells_with_a_blue_selection() {
         }
     ));
     let buffer = render_buffer(&mut app, 120);
-    let (_, project) = find_cell(&buffer, project_row, "Terminal Agent").unwrap();
+    let (_, project) = find_cell(&buffer, project_row, "TERMINAL AGENT").unwrap();
     assert_eq!(project.bg, Some(Color::Reset));
     assert_eq!(project.fg, Some(colors.muted));
     assert!((project_row..buffer.area.height)
@@ -569,7 +581,7 @@ fn test_project_rows_are_cells_with_a_blue_selection() {
     let buffer = render_buffer(&mut app, 120);
     let (_, agent) = find_cell(&buffer, selected_row, "Terminal Agent").unwrap();
     assert_eq!(agent.bg, Some(colors.selection));
-    let (_, project) = find_cell(&buffer, project_row, "Terminal Agent").unwrap();
+    let (_, project) = find_cell(&buffer, project_row, "TERMINAL AGENT").unwrap();
     assert_eq!(project.bg, Some(Color::Reset));
 
     // Away from the panel, the agent shown in the chat stays selected
@@ -587,8 +599,8 @@ fn test_project_rows_are_cells_with_a_blue_selection() {
     assert_eq!(active.bg, Some(colors.selection));
     assert_eq!(active.fg, Some(colors.on_selection));
     for (row, name, fg) in [
-        (project_row, "Terminal Agent", colors.muted),
-        (researcher_project, "Researcher", colors.muted),
+        (project_row, "TERMINAL AGENT", colors.muted),
+        (researcher_project, "RESEARCHER", colors.muted),
         (researcher_agent, "Researcher", colors.foreground),
     ] {
         let (_, cell) = find_cell(&buffer, row, name).unwrap();
@@ -620,10 +632,10 @@ fn test_active_agent_is_selected_on_open() {
 
     let buffer = render_buffer(&mut app, 120);
     let colors = test_theme().colors;
-    let project = row_of(&buffer, "Researcher");
+    let project = row_of(&buffer, "RESEARCHER");
     let (_, agent) = find_cell(&buffer, project + 1, "Researcher").unwrap();
     assert_eq!(agent.bg, Some(colors.selection));
-    let (_, header) = find_cell(&buffer, project, "Researcher").unwrap();
+    let (_, header) = find_cell(&buffer, project, "RESEARCHER").unwrap();
     assert_eq!(header.bg, Some(Color::Reset));
 }
 
@@ -1803,11 +1815,13 @@ fn test_chat_panel_tabs_switch_between_chat_and_terminal() {
     let mut app = app_with_model(None);
     let rows = render_rows(&mut app, 120);
     let (tabs, left, right) = chat_panel(&rows);
-    let first = ChatTab::layout(u16::try_from(right - left + 1).unwrap()).cells[0];
+    let first = ChatTab::layout(u16::try_from(right - left + 1 - 4).unwrap()).cells[0];
     let divider = left + usize::from(first.start + first.width);
     assert_eq!(rows[tabs - 1].chars().nth(divider), Some('┬'));
     assert_eq!(rows[tabs + 1].chars().nth(divider), Some('┴'));
     assert_eq!(rows[tabs + 2].chars().nth(left), Some('┌'), "body below");
+    let end: String = rows[tabs].chars().skip(right - 4).take(5).collect();
+    assert_eq!(end, "│ ⤢ │", "the expand button ends the bar");
 
     let theme = test_theme();
     let active = |app: &mut crate::App, label: &str| {
@@ -1843,6 +1857,45 @@ fn test_chat_panel_tabs_switch_between_chat_and_terminal() {
     }
     assert_eq!(app.chat_tab(), ChatTab::Chat);
     assert!(app.selection().is_none());
+}
+
+#[test]
+fn test_expand_button_fills_the_screen_with_the_chat_panel() {
+    use crate::app::{ChatTab, HoverTarget};
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
+
+    let mut app = app_with_model(None);
+    app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+    app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+    assert_eq!(app.chat_tab(), ChatTab::Graph);
+    let rows = render_rows(&mut app, 120);
+    let (tabs, left, right) = chat_panel(&rows);
+    assert!(left > 2, "the agents panel is beside the chat");
+    let mouse = |kind, column: usize| MouseEvent {
+        kind,
+        column: u16::try_from(column).unwrap(),
+        row: u16::try_from(tabs).unwrap(),
+        modifiers: KeyModifiers::empty(),
+    };
+    app.handle_mouse(mouse(MouseEventKind::Moved, right - 2));
+    assert_eq!(app.hover(), Some(HoverTarget::ExpandChat));
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), right - 2));
+    assert!(app.chat_expanded());
+    assert_eq!(app.chat_tab(), ChatTab::Graph, "the tab stays");
+
+    let rows = render_rows(&mut app, 120);
+    let (tabs, wide_left, wide_right) = chat_panel(&rows);
+    assert_eq!((wide_left, wide_right), (1, 118), "{}", rows.join("\n"));
+    assert!(!rows.join("\n").contains("KERNEL"), "the other panels hide");
+    let end: String = rows[tabs].chars().skip(wide_right - 4).take(5).collect();
+    assert_eq!(end, "│ ⤡ │", "the button now restores");
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
+    assert!(!app.chat_expanded(), "Ctrl+X restores it too");
+    let rows = render_rows(&mut app, 120);
+    assert_eq!(chat_panel(&rows), (tabs, left, right));
 }
 
 #[test]
@@ -2103,7 +2156,10 @@ fn test_status_line_on_one_model_measures_context_against_its_window() {
     });
     let rows = render_rows(&mut app, 160);
     let status = &rows[rows.len() - 1];
-    assert!(status.contains("Claude Haiku 4.5 · 20% context used"), "{status:?}");
+    assert!(
+        status.contains("Claude Haiku 4.5 · 20% context used"),
+        "{status:?}"
+    );
     assert!(!status.contains("model"), "{status:?}");
 }
 
@@ -2203,7 +2259,12 @@ fn reply_footer_row(model: &str, usage: Option<CallUsage>, width: u16) -> String
     let prompt = rows.iter().position(|r| r.contains("→ hi")).unwrap();
     assert!(!rows[prompt].contains(" · "), "{:?}", rows[prompt]);
     let reply = rows.iter().position(|r| r.contains("hello")).unwrap();
-    let footer = &rows[reply + 1];
+    // A blank separator row sits between the reply and its footer, so the
+    // footer is the first row below the reply that carries a bracket.
+    let footer = rows[reply + 1..]
+        .iter()
+        .find(|r| r.contains('['))
+        .unwrap_or_else(|| panic!("no footer after reply: {rows:?}"));
     let start = footer.find('[').unwrap_or_else(|| panic!("{footer:?}"));
     let end = footer.find(']').unwrap();
     footer[start..=end].to_string()
@@ -2691,9 +2752,9 @@ fn test_a_scrolled_projects_list_draws_the_rows_it_shows() {
     app.process_command(UiCommand::SetActiveAgent("p0".to_string()));
 
     let buffer = render_buffer(&mut app, 120);
-    let top = row_of(&buffer, "Lead00");
+    let top = row_of(&buffer, "LEAD00");
     let label = |app: &crate::App, row: usize| match app.project_rows()[row] {
-        ProjectListRow::Project { root, .. } => Some(app.agents()[root].name.clone()),
+        ProjectListRow::Project { root, .. } => Some(app.agents()[root].name.to_uppercase()),
         ProjectListRow::Agent { index } => Some(app.agents()[index].name.clone()),
         _ => None,
     };

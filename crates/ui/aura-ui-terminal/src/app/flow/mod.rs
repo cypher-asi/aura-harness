@@ -17,6 +17,7 @@ pub mod layout;
 mod tests;
 
 use super::file_view::FileView;
+use super::format::{format_cost, format_tokens};
 use super::trace_json::{node_json, NodeLink};
 use super::{App, ChatTab, DetailView, NotificationType, PanelFocus};
 use crate::events::{FlowKind, FlowLane, FlowNode, TraceNode, TraceNodeStatus, UiEvent};
@@ -139,6 +140,8 @@ pub struct FlowState {
     clip: Vec<Rect>,
     /// Screen cell a drag that pans the view is at
     drag: Option<(u16, u16)>,
+    /// Id of the head of the card whose fold button the pointer is over
+    fold_hover: Option<String>,
 }
 
 impl FlowState {
@@ -264,10 +267,55 @@ impl FlowState {
             }
             _ => {}
         }
-        if !node.detail.is_empty() {
+        // A call's tokens and time are on its stats line.
+        let on_stats_line = placed.kind == CardKind::Call && placed.stats.is_some();
+        if !node.detail.is_empty() && !on_stats_line {
             facts.push(node.detail.clone());
         }
         facts.join(" · ")
+    }
+
+    /// Whether the pointer is over card `card`'s fold button.
+    #[must_use]
+    pub fn fold_hovered(&self, card: usize) -> bool {
+        let head = self.layout.cards[card].head;
+        self.fold_hover.as_deref() == Some(self.nodes[head].id.as_str())
+    }
+
+    /// The pointer is at canvas point `at`, or off the canvas for `None`.
+    /// Returns whether that took it onto or off a fold button.
+    fn hover(&mut self, at: Option<(f32, f32)>) -> bool {
+        let over = at
+            .and_then(|(x, y)| self.layout.spot_at(x, y))
+            .and_then(|spot| match spot {
+                Spot::Title { card, fold: true } => {
+                    Some(self.nodes[self.layout.cards[card].head].id.clone())
+                }
+                _ => None,
+            });
+        let changed = over != self.fold_hover;
+        self.fold_hover = over;
+        changed
+    }
+
+    /// The stats line of card `card`, when it has one: the tokens in and
+    /// out, `↑48.2k ↓516`, and against the right edge its cost and time,
+    /// `$0.042 · 3.2s`.
+    #[must_use]
+    pub fn card_stats(&self, card: usize) -> Option<(String, String)> {
+        let usage = self.layout.cards[card].stats?;
+        let tokens = format!(
+            "↑{} ↓{}",
+            format_tokens(usage.input_tokens),
+            format_tokens(usage.output_tokens)
+        );
+        let spent: Vec<String> = usage
+            .cost_usd
+            .map(format_cost)
+            .into_iter()
+            .chain(usage.duration_ms.map(format_ms))
+            .collect();
+        Some((tokens, spent.join(" · ")))
     }
 
     /// The row the last line of card `card` shows when the card has more
@@ -919,6 +967,15 @@ impl FlowState {
     }
 }
 
+/// `850ms`, `3.2s`, `4m12s`.
+fn format_ms(ms: u64) -> String {
+    match ms {
+        0..1_000 => format!("{ms}ms"),
+        1_000..60_000 => format!("{}.{}s", ms / 1_000, ms % 1_000 / 100),
+        _ => format!("{}m{:02}s", ms / 60_000, ms % 60_000 / 1_000),
+    }
+}
+
 /// `n` cells, as a position on the canvas.
 #[allow(clippy::cast_precision_loss)]
 const fn cells(n: usize) -> f32 {
@@ -992,6 +1049,14 @@ impl App {
             self.open_flow_node();
         }
         true
+    }
+
+    /// The pointer is at canvas point `at` of the GRAPH tab, in cells, or
+    /// off its canvas for `None`. Returns whether a fold button under it
+    /// is to be drawn differently.
+    pub fn hover_flow_at(&mut self, at: Option<(f32, f32)>) -> bool {
+        self.flow.ensure_layout();
+        self.flow.hover(at)
     }
 
     /// Ask for the flow of the agent on screen, and for it to be kept up
@@ -1170,6 +1235,17 @@ impl App {
             ),
             ("agent_id".to_string(), node.agent_id.clone()),
         ];
+        let parent = self
+            .flow
+            .lane_index
+            .get(&node.agent_id)
+            .and_then(|&lane| self.flow.lanes[lane].parent.as_deref());
+        if let Some(parent) = parent {
+            meta.push((
+                "spawned by".to_string(),
+                format!("{} ({parent})", self.flow.lane_name(parent)),
+            ));
+        }
         if let Some(time) = i64::try_from(node.at_ms)
             .ok()
             .and_then(chrono::DateTime::from_timestamp_millis)
@@ -1177,8 +1253,21 @@ impl App {
             let local = time.with_timezone(&chrono::Local);
             meta.push((
                 "time".to_string(),
-                local.format("%Y-%m-%d %H:%M:%S").to_string(),
+                local.format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
             ));
+        }
+        if let Some((card, None)) = self.flow.selected_place() {
+            let placed = &self.flow.layout().cards[card];
+            if let (CardKind::Turn, Some(usage)) = (placed.kind, placed.stats) {
+                let totals = serde_json::json!({
+                    "steps": placed.steps,
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                    "cost_usd": usage.cost_usd,
+                    "duration_ms": usage.duration_ms,
+                });
+                meta.push(("turn".to_string(), totals.to_string()));
+            }
         }
         meta.extend(node.meta.iter().cloned());
         let step = TraceNode {

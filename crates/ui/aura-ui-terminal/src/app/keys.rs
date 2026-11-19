@@ -18,6 +18,13 @@ impl App {
         if self.context_menu.is_some() && self.handle_context_menu_key(key) {
             return KeyResult::continue_running();
         }
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('x')
+            && matches!(self.state, AppState::Idle | AppState::Processing)
+        {
+            self.toggle_chat_expanded();
+            return KeyResult::continue_running();
+        }
         if self.detail.is_some() {
             self.handle_detail_key(key);
             return KeyResult::continue_running();
@@ -325,12 +332,21 @@ impl App {
             self.toggle_all_activity();
             return KeyResult::continue_running();
         }
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('v') {
+        // Cmd+V (Super), for terminals that report it.
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER)
+            && key.code == KeyCode::Char('v')
+        {
             self.request_paste();
             return KeyResult::continue_running();
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') {
             self.edit_input_in_editor();
+            return KeyResult::continue_running();
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('t') {
+            self.stop_command();
             return KeyResult::continue_running();
         }
         if key.modifiers.contains(KeyModifiers::ALT) {
@@ -515,9 +531,9 @@ impl App {
     const fn panel_visible(&self, panel: PanelFocus) -> bool {
         match panel {
             PanelFocus::Chat => true,
-            PanelFocus::Records => self.record_panel_visible,
-            PanelFocus::Sandbox => self.sandbox_panel_visible,
-            PanelFocus::Swarm => self.swarm_panel_visible,
+            PanelFocus::Records => self.record_panel_visible(),
+            PanelFocus::Sandbox => self.sandbox_panel_visible(),
+            PanelFocus::Swarm => self.swarm_panel_visible(),
         }
     }
 
@@ -546,6 +562,17 @@ impl App {
             KeyCode::Enter => {
                 if !self.input.is_empty() {
                     return self.submit_input();
+                }
+                // Enter on an empty prompt sends the oldest queued message
+                // now, cancelling the turn that is running.
+                if self.state == AppState::Processing && self.hud.queued > 0 {
+                    if let Some(tx) = &self.event_tx {
+                        let _ = tx.try_send(UiEvent::SendQueuedNow(self.active_agent_id.clone()));
+                    }
+                    self.notification = Some((
+                        "Sending the queued message now".to_string(),
+                        NotificationType::Success,
+                    ));
                 }
             }
             // A recalled `/command` keeps the slash menu closed so Up/Down
@@ -727,14 +754,14 @@ impl App {
         // in order with the reply still streaming.
         if busy && !images.is_empty() {
             self.queue_image_previews(&text, previews);
-            // A running turn only takes text, so images wait for the next.
             self.notification = Some((
                 "Queued: the agent gets the images when its current work ends".to_string(),
                 NotificationType::Success,
             ));
         } else if busy {
             self.notification = Some((
-                "Sent: the agent reads it before its next step".to_string(),
+                "Queued: sent when the current work ends. Enter on an empty prompt sends it now"
+                    .to_string(),
                 NotificationType::Success,
             ));
         } else {

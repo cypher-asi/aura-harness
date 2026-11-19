@@ -18,11 +18,11 @@ mod overlays;
 mod panels;
 mod plans;
 mod processes;
-mod tasks;
 mod sandbox;
 mod segments;
 mod side_list;
 mod slash_menu;
+mod tasks;
 mod text;
 mod trace_feed;
 
@@ -100,6 +100,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     if let Some(selection) = app.selection() {
         selection.highlight(frame.buffer_mut());
     }
+    app.set_input_area(chat_column[1]);
     input::render_input(frame, chat_column[1], app, theme);
     hud::render_footer(frame, inset_edges(chat_column[2]), app, theme);
 

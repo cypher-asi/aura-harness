@@ -617,6 +617,28 @@ impl AgentHub {
         )
     }
 
+    /// Give `agent` the chat title `title` and show it in the Agents panel
+    /// right away, unless the agent got a name or title in the meantime.
+    pub(super) async fn apply_title(&self, agent: AgentId, title: &str) {
+        let applied = {
+            let mut registry = lock(&self.registry);
+            let wanted = registry
+                .find(agent)
+                .is_some_and(crate::agent_registry::RegisteredAgent::needs_title);
+            wanted
+                && match registry.set_title(agent, title) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        warn!(%agent, error = %e, "Could not save the chat title");
+                        false
+                    }
+                }
+        };
+        if applied {
+            self.send_agent_list().await;
+        }
+    }
+
     /// Send the Agents panel rows and the active agent to the UI.
     pub async fn send_agent_list(&self) {
         self.name_agents();
@@ -1044,8 +1066,13 @@ impl AgentHub {
             None
         } else {
             Some(
-                self.write_slot(&request, workspace.clone(), &first.cancel)
-                    .await,
+                self.write_slot(
+                    &request,
+                    workspace.clone(),
+                    &first.cancel,
+                    &AgentUi::new(self.commands.clone(), first.session.agent_id()),
+                )
+                .await,
             )
         };
         if let Some(slot) = &mut slot {
@@ -1125,6 +1152,7 @@ impl AgentHub {
         request: &SubagentDispatchRequest,
         workspace: PathBuf,
         cancel: &CancellationToken,
+        ui: &AgentUi,
     ) -> WriteSlot<'_> {
         let nested = {
             let writing = lock(&self.writing);
@@ -1136,9 +1164,22 @@ impl AgentHub {
             None
         } else {
             let mutex = Arc::clone(lock(&self.write_locks).entry(workspace).or_default());
-            tokio::select! {
-                guard = mutex.lock_owned() => Some(guard),
-                () = cancel.cancelled() => None,
+            if let Ok(guard) = Arc::clone(&mutex).try_lock_owned() {
+                Some(guard)
+            } else {
+                // The agent is listed as working from here on, but its turn
+                // (and so its chat and record) starts only once it has the
+                // workspace. Say so rather than show an empty chat.
+                ui.send(system_message(
+                    "Queued: another agent is editing this workspace. \
+                     This agent starts when it finishes."
+                        .to_string(),
+                ))
+                .await;
+                tokio::select! {
+                    guard = mutex.lock_owned() => Some(guard),
+                    () = cancel.cancelled() => None,
+                }
             }
         };
         WriteSlot {

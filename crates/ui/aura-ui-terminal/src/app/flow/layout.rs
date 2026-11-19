@@ -22,14 +22,14 @@
 //!   └─┬────────────────────────────────┘
 //!     │ ┌ ✓ model ───── 1.2k/300 · 4s ┐
 //!     ├─┤ sonnet                      │   coder #1
-//!     │ │ ✓ task coder · greet() 4.2s ●───┌ ✓ turn ─── coder #1 ┐
+//!     │ │ ✓ task coder · greet() 4.2s ├───┌ ✓ turn ─── coder #1 ┐
 //!     │ └─────────────────────────────┘   │ write greet()       │
 //! ```
 //!
 //! The terminal draws the layout with box characters and the desktop
 //! window in pixels; both place it from these cells.
 
-use crate::events::{FlowKind, FlowNode};
+use crate::events::{FlowKind, FlowNode, FlowUsage};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
@@ -68,7 +68,7 @@ pub enum CardKind {
 }
 
 /// One card: a node and the rows that follow it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Card {
     pub kind: CardKind,
     /// Index into the flow's nodes
@@ -88,13 +88,22 @@ pub struct Card {
     pub steps: usize,
     /// Whether those are folded away
     pub folded: bool,
+    /// What a call used, or a turn's calls together and how long it
+    /// took; on a line of its own under the head
+    pub stats: Option<FlowUsage>,
 }
 
 impl Card {
-    /// Lines below the head.
+    /// Lines of rows.
     #[must_use]
     pub fn lines(&self) -> usize {
         self.rows.len().min(MAX_LINES)
+    }
+
+    /// The line, counted from the card's top, of its first row.
+    #[must_use]
+    pub fn first_row_line(&self) -> usize {
+        2 + usize::from(self.stats.is_some())
     }
 
     /// Rows that have a line of their own; the rest share the last.
@@ -108,17 +117,19 @@ impl Card {
     }
 
     /// Rows of the canvas the card takes: its title border, its head,
-    /// its lines and its bottom border.
+    /// its stats, its lines and its bottom border.
     #[must_use]
     pub fn height(&self) -> usize {
-        self.lines() + 3
+        self.first_row_line() + self.lines() + 1
     }
 
     /// The line, counted from the card's top, of row `row`, or of the
     /// head for `None`. Rows without a line of their own are on the last.
     #[must_use]
     pub fn line_of(&self, row: Option<usize>) -> usize {
-        row.map_or(1, |row| 2 + row.min(self.lines().saturating_sub(1)))
+        row.map_or(1, |row| {
+            self.first_row_line() + row.min(self.lines().saturating_sub(1))
+        })
     }
 
     /// Columns right of its block's left edge.
@@ -449,7 +460,11 @@ impl FlowLayout {
                 card,
                 fold: placed.folds() && (rect.x + 1..=rect.x + 3).contains(&x),
             },
-            line if line >= 2 && line < 2 + placed.lines() => Spot::Row(card, line - 2),
+            line if (placed.first_row_line()..placed.first_row_line() + placed.lines())
+                .contains(&line) =>
+            {
+                Spot::Row(card, line - placed.first_row_line())
+            }
             _ => Spot::Head(card),
         })
     }
@@ -493,6 +508,30 @@ struct TurnDraft {
     lane: usize,
     /// When it started, then its lane and record order
     key: (u64, usize, u64),
+}
+
+/// What the model calls of turn `draft` used together, and how long the
+/// turn has taken: from its prompt to the last of its steps. `None`
+/// before its first call is done.
+fn turn_stats(draft: &TurnDraft, nodes: &[FlowNode]) -> Option<FlowUsage> {
+    let mut total: Option<FlowUsage> = None;
+    let mut last = nodes[draft.head].at_ms;
+    for sub in &draft.subs {
+        for &node in std::iter::once(&sub.head).chain(&sub.rows) {
+            last = last.max(nodes[node].at_ms);
+        }
+        if let Some(usage) = nodes[sub.head].usage {
+            total = Some(total.map_or(usage, |total| total.plus(usage)));
+        }
+    }
+    for &node in &draft.rows {
+        last = last.max(nodes[node].at_ms);
+    }
+    let wall = last.saturating_sub(nodes[draft.head].at_ms);
+    total.map(|total| FlowUsage {
+        duration_ms: Some(total.duration_ms.unwrap_or(0).max(wall)),
+        ..total
+    })
 }
 
 /// Whether `kind` is a model call the harness made around the agent's
@@ -625,7 +664,7 @@ pub(super) fn build_layout(
         let folded = !draft.subs.is_empty() && folds.turns.contains(&nodes[draft.head].id);
         let main = cards.len();
         let block = blocks.len();
-        let card = |kind, head, rows: Vec<usize>, steps, folded| Card {
+        let card = |kind, head, rows: Vec<usize>, steps, folded, stats| Card {
             kind,
             head,
             rows,
@@ -636,6 +675,7 @@ pub(super) fn build_layout(
             top: 0,
             steps,
             folded,
+            stats,
         };
         cards.push(card(
             CardKind::Turn,
@@ -643,6 +683,7 @@ pub(super) fn build_layout(
             draft.rows.clone(),
             draft.subs.len(),
             folded,
+            turn_stats(draft, nodes),
         ));
         lane_turns[draft.lane].push(main);
         card_of[draft.head] = main;
@@ -682,7 +723,15 @@ pub(super) fn build_layout(
             } else {
                 sub.rows.clone()
             };
-            cards.push(card(sub.kind, sub.head, rows, sub.rows.len(), rows_folded));
+            let stats = nodes[sub.head].usage.filter(|_| sub.kind == CardKind::Call);
+            cards.push(card(
+                sub.kind,
+                sub.head,
+                rows,
+                sub.rows.len(),
+                rows_folded,
+                stats,
+            ));
         }
         blocks.push(Block {
             lane: draft.lane,

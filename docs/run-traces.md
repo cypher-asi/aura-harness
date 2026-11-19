@@ -29,7 +29,7 @@ AURA_HOME/
     rewards.jsonl   stored rewards (outcome, human labels, interrupts)
     summary.json    the RunScorecard, rewritten when the run ends or is relabeled
     record.jsonl    kernel record rows seen during the run (seq, tx type, time, tool_use_id,
-                    and for policy decisions the verdict and approver)
+                    and for policy decisions the verdict, approver, rule and reason)
     record/         RocksDB kernel record log (headless runs: eval, branch)
   blobs/            shared zstd-compressed blobs, addressed by the blake3 of the raw bytes
 ```
@@ -59,6 +59,8 @@ Harness decisions name a `DecisionSource`: `steering`, `compaction`, `budget`, `
 The model step is written as soon as the model finishes streaming, before its tool calls run, and each tool result is written when that call finishes rather than when the whole batch does. When a call waits for an approval, the recorder adds a `policy` step named `approval_wait` once the answer arrives. Its trigger holds the tool, the wait in milliseconds, the approver and the verdict, and its action is `block` if the call was denied or `warn` if the wait took 30 seconds or more.
 
 When a run is loaded, the steps are joined to `record.jsonl`: user prompts match by order, and tool calls and results match by `tool_use_id`. Each matched step gets `record_seqs`, so the graph view can jump from a step to its kernel record row.
+
+A `turn_end` step whose turn stopped on a failed model call carries the failure in `error`.
 
 ## Rewards
 
@@ -145,7 +147,7 @@ A task may set `category` (default `general`) and `tags`, and may keep a `checks
 ## TUI
 
 - `/graph [run id]` opens the graph of the current run, or of the given run, over the chat panel. `/runs` lists recorded runs, and `/status` shows the live scorecard.
-- The graph is a tree of runs, turns, iterations and steps, with a metadata pane for the selected node.
+- The graph is a tree of runs, turns, iterations and steps, with a metadata pane for the selected node. Every node says when it happened (`time`, to the millisecond). Model calls show their whole prompt (cached or not) and estimated cost, and turns and the run add up their calls' cost. A call that stopped on `max_tokens` is a warning, and a turn that ended on a failed call shows that call as a failed iteration. A tool call carries the kernel's `policy` decision (verdict, rule, approver, reason); a `task` call names the run of the agent it started (`child_run`), and a spawned run's root node names its parent (`spawned_by`). Fields a run has no value for show as `null`.
 
   | Key | Action |
   |-----|--------|
@@ -156,7 +158,7 @@ A task may set `category` (default `general`) and `tags`, and may keep a `checks
   | `e` | Show only issues. |
   | `+`/`=` and `-` | Label the step good or bad; stored as a `human_explicit` reward. |
   | `r` | Jump to the step's row in the KERNEL record panel. |
-  | `o` | Open the step's file. |
+  | `o` | Open the run a `task` call started (on the run node, the run that spawned it), else the step's file. |
   | `g`/`G` | First and last node. |
   | `q`/`Esc` | Close the graph. |
 

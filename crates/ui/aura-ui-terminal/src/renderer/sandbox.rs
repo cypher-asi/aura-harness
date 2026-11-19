@@ -31,6 +31,8 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
         hovered,
         title: None,
         info: None,
+        close: None,
+        expand: None,
         focused: is_focused,
         hosted,
     };

@@ -551,6 +551,9 @@ pub enum StepAction {
         output_tokens: u64,
         /// Files changed in the turn.
         files_changed: usize,
+        /// Why the last model call failed, when one did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
 }
 

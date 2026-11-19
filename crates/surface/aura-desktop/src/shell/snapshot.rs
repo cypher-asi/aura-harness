@@ -20,11 +20,11 @@ use crate::gpu::Offscreen;
 use crate::tab_bar::Hit;
 use crate::{raster, text};
 use aura_ui::events::{
-    AgentDefinitionSummary, AgentSummary, CallUsage, FlowKind, FlowLane, FlowNode, MessageData,
-    MessageRole, ModelOptionView, ProcessKind, ProcessStatus, ProcessSummary, TodoState, TodoView,
-    ToolData, TraceNodeStatus, UiCommand,
+    AgentDefinitionSummary, AgentSummary, CallUsage, FlowKind, FlowLane, FlowNode, FlowUsage,
+    MessageData, MessageRole, ModelOptionView, ProcessKind, ProcessStatus, ProcessSummary,
+    TodoState, TodoView, ToolData, TraceNodeStatus, UiCommand,
 };
-use aura_ui_terminal::{AgentsTab, ChatTab, PaneTab};
+use aura_ui_terminal::{AgentsTab, ChatTab, Pane, PaneTab};
 use winit::event::MouseButton;
 use winit::keyboard::{ModifiersState, NamedKey};
 
@@ -549,6 +549,15 @@ pub fn flow(h: &mut Stage) {
         name: name.into(),
         parent: parent.map(Into::into),
     };
+    let used = |mut node: FlowNode, input_tokens, output_tokens, cost_usd, ms| {
+        node.usage = Some(FlowUsage {
+            input_tokens,
+            output_tokens,
+            cost_usd,
+            duration_ms: Some(ms),
+        });
+        node
+    };
     let mut pending = node("a1", 9, FlowKind::Model, "qwen3-coder", "");
     pending.status = TraceNodeStatus::Pending;
     h.apply([UiCommand::FlowLoad {
@@ -560,7 +569,13 @@ pub fn flow(h: &mut Stage) {
         ],
         nodes: vec![
             node("a1", 1, FlowKind::Prompt, "Summarise the crates", ""),
-            node("a1", 2, FlowKind::Model, "qwen3-coder", "1.2k/300 · 4s"),
+            used(
+                node("a1", 2, FlowKind::Model, "qwen3-coder", "1.2k/300 · 4s"),
+                48_200,
+                300,
+                Some(0.042),
+                4_000,
+            ),
             node("a1", 3, FlowKind::Tool, "list_files crates", "12ms"),
             linked(
                 linked(
@@ -581,7 +596,13 @@ pub fn flow(h: &mut Stage) {
                 "a1:8",
             ),
             node("c1", 1, FlowKind::Prompt, "fix README", ""),
-            node("c1", 2, FlowKind::Model, "qwen3-coder", "800/120 · 2s"),
+            used(
+                node("c1", 2, FlowKind::Model, "qwen3-coder", "800/120 · 2s"),
+                800,
+                120,
+                None,
+                2_000,
+            ),
             node("c1", 3, FlowKind::Tool, "edit_file README.md", "4ms"),
             linked(node("c1", 4, FlowKind::Reply, "done", ""), "return", "a1:7"),
             node("t1", 1, FlowKind::Prompt, "cargo test", ""),
@@ -615,6 +636,21 @@ fn graph_canvas() {
     let canvas = tui.flow_canvas().expect("the canvas is on screen");
     assert_eq!(tui.flow_canvas_clip(), [canvas]);
     snapshot("graph", &mut h);
+
+    // Expanded, the graph has the whole window.
+    let expand = |h: &mut Stage| {
+        let at = h.shell.chrome.expand_box(Pane::Chat).expect("drawn");
+        let at = Point::new(at.center_x(), at.center_y());
+        h.drag(at, at);
+    };
+    expand(&mut h);
+    let tui = &h.shell.tabs.front().tui;
+    assert!(tui.chat_expanded());
+    let wide = tui.flow_canvas().expect("the canvas is on screen");
+    assert!(wide.width > canvas.width, "{wide:?} over {canvas:?}");
+    snapshot("graph-expanded", &mut h);
+    expand(&mut h);
+    assert!(!h.shell.tabs.front().tui.chat_expanded());
 
     h.shell.key_pressed(&Press::of(NamedKey::Home), h.now);
     for _ in 0..3 {

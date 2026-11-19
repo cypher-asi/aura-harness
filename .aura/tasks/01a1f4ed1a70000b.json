@@ -1,0 +1,13 @@
+{
+  "id": "01a1f4ed1a70000b",
+  "title": "In /home/n3o/code/aura-harness (Rust, ratatui UI rendered in a winit/wgpu window), add drag-and-drop of folders onto th…",
+  "state": "open",
+  "agent_id": "9216e689ae9d2bc96cbf8f4008bd840dd89bfcfcbc95c10795a34a5455583339",
+  "agent_name": "rust-engineer #3",
+  "assignee": "rust-engineer",
+  "parent": "01a1f4ec457b0006",
+  "items": [],
+  "updated_ms": 1795110541936,
+  "created_ms": 1795110541936,
+  "tool_use_id": "toolu_011oFqdSMwQgwC5XPHq88PWU"
+}

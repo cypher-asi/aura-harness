@@ -1,0 +1,14 @@
+{
+  "id": "01a1f4f453040001",
+  "title": "Repo: aura-harness (Rust workspace; follow .cursor/rules.md: no warnings, clippy -D warnings, no unwrap in prod, tests)…",
+  "state": "completed",
+  "agent_id": "f9f82a10f473f37e26017d3b6589ac30baf8fac24a7dab221be2924edb3c50f2",
+  "agent_name": "rust-engineer #4",
+  "assignee": "rust-engineer",
+  "parent": "01a1f4f4349e0000",
+  "items": [],
+  "summary": "A project_drag.rs already exists. Let me look.Mostly implemented already. Run checks.A failure: right_clicking_a_project_opens_its_menu.Desktop passes; terminal has a failure. Find it.Drag-and-drop reordering of projects was already in the working tree, uncommitted, when I started. I fixed the existing tests it broke and verified it. I wrote none of the feature code myself.",
+  "updated_ms": 1795111160117,
+  "created_ms": 1795111015172,
+  "tool_use_id": "toolu_01LwPfrVW9wDncY4hLs75wSF"
+}

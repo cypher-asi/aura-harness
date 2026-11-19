@@ -39,6 +39,12 @@ pub struct RecordRow {
     /// (`user`, `hook`); `None` when nobody was asked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approver: Option<String>,
+    /// Rule behind a policy decision (`source.rule`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
+    /// Why a policy decision was made, when it says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 impl RecordRow {
@@ -52,6 +58,11 @@ impl RecordRow {
                 .and_then(Value::as_str)
                 .map(str::to_string)
         };
+        let policy = entry.tx.tx_type == TransactionType::PolicyDecision;
+        let rule = payload.get("decided_by").and_then(|by| {
+            let part = |key: &str| by.get(key).and_then(Value::as_str).unwrap_or("");
+            (!part("rule").is_empty()).then(|| format!("{}.{}", part("source"), part("rule")))
+        });
         Self {
             seq: entry.seq,
             tx_type: serde_json::to_value(entry.tx.tx_type)
@@ -66,6 +77,8 @@ impl RecordRow {
                 .pointer("/approval/approver/kind")
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            rule: rule.filter(|_| policy),
+            reason: field("reason").filter(|_| policy),
         }
     }
 
@@ -182,6 +195,8 @@ mod tests {
             tool: None,
             verdict: None,
             approver: None,
+            rule: None,
+            reason: None,
         }
     }
 
@@ -206,6 +221,8 @@ mod tests {
             "tool_use_id": "t1",
             "tool": "edit_file",
             "verdict": "approved",
+            "reason": "asked the user",
+            "decided_by": {"source": "mode", "rule": "ask_on_write"},
             "approval": {"approver": {"kind": "user"}, "remember": "once"},
         });
         let tx = Transaction::new_chained(
@@ -217,6 +234,8 @@ mod tests {
         let r = RecordRow::from_entry(&RecordEntry::builder(8, tx).build());
         assert_eq!(r.verdict.as_deref(), Some("approved"));
         assert_eq!(r.approver.as_deref(), Some("user"));
+        assert_eq!(r.rule.as_deref(), Some("mode.ask_on_write"));
+        assert_eq!(r.reason.as_deref(), Some("asked the user"));
     }
 
     #[test]

@@ -69,6 +69,34 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The desktop window's title bars and tabs fill the selected box in gray
   instead of the accent, and it draws `⬢ ☐ ☒ ▣` itself.
 
+##### Added
+
+- The chat panel expands to fill the window: the `⤢` at the right end of
+  its header bar, `Ctrl+X` or `/expand` (`/zoom`, `/fullscreen`) hides
+  the other panels, and `⤡` or the same key brings them back. CHAT,
+  TERMINAL, GRAPH and a file or record over the chat all expand; over a
+  file or record the button sits left of its `✕`. The desktop window
+  draws it as a box of corner brackets. `PaneChrome::expand` and
+  `App::expand_pane` let other front ends draw and work it.
+
+### Context compaction
+
+##### Changed
+
+- A tool result longer than 32 KB (`aura_config::TOOL_RESULT_MAX_BYTES`)
+  enters the transcript as its first and last 16 KB around a marker
+  saying how much was cut and how to read the rest, so later requests
+  never resend the whole of a huge `search_code` or `read_file` output.
+  Events and records still carry the full result.
+  `AURA_AGENT_DISABLE_COMPACTION` turns the cap off along with the
+  rest of compaction.
+- Compaction tiers trim harder as the context fills: the 15% tier now
+  cuts older tool results to 3,000 characters and keeps the last 8
+  messages, and the 30% tier cuts to 1,500 and keeps 6 (they were the
+  other way round). `CompactionConfig::micro()` and `history()` are
+  renamed `emergency()` and `minimal()`, and `OverflowStep::MICRO` is
+  `OverflowStep::EMERGENCY`.
+
 ### Gate router (`aura-agent-gate`)
 
 Gate is now one learning router and the default model. The coordinator
@@ -232,6 +260,12 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   view has no room for the next, then on at the top of the next column;
   agents that work in turn share a band, and bands share the view's
   height. Wires never run backwards.
+- Model calls and turns have a line of their own with the tokens read
+  and written (the whole prompt, cached or not), the cost and the time;
+  a turn's adds up its calls.
+- A step opened as JSON says when it happened to the millisecond, and
+  which agent spawned its agent. A turn's prompt also shows the turn's
+  totals: steps, tokens, cost and time.
 - The calls the harness makes around a turn are subcards of their own
   kind, muted: `gate` (classifying the prompt, the first step of its
   turn), `judge` and `title`.
@@ -404,6 +438,17 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   iteration and running token count.
 - `aura runs` (list, show, diff, label, verify, branch), `aura dataset
   build` and `aura eval run/compare` with the `evals/coding` suite.
+- The `/graph` view says when each node happened, to the millisecond,
+  and what model calls, turns and the run cost. A model call's tokens
+  count its whole prompt (they double-counted cached tokens on OpenAI
+  models). A call cut off at `max_tokens` is a warning, and a turn
+  that ended on a failed call shows it as a failed iteration
+  (`turn_end` steps gain `error`). Tool calls show the kernel's policy
+  decision (verdict, rule, approver, reason), live too
+  (`RunRecorder::subscribe_records`). A `task` call names the run of
+  the agent it started and `o` opens it; `o` on a spawned run's root
+  node opens its parent. The run node lists every `meta.json` field,
+  and missing values show as `null` instead of blank.
 
 ### Surface — native desktop app (`aura-desktop`)
 

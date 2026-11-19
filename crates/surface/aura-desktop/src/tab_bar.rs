@@ -59,7 +59,7 @@ pub struct Model {
 
 /// Height of the bar at this font size, in whole pixels.
 pub fn height(metrics: &Metrics) -> f32 {
-    // The same space above the boxes as around the grid.
+    // The same space above the boxes as beside the grid.
     metrics.pad + box_height(metrics)
 }
 

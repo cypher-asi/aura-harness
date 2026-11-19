@@ -52,6 +52,42 @@ fn tool_results_are_emitted_before_context_texts() {
     ));
 }
 
+#[test]
+fn long_tool_results_keep_their_start_and_end_in_the_transcript() {
+    let result = |id: &str, content: String| ToolCallResult {
+        tool_use_id: id.to_string(),
+        content,
+        is_error: false,
+        kind: aura_core_types::ToolResultKind::Ok,
+        stop_loop: false,
+        file_changes: Vec::new(),
+        image: None,
+    };
+    let short = "s".repeat(aura_config::TOOL_RESULT_MAX_BYTES);
+    let long = format!("START{}END", "€".repeat(30_000));
+    let mut messages = Vec::new();
+
+    push_tool_result_message(
+        &mut messages,
+        vec![result("short", short.clone()), result("long", long.clone())],
+        Vec::new(),
+    );
+
+    let text = |i: usize| match &messages[0].content[i] {
+        ContentBlock::ToolResult { content, .. } => match content {
+            aura_model::ToolResultContent::Text(t) => t.clone(),
+            other => panic!("unexpected content {other:?}"),
+        },
+        other => panic!("unexpected block {other:?}"),
+    };
+    assert_eq!(text(0), short, "a result at the cap is kept whole");
+    let capped = text(1);
+    assert!(capped.starts_with("START") && capped.ends_with("END"));
+    assert!(capped.contains("cut from the middle"));
+    assert!(capped.contains(&format!("of {} bytes", long.len())));
+    assert!(capped.len() < aura_config::TOOL_RESULT_MAX_BYTES + 400);
+}
+
 /// Cached read hits now reinsert the cache content verbatim — the
 /// silent cache-result-shaping path was removed because it was
 /// rewriting `read_file` results without telling the model. This test

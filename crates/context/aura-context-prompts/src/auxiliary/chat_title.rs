@@ -16,6 +16,9 @@ no prefix like \"Title:\".";
 /// prompt and the agent's reply, already shortened by the caller.
 #[must_use]
 pub fn chat_title_user_prompt(prompt: &str, reply: &str) -> String {
+    if reply.trim().is_empty() {
+        return format!("User:\n{prompt}\n\nTitle this conversation.");
+    }
     format!("User:\n{prompt}\n\nAgent:\n{reply}\n\nTitle this conversation.")
 }
 

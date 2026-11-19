@@ -96,6 +96,9 @@ impl RunTrace {
         for step in &self.steps {
             graph.apply(step);
         }
+        for row in &self.records {
+            graph.apply_record(row);
+        }
         for reward in self.rewards() {
             graph.apply_reward(&reward);
         }
@@ -146,6 +149,7 @@ mod tests {
                 input_tokens: 0,
                 output_tokens: 0,
                 files_changed: 1,
+                error: None,
             },
         );
         end.links.files = vec!["x".into()];

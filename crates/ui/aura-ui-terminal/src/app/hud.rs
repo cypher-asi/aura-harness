@@ -279,7 +279,10 @@ mod tests {
             ..call(10, 0, 0, None)
         });
         stats.add(&call(10, 0, 0, None));
-        assert_eq!(stats.models, ["aura-claude-sonnet-4-6", "aura-claude-haiku-4-5"]);
+        assert_eq!(
+            stats.models,
+            ["aura-claude-sonnet-4-6", "aura-claude-haiku-4-5"]
+        );
 
         stats.restore(&SessionTotals {
             calls: 7,

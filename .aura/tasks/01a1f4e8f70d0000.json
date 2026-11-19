@@ -1,0 +1,11 @@
+{
+  "id": "01a1f4e8f70d0000",
+  "title": "need to be able to right click on archived agent and unarchive.",
+  "state": "completed",
+  "agent_id": "60c146cafadf43e015154501278ffc48be384eace86576afec7f837c6ba5ca59",
+  "agent_name": "reviewer #1",
+  "items": [],
+  "summary": "I can't implement this. My role is review only, and I don't modify files. I can locate the relevant code so the change can be made by someone who can edit it.The archive path already exists in the backend. I'll check whether an unarchive handler and a UI entry point are wired up.The restore backend already exists. I'll check which menu items the terminal context menu builds, since that's where th…",
+  "updated_ms": 1795110299595,
+  "created_ms": 1795110270733
+}

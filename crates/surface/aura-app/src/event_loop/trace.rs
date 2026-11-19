@@ -11,15 +11,16 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use aura_agent::{AgentError, AgentLoopEvent, AgentLoopResult};
-use aura_agent_trace::bundle::{list_run_dirs, list_runs, RunBundle};
+use aura_agent_trace::bundle::{child_runs, list_run_dirs, list_runs, RunBundle};
 use aura_agent_trace::graph::{GraphNode, NodeStatus};
 use aura_agent_trace::{
     db, report, DbSink, RecordRouter, RunGraph, RunMeta, RunRecorder, RunSource, RunTrace,
 };
-use aura_core_types::trace::{Reward, RewardKind, RewardTarget};
+use aura_core_types::trace::{Reward, RewardKind, RewardTarget, StepAction};
 use aura_core_types::{AgentId, SubagentExit};
 use aura_engine::{HostedTurn, TurnObserver};
 use aura_store_db::TraceStore;
@@ -104,6 +105,20 @@ impl Traces {
         }
         let graph = Arc::new(Mutex::new(RunGraph::new(&recorder.meta())));
         subscribe_graph(&recorder, agent, Arc::clone(&graph), self.commands.clone());
+        if let Some(parent_run) = recorder.meta().spawned_by {
+            let parent = live
+                .iter()
+                .find(|(_, run)| run.recorder.run_id() == parent_run)
+                .map(|(id, run)| (*id, Arc::clone(&run.graph)));
+            if let Some((parent_agent, parent_graph)) = parent {
+                link_to_parent(
+                    &recorder,
+                    (parent_agent, parent_run),
+                    parent_graph,
+                    self.commands.clone(),
+                );
+            }
+        }
         if let Some(router) = &self.router {
             router.attach(agent, &recorder);
         }
@@ -193,7 +208,7 @@ impl Traces {
         let Some(trace) = self.latest(agent) else {
             return;
         };
-        let nodes = full_view(&trace.graph());
+        let nodes = full_view(&self.graph_of(&trace));
         if nodes.is_empty() {
             return;
         }
@@ -251,6 +266,15 @@ impl Traces {
         }
         self.find_bundle(run_id)
             .and_then(|bundle| RunTrace::load(&bundle).map_err(|e| e.to_string()))
+    }
+
+    /// `trace`'s graph, with the runs it spawned linked to their calls.
+    fn graph_of(&self, trace: &RunTrace) -> RunGraph {
+        let mut graph = trace.graph();
+        if let Some(home) = self.home.as_deref() {
+            graph.link_child_runs(&child_runs(home, &trace.meta.run_id));
+        }
+        graph
     }
 
     fn find_bundle(&self, run_id: &str) -> Result<RunBundle, String> {
@@ -370,7 +394,6 @@ fn enum_name<T: serde::Serialize>(v: &T) -> String {
 fn meta_value(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
-        Value::Null => String::new(),
         other => other.to_string(),
     }
 }
@@ -425,27 +448,75 @@ fn subscribe_graph(
     graph: Arc<Mutex<RunGraph>>,
     commands: mpsc::Sender<UiCommand>,
 ) {
-    let run_id = recorder.run_id();
-    let agent_id = agent.to_hex();
+    let upsert = graph_sender(recorder.run_id(), agent, commands);
+    let on_step = Arc::clone(&upsert);
+    let step_graph = Arc::clone(&graph);
     recorder.subscribe(move |step| {
-        let mut g = graph.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut g = lock(&step_graph);
         let before = g.nodes.len();
         g.apply(step);
-        let nodes: Vec<TraceNode> = g
+        let ids: Vec<String> = g
             .changed_since(before, step.seq)
             .into_iter()
-            .map(|n| view(&g, n))
+            .map(|n| n.id.clone())
             .collect();
-        if !nodes.is_empty() {
-            let _ = commands.try_send(UiCommand::ForAgent {
-                agent_id: agent_id.clone(),
-                command: Box::new(UiCommand::GraphUpsert {
-                    run_id: run_id.clone(),
-                    nodes,
-                }),
-            });
+        on_step(&g, &ids);
+    });
+    recorder.subscribe_records(move |row| {
+        let mut g = lock(&graph);
+        if let Some(id) = g.apply_record(row) {
+            upsert(&g, &[id]);
         }
     });
+}
+
+/// Link `child`'s run to the call that spawned it in the parent's live
+/// `graph`, once its first prompt has given it a title.
+fn link_to_parent(
+    child: &Arc<RunRecorder>,
+    parent: (AgentId, String),
+    graph: Arc<Mutex<RunGraph>>,
+    commands: mpsc::Sender<UiCommand>,
+) {
+    let upsert = graph_sender(parent.1, parent.0, commands);
+    let child_rec = Arc::downgrade(child);
+    let linked = AtomicBool::new(false);
+    child.subscribe(move |step| {
+        if !matches!(step.action, StepAction::UserPrompt { .. }) || linked.swap(true, Relaxed) {
+            return;
+        }
+        let Some(child) = child_rec.upgrade() else {
+            return;
+        };
+        let mut g = lock(&graph);
+        let ids = g.link_child_runs(&[child.meta()]);
+        upsert(&g, &ids);
+    });
+}
+
+/// Sends the nodes of run `run_id`'s graph with the given ids to
+/// `agent`'s TRACE tab and to the graph view.
+type GraphSender = Arc<dyn Fn(&RunGraph, &[String]) + Send + Sync>;
+
+fn graph_sender(run_id: String, agent: AgentId, commands: mpsc::Sender<UiCommand>) -> GraphSender {
+    let agent_id = agent.to_hex();
+    Arc::new(move |g, ids| {
+        let nodes: Vec<TraceNode> = ids
+            .iter()
+            .filter_map(|id| g.node(id))
+            .map(|n| view(g, n))
+            .collect();
+        if nodes.is_empty() {
+            return;
+        }
+        let _ = commands.try_send(UiCommand::ForAgent {
+            agent_id: agent_id.clone(),
+            command: Box::new(UiCommand::GraphUpsert {
+                run_id: run_id.clone(),
+                nodes,
+            }),
+        });
+    })
 }
 
 /// Record how a turn ended and refresh the run's scorecard.
@@ -497,7 +568,10 @@ pub(super) async fn open_graph(state: &LoopState<'_>, id: Option<String>) {
             Some((rec, graph)) => {
                 rec.flush();
                 match RunTrace::load(rec.bundle()) {
-                    Ok(trace) => Ok((trace.meta.run_id.clone(), full_view(&trace.graph()))),
+                    Ok(trace) => Ok((
+                        trace.meta.run_id.clone(),
+                        full_view(&traces.graph_of(&trace)),
+                    )),
                     Err(_) => {
                         let g = graph.lock().unwrap_or_else(PoisonError::into_inner);
                         Ok((rec.run_id(), full_view(&g)))
@@ -506,16 +580,24 @@ pub(super) async fn open_graph(state: &LoopState<'_>, id: Option<String>) {
             }
             None => traces
                 .latest(state.active)
-                .map(|trace| (trace.meta.run_id.clone(), full_view(&trace.graph())))
+                .map(|trace| {
+                    (
+                        trace.meta.run_id.clone(),
+                        full_view(&traces.graph_of(&trace)),
+                    )
+                })
                 .ok_or_else(|| {
                     "No run recorded for this conversation yet. Send a message, \
                      or open a recorded run with /graph <id> (see /runs)."
                         .to_string()
                 }),
         },
-        Some(id) => traces
-            .load(&id)
-            .map(|trace| (trace.meta.run_id.clone(), full_view(&trace.graph()))),
+        Some(id) => traces.load(&id).map(|trace| {
+            (
+                trace.meta.run_id.clone(),
+                full_view(&traces.graph_of(&trace)),
+            )
+        }),
     };
     let command = match load {
         Ok((run_id, nodes)) => UiCommand::GraphLoad { run_id, nodes },
@@ -649,5 +731,67 @@ mod tests {
         }
         restarted.send_history(child).await;
         assert!(rx.try_recv().is_err(), "history is sent once");
+    }
+
+    #[test]
+    fn a_spawned_run_is_linked_to_the_call_in_the_parents_live_graph() {
+        use aura_core_types::trace::{
+            Actor, ModelAction, Observation, PolicyRef, Step, StepLinks, ToolCallAction, ToolIntent,
+        };
+        let home = tempfile::tempdir().unwrap();
+        let (tx, mut rx) = mpsc::channel(64);
+        let traces = Traces::new(Some(home.path().to_path_buf()), None, None, tx);
+        let (parent, child) = (AgentId::generate(), AgentId::generate());
+        traces
+            .start(parent, RunMeta::new("m", RunSource::Tui))
+            .unwrap();
+        let (_, graph) = traces.live_graph(parent).unwrap();
+        let input = serde_json::json!({"prompt": "count files"});
+        lock(&graph).apply(&Step {
+            run_id: String::new(),
+            seq: 1,
+            parent: None,
+            turn: 1,
+            iteration: Some(0),
+            at_ms: 0,
+            actor: Actor::Model,
+            observation: Observation::None,
+            action: StepAction::Model(ModelAction {
+                tool_calls: vec![ToolCallAction {
+                    tool_use_id: "t1".into(),
+                    name: "task".into(),
+                    intent: ToolIntent::classify("task", &input),
+                    input,
+                }],
+                ..ModelAction::default()
+            }),
+            policy: PolicyRef::default(),
+            links: StepLinks::default(),
+            usage: None,
+            duration_ms: None,
+        });
+        while rx.try_recv().is_ok() {}
+
+        traces.turn_started(&HostedTurn {
+            agent_id: child,
+            parent: Some(parent),
+            name: "helper",
+            model: "m",
+            prompt: "count files",
+        });
+        let child_run = traces.run_id_of(child).unwrap();
+        let call = lock(&graph).node("tc:t1").unwrap().meta["child_run"].clone();
+        assert_eq!(call, serde_json::json!(child_run));
+        let sent = std::iter::from_fn(|| rx.try_recv().ok()).any(|c| match c {
+            UiCommand::ForAgent { agent_id, command } => {
+                agent_id == parent.to_hex()
+                    && matches!(*command, UiCommand::GraphUpsert { nodes, .. }
+                        if nodes.iter().any(|n| n.id == "tc:t1"
+                            && n.meta.iter().any(|(k, v)| k == "child_run" && *v == child_run)))
+            }
+            _ => false,
+        });
+        assert!(sent, "the parent's graph view hears about the link");
+        traces.close_all();
     }
 }

@@ -304,6 +304,23 @@ mod tests {
         });
     }
 
+    #[test]
+    fn right_click_in_the_input_box_asks_for_a_paste() {
+        let mut app = App::new();
+        app.set_input_area(Rect::new(10, 20, 40, 3));
+        press(&mut app, MouseButton::Right, (12, 21));
+        assert!(app.take_paste_request());
+        press(&mut app, MouseButton::Right, (12, 5));
+        assert!(!app.take_paste_request(), "outside the box");
+    }
+
+    #[test]
+    fn super_v_asks_for_a_paste() {
+        let mut app = App::new();
+        app.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::SUPER));
+        assert!(app.take_paste_request());
+    }
+
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
     }

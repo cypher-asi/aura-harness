@@ -173,7 +173,8 @@ impl Handler {
         let attributes = Window::default_attributes()
             .with_title("AURA")
             .with_decorations(false)
-            .with_inner_size(LogicalSize::new(WINDOW.width, WINDOW.height));
+            .with_inner_size(LogicalSize::new(WINDOW.width, WINDOW.height))
+            .with_maximized(true);
         let window = event_loop
             .create_window(attributes)
             .context("opening the window")?;
@@ -377,6 +378,7 @@ impl ApplicationHandler<Wake> for Handler {
                 self.shell
                     .button(button, state.is_pressed(), Instant::now());
             }
+            WindowEvent::DroppedFile(path) => self.shell.path_dropped(&path),
             WindowEvent::MouseWheel { delta, .. } => self.shell.wheel(delta, Instant::now()),
             #[allow(clippy::cast_possible_truncation)]
             WindowEvent::PinchGesture { delta, .. } => self.shell.pinch(delta as f32),

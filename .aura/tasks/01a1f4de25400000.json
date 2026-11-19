@@ -1,0 +1,11 @@
+{
+  "id": "01a1f4de25400000",
+  "title": "should be able to not highlight text in left panel",
+  "state": "completed",
+  "agent_id": "dee0195d4d8b00ae6a7c9bad3534406520918c6cbaf9dde8bc41fb809bbad3a4",
+  "agent_name": "Agent",
+  "items": [],
+  "summary": "I'll find the left panel component and its styles.The search output was mostly noise from old session logs. The likely target is the desktop app (`crates/surface/aura-desktop`), so I'll check its layout and look for existing selection rules.The desktop app is a Rust UI with a \"left panel\" in `paint.rs`. I'll look at its source and the selection code.This is a custom Rust GPU UI where drags in the…",
+  "updated_ms": 1795109663149,
+  "created_ms": 1795109561664
+}

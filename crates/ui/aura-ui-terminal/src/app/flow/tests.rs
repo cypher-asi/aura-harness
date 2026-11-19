@@ -1,7 +1,7 @@
 use super::layout::{CardKind, WireKind, MAX_LINES};
 use super::*;
 use crate::app::file_view::FileBody;
-use crate::events::{AgentSummary, TraceNodeStatus, UiCommand};
+use crate::events::{AgentSummary, FlowUsage, TraceNodeStatus, UiCommand};
 use tokio::sync::mpsc;
 
 const LEAD: &str = "aa";
@@ -254,6 +254,90 @@ fn the_harness_calls_are_steps_of_the_turn_they_are_for() {
     app.flow_mut().ensure_layout();
     assert_eq!(heads(&app).len(), 9);
     assert_eq!(app.flow().layout().blocks.len(), 2);
+}
+
+#[test]
+fn calls_and_turns_have_a_line_of_tokens_cost_and_time() {
+    let used = |mut node: FlowNode, input_tokens, output_tokens, cost_usd, ms| {
+        node.detail = "tokens · time".into();
+        node.usage = Some(FlowUsage {
+            input_tokens,
+            output_tokens,
+            cost_usd,
+            duration_ms: Some(ms),
+        });
+        node
+    };
+    let mut app = app_with(
+        vec![lane(LEAD, "Lead", None)],
+        vec![
+            node(LEAD, 1, 1_000, FlowKind::Prompt, "go"),
+            used(
+                node(LEAD, 2, 5_000, FlowKind::Model, "sonnet"),
+                48_200,
+                516,
+                Some(0.042),
+                3_200,
+            ),
+            node(LEAD, 3, 5_100, FlowKind::Tool, "read_file a.rs"),
+            used(
+                node(LEAD, 4, 9_000, FlowKind::Model, "sonnet"),
+                50_000,
+                40,
+                None,
+                1_500,
+            ),
+            node(LEAD, 5, 9_500, FlowKind::Reply, "went"),
+        ],
+    );
+    let flow = app.flow();
+    let stats = |card: usize| flow.card_stats(card).map(|(l, r)| format!("{l} | {r}"));
+    assert_eq!(stats(1).as_deref(), Some("↑48.2k ↓516 | $0.042 · 3.2s"));
+    assert_eq!(stats(2).as_deref(), Some("↑50.0k ↓40 | 1.5s"));
+    assert_eq!(
+        stats(0).as_deref(),
+        Some("↑98.2k ↓556 | $0.042 · 8.5s"),
+        "the turn: both calls, from its prompt to its reply"
+    );
+    assert_eq!(flow.card_facts(1), "", "the title no longer says it");
+
+    // The line is under the head; the rows come after it.
+    let layout = flow.layout();
+    let call = &layout.cards[1];
+    assert_eq!((call.first_row_line(), call.height()), (3, 5));
+    let rect = layout.card_rect(1);
+    let at = |line: usize| layout.spot_at(cells(rect.x + 4), cells(rect.y + line) + 0.5);
+    assert_eq!(at(2), Some(Spot::Head(1)));
+    assert_eq!(at(3), Some(Spot::Row(1, 0)));
+
+    // A call that is not done yet has no line.
+    app.process_command(UiCommand::FlowUpsert {
+        agent_id: LEAD.into(),
+        lanes: Vec::new(),
+        nodes: vec![node(LEAD, 6, 9_600, FlowKind::Model, "sonnet")],
+    });
+    app.flow_mut().ensure_layout();
+    assert_eq!(app.flow().card_stats(3), None);
+}
+
+#[test]
+fn the_fold_button_knows_when_the_pointer_is_over_it() {
+    let mut app = app_with_flow();
+    let rect = app.flow().layout().card_rect(0);
+    let marker = (cells(rect.x + 2) + 0.5, cells(rect.y) + 0.5);
+    assert!(app.hover_flow_at(Some(marker)), "onto the button");
+    assert!(app.flow().fold_hovered(0));
+    assert!(!app.flow().fold_hovered(1));
+    assert!(
+        !app.hover_flow_at(Some((marker.0 + 1.0, marker.1))),
+        "still on it"
+    );
+    let label = (cells(rect.x + 8) + 0.5, cells(rect.y) + 0.5);
+    assert!(app.hover_flow_at(Some(label)), "off it, onto the title");
+    assert!(!app.flow().fold_hovered(0));
+    assert!(app.hover_flow_at(Some(marker)));
+    assert!(app.hover_flow_at(None), "off the canvas");
+    assert!(!app.flow().fold_hovered(0));
 }
 
 #[test]
@@ -832,6 +916,41 @@ fn enter_opens_the_node_as_json_and_closing_it_comes_back() {
     assert!(app.detail_view().is_none());
     assert_eq!(app.chat_tab(), ChatTab::Graph);
     assert_eq!(selected(&app), "aa:3");
+}
+
+#[test]
+fn an_opened_turn_shows_its_totals_and_a_spawned_agent_who_started_it() {
+    let (lanes, mut nodes) = delegation();
+    nodes[0].at_ms = 1_700_000_000_123;
+    nodes[1].usage = Some(FlowUsage {
+        input_tokens: 1200,
+        output_tokens: 300,
+        cost_usd: Some(0.01),
+        duration_ms: Some(2500),
+    });
+    let mut app = app_with(lanes, nodes);
+    let opened = |app: &mut App, id: &str| {
+        app.flow_mut().selected = Some(id.into());
+        press(app, KeyCode::Enter);
+        let Some(DetailView::File(file)) = app.detail_view() else {
+            panic!("not a file view: {:?}", app.detail_view());
+        };
+        let FileBody::Text(json) = &file.body else {
+            panic!("no text");
+        };
+        let json = json.clone();
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        json
+    };
+
+    let turn = opened(&mut app, "aa:1");
+    assert!(turn.contains("\"input_tokens\": 1200"), "{turn}");
+    assert!(turn.contains("\"duration_ms\": 2500"), "{turn}");
+    assert!(turn.contains(".123\""), "time to the millisecond: {turn}");
+    assert!(!turn.contains("spawned by"), "{turn}");
+
+    let child = opened(&mut app, "bb:1");
+    assert!(child.contains("\"spawned by\": \"Lead (aa)\""), "{child}");
 }
 
 #[test]

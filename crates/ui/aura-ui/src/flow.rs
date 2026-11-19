@@ -82,6 +82,39 @@ pub struct FlowLane {
     pub parent: Option<String>,
 }
 
+/// What a model call used, or the calls of a turn together.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct FlowUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    /// Estimated, in US dollars; `None` when no call was priced
+    pub cost_usd: Option<f64>,
+    /// How long it took
+    pub duration_ms: Option<u64>,
+}
+
+impl FlowUsage {
+    /// The tokens and cost of `self` and `other` together, and the
+    /// time of both calls one after the other.
+    #[must_use]
+    pub fn plus(self, other: Self) -> Self {
+        Self {
+            input_tokens: self.input_tokens + other.input_tokens,
+            output_tokens: self.output_tokens + other.output_tokens,
+            cost_usd: either_or_sum(self.cost_usd, other.cost_usd),
+            duration_ms: either_or_sum(self.duration_ms, other.duration_ms),
+        }
+    }
+}
+
+fn either_or_sum<T: std::ops::Add<Output = T>>(a: Option<T>, b: Option<T>) -> Option<T> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a + b),
+        (a, None) => a,
+        (None, b) => b,
+    }
+}
+
 /// One box of the flow.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct FlowNode {
@@ -94,6 +127,9 @@ pub struct FlowNode {
     pub label: String,
     /// Short facts shown beside the kind: model, tokens, duration
     pub detail: String,
+    /// What a model call used, once it is done
+    #[serde(default)]
+    pub usage: Option<FlowUsage>,
     /// Health
     pub status: TraceNodeStatus,
     /// Sequence number, in its agent's record, of the entry it comes from
@@ -119,6 +155,9 @@ impl FlowNode {
         }
         if update.status != TraceNodeStatus::Pending {
             self.status = update.status;
+        }
+        if update.usage.is_some() {
+            self.usage = update.usage;
         }
         for (key, value) in update.meta {
             match self.meta.iter_mut().find(|(k, _)| *k == key) {

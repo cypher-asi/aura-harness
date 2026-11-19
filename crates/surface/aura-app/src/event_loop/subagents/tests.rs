@@ -343,6 +343,38 @@ async fn cancelling_a_spawn_fails_its_task() {
 }
 
 #[tokio::test]
+async fn a_writer_waiting_for_the_workspace_tells_its_chat_it_is_queued() {
+    let mut fixture = slow_fixture("unused", 60_000);
+    let parent = lock(&fixture.hub.registry).active().agent_id();
+    let hub = Arc::clone(&fixture.hub);
+    for prompt in ["first edit", "second edit"] {
+        let dispatcher = Arc::clone(&fixture.dispatcher);
+        let asked = request(parent, "engineer", prompt);
+        tokio::spawn(async move { dispatcher.dispatch(asked).await });
+    }
+
+    let mut queued = false;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !queued && std::time::Instant::now() < deadline {
+        while let Ok(command) = fixture.commands.try_recv() {
+            if let UiCommand::ForAgent { command, .. } = command {
+                queued |= matches!(
+                    *command,
+                    UiCommand::ShowMessage(ref m) if m.content.starts_with("Queued:")
+                );
+            }
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(queued, "the waiting agent's chat says why it is empty");
+
+    let running: Vec<AgentId> = lock(&hub.running).keys().copied().collect();
+    for child in running {
+        hub.cancel(child);
+    }
+}
+
+#[tokio::test]
 async fn waiting_spawn_is_listed_as_a_finished_task() {
     let fixture = fixture("Looks good.");
     let parent = lock(&fixture.hub.registry).active().agent_id();

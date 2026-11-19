@@ -97,6 +97,7 @@ impl Shell {
             self.bar.point(Some(at));
             self.chrome.point(None);
             self.dirty |= hovers != (self.bar.hover(), self.chrome.hover());
+            self.dirty |= self.tabs.front_mut().tui.hover_flow_at(None);
             return;
         }
         pointer.on_bar = None;
@@ -129,6 +130,8 @@ impl Shell {
             self.chrome.point(Some(in_grid));
         }
         self.dirty |= hovers != (self.bar.hover(), self.chrome.hover());
+        let over = self.canvas_point(in_grid);
+        self.dirty |= self.tabs.front_mut().tui.hover_flow_at(over);
         let cell = self.cell_at(in_grid);
         if self.pointer.cell == Some(cell) {
             return;
@@ -142,6 +145,14 @@ impl Shell {
         if changed {
             self.settle(started);
         }
+    }
+
+    /// A file or folder was dropped on the window. The system sends no
+    /// pointer position during a drag from outside on every platform, so
+    /// a folder is taken wherever it lands.
+    pub fn path_dropped(&mut self, path: &std::path::Path) {
+        self.tabs.front_mut().tui.drop_path(path);
+        self.dirty = true;
     }
 
     /// The pointer left the window.
@@ -274,7 +285,8 @@ impl Shell {
             Some(chrome::Hit::Divider(divider)) => Some(divider),
             _ => None,
         });
-        let panning = self.pointer.canvas.is_some_and(|press| press.moved);
+        let panning = self.pointer.canvas.is_some_and(|press| press.moved)
+            || self.tabs.front().tui.project_dragging();
         if self.pointer.tab_drag.is_some() || panning {
             CursorIcon::Grabbing
         } else if let Some(edge) = self.pointer.edge {
@@ -285,7 +297,10 @@ impl Shell {
             } else {
                 CursorIcon::NsResize
             }
-        } else if matches!(hover, Some(chrome::Hit::Tab(_))) {
+        } else if matches!(
+            hover,
+            Some(chrome::Hit::Tab(_) | chrome::Hit::Close(_) | chrome::Hit::Expand(_))
+        ) {
             CursorIcon::Pointer
         } else {
             CursorIcon::Default
@@ -326,7 +341,8 @@ impl Shell {
     }
 
     /// A button went down on a panel's title bar or a divider: left picks
-    /// the tab, focuses the panel or starts dragging the divider.
+    /// the tab, closes what covers the panel, expands or restores it,
+    /// focuses the panel or starts dragging the divider.
     fn chrome_press(&mut self, hit: chrome::Hit, button: MouseButton) {
         if button != MouseButton::Left {
             return;
@@ -334,6 +350,8 @@ impl Shell {
         let tui = &mut self.tabs.front_mut().tui;
         match hit {
             chrome::Hit::Tab(tab) => tui.select_pane_tab(tab),
+            chrome::Hit::Close(pane) => tui.close_pane_view(pane),
+            chrome::Hit::Expand(pane) => tui.expand_pane(pane),
             chrome::Hit::Bar(pane) => tui.focus_pane(pane),
             chrome::Hit::Divider(divider) => self.pointer.dragging = Some(divider),
         }
@@ -396,7 +414,7 @@ impl Shell {
     fn canvas_offset(&self, at: Point) -> Option<(f32, f32)> {
         let tui = &self.tabs.front().tui;
         let area = tui.flow_canvas()?;
-        let origin = self.metrics.origin(self.grid_area(), self.cols, self.rows);
+        let origin = self.metrics.origin(self.grid_area(), self.cols);
         let cell = self.metrics.cell;
         let (x, y) = (
             (at.x - origin.x) / cell.width,
@@ -473,12 +491,14 @@ impl Shell {
             return false;
         };
         let modifiers = super::keys::modifiers(self.modifiers);
-        self.tabs.front_mut().tui.handle_mouse(MouseEvent {
+        let changed = self.tabs.front_mut().tui.handle_mouse(MouseEvent {
             kind,
             column: at.x,
             row: at.y,
             modifiers,
-        })
+        });
+        self.tabs.adopt_project_order();
+        changed
     }
 }
 
@@ -745,6 +765,153 @@ mod tests {
         assert_eq!(after.x, before.x + 10, "{before:?} → {after:?}");
     }
 
+    /// A record shown over the chat.
+    fn record_over_the_chat() -> Stage {
+        use aura_ui::events::{RecordStatus, RecordSummary};
+        use crossterm::event::{KeyCode, KeyEvent};
+
+        let mut stage = stage();
+        stage.seed(false);
+        stage.shell.commands([UiCommand::NewRecord(RecordSummary {
+            seq: 60,
+            timestamp: "06:16:19".to_string(),
+            full_hash: "355d52f6".repeat(8),
+            hash_suffix: String::new(),
+            tx_kind: "Policy".to_string(),
+            sender: "KERNEL".to_string(),
+            message: "approved".to_string(),
+            action_count: 0,
+            effect_status: "-".to_string(),
+            status: RecordStatus::Ok,
+            info: String::new(),
+            what: String::new(),
+            group: String::new(),
+            detail: String::new(),
+            error_details: String::new(),
+            tx_id: "a71e37b3".repeat(8),
+            agent_id: String::new(),
+            ts_ms: 0,
+            policy: None,
+        })]);
+        stage.draw();
+        assert!(!stage.chat().closable, "the chat's own tabs don't close");
+        let tui = &mut stage.shell.tabs.front_mut().tui;
+        tui.focus_pane(Pane::Records);
+        tui.handle_key(KeyEvent::from(KeyCode::Enter));
+        stage.draw();
+        stage
+    }
+
+    #[test]
+    fn the_close_box_closes_what_covers_the_chat() {
+        let mut stage = record_over_the_chat();
+        assert!(stage.chat().closable, "the record over the chat closes");
+
+        let close = stage
+            .shell
+            .chrome
+            .close_box(Pane::Chat)
+            .expect("the close box is drawn");
+        let close = Point::new(close.center_x(), close.center_y());
+        stage.shell.pointer_moved(Point::new(
+            close.x,
+            close.y + tab_bar::height(&stage.shell.metrics),
+        ));
+        assert_eq!(stage.shell.cursor_icon(), CursorIcon::Pointer);
+        stage.drag(close, close);
+        assert!(stage.shell.tabs.front().tui.detail_view().is_none());
+        assert!(!stage.chat().closable);
+        assert!(stage.chat().focused);
+    }
+
+    #[test]
+    fn the_expand_box_fills_the_window_with_the_chat_and_restores_it() {
+        let mut stage = stage();
+        stage.seed(false);
+        stage.draw();
+        assert_eq!(stage.chat().expand, Some(false));
+        let panes = stage.shell.tabs.front().tui.pane_chrome().len();
+        assert!(panes > 1, "the other panels are beside the chat");
+
+        let press = |stage: &mut Stage| {
+            let expand = stage
+                .shell
+                .chrome
+                .expand_box(Pane::Chat)
+                .expect("the expand box is drawn");
+            let middle = Point::new(expand.center_x(), expand.center_y());
+            stage.shell.pointer_moved(Point::new(
+                middle.x,
+                middle.y + tab_bar::height(&stage.shell.metrics),
+            ));
+            assert_eq!(stage.shell.cursor_icon(), CursorIcon::Pointer);
+            stage.drag(middle, middle);
+            stage.draw();
+        };
+        press(&mut stage);
+        let tui = &stage.shell.tabs.front().tui;
+        assert!(tui.chat_expanded());
+        assert_eq!(tui.pane_chrome().len(), 1, "only the chat is left");
+        assert_eq!(stage.chat().expand, Some(true));
+
+        press(&mut stage);
+        let tui = &stage.shell.tabs.front().tui;
+        assert!(!tui.chat_expanded());
+        assert_eq!(tui.pane_chrome().len(), panes);
+    }
+
+    #[test]
+    fn the_cross_sits_in_the_middle_of_the_close_box() {
+        let mut stage = record_over_the_chat();
+        // Odd and even boxes, thin and thick strokes.
+        for _ in 0..12 {
+            cross_is_centered(&mut stage);
+            stage.key(ModifiersState::CONTROL, Press::typing("="));
+            stage.draw();
+        }
+    }
+
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
+    fn cross_is_centered(stage: &mut Stage) {
+        let mut close = stage.shell.chrome.close_box(Pane::Chat).expect("drawn");
+        close.y += tab_bar::height(&stage.shell.metrics);
+        let pixels = stage.pixels();
+        let width = WINDOW.width as usize;
+        let at = |x: usize, y: usize| {
+            let i = (y * width + x) * 4;
+            pixels[i..i + 3].iter().map(|&c| f32::from(c)).sum::<f32>()
+        };
+        // Inside the outline, which is a few pixels thick at most.
+        let inset = 4.0;
+        let xs = (close.x + inset) as usize..(close.x + close.width - inset) as usize;
+        let ys = (close.y + inset) as usize..(close.y + close.height - inset) as usize;
+        let ground = at(xs.start, ys.start);
+        let (mut sum, mut sx, mut sy) = (0.0, 0.0, 0.0);
+        for y in ys.clone() {
+            for x in xs.clone() {
+                let ink = (at(x, y) - ground).abs();
+                sum += ink;
+                sx += ink * (x as f32 + 0.5);
+                sy += ink * (y as f32 + 0.5);
+            }
+        }
+        assert!(sum > 0.0, "the cross is drawn");
+        let (cx, cy) = (sx / sum, sy / sum);
+        let size = stage.shell.font_size;
+        assert!(
+            (cx - close.center_x()).abs() < 0.25,
+            "{cx} in {close:?} at {size}"
+        );
+        assert!(
+            (cy - close.center_y()).abs() < 0.25,
+            "{cy} in {close:?} at {size}"
+        );
+    }
+
     #[test]
     fn the_wheel_scrolls_the_chat_by_pixels() {
         let mut stage = stage();
@@ -868,11 +1035,10 @@ mod tests {
 
         // Canvas cell (x, y) on the grid's part of the window.
         let area = stage.shell.tabs.front().tui.flow_canvas().expect("drawn");
-        let origin =
-            stage
-                .shell
-                .metrics
-                .origin(stage.shell.grid_area(), stage.shell.cols, stage.shell.rows);
+        let origin = stage
+            .shell
+            .metrics
+            .origin(stage.shell.grid_area(), stage.shell.cols);
         let cell = stage.shell.metrics.cell;
         let at = |x: f32, y: f32| {
             Point::new(
@@ -950,11 +1116,10 @@ mod tests {
         stage.draw();
 
         let area = stage.shell.tabs.front().tui.flow_canvas().expect("drawn");
-        let origin =
-            stage
-                .shell
-                .metrics
-                .origin(stage.shell.grid_area(), stage.shell.cols, stage.shell.rows);
+        let origin = stage
+            .shell
+            .metrics
+            .origin(stage.shell.grid_area(), stage.shell.cols);
         let cell = stage.shell.metrics.cell;
         let bar = tab_bar::height(&stage.shell.metrics);
         let pointer = Point::new(
@@ -1018,18 +1183,17 @@ mod tests {
         let text = stage.shell.text();
         let row = text
             .lines()
-            .position(|line| line.contains("agent01"))
+            .position(|line| line.contains("AGENT01"))
             .expect("the project is listed");
         let line = text.lines().nth(row).unwrap_or_default();
         let col = line
-            .find("agent01")
+            .find("AGENT01")
             .map_or(0, |at| line[..at].chars().count());
         let cell = stage.shell.metrics.cell;
-        let origin =
-            stage
-                .shell
-                .metrics
-                .origin(stage.shell.grid_area(), stage.shell.cols, stage.shell.rows);
+        let origin = stage
+            .shell
+            .metrics
+            .origin(stage.shell.grid_area(), stage.shell.cols);
         let bar = tab_bar::height(&stage.shell.metrics);
         stage.shell.pointer_moved(Point::new(
             origin.x + (col as f32 + 0.5) * cell.width,
@@ -1065,11 +1229,10 @@ mod tests {
             .find("a reply")
             .map_or(0, |at| line[..at].chars().count());
         let cell = stage.shell.metrics.cell;
-        let origin =
-            stage
-                .shell
-                .metrics
-                .origin(stage.shell.grid_area(), stage.shell.cols, stage.shell.rows);
+        let origin = stage
+            .shell
+            .metrics
+            .origin(stage.shell.grid_area(), stage.shell.cols);
         #[allow(clippy::cast_precision_loss)]
         let at = |col: usize| {
             Point::new(

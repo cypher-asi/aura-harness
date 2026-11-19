@@ -7,7 +7,7 @@
 //!   └─┬──────────────────────────────┘
 //!     │ ┌ ▾ ✓ model ── 1.2k/300 · 4s ┐
 //!     ├─┤ sonnet                     │
-//!     │ │ ✓ task coder · write… 4.2s ●────┐
+//!     │ │ ✓ task coder · write… 4.2s ├────┐
 //!     │ └────────────────────────────┘    │ coder #1
 //!     │ ┌ ● model ───────────────────┐    │ ┌ ✓ turn ────────────── coder #1 ┐
 //!     └─┤ sonnet                     │    └─┤ write greet()                  │
@@ -250,7 +250,7 @@ impl Canvas<'_> {
                 continue;
             }
             let (x, y) = self.layout.port_out(wire.from, wire.row);
-            self.put(x, y, "●", style);
+            self.join(x, y, RIGHT, style);
             let (x, y) = self.layout.port_in(wire.to);
             self.join(x, y, LEFT, style);
         }
@@ -420,10 +420,18 @@ impl Canvas<'_> {
         };
         self.line_fill(card, 1, head);
         self.text(x + 2, y + 1, &node.label, w - 4, head);
+        if let Some((tokens, spent)) = self.flow.card_stats(card) {
+            let style = Style::default().fg(self.theme.colors.secondary);
+            let spent = truncate_record_info(&spent, w - 4);
+            let spent_width = display_width(&spent);
+            self.text(x + w - 2 - spent_width, y + 2, &spent, spent_width, style);
+            let room = (w - 4).saturating_sub(spent_width + 1);
+            self.text(x + 2, y + 2, &tokens, room, style);
+        }
 
         let shown = placed.shown_rows();
         for row in 0..placed.lines() {
-            let line = 2 + row;
+            let line = placed.first_row_line() + row;
             if row == shown {
                 // The last line of a card with more rows than lines.
                 match self.flow.last_line_row(card) {
@@ -758,7 +766,7 @@ mod tests {
             "│    │ ┌ ▾ ✓ model ── 1.2k/300 · 4s ┐                                              │",
             "│    ├─┤ sonnet                     │                                              │",
             "│    │ │ ✓ read_file src/lib.… 12ms │                                              │",
-            "│    │ │ ✓ task coder · write… 4.2s ●────┐                                         │",
+            "│    │ │ ✓ task coder · write… 4.2s ├────┐                                         │",
             "│    │ └────────────────────────────┘    │                                         │",
             "│    │                                   │                                         │",
             "│    │ ┌ ● model ───────────────────┐    │                                         │",
@@ -813,7 +821,7 @@ mod tests {
         );
         assert!(!rows.contains("sonnet"), "{rows}");
         assert!(
-            rows.contains("add a greeting                 ●────┐"),
+            rows.contains("add a greeting                 ├────┐"),
             "the spawn comes from the main card\n{rows}"
         );
         assert!(rows.contains("└─┤ write greet()"), "{rows}");
@@ -830,7 +838,7 @@ mod tests {
         assert!(rows.contains("┌ ▸ ✓ model ─ +2 tools · "), "{rows}");
         assert!(!rows.contains("read_file"), "{rows}");
         assert!(
-            rows.contains("├─┤ sonnet                     ●────┐"),
+            rows.contains("├─┤ sonnet                     ├────┐"),
             "the spawn comes from the model call\n{rows}"
         );
         press(&mut app, KeyCode::Char(' '));

@@ -172,11 +172,7 @@ impl Shell {
             }
             return true;
         }
-        let chord = if cfg!(target_os = "macos") {
-            m.super_key()
-        } else {
-            m.control_key()
-        };
+        let chord = m.super_key() || (!cfg!(target_os = "macos") && m.control_key());
         // Tabs by number, as window managers switch workspaces. Option
         // types symbols on macOS, so Alt is for the other systems.
         if chord || (m.alt_key() && !cfg!(target_os = "macos")) {
@@ -194,7 +190,7 @@ impl Shell {
         }
         // Ctrl+C, Ctrl+V, Ctrl+T and Ctrl+W on their own belong to the
         // UI, as in a terminal; the window takes them with Shift.
-        let shifted = m.shift_key() || cfg!(target_os = "macos");
+        let shifted = m.shift_key() || m.super_key() || cfg!(target_os = "macos");
         let size = self.font_size;
         let zoom = |size: f32| size.clamp(theme::MIN_FONT_SIZE, theme::MAX_FONT_SIZE);
         let new_size = match press.key.as_ref() {

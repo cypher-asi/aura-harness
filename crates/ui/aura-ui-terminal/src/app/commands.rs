@@ -70,6 +70,7 @@ impl App {
                     self.focus = PanelFocus::Chat;
                 }
             }
+            "expand" | "zoom" | "fullscreen" => self.toggle_chat_expanded(),
             "agent" | "a" => self.handle_agent_command(arg),
             "name" => {
                 if arg.is_empty() {

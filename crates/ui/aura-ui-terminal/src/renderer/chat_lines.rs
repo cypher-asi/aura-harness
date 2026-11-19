@@ -228,7 +228,18 @@ impl ChatLineCache {
                     }));
                     lines.extend(more);
                 }
-                lines.extend(reply_footer(&place.footer, width, theme));
+                if let Some(footer) = reply_footer(&place.footer, width, theme) {
+                    // Separate the closing meta line from the reply body (or the
+                    // activity lines above it) with a blank row so it reads as a
+                    // distinct footer rather than another content line.
+                    let separated = lines
+                        .last()
+                        .is_none_or(|line| line.spans.iter().all(|s| s.content.trim().is_empty()));
+                    if !separated {
+                        lines.push(Line::from(""));
+                    }
+                    lines.push(footer);
+                }
                 self.entries.insert(
                     key,
                     BlockLines {

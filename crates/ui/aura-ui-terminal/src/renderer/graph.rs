@@ -18,7 +18,7 @@ use ratatui::{
 };
 
 const HINT: &str =
-    "↑↓ move  ⏎/click open  Space/←→ fold  Tab link  e issues  +/- label  r record  o file  Esc close";
+    "↑↓ move  ⏎/click open  Space/←→ fold  Tab link  e issues  +/- label  r record  o run/file  Esc close";
 
 pub(super) const fn status_glyph(status: TraceNodeStatus, theme: &Theme) -> (&'static str, Color) {
     match status {

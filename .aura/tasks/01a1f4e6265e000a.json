@@ -1,0 +1,13 @@
+{
+  "id": "01a1f4e6265e000a",
+  "title": "Implement the plan in /home/n3o/code/aura-harness/.aura/plans/instant-agent-switching_290830b2.plan.md (read it first; …",
+  "state": "open",
+  "agent_id": "dcfd14a5c7e7781a0a67e1c1d3b56d4b422ab70abbdd6c507e6069fb3b5e0e82",
+  "agent_name": "rust-engineer #1",
+  "assignee": "rust-engineer",
+  "parent": "01a1f4e60a1c0009",
+  "items": [],
+  "updated_ms": 1795110086238,
+  "created_ms": 1795110086238,
+  "tool_use_id": "toolu_01FULkV4QAaBbcmsANo6r59K"
+}

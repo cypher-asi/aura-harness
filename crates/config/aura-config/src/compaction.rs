@@ -21,6 +21,12 @@ pub const COMPACTION_TIER_30: f64 = 0.30;
 /// Micro-compaction tier (15% utilization).
 pub const COMPACTION_TIER_MICRO: f64 = 0.15;
 
+/// Longest tool result, in bytes, the agent loop keeps in the transcript.
+/// Longer results keep their start and end, so every later request
+/// resends at most this much of them. Disabled with the rest of
+/// compaction by `AURA_AGENT_DISABLE_COMPACTION`.
+pub const TOOL_RESULT_MAX_BYTES: usize = 32 * 1024;
+
 // ---------------------------------------------------------------------------
 // Config struct
 // ---------------------------------------------------------------------------

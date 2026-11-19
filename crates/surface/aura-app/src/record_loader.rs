@@ -911,10 +911,14 @@ fn reasoning_columns(payload: &Value) -> RecordColumns {
     RecordColumns::new(stop, family, detail.join(" · "))
 }
 
-/// The error of a failed model call; `None` when the call succeeded.
+/// The error of a failed model call; `None` when the call succeeded. A
+/// stream that broke says `status: failed`; a call that got no answer at
+/// all (an error or timeout before any stream) says `stop_reason: Error`,
+/// which no answer has.
 pub(crate) fn reasoning_error(payload: &Value) -> Option<&str> {
-    (payload.get("status").and_then(Value::as_str) == Some("failed"))
-        .then(|| payload.get("error").and_then(Value::as_str).unwrap_or(""))
+    let text = |key: &str| payload.get(key).and_then(Value::as_str);
+    (text("status") == Some("failed") || text("stop_reason") == Some("Error"))
+        .then(|| text("error").unwrap_or(""))
 }
 
 /// Short class of a model call error, at most 7 characters.
@@ -1053,7 +1057,7 @@ pub(crate) fn summarize_tool_call(tool: &str, args: &Value) -> String {
 
 /// What a tool call acts on: the command line for `run_command`, else
 /// its primary argument.
-fn tool_target(tool: &str, args: &Value) -> String {
+pub(crate) fn tool_target(tool: &str, args: &Value) -> String {
     if tool == "run_command" {
         extract_cmd_run_command(args)
     } else {
@@ -1343,7 +1347,7 @@ fn one_decimal(n: u64, unit: u64) -> String {
     format!("{}.{}", tenths / 10, tenths % 10)
 }
 
-fn format_tokens(n: u64) -> String {
+pub(crate) fn format_tokens(n: u64) -> String {
     if n < 1000 {
         n.to_string()
     } else {

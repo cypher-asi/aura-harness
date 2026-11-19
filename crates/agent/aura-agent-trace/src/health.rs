@@ -343,6 +343,8 @@ mod tests {
             tool: Some("edit_file".into()),
             verdict: None,
             approver: None,
+            rule: None,
+            reason: None,
         }
     }
 

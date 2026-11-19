@@ -1,0 +1,14 @@
+{
+  "id": "01a1f4e33edf0007",
+  "title": "In the Rust workspace at /home/n3o/code/aura-harness, trace the full end-to-end path of switching the active agent in t…",
+  "state": "completed",
+  "agent_id": "c7e16a4db636a0ce9585f04ded0776eb4a94f5deda3d34292866d155b13414aa",
+  "agent_name": "explorer #6",
+  "assignee": "explorer",
+  "parent": "01a1f4e2d9520006",
+  "items": [],
+  "summary": "Line numbers in mod.rs differ; search it.Nothing was run or modified. All of this comes from reading the code. The main finding is that the terminal UI already keeps a per-agent chat cache, but the backend's `Chat::Reload` path then overwrites it on every switch to an idle agent.",
+  "updated_ms": 1795109979038,
+  "created_ms": 1795109895903,
+  "tool_use_id": "toolu_011iEA85BAsMbdXhptcAA746"
+}

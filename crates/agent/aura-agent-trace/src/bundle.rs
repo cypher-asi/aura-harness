@@ -378,6 +378,19 @@ pub fn list_runs(home: &Path) -> Vec<(RunMeta, Option<RunScorecard>)> {
         .collect()
 }
 
+/// Metadata of the runs spawned by run `run_id`, oldest first. Run ids
+/// sort by start time, so only later runs are read.
+#[must_use]
+pub fn child_runs(home: &Path, run_id: &str) -> Vec<RunMeta> {
+    let started = run_id.split('-').next().unwrap_or(run_id);
+    list_run_dirs(home)
+        .into_iter()
+        .filter(|dir| dir.file_name().is_some_and(|name| *name >= *started))
+        .filter_map(|dir| RunBundle::at(dir).read_meta().ok())
+        .filter(|meta| meta.spawned_by.as_deref() == Some(run_id))
+        .collect()
+}
+
 pub(crate) fn read_jsonl<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Vec<T>, TraceError> {
     let file = match File::open(path) {
         Ok(f) => f,

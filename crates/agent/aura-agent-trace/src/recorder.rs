@@ -372,6 +372,7 @@ impl StepBuilder {
                 input_tokens: result.total_input_tokens,
                 output_tokens: result.total_output_tokens,
                 files_changed: result.file_changes.len(),
+                error: result.llm_error.clone(),
             },
             at_ms,
         );
@@ -481,6 +482,7 @@ enum WriteOp {
 }
 
 type Listener = Box<dyn Fn(&Step) + Send + Sync>;
+type RecordListener = Box<dyn Fn(&RecordRow) + Send + Sync>;
 
 /// A second home for everything a [`RunRecorder`] writes to its bundle,
 /// such as the agent-state database. Calls come from the recorder's
@@ -510,6 +512,7 @@ pub struct RunRecorder {
     tx: Mutex<Option<SyncSender<WriteOp>>>,
     writer: Mutex<Option<JoinHandle<()>>>,
     listeners: Mutex<Vec<Listener>>,
+    record_listeners: Mutex<Vec<RecordListener>>,
     sinks: Sinks,
     dropped: AtomicU64,
 }
@@ -565,6 +568,7 @@ impl RunRecorder {
             tx: Mutex::new(Some(tx)),
             writer: Mutex::new(Some(writer)),
             listeners: Mutex::new(Vec::new()),
+            record_listeners: Mutex::new(Vec::new()),
             sinks,
             dropped: AtomicU64::new(0),
         })))
@@ -670,6 +674,12 @@ impl RunRecorder {
         lock(&self.listeners).push(Box::new(f));
     }
 
+    /// Call `f` with every kernel record row joined to the run (for live
+    /// views).
+    pub fn subscribe_records(&self, f: impl Fn(&RecordRow) + Send + Sync + 'static) {
+        lock(&self.record_listeners).push(Box::new(f));
+    }
+
     /// Update metadata (title, mode, task id) after start.
     pub fn update_meta(&self, f: impl FnOnce(&mut RunMeta)) {
         {
@@ -759,6 +769,9 @@ impl RunRecorder {
             for sink in sinks.iter() {
                 sink.records(&run_id, std::slice::from_ref(row));
             }
+        }
+        for listener in lock(&self.record_listeners).iter() {
+            listener(row);
         }
         let step = lock(&self.builder).on_record(row);
         if let Some(step) = step {
@@ -978,6 +991,8 @@ mod tests {
             tool: Some("edit_file".into()),
             verdict: None,
             approver: None,
+            rule: None,
+            reason: None,
         };
         let mut b = StepBuilder::new("r", &HarnessParams::default(), None);
         b.user_prompt("x", 0);

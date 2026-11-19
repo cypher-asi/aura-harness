@@ -349,12 +349,21 @@ impl Tabs {
     /// agent the tab shows rather than on the session's.
     fn agents_of(&self, tab: &Tab) -> Vec<AgentSummary> {
         let mut out = Vec::new();
-        let mut held = false;
-        for agent in &self.agents {
-            if agent.heads_project() {
-                held = tab.projects.contains(&agent.id);
-            }
-            if held {
+        // In the tab's order of projects, which a drag in the list changes.
+        for root in &tab.projects {
+            let Some(start) = self
+                .agents
+                .iter()
+                .position(|agent| agent.heads_project() && agent.id == *root)
+            else {
+                continue;
+            };
+            let group = self.agents[start..]
+                .iter()
+                .enumerate()
+                .take_while(|(offset, agent)| *offset == 0 || !agent.heads_project())
+                .map(|(_, agent)| agent);
+            for agent in group {
                 let mut agent = agent.clone();
                 if !tab.agent().is_empty() {
                     agent.is_active = agent.id == tab.agent();
@@ -363,6 +372,19 @@ impl Tabs {
             }
         }
         out
+    }
+
+    /// Take the order of projects the front tab's list now has, after the
+    /// pointer dragged one, so it is kept when the session lists its
+    /// agents again and written with the tabs.
+    pub fn adopt_project_order(&mut self) {
+        let tab = &mut self.tabs[self.front];
+        let order = tab.tui.project_order();
+        let same_projects =
+            order.len() == tab.projects.len() && order.iter().all(|id| tab.projects.contains(id));
+        if same_projects {
+            tab.projects = order;
+        }
     }
 
     fn send_agents(&mut self) {
@@ -917,6 +939,42 @@ mod tests {
 
         tabs.move_tab(0, 5);
         assert_eq!(tabs.arrangement(), [vec!["a1", "p2"], vec!["a3"]]);
+    }
+
+    #[test]
+    fn a_dragged_order_of_projects_is_kept_listed_and_saved() {
+        let (mut tabs, _events) = tabs();
+        start(&mut tabs, TWO, "a1");
+        assert_eq!(held(&tabs), [["a1", "a1.1", "p2", "a3"]]);
+
+        // The front tab's list was reordered by a drag.
+        tabs.tabs[0]
+            .tui
+            .process_command(list(&[("p2", 0), ("a1", 0), ("a1.1", 1), ("a3", 0)], "a1"));
+        tabs.adopt_project_order();
+        assert_eq!(tabs.arrangement(), [["p2", "a1", "a3"]]);
+
+        // The session lists its agents in its own order again.
+        tabs.apply(list(TWO, "a1"));
+        assert_eq!(held(&tabs), [["p2", "a1", "a1.1", "a3"]]);
+
+        // A new project goes last; the order survives the file.
+        let more: Agents = &[("a1", 0), ("a1.1", 1), ("p2", 0), ("a3", 0), ("p4", 0)];
+        tabs.apply(list(more, "a1"));
+        assert_eq!(held(&tabs), [["p2", "a1", "a1.1", "a3", "p4"]]);
+        let path = std::env::temp_dir().join(format!("aura_order_{}", std::process::id()));
+        save_arrangement(&path, &tabs.arrangement()).expect("temp dir is writable");
+        let saved = load_arrangement(&path);
+        std::fs::remove_file(&path).expect("just written");
+
+        let restore: Vec<Vec<&str>> = saved
+            .iter()
+            .map(|tab| tab.iter().map(String::as_str).collect())
+            .collect();
+        let restore: Vec<&[&str]> = restore.iter().map(Vec::as_slice).collect();
+        let (mut tabs, _events) = tabs_with(&restore);
+        start(&mut tabs, more, "a1");
+        assert_eq!(held(&tabs), [["p2", "a1", "a1.1", "a3", "p4"]]);
     }
 
     #[test]

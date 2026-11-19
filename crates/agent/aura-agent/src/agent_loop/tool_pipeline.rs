@@ -36,7 +36,7 @@ use crate::dup_audit;
 use crate::events::AgentLoopEvent;
 use crate::helpers;
 use crate::types::{AgentToolExecutor, BuildBaseline, ToolCallInfo, ToolCallResult};
-use aura_config::{TOOL_ERROR_PREVIEW_LIMIT, WRITE_FILE_CHUNK_BYTES};
+use aura_config::{TOOL_ERROR_PREVIEW_LIMIT, TOOL_RESULT_MAX_BYTES, WRITE_FILE_CHUNK_BYTES};
 use aura_model::{ContentBlock, Message, ModelResponse, Role, ToolResultContent};
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
@@ -643,7 +643,7 @@ pub(super) fn push_tool_result_message(
         }
         blocks.push(ContentBlock::tool_result(
             &r.tool_use_id,
-            ToolResultContent::text(r.content),
+            ToolResultContent::text(cap_tool_result(r.content)),
             r.is_error,
         ));
     }
@@ -657,6 +657,32 @@ pub(super) fn push_tool_result_message(
         messages.push(Message::new(Role::User, blocks));
         dup_audit::audit_tool_result_duplicates(messages, "push_tool_result.post");
     }
+}
+
+/// `content` cut to [`TOOL_RESULT_MAX_BYTES`], keeping its start and end
+/// around a marker that says how much is missing.
+fn cap_tool_result(content: String) -> String {
+    if content.len() <= TOOL_RESULT_MAX_BYTES || aura_config::agent().compaction.disabled {
+        return content;
+    }
+    let mut head = TOOL_RESULT_MAX_BYTES / 2;
+    while !content.is_char_boundary(head) {
+        head -= 1;
+    }
+    let mut tail = content.len() - TOOL_RESULT_MAX_BYTES / 2;
+    while !content.is_char_boundary(tail) {
+        tail += 1;
+    }
+    format!(
+        "{}\n\n[... {} of {} bytes cut from the middle: tool results over {} KB keep only \
+         their start and end. Ask for a narrower slice, such as read_file with \
+         start_line/end_line or a more specific search, to see the rest ...]\n\n{}",
+        &content[..head],
+        tail - head,
+        content.len(),
+        TOOL_RESULT_MAX_BYTES / 1024,
+        &content[tail..],
+    )
 }
 
 /// Unified stop-reason dispatch.

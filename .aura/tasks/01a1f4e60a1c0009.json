@@ -1,0 +1,35 @@
+{
+  "id": "01a1f4e60a1c0009",
+  "title": "impl",
+  "state": "cancelled",
+  "agent_id": "ec3b85ef07ffec61e12f3e55fa4141f3cdf15ca44b3299b871b188516c80364a",
+  "agent_name": "Agent 7",
+  "items": [
+    {
+      "content": "UI optimistic switch + loaded flag",
+      "state": "pending"
+    },
+    {
+      "content": "SetRecords command",
+      "state": "pending"
+    },
+    {
+      "content": "Backend single scan in spawn_blocking",
+      "state": "pending"
+    },
+    {
+      "content": "Registry save/sandbox dir/rollback",
+      "state": "pending"
+    },
+    {
+      "content": "Prune + LRU eviction",
+      "state": "pending"
+    },
+    {
+      "content": "Tests, fmt, clippy",
+      "state": "pending"
+    }
+  ],
+  "updated_ms": 1795110153954,
+  "created_ms": 1795110079004
+}

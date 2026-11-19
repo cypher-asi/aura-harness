@@ -29,6 +29,21 @@ const HOSTED_HEIGHT: u16 = 2;
 /// Shortest panel given a framed bar; shorter ones get its middle row.
 const FRAMED_MIN_PANEL_HEIGHT: u16 = 6;
 
+/// Narrowest bar with room for a close button.
+const CLOSE_MIN_WIDTH: u16 = 8;
+
+/// Narrowest bar with room for an expand button, beside tabs or a close
+/// button.
+const EXPAND_MIN_WIDTH: u16 = 20;
+
+/// Columns an expand button takes from a tabbed bar: its cell and the
+/// divider before it.
+const EXPAND_COLUMNS: u16 = 4;
+
+/// The expand button's glyph, and the one that restores the panel.
+const EXPAND_GLYPH: &str = "⤢";
+const RESTORE_GLYPH: &str = "⤡";
+
 /// Split a panel's area into its header bar and the body below it.
 /// `hosted` bars are the front end's to draw.
 pub(super) fn split(area: Rect, hosted: bool) -> (Rect, Rect) {
@@ -44,6 +59,63 @@ pub(super) fn split(area: Rect, hosted: bool) -> (Rect, Rect) {
         ..area
     };
     (bar, body)
+}
+
+/// The cells of `bar`'s close button: `✕` with a space on each side,
+/// against the right border on the row with the labels.
+pub(super) fn close_cell(bar: Rect) -> Option<Rect> {
+    if bar.width < CLOSE_MIN_WIDTH || bar.height == 0 {
+        return None;
+    }
+    Some(Rect::new(bar.right() - 4, label_row(bar), 3, 1))
+}
+
+/// The cells of `bar`'s expand button. Beside a close button it is the
+/// glyph and the space before it, left of the `✕`; otherwise a cell of
+/// its own against the right border, after the tabs' last divider.
+///
+/// ```text
+/// │ src/main.rs     100 LINES ⤢ ✕ │
+/// │  CHAT  │ TERMINAL │ GRAPH │ ⤢ │
+/// ```
+pub(super) fn expand_cell(bar: Rect, beside_close: bool) -> Option<Rect> {
+    if bar.width < EXPAND_MIN_WIDTH || bar.height == 0 {
+        return None;
+    }
+    let row = label_row(bar);
+    Some(if beside_close {
+        Rect::new(bar.right() - 6, row, 2, 1)
+    } else {
+        Rect::new(bar.right() - 4, row, 3, 1)
+    })
+}
+
+/// The width a tabbed bar leaves its tabs when it ends in an expand
+/// button: the tab layout for this width puts the last divider before
+/// the button's cell.
+pub(super) fn tabs_beside_expand(bar: Rect) -> u16 {
+    if expand_cell(bar, false).is_some() {
+        bar.width - EXPAND_COLUMNS
+    } else {
+        bar.width
+    }
+}
+
+/// The row of `bar` its labels are drawn on.
+const fn label_row(bar: Rect) -> u16 {
+    if bar.height >= FRAMED_HEIGHT {
+        bar.y + 1
+    } else {
+        bar.y
+    }
+}
+
+/// A bar's expand button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ExpandButton {
+    /// Whether the panel fills the screen, so the button restores it
+    pub expanded: bool,
+    pub hovered: bool,
 }
 
 /// Text for a header's info cell. `short` stands in when `text` does not
@@ -73,6 +145,12 @@ pub(super) struct PanelHeader<'a, T> {
     /// Drawn on the left of the info cell, for panels without tabs
     pub title: Option<&'a str>,
     pub info: Option<HeaderInfo>,
+    /// A close button at the right end, `Some(true)` while the pointer is
+    /// over it
+    pub close: Option<bool>,
+    /// An expand button at the right end, left of any close button. A
+    /// tabbed bar lays out its tabs in [`tabs_beside_expand`] columns.
+    pub expand: Option<ExpandButton>,
     pub focused: bool,
     /// Whether the front end draws the bar: the grid keeps only its frame
     pub hosted: bool,
@@ -125,6 +203,8 @@ impl<T: HostTab> PanelHeader<'_, T> {
             info: self.info.as_ref().map(|info| info.text.clone()),
             info_short: self.info.as_ref().map(|info| info.short.clone()),
             info_color: self.info.as_ref().map_or(Color::Reset, |info| info.color),
+            closable: self.close.is_some(),
+            expand: self.expand.map(|button| button.expanded),
             focused: self.focused,
         }
     }
@@ -215,9 +295,35 @@ pub(super) fn render_panel_header<T: Copy + PartialEq>(
         draw_centered(buf, area, cell.label, style);
     }
 
+    let close = header.close.zip(close_cell(bar));
+    let expand = header.expand.zip(expand_cell(bar, close.is_some()));
     if let Some((start, width)) = header.layout.info {
-        let area = Rect::new(bar.x + start, middle, width.min(last - start), 1);
+        let buttons = u16::from(close.is_some()) + u16::from(expand.is_some());
+        let width = width.min(last - start).saturating_sub(2 * buttons);
+        let area = Rect::new(bar.x + start, middle, width, 1);
         draw_info(buf, area, header, theme);
+    }
+    let button_style = |hovered| {
+        if hovered {
+            Style::default()
+                .bg(colors.surface_hover)
+                .fg(colors.foreground)
+        } else {
+            Style::default().fg(colors.muted)
+        }
+    };
+    if let Some((hovered, cell)) = close {
+        draw_centered(buf, cell, "✕", button_style(hovered));
+    }
+    if let Some((button, cell)) = expand {
+        let style = button_style(button.hovered);
+        let glyph = if button.expanded {
+            RESTORE_GLYPH
+        } else {
+            EXPAND_GLYPH
+        };
+        buf.set_style(cell, style);
+        buf.set_string(cell.x + 1, cell.y, glyph, style);
     }
 }
 
@@ -325,6 +431,8 @@ mod tests {
             hovered,
             title: None,
             info: None,
+            close: None,
+            expand: None,
             focused,
             hosted: false,
         }
@@ -391,6 +499,8 @@ mod tests {
             hovered: None,
             title: None,
             info: None,
+            close: None,
+            expand: None,
             focused: true,
             hosted: true,
         };
@@ -413,10 +523,21 @@ mod tests {
             hovered: None,
             title: Some("KERNEL"),
             info: Some(HeaderInfo::count(128, "RECORDS", Color::Gray)),
+            close: None,
+            expand: None,
             focused: false,
             hosted: true,
         };
         let chrome = titled.chrome(Pane::Records, area, bar);
+        assert!(!chrome.closable);
+        assert!(
+            PanelHeader {
+                close: Some(false),
+                ..titled
+            }
+            .chrome(Pane::Chat, area, bar)
+            .closable
+        );
         assert!(chrome.tabs.is_empty());
         assert_eq!(chrome.title.as_deref(), Some("KERNEL"));
         assert_eq!(chrome.info.as_deref(), Some("128 RECORDS"));
@@ -432,6 +553,8 @@ mod tests {
             hovered: None,
             title: Some("KERNEL"),
             info: Some(HeaderInfo::count(128, "RECORDS", Color::Gray)),
+            close: None,
+            expand: None,
             focused: false,
             hosted: false,
         };
@@ -443,5 +566,79 @@ mod tests {
         assert_eq!(row(&narrow, 1), "│ KERNEL   128 │");
         let tiny = draw(10, 10, &header(10));
         assert_eq!(row(&tiny, 1), "│ KERNEL │");
+    }
+
+    #[test]
+    fn closable_bars_end_in_a_close_button_lit_under_the_pointer() {
+        let header = |hovered| PanelHeader::<()> {
+            layout: TabLayout::untabbed(30),
+            active: None,
+            hovered: None,
+            title: Some("RECORD #60"),
+            info: Some(HeaderInfo::count(128, "LINES", Color::Gray)),
+            close: Some(hovered),
+            expand: None,
+            focused: true,
+            hosted: false,
+        };
+        let idle = draw(30, 10, &header(false));
+        assert_eq!(row(&idle, 1), "│ RECORD #60     128 LINES ✕ │");
+        assert_eq!(
+            close_cell(Rect::new(0, 0, 30, 3)),
+            Some(Rect::new(26, 1, 3, 1))
+        );
+        let colors = Theme::cyber().colors;
+        assert_eq!(idle[(27, 1)].style().fg, Some(colors.muted));
+        let lit = draw(30, 10, &header(true));
+        assert_eq!(lit[(27, 1)].style().bg, Some(colors.surface_hover));
+    }
+
+    #[test]
+    fn tabbed_bars_end_in_an_expand_button_of_their_own() {
+        let bar = Rect::new(0, 0, 40, 3);
+        let tabs = tabs_beside_expand(bar);
+        assert_eq!(tabs, 36);
+        let header = |expanded, hovered| PanelHeader {
+            expand: Some(ExpandButton { expanded, hovered }),
+            ..chat_header(tabs, true, None)
+        };
+        let idle = draw(40, 10, &header(false, false));
+        assert_eq!(row(&idle, 0), "┌─────────────────┬────────────────┬───┐");
+        assert_eq!(row(&idle, 1), "│      CHAT       │    TERMINAL    │ ⤢ │");
+        assert_eq!(row(&idle, 2), "└─────────────────┴────────────────┴───┘");
+        assert_eq!(expand_cell(bar, false), Some(Rect::new(36, 1, 3, 1)));
+        let colors = Theme::cyber().colors;
+        assert_eq!(idle[(37, 1)].style().fg, Some(colors.muted));
+
+        let lit = draw(40, 10, &header(true, true));
+        assert_eq!(lit[(37, 1)].symbol(), "⤡", "expanded, it restores");
+        assert_eq!(lit[(36, 1)].style().bg, Some(colors.surface_hover));
+
+        assert_eq!(tabs_beside_expand(Rect::new(0, 0, 16, 3)), 16);
+        assert_eq!(expand_cell(Rect::new(0, 0, 16, 3), false), None);
+    }
+
+    #[test]
+    fn the_expand_button_sits_left_of_a_close_button() {
+        let header = PanelHeader::<()> {
+            layout: TabLayout::untabbed(30),
+            active: None,
+            hovered: None,
+            title: Some("RECORD #60"),
+            info: Some(HeaderInfo::count(128, "LINES", Color::Gray)),
+            close: Some(false),
+            expand: Some(ExpandButton {
+                expanded: false,
+                hovered: false,
+            }),
+            focused: true,
+            hosted: false,
+        };
+        let buffer = draw(30, 10, &header);
+        assert_eq!(row(&buffer, 1), "│ RECORD #60   128 LINES ⤢ ✕ │");
+        assert_eq!(
+            expand_cell(Rect::new(0, 0, 30, 3), true),
+            Some(Rect::new(24, 1, 2, 1))
+        );
     }
 }

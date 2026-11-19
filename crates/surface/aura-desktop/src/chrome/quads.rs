@@ -1,9 +1,13 @@
 //! The title bars as quads.
 
 use super::{Chrome, Hit, Kind};
-use crate::geom::{rgba, Point};
-use crate::scene::{fill, Layers};
-use crate::tab_bar::{label_size, quads::outline};
+use crate::geom::{rgba, Color, Point};
+use crate::scene::{fill, Layers, Quad};
+use crate::tab_bar::{
+    label_size,
+    quads::{cross, outline},
+    unit,
+};
 use crate::text::{Align, Face, Label, Shaping, TextSystem, LABEL_LINE_EM};
 
 impl Chrome {
@@ -77,6 +81,61 @@ impl Chrome {
                 };
                 text.write(&mut out.over, &label, end);
             }
+            if let Some(mut rect) = bar.close {
+                rect.y += top;
+                let (edge, ink) = if self.hover == Some(Hit::Close(bar.pane)) {
+                    (palette.muted, palette.fg)
+                } else {
+                    (palette.faint, palette.muted)
+                };
+                outline(&mut out.under, rect, edge, line);
+                let arm = (unit(&model.metrics) * 0.55).round();
+                let middle = Point::new(rect.center_x(), rect.center_y());
+                cross(text, out, middle, (arm, line), ink);
+            }
+            if let Some((mut rect, expanded)) = bar.expand {
+                rect.y += top;
+                let (edge, ink) = if self.hover == Some(Hit::Expand(bar.pane)) {
+                    (palette.muted, palette.fg)
+                } else {
+                    (palette.faint, palette.muted)
+                };
+                outline(&mut out.under, rect, edge, line);
+                let reach = (unit(&model.metrics) * 0.6).round();
+                let middle = Point::new(rect.center_x().round(), rect.center_y().round());
+                corners(&mut out.under, middle, (reach, line), expanded, ink);
+            }
         }
+    }
+}
+
+/// Four corner brackets around `middle`, `reach` pixels out, strokes
+/// `line` pixels thick: at the corners and opening inward to expand, or
+/// near the middle and opening outward to restore.
+fn corners(out: &mut Vec<Quad>, middle: Point, size: (f32, f32), restore: bool, ink: Color) {
+    let (reach, line) = size;
+    let gap = (reach * 0.3).round().max(line);
+    let (from, arm) = if restore {
+        (gap, reach - gap)
+    } else {
+        (reach, (reach * 0.7).round())
+    };
+    for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+        // The bracket's corner, and the way its arms run from it.
+        let corner = Point::new(middle.x + sx * from, middle.y + sy * from);
+        let (dx, dy): (f32, f32) = if restore { (sx, sy) } else { (-sx, -sy) };
+        let span = |at: f32, dir: f32, len: f32| {
+            if dir > 0.0 {
+                (at, len)
+            } else {
+                (at - len, len)
+            }
+        };
+        let (x, w) = span(corner.x, dx, arm);
+        let (y, h) = span(corner.y, dy, line);
+        fill(out, x, y, w, h, ink);
+        let (x, w) = span(corner.x, dx, line);
+        let (y, h) = span(corner.y, dy, arm);
+        fill(out, x, y, w, h, ink);
     }
 }

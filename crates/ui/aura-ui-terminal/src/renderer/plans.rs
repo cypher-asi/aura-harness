@@ -53,6 +53,18 @@ pub(super) fn todo_style(state: TodoState, theme: &Theme) -> Style {
     }
 }
 
+/// How a todo under a plan is drawn: always muted gray, even while open,
+/// so the plan's own name stands out. Struck through when cancelled.
+/// The TASKS panel keeps the shared `todo_style`.
+pub(super) fn plan_todo_style(state: TodoState, theme: &Theme) -> Style {
+    let style = name_style(Tone::Settled, theme);
+    if state == TodoState::Cancelled {
+        style.add_modifier(Modifier::CROSSED_OUT)
+    } else {
+        style
+    }
+}
+
 /// Draw the plans into `inner`, the body below the tab bar of the panel
 /// bordered by `area`.
 pub(super) fn render_plans(
@@ -115,7 +127,7 @@ pub(super) fn render_plans(
                         1,
                         icon,
                         (content, agent.as_deref()),
-                        cell_style(theme, state, todo_style(todo.state, theme)),
+                        cell_style(theme, state, plan_todo_style(todo.state, theme)),
                         None,
                     )
                 }

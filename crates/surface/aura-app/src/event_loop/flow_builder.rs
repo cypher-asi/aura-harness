@@ -10,19 +10,19 @@
 
 use super::steering::SteerSource;
 use crate::record_loader::{
-    collapse_whitespace, format_duration_ms, json_payload, payload_text, reasoning_error,
-    reasoning_tokens, reasoning_tools, summarize_action_result, summarize_policy_decision,
-    summarize_system, summarize_tool_call, tool_execution, tool_outcome, truncate_chars,
-    tx_type_label,
+    collapse_whitespace, format_duration_ms, format_tokens, json_payload, model_call, payload_text,
+    reasoning_error, reasoning_tokens, reasoning_tools, summarize_action_result,
+    summarize_policy_decision, summarize_system, summarize_tool_call, tool_execution, tool_outcome,
+    tool_target, truncate_chars, tx_type_label,
 };
 use aura_core_types::{
-    ActionResultPayload, AgentId, Hash, PolicyDecision, RecordEntry, RouteLevel, ToolExecution,
-    ToolGateVerdict, ToolProposal, TransactionType,
+    ActionResultPayload, AgentId, Hash, PolicyApproval, PolicyApprover, PolicyDecision,
+    RecordEntry, RouteLevel, ToolExecution, ToolGateVerdict, ToolProposal, TransactionType,
 };
 use aura_exec_tools::agents::send_to_agent::SEND_TO_AGENT_TOOL_NAME;
 use aura_exec_tools::agents::task::TASK_TOOL_NAME;
-use aura_model::ModelCallPurpose;
-use aura_ui_terminal::events::{FlowKind, FlowLane, FlowNode, TraceNodeStatus};
+use aura_model::{model_catalog, ModelCallPurpose};
+use aura_ui_terminal::events::{FlowKind, FlowLane, FlowNode, FlowUsage, TraceNodeStatus};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -66,6 +66,11 @@ struct Slot {
     node: FlowNode,
     tx: Hash,
     tool: Option<(AgentId, String)>,
+    /// Hex id of the action the kernel accepted for the tool call
+    action: Option<String>,
+    /// What the tool call acts on (the command line of a `run_command`),
+    /// for the process it may start
+    target: Option<String>,
 }
 
 /// A `task` call and the agents that took its work.
@@ -92,6 +97,9 @@ pub(crate) struct FlowBuilder {
     order: VecDeque<String>,
     by_tx: HashMap<Hash, String>,
     tools: HashMap<(AgentId, String), String>,
+    /// Tool calls by the hex id of the action the kernel accepted for
+    /// them, which a background process it started reports back with
+    actions: HashMap<String, String>,
     last_node: HashMap<AgentId, String>,
     /// Prompts with no reply yet, per agent
     open_prompts: HashMap<AgentId, Vec<String>>,
@@ -132,6 +140,7 @@ impl FlowBuilder {
             order: VecDeque::new(),
             by_tx: HashMap::new(),
             tools: HashMap::new(),
+            actions: HashMap::new(),
             last_node: HashMap::new(),
             open_prompts: HashMap::new(),
             tasks: VecDeque::new(),
@@ -276,6 +285,16 @@ impl FlowBuilder {
                         prompt.route.level, prompt.route.model, prompt.route.reason
                     ),
                 );
+            }
+            if prompt.route.explored {
+                set_meta(
+                    &mut node,
+                    "explored",
+                    format!("propensity {:.3}", prompt.route.propensity),
+                );
+            }
+            if !prompt.classifier.is_empty() {
+                set_meta(&mut node, "classifier", prompt.classifier.clone());
             }
             if let Some(kind) = &prompt.kind {
                 set_meta(&mut node, "kind", kind.clone());
@@ -428,12 +447,46 @@ impl FlowBuilder {
         };
         let mut node = new_node(entry, kind, text("model").unwrap_or("model call"));
         node.status = TraceNodeStatus::Ok;
+        let duration_ms = payload.get("duration_ms").and_then(Value::as_u64);
+        let mut tokens = reasoning_tokens(&payload);
+        if let Some((model, usage)) = model_call(&entry.tx) {
+            let billed = model_catalog::billed_tokens(&model, &usage);
+            let flow_usage = FlowUsage {
+                input_tokens: billed.uncached_input + billed.cache_write + billed.cache_read,
+                output_tokens: billed.output,
+                cost_usd: model_catalog::estimate_cost_usd(&model, &usage),
+                duration_ms,
+            };
+            // The whole prompt, as the stats line counts it: Anthropic
+            // reports cached tokens beside `input_tokens`, not in it.
+            tokens = Some(format!(
+                "{}/{} tok",
+                format_tokens(flow_usage.input_tokens),
+                format_tokens(flow_usage.output_tokens)
+            ));
+            if billed.cache_read > 0 || billed.cache_write > 0 {
+                set_meta(
+                    &mut node,
+                    "cache",
+                    format!(
+                        "{} read · {} written",
+                        format_tokens(billed.cache_read),
+                        format_tokens(billed.cache_write)
+                    ),
+                );
+            }
+            if let Some(cost) = flow_usage.cost_usd {
+                set_meta(&mut node, "cost", format!("${cost:.4}"));
+            }
+            node.usage = Some(flow_usage);
+        }
         let mut facts = Vec::new();
-        if let Some(tokens) = reasoning_tokens(&payload) {
+        if let Some(tokens) = tokens {
             set_meta(&mut node, "tokens", tokens.clone());
             facts.push(tokens);
         }
-        if let Some(ms) = payload.get("duration_ms").and_then(Value::as_u64) {
+        if let Some(ms) = duration_ms {
+            set_meta(&mut node, "took", format_duration_ms(ms));
             facts.push(format_duration_ms(ms));
         }
         if let Some(stop) = text("stop_reason") {
@@ -444,11 +497,17 @@ impl FlowBuilder {
         }
         if let Some(thinking) = text("thinking").filter(|thinking| !thinking.is_empty()) {
             set_meta(&mut node, "thinking", capped(thinking));
+            if let Some(ms) = payload.get("thinking_ms").and_then(Value::as_u64) {
+                set_meta(&mut node, "thought for", format_duration_ms(ms));
+            }
         }
         if let Some(error) = reasoning_error(&payload) {
             node.status = TraceNodeStatus::Error;
             facts = vec!["failed".to_string()];
             set_meta(&mut node, "error", capped(error));
+            if let Some(stage) = text("stage") {
+                set_meta(&mut node, "stage", stage.to_string());
+            }
         }
         node.detail = facts.join(" · ");
         self.insert(entry, node, None);
@@ -471,6 +530,7 @@ impl FlowBuilder {
         }
         let id = node.id.clone();
         self.insert(entry, node, Some((agent, proposal.tool_use_id)));
+        self.set_target(&id, &proposal.tool, &proposal.args);
         match proposal.tool.as_str() {
             TASK_TOOL_NAME => {
                 self.tasks.push_back(TaskCall {
@@ -518,7 +578,17 @@ impl FlowBuilder {
             if let Some(reason) = decision.reason.as_deref().filter(|r| !r.is_empty()) {
                 set_meta(node, "policy reason", capped(reason));
             }
+            if let Some(approval) = &decision.approval {
+                set_meta(node, "approved by", approval_label(approval));
+            }
+            set_meta(node, "mode", decision.mode.clone());
         });
+        if let Some(action) = decision.action_id {
+            if let Some(slot) = self.slots.get_mut(&id) {
+                slot.action = Some(action.clone());
+            }
+            self.actions.insert(action, id);
+        }
     }
 
     fn tool_result(&mut self, entry: &RecordEntry) {
@@ -550,7 +620,9 @@ impl FlowBuilder {
             );
             set_call_meta(&mut node, &execution.tool, &execution.args);
             finish(&mut node);
-            return self.insert(entry, node, Some(key));
+            let id = node.id.clone();
+            self.insert(entry, node, Some(key));
+            return self.set_target(&id, &execution.tool, &execution.args);
         };
         self.update(&call, finish);
         if execution.tool == TASK_TOOL_NAME {
@@ -699,13 +771,43 @@ impl FlowBuilder {
         let label = result
             .as_ref()
             .map_or_else(|| payload_text(&entry.tx), summarize_action_result);
+        // The action id names the call that started the process; the
+        // reference is only the agent's latest entry when it started,
+        // which in a batch of calls can be another call's.
+        let started_by = result
+            .as_ref()
+            .and_then(|result| self.actions.get(&result.action_id.to_hex()))
+            .or_else(|| {
+                let hash = entry.tx.reference_tx_hash?;
+                self.by_tx.get(&hash)
+            })
+            .cloned();
+        let command = started_by
+            .as_ref()
+            .and_then(|id| self.slots.get(id))
+            .and_then(|slot| slot.target.clone());
+        let label = match &command {
+            Some(command) => format!("{command} · {label}"),
+            None => label,
+        };
         let mut node = new_node(entry, FlowKind::Process, &label);
         node.status = match &result {
             Some(result) if !result.success => TraceNodeStatus::Error,
             _ => TraceNodeStatus::Ok,
         };
+        if let Some(command) = command {
+            set_meta(&mut node, "command", capped(&command));
+        }
         if let Some(result) = &result {
             node.detail = format_duration_ms(result.duration_ms);
+            set_meta(
+                &mut node,
+                "exit",
+                result
+                    .exit_code
+                    .map_or_else(|| "none".to_string(), |code| code.to_string()),
+            );
+            set_meta(&mut node, "process", result.process_id.to_hex());
             for (key, bytes) in [("stdout", &result.stdout), ("stderr", &result.stderr)] {
                 let text = String::from_utf8_lossy(bytes);
                 if !text.trim().is_empty() {
@@ -714,10 +816,6 @@ impl FlowBuilder {
             }
         }
         let id = node.id.clone();
-        let started_by = entry
-            .tx
-            .reference_tx_hash
-            .and_then(|hash| self.by_tx.get(&hash).cloned());
         self.insert(entry, node, None);
         if let Some(from) = started_by {
             self.link(&from, LINK_COMPLETED, &id);
@@ -752,7 +850,15 @@ impl FlowBuilder {
                     MAX_DETAIL_CHARS,
                 );
             }
-            set_meta(node, "outcome", outcome.signal.to_string());
+            // Later signals (a rewind, the judge, the user's rating) say
+            // more about the same work; the first one is not dropped.
+            let signal = outcome.signal.to_string();
+            let signals = match node.meta.iter().find(|(key, _)| key == "outcome") {
+                Some((_, before)) if before.split(" → ").any(|s| s == signal) => before.clone(),
+                Some((_, before)) => format!("{before} → {signal}"),
+                None => signal,
+            };
+            set_meta(node, "outcome", signals);
             set_meta(node, "cost", format!("${:.4}", outcome.cost_usd));
             set_meta(node, "took", format_duration_ms(outcome.latency_ms));
         });
@@ -780,6 +886,8 @@ impl FlowBuilder {
                 node,
                 tx: entry.tx.hash,
                 tool,
+                action: None,
+                target: None,
             },
         );
         self.order.push_back(id.clone());
@@ -807,6 +915,19 @@ impl FlowBuilder {
                     self.tools.remove(&key);
                 }
             }
+            if let Some(action) = slot.action {
+                if self.actions.get(&action) == Some(&id) {
+                    self.actions.remove(&action);
+                }
+            }
+        }
+    }
+
+    /// Remember what the tool call `id` acts on.
+    fn set_target(&mut self, id: &str, tool: &str, args: &Value) {
+        let target = tool_target(tool, args);
+        if let Some(slot) = self.slots.get_mut(id).filter(|_| !target.is_empty()) {
+            slot.target = Some(short(&target, MAX_LABEL_CHARS));
         }
     }
 
@@ -879,6 +1000,19 @@ fn set_call_meta(node: &mut FlowNode, tool: &str, args: &Value) {
     if !args.is_null() {
         let args = serde_json::to_string_pretty(args).unwrap_or_else(|_| args.to_string());
         set_meta(node, "args", capped(&args));
+    }
+}
+
+/// Who answered a live approval, and for how long it holds: `user · session`.
+fn approval_label(approval: &PolicyApproval) -> String {
+    let who = match &approval.approver {
+        PolicyApprover::Hook => "hook".to_string(),
+        PolicyApprover::User { user_id: Some(id) } => format!("user {id}"),
+        PolicyApprover::User { user_id: None } => "user".to_string(),
+    };
+    match &approval.remember {
+        Some(remember) => format!("{who} · {remember}"),
+        None => who,
     }
 }
 
@@ -1143,7 +1277,18 @@ mod tests {
                 FlowKind::Title
             ]
         );
-        assert_eq!(node(&nodes, &id(lead, 1)).detail, "170/3 tok");
+        let gate = node(&nodes, &id(lead, 1));
+        assert_eq!(gate.detail, "170/3 tok");
+        assert_eq!(
+            gate.usage,
+            Some(FlowUsage {
+                input_tokens: 170,
+                output_tokens: 3,
+                cost_usd: None,
+                duration_ms: None,
+            }),
+            "an unpriced model has no cost"
+        );
     }
 
     #[test]
@@ -1361,8 +1506,162 @@ mod tests {
         );
         let process = node(&nodes, &id(lead, 2));
         assert_eq!(process.kind, FlowKind::Process);
-        assert_eq!(process.label, "ok · exit 0 · 61.0s");
+        assert_eq!(process.label, "cargo test · ok · exit 0 · 61.0s");
+        assert_eq!(meta(process, "command"), Some("cargo test"));
+        assert_eq!(meta(process, "exit"), Some("0"));
+        assert_eq!(
+            meta(process, "process"),
+            Some(ProcessId::new([2; 16]).to_hex().as_str())
+        );
         assert_eq!(meta(process, "stdout"), Some("ok"));
+    }
+
+    #[test]
+    fn a_process_started_in_a_batch_finds_its_call_by_action() {
+        let lead = agent(1);
+        let mut records = Records::default();
+        let mut flow = FlowBuilder::new(lead, "Lead");
+        let decision = |tool_use_id: &str, action: ActionId| PolicyDecision {
+            tool_use_id: tool_use_id.to_string(),
+            tool: "run_command".to_string(),
+            verdict: ToolGateVerdict::Approved,
+            reason: None,
+            decided_by: PolicyRule::new(PolicySource::UserDefault, "allow"),
+            trace: Vec::new(),
+            approval: None,
+            mode: "agent".to_string(),
+            policy_hash: String::new(),
+            action_id: Some(action.to_hex()),
+        };
+        let (serve, build) = (ActionId::new([1; 16]), ActionId::new([2; 16]));
+        // Every call and decision of a batch is written before any runs.
+        for (tool_use_id, command) in [("tu_1", "npm run dev"), ("tu_2", "cargo build")] {
+            flow.push(&records.call(
+                lead,
+                tool_use_id,
+                "run_command",
+                json!({"command": command, "background": true}),
+            ));
+        }
+        flow.push(&records.json(
+            lead,
+            TransactionType::PolicyDecision,
+            &json!(decision("tu_1", serve)),
+        ));
+        let last = records.json(
+            lead,
+            TransactionType::PolicyDecision,
+            &json!(decision("tu_2", build)),
+        );
+        let latest = last.tx.hash;
+        flow.push(&last);
+        // The server started by the first call ends; the agent's latest
+        // entry when it started was the second call's decision.
+        let done = ActionResultPayload::failure(
+            serve,
+            ProcessId::new([3; 16]),
+            Some(1),
+            "port in use".as_bytes().to_vec(),
+            1500,
+        );
+        let mut entry = records.json(lead, TransactionType::ProcessComplete, &json!(done));
+        entry.tx.reference_tx_hash = Some(latest);
+        flow.push(&entry);
+
+        let (_, nodes) = flow.snapshot();
+        assert_eq!(
+            node(&nodes, &id(lead, 1)).links,
+            [link("completed", id(lead, 5))]
+        );
+        assert!(node(&nodes, &id(lead, 2)).links.is_empty());
+        let process = node(&nodes, &id(lead, 5));
+        assert_eq!(process.status, TraceNodeStatus::Error);
+        assert_eq!(process.label, "npm run dev · failed · exit 1 · 1.5s");
+        assert_eq!(meta(process, "stderr"), Some("port in use"));
+    }
+
+    #[test]
+    fn a_call_that_got_no_answer_is_a_failed_call() {
+        let lead = agent(1);
+        let mut records = Records::default();
+        let mut flow = FlowBuilder::new(lead, "Lead");
+        flow.push(&records.json(
+            lead,
+            TransactionType::Reasoning,
+            &json!({"stop_reason": "Error", "stage": "streaming_handshake", "error": "HTTP 529 overloaded"}),
+        ));
+        let (_, nodes) = flow.snapshot();
+        let call = &nodes[0];
+        assert_eq!(call.status, TraceNodeStatus::Error);
+        assert_eq!(call.detail, "failed");
+        assert_eq!(meta(call, "error"), Some("HTTP 529 overloaded"));
+        assert_eq!(meta(call, "stage"), Some("streaming_handshake"));
+    }
+
+    #[test]
+    fn a_call_counts_its_whole_prompt_and_says_what_was_cached() {
+        let lead = agent(1);
+        let mut records = Records::default();
+        let mut flow = FlowBuilder::new(lead, "Lead");
+        flow.push(&records.json(
+            lead,
+            TransactionType::Reasoning,
+            &json!({
+                "model": "claude-sonnet-4-6",
+                "input_tokens": 200,
+                "cache_read_input_tokens": 48_000,
+                "cache_creation_input_tokens": 1_000,
+                "output_tokens": 516,
+                "duration_ms": 3200,
+                "thinking": "look at main.rs first",
+                "thinking_ms": 1400,
+            }),
+        ));
+        let (_, nodes) = flow.snapshot();
+        let call = &nodes[0];
+        let usage = call.usage.expect("the call was answered");
+        assert_eq!((usage.input_tokens, usage.output_tokens), (49_200, 516));
+        assert_eq!(call.detail, "49.2k/516 tok · 3.2s");
+        assert_eq!(meta(call, "tokens"), Some("49.2k/516 tok"));
+        assert_eq!(meta(call, "cache"), Some("48.0k read · 1.0k written"));
+        assert_eq!(meta(call, "took"), Some("3.2s"));
+        assert_eq!(meta(call, "thought for"), Some("1.4s"));
+        assert_eq!(
+            meta(call, "cost").is_some(),
+            usage.cost_usd.is_some(),
+            "a priced call shows its cost"
+        );
+    }
+
+    #[test]
+    fn later_signals_about_a_turn_are_added_to_the_first() {
+        let lead = agent(1);
+        let mut records = Records::default();
+        let mut flow = FlowBuilder::new(lead, "Lead");
+        let prompt = records.prompt(lead, "fix the test");
+        let outcome = OutcomePayload {
+            prompt_tx: prompt.tx.hash,
+            category: PromptCategory::Debugging,
+            model: "sonnet".to_string(),
+            success: Some(false),
+            signal: OutcomeSignal::ChecksFailed,
+            cost_usd: 0.02,
+            latency_ms: 9000,
+        };
+        flow.push(&prompt);
+        for signal in [
+            OutcomeSignal::ChecksFailed,
+            OutcomeSignal::JudgedExcused,
+            OutcomeSignal::JudgedExcused,
+        ] {
+            let payload = outcome.with_signal(signal);
+            flow.push(&records.entry(lead, TransactionType::Outcome, payload.to_bytes()));
+        }
+        let (_, nodes) = flow.snapshot();
+        assert_eq!(
+            meta(&nodes[0], "outcome"),
+            Some("checks_failed → judged_excused")
+        );
     }
 
     #[test]

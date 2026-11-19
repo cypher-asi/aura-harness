@@ -266,9 +266,10 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Give `text` from `source` to `agent_id`: into its running turn if it
-/// has one that still takes input, else as a prompt. `shown` is whether
-/// the chat already shows it.
+/// Give `text` from `source` to `agent_id`. A harness notice goes into its
+/// running turn if it has one that still takes input; a user's message
+/// waits in the queue while the agent is busy. Otherwise it runs as a
+/// prompt. `shown` is whether the chat already shows it.
 async fn deliver(
     state: &mut LoopState<'_>,
     agent_id: AgentId,
@@ -297,16 +298,16 @@ async fn deliver_with_images(
         submit(state, agent_id, work).await;
         return;
     }
-    if let Some(steering) = state.hub.steering(agent_id) {
-        let body = steered_body(state, agent_id, source, &text).await;
-        if steering.send(source, text.clone(), body).await {
-            info!(%agent_id, ?source, "Sent message into the running turn");
-            if source == SteerSource::User && !shown {
-                AgentUi::new(state.commands.clone(), agent_id)
-                    .send(UiCommand::UserSteered(text))
-                    .await;
+    // A user's message waits its turn in the queue, and the user can send
+    // it now (`UiEvent::SendQueuedNow`). Harness notices still go straight
+    // into the running turn.
+    if source == SteerSource::Harness {
+        if let Some(steering) = state.hub.steering(agent_id) {
+            let body = steered_body(state, agent_id, source, &text).await;
+            if steering.send(source, text.clone(), body).await {
+                info!(%agent_id, ?source, "Sent notice into the running turn");
+                return;
             }
-            return;
         }
     }
     submit(state, agent_id, prompt_work(source, text, shown)).await;
@@ -467,6 +468,23 @@ async fn handle_ui_event(
                     .await;
             }
         }
+        UiEvent::SendQueuedNow(agent_id) => {
+            let agent_id = state.agent_or_active(&agent_id);
+            send_queued_now(state, agent_id).await;
+        }
+        UiEvent::StopCommand(agent_id) => {
+            let agent_id = state.agent_or_active(&agent_id);
+            let stopped = aura_exec_tools::stop_commands(&agent_id.to_hex());
+            debug!(%agent_id, stopped, "Stop command received");
+            let status = match stopped {
+                0 => "No command running".to_string(),
+                1 => "Stopping the command".to_string(),
+                n => format!("Stopping {n} commands"),
+            };
+            AgentUi::new(state.commands.clone(), agent_id)
+                .send(UiCommand::SetStatus(status))
+                .await;
+        }
         UiEvent::ShowStatus => trace::status_report(state).await,
         UiEvent::ShowGate => gate_view::show(state).await,
         UiEvent::OpenGraph(id) => trace::open_graph(state, id).await,
@@ -582,6 +600,25 @@ async fn submit(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
     start_work(state, agent_id, work).await;
 }
 
+/// Force the oldest queued work of `agent_id` to run now: the running turn
+/// is cancelled, and `handle_work_done` then starts the front of the queue.
+/// The queue itself is kept, so nothing the user queued is dropped.
+async fn send_queued_now(state: &mut LoopState<'_>, agent_id: AgentId) {
+    let has_queued = state.queued.get(&agent_id).is_some_and(|q| !q.is_empty());
+    if !has_queued {
+        return;
+    }
+    if !state.hub.is_running(agent_id) {
+        start_next(state, agent_id).await;
+        return;
+    }
+    info!(%agent_id, "Sending queued work now; cancelling the running turn");
+    // A call waiting for an answer holds the turn; deny it so the turn
+    // sees the cancellation.
+    state.approvals.cancel_agent(agent_id).await;
+    state.hub.cancel(agent_id);
+}
+
 /// Start the oldest work waiting for `agent_id`, if any.
 async fn start_next(state: &mut LoopState<'_>, agent_id: AgentId) {
     let Some(queue) = state.queued.get_mut(&agent_id) else {
@@ -663,11 +700,20 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
             ));
             let turn_steering = Steering::new(&cancel);
             steering = Some(turn_steering.clone());
-            let title_model = (prompt.mentions
+            if prompt.mentions
                 && subagents::lock(&state.hub.registry)
                     .find(agent_id)
-                    .is_some_and(RegisteredAgent::needs_title))
-            .then(|| titles::title_model(state.models.classifier_model()));
+                    .is_some_and(RegisteredAgent::needs_title)
+            {
+                titles::spawn(
+                    Arc::clone(&state.hub),
+                    agent_id,
+                    aura_agent::KernelModelGateway::new(Arc::clone(&session.kernel)),
+                    agent_loop.config().clone(),
+                    titles::title_model(state.models.classifier_model()),
+                    prompt.text.clone(),
+                );
+            }
             Task::Turn {
                 prompt,
                 agent_loop: Box::new(agent_loop),
@@ -677,7 +723,6 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
                 recorder,
                 gate,
                 routing,
-                title_model,
             }
         }
         Work::Command { command, cols } => Task::Command { command, cols },
@@ -808,18 +853,12 @@ async fn handle_work_done(state: &mut LoopState<'_>, done: WorkDone) {
         failure,
         unseen,
         refused_models,
-        title,
     } = done;
     if !refused_models.is_empty() {
         for model in &refused_models {
             state.models.drop_model(model);
         }
         let _ = state.commands.send(state.models.ui_command()).await;
-    }
-    if let Some(title) = title {
-        if let Err(e) = subagents::lock(&state.hub.registry).set_title(agent_id, &title) {
-            warn!(%agent_id, error = %e, "Could not save the chat title");
-        }
     }
     if !unseen.is_empty() {
         let queue = state.queued.entry(agent_id).or_default();

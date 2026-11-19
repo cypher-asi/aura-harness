@@ -4,7 +4,7 @@
 //! - `UiEvent`: Events from the UI to the kernel (user actions)
 //! - `UiCommand`: Commands from the kernel to the UI (state updates)
 
-pub use crate::flow::{FlowKind, FlowLane, FlowNode};
+pub use crate::flow::{FlowKind, FlowLane, FlowNode, FlowUsage};
 use crate::mode_command::{ApprovalLevel, PermissionMode};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -90,6 +90,15 @@ pub enum UiEvent {
 
     /// User cancelled the turn of the agent with this hex id
     Cancel(String),
+
+    /// User asked to send the oldest queued message of the agent with this
+    /// hex id now: its running turn is cancelled and the message runs next,
+    /// ahead of the rest of the queue.
+    SendQueuedNow(String),
+
+    /// User stopped the commands the agent with this hex id is running;
+    /// its turn goes on with what they printed
+    StopCommand(String),
 
     /// User requested a new session (reset context)
     NewSession,

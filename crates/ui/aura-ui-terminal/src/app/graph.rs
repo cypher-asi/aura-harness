@@ -435,7 +435,7 @@ impl App {
                 (kind.clone(), other.clone(), label)
             })
             .collect();
-        let json = super::trace_json::node_json(node, &links);
+        let json = super::trace_json::node_json(&with_time(node), &links);
         let title = node_title(node);
         let view = FileView::snapshot(&title, &json, "json", 1);
         self.open_detail(DetailView::File(Box::new(view)));
@@ -509,8 +509,22 @@ impl App {
         }
     }
 
-    /// Open the first file the selected node touched.
+    /// Open the run the selected node links to (the child a subagent call
+    /// started, or on the run node the run that spawned it), else the
+    /// first file the node touched.
     fn open_node_file(&mut self) {
+        let run = self.graph.selected_node().and_then(|n| {
+            let key = if n.kind == "run" {
+                "spawned_by"
+            } else {
+                "child_run"
+            };
+            meta(n, key).filter(|id| !id.is_empty() && id != "null")
+        });
+        if let Some(run) = run {
+            self.request_graph(&run);
+            return;
+        }
         let path = self.graph.selected_node().and_then(|n| {
             meta(n, "path").filter(|p| !p.is_empty()).or_else(|| {
                 meta(n, "files").and_then(|v| {
@@ -543,6 +557,22 @@ fn meta(node: &TraceNode, key: &str) -> Option<String> {
         .iter()
         .find(|(k, _)| k == key)
         .map(|(_, v)| v.clone())
+}
+
+/// `node` with a local `time` (to the millisecond) first in its metadata,
+/// from when it happened or the run started.
+fn with_time(node: &TraceNode) -> TraceNode {
+    let mut node = node.clone();
+    let time = meta(&node, "at_ms")
+        .or_else(|| meta(&node, "started_at_ms"))
+        .and_then(|ms| ms.parse::<i64>().ok())
+        .and_then(chrono::DateTime::from_timestamp_millis);
+    if let Some(time) = time {
+        let local = time.with_timezone(&chrono::Local);
+        let text = local.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+        node.meta.insert(0, ("time".to_string(), text));
+    }
+    node
 }
 
 fn numbers(text: &str) -> Vec<u64> {
@@ -646,6 +676,36 @@ mod tests {
         }
         let shown = meta(app.graph().node("s3").unwrap(), "human");
         assert_eq!(shown.as_deref(), Some("-1"));
+    }
+
+    #[test]
+    fn o_opens_the_run_a_subagent_call_started_and_the_one_that_spawned_this() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let mut app = App::new().with_event_sender(tx);
+        let mut run = node("run", None, TraceNodeStatus::Ok);
+        run.kind = "run".into();
+        run.meta = vec![("spawned_by".into(), "parent-run".into())];
+        let mut call = node("tc:a", Some("run"), TraceNodeStatus::Ok);
+        call.meta = vec![("child_run".into(), "child-run".into())];
+        app.process_command(UiCommand::GraphLoad {
+            run_id: "r".into(),
+            nodes: vec![run, call],
+        });
+        app.handle_key(key(KeyCode::Char('o')));
+        assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenGraph(Some(id))) if id == "child-run"));
+        app.handle_key(key(KeyCode::Char('g')));
+        app.handle_key(key(KeyCode::Char('o')));
+        assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenGraph(Some(id))) if id == "parent-run"));
+    }
+
+    #[test]
+    fn inspected_nodes_say_when_they_happened_to_the_millisecond() {
+        let mut step = node("s3", None, TraceNodeStatus::Ok);
+        step.meta = vec![("at_ms".into(), "1700000000123".into())];
+        let shown = with_time(&step);
+        let (key, time) = &shown.meta[0];
+        assert_eq!(key, "time");
+        assert!(time.ends_with(".123"), "{time}");
     }
 
     #[test]

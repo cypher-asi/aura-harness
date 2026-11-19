@@ -33,31 +33,45 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     let hosted = app.host_chrome();
     let panel = area;
     let (bar, area) = header::split(area, hosted);
+    let expand = Some(header::ExpandButton {
+        expanded: app.chat_expanded(),
+        hovered: app.hover() == Some(HoverTarget::ExpandChat),
+    });
     if let Some((title, info)) = detail_header(app, theme) {
+        if !hosted {
+            app.set_detail_close_area(header::close_cell(bar));
+            app.set_chat_expand_area(header::expand_cell(bar, true));
+        }
         let header = PanelHeader::<()> {
             layout: TabLayout::untabbed(bar.width),
             active: None,
             hovered: None,
             title: Some(&title),
             info,
+            close: Some(app.hover() == Some(HoverTarget::CloseDetail)),
+            expand,
             focused: true,
             hosted,
         };
         header::show(frame, app, (Pane::Chat, panel, bar), &header, theme);
     } else {
+        let tabs = header::tabs_beside_expand(bar);
         if !hosted {
-            app.set_chat_tabs_area(bar);
+            app.set_chat_tabs_area(Rect { width: tabs, ..bar });
+            app.set_chat_expand_area(header::expand_cell(bar, false));
         }
         let hovered = match app.hover() {
             Some(HoverTarget::ChatTab(tab)) => Some(tab),
             _ => None,
         };
         let header = PanelHeader {
-            layout: ChatTab::layout(bar.width),
+            layout: ChatTab::layout(tabs),
             active: Some(app.chat_tab()),
             hovered,
             title: None,
             info: None,
+            close: None,
+            expand,
             focused: is_focused,
             hosted,
         };
@@ -745,6 +759,8 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
         hovered,
         title: None,
         info: None,
+        close: None,
+        expand: None,
         focused: is_focused,
         hosted,
     };
@@ -882,7 +898,11 @@ fn build_archived_lines<'a>(
                 cell_style(
                     theme,
                     CellState::of(selected, hovered),
-                    Style::default().fg(theme.colors.foreground),
+                    Style::default().fg(if agent.depth == 0 {
+                        theme.colors.foreground
+                    } else {
+                        theme.colors.muted
+                    }),
                 ),
                 side.as_deref(),
             )
@@ -904,12 +924,12 @@ fn build_archived_lines<'a>(
 /// last line is "+ New project", which the panel pins to its bottom row:
 ///
 /// ```text
-///  🗁  Website            +
+///  🗁  WEBSITE            +
 ///  ⢎⡱ Agent              1m
 ///      reviewer          2d
 ///     Agent 2            5m
 ///
-///  🗀  Research           +
+///  🗀  RESEARCH           +
 ///  …
 ///  +  New project
 /// ```
@@ -933,6 +953,7 @@ fn build_swarm_lines<'a>(
     };
     let project_name = Style::default().fg(theme.colors.muted);
     let agent_name = Style::default().fg(theme.colors.foreground);
+    let subagent_name = Style::default().fg(theme.colors.muted);
     let rows = app.project_rows();
     let listed = rows.len().saturating_sub(1);
     // A project's agents run up to the next project's root.
@@ -1001,12 +1022,17 @@ fn build_swarm_lines<'a>(
                 };
                 let ago = agent.last_active_ms.map(|ms| format_ago(ms, now_ms));
                 let state = CellState::of(is_selected, is_hovered);
+                let name = if agent.depth == 0 {
+                    agent_name
+                } else {
+                    subagent_name
+                };
                 lines.push(tree_row(
                     width,
                     (&spawn_guides(app.agents(), index), theme.colors.muted),
                     icon,
                     &agent.name,
-                    cell_style(theme, state, agent_name),
+                    cell_style(theme, state, name),
                     ago.as_deref(),
                 ));
             }
@@ -1257,6 +1283,7 @@ fn project_label(agent: &crate::events::AgentSummary) -> String {
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .map_or_else(|| agent.name.clone(), ToString::to_string)
+        .to_uppercase()
 }
 
 /// Roster rows: a gray `@` and the name for each permanent agent, then
@@ -1334,6 +1361,8 @@ pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, 
             "RECORDS",
             theme.colors.muted,
         )),
+        close: None,
+        expand: None,
         focused: is_focused,
         hosted,
     };

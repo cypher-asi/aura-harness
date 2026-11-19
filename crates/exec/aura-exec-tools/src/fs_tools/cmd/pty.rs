@@ -2,6 +2,7 @@
 //! output the way it would in an interactive terminal (`ls` columns,
 //! `git` / `grep` colors).
 
+use super::stop::Registration;
 use super::{truncate_output, STDOUT_TRUNCATE_LIMIT};
 use crate::error::ToolError;
 use crate::sandbox::Sandbox;
@@ -102,7 +103,7 @@ pub(super) fn cmd_run_in_pty(
     let reader = match pair.master.try_clone_reader() {
         Ok(reader) => reader,
         Err(e) => {
-            kill_tree(child.as_mut());
+            let _ = kill_tree(child.as_mut());
             return Some(Err(ToolError::CommandFailed(format!(
                 "Failed to read terminal output: {e}"
             ))));
@@ -111,8 +112,9 @@ pub(super) fn cmd_run_in_pty(
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || read_until_closed(reader, &tx));
 
+    let stop = Registration::new(tags, child.process_id());
     let mut captured = Vec::new();
-    let status = match wait_capturing(child.as_mut(), &rx, &mut captured, timeout_ms) {
+    let status = match wait_capturing(child.as_mut(), &rx, &mut captured, timeout_ms, &stop) {
         Ok(status) => status,
         Err(e) => return Some(Err(e)),
     };
@@ -132,7 +134,7 @@ pub(super) fn cmd_run_in_pty(
         let mut result = ToolResult::failure("run_command", String::new());
         result.stdout = output.into();
         result.exit_code = Some(exit_code);
-        result
+        stop.annotate(result)
     };
     Some(Ok(result.with_metadata("exit_code", exit_code.to_string())))
 }
@@ -214,6 +216,7 @@ fn wait_capturing(
     rx: &mpsc::Receiver<Vec<u8>>,
     captured: &mut Vec<u8>,
     timeout_ms: u64,
+    stop: &Registration,
 ) -> Result<portable_pty::ExitStatus, ToolError> {
     let timeout = Duration::from_millis(timeout_ms);
     let start = Instant::now();
@@ -227,8 +230,13 @@ fn wait_capturing(
                 )))
             }
         }
+        if stop.overdue() {
+            if let Ok(status) = kill_tree(child) {
+                return Ok(status);
+            }
+        }
         if start.elapsed() > timeout {
-            kill_tree(child);
+            let _ = kill_tree(child);
             return Err(ToolError::CommandFailed(
                 "Command timed out: Process timed out".into(),
             ));
@@ -250,7 +258,7 @@ fn capture(captured: &mut Vec<u8>, chunk: &[u8]) {
 
 /// The program leads its own session, so its pid is also the process
 /// group of everything it started.
-fn kill_tree(child: &mut (dyn Child + Send + Sync)) {
+fn kill_tree(child: &mut (dyn Child + Send + Sync)) -> std::io::Result<portable_pty::ExitStatus> {
     #[cfg(unix)]
     if let Some(pid) = child.process_id() {
         let _ = std::process::Command::new("kill")
@@ -258,7 +266,7 @@ fn kill_tree(child: &mut (dyn Child + Send + Sync)) {
             .status();
     }
     let _ = child.kill();
-    let _ = child.wait();
+    child.wait()
 }
 
 /// Turn raw terminal output into plain lines: `\r\n` becomes `\n`, and a

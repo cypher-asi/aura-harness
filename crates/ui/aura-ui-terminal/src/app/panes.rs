@@ -82,6 +82,13 @@ pub struct PaneChrome {
     pub info: Option<String>,
     pub info_short: Option<String>,
     pub info_color: Color,
+    /// Whether the bar ends in a close button, which
+    /// [`App::close_pane_view`] works
+    pub closable: bool,
+    /// Whether the bar has a button that expands the panel to fill the
+    /// screen, which [`App::expand_pane`] works; `Some(true)` while it is
+    /// expanded
+    pub expand: Option<bool>,
     pub focused: bool,
 }
 
@@ -154,6 +161,24 @@ impl App {
         self.focus = pane.focus();
         self.clear_selection();
     }
+
+    /// Close what covers `pane` and focus it, as its bar's close button
+    /// does.
+    pub fn close_pane_view(&mut self, pane: Pane) {
+        self.focus_pane(pane);
+        if pane == Pane::Chat {
+            self.close_detail();
+        }
+    }
+
+    /// Expand `pane` to fill the screen, or restore it, and focus it, as
+    /// its bar's expand button does.
+    pub fn expand_pane(&mut self, pane: Pane) {
+        self.focus_pane(pane);
+        if pane == Pane::Chat {
+            self.toggle_chat_expanded();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -177,6 +202,33 @@ mod tests {
 
         app.focus_pane(Pane::Records);
         assert_eq!(app.focus(), PanelFocus::Records);
+    }
+
+    #[test]
+    fn closing_the_chat_pane_view_uncovers_the_chat() {
+        let mut app = App::new();
+        app.open_detail(super::super::DetailView::Graph);
+        app.close_pane_view(Pane::Chat);
+        assert!(app.detail_view().is_none());
+        assert_eq!(app.focus(), PanelFocus::Chat);
+    }
+
+    #[test]
+    fn the_chat_expands_over_the_other_panels_and_back() {
+        let mut app = App::new();
+        app.focus_pane(Pane::Records);
+        app.expand_pane(Pane::Chat);
+        assert!(app.chat_expanded());
+        assert_eq!(app.focus(), PanelFocus::Chat);
+        assert!(!app.swarm_panel_visible());
+        assert!(!app.record_panel_visible());
+        assert!(!app.sandbox_panel_visible());
+
+        app.expand_pane(Pane::Chat);
+        assert!(!app.chat_expanded());
+        assert!(app.swarm_panel_visible());
+        assert!(app.record_panel_visible());
+        assert!(app.sandbox_panel_visible());
     }
 
     #[test]

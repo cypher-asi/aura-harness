@@ -578,7 +578,7 @@ fn user_texts(state: &LoopState<'_>, agent_id: AgentId) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn message_to_a_busy_agent_goes_into_its_turn() {
+async fn message_to_a_busy_agent_waits_in_the_queue() {
     let (fixture, mut commands) = fixture();
     let mut b = borrowed(&fixture);
     let links = b.links.clone();
@@ -588,26 +588,70 @@ async fn message_to_a_busy_agent_goes_into_its_turn() {
 
     handle_ui_event(&mut state, message(first, "slow start", true), &links).await;
     handle_ui_event(&mut state, message(first, "follow-up", false), &links).await;
-    assert!(state.queued.is_empty(), "nothing waits for the turn to end");
+    assert_eq!(state.queued[&first].len(), 1, "the message waits its turn");
 
     fixture.gate.add_permits(1);
     let finished = next_done(&mut done).await;
     assert!(finished.unseen.is_empty());
     handle_work_done(&mut state, finished).await;
-    assert!(!state.hub.is_running(first), "one turn answered both");
+    let finished = next_done(&mut done).await;
+    handle_work_done(&mut state, finished).await;
 
-    // Depending on timing the model gets the message with its first call
-    // or after it, so only the order is fixed.
-    let prompts = user_texts(&state, first).concat();
-    let steered = format!("{}follow-up", SteerSource::User.prefix());
-    assert!(prompts.starts_with("slow start"), "{prompts:?}");
-    assert!(prompts.ends_with(&steered), "{prompts:?}");
+    assert_eq!(user_texts(&state, first), ["slow start", "follow-up"]);
+    let shown = drain(&mut commands)
+        .into_iter()
+        .any(|(_, c)| matches!(c, UiCommand::TurnStarted { prompt: Some(p) } if p == "follow-up"));
+    assert!(shown, "the chat shows the message when its turn starts");
+}
 
-    let commands = drain(&mut commands);
-    let echoed = commands
-        .iter()
-        .any(|(_, c)| matches!(c, UiCommand::UserSteered(p) if p == "follow-up"));
-    assert!(echoed, "the chat shows the message when the turn takes it");
+#[tokio::test]
+async fn send_queued_now_cancels_the_turn_and_runs_the_message_next() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+
+    handle_ui_event(&mut state, message(first, "slow start", true), &links).await;
+    handle_ui_event(&mut state, message(first, "urgent", false), &links).await;
+    handle_ui_event(&mut state, message(first, "later", false), &links).await;
+    assert_eq!(state.queued[&first].len(), 2);
+
+    // The slow turn is never released: only the cancellation ends it.
+    handle_ui_event(&mut state, UiEvent::SendQueuedNow(first.to_hex()), &links).await;
+    let finished = next_done(&mut done).await;
+    handle_work_done(&mut state, finished).await;
+
+    assert!(state.hub.is_running(first), "the queued message started");
+    assert_eq!(state.queued[&first].len(), 1, "only the first one ran");
+    let finished = next_done(&mut done).await;
+    handle_work_done(&mut state, finished).await;
+    let finished = next_done(&mut done).await;
+    handle_work_done(&mut state, finished).await;
+
+    let texts = user_texts(&state, first);
+    let position = |text: &str| texts.iter().position(|t| t == text);
+    assert!(position("urgent") < position("later"), "{texts:?}");
+    assert!(state.queued.is_empty());
+}
+
+#[tokio::test]
+async fn send_queued_now_with_nothing_queued_leaves_the_turn_alone() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut state = loop_state(&fixture, &mut b);
+
+    handle_ui_event(&mut state, message(first, "slow start", true), &links).await;
+    handle_ui_event(&mut state, UiEvent::SendQueuedNow(first.to_hex()), &links).await;
+
+    assert!(
+        state.hub.is_running(first),
+        "nothing to send, nothing cancelled"
+    );
+    fixture.gate.add_permits(1);
 }
 
 #[tokio::test]
@@ -732,8 +776,12 @@ async fn a_harness_notice_never_attaches_files() {
     )
     .await;
     let finished = next_done(&mut done).await;
-    assert_eq!(finished.title, None, "only typed prompts title a chat");
     handle_work_done(&mut state, finished).await;
+    assert_eq!(
+        lock_registry_agent(&fixture, first).title,
+        None,
+        "only typed prompts title a chat"
+    );
 
     let prompts = user_texts(&state, first);
     assert!(!prompts[0].contains("remember the milk"), "{prompts:?}");
@@ -749,11 +797,9 @@ async fn the_first_turn_titles_a_placeholder_named_agent() {
     let mut state = loop_state(&fixture, &mut b);
 
     handle_ui_event(&mut state, message(first, "fix the build", true), &links).await;
+    // The title lands while the turn runs, not once it has ended.
+    let title = wait_for_title(&fixture, first).await;
     let finished = next_done(&mut done).await;
-    let title = finished
-        .title
-        .clone()
-        .expect("the first turn titles the chat");
     handle_work_done(&mut state, finished).await;
     assert_eq!(
         lock_registry_agent(&fixture, first).title.as_deref(),
@@ -766,14 +812,28 @@ async fn the_first_turn_titles_a_placeholder_named_agent() {
 
     handle_ui_event(&mut state, message(first, "and again", true), &links).await;
     let finished = next_done(&mut done).await;
-    assert_eq!(finished.title, None, "an agent is titled once");
     handle_work_done(&mut state, finished).await;
+    assert_eq!(
+        lock_registry_agent(&fixture, first).title.as_deref(),
+        Some(title.as_str()),
+        "an agent is titled once"
+    );
 
     handle_ui_event(&mut state, message(second, "quick question", true), &links).await;
     let finished = next_done(&mut done).await;
-    assert_eq!(finished.title, None, "a name the user picked stays");
     handle_work_done(&mut state, finished).await;
     assert_eq!(lock_registry_agent(&fixture, second).title, None);
+}
+
+/// Wait for the background title job to name `agent_id`.
+async fn wait_for_title(fixture: &Fixture, agent_id: AgentId) -> String {
+    for _ in 0..500 {
+        if let Some(title) = lock_registry_agent(fixture, agent_id).title {
+            return title;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the agent was never titled");
 }
 
 /// A table whose process manager runs `true` as a background command of
@@ -920,7 +980,6 @@ async fn messages_the_turn_never_saw_run_next() {
             failure: None,
             unseen: vec![(SteerSource::User, "late".to_string())],
             refused_models: Vec::new(),
-            title: None,
         },
     )
     .await;
@@ -1060,6 +1119,57 @@ async fn queued_work_is_counted_for_the_status_line() {
         })
         .collect();
     assert_eq!(queued, [0]);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn stop_command_ends_a_running_command_and_reports_it() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+
+    let stop = || UiEvent::StopCommand(first.to_hex());
+    handle_ui_event(&mut state, stop(), &links).await;
+    assert!(drain(&mut commands)
+        .iter()
+        .any(|(_, c)| matches!(c, UiCommand::SetStatus(s) if s == "No command running")));
+
+    let command = UiEvent::RunCommand {
+        agent_id: first.to_hex(),
+        command: "echo started; sleep 30".to_string(),
+        cols: 80,
+    };
+    handle_ui_event(&mut state, command, &links).await;
+    let started = std::time::Instant::now();
+    loop {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "command never started"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        handle_ui_event(&mut state, stop(), &links).await;
+        if drain(&mut commands)
+            .iter()
+            .any(|(_, c)| matches!(c, UiCommand::SetStatus(s) if s == "Stopping the command"))
+        {
+            break;
+        }
+    }
+
+    let finished = next_done(&mut done).await;
+    handle_work_done(&mut state, finished).await;
+    assert!(started.elapsed() < Duration::from_secs(10));
+    let output = drain(&mut commands)
+        .into_iter()
+        .find_map(|(_, c)| match c {
+            UiCommand::CommandFinished { output, .. } => Some(output),
+            _ => None,
+        })
+        .expect("command finished");
+    assert!(output.contains("[STOPPED]"), "{output:?}");
 }
 
 /// A tool call with its result, as a turn leaves them in the history.
@@ -1705,7 +1815,6 @@ async fn turn(
         failure: finished.failure.clone(),
         unseen: Vec::new(),
         refused_models: finished.refused_models.clone(),
-        title: finished.title.clone(),
     };
     handle_work_done(state, finished).await;
     reported

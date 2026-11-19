@@ -1,0 +1,13 @@
+{
+  "id": "01a1f4ec8fcf0008",
+  "title": "Repo: aura-harness (Rust workspace; follow .cursor/rules.md: no warnings, clippy -D warnings, no unwrap in prod, tests)…",
+  "state": "open",
+  "agent_id": "14f0c6870236d856bbe113dc164b986b70397b879d3a0848a726d2ca7f1a0a5e",
+  "agent_name": "rust-engineer #2",
+  "assignee": "rust-engineer",
+  "parent": "01a1f4ea5ff30003",
+  "items": [],
+  "updated_ms": 1795110506447,
+  "created_ms": 1795110506447,
+  "tool_use_id": "toolu_01P8QyDjp6iiVUzzpqVNQ9Nw"
+}

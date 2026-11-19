@@ -481,7 +481,7 @@ mod tests {
         assert!(compact_for_overflow(
             &config,
             &mut state,
-            aura_context_compaction::CompactionConfig::micro(),
+            aura_context_compaction::CompactionConfig::emergency(),
             &[],
         ));
     }

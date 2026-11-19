@@ -14,8 +14,12 @@ use aura_core_types::trace::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
+use aura_model::model_catalog::{call_tokens, estimate_cost_usd};
+use aura_model::Usage;
+
 use crate::bundle::RunMeta;
 use crate::recorder::excerpt;
+use crate::records::RecordRow;
 
 /// Kind of a graph node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -125,6 +129,9 @@ pub struct RunGraph {
     by_seq: HashMap<u64, String>,
     #[serde(skip)]
     last_touch: HashMap<String, String>,
+    /// Policy decisions that arrived before their tool call's node.
+    #[serde(skip)]
+    pending_policy: HashMap<String, Value>,
 }
 
 impl RunGraph {
@@ -139,12 +146,17 @@ impl RunGraph {
         node_meta.insert("harness".into(), json!(meta.harness_version));
         node_meta.insert("trace_level".into(), json!(meta.trace_level));
         node_meta.insert("params".into(), json!(meta.params));
-        if let Some(task) = &meta.task_id {
-            node_meta.insert("task_id".into(), json!(task));
-        }
-        if let Some(arm) = &meta.arm {
-            node_meta.insert("arm".into(), json!(arm));
-        }
+        node_meta.insert("title".into(), json!(meta.title));
+        node_meta.insert("started_at_ms".into(), json!(meta.started_at_ms));
+        node_meta.insert("ended_at_ms".into(), json!(meta.ended_at_ms));
+        node_meta.insert("mode".into(), json!(meta.mode));
+        node_meta.insert("workspace".into(), json!(meta.workspace));
+        node_meta.insert("agent_id".into(), json!(meta.agent_id));
+        node_meta.insert("spawned_by".into(), json!(meta.spawned_by));
+        node_meta.insert("task_id".into(), json!(meta.task_id));
+        node_meta.insert("arm".into(), json!(meta.arm));
+        node_meta.insert("arm_propensity".into(), json!(meta.arm_propensity));
+        node_meta.insert("consent".into(), json!(meta.consent));
         graph.insert(GraphNode {
             id: "run".into(),
             kind: NodeKind::Run,
@@ -269,6 +281,8 @@ impl RunGraph {
             return t.clone();
         }
         let id = format!("t{}", step.turn);
+        let mut meta = Map::new();
+        meta.insert("at_ms".into(), json!(step.at_ms));
         self.insert(GraphNode {
             id: id.clone(),
             kind: NodeKind::Turn,
@@ -277,7 +291,7 @@ impl RunGraph {
             detail: String::new(),
             status: NodeStatus::Pending,
             seq: None,
-            meta: Map::new(),
+            meta,
             children: Vec::new(),
         });
         self.current_turn = Some(id.clone());
@@ -304,6 +318,7 @@ impl RunGraph {
                 let id = format!("t{}", step.turn);
                 let mut meta = Map::new();
                 meta.insert("prompt".into(), json!(text));
+                meta.insert("at_ms".into(), json!(step.at_ms));
                 self.insert(GraphNode {
                     id: id.clone(),
                     kind: NodeKind::Turn,
@@ -322,13 +337,26 @@ impl RunGraph {
                 let parent = self.turn_parent(step);
                 let id = format!("s{}", step.seq);
                 let usage = step.usage.unwrap_or_default();
+                let billed = Usage {
+                    input_tokens: usage.input,
+                    output_tokens: usage.output,
+                    cache_creation_input_tokens: Some(usage.cache_write),
+                    cache_read_input_tokens: Some(usage.cache_read),
+                };
+                let total = call_tokens(&step.policy.id, &billed);
+                let prompt_tokens = total.saturating_sub(usage.output);
+                let cost = estimate_cost_usd(&step.policy.id, &billed);
+                let truncated = action.stop_reason == "max_tokens";
                 let intents = intent_mix(action.tool_calls.iter().map(|c| c.intent));
                 let mut meta = Map::new();
                 meta.insert("seq".into(), json!(step.seq));
+                meta.insert("at_ms".into(), json!(step.at_ms));
                 meta.insert("iteration".into(), json!(step.iteration));
                 meta.insert("model".into(), json!(step.policy.id));
                 meta.insert("params".into(), step.policy.params.clone());
                 meta.insert("usage".into(), json!(usage));
+                meta.insert("prompt_tokens".into(), json!(prompt_tokens));
+                meta.insert("cost_usd".into(), json!(cost));
                 meta.insert("latency_ms".into(), json!(step.duration_ms));
                 meta.insert("stop_reason".into(), json!(action.stop_reason));
                 meta.insert("thinking_chars".into(), json!(action.thinking_chars));
@@ -347,13 +375,18 @@ impl RunGraph {
                     parent: Some(parent),
                     label: format!("I{n} model"),
                     detail: format!(
-                        "{}/{}  {}  {}",
-                        tokens(usage.input + usage.cache_read + usage.cache_write),
+                        "{}/{}  {}  {}{}",
+                        tokens(prompt_tokens),
                         tokens(usage.output),
                         secs(step.duration_ms.unwrap_or_default()),
-                        intents.first().map_or("answer", |(i, _)| i.as_str())
+                        intents.first().map_or("answer", |(i, _)| i.as_str()),
+                        if truncated { "  max tokens" } else { "" }
                     ),
-                    status: NodeStatus::Ok,
+                    status: if truncated {
+                        NodeStatus::Warn
+                    } else {
+                        NodeStatus::Ok
+                    },
                     seq: Some(step.seq),
                     meta,
                     children: Vec::new(),
@@ -372,8 +405,10 @@ impl RunGraph {
                     m.insert("tool".into(), json!(call.name));
                     m.insert("input".into(), call.input.clone());
                     m.insert("intent".into(), json!(call.intent));
+                    m.insert("at_ms".into(), json!(step.at_ms));
+                    let call_id = format!("tc:{}", call.tool_use_id);
                     self.insert(GraphNode {
-                        id: format!("tc:{}", call.tool_use_id),
+                        id: call_id.clone(),
                         kind: if call.intent == ToolIntent::Delegate {
                             NodeKind::Subagent
                         } else {
@@ -387,6 +422,9 @@ impl RunGraph {
                         meta: m,
                         children: Vec::new(),
                     });
+                    if let Some(policy) = self.pending_policy.remove(&call_id) {
+                        self.set_policy(&call_id, policy);
+                    }
                 }
             }
             StepAction::ToolResult {
@@ -416,6 +454,9 @@ impl RunGraph {
                         meta: Map::new(),
                         children: Vec::new(),
                     });
+                    if let Some(policy) = self.pending_policy.remove(&id) {
+                        self.set_policy(&id, policy);
+                    }
                 }
                 self.by_seq.insert(step.seq, id.clone());
                 let mut flags = vec![if *is_error { "fail" } else { "ok" }.to_string()];
@@ -441,6 +482,7 @@ impl RunGraph {
                     };
                     node.detail = flags.join("  ");
                     node.meta.insert("result_seq".into(), json!(step.seq));
+                    node.meta.insert("ended_at_ms".into(), json!(step.at_ms));
                     node.meta.insert("is_error".into(), json!(is_error));
                     node.meta.insert("source".into(), json!(source));
                     node.meta
@@ -478,6 +520,7 @@ impl RunGraph {
                 };
                 let mut meta = Map::new();
                 meta.insert("seq".into(), json!(step.seq));
+                meta.insert("at_ms".into(), json!(step.at_ms));
                 meta.insert("source".into(), json!(source));
                 meta.insert("name".into(), json!(name));
                 meta.insert("action".into(), json!(action));
@@ -520,9 +563,14 @@ impl RunGraph {
                 input_tokens,
                 output_tokens,
                 files_changed,
+                error,
             } => {
                 let turn = self.turn_parent(step);
                 self.by_seq.insert(step.seq, turn.clone());
+                if let Some(error) = error {
+                    self.failed_call(&turn, step, error);
+                }
+                let cost = self.cost_of(|n| n.parent.as_deref() == Some(turn.as_str()));
                 if let Some(node) = self.node_mut(&turn) {
                     node.status = if matches!(stop_reason.as_str(), "end_turn" | "task_done") {
                         NodeStatus::Ok
@@ -530,15 +578,28 @@ impl RunGraph {
                         NodeStatus::Error
                     };
                     node.detail = format!(
-                        "{stop_reason}  {}  {iterations} calls  {files_changed} files",
-                        tokens(input_tokens + output_tokens)
+                        "{stop_reason}  {}  {iterations} calls  {files_changed} files{}",
+                        tokens(input_tokens + output_tokens),
+                        cost.map(|c| format!("  ${c:.4}")).unwrap_or_default()
                     );
+                    let started = node.meta.get("at_ms").and_then(Value::as_u64);
                     node.meta.insert("stop_reason".into(), json!(stop_reason));
+                    node.meta.insert("error".into(), json!(error));
                     node.meta.insert("iterations".into(), json!(iterations));
                     node.meta.insert("input_tokens".into(), json!(input_tokens));
                     node.meta
                         .insert("output_tokens".into(), json!(output_tokens));
+                    node.meta.insert("cost_usd".into(), json!(cost));
+                    node.meta.insert("ended_at_ms".into(), json!(step.at_ms));
+                    node.meta.insert(
+                        "duration_ms".into(),
+                        json!(started.map(|s| step.at_ms.saturating_sub(s))),
+                    );
                     node.meta.insert("files".into(), json!(step.links.files));
+                }
+                let run_cost = self.cost_of(|_| true);
+                if let Some(run) = self.node_mut("run") {
+                    run.meta.insert("cost_usd".into(), json!(run_cost));
                 }
                 self.current_turn = None;
                 self.last_iteration = None;
@@ -611,6 +672,150 @@ impl RunGraph {
                 }
             }
         }
+    }
+
+    /// Add a kernel record row: a policy decision goes on its tool call.
+    /// Returns the id of the node that changed.
+    pub fn apply_record(&mut self, row: &RecordRow) -> Option<String> {
+        if row.tx_type != "policy_decision" {
+            return None;
+        }
+        let id = format!("tc:{}", row.tool_use_id.as_deref()?);
+        let policy = json!({
+            "verdict": row.verdict,
+            "rule": row.rule,
+            "approver": row.approver,
+            "reason": row.reason,
+            "record_seq": row.seq,
+            "at_ms": row.at_ms,
+        });
+        if self.node(&id).is_none() {
+            self.pending_policy.insert(id, policy);
+            return None;
+        }
+        self.set_policy(&id, policy);
+        Some(id)
+    }
+
+    fn set_policy(&mut self, id: &str, policy: Value) {
+        let Some(node) = self.node_mut(id) else {
+            return;
+        };
+        if node.status == NodeStatus::Pending {
+            match policy.get("verdict").and_then(Value::as_str) {
+                Some("denied") => {
+                    node.status = NodeStatus::Error;
+                    node.detail = "denied".into();
+                }
+                Some("pending_approval") => node.detail = "awaiting approval".into(),
+                _ if node.detail == "awaiting approval" => node.detail = "running".into(),
+                _ => {}
+            }
+        }
+        node.meta.insert("policy".into(), policy);
+    }
+
+    /// Link runs of agents this run spawned to the calls that spawned
+    /// them: the call whose prompt the child's title was taken from, else
+    /// the latest call made before the child started (a retry). Returns
+    /// the ids of the nodes that changed.
+    pub fn link_child_runs(&mut self, children: &[RunMeta]) -> Vec<String> {
+        let mut children: Vec<&RunMeta> = children.iter().collect();
+        children.sort_by_key(|c| c.started_at_ms);
+        let mut changed: Vec<String> = Vec::new();
+        for child in children {
+            let lists = |n: &GraphNode| {
+                n.meta
+                    .get("child_runs")
+                    .and_then(Value::as_array)
+                    .is_some_and(|l| l.iter().any(|v| v.as_str() == Some(&child.run_id)))
+            };
+            if self.nodes.iter().any(|n| n.id != "run" && lists(n)) {
+                continue;
+            }
+            let before = |n: &&GraphNode| {
+                n.kind == NodeKind::Subagent
+                    && n.meta
+                        .get("at_ms")
+                        .and_then(Value::as_u64)
+                        .is_none_or(|at| at <= child.started_at_ms)
+            };
+            let titled = |n: &&GraphNode| {
+                !n.meta.contains_key("child_run")
+                    && n.meta
+                        .get("input")
+                        .and_then(|i| i.get("prompt"))
+                        .and_then(Value::as_str)
+                        .is_some_and(|p| excerpt(first_line(p), 80) == child.title)
+            };
+            let target = self
+                .nodes
+                .iter()
+                .filter(before)
+                .find(titled)
+                .or_else(|| self.nodes.iter().rev().find(before))
+                .map(|n| n.id.clone());
+            for id in std::iter::once("run".to_string()).chain(target) {
+                let Some(node) = self.node_mut(&id) else {
+                    continue;
+                };
+                if id != "run" {
+                    node.meta
+                        .entry("child_run")
+                        .or_insert_with(|| json!(child.run_id));
+                }
+                let list = node
+                    .meta
+                    .entry("child_runs")
+                    .or_insert_with(|| Value::Array(Vec::new()));
+                if let Value::Array(list) = list {
+                    if !list.iter().any(|v| v.as_str() == Some(&child.run_id)) {
+                        list.push(json!(child.run_id));
+                    }
+                }
+                if !changed.contains(&id) {
+                    changed.push(id);
+                }
+            }
+        }
+        changed
+    }
+
+    fn failed_call(&mut self, turn: &str, step: &Step, error: &str) {
+        let calls = self.node(turn).map_or(0, |t| {
+            t.children
+                .iter()
+                .filter(|c| self.node(c).is_some_and(|n| n.kind == NodeKind::Iteration))
+                .count()
+        });
+        let id = format!("s{}:failed", step.seq);
+        let mut meta = Map::new();
+        meta.insert("at_ms".into(), json!(step.at_ms));
+        meta.insert("error".into(), json!(error));
+        self.insert(GraphNode {
+            id: id.clone(),
+            kind: NodeKind::Iteration,
+            parent: Some(turn.to_string()),
+            label: format!("I{} failed", calls + 1),
+            detail: excerpt(first_line(error), 60),
+            status: NodeStatus::Error,
+            seq: None,
+            meta,
+            children: Vec::new(),
+        });
+        if let Some(prev) = self.last_iteration.replace(id.clone()) {
+            self.edge(&prev, &id, EdgeKind::Next);
+        }
+    }
+
+    /// Summed cost of the model calls `keep` selects; `None` when none
+    /// has a known price.
+    fn cost_of(&self, keep: impl Fn(&GraphNode) -> bool) -> Option<f64> {
+        self.nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Iteration && keep(n))
+            .filter_map(|n| n.meta.get("cost_usd").and_then(Value::as_f64))
+            .fold(None, |sum, c| Some(sum.unwrap_or(0.0) + c))
     }
 }
 
@@ -793,5 +998,151 @@ mod tests {
             .map(|n| n.id.as_str())
             .collect();
         assert_eq!(ids, vec!["run", "t1", "s3", "tc:a"]);
+    }
+
+    fn turn_end(seq: u64, stop_reason: &str, error: Option<&str>) -> Step {
+        base(
+            seq,
+            Actor::Environment,
+            StepAction::TurnEnd {
+                stop_reason: stop_reason.into(),
+                iterations: 1,
+                input_tokens: 0,
+                output_tokens: 0,
+                files_changed: 0,
+                error: error.map(str::to_string),
+            },
+        )
+    }
+
+    fn policy(seq: u64, id: &str, verdict: &str) -> RecordRow {
+        RecordRow {
+            seq,
+            tx_type: "policy_decision".into(),
+            at_ms: seq * 1000,
+            tool_use_id: Some(id.into()),
+            tool: Some("edit_file".into()),
+            verdict: Some(verdict.into()),
+            approver: Some("user".into()),
+            rule: Some("mode.ask".into()),
+            reason: None,
+        }
+    }
+
+    #[test]
+    fn model_calls_are_timed_priced_and_flag_max_tokens() {
+        let mut m = model(2, &[]);
+        m.policy.id = "claude-opus-4-5".into();
+        m.usage = Some(aura_core_types::trace::TokenUsage {
+            input: 200,
+            output: 100,
+            cache_write: 0,
+            cache_read: 800,
+        });
+        if let StepAction::Model(action) = &mut m.action {
+            action.stop_reason = "max_tokens".into();
+        }
+        let mut g = RunGraph::new(&RunMeta::new("m", RunSource::Test));
+        g.apply(&m);
+        g.apply(&turn_end(3, "end_turn", None));
+        let call = g.node("s2").unwrap();
+        assert_eq!(call.status, NodeStatus::Warn);
+        assert!(call.detail.starts_with("1.0k/100"), "{}", call.detail);
+        assert!(call.detail.ends_with("max tokens"));
+        assert_eq!(call.meta["at_ms"], json!(2000));
+        assert_eq!(call.meta["prompt_tokens"], json!(1000));
+        let cost = call.meta["cost_usd"].as_f64().unwrap();
+        assert!((cost - 0.0039).abs() < 1e-9);
+        let turn = g.node("t1").unwrap();
+        assert_eq!(turn.meta["cost_usd"], json!(cost));
+        assert_eq!(turn.meta["duration_ms"], json!(1000));
+        assert_eq!(g.node("run").unwrap().meta["cost_usd"], json!(cost));
+    }
+
+    #[test]
+    fn a_turn_that_ended_on_an_error_shows_the_failed_call() {
+        let mut g = RunGraph::new(&RunMeta::new("m", RunSource::Test));
+        g.apply(&model(1, &[]));
+        g.apply(&turn_end(2, "llm_error", Some("overloaded\nretry later")));
+        let failed = g.node("s2:failed").unwrap();
+        assert_eq!(failed.label, "I2 failed");
+        assert_eq!(failed.detail, "overloaded");
+        assert_eq!(failed.status, NodeStatus::Error);
+        assert!(g.links("s1").iter().any(|e| e.to == "s2:failed"));
+        assert_eq!(
+            g.node("t1").unwrap().meta["error"],
+            json!("overloaded\nretry later")
+        );
+    }
+
+    #[test]
+    fn policy_decisions_land_on_their_tool_call_in_either_order() {
+        let mut g = RunGraph::new(&RunMeta::new("m", RunSource::Test));
+        assert_eq!(g.apply_record(&policy(1, "early", "denied")), None);
+        g.apply(&model(2, &[("early", "edit_file", json!({"path": "x"}))]));
+        let early = g.node("tc:early").unwrap();
+        assert_eq!(early.status, NodeStatus::Error);
+        assert_eq!(early.meta["policy"]["verdict"], json!("denied"));
+
+        g.apply(&model(3, &[("late", "edit_file", json!({"path": "y"}))]));
+        let changed = g.apply_record(&policy(4, "late", "pending_approval"));
+        assert_eq!(changed.as_deref(), Some("tc:late"));
+        assert_eq!(g.node("tc:late").unwrap().detail, "awaiting approval");
+        g.apply_record(&policy(5, "late", "approved"));
+        let late = g.node("tc:late").unwrap();
+        assert_eq!(late.detail, "running");
+        assert_eq!(late.meta["policy"]["approver"], json!("user"));
+        assert_eq!(late.meta["policy"]["rule"], json!("mode.ask"));
+        assert_eq!(late.meta["policy"]["record_seq"], json!(5));
+    }
+
+    #[test]
+    fn child_runs_link_to_the_call_that_spawned_them() {
+        let parent = RunMeta::new("m", RunSource::Test);
+        let mut g = RunGraph::new(&parent);
+        g.apply(&model(
+            1,
+            &[
+                ("a", "task", json!({"prompt": "count files\nin src"})),
+                ("b", "task", json!({"prompt": "list tests"})),
+            ],
+        ));
+        assert_eq!(g.node("tc:a").unwrap().kind, NodeKind::Subagent);
+        let child = |id: &str, title: &str, at: u64| {
+            let mut meta = RunMeta::new("m", RunSource::Test);
+            meta.run_id = id.into();
+            meta.title = title.into();
+            meta.started_at_ms = at;
+            meta.spawned_by = Some(parent.run_id.clone());
+            meta
+        };
+        let changed = g.link_child_runs(&[
+            child("c2", "list tests", 1500),
+            child("c1", "count files", 1200),
+            child("c3", "list tests, retried", 1800),
+        ]);
+        assert_eq!(changed, vec!["run", "tc:a", "tc:b"]);
+        assert_eq!(g.node("tc:a").unwrap().meta["child_run"], json!("c1"));
+        assert_eq!(g.node("tc:b").unwrap().meta["child_run"], json!("c2"));
+        assert_eq!(
+            g.node("tc:b").unwrap().meta["child_runs"],
+            json!(["c2", "c3"])
+        );
+        assert_eq!(
+            g.node("run").unwrap().meta["child_runs"],
+            json!(["c1", "c2", "c3"])
+        );
+        assert!(g
+            .link_child_runs(&[child("c1", "count files", 1200)])
+            .is_empty());
+    }
+
+    #[test]
+    fn the_run_node_shows_unset_fields_as_null() {
+        let g = RunGraph::new(&RunMeta::new("m", RunSource::Test));
+        let run = &g.node("run").unwrap().meta;
+        assert_eq!(run["ended_at_ms"], Value::Null);
+        assert_eq!(run["spawned_by"], Value::Null);
+        assert!(run["started_at_ms"].as_u64().is_some());
     }
 }

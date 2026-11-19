@@ -23,9 +23,10 @@ mod line_edit;
 pub mod mentions;
 mod panes;
 pub mod plans;
-pub mod tasks;
 mod processes;
+mod project_drag;
 mod prose;
+pub mod tasks;
 pub use aura_ui::sandbox;
 mod selection;
 pub(crate) mod shell_input;
@@ -211,6 +212,8 @@ pub struct App {
     pub(super) swarm_panel_visible: bool,
     /// Whether the Sandbox panel is visible
     pub(super) sandbox_panel_visible: bool,
+    /// Whether the chat panel fills the screen, the other panels hidden
+    pub(super) chat_expanded: bool,
     /// File tree of the active agent's sandbox
     pub(super) sandbox: SandboxTree,
     /// Whether a tool may have changed files since the tree was read; the
@@ -236,6 +239,11 @@ pub struct App {
     pub(super) selected_agent: usize,
     /// Root-agent ids whose project row is folded shut
     pub(super) collapsed_projects: HashSet<String>,
+    /// The left button is down on a project's header: a click folds it, a
+    /// drag moves it
+    pub(super) project_press: Option<project_drag::ProjectPress>,
+    /// Times a drag has reordered the projects, so the screen is redrawn
+    pub(super) project_moves: usize,
     /// Currently active agent ID
     pub(super) active_agent_id: String,
     /// Chats of the agents not on screen, by agent ID
@@ -402,8 +410,14 @@ pub struct PanelAreas {
     pub chat: Option<Rect>,
     /// Header bar of the chat panel
     pub chat_tabs: Option<Rect>,
+    /// Close button in the chat panel's header bar while a view covers it
+    pub detail_close: Option<Rect>,
+    /// Button in the chat panel's header bar that expands or restores it
+    pub chat_expand: Option<Rect>,
     /// Message text area inside the chat panel
     pub chat_text: Option<Rect>,
+    /// Input box under the chat panel (including border)
+    pub input: Option<Rect>,
     /// Record panel (including border)
     pub records: Option<Rect>,
     /// Rows of the record list inside the panel
@@ -456,6 +470,10 @@ pub(crate) enum HoverTarget {
     AgentTab(AgentsTab),
     /// A label in the chat panel's tab bar.
     ChatTab(ChatTab),
+    /// The close button of the view over the chat panel.
+    CloseDetail,
+    /// The button that expands the chat panel or restores it.
+    ExpandChat,
     /// A row in the projects list, including "+ New project".
     ProjectRow(usize),
     /// The "+" at the right end of a project's row in the projects list.
@@ -623,6 +641,7 @@ impl App {
             record_panel_visible: true,
             swarm_panel_visible: true,
             sandbox_panel_visible: true,
+            chat_expanded: false,
             sandbox: SandboxTree::default(),
             sandbox_stale: false,
             animation_frame: 0,
@@ -635,6 +654,8 @@ impl App {
             agents: Vec::new(),
             selected_agent: 0,
             collapsed_projects: HashSet::new(),
+            project_press: None,
+            project_moves: 0,
             active_agent_id: String::new(),
             views: HashMap::new(),
             api_url: None,
@@ -1221,6 +1242,39 @@ impl App {
         self.notification = Some(("Cancelled".to_string(), NotificationType::Warning));
     }
 
+    /// A path was dropped on the window. A folder becomes a project named
+    /// after it, with the same event the folder browser sends; anything
+    /// else is refused with a notice. Returns whether a project was asked
+    /// for.
+    pub fn drop_path(&mut self, path: &std::path::Path) -> bool {
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().trim().to_string())
+            .filter(|name| !name.is_empty());
+        let (Some(name), true) = (name, path.is_dir()) else {
+            self.notification = Some((
+                "Drop a folder to start a project".to_string(),
+                NotificationType::Warning,
+            ));
+            return false;
+        };
+        let Some(tx) = &self.event_tx else {
+            return false;
+        };
+        let event = UiEvent::CreateProject {
+            name,
+            folder: path.to_path_buf(),
+        };
+        if tx.try_send(event).is_err() {
+            self.notification = Some((
+                "Cannot add the project right now".to_string(),
+                NotificationType::Error,
+            ));
+            return false;
+        }
+        true
+    }
+
     /// Folder browser for a new project, while it is open.
     #[must_use]
     pub const fn folder_picker(&self) -> Option<&FolderPicker> {
@@ -1360,6 +1414,11 @@ impl App {
         self.areas.chat_text = Some(area);
     }
 
+    /// Record where the input box was drawn this frame.
+    pub fn set_input_area(&mut self, area: Rect) {
+        self.areas.input = Some(area);
+    }
+
     /// Record where the agents list rows were drawn this frame.
     pub fn set_agent_rows_area(&mut self, area: Rect) {
         self.areas.agent_rows = Some(area);
@@ -1416,15 +1475,16 @@ impl App {
     pub fn handle_mouse(&mut self, mouse: MouseEvent) -> bool {
         let pointing = matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Drag(_));
         let menu = |app: &Self| app.context_menu.as_ref().map(|menu| menu.selected);
-        let before = (self.hover, self.selection, menu(self));
+        let before = (self.hover, self.selection, menu(self), self.project_moves);
         self.mouse(mouse);
-        !pointing || before != (self.hover, self.selection, menu(self))
+        !pointing || before != (self.hover, self.selection, menu(self), self.project_moves)
     }
 
     fn mouse(&mut self, mouse: MouseEvent) {
         if self.state != AppState::Idle && self.state != AppState::Processing {
             self.hover = None;
             self.context_menu = None;
+            self.project_press = None;
             return;
         }
         if self.context_menu_mouse(mouse.kind, mouse.column, mouse.row) {
@@ -1439,10 +1499,22 @@ impl App {
             self.hover = None;
             return;
         }
+        // Right-click in the input box pastes, as in a terminal.
+        if mouse.kind == MouseEventKind::Down(MouseButton::Right)
+            && contains(self.areas.input, mouse.column, mouse.row)
+        {
+            self.clear_selection();
+            self.hover = None;
+            self.request_paste();
+            return;
+        }
         let at = Position::new(mouse.column, mouse.row);
         match mouse.kind {
             MouseEventKind::Drag(MouseButton::Left) => {
                 self.hover = None;
+                if self.drag_project(mouse.row) {
+                    return;
+                }
                 if self.drag_flow(mouse.column, mouse.row) {
                     return;
                 }
@@ -1452,6 +1524,10 @@ impl App {
                 return;
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                if self.release_project() {
+                    self.hover = self.hover_target(mouse.column, mouse.row);
+                    return;
+                }
                 if self.release_flow() {
                     return;
                 }
@@ -1518,11 +1594,21 @@ impl App {
                     .map(|bounds| Selection::new(bounds, at));
                 self.selecting = self.selection.is_some();
                 match panel {
-                    PanelFocus::Swarm => self.click_agents_panel(mouse.column, mouse.row),
+                    PanelFocus::Swarm => {
+                        if !self.press_project(mouse.column, mouse.row) {
+                            self.click_agents_panel(mouse.column, mouse.row);
+                        }
+                    }
                     PanelFocus::Sandbox => self.click_side_panel(mouse.column, mouse.row),
                     PanelFocus::Records => self.click_record_row(mouse.column, mouse.row),
                     PanelFocus::Chat => {
-                        if self.click_chat_tabs(mouse.column, mouse.row) {
+                        if self.detail_close_at(mouse.column, mouse.row) {
+                            self.close_detail();
+                            self.clear_selection();
+                        } else if contains(self.areas.chat_expand, mouse.column, mouse.row) {
+                            self.toggle_chat_expanded();
+                            self.clear_selection();
+                        } else if self.click_chat_tabs(mouse.column, mouse.row) {
                             self.clear_selection();
                         } else if self.detail == Some(DetailView::Graph) {
                             self.click_graph(mouse.column, mouse.row);
@@ -1548,6 +1634,12 @@ impl App {
         }
         if let Some(target) = self.hovered_chat_tab(column, row) {
             return Some(target);
+        }
+        if self.detail_close_at(column, row) {
+            return Some(HoverTarget::CloseDetail);
+        }
+        if contains(self.areas.chat_expand, column, row) {
+            return Some(HoverTarget::ExpandChat);
         }
         if self.agents_tab == AgentsTab::Projects {
             if let Some(index) = self.project_row_at(column, row) {
@@ -1647,12 +1739,13 @@ impl App {
     }
 
     /// Cells of `panel` that hold text: inside its border, and for the chat
-    /// only the message area unless a record or file covers it.
+    /// only the message area unless a record or file covers it. The agents
+    /// panel on the left is navigation, so its text is never selected.
     fn selectable_area(&self, panel: PanelFocus) -> Option<Rect> {
         let area = match panel {
             PanelFocus::Chat if self.detail.is_some() => self.areas.chat,
             PanelFocus::Chat => return self.areas.chat_text.or(self.areas.chat),
-            PanelFocus::Swarm => self.areas.swarm,
+            PanelFocus::Swarm => return None,
             PanelFocus::Records => self.areas.records,
             PanelFocus::Sandbox => self.areas.sandbox,
         }?;
@@ -1768,19 +1861,34 @@ impl App {
     /// Check if the Record panel is visible.
     #[must_use]
     pub const fn record_panel_visible(&self) -> bool {
-        self.record_panel_visible
+        self.record_panel_visible && !self.chat_expanded
     }
 
     /// Check if the Swarm panel is visible.
     #[must_use]
     pub const fn swarm_panel_visible(&self) -> bool {
-        self.swarm_panel_visible
+        self.swarm_panel_visible && !self.chat_expanded
     }
 
     /// Check if the Sandbox panel is visible.
     #[must_use]
     pub const fn sandbox_panel_visible(&self) -> bool {
-        self.sandbox_panel_visible
+        self.sandbox_panel_visible && !self.chat_expanded
+    }
+
+    /// Whether the chat panel fills the screen, the other panels hidden.
+    #[must_use]
+    pub const fn chat_expanded(&self) -> bool {
+        self.chat_expanded
+    }
+
+    /// Expand the chat panel to fill the screen, or give the other panels
+    /// their room back. The chat keeps whichever tab or view it shows.
+    pub fn toggle_chat_expanded(&mut self) {
+        self.chat_expanded = !self.chat_expanded;
+        if self.chat_expanded {
+            self.focus = PanelFocus::Chat;
+        }
     }
 
     /// File tree of the active agent's sandbox.
@@ -2104,6 +2212,21 @@ impl App {
         self.graph.behind = false;
     }
 
+    /// Record where the close button of the view over the chat panel was
+    /// drawn this frame.
+    pub fn set_detail_close_area(&mut self, area: Option<Rect>) {
+        self.areas.detail_close = area;
+    }
+
+    /// Record where the chat panel's expand button was drawn this frame.
+    pub fn set_chat_expand_area(&mut self, area: Option<Rect>) {
+        self.areas.chat_expand = area;
+    }
+
+    fn detail_close_at(&self, column: u16, row: u16) -> bool {
+        self.detail.is_some() && contains(self.areas.detail_close, column, row)
+    }
+
     /// Open the highlighted sandbox row: a file over the chat panel; a
     /// directory, which has nothing to show, folds or unfolds.
     pub(super) fn activate_selected_sandbox_row(&mut self) {
@@ -2227,6 +2350,14 @@ impl App {
             if let Some(tx) = &self.event_tx {
                 let _ = tx.try_send(UiEvent::Cancel(self.active_agent_id.clone()));
             }
+        }
+    }
+
+    /// Stop the commands the agent on screen is running. Its turn goes on
+    /// with what they printed.
+    pub fn stop_command(&mut self) {
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::StopCommand(self.active_agent_id.clone()));
         }
     }
 

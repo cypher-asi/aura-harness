@@ -8,8 +8,11 @@ use std::path::Path;
 use tracing::{debug, instrument};
 
 mod pty;
+mod stop;
 mod tags;
 
+pub use stop::stop_commands;
+use stop::Registration;
 pub use tags::{ProcessTags, AGENT_ID_VAR, HARNESS_PID_VAR, TOOL_USE_ID_VAR};
 
 /// Result of a threshold-based wait operation.
@@ -406,15 +409,16 @@ fn run_program(
     use std::time::Duration;
 
     let (child, _full_command) = spawn_program(sandbox, program, args, cwd, tags)?;
+    let stop = Registration::new(tags, Some(child.id()));
 
-    let output = match wait_with_hard_timeout(child, Duration::from_millis(timeout_ms)) {
+    let output = match wait_with_hard_timeout(child, Duration::from_millis(timeout_ms), &stop) {
         Ok(out) => out,
         Err(e) => {
             return Err(ToolError::CommandFailed(format!("Command timed out: {e}")));
         }
     };
 
-    output_to_tool_result_with_program(output, Some(program), args)
+    output_to_tool_result_with_program(output, Some(program), args).map(|r| stop.annotate(r))
 }
 
 /// Run a raw shell script synchronously with a timeout.
@@ -432,15 +436,16 @@ fn cmd_run_shell_script(
     use std::time::Duration;
 
     let (child, _display) = cmd_spawn_shell_script(sandbox, shell_script, cwd, tags)?;
+    let stop = Registration::new(tags, Some(child.id()));
 
-    let output = match wait_with_hard_timeout(child, Duration::from_millis(timeout_ms)) {
+    let output = match wait_with_hard_timeout(child, Duration::from_millis(timeout_ms), &stop) {
         Ok(out) => out,
         Err(e) => {
             return Err(ToolError::CommandFailed(format!("Command timed out: {e}")));
         }
     };
 
-    output_to_tool_result(output)
+    output_to_tool_result(output).map(|r| stop.annotate(r))
 }
 
 /// Truncation limits for command output.
@@ -668,10 +673,13 @@ fn drain_pipe<R: std::io::Read + Send + 'static>(mut pipe: R) -> std::thread::Jo
 /// Wait for a child process with a hard timeout (kills on timeout).
 ///
 /// This is the original timeout behavior - if the process doesn't complete
-/// within the timeout, it is killed and an error is returned.
+/// within the timeout, it is killed and an error is returned. A child the
+/// user stopped through `stop` is killed once its grace runs out, and its
+/// output so far returned.
 fn wait_with_hard_timeout(
     mut child: std::process::Child,
     timeout: std::time::Duration,
+    stop: &Registration,
 ) -> std::io::Result<std::process::Output> {
     use std::thread;
     use std::time::Instant;
@@ -694,6 +702,10 @@ fn wait_with_hard_timeout(
             });
         }
 
+        if stop.overdue() {
+            terminate_child_process_group(&mut child);
+            continue;
+        }
         if start.elapsed() > timeout {
             terminate_child_process_group(&mut child);
             return Err(std::io::Error::new(

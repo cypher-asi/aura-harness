@@ -63,17 +63,9 @@ impl Bar {
             };
             text.write(&mut out.over, &label, middle(rect));
             if item.busy {
-                // A bar along the bottom, inside the outline.
-                let inset = 2.0 * line + 1.0;
-                let thick = 2.0 * line;
-                fill(
-                    &mut out.under,
-                    rect.x + inset,
-                    rect.y + rect.height - inset - thick,
-                    (rect.width - 2.0 * inset).max(0.0),
-                    thick,
-                    palette.accent,
-                );
+                // A green border around the whole box while an agent of
+                // the tab works; drawn last so it wins over the edge above.
+                outline(&mut out.under, *rect, palette.accent, line);
             }
         }
 
@@ -148,44 +140,50 @@ impl Bar {
                     };
                     outline(&mut out.under, square, ink, line);
                 }
-                _ => {
-                    // Two strokes corner to corner, on whole pixels: one
-                    // drawing serves wherever the box is.
-                    let width = line * 1.25;
-                    let reach = 2.0 * arm;
-                    let pad = width.ceil() + 1.0;
-                    let key = ShapeKey {
-                        shape: CROSS,
-                        width: arm.to_bits(),
-                        height: line.to_bits(),
-                        phase: [0, 0],
-                    };
-                    let at = (
-                        (cx - arm + half - pad) as i32,
-                        (cy - arm + half - pad) as i32,
-                    );
-                    let side = (reach + 2.0 * pad) as u32;
-                    let atlas = text.atlas_mut();
-                    shapes::stamp(
-                        &mut out.under,
-                        atlas,
-                        key,
-                        at,
-                        (side, side),
-                        rgba(ink),
-                        |pen| {
-                            let (near, far) = (pad, pad + reach);
-                            for (from, to) in [(near, far), (far, near)] {
-                                let stroke =
-                                    Outline::line(Point::new(near, from), Point::new(far, to));
-                                pen.stroke(stroke, width, LineCap::Butt, LineJoin::Miter);
-                            }
-                        },
-                    );
-                }
+                _ => cross(text, out, middle(rect), (arm, line), ink),
             }
         }
     }
+}
+
+/// An `×` centered on `middle`, `arm` pixels to each end, strokes `line`
+/// pixels thick: two strokes corner to corner. One drawing serves every
+/// place with the same offset from whole pixels.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub fn cross(text: &mut TextSystem, out: &mut Layers, middle: Point, size: (f32, f32), ink: Color) {
+    let (arm, line) = size;
+    let width = line * 1.25;
+    let reach = 2.0 * arm;
+    let pad = width.ceil() + 1.0;
+    let corner = Point::new(middle.x - arm - pad, middle.y - arm - pad);
+    let (left, top) = (corner.x.floor(), corner.y.floor());
+    let (dx, dy) = (corner.x - left, corner.y - top);
+    let key = ShapeKey {
+        shape: CROSS,
+        width: arm.to_bits(),
+        height: line.to_bits(),
+        phase: [shapes::phase(corner.x), shapes::phase(corner.y)],
+    };
+    let side = (reach + 2.0 * pad).ceil() as u32 + 1;
+    let atlas = text.atlas_mut();
+    shapes::stamp(
+        &mut out.under,
+        atlas,
+        key,
+        (left as i32, top as i32),
+        (side, side),
+        rgba(ink),
+        |pen| {
+            let (near, far) = (pad, pad + reach);
+            for (from, to) in [(near, far), (far, near)] {
+                let stroke = Outline::line(
+                    Point::new(near + dx, from + dy),
+                    Point::new(far + dx, to + dy),
+                );
+                pen.stroke(stroke, width, LineCap::Butt, LineJoin::Miter);
+            }
+        },
+    );
 }
 
 /// A box outline `line` pixels thick, on whole pixels inside `rect`.

@@ -4,6 +4,7 @@
 
 use super::agent_events::AgentUi;
 use super::agents::AgentSession;
+use super::plan_mode::todo_state;
 use super::LoopState;
 use crate::session_checkpoint::SessionUsage;
 use aura_agent::AgentLoopResult;
@@ -11,7 +12,6 @@ use aura_core_types::AgentId;
 use aura_exec_tools::todo::TodoItem;
 use aura_model::{model_catalog, Usage};
 use aura_ui_terminal::events::{CallStats, ContextView, SessionTotals, TodoView};
-use super::plan_mode::todo_state;
 use aura_ui_terminal::UiCommand;
 
 /// `todos` as the UI shows them.

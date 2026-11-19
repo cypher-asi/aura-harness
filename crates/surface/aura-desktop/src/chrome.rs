@@ -4,7 +4,9 @@
 //! at the right end. A panel without tabs shows its title in a filled
 //! box; a panel with tabs fills the box of the one it shows. Fills take
 //! the selection color while their panel has focus; otherwise the box is
-//! only outlined.
+//! only outlined. A bar over a view that closes, such as a file shown
+//! over the chat, ends in a close box; a panel that expands to fill the
+//! window has an expand box left of it.
 //!
 //! The dividers between panels live here too: bands along the borders
 //! two panels share, which drag to move the border.
@@ -45,6 +47,10 @@ impl Divider {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hit {
     Tab(PaneTab),
+    /// The close box at the right end of a bar
+    Close(Pane),
+    /// The box that expands a panel to fill the window, or restores it
+    Expand(Pane),
     /// The rest of a title bar
     Bar(Pane),
     Divider(Divider),
@@ -126,6 +132,10 @@ struct BarLayout {
     active: Option<PaneTab>,
     boxes: Vec<Boxed>,
     info: Option<Info>,
+    /// The close box, for bars that close what they show
+    close: Option<Rectangle>,
+    /// The expand box, and whether the panel is expanded
+    expand: Option<(Rectangle, bool)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -228,6 +238,12 @@ impl Layout {
             return Some(Hit::Divider(band.divider));
         }
         let bar = self.bars.iter().find(|bar| bar.rect.contains(at))?;
+        if bar.close.is_some_and(|close| close.contains(at)) {
+            return Some(Hit::Close(bar.pane));
+        }
+        if bar.expand.is_some_and(|(expand, _)| expand.contains(at)) {
+            return Some(Hit::Expand(bar.pane));
+        }
         let tab = bar.boxes.iter().find_map(|boxed| match boxed.kind {
             Kind::Tab(tab) if boxed.rect.contains(at) => Some(tab),
             _ => None,
@@ -256,10 +272,21 @@ fn bar_layout(model: &Model, pane: &PaneChrome) -> BarLayout {
     let margin = ((rect.height - height) / 2.0).floor();
     let top = (rect.center_y() - height / 2.0).round();
     let gap = (unit * 0.4).round().max(2.0);
-    let (start, end) = (
+    let (start, mut end) = (
         (rect.x + margin).round(),
         (rect.x + rect.width - margin).round(),
     );
+    let mut square = |wanted: bool| {
+        (wanted && end - start >= 4.0 * height).then(|| {
+            let square = Rectangle::new(Point::new(end - height, top), Size::new(height, height));
+            end = square.x - gap;
+            square
+        })
+    };
+    let close = square(pane.closable);
+    let expand = pane
+        .expand
+        .and_then(|expanded| Some((square(true)?, expanded)));
     let width = |text: &str| ((text.width() as f32 + 2.0 * SIDE) * unit).round();
 
     let items = |short: bool| -> Vec<(String, Kind)> {
@@ -313,6 +340,8 @@ fn bar_layout(model: &Model, pane: &PaneChrome) -> BarLayout {
         active: pane.active,
         boxes,
         info,
+        close,
+        expand,
     }
 }
 
@@ -392,6 +421,20 @@ impl Chrome {
             })
     }
 
+    /// The close box of `pane`'s bar, if it is drawn.
+    #[cfg(test)]
+    pub fn close_box(&self, pane: Pane) -> Option<Rectangle> {
+        let bar = self.layout.bars.iter().find(|bar| bar.pane == pane)?;
+        bar.close
+    }
+
+    /// The expand box of `pane`'s bar, if it is drawn.
+    #[cfg(test)]
+    pub fn expand_box(&self, pane: Pane) -> Option<Rectangle> {
+        let bar = self.layout.bars.iter().find(|bar| bar.pane == pane)?;
+        bar.expand.map(|(rect, _)| rect)
+    }
+
     /// The middle of the band of `divider`, if there is one.
     #[cfg(test)]
     pub fn band(&self, divider: Divider) -> Option<Point> {
@@ -420,6 +463,8 @@ mod tests {
             info: None,
             info_short: None,
             info_color: TermColor::Reset,
+            closable: false,
+            expand: None,
             focused: false,
         }
     }
@@ -519,6 +564,55 @@ mod tests {
         }
         chrome.point(Some(at));
         assert_eq!(chrome.hover(), Some(Hit::Tab(terminal)));
+    }
+
+    #[test]
+    fn closable_bars_end_in_a_close_box_left_of_the_info() {
+        let mut model = four_panes();
+        let chat = &mut model.panes[1];
+        chat.tabs.clear();
+        chat.title = Some("RECORD #60".into());
+        chat.info = Some("POLICY".into());
+        chat.closable = true;
+        let layout = Layout::of(&model);
+        let bar = &layout.bars[1];
+        let close = bar.close.expect("room for the close box");
+        assert!(close.x + close.width <= bar.rect.x + bar.rect.width);
+        let info = bar.info.as_ref().expect("room for the info");
+        assert!(info.end.x < close.x);
+        let middle = Point::new(close.center_x(), close.center_y());
+        assert_eq!(layout.hit(middle), Some(Hit::Close(Pane::Chat)));
+        assert!(Layout::of(&four_panes()).bars[1].close.is_none());
+    }
+
+    #[test]
+    fn expandable_bars_end_in_an_expand_box_left_of_any_close_box() {
+        let mut model = four_panes();
+        model.panes[1].expand = Some(false);
+        let layout = Layout::of(&model);
+        let bar = &layout.bars[1];
+        let (expand, expanded) = bar.expand.expect("room for the expand box");
+        assert!(!expanded);
+        assert!(expand.x + expand.width <= bar.rect.x + bar.rect.width);
+        let last = bar.boxes.last().expect("the tabs are drawn");
+        assert!(last.rect.x + last.rect.width < expand.x);
+        let middle = Point::new(expand.center_x(), expand.center_y());
+        assert_eq!(layout.hit(middle), Some(Hit::Expand(Pane::Chat)));
+        assert!(Layout::of(&four_panes()).bars[1].expand.is_none());
+
+        let chat = &mut model.panes[1];
+        chat.tabs.clear();
+        chat.title = Some("RECORD #60".into());
+        chat.closable = true;
+        chat.expand = Some(true);
+        let layout = Layout::of(&model);
+        let bar = &layout.bars[1];
+        let close = bar.close.expect("room for the close box");
+        let (expand, expanded) = bar.expand.expect("room for the expand box");
+        assert!(expanded);
+        assert!(expand.x + expand.width < close.x);
+        let middle = Point::new(expand.center_x(), expand.center_y());
+        assert_eq!(layout.hit(middle), Some(Hit::Expand(Pane::Chat)));
     }
 
     #[test]

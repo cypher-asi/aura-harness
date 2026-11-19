@@ -460,11 +460,7 @@ impl Shell {
                 self.panes.clear();
                 self.panes
                     .extend(tui.pane_chrome().iter().map(|chrome| chrome.area));
-                let at = (
-                    self.metrics.origin(area, cols, rows),
-                    self.metrics,
-                    self.palette,
-                );
+                let at = (self.metrics.origin(area, cols), self.metrics, self.palette);
                 let model = chrome::Model::new(tui.pane_chrome(), frame.buffer, at);
                 self.chrome.update(model, self.pointer.on_grid);
             }
@@ -478,7 +474,7 @@ impl Shell {
             }
         }
 
-        let origin = self.metrics.origin(area, cols, rows);
+        let origin = self.metrics.origin(area, cols);
         let model = tab_bar::Model {
             items: self
                 .tabs

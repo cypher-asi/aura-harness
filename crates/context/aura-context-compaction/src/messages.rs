@@ -37,9 +37,10 @@ pub struct CompactionConfig {
 }
 
 impl CompactionConfig {
-    /// Micro tier: very aggressive truncation for near-limit contexts (>=85%).
+    /// Emergency tier: very aggressive truncation for near-limit contexts
+    /// (>=85%) and for overflow recovery.
     #[must_use]
-    pub const fn micro() -> Self {
+    pub const fn emergency() -> Self {
         Self {
             tool_result_max_chars: 200,
             text_max_chars: 400,
@@ -71,19 +72,20 @@ impl CompactionConfig {
     #[must_use]
     pub const fn light() -> Self {
         Self {
-            tool_result_max_chars: 3000,
-            text_max_chars: 4000,
-            preserve_recent: 8,
-        }
-    }
-
-    /// History tier: minimal truncation preserving most context (>=15%).
-    #[must_use]
-    pub const fn history() -> Self {
-        Self {
             tool_result_max_chars: 1500,
             text_max_chars: 2000,
             preserve_recent: 6,
+        }
+    }
+
+    /// Minimal tier: the lightest truncation, preserving most context
+    /// (>=15%).
+    #[must_use]
+    pub const fn minimal() -> Self {
+        Self {
+            tool_result_max_chars: 3000,
+            text_max_chars: 4000,
+            preserve_recent: 8,
         }
     }
 }
@@ -308,8 +310,8 @@ impl OverflowStep {
     };
 
     /// Existing emergency recovery step.
-    pub const MICRO: Self = Self {
-        tier: CompactionConfig::micro(),
+    pub const EMERGENCY: Self = Self {
+        tier: CompactionConfig::emergency(),
         warning:
             "Context is still too large; applying emergency compaction, trimming response budget again, and retrying.",
     };
@@ -449,7 +451,7 @@ pub fn select_tier(utilization: f64) -> Option<CompactionConfig> {
 fn tier_for(pressure: f64) -> Option<CompactionConfig> {
     let tiers = aura_config::agent().compaction;
     if pressure >= tiers.tier_history {
-        Some(CompactionConfig::micro())
+        Some(CompactionConfig::emergency())
     } else if pressure >= tiers.tier_aggressive {
         Some(CompactionConfig::aggressive())
     } else if pressure >= tiers.tier_60 {
@@ -457,7 +459,7 @@ fn tier_for(pressure: f64) -> Option<CompactionConfig> {
     } else if pressure >= tiers.tier_30 {
         Some(CompactionConfig::light())
     } else if pressure >= tiers.tier_micro {
-        Some(CompactionConfig::history())
+        Some(CompactionConfig::minimal())
     } else {
         None
     }
@@ -567,9 +569,9 @@ const fn select_compaction_candidates(
         return None;
     }
     let compact_end = messages.len().saturating_sub(config.preserve_recent);
-    let is_micro = config.preserve_recent == CompactionConfig::micro().preserve_recent
-        && config.tool_result_max_chars == CompactionConfig::micro().tool_result_max_chars;
-    let (head_chars, tail_chars) = if is_micro {
+    let is_emergency = config.preserve_recent == CompactionConfig::emergency().preserve_recent
+        && config.tool_result_max_chars == CompactionConfig::emergency().tool_result_max_chars;
+    let (head_chars, tail_chars) = if is_emergency {
         (Some(6000_usize), Some(3000_usize))
     } else {
         (None, None)
@@ -640,14 +642,14 @@ fn boundary_splits_tool_pair(messages: &[Message], end: usize) -> bool {
 }
 
 fn select_summary_range(messages: &[Message]) -> Option<(usize, usize)> {
-    if messages.len() <= CompactionConfig::micro().preserve_recent + 2 {
+    if messages.len() <= CompactionConfig::emergency().preserve_recent + 2 {
         return None;
     }
 
     let mut start = 1;
     let mut end = messages
         .len()
-        .saturating_sub(CompactionConfig::micro().preserve_recent);
+        .saturating_sub(CompactionConfig::emergency().preserve_recent);
 
     while start < end && result_is_for_previous_tool_use(messages, start) {
         start += 1;
@@ -1082,7 +1084,7 @@ pub fn apply_message_summary(
     CompactionReport {
         before_chars,
         after_chars,
-        action: CompactionAction::Applied(CompactionConfig::micro()),
+        action: CompactionAction::Applied(CompactionConfig::emergency()),
     }
 }
 
@@ -1382,11 +1384,11 @@ mod tests {
         let config = tier.unwrap();
         assert_eq!(
             config.preserve_recent,
-            CompactionConfig::micro().preserve_recent
+            CompactionConfig::emergency().preserve_recent
         );
         assert_eq!(
             config.tool_result_max_chars,
-            CompactionConfig::micro().tool_result_max_chars
+            CompactionConfig::emergency().tool_result_max_chars
         );
     }
 
@@ -1421,23 +1423,38 @@ mod tests {
         assert_eq!(t.preserve_recent, 6);
 
         let t = select_tier(0.45).unwrap();
-        assert_eq!(t.preserve_recent, 8);
-        assert_eq!(t.tool_result_max_chars, 3000);
-        assert_eq!(t.text_max_chars, 4000);
-
-        let t = select_tier(0.30).unwrap();
-        assert_eq!(t.preserve_recent, 8);
-
-        let t = select_tier(0.20).unwrap();
         assert_eq!(t.preserve_recent, 6);
         assert_eq!(t.tool_result_max_chars, 1500);
         assert_eq!(t.text_max_chars, 2000);
 
-        let t = select_tier(0.15).unwrap();
+        let t = select_tier(0.30).unwrap();
         assert_eq!(t.preserve_recent, 6);
+
+        let t = select_tier(0.20).unwrap();
+        assert_eq!(t.preserve_recent, 8);
+        assert_eq!(t.tool_result_max_chars, 3000);
+        assert_eq!(t.text_max_chars, 4000);
+
+        let t = select_tier(0.15).unwrap();
+        assert_eq!(t.preserve_recent, 8);
 
         assert!(select_tier(0.10).is_none());
         assert!(select_tier(0.0).is_none());
+    }
+
+    #[test]
+    fn each_tier_trims_at_least_as_hard_as_the_one_below_it() {
+        let tiers: Vec<CompactionConfig> = [0.15, 0.30, 0.60, 0.70, 0.85]
+            .into_iter()
+            .map(|pressure| select_tier(pressure).unwrap())
+            .collect();
+        for pair in tiers.windows(2) {
+            let (lower, higher) = (pair[0], pair[1]);
+            assert!(higher.tool_result_max_chars <= lower.tool_result_max_chars);
+            assert!(higher.text_max_chars <= lower.text_max_chars);
+            assert!(higher.preserve_recent <= lower.preserve_recent);
+            assert_ne!(higher, lower);
+        }
     }
 
     #[test]

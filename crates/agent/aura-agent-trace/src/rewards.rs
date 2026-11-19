@@ -569,6 +569,7 @@ pub(crate) mod tests {
                 input_tokens: 0,
                 output_tokens: 0,
                 files_changed: 1,
+                error: None,
             },
         );
         end.links.files = vec!["x".into()];

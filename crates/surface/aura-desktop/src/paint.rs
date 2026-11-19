@@ -137,7 +137,7 @@ impl Painter {
         let (metrics, palette) = (view.metrics, view.palette);
         let bar = tab_bar::height(&metrics);
         let area = Size::new(view.size.width, (view.size.height - bar).max(0.0));
-        let origin = metrics.origin(area, view.cols, view.rows);
+        let origin = metrics.origin(area, view.cols);
         if self.basis.is_some_and(|basis| basis.metrics != metrics) {
             // Zoomed: nothing in the atlas is the size of anything drawn
             // from here on.
@@ -672,8 +672,9 @@ mod tests {
 
         fn view(&self) -> View<'_> {
             View {
-                // Exactly the grid, under the bar: the origin is (0, 0).
-                size: Size::new(168.0, 29.0 + 72.0),
+                // Exactly the grid, half a row under the bar: the origin is
+                // (0, 9).
+                size: Size::new(168.0, 29.0 + 9.0 + 72.0),
                 cells: &self.buffer.content,
                 cols: COLS,
                 rows: ROWS,
@@ -733,23 +734,23 @@ mod tests {
         stage.buffer.set_string(6, 1, "│", Style::default());
         let mut painter = Painter::default();
         let scene = painter.paint_with(&stage.view(), &mut text);
-        assert_eq!((scene.width, scene.height), (168, 101));
+        assert_eq!((scene.width, scene.height), (168, 110));
         assert_eq!(scene.background, rgba(stage.palette.bg));
 
         let [back, line, below, h, i] = scene.quads[..] else {
             panic!("a background, a line and two glyphs: {:?}", scene.quads);
         };
         // Columns 2 and 3 of row 1: 16.8 to 33.6 across, 18 down from
-        // the bar's 29.
-        assert_eq!((back.x, back.y, back.w, back.h), (17, 47, 17, 18));
+        // the grid's top at 38.
+        assert_eq!((back.x, back.y, back.w, back.h), (17, 56, 17, 18));
         assert_eq!((back.fill, back.color), (Fill::Solid, [200, 0, 0, 255]));
         // The line's two arms, up and down from the middle of column 6.
         assert_eq!((line.fill, line.x, line.w), (Fill::Solid, 54, 1));
-        assert_eq!((line.y, below.bottom()), (47, 65));
+        assert_eq!((line.y, below.bottom()), (56, 74));
         assert_eq!((below.x, below.w), (54, 1));
         assert_eq!((h.fill, i.fill), (Fill::Mask, Fill::Mask));
         assert!(h.x >= 17 && h.x < i.x && i.right() <= 34);
-        assert!(h.y >= 47 && h.bottom() <= 65, "{h:?}");
+        assert!(h.y >= 56 && h.bottom() <= 74, "{h:?}");
         assert_eq!(h.color, rgba(stage.palette.fg));
     }
 
@@ -857,7 +858,7 @@ mod tests {
             .iter()
             .find(|q| q.fill == Fill::Solid)
             .expect("the block");
-        assert_eq!((block.x, block.y, block.w, block.h), (8, 65, 9, 18));
+        assert_eq!((block.x, block.y, block.w, block.h), (8, 74, 9, 18));
         assert_eq!(block.color, rgba(stage.palette.fg));
         let cut = scene.quads.last().expect("the cut-out");
         assert_eq!((cut.fill, cut.color), (Fill::Mask, rgba(stage.palette.bg)));

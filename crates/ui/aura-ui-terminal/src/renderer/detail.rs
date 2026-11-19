@@ -27,12 +27,12 @@ use unicode_width::UnicodeWidthChar;
 const TAB: &str = "    ";
 
 /// The chat panel's header while a view covers its body: what is open on
-/// the left, its status on the right. `None` leaves the CHAT | TERMINAL
-/// tabs.
+/// the left, its status and a close button on the right. `None` leaves the
+/// CHAT | TERMINAL tabs.
 ///
 /// ```text
-/// │ RECORD #60                 ✓ POLICY │
-/// │ src/main.rs               100 LINES │
+/// │ RECORD #60               ✓ POLICY ✕ │
+/// │ src/main.rs             100 LINES ✕ │
 /// ```
 pub(super) fn detail_header(app: &App, theme: &Theme) -> Option<(String, Option<HeaderInfo>)> {
     let status = |icon: &str, label: &str, color| HeaderInfo {
@@ -768,7 +768,7 @@ mod tests {
         assert_eq!(corners, ["┌", "┐", "└", "┘"], "{text}");
         let header: String = rows[top - 2][left..=right].concat();
         assert!(header.starts_with("│ RECORD #60 "), "{header}");
-        assert!(header.ends_with(" ✓ POLICY │"), "{header}");
+        assert!(header.ends_with(" ✓ POLICY ⤢ ✕ │"), "{header}");
         assert!(!text.contains("TERMINAL"), "the tabs give way: {text}");
         let border: String = rows[top][left..=right].concat();
         assert!(border.trim_matches(['┌', '─', '┐']).is_empty(), "{border}");
@@ -778,6 +778,48 @@ mod tests {
         app.handle_key(KeyEvent::from(KeyCode::Esc));
         let rows = screen(&mut app);
         assert_eq!(chat_corners(&rows), chat, "closing brings the tabs back");
+
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        screen(&mut app);
+        let at = |column: usize| {
+            move |kind| crossterm::event::MouseEvent {
+                kind,
+                column: u16::try_from(column).unwrap(),
+                row: u16::try_from(top - 2).unwrap(),
+                modifiers: crossterm::event::KeyModifiers::empty(),
+            }
+        };
+        let expand = at(right - 4);
+        app.handle_mouse(expand(crossterm::event::MouseEventKind::Moved));
+        assert_eq!(app.hover(), Some(crate::app::HoverTarget::ExpandChat));
+        app.handle_mouse(expand(crossterm::event::MouseEventKind::Down(
+            crossterm::event::MouseButton::Left,
+        )));
+        assert!(app.chat_expanded(), "the ⤢ expands the chat");
+        assert!(app.detail_view().is_some(), "with the record still on it");
+        let rows = screen(&mut app);
+        let header = &rows[top - 2];
+        let wide_left = header.iter().position(|cell| cell == "│").unwrap();
+        let wide_right = header.iter().rposition(|cell| cell == "│").unwrap();
+        assert!(wide_left < left && wide_right > right, "the chat widens");
+        let header: String = header[wide_left..=wide_right].concat();
+        assert!(header.starts_with("│ RECORD #60 "), "{header}");
+        assert!(header.ends_with(" ✓ POLICY ⤡ ✕ │"), "{header}");
+        app.handle_mouse(at(wide_right - 4)(crossterm::event::MouseEventKind::Down(
+            crossterm::event::MouseButton::Left,
+        )));
+        assert!(!app.chat_expanded(), "the ⤡ restores it");
+        screen(&mut app);
+
+        let close = at(right - 2);
+        app.handle_mouse(close(crossterm::event::MouseEventKind::Moved));
+        assert_eq!(app.hover(), Some(crate::app::HoverTarget::CloseDetail));
+        app.handle_mouse(close(crossterm::event::MouseEventKind::Down(
+            crossterm::event::MouseButton::Left,
+        )));
+        assert!(app.detail_view().is_none(), "the ✕ closes the record");
+        let rows = screen(&mut app);
+        assert_eq!(chat_corners(&rows), chat);
     }
 
     #[test]
@@ -845,7 +887,7 @@ mod tests {
             .lines()
             .find(|row| row.contains("│ main.rs "))
             .unwrap_or_else(|| panic!("no file header: {first}"));
-        assert!(header.contains(" 100 LINES │"), "{header}");
+        assert!(header.contains(" 100 LINES ⤢ ✕ │"), "{header}");
         assert!(!first.contains("TERMINAL"), "{first}");
         assert!(first.contains("  1 │ let x1 = 1;"), "{first}");
 
