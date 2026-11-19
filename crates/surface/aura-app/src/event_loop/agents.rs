@@ -11,7 +11,7 @@ use super::agent_events::AgentUi;
 use super::subagents::lock;
 use super::tasks::TaskBoard;
 use super::LoopState;
-use crate::agent_registry::RegisteredAgent;
+use crate::agent_registry::{Opened, RegisteredAgent};
 use crate::file_checkpoints::FileCheckpoints;
 use crate::record_loader::{conversation_history, latest_plan_path, recent_record_summaries};
 use crate::session_checkpoint::{
@@ -397,38 +397,59 @@ pub(super) enum Chat {
     Keep,
 }
 
-pub(super) async fn handle_create_project(state: &mut LoopState<'_>, name: &str, folder: &Path) {
-    let created = lock(&state.hub.registry).create_project(name, folder);
-    match created {
-        Ok(agent) => {
-            let project = agent
-                .project
-                .clone()
-                .unwrap_or_else(|| name.trim().to_string());
-            let folder = agent
-                .folder
-                .as_deref()
-                .unwrap_or(folder)
-                .display()
-                .to_string();
-            info!(zns_id = %agent.zns_id, %project, %folder, "Created project");
-            activate_agent(state, agent.agent_id(), Chat::Reload).await;
-            show_success(state, format!("Created project {project} in {folder}")).await;
+/// Open `folder` as a project: a new one, the one it already is, or the
+/// one it was before it was removed. Switches to its agent.
+pub(super) async fn handle_create_project(state: &mut LoopState<'_>, folder: &Path) {
+    let opened = {
+        let mut registry = lock(&state.hub.registry);
+        registry.open_project(folder).map(|(agent, opened)| {
+            let project = registry.project_of(agent.agent_id()).cloned();
+            (agent, opened, project)
+        })
+    };
+    let (agent, opened, project) = match opened {
+        Ok((agent, opened, Some(project))) => (agent, opened, project),
+        Ok((_, _, None)) => {
+            show_error(state, "Could not open the project".to_string()).await;
+            return;
         }
-        Err(e) => show_error(state, format!("Could not create project: {e}")).await,
-    }
+        Err(e) => {
+            show_error(state, format!("Could not open project: {e}")).await;
+            return;
+        }
+    };
+    let name = project.name();
+    let path = project.folder.display().to_string();
+    info!(zns_id = %agent.zns_id, project = %name, folder = %path, ?opened, "Opened project");
+    activate_agent(state, agent.agent_id(), Chat::Reload).await;
+    let notice = match opened {
+        Opened::Created => UiCommand::ShowSuccess(format!("Created project {name} in {path}")),
+        Opened::Existing => UiCommand::ShowWarning(format!("{path} is already project {name}")),
+        Opened::Revived => UiCommand::ShowSuccess(format!("Reopened project {name}")),
+    };
+    let _ = state.commands.send(notice).await;
 }
 
-pub(super) async fn handle_rename_project(state: &mut LoopState<'_>, name: &str) {
-    let agent_id = lock(&state.hub.registry).active().agent_id();
-    let renamed = lock(&state.hub.registry).rename_project(agent_id, name);
-    match renamed {
-        Ok(()) => {
-            state.hub.send_agent_list().await;
-            show_success(state, format!("Renamed project to {}", name.trim())).await;
-        }
-        Err(e) => show_error(state, format!("Could not rename project: {e}")).await,
+/// Save the order projects were dragged into.
+pub(super) async fn handle_reorder_projects(state: &mut LoopState<'_>, order: &[String]) {
+    let saved = lock(&state.hub.registry).reorder_projects(order);
+    if let Err(e) = saved {
+        show_error(state, format!("Could not save the order of projects: {e}")).await;
     }
+    state.hub.send_agent_list().await;
+}
+
+/// Save the order a project's agents were dragged into.
+pub(super) async fn handle_reorder_agents(
+    state: &mut LoopState<'_>,
+    project_id: &str,
+    order: &[String],
+) {
+    let saved = lock(&state.hub.registry).reorder_agents(project_id, order);
+    if let Err(e) = saved {
+        show_error(state, format!("Could not save the order of agents: {e}")).await;
+    }
+    state.hub.send_agent_list().await;
 }
 
 pub(super) async fn handle_create_agent(state: &mut LoopState<'_>, name: Option<String>) {
@@ -443,18 +464,9 @@ pub(super) async fn handle_create_agent(state: &mut LoopState<'_>, name: Option<
     }
 }
 
-/// Add a new agent to the project headed by the agent with hex id
-/// `root_hex`, and switch to it.
-pub(super) async fn handle_add_agent_to_project(state: &mut LoopState<'_>, root_hex: &str) {
-    let root_id = match AgentId::from_hex(root_hex) {
-        Ok(agent_id) => agent_id,
-        Err(e) => {
-            warn!(agent = root_hex, error = %e, "Invalid agent id from UI");
-            show_error(state, format!("Invalid agent id: {e}")).await;
-            return;
-        }
-    };
-    let created = lock(&state.hub.registry).create_in_project(root_id);
+/// Add a new agent to project `project_id`, and switch to it.
+pub(super) async fn handle_add_agent_to_project(state: &mut LoopState<'_>, project_id: &str) {
+    let created = lock(&state.hub.registry).create_in_project(project_id);
     match created {
         Ok(agent) => {
             info!(zns_id = %agent.zns_id, name = %agent.name, "Added agent to project");
@@ -577,30 +589,26 @@ pub(super) async fn handle_restore_agent(state: &mut LoopState<'_>, agent_hex: &
     }
 }
 
-/// Remove the project containing an agent from the list. Its records and
-/// folder stay on disk.
-pub(super) async fn handle_remove_project(state: &mut LoopState<'_>, agent_hex: &str) {
-    let Some(agent_id) = parse_agent(state, agent_hex).await else {
-        return;
-    };
+/// Remove project `project_id` from the list. Its records and folder stay
+/// on disk.
+pub(super) async fn handle_remove_project(state: &mut LoopState<'_>, project_id: &str) {
     let found = {
         let registry = lock(&state.hub.registry);
-        registry.project_root(agent_id).map(|root| {
-            let label = root
-                .project
-                .as_deref()
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .unwrap_or(root.display_name())
-                .to_string();
-            (registry.subtree(root.agent_id()), label)
+        registry.project(project_id).map(|project| {
+            let agents: Vec<AgentId> = registry
+                .agents()
+                .iter()
+                .filter(|a| a.project_id.as_deref() == Some(project_id))
+                .map(RegisteredAgent::agent_id)
+                .collect();
+            (agents, project.name())
         })
     };
-    let Some((subtree, project)) = found else {
-        show_error(state, "Unknown agent".to_string()).await;
+    let Some((agents, project)) = found else {
+        show_error(state, "Unknown project".to_string()).await;
         return;
     };
-    if let Some(busy) = busy_agent(state, &subtree) {
+    if let Some(busy) = busy_agent(state, &agents) {
         show_error(
             state,
             format!("Cannot remove {project}: {busy} is still working"),
@@ -608,7 +616,7 @@ pub(super) async fn handle_remove_project(state: &mut LoopState<'_>, agent_hex: 
         .await;
         return;
     }
-    let removed = lock(&state.hub.registry).remove_project(agent_id);
+    let removed = lock(&state.hub.registry).remove_project(project_id);
     match removed {
         Ok(removed) => {
             for id in &removed {
@@ -631,32 +639,23 @@ pub(super) async fn handle_instantiate_definition(state: &mut LoopState<'_>, nam
 
 /// Where a new permanent-agent instance goes in the agents list.
 enum Placement {
-    /// Its own project.
+    /// The launch directory's project.
     Alone,
-    /// Beside the root agent with this ZNS id, in its project.
+    /// At the top of the project with this id.
     InProject(String),
 }
 
 /// Start an instance of a permanent agent inside the project that contains
 /// the active agent, and switch to it.
 pub(super) async fn handle_add_definition_to_project(state: &mut LoopState<'_>, name: &str) {
-    let root = lock(&state.hub.registry)
-        .project_root(state.active)
-        .cloned();
-    let Some(root) = root else {
+    let project = lock(&state.hub.registry).project_of(state.active).cloned();
+    let Some(project) = project else {
         show_error(state, "Unknown agent".to_string()).await;
         return;
     };
-    if let Some(agent) =
-        start_instance(state, name, Placement::InProject(root.zns_id.clone())).await
+    if let Some(agent) = start_instance(state, name, Placement::InProject(project.id.clone())).await
     {
-        let project = root
-            .project
-            .as_deref()
-            .map(str::trim)
-            .filter(|project| !project.is_empty())
-            .unwrap_or(root.display_name());
-        show_success(state, format!("Added {} to {project}", agent.name)).await;
+        show_success(state, format!("Added {} to {}", agent.name, project.name())).await;
     }
 }
 
@@ -678,7 +677,9 @@ async fn start_instance(
         let mut registry = lock(&state.hub.registry);
         match placement {
             Placement::Alone => registry.create_instance(&definition, None),
-            Placement::InProject(root) => registry.add_instance_to_project(&definition, root),
+            Placement::InProject(project) => {
+                registry.add_instance_to_project(&definition, &project)
+            }
         }
     };
     match created {

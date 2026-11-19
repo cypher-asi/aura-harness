@@ -31,6 +31,10 @@ pub(super) fn render_overlays(frame: &mut Frame, app: &App, theme: &Theme) {
         render_model_selector(frame, app, theme);
     }
 
+    if let Some(project) = app.project_info() {
+        render_project_info(frame, project, theme);
+    }
+
     if let Some((msg, notification_type)) = app.notification() {
         render_notification(frame, msg, *notification_type, theme);
     }
@@ -302,6 +306,57 @@ fn truncate_start(text: &str, width: usize) -> String {
     std::iter::once('…').chain(kept.into_iter().rev()).collect()
 }
 
+/// Render a project's details: its name, folder, when it was made, and
+/// how many of its agents are listed and archived.
+fn render_project_info(frame: &mut Frame, project: &crate::events::ProjectSummary, theme: &Theme) {
+    let area = frame.area();
+    let modal_width = 64.min(area.width.saturating_sub(4));
+    let text_width = usize::from(modal_width.saturating_sub(2)).max(1);
+    let muted = Style::default().fg(theme.colors.muted);
+    let fg = Style::default().fg(theme.colors.foreground);
+    let field = |label: &str, value: String, style: Style| {
+        Line::from(vec![
+            Span::styled(format!("{label:<10}"), muted),
+            Span::styled(value, style),
+        ])
+    };
+    let mut lines = vec![Line::from(Span::styled("Folder", muted))];
+    lines.extend(
+        wrap_words(&project.folder, text_width)
+            .into_iter()
+            .map(|line| Line::from(Span::styled(line, fg))),
+    );
+    if !project.folder_exists {
+        lines.push(Line::from(Span::styled(
+            "The folder is missing",
+            Style::default().fg(theme.colors.warning),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(field("Created", project.created.clone(), fg));
+    lines.push(field("Agents", project.listed_agents.to_string(), fg));
+    lines.push(field("Archived", project.archived_agents.to_string(), fg));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("Press any key to close", muted)));
+
+    let modal_height = u16::try_from(lines.len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(2)
+        .min(area.height);
+    let modal_area = centered_rect(modal_width, modal_height, area);
+    frame.render_widget(Clear, modal_area);
+    let block = Block::default()
+        .title(format!(" {} ", project.name.to_uppercase()))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.colors.muted));
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false }),
+        modal_area,
+    );
+}
+
 /// Render the help overlay.
 fn render_help_overlay(frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
@@ -345,7 +400,7 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "/cost      Tokens and cost of the session",
         "/agent [n|name]     Add an agent, or switch",
         "/agent new [name]   Create and switch to agent",
-        "/name [name]        Rename the current project",
+        "/project   The current project's folder, agents",
         "/archive /remove-project  Hide agent, project",
         "/agents /kernel /files  Toggle those panels",
         "/graph [id] /runs /status  Run graphs, scores",

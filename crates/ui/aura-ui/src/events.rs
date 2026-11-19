@@ -122,21 +122,28 @@ pub enum UiEvent {
     /// User requested a new agent (with optional display name)
     CreateAgent(Option<String>),
 
-    /// User picked a folder for a new project and named it. A default
-    /// agent is created under it, working in that folder.
+    /// User picked a folder for a project. A new project, named after the
+    /// folder, gets a default agent working in it; a folder that is a
+    /// project already opens that project.
     CreateProject {
-        /// Project name
-        name: String,
         /// Folder the project's agents work in
         folder: PathBuf,
     },
 
-    /// User renamed the project that contains the active agent.
-    RenameProject(String),
-
-    /// User asked for a new agent in the project headed by the agent with
-    /// this hex id
+    /// User asked for a new agent in the project with this id
     AddAgentToProject(String),
+
+    /// User dragged projects into this order, by id. Projects it doesn't
+    /// name keep their places.
+    ReorderProjects(Vec<String>),
+
+    /// User dragged the top-level agents of a project into this order
+    ReorderAgents {
+        /// Project id
+        project_id: String,
+        /// Hex ids of its top-level agents, in their new order
+        order: Vec<String>,
+    },
 
     /// User moved the agent with this hex id, and the agents under it, to
     /// the Archive
@@ -145,8 +152,8 @@ pub enum UiEvent {
     /// User brought the agent with this hex id back from the Archive
     RestoreAgent(String),
 
-    /// User confirmed removing the project that contains the agent with
-    /// this hex id from the projects list
+    /// User confirmed removing the project with this id from the projects
+    /// list
     RemoveProject(String),
 
     /// User started an instance of the named permanent agent
@@ -533,7 +540,11 @@ pub enum UiCommand {
     /// A new record was added to the kernel
     NewRecord(RecordSummary),
 
-    /// Update the list of agents in the swarm
+    /// Update the listed projects, in list order. Sent before the
+    /// [`Self::SetAgents`] that lists their agents.
+    SetProjects(Vec<ProjectSummary>),
+
+    /// Update the list of agents in the swarm, project by project
     SetAgents(Vec<AgentSummary>),
 
     /// Update the Archive: archived agents, each followed by the agents
@@ -1188,27 +1199,56 @@ pub struct AgentSummary {
     /// How many spawning agents it is nested under (0 for top-level agents)
     #[serde(default)]
     pub depth: usize,
-    /// Whether it was added to the project of the agent heading the
-    /// project listed before it, rather than heading one itself
-    #[serde(default)]
-    pub added_to_project: bool,
     /// Whether it is working right now: running a turn, a command, or a
     /// task for the agent that spawned it
     #[serde(default)]
     pub running: bool,
-    /// Project this root agent heads. Empty when the project is unnamed
-    /// and the header should use [`Self::name`].
+    /// Id of the project it is in. A project's agents are listed together.
+    #[serde(default)]
+    pub project_id: Option<String>,
+    /// Name of the project it is in
     #[serde(default)]
     pub project: Option<String>,
 }
 
 impl AgentSummary {
-    /// Whether it heads a project. The agents listed after it, up to the
-    /// next head, are in its project.
+    /// Key of the project it is listed in: the project's id, or its own id
+    /// when it has none.
     #[must_use]
-    pub const fn heads_project(&self) -> bool {
-        self.depth == 0 && !self.added_to_project
+    pub fn project_key(&self) -> &str {
+        self.project_id.as_deref().unwrap_or(&self.id)
     }
+}
+
+/// Whether `agents[index]` is the first agent of its project, in a list
+/// that lists each project's agents together. An agent without a project
+/// starts one of its own unless it was spawned.
+#[must_use]
+pub fn starts_project(agents: &[AgentSummary], index: usize) -> bool {
+    let agent = &agents[index];
+    match &agent.project_id {
+        Some(id) => index == 0 || agents[index - 1].project_id.as_ref() != Some(id),
+        None => agent.depth == 0,
+    }
+}
+
+/// A project of the projects list: a folder its agents work in.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectSummary {
+    /// Project id
+    pub id: String,
+    /// What it is called: its folder's name
+    pub name: String,
+    /// Full path of its folder
+    pub folder: String,
+    /// Whether the folder is still there
+    pub folder_exists: bool,
+    /// When it was made, in local time
+    pub created: String,
+    /// How many of its agents are listed
+    pub listed_agents: usize,
+    /// How many of its agents sit in the Archive
+    pub archived_agents: usize,
 }
 
 /// What a row in the Processes tab is running.

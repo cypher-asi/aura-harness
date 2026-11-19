@@ -3,7 +3,7 @@
 //! input draft, panels, overlays and scroll position.
 
 use crate::grid::GridBackend;
-use aura_ui::events::{AgentSummary, UiEvent};
+use aura_ui::events::{starts_project, AgentSummary, UiEvent};
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
 use tokio::sync::mpsc;
@@ -35,8 +35,9 @@ pub struct Tab {
     pub tui: aura_ui_terminal::App,
     pub terminal: ratatui::Terminal<GridBackend>,
     pub watch: Option<Watch>,
-    /// Hex ids of the root agents heading the projects in this tab. The
-    /// agents under a root belong to the tab with it.
+    /// Keys of the projects in this tab (see
+    /// [`AgentSummary::project_key`]). A project's agents belong to the tab
+    /// with it.
     pub projects: Vec<String>,
     /// What the UI asked of the session since the last update.
     events: mpsc::Receiver<UiEvent>,
@@ -85,10 +86,10 @@ impl Tab {
         let Some(index) = agents.iter().position(|a| a.id == self.agent()) else {
             return String::new();
         };
-        let root = agents[..=index]
-            .iter()
-            .rfind(|agent| agent.heads_project())
-            .unwrap_or(&agents[index]);
+        let root = (0..=index)
+            .rev()
+            .find(|&i| starts_project(agents, i))
+            .map_or(&agents[index], |i| &agents[i]);
         let named = |text: &str| Some(text.trim().to_uppercase()).filter(|text| !text.is_empty());
         let agent = named(&agents[index].name);
         match root.project.as_deref().and_then(named) {

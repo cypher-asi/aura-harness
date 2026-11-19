@@ -481,14 +481,12 @@ impl App {
                     self.insert_text(&text.replace("\r\n", "\n").replace('\r', "\n"));
                 }
             }
-            AppState::LoginEmail
-            | AppState::LoginPassword
-            | AppState::LinkCode
-            | AppState::ProjectName => {
+            AppState::LoginEmail | AppState::LoginPassword | AppState::LinkCode => {
                 self.insert_text(text.trim().replace(['\r', '\n'], "").as_str());
             }
             AppState::AwaitingApproval
             | AppState::ShowingHelp
+            | AppState::ShowingProjectInfo
             | AppState::SelectingModel
             | AppState::SelectingFolder => {}
         }

@@ -273,7 +273,8 @@ async fn build(
     tokio::fs::create_dir_all(data_dir)
         .await
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let registry = AgentRegistry::load_or_init(data_dir).context("loading agent registry")?;
+    let registry = AgentRegistry::load_or_init_in(data_dir, &workspace_root)
+        .context("loading agent registry")?;
     let definitions =
         AgentDefinitions::load_or_seed(data_dir).context("loading permanent agents")?;
     let store_path = session_helpers::resolve_store_path(data_dir);

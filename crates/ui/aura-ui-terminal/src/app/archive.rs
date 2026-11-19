@@ -129,8 +129,21 @@ impl App {
     /// agent's project.
     pub(super) fn remove_selected_project(&mut self) {
         if let Some(id) = self.highlighted_agent() {
-            self.request_remove_project(id);
+            self.request_remove_project_of(&id);
         }
+    }
+
+    /// Ask to confirm removing the project agent `id` is in.
+    pub(super) fn request_remove_project_of(&mut self, id: &str) {
+        if let Some(key) = self.project_key_of_agent(id) {
+            self.request_remove_project(key);
+        }
+    }
+
+    /// Key of the project the listed agent `id` is in.
+    pub(super) fn project_key_of_agent(&self, id: &str) -> Option<String> {
+        let index = self.agents.iter().position(|a| a.id == id)?;
+        self.project_key(self.project_root(index)?)
     }
 
     /// Move the agent with hex id `id`, and the agents under it, to the
@@ -142,12 +155,9 @@ impl App {
         self.send_event(UiEvent::ArchiveAgent(id));
     }
 
-    /// Ask to confirm removing the project that contains agent `id`.
-    pub(super) fn request_remove_project(&mut self, id: String) {
-        let Some(index) = self.agents.iter().position(|a| a.id == id) else {
-            return;
-        };
-        let Some(root) = (0..=index).rev().find(|&i| self.agents[i].heads_project()) else {
+    /// Ask to confirm removing the project with key `key`.
+    pub(super) fn request_remove_project(&mut self, key: String) {
+        let Some(root) = self.project_root_of_key(&key) else {
             return;
         };
         let head = &self.agents[root];
@@ -164,7 +174,7 @@ impl App {
             ),
             NotificationType::Warning,
         ));
-        self.pending_remove_project = Some(id);
+        self.pending_remove_project = Some(key);
     }
 
     /// Resolve a pending project removal with `key`. Returns `false` when
@@ -314,9 +324,10 @@ mod tests {
         app.handle_key(key(KeyCode::Char('n')));
         assert!(rx.try_recv().is_err());
 
+        // It names the project, by the key of the one `bb` is in.
         app.handle_command("/remove-project");
         app.handle_key(key(KeyCode::Char('y')));
-        assert!(matches!(rx.try_recv(), Ok(UiEvent::RemoveProject(id)) if id == "bb"));
+        assert!(matches!(rx.try_recv(), Ok(UiEvent::RemoveProject(id)) if id == "aa"));
     }
 
     #[test]

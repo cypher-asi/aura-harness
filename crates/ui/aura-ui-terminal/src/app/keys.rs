@@ -42,10 +42,13 @@ impl App {
                 self.state = AppState::Idle;
                 KeyResult::continue_running()
             }
-            AppState::LoginEmail
-            | AppState::LoginPassword
-            | AppState::LinkCode
-            | AppState::ProjectName => self.handle_login_key(key),
+            AppState::ShowingProjectInfo => {
+                self.close_project_info();
+                KeyResult::continue_running()
+            }
+            AppState::LoginEmail | AppState::LoginPassword | AppState::LinkCode => {
+                self.handle_login_key(key)
+            }
             AppState::SelectingModel => self.handle_model_selector_key(key),
             AppState::SelectingFolder => self.handle_folder_picker_key(key),
             AppState::Idle | AppState::Processing => self.handle_normal_key(key),
@@ -210,22 +213,14 @@ impl App {
     fn handle_login_key(&mut self, key: KeyEvent) -> KeyResult {
         match key.code {
             KeyCode::Esc => {
-                let naming = self.state == AppState::ProjectName;
                 self.state = AppState::Idle;
                 self.status = "Ready".to_string();
                 self.input.clear();
                 self.cursor_pos = 0;
                 self.login_email.clear();
                 self.pending_model = None;
-                self.project_name_purpose = None;
-                self.notification = Some((
-                    if naming {
-                        "Cancelled".to_string()
-                    } else {
-                        "Login cancelled".to_string()
-                    },
-                    NotificationType::Warning,
-                ));
+                self.notification =
+                    Some(("Login cancelled".to_string(), NotificationType::Warning));
             }
             KeyCode::Enter => {
                 let value = std::mem::take(&mut self.input);
@@ -261,7 +256,6 @@ impl App {
                             let _ = tx.try_send(UiEvent::LinkCode(value.trim().to_string()));
                         }
                     }
-                    AppState::ProjectName => self.submit_project_name(&value),
                     _ => {}
                 }
             }

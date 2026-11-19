@@ -529,16 +529,17 @@ async fn handle_ui_event(
         UiEvent::SelectAgent(agent_hex) => agents::handle_select_agent(state, &agent_hex).await,
         UiEvent::FocusAgent(agent_hex) => agents::handle_focus_agent(state, &agent_hex).await,
         UiEvent::CreateAgent(name) => agents::handle_create_agent(state, name).await,
-        UiEvent::CreateProject { name, folder } => {
-            agents::handle_create_project(state, &name, &folder).await;
+        UiEvent::CreateProject { folder } => agents::handle_create_project(state, &folder).await,
+        UiEvent::AddAgentToProject(project) => {
+            agents::handle_add_agent_to_project(state, &project).await;
         }
-        UiEvent::RenameProject(name) => agents::handle_rename_project(state, &name).await,
-        UiEvent::AddAgentToProject(root) => {
-            agents::handle_add_agent_to_project(state, &root).await;
+        UiEvent::ReorderProjects(order) => agents::handle_reorder_projects(state, &order).await,
+        UiEvent::ReorderAgents { project_id, order } => {
+            agents::handle_reorder_agents(state, &project_id, &order).await;
         }
         UiEvent::ArchiveAgent(agent) => agents::handle_archive_agent(state, &agent).await,
         UiEvent::RestoreAgent(agent) => agents::handle_restore_agent(state, &agent).await,
-        UiEvent::RemoveProject(agent) => agents::handle_remove_project(state, &agent).await,
+        UiEvent::RemoveProject(project) => agents::handle_remove_project(state, &project).await,
         UiEvent::RefreshAgents => agents::handle_refresh_agents(state).await,
         UiEvent::InstantiateDefinition(name) => {
             agents::handle_instantiate_definition(state, &name).await;

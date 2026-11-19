@@ -50,13 +50,14 @@ use crate::{
     alerts::AlertSettings,
     components::{Activity, Message},
     events::{
-        AgentDefinitionSummary, AgentSummary, ModelOptionView, PlanView, ProcessSummary,
-        RecordSummary, UiCommand, UiEvent,
+        starts_project, AgentDefinitionSummary, AgentSummary, ModelOptionView, PlanView,
+        ProcessSummary, ProjectSummary, RecordSummary, UiCommand, UiEvent,
     },
     input::InputHistory,
     renderer::{ChatLineCache, GroupState},
 };
 pub use chat_tabs::ChatTab;
+pub(crate) use context_menu::MenuTarget;
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 pub use definitions::AgentsTab;
 use file_view::FileView;
@@ -124,21 +125,12 @@ pub enum AppState {
     LoginPassword,
     /// Plan link flow: waiting for the pasted sign-in code
     LinkCode,
-    /// Waiting for a project name (create or rename)
-    ProjectName,
     /// Model selector overlay is open
     SelectingModel,
     /// Folder browser for a new project is open
     SelectingFolder,
-}
-
-/// Why the project-name prompt is open.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum ProjectNamePurpose {
-    /// Name a project that does not exist yet, kept in this folder
-    Create(PathBuf),
-    /// Rename the project that contains the active agent
-    Rename,
+    /// A project's details are shown over the screen
+    ShowingProjectInfo,
 }
 
 /// Pending approval request.
@@ -159,8 +151,10 @@ pub struct PendingApproval {
 pub struct App {
     /// Current application state
     pub(super) state: AppState,
-    /// What submitting the project-name prompt will do
-    pub(super) project_name_purpose: Option<ProjectNamePurpose>,
+    /// Listed projects, in list order
+    pub(super) projects: Vec<ProjectSummary>,
+    /// Key of the project whose details are shown
+    pub(super) project_info: Option<String>,
     /// Conversation messages
     pub(super) messages: VecDeque<Message>,
     /// Current input text
@@ -622,7 +616,8 @@ impl App {
     pub fn new() -> Self {
         Self {
             state: AppState::Idle,
-            project_name_purpose: None,
+            projects: Vec::new(),
+            project_info: None,
             messages: VecDeque::new(),
             input: String::new(),
             input_history: InputHistory::new(),
@@ -1214,8 +1209,8 @@ impl App {
         self.select_agent_row(row);
     }
 
-    /// Ask for a folder and then a name, then create a project with a
-    /// default agent under it. Browsing starts in the launch directory.
+    /// Ask for a folder, then open it as a project named after it.
+    /// Browsing starts in the launch directory.
     pub(super) fn prompt_new_project(&mut self) {
         let start = std::env::current_dir()
             .ok()
@@ -1236,18 +1231,14 @@ impl App {
         }
     }
 
-    /// Close the folder browser and ask for the new project's name,
-    /// starting from the folder's own name.
+    /// Close the folder browser and open the folder as a project.
     pub(super) fn choose_project_folder(&mut self, folder: PathBuf) {
         self.folder_picker = None;
-        let name = folder
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        self.project_name_purpose = Some(ProjectNamePurpose::Create(folder));
-        self.begin_project_name();
-        self.cursor_pos = name.len();
-        self.input = name;
+        self.state = AppState::Idle;
+        self.status = "Ready".to_string();
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::CreateProject { folder });
+        }
     }
 
     /// Close the folder browser without creating a project.
@@ -1263,22 +1254,17 @@ impl App {
     /// else is refused with a notice. Returns whether a project was asked
     /// for.
     pub fn drop_path(&mut self, path: &std::path::Path) -> bool {
-        let name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().trim().to_string())
-            .filter(|name| !name.is_empty());
-        let (Some(name), true) = (name, path.is_dir()) else {
+        if !path.is_dir() {
             self.notification = Some((
                 "Drop a folder to start a project".to_string(),
                 NotificationType::Warning,
             ));
             return false;
-        };
+        }
         let Some(tx) = &self.event_tx else {
             return false;
         };
         let event = UiEvent::CreateProject {
-            name,
             folder: path.to_path_buf(),
         };
         if tx.try_send(event).is_err() {
@@ -1305,39 +1291,50 @@ impl App {
             .map_or(0, |picker| picker.sync_scroll(visible_rows))
     }
 
-    /// Ask for a new name for the project that contains the active agent.
-    pub(super) fn prompt_rename_project(&mut self) {
-        self.project_name_purpose = Some(ProjectNamePurpose::Rename);
-        self.begin_project_name();
+    /// Listed projects, in list order.
+    #[must_use]
+    pub fn projects(&self) -> &[ProjectSummary] {
+        &self.projects
     }
 
-    fn begin_project_name(&mut self) {
-        self.state = AppState::ProjectName;
-        self.input.clear();
-        self.cursor_pos = 0;
-        self.status = "Project name".to_string();
+    /// The project whose details are shown, while they are.
+    #[must_use]
+    pub fn project_info(&self) -> Option<&ProjectSummary> {
+        if self.state != AppState::ShowingProjectInfo {
+            return None;
+        }
+        let key = self.project_info.as_deref()?;
+        self.projects.iter().find(|project| project.id == key)
     }
 
-    /// Finish the project-name prompt. An empty name leaves the prompt open.
-    pub(super) fn submit_project_name(&mut self, name: &str) {
-        let name = name.trim().to_string();
-        if name.is_empty() {
+    /// Show the details of the project with key `key`.
+    pub(super) fn show_project_info(&mut self, key: &str) {
+        if !self.projects.iter().any(|project| project.id == key) {
             self.notification = Some((
-                "Project name cannot be empty".to_string(),
+                "No details for that project".to_string(),
                 NotificationType::Warning,
             ));
             return;
         }
-        let purpose = self.project_name_purpose.take();
-        self.state = AppState::Idle;
-        self.status = "Ready".to_string();
-        let event = match purpose {
-            Some(ProjectNamePurpose::Create(folder)) => UiEvent::CreateProject { name, folder },
-            Some(ProjectNamePurpose::Rename) | None => UiEvent::RenameProject(name),
-        };
-        if let Some(tx) = &self.event_tx {
-            let _ = tx.try_send(event);
+        self.project_info = Some(key.to_string());
+        self.state = AppState::ShowingProjectInfo;
+    }
+
+    /// Show the details of the project the active agent is in.
+    pub(super) fn show_active_project_info(&mut self) {
+        match self.project_key_of_agent(&self.active_agent_id) {
+            Some(key) => self.show_project_info(&key),
+            None => {
+                self.notification =
+                    Some(("No project is open".to_string(), NotificationType::Warning));
+            }
         }
+    }
+
+    /// Close the project details.
+    pub(super) fn close_project_info(&mut self) {
+        self.project_info = None;
+        self.state = AppState::Idle;
     }
 
     /// Fold or open the project under the highlight. An agent row folds the
@@ -1717,10 +1714,10 @@ impl App {
         (column + PROJECT_ADD_WIDTH >= list.x + list.width).then_some(root)
     }
 
-    /// Unfold the project headed by agent `root` and ask for a new agent in
-    /// it.
+    /// Unfold the project whose first agent is `root` and ask for a new
+    /// agent in it.
     pub(super) fn add_agent_to_project(&mut self, root: usize) {
-        let Some(id) = self.agents.get(root).map(|agent| agent.id.clone()) else {
+        let Some(id) = self.project_key(root) else {
             return;
         };
         self.collapsed_projects.remove(&id);
@@ -1927,13 +1924,15 @@ impl App {
         let mut rows = Vec::new();
         let mut index = 0;
         while index < self.agents.len() {
-            if self.agents[index].heads_project() {
+            if starts_project(&self.agents, index) {
                 let root = index;
                 if !rows.is_empty() {
                     rows.push(ProjectListRow::Gap);
                 }
                 let end = self.project_end(root);
-                let expanded = !self.collapsed_projects.contains(&self.agents[root].id);
+                let expanded = !self
+                    .collapsed_projects
+                    .contains(self.agents[root].project_key());
                 rows.push(ProjectListRow::Project { root, expanded });
                 if expanded {
                     for agent_index in root..end {
@@ -1950,24 +1949,39 @@ impl App {
         rows
     }
 
-    /// Index just past the agents that belong to the project rooted at `root`.
-    fn project_end(&self, root: usize) -> usize {
-        self.agents
-            .iter()
-            .skip(root + 1)
-            .position(|agent| agent.heads_project())
-            .map_or(self.agents.len(), |offset| root + 1 + offset)
+    /// Index just past the agents of the project whose first agent is
+    /// `root`.
+    pub(super) fn project_end(&self, root: usize) -> usize {
+        (root + 1..self.agents.len())
+            .find(|&i| starts_project(&self.agents, i))
+            .unwrap_or(self.agents.len())
     }
 
-    /// Root agent of the project that contains `index`.
-    fn project_root(&self, index: usize) -> Option<usize> {
-        (0..=index).rev().find(|&i| self.agents[i].heads_project())
+    /// First agent of the project that contains `index`.
+    pub(super) fn project_root(&self, index: usize) -> Option<usize> {
+        (0..=index).rev().find(|&i| starts_project(&self.agents, i))
+    }
+
+    /// Key of the project whose first agent is `root`.
+    pub(super) fn project_key(&self, root: usize) -> Option<String> {
+        self.agents
+            .get(root)
+            .map(|agent| agent.project_key().to_string())
+    }
+
+    /// First agent of the project with key `key`.
+    pub(super) fn project_root_of_key(&self, key: &str) -> Option<usize> {
+        (0..self.agents.len())
+            .find(|&i| starts_project(&self.agents, i) && self.agents[i].project_key() == key)
     }
 
     /// Open a folded project so `index` has a visible row.
     fn reveal_agent(&mut self, index: usize) {
-        if let Some(root) = self.project_root(index) {
-            self.collapsed_projects.remove(&self.agents[root].id);
+        if let Some(key) = self
+            .project_root(index)
+            .and_then(|root| self.project_key(root))
+        {
+            self.collapsed_projects.remove(&key);
         }
     }
 
@@ -1984,7 +1998,7 @@ impl App {
     /// to the agent shown in the chat if it is in there. Otherwise the
     /// highlight stays on the same row as rows above it come and go.
     fn toggle_project(&mut self, root: usize) {
-        let Some(id) = self.agents.get(root).map(|agent| agent.id.clone()) else {
+        let Some(id) = self.project_key(root) else {
             return;
         };
         let span = root..self.project_end(root);
@@ -2137,8 +2151,8 @@ impl App {
     }
 
     /// Whether the input line shows the terminal prompt and Enter runs it
-    /// as a shell command. Prompts that ask for a value (login, project
-    /// name, folder) take the line over while they are open.
+    /// as a shell command. Prompts that ask for a value (login, folder)
+    /// take the line over while they are open.
     #[must_use]
     pub const fn input_is_command(&self) -> bool {
         self.terminal_mode
@@ -2147,7 +2161,6 @@ impl App {
                 AppState::LoginEmail
                     | AppState::LoginPassword
                     | AppState::LinkCode
-                    | AppState::ProjectName
                     | AppState::SelectingFolder
             )
     }

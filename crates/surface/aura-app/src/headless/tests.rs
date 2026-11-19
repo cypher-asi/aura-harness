@@ -133,7 +133,7 @@ fn harness(
     let Harness { hub, background } = build_hub(HubSetup {
         data_dir: data.to_path_buf(),
         workspace_root: workspace.clone(),
-        registry: AgentRegistry::load_or_init(data).unwrap(),
+        registry: AgentRegistry::load_or_init_in(data, &workspace).unwrap(),
         definitions: AgentDefinitions::load_or_seed(data).unwrap(),
         store: Arc::new(RocksStore::open(data.join("db"), false).unwrap()),
         provider,

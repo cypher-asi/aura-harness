@@ -40,7 +40,7 @@ fn slow_fixture(reply: &str, latency_ms: u64) -> Fixture {
         tx.clone(),
     );
     let parts = AgentHubParts {
-        registry: AgentRegistry::load_or_init(data.path()).unwrap(),
+        registry: AgentRegistry::load_or_init_in(data.path(), workspace.path()).unwrap(),
         definitions: AgentDefinitions::load_or_seed(data.path()).unwrap(),
         skills: SkillManager::new(SkillLoader::with_defaults(
             Some(workspace.path().to_path_buf()),
@@ -442,8 +442,8 @@ fn task_tool_offers_detached_spawns() {
 async fn spawned_instance_works_in_its_projects_folder() {
     let fixture = fixture("Done.");
     let folder = TempDir::new().unwrap();
-    let parent = lock(&fixture.hub.registry)
-        .create_project("Site", folder.path())
+    let (parent, _) = lock(&fixture.hub.registry)
+        .open_project(folder.path())
         .unwrap();
 
     let result = fixture

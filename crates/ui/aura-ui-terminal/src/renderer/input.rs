@@ -59,7 +59,6 @@ fn plan<'a>(area: Rect, app: &'a App, theme: &Theme) -> Plan<'a> {
             before_cursor.to_string(),
         ),
         AppState::LoginEmail => ("Email: ", input.to_string(), before_cursor.to_string()),
-        AppState::ProjectName => ("Project: ", input.to_string(), before_cursor.to_string()),
         AppState::LinkCode => (
             "Code: ",
             "•".repeat(input.chars().count()),

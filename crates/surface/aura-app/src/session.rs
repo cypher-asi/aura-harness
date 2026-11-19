@@ -125,7 +125,8 @@ pub async fn start(
     let workspace_root = std::env::current_dir().context("resolving working directory")?;
     tokio::fs::create_dir_all(&data_dir).await?;
 
-    let mut registry = AgentRegistry::load_or_init(&data_dir).context("loading agent registry")?;
+    let mut registry = AgentRegistry::load_or_init_in(&data_dir, &workspace_root)
+        .context("loading agent registry")?;
     let definitions =
         AgentDefinitions::load_or_seed(&data_dir).context("loading permanent agents")?;
 

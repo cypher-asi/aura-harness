@@ -16,7 +16,7 @@ use aura_store_record::{ReadStore, StoreError};
 use aura_ui_terminal::{
     events::{
         ActivityData, AgentSummary, CallUsage, MessageData, MessageRole, PolicyDetail,
-        RecordStatus, RecordSummary,
+        ProjectSummary, RecordStatus, RecordSummary,
     },
     UiCommand,
 };
@@ -523,17 +523,31 @@ pub fn archived_summaries(registry: &AgentRegistry, store: &dyn ReadStore) -> Ve
     registry
         .archived_tree()
         .into_iter()
-        .map(|(agent, depth)| {
-            let mut summary = summarize(registry, agent, depth, store, unknown, &none);
-            summary.project = registry.project_root(agent.agent_id()).map(|root| {
-                root.project
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or(root.display_name())
-                    .to_string()
-            });
-            summary
+        .map(|(agent, depth)| summarize(registry, agent, depth, store, unknown, &none))
+        .collect()
+}
+
+/// Rows of the listed projects, in list order.
+#[must_use]
+pub fn project_summaries(registry: &AgentRegistry) -> Vec<ProjectSummary> {
+    registry
+        .listed_projects()
+        .into_iter()
+        .map(|project| {
+            let (listed_agents, archived_agents) = registry.project_counts(&project.id);
+            ProjectSummary {
+                id: project.id.clone(),
+                name: project.name(),
+                folder: project.folder.display().to_string(),
+                folder_exists: project.folder.is_dir(),
+                created: project
+                    .created_at
+                    .with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d %H:%M")
+                    .to_string(),
+                listed_agents,
+                archived_agents,
+            }
         })
         .collect()
 }
@@ -562,9 +576,11 @@ fn summarize(
         last_active_ms,
         definition: agent.definition.clone(),
         depth,
-        added_to_project: agent.parent.is_none() && !registry.heads_project(agent),
         running: running.contains(&agent_id),
-        project: agent.project.clone(),
+        project_id: agent.project_id.clone(),
+        project: registry
+            .project_of(agent_id)
+            .map(crate::agent_registry::Project::name),
     }
 }
 

@@ -63,12 +63,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Benchmark two models, or Gate and a model, on the same work",
         needs_args: false,
     },
-    SlashCommand {
-        name: "name",
-        args: "[name]",
-        description: "Rename the current project",
-        needs_args: false,
-    },
+    command("project", "Show the current project's folder and agents"),
     command("archive", "Move the current agent to the Archive"),
     command("remove-project", "Remove the current project from the list"),
     command("clear", "Clear messages"),

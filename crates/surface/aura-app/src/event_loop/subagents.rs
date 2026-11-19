@@ -744,11 +744,15 @@ impl AgentHub {
     pub async fn send_agent_list(&self) {
         self.name_agents();
         let summaries = self.agent_summaries();
-        let archived = crate::record_loader::archived_summaries(
-            &lock(&self.registry),
-            self.factory.store.as_ref(),
-        );
-        let active = lock(&self.registry).active().agent_id();
+        let (projects, archived, active) = {
+            let registry = lock(&self.registry);
+            (
+                crate::record_loader::project_summaries(&registry),
+                crate::record_loader::archived_summaries(&registry, self.factory.store.as_ref()),
+                registry.active().agent_id(),
+            )
+        };
+        let _ = self.commands.send(UiCommand::SetProjects(projects)).await;
         let _ = self.commands.send(UiCommand::SetAgents(summaries)).await;
         let _ = self
             .commands

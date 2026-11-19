@@ -72,13 +72,7 @@ impl App {
             }
             "expand" | "zoom" | "fullscreen" => self.toggle_chat_expanded(),
             "agent" | "a" => self.handle_agent_command(arg),
-            "name" => {
-                if arg.is_empty() {
-                    self.prompt_rename_project();
-                } else if let Some(tx) = &self.event_tx {
-                    let _ = tx.try_send(UiEvent::RenameProject(arg.to_string()));
-                }
-            }
+            "project" => self.show_active_project_info(),
             "spawn" => self.handle_spawn_command(arg),
             "archive" => {
                 let id = self.active_agent_id.clone();
@@ -86,7 +80,7 @@ impl App {
             }
             "remove-project" => {
                 let id = self.active_agent_id.clone();
-                self.request_remove_project(id);
+                self.request_remove_project_of(&id);
             }
             "plan" => self.request_plan_toggle(),
             "build" => self.request_build(arg),
@@ -808,6 +802,7 @@ impl App {
             }
             UiCommand::ClearConversation => self.cmd_clear_conversation(),
             UiCommand::NewRecord(record) => self.cmd_new_record(record),
+            UiCommand::SetProjects(projects) => self.projects = projects,
             UiCommand::SetAgents(agents) => self.cmd_set_agents(agents),
             UiCommand::SetArchivedAgents(agents) => self.set_archived(agents),
             UiCommand::SetActiveAgent(agent_id) => self.cmd_set_active_agent(&agent_id),
@@ -1168,7 +1163,7 @@ impl App {
     fn cmd_set_agents(&mut self, agents: Vec<crate::events::AgentSummary>) {
         self.agents = agents;
         self.collapsed_projects
-            .retain(|id| self.agents.iter().any(|agent| agent.id == *id));
+            .retain(|key| self.agents.iter().any(|agent| agent.project_key() == key));
         self.select_visible_active();
     }
 

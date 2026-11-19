@@ -7,8 +7,8 @@ use super::text::{display_width, wrap_words, Measure};
 use crate::{
     animation::AURA_WIDTH,
     app::{
-        tab_bar::TabLayout, AgentsTab, AppState, ChatScroll, ChatTab, HoverTarget, ImageHit, Pane,
-        PanelFocus, ProjectListRow, ProseRow, ToggleRow, ToggleTarget,
+        tab_bar::TabLayout, AgentsTab, AppState, ChatScroll, ChatTab, HoverTarget, ImageHit,
+        MenuTarget, Pane, PanelFocus, ProjectListRow, ProseRow, ToggleRow, ToggleTarget,
     },
     App, Theme,
 };
@@ -878,6 +878,7 @@ fn build_archived_lines<'a>(
     let is_focused = app.focus() == PanelFocus::Swarm;
     let width = inner.width as usize;
     let now_ms = now_ms();
+    let menu_target = app.context_menu().map(|menu| &menu.target);
     let shown = archived
         .iter()
         .enumerate()
@@ -885,7 +886,8 @@ fn build_archived_lines<'a>(
         .take(window.len())
         .map(|(index, agent)| {
             let selected = is_focused && index == app.selected_archived();
-            let hovered = matches!(app.hover(), Some(HoverTarget::ArchivedRow(i)) if i == index);
+            let hovered = matches!(app.hover(), Some(HoverTarget::ArchivedRow(i)) if i == index)
+                || matches!(menu_target, Some(MenuTarget::Archived(id)) if *id == agent.id);
             let side = if agent.depth == 0 {
                 agent
                     .project
@@ -958,6 +960,7 @@ fn build_swarm_lines<'a>(
     let project_name = Style::default().fg(theme.colors.muted);
     let agent_name = Style::default().fg(theme.colors.foreground);
     let subagent_name = Style::default().fg(theme.colors.muted);
+    let menu_target = app.context_menu().map(|menu| &menu.target);
     let rows = app.project_rows();
     let listed = rows.len().saturating_sub(1);
     // A project's agents run up to the next project's root.
@@ -988,7 +991,17 @@ fn build_swarm_lines<'a>(
         };
         let add_hovered =
             matches!(app.hover(), Some(HoverTarget::AddToProject(index)) if index == row_index);
+        let menu_on = match (row, menu_target) {
+            (ProjectListRow::Project { root, .. }, Some(MenuTarget::Project(key))) => {
+                app.agents()[root].project_key() == key
+            }
+            (ProjectListRow::Agent { index }, Some(MenuTarget::Agent(id))) => {
+                app.agents()[index].id == *id
+            }
+            _ => false,
+        };
         let is_hovered = add_hovered
+            || menu_on
             || matches!(app.hover(), Some(HoverTarget::ProjectRow(index)) if index == row_index);
         match row {
             ProjectListRow::Project { root, expanded } => {
@@ -1225,8 +1238,8 @@ impl CellState {
 /// Colors for one list row. `icon` overrides the icon's own color.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct CellStyle {
-    bg: Option<Color>,
-    text: Style,
+    pub(super) bg: Option<Color>,
+    pub(super) text: Style,
     icon: Option<Color>,
     time: Color,
 }

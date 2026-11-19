@@ -1,6 +1,6 @@
 //! The menu a right click opens on a project or an agent in the projects
 //! list, or on an agent in the Archive. Its items are the list's own
-//! actions (add an agent, rename, fold, archive, remove, unarchive),
+//! actions (add an agent, project info, fold, archive, remove, unarchive),
 //! gathered where the pointer is.
 //!
 //! The menu keeps the ids of what it was opened on, not list positions, so
@@ -14,7 +14,7 @@ use ratatui::layout::{Position, Rect};
 /// What the menu was opened on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum MenuTarget {
-    /// A project, by the id of the agent heading it
+    /// A project, by its key (see [`crate::events::AgentSummary::project_key`])
     Project(String),
     /// An agent, by id
     Agent(String),
@@ -28,7 +28,7 @@ pub(crate) enum MenuTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MenuItem {
     AddAgent,
-    Rename,
+    Info,
     Fold,
     Open,
     Archive,
@@ -88,7 +88,7 @@ impl App {
     pub(crate) fn menu_label(&self, menu: &ContextMenu, item: MenuItem) -> &'static str {
         match item {
             MenuItem::AddAgent => "Add agent",
-            MenuItem::Rename => "Rename project…",
+            MenuItem::Info => "Project info",
             MenuItem::Fold => {
                 let folded = matches!(&menu.target, MenuTarget::Project(id) if self.collapsed_projects.contains(id));
                 if folded {
@@ -119,10 +119,10 @@ impl App {
         };
         let (target, items) = match self.project_rows().get(index).copied() {
             Some(ProjectListRow::Project { root, .. }) => (
-                MenuTarget::Project(self.agents[root].id.clone()),
+                MenuTarget::Project(self.agents[root].project_key().to_string()),
                 vec![
                     MenuItem::AddAgent,
-                    MenuItem::Rename,
+                    MenuItem::Info,
                     MenuItem::Fold,
                     MenuItem::RemoveProject,
                 ],
@@ -250,29 +250,36 @@ impl App {
         let Some(&item) = menu.items.get(menu.selected) else {
             return;
         };
-        let id = match menu.target {
+        match menu.target {
             MenuTarget::Archived(id) => {
                 if item == MenuItem::Restore {
                     self.restore_agent(id);
                 }
-                return;
             }
-            MenuTarget::Project(id) | MenuTarget::Agent(id) => id,
-        };
-        let Some(index) = self.agents.iter().position(|agent| agent.id == id) else {
-            return;
-        };
-        match item {
-            MenuItem::AddAgent => self.add_agent_to_project(index),
-            MenuItem::Fold => self.toggle_project(index),
-            MenuItem::Rename => {
-                self.request_agent_switch(id);
-                self.prompt_rename_project();
+            MenuTarget::Project(key) => {
+                let Some(root) = self.project_root_of_key(&key) else {
+                    return;
+                };
+                match item {
+                    MenuItem::AddAgent => self.add_agent_to_project(root),
+                    MenuItem::Fold => self.toggle_project(root),
+                    MenuItem::Info => self.show_project_info(&key),
+                    MenuItem::RemoveProject => self.request_remove_project(key),
+                    MenuItem::Open | MenuItem::Archive | MenuItem::Restore => {}
+                }
             }
-            MenuItem::Open => self.request_agent_switch(id),
-            MenuItem::Archive => self.archive_agent(id),
-            MenuItem::RemoveProject => self.request_remove_project(id),
-            MenuItem::Restore => self.restore_agent(id),
+            MenuTarget::Agent(id) => {
+                if !self.agents.iter().any(|agent| agent.id == id) {
+                    return;
+                }
+                match item {
+                    MenuItem::Open => self.request_agent_switch(id),
+                    MenuItem::Archive => self.archive_agent(id),
+                    MenuItem::RemoveProject => self.request_remove_project_of(&id),
+                    MenuItem::Restore => self.restore_agent(id),
+                    MenuItem::AddAgent | MenuItem::Fold | MenuItem::Info => {}
+                }
+            }
         }
     }
 }
@@ -370,12 +377,7 @@ mod tests {
         let rows = screen(&mut app, 30);
         press(&mut app, MouseButton::Right, cell_of(&rows, "CC"));
         let rows = screen(&mut app, 30);
-        for label in [
-            "Add agent",
-            "Rename project…",
-            "Collapse",
-            "Remove project…",
-        ] {
+        for label in ["Add agent", "Project info", "Collapse", "Remove project…"] {
             assert!(
                 rows.iter().any(|row| row.contains(label)),
                 "{label}:\n{}",
@@ -464,18 +466,54 @@ mod tests {
     }
 
     #[test]
-    fn renaming_another_project_switches_to_it_first() {
+    fn project_info_shows_the_folder_and_closes_on_any_key() {
         let (mut app, mut rx) = app();
+        app.process_command(UiCommand::SetProjects(vec![
+            crate::events::ProjectSummary {
+                id: "aa".into(),
+                name: "site".into(),
+                folder: "/work/site".into(),
+                folder_exists: true,
+                ..Default::default()
+            },
+            crate::events::ProjectSummary {
+                id: "cc".into(),
+                name: "notes".into(),
+                folder: "/work/notes".into(),
+                folder_exists: false,
+                created: "2026-11-19 14:00".into(),
+                listed_agents: 1,
+                archived_agents: 2,
+            },
+        ]));
         let rows = screen(&mut app, 30);
         press(&mut app, MouseButton::Right, cell_of(&rows, "CC"));
         let rows = screen(&mut app, 30);
-        press(
-            &mut app,
-            MouseButton::Left,
-            cell_of(&rows, "Rename project"),
-        );
-        assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "cc"));
-        assert_eq!(app.state(), AppState::ProjectName);
+        press(&mut app, MouseButton::Left, cell_of(&rows, "Project info"));
+        assert!(rx.try_recv().is_err(), "nothing goes to the session");
+        assert_eq!(app.state(), AppState::ShowingProjectInfo);
+        assert_eq!(app.project_info().map(|p| p.id.as_str()), Some("cc"));
+
+        let rows = screen(&mut app, 30);
+        for text in [
+            "NOTES",
+            "/work/notes",
+            "The folder is missing",
+            "2026-11-19 14:00",
+        ] {
+            assert!(
+                rows.iter().any(|row| row.contains(text)),
+                "{text}:\n{}",
+                rows.join("\n")
+            );
+        }
+        app.handle_key(key(KeyCode::Char('x')));
+        assert_eq!(app.state(), AppState::Idle);
+        assert!(app.project_info().is_none());
+
+        // `/project` shows the active agent's project.
+        app.handle_command("/project");
+        assert_eq!(app.project_info().map(|p| p.id.as_str()), Some("aa"));
     }
 
     #[test]

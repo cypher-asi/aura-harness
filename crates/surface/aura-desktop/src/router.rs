@@ -1,7 +1,7 @@
 //! The window's tabs, and how one agent session serves all of them.
 //!
-//! A tab is a workspace: it holds some of the session's projects (a root
-//! agent and the agents under it) and shows only those, in its own copy
+//! A tab is a workspace: it holds some of the session's projects (by
+//! project key) and shows only those, in its own copy
 //! of the terminal UI. The session knows nothing of tabs. It has one
 //! event loop, one command stream and one "active" agent, whose Record
 //! panel, sandbox and notifications it sends without an address, so the
@@ -18,7 +18,7 @@
 //! tab that asked for it; `+` asks for one in a tab of its own.
 
 use crate::tab::{Settings, Tab};
-use aura_ui::events::{AgentSummary, ProcessSummary, UiCommand, UiEvent};
+use aura_ui::events::{starts_project, AgentSummary, ProcessSummary, UiCommand, UiEvent};
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 
@@ -69,7 +69,7 @@ pub struct Tabs {
     /// Every process of the session, as last listed.
     processes: Vec<ProcessSummary>,
     /// The latest of each list all tabs show whole, for tabs opened later.
-    lists: [Option<UiCommand>; 4],
+    lists: [Option<UiCommand>; 5],
     /// The session's active agent, as it last reported.
     session_active: String,
     /// Agent the session was asked to make active and hasn't confirmed.
@@ -97,7 +97,7 @@ impl Tabs {
             next_id: 2,
             agents: Vec::new(),
             processes: Vec::new(),
-            lists: [None, None, None, None],
+            lists: [None, None, None, None, None],
             session_active: String::new(),
             focus_sent: None,
             opening: false,
@@ -145,12 +145,12 @@ impl Tabs {
         self.tabs.iter().map(|tab| tab.projects.clone()).collect()
     }
 
-    /// The root agent heading the project `agent` is in.
+    /// Key of the project `agent` is in.
     fn root_of(&self, agent: &str) -> Option<&str> {
         let mut root = None;
-        for listed in &self.agents {
-            if listed.heads_project() {
-                root = Some(listed.id.as_str());
+        for (index, listed) in self.agents.iter().enumerate() {
+            if starts_project(&self.agents, index) {
+                root = Some(listed.project_key());
             }
             if listed.id == agent {
                 return root;
@@ -226,6 +226,7 @@ impl Tabs {
             | UiCommand::EndLink
             | UiCommand::SetAgentDefinitions(_)
             | UiCommand::SetArchivedAgents(_)
+            | UiCommand::SetProjects(_)
             | UiCommand::SetModels { .. }
             | UiCommand::SetApiStatus { .. } => {
                 let slot = match command {
@@ -233,6 +234,7 @@ impl Tabs {
                     UiCommand::SetModels { .. } => Some(1),
                     UiCommand::SetApiStatus { .. } => Some(2),
                     UiCommand::SetArchivedAgents(_) => Some(3),
+                    UiCommand::SetProjects(_) => Some(4),
                     _ => None,
                 };
                 if let Some(slot) = slot {
@@ -284,11 +286,9 @@ impl Tabs {
     }
 
     fn place_projects(&mut self) {
-        let roots: Vec<String> = self
-            .agents
-            .iter()
-            .filter(|agent| agent.heads_project())
-            .map(|agent| agent.id.clone())
+        let roots: Vec<String> = (0..self.agents.len())
+            .filter(|&index| starts_project(&self.agents, index))
+            .map(|index| self.agents[index].project_key().to_string())
             .collect();
         for tab in &mut self.tabs {
             tab.projects.retain(|project| roots.contains(project));
@@ -351,37 +351,30 @@ impl Tabs {
     }
 
     /// The agents of the projects in `tab`, with the active flag on the
-    /// agent the tab shows rather than on the session's.
+    /// agent the tab shows rather than on the session's. Projects come in
+    /// the session's order, which keeps the order dragged into a list.
     fn agents_of(&self, tab: &Tab) -> Vec<AgentSummary> {
         let mut out = Vec::new();
-        // In the tab's order of projects, which a drag in the list changes.
-        for root in &tab.projects {
-            let Some(start) = self
-                .agents
-                .iter()
-                .position(|agent| agent.heads_project() && agent.id == *root)
-            else {
-                continue;
-            };
-            let group = self.agents[start..]
-                .iter()
-                .enumerate()
-                .take_while(|(offset, agent)| *offset == 0 || !agent.heads_project())
-                .map(|(_, agent)| agent);
-            for agent in group {
-                let mut agent = agent.clone();
-                if !tab.agent().is_empty() {
-                    agent.is_active = agent.id == tab.agent();
-                }
-                out.push(agent);
+        let mut keep = false;
+        for (index, agent) in self.agents.iter().enumerate() {
+            if starts_project(&self.agents, index) {
+                keep = tab.projects.iter().any(|key| key == agent.project_key());
             }
+            if !keep {
+                continue;
+            }
+            let mut agent = agent.clone();
+            if !tab.agent().is_empty() {
+                agent.is_active = agent.id == tab.agent();
+            }
+            out.push(agent);
         }
         out
     }
 
     /// Take the order of projects the front tab's list now has, after the
-    /// pointer dragged one, so it is kept when the session lists its
-    /// agents again and written with the tabs.
+    /// pointer dragged one, to write with the tabs. The session keeps the
+    /// order itself, from the tab's `ReorderProjects`.
     pub fn adopt_project_order(&mut self) {
         let tab = &mut self.tabs[self.front];
         let order = tab.tui.project_order();
@@ -546,8 +539,14 @@ impl Tabs {
     fn sync_focus(&mut self) {
         let tab = self.front();
         if tab.agent().is_empty() {
-            if let Some(project) = tab.projects.first().cloned() {
-                self.request(&project, true);
+            let first = tab.projects.first().and_then(|key| {
+                self.agents
+                    .iter()
+                    .find(|agent| agent.project_key() == key)
+                    .map(|agent| agent.id.clone())
+            });
+            if let Some(agent) = first {
+                self.request(&agent, true);
             }
         } else {
             let agent = tab.agent().to_string();
@@ -741,7 +740,6 @@ mod tests {
         let _ = sent(&mut events);
 
         let event = UiEvent::CreateProject {
-            name: "docs".into(),
             folder: "/tmp".into(),
         };
         tabs.forward(0, event);
@@ -759,12 +757,15 @@ mod tests {
         let UiCommand::SetAgents(mut agents) = list(TWO, "a1") else {
             unreachable!("list sends agents");
         };
+        for agent in &mut agents[..2] {
+            agent.project_id = Some("a1".into());
+        }
         agents.insert(
             2,
             AgentSummary {
                 id: "a1.2".into(),
                 name: "A1.2".into(),
-                added_to_project: true,
+                project_id: Some("a1".into()),
                 ..AgentSummary::default()
             },
         );
@@ -956,24 +957,23 @@ mod tests {
     }
 
     #[test]
-    fn a_dragged_order_of_projects_is_kept_listed_and_saved() {
+    fn a_dragged_order_of_projects_is_listed_and_saved() {
         let (mut tabs, _events) = tabs();
         start(&mut tabs, TWO, "a1");
         assert_eq!(held(&tabs), [["a1", "a1.1", "p2", "a3"]]);
 
         // The front tab's list was reordered by a drag.
-        tabs.tabs[0]
-            .tui
-            .process_command(list(&[("p2", 0), ("a1", 0), ("a1.1", 1), ("a3", 0)], "a1"));
+        let dragged: Agents = &[("p2", 0), ("a1", 0), ("a1.1", 1), ("a3", 0)];
+        tabs.tabs[0].tui.process_command(list(dragged, "a1"));
         tabs.adopt_project_order();
         assert_eq!(tabs.arrangement(), [["p2", "a1", "a3"]]);
 
-        // The session lists its agents in its own order again.
-        tabs.apply(list(TWO, "a1"));
+        // The session, told of the drag, lists its agents in that order.
+        tabs.apply(list(dragged, "a1"));
         assert_eq!(held(&tabs), [["p2", "a1", "a1.1", "a3"]]);
 
         // A new project goes last; the order survives the file.
-        let more: Agents = &[("a1", 0), ("a1.1", 1), ("p2", 0), ("a3", 0), ("p4", 0)];
+        let more: Agents = &[("p2", 0), ("a1", 0), ("a1.1", 1), ("a3", 0), ("p4", 0)];
         tabs.apply(list(more, "a1"));
         assert_eq!(held(&tabs), [["p2", "a1", "a1.1", "a3", "p4"]]);
         let path = std::env::temp_dir().join(format!("aura_order_{}", std::process::id()));

@@ -814,24 +814,24 @@ fn test_project_folds_its_first_agent() {
 }
 
 #[test]
-fn test_agents_added_to_a_project_stay_in_it_unindented() {
+fn test_agents_of_one_project_stay_in_it_unindented() {
     use super::ProjectListRow;
 
     let (mut app, _rx) = app_with_agents();
-    let added = |id: &str, name: &str| crate::events::AgentSummary {
-        added_to_project: true,
+    let in_project = |project: &str, id: &str, name: &str| crate::events::AgentSummary {
+        project_id: Some(project.to_string()),
         ..agent(id, name)
     };
     let spawned = crate::events::AgentSummary {
         depth: 1,
-        ..agent("dd", "explorer #1")
+        ..in_project("site", "dd", "explorer #1")
     };
     app.process_command(UiCommand::SetAgents(vec![
-        agent("aa", "Agent"),
-        added("bb", "Agent 2"),
+        in_project("site", "aa", "Agent"),
+        in_project("site", "bb", "Agent 2"),
         spawned,
-        added("cc", "reviewer #1"),
-        agent("ee", "Other"),
+        in_project("site", "cc", "reviewer #1"),
+        in_project("notes", "ee", "Other"),
     ]));
 
     assert_eq!(
@@ -1217,7 +1217,7 @@ fn open_folder_picker(app: &mut App, dir: &std::path::Path) {
 }
 
 #[test]
-fn test_ctrl_n_picks_a_folder_then_names_the_project() {
+fn test_ctrl_n_picks_a_folder_and_opens_it_as_a_project() {
     let (mut app, mut rx) = app_with_agents();
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("website")).unwrap();
@@ -1232,18 +1232,11 @@ fn test_ctrl_n_picks_a_folder_then_names_the_project() {
     app.handle_key(key(KeyCode::Home));
     app.handle_key(key(KeyCode::Enter));
 
-    assert_eq!(app.state(), AppState::ProjectName);
     assert!(app.folder_picker().is_none());
-    assert_eq!(app.input(), "website");
-    assert!(rx.try_recv().is_err());
-
-    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
-    type_chars(&mut app, "Website");
-    app.handle_key(key(KeyCode::Enter));
     let expected = dir.path().join("website");
     assert!(matches!(
         rx.try_recv(),
-        Ok(UiEvent::CreateProject { name, folder }) if name == "Website" && folder == expected
+        Ok(UiEvent::CreateProject { folder }) if folder == expected
     ));
     assert_eq!(app.state(), AppState::Idle);
 }
@@ -1258,7 +1251,7 @@ fn test_dropping_a_folder_creates_a_project_named_after_it() {
     assert!(app.drop_path(&folder));
     assert!(matches!(
         rx.try_recv(),
-        Ok(UiEvent::CreateProject { name, folder: got }) if name == "website" && got == folder
+        Ok(UiEvent::CreateProject { folder: got }) if got == folder
     ));
 }
 
@@ -1286,13 +1279,11 @@ fn test_folder_picker_creates_a_folder_and_space_picks_it() {
     assert_eq!(app.state(), AppState::SelectingFolder);
 
     app.handle_key(key(KeyCode::Char(' ')));
-    assert_eq!(app.state(), AppState::ProjectName);
-    assert_eq!(app.input(), "new-app");
-    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.state(), AppState::Idle);
     let expected = dir.path().join("new-app");
     assert!(matches!(
         rx.try_recv(),
-        Ok(UiEvent::CreateProject { folder, .. }) if folder == expected
+        Ok(UiEvent::CreateProject { folder }) if folder == expected
     ));
 }
 
@@ -1309,17 +1300,11 @@ fn test_esc_closes_the_folder_picker() {
 }
 
 #[test]
-fn test_name_command_renames_the_current_project() {
+fn test_projects_have_no_name_to_set() {
     let (mut app, mut rx) = app_with_agents();
-
     app.handle_command("/name Research");
-    assert!(matches!(rx.try_recv(), Ok(UiEvent::RenameProject(name)) if name == "Research"));
-
-    app.handle_command("/name");
-    assert_eq!(app.state(), AppState::ProjectName);
-    type_chars(&mut app, "Notes");
-    app.handle_key(key(KeyCode::Enter));
-    assert!(matches!(rx.try_recv(), Ok(UiEvent::RenameProject(name)) if name == "Notes"));
+    assert!(rx.try_recv().is_err());
+    assert_ne!(app.state(), AppState::ShowingProjectInfo);
 }
 
 #[test]
@@ -1446,6 +1431,86 @@ fn test_dragging_a_project_reorders_the_list_live() {
         app.project_rows()[app.project_rows().len() - 4],
         ProjectListRow::Project { expanded: true, .. }
     ));
+}
+
+#[test]
+fn test_dropping_a_dragged_project_sends_the_new_order() {
+    let (tx, mut rx) = mpsc::channel(16);
+    let mut app = app_with_three_projects();
+    app.event_tx = Some(tx);
+    left(&mut app, MouseEventKind::Down, 4);
+    left(&mut app, MouseEventKind::Drag, 8);
+    assert!(rx.try_recv().is_err(), "nothing is sent mid-drag");
+    left(&mut app, MouseEventKind::Up, 8);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::ReorderProjects(order)) if order == ["bb", "aa", "cc"]
+    ));
+
+    // A click that folds sends no order.
+    left(&mut app, MouseEventKind::Down, 4);
+    left(&mut app, MouseEventKind::Up, 4);
+    assert!(rx.try_recv().is_err());
+}
+
+/// Project `site` with `a1` (which spawned `a1c`), `a2` and `a3`, then
+/// project `notes` with `n1`. Rows from line 4: site 4, a1 5, a1c 6, a2 7,
+/// a3 8; gap 9; notes 10, n1 11.
+fn app_with_agents_to_drag() -> (App, mpsc::Receiver<UiEvent>) {
+    let (tx, rx) = mpsc::channel(16);
+    let mut app = App::new();
+    app.event_tx = Some(tx);
+    let at = |project: &str, id: &str, depth: usize| crate::events::AgentSummary {
+        project_id: Some(project.to_string()),
+        depth,
+        ..agent(id, &id.to_uppercase())
+    };
+    app.process_command(UiCommand::SetAgents(vec![
+        at("site", "a1", 0),
+        at("site", "a1c", 1),
+        at("site", "a2", 0),
+        at("site", "a3", 0),
+        at("notes", "n1", 0),
+    ]));
+    (with_agent_areas(app), rx)
+}
+
+#[test]
+fn test_dragging_an_agent_reorders_its_project_and_sends_the_order() {
+    let (mut app, mut rx) = app_with_agents_to_drag();
+    left(&mut app, MouseEventKind::Down, 5);
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "a1"));
+
+    // Onto a3: a1 and the agent it spawned move below it.
+    left(&mut app, MouseEventKind::Drag, 8);
+    assert_eq!(agent_ids(&app), ["a2", "a3", "a1", "a1c", "n1"]);
+    assert!(app.project_dragging());
+    // It never leaves its project.
+    left(&mut app, MouseEventKind::Drag, 11);
+    assert_eq!(agent_ids(&app), ["a2", "a3", "a1", "a1c", "n1"]);
+
+    left(&mut app, MouseEventKind::Up, 11);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::ReorderAgents { project_id, order })
+            if project_id == "site" && order == ["a2", "a3", "a1"]
+    ));
+}
+
+#[test]
+fn test_a_spawned_agent_is_not_dragged_on_its_own() {
+    let (mut app, mut rx) = app_with_agents_to_drag();
+    left(&mut app, MouseEventKind::Down, 6);
+    left(&mut app, MouseEventKind::Drag, 8);
+    assert_eq!(agent_ids(&app), ["a1", "a1c", "a2", "a3", "n1"]);
+    left(&mut app, MouseEventKind::Up, 8);
+    let sent: Vec<UiEvent> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert!(
+        !sent
+            .iter()
+            .any(|event| matches!(event, UiEvent::ReorderAgents { .. })),
+        "{sent:?}"
+    );
 }
 
 #[test]

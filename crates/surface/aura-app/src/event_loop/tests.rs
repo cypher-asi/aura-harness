@@ -294,7 +294,7 @@ fn fixture_with_gate(gate: GateLive) -> (Fixture, mpsc::Receiver<UiCommand>) {
     let (_, tools) = build_executor_router_with_config(&ToolConfig::for_autonomous_dev_loop());
     let config = default_agent_config_with_auth("mock-model", None);
     let (commands_tx, commands) = mpsc::channel(4096);
-    let mut registry = AgentRegistry::load_or_init(data.path()).unwrap();
+    let mut registry = AgentRegistry::load_or_init_in(data.path(), workspace.path()).unwrap();
     let first = registry.active().agent_id();
     let second = registry
         .create(Some("Second".to_string()))
