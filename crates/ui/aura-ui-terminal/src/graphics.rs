@@ -6,6 +6,17 @@
 //! (`\x1b_G…\x1b\\`). The terminal places images at the cursor position in
 //! cell coordinates, compositing them over text.
 //!
+//! # Images and placements
+//!
+//! An *image* (`i=`) is the pixel data the terminal holds; a *placement*
+//! (`p=`) is one spot on screen where that image is shown. Every transmit
+//! (`a=T`) and place (`a=p`) command here names both. Placing an
+//! `(i, p)` pair that already exists *moves* that placement; placing an
+//! image without `p` would add a new placement each time and leave the old
+//! one on screen. The same image can be shown in several UI locations at
+//! once (a chat thumbnail and the full-size view), so each location is its
+//! own [`PlacementSlot`] with its own fixed placement id.
+//!
 //! # Detection
 //!
 //! Support is detected once at startup from environment variables. We never
@@ -19,9 +30,8 @@
 //! standard to silently ignore `\x1b_…\x1b\\` blocks. Well-behaved
 //! non-Kitty terminals therefore swallow the escapes harmlessly. The
 //! existing half-block Unicode rendering remains in the ratatui buffer
-//! underneath; if the detection is wrong (e.g. a proxied environment where
-//! `KITTY_WINDOW_ID` is set but the outer terminal is not kitty), the user
-//! sees stray ignored bytes at worst and the half-block image at best.
+//! underneath; if the detection is wrong the user sees stray ignored bytes
+//! at worst and the half-block image at best.
 //!
 //! # Chunking
 //!
@@ -42,6 +52,13 @@ use std::io::{self, Write};
 
 /// Maximum base64 payload bytes per APC chunk.
 const CHUNK_SIZE: usize = 4096;
+
+/// DECSC: save the cursor, so drawing images does not move the caret
+/// ratatui left in the input box.
+const SAVE_CURSOR: &[u8] = b"\x1b7";
+
+/// DECRC: restore the cursor saved by [`SAVE_CURSOR`].
+const RESTORE_CURSOR: &[u8] = b"\x1b8";
 
 // ── Protocol detection ────────────────────────────────────────────────────────
 
@@ -73,13 +90,23 @@ impl Protocol {
 /// Detection rules (first match wins):
 /// 1. `AURA_IMAGE_PROTOCOL=kitty` → `Kitty` (forced on).
 /// 2. `AURA_IMAGE_PROTOCOL=none` → `None` (forced off).
-/// 3. Under `TMUX` → `None` (tmux does not propagate `KITTY_WINDOW_ID`
-///    and would require passthrough escapes we don't implement).
-/// 4. `KITTY_WINDOW_ID` set → `Kitty`.
-/// 5. `TERM_PROGRAM` is `WezTerm`, `ghostty`, or `rio` → `Kitty`.
-/// 6. `TERM` is `xterm-ghostty` or contains `foot` → `Kitty`.
-/// 7. `KONSOLE_VERSION` ≥ `220400` → `Kitty`.
-/// 8. Everything else → `None`.
+/// 3. Inside a terminal multiplexer → `None`: `TMUX`, `ZELLIJ` or `STY`
+///    (GNU screen) set, or `TERM` starting with `screen` or `tmux`. They
+///    need passthrough escapes we don't implement, and the variables
+///    below may describe the terminal *around* the multiplexer.
+/// 4. `KITTY_WINDOW_ID` set **and** `TERM` starting with `xterm-kitty` →
+///    `Kitty`. `KITTY_WINDOW_ID` alone is not enough: it is inherited by
+///    every child process, including other terminals launched from kitty.
+/// 5. `TERM_PROGRAM` is `WezTerm` or `ghostty` → `Kitty`.
+/// 6. `TERM` is `xterm-ghostty` → `Kitty`.
+/// 7. Everything else → `None`.
+///
+/// Only kitty, WezTerm and Ghostty are auto-detected: they document full
+/// support for placement ids (`a=p` with `p=`, which re-placing relies on)
+/// and for scaling to a `c`×`r` cell box. Others that implement parts of
+/// the protocol (Konsole, Rio, …) are not verified for both and could
+/// leave corrupted or stacked images, so they are left out; foot only
+/// supports sixel. `AURA_IMAGE_PROTOCOL=kitty` still turns it on for them.
 pub(crate) fn detect(vars: impl Fn(&str) -> Option<String>) -> Protocol {
     // Explicit overrides always win.
     match vars("AURA_IMAGE_PROTOCOL").as_deref() {
@@ -88,43 +115,73 @@ pub(crate) fn detect(vars: impl Fn(&str) -> Option<String>) -> Protocol {
         _ => {}
     }
 
-    // tmux does not propagate KITTY_WINDOW_ID and requires passthrough
-    // escapes we don't implement; default to None inside tmux.
-    if vars("TMUX").is_some() {
+    let term = vars("TERM").unwrap_or_default();
+    let in_multiplexer = ["TMUX", "ZELLIJ", "STY"]
+        .iter()
+        .any(|name| vars(name).is_some())
+        || term.starts_with("screen")
+        || term.starts_with("tmux");
+    if in_multiplexer {
         return Protocol::None;
     }
 
-    // kitty sets this in every window it creates.
-    if vars("KITTY_WINDOW_ID").is_some() {
+    if vars("KITTY_WINDOW_ID").is_some() && term.starts_with("xterm-kitty") {
         return Protocol::Kitty;
     }
 
-    // TERM_PROGRAM-identified terminals known to implement the protocol.
-    match vars("TERM_PROGRAM").as_deref() {
-        Some("WezTerm") | Some("ghostty") | Some("rio") => return Protocol::Kitty,
-        _ => {}
+    if matches!(vars("TERM_PROGRAM").as_deref(), Some("WezTerm" | "ghostty")) {
+        return Protocol::Kitty;
     }
 
-    // TERM-based identification.
-    match vars("TERM").as_deref() {
-        Some("xterm-ghostty") => return Protocol::Kitty,
-        Some(term) if term.contains("foot") => return Protocol::Kitty,
-        _ => {}
-    }
-
-    // Konsole >= 22.04 (version string "220400" or higher).
-    if let Some(version_str) = vars("KONSOLE_VERSION") {
-        if version_str
-            .trim()
-            .parse::<u64>()
-            .is_ok_and(|v| v >= 220_400)
-        {
-            return Protocol::Kitty;
-        }
+    if term == "xterm-ghostty" {
+        return Protocol::Kitty;
     }
 
     Protocol::None
 }
+
+// ── Placements ────────────────────────────────────────────────────────────────
+
+/// A UI location an image can be shown in. Each slot is a separate Kitty
+/// placement, so one image shown in two slots at once is two placements
+/// that never replace each other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) enum PlacementSlot {
+    /// A thumbnail under a chat message.
+    ChatThumbnail,
+    /// A thumbnail in the strip of images waiting in the input.
+    PendingThumbnail,
+    /// The full-size image in the detail view.
+    Detail,
+}
+
+impl PlacementSlot {
+    /// The Kitty placement id (`p=`) for this slot; never zero, since
+    /// `p=0` means "no placement id" to the terminal.
+    pub(crate) const fn placement_id(self) -> u32 {
+        match self {
+            Self::ChatThumbnail => 1,
+            Self::PendingThumbnail => 2,
+            Self::Detail => 3,
+        }
+    }
+}
+
+/// One image wanted on screen this frame.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Placement<'a> {
+    /// Stable per-image identifier (from `ImagePreview::id`).
+    pub image_id: u32,
+    /// Where in the UI the image is shown.
+    pub slot: PlacementSlot,
+    /// Absolute terminal cells the image fills (Kitty scales it to fit).
+    pub rect: Rect,
+    /// PNG bytes, sent only the first time the image is shown.
+    pub png: &'a [u8],
+}
+
+/// Identity of a placement on the terminal: which image, in which slot.
+type PlacementKey = (u32, PlacementSlot);
 
 // ── Wire-format helpers ───────────────────────────────────────────────────────
 
@@ -134,58 +191,56 @@ pub(crate) fn detect(vars: impl Fn(&str) -> Option<String>) -> Protocol {
 /// emitted before every transmit/place command.
 pub(crate) fn move_cursor(col: u16, row: u16) -> Vec<u8> {
     // CSI row ; col H  (CUP — Cursor Position, 1-indexed)
-    format!("\x1b[{};{}H", row, col).into_bytes()
+    format!("\x1b[{row};{col}H").into_bytes()
 }
 
-/// Delete the placement for `id` from the screen (by image id).
+/// Delete placement `placement` of image `id` from the screen, keeping
+/// the image data so it can be placed again without resending it.
 ///
-/// Uses `a=d,d=i` (delete by image id), `q=2` (suppress response).
-pub(crate) fn delete(id: u32) -> Vec<u8> {
-    format!("\x1b_Ga=d,d=i,i={id},q=2\x1b\\").into_bytes()
+/// Uses `a=d,d=i` (delete by image id) narrowed by `p=`, `q=2` (suppress
+/// response).
+pub(crate) fn delete(id: u32, placement: u32) -> Vec<u8> {
+    format!("\x1b_Ga=d,d=i,i={id},p={placement},q=2\x1b\\").into_bytes()
 }
 
-/// Re-place a previously transmitted image at the current cursor position,
-/// sized to `cols × rows` terminal cells. No PNG bytes are sent.
+/// Place a previously transmitted image at the current cursor position,
+/// sized to `cols × rows` terminal cells. No PNG bytes are sent. An
+/// existing placement with the same `id` and `placement` is moved rather
+/// than duplicated.
 ///
 /// Uses `a=p` (place), `q=2` (suppress response).
-pub(crate) fn place(id: u32, cols: u16, rows: u16) -> Vec<u8> {
-    format!("\x1b_Ga=p,i={id},c={cols},r={rows},q=2\x1b\\").into_bytes()
+pub(crate) fn place(id: u32, placement: u32, cols: u16, rows: u16) -> Vec<u8> {
+    format!("\x1b_Ga=p,i={id},p={placement},c={cols},r={rows},q=2\x1b\\").into_bytes()
 }
 
 /// Transmit `png` bytes and immediately display the image at the current
-/// cursor position, sized to `cols × rows` terminal cells.
+/// cursor position as placement `placement`, sized to `cols × rows`
+/// terminal cells.
 ///
 /// The PNG is base64-encoded and split into chunks of at most [`CHUNK_SIZE`]
 /// bytes. All but the last chunk carry `m=1` (more data follows); the last
 /// carries `m=0`. The first chunk also carries the display parameters
-/// (`a=T`, `f=100` for PNG passthrough, `c`, `r`, `q=2`).
-///
-/// Returns `Err` only if the base64 encoding or the `Write` calls fail.
-pub(crate) fn transmit(id: u32, png: &[u8], cols: u16, rows: u16) -> Vec<u8> {
+/// (`a=T`, `f=100` for PNG passthrough, `p`, `c`, `r`, `q=2`).
+pub(crate) fn transmit(id: u32, placement: u32, png: &[u8], cols: u16, rows: u16) -> Vec<u8> {
     let encoded = base64::engine::general_purpose::STANDARD.encode(png);
-    let chunks: Vec<&str> = encoded
-        .as_bytes()
-        .chunks(CHUNK_SIZE)
-        .map(|c| {
-            // SAFETY: base64 output is ASCII; every chunk is valid UTF-8.
-            std::str::from_utf8(c).unwrap_or_default()
-        })
-        .collect();
+    let chunks: Vec<&[u8]> = encoded.as_bytes().chunks(CHUNK_SIZE).collect();
+    let last = chunks.len().saturating_sub(1);
 
-    let mut out = Vec::new();
-    let n = chunks.len();
+    let mut out = Vec::with_capacity(encoded.len() + chunks.len() * 64);
     for (i, chunk) in chunks.iter().enumerate() {
-        let more = if i + 1 < n { 1 } else { 0 };
+        let more = u8::from(i < last);
         if i == 0 {
             // First chunk: include display parameters.
             out.extend_from_slice(
-                format!("\x1b_Ga=T,i={id},f=100,c={cols},r={rows},m={more},q=2;{chunk}\x1b\\")
+                format!("\x1b_Ga=T,i={id},p={placement},f=100,c={cols},r={rows},m={more},q=2;")
                     .as_bytes(),
             );
         } else {
-            // Continuation chunks: id + chunk flag only.
-            out.extend_from_slice(format!("\x1b_Gm={more};{chunk}\x1b\\").as_bytes());
+            // Continuation chunks: chunk flag only.
+            out.extend_from_slice(format!("\x1b_Gm={more};").as_bytes());
         }
+        out.extend_from_slice(chunk);
+        out.extend_from_slice(b"\x1b\\");
     }
     out
 }
@@ -197,17 +252,19 @@ pub(crate) fn transmit(id: u32, png: &[u8], cols: u16, rows: u16) -> Vec<u8> {
 ///
 /// Invariants:
 /// - `transmitted` contains every image id whose data the terminal has
-///   already received. Data is never re-sent for an id in this set.
-/// - `placed` contains the `Rect` of every image visible in the **previous**
-///   frame. On the next call to [`GraphicsState::sync`] it is diffed against
-///   `wanted` to decide what to delete, re-place, or transmit+display.
-/// - Both sets are empty when [`Protocol::None`]; `sync` is a no-op.
+///   already received. Data is per image, not per placement, so it is
+///   never re-sent for an id in this set, whichever slot shows it.
+/// - `placed` holds the `Rect` of every placement — `(image id, slot)` —
+///   visible in the **previous** frame. On the next call to
+///   [`GraphicsState::sync`] it is diffed against `wanted` to decide what
+///   to delete, re-place, or transmit+display.
+/// - Both are empty when [`Protocol::None`]; `sync` is a no-op.
 pub(crate) struct GraphicsState {
     protocol: Protocol,
     /// Image ids whose PNG data the terminal has already received.
     transmitted: HashSet<u32>,
-    /// Previous frame's placements: id → absolute cell `Rect`.
-    placed: HashMap<u32, Rect>,
+    /// Previous frame's placements: (image id, slot) → absolute cell `Rect`.
+    placed: HashMap<PlacementKey, Rect>,
 }
 
 impl GraphicsState {
@@ -229,77 +286,83 @@ impl GraphicsState {
     /// previous frame, writing only the minimum set of Kitty escapes to
     /// `out`.
     ///
-    /// `wanted` is a list of `(id, rect, png)` triples:
-    /// - `id` — stable per-image identifier (from [`ImagePreview::id`]).
-    /// - `rect` — absolute terminal cell rectangle where the image should
-    ///   appear (Kitty scales the image to fill it).
-    /// - `png` — PNG bytes to transmit on first display; ignored for ids
-    ///   already in `transmitted`.
+    /// Actions taken, per `(image id, slot)` placement:
+    /// - **Delete**: placed last frame but not wanted now (or wanted with
+    ///   an empty rect) → `a=d` for that placement only.
+    /// - **Re-place**: image already transmitted but the placement is new
+    ///   or its `Rect` changed → `a=p` with the slot's placement id, which
+    ///   moves an existing placement instead of adding another. No data is
+    ///   re-sent.
+    /// - **Transmit + display**: image not transmitted yet → `a=T` with the
+    ///   PNG payload.
+    /// - **No-op**: placement already at the same `Rect`.
     ///
-    /// Actions taken:
-    /// - **Delete**: an id in `placed` but not in `wanted` → `a=d`.
-    /// - **Re-place**: an id in both but with a different `Rect` → `a=p`
-    ///   (no data re-sent).
-    /// - **Transmit + display** (first time): an id not in `transmitted` →
-    ///   `a=T` with the PNG payload.
-    /// - **No-op**: an id already placed at the same `Rect`.
+    /// A placement listed twice in `wanted` is shown at its first rect; one
+    /// placement cannot be in two places.
     ///
-    /// When `Protocol::None` this method returns immediately without writing
-    /// anything.
+    /// The cursor is saved before and restored after any output, so the
+    /// caret stays where ratatui put it. When `Protocol::None` this method
+    /// returns immediately without writing anything.
     pub(crate) fn sync(
         &mut self,
         out: &mut impl Write,
-        wanted: &[(u32, Rect, &[u8])],
+        wanted: &[Placement<'_>],
     ) -> io::Result<()> {
         if !self.protocol.is_kitty() {
             return Ok(());
         }
 
-        // Collect the ids we want visible this frame.
-        let wanted_ids: HashSet<u32> = wanted.iter().map(|&(id, _, _)| id).collect();
+        let mut seen: HashSet<PlacementKey> = HashSet::with_capacity(wanted.len());
+        let wanted: Vec<&Placement<'_>> = wanted
+            .iter()
+            .filter(|p| !p.rect.is_empty() && seen.insert((p.image_id, p.slot)))
+            .collect();
 
-        // Delete anything placed last frame that is no longer wanted.
-        let to_delete: Vec<u32> = self
+        let mut bytes = Vec::new();
+
+        // Delete placements from last frame that are no longer wanted.
+        // Sorted so the output is deterministic.
+        let mut stale: Vec<PlacementKey> = self
             .placed
             .keys()
             .copied()
-            .filter(|id| !wanted_ids.contains(id))
+            .filter(|key| !seen.contains(key))
             .collect();
-        for id in to_delete {
-            out.write_all(&delete(id))?;
-            self.placed.remove(&id);
+        stale.sort_unstable();
+        for key in stale {
+            bytes.extend_from_slice(&delete(key.0, key.1.placement_id()));
+            self.placed.remove(&key);
         }
 
-        // Transmit new images and (re-)place moved/resized ones.
-        for &(id, rect, png) in wanted {
-            if rect.is_empty() {
+        for p in wanted {
+            let key = (p.image_id, p.slot);
+            let rect = p.rect;
+            let placement = p.slot.placement_id();
+            if !self.transmitted.contains(&p.image_id) {
+                bytes.extend_from_slice(&move_cursor(rect.x + 1, rect.y + 1));
+                bytes.extend_from_slice(&transmit(
+                    p.image_id,
+                    placement,
+                    p.png,
+                    rect.width,
+                    rect.height,
+                ));
+                self.transmitted.insert(p.image_id);
+            } else if self.placed.get(&key) != Some(&rect) {
+                bytes.extend_from_slice(&move_cursor(rect.x + 1, rect.y + 1));
+                bytes.extend_from_slice(&place(p.image_id, placement, rect.width, rect.height));
+            } else {
                 continue;
             }
-            let prev = self.placed.get(&id).copied();
-            let already_transmitted = self.transmitted.contains(&id);
-
-            if already_transmitted {
-                match prev {
-                    Some(r) if r == rect => {
-                        // Unchanged — nothing to do.
-                    }
-                    _ => {
-                        // Position or size changed: re-place without resending
-                        // data.
-                        out.write_all(&move_cursor(rect.x + 1, rect.y + 1))?;
-                        out.write_all(&place(id, rect.width, rect.height))?;
-                        self.placed.insert(id, rect);
-                    }
-                }
-            } else {
-                // First time this image appears: transmit + display.
-                out.write_all(&move_cursor(rect.x + 1, rect.y + 1))?;
-                out.write_all(&transmit(id, png, rect.width, rect.height))?;
-                self.transmitted.insert(id);
-                self.placed.insert(id, rect);
-            }
+            self.placed.insert(key, rect);
         }
 
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        out.write_all(SAVE_CURSOR)?;
+        out.write_all(&bytes)?;
+        out.write_all(RESTORE_CURSOR)?;
         out.flush()
     }
 }
@@ -309,7 +372,6 @@ impl GraphicsState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     // ── detect() ─────────────────────────────────────────────────────────────
 
@@ -321,6 +383,8 @@ mod tests {
         }
     }
 
+    const KITTY: [(&str, &str); 2] = [("KITTY_WINDOW_ID", "1"), ("TERM", "xterm-kitty")];
+
     #[test]
     fn detect_override_kitty_forces_on() {
         assert_eq!(
@@ -330,30 +394,87 @@ mod tests {
     }
 
     #[test]
+    fn detect_override_kitty_wins_inside_multiplexers() {
+        for mux in [
+            ("TMUX", "/tmp/tmux-1000/default,1234,0"),
+            ("ZELLIJ", "0"),
+            ("STY", "1234.pts-0.host"),
+            ("TERM", "screen-256color"),
+        ] {
+            assert_eq!(
+                detect(env(&[("AURA_IMAGE_PROTOCOL", "kitty"), mux])),
+                Protocol::Kitty,
+                "{mux:?}"
+            );
+        }
+    }
+
+    #[test]
     fn detect_override_none_forces_off() {
         assert_eq!(
-            detect(env(&[
-                ("AURA_IMAGE_PROTOCOL", "none"),
-                ("KITTY_WINDOW_ID", "1")
-            ])),
+            detect(env(&[("AURA_IMAGE_PROTOCOL", "none"), KITTY[0], KITTY[1]])),
             Protocol::None
         );
     }
 
     #[test]
-    fn detect_tmux_disables_even_with_kitty_window_id() {
+    fn detect_multiplexers_disable_even_inside_kitty() {
+        for mux in [
+            ("TMUX", "/tmp/tmux-1000/default,1234,0"),
+            ("ZELLIJ", "0"),
+            ("STY", "1234.pts-0.host"),
+        ] {
+            assert_eq!(
+                detect(env(&[mux, KITTY[0], KITTY[1]])),
+                Protocol::None,
+                "{mux:?}"
+            );
+            assert_eq!(
+                detect(env(&[mux, ("TERM_PROGRAM", "WezTerm")])),
+                Protocol::None,
+                "{mux:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn detect_multiplexer_term_disables() {
+        for term in ["screen", "screen-256color", "tmux-256color"] {
+            assert_eq!(
+                detect(env(&[
+                    ("TERM", term),
+                    ("KITTY_WINDOW_ID", "1"),
+                    ("TERM_PROGRAM", "ghostty")
+                ])),
+                Protocol::None,
+                "{term}"
+            );
+        }
+    }
+
+    #[test]
+    fn detect_kitty_needs_window_id_and_term() {
+        assert_eq!(detect(env(&KITTY)), Protocol::Kitty);
         assert_eq!(
             detect(env(&[
-                ("TMUX", "/tmp/tmux-1000/default,1234,0"),
-                ("KITTY_WINDOW_ID", "1")
+                ("KITTY_WINDOW_ID", "42"),
+                ("TERM", "xterm-kitty-direct")
             ])),
-            Protocol::None
+            Protocol::Kitty
         );
     }
 
     #[test]
-    fn detect_kitty_window_id() {
-        assert_eq!(detect(env(&[("KITTY_WINDOW_ID", "42")])), Protocol::Kitty);
+    fn detect_inherited_kitty_window_id_alone_is_none() {
+        // A terminal launched from inside kitty inherits KITTY_WINDOW_ID.
+        assert_eq!(detect(env(&[("KITTY_WINDOW_ID", "42")])), Protocol::None);
+        assert_eq!(
+            detect(env(&[
+                ("KITTY_WINDOW_ID", "42"),
+                ("TERM", "xterm-256color")
+            ])),
+            Protocol::None
+        );
     }
 
     #[test]
@@ -372,34 +493,15 @@ mod tests {
     }
 
     #[test]
-    fn detect_foot() {
-        assert_eq!(detect(env(&[("TERM", "foot")])), Protocol::Kitty);
-        assert_eq!(detect(env(&[("TERM", "foot-extra")])), Protocol::Kitty);
-    }
-
-    #[test]
-    fn detect_rio() {
-        assert_eq!(detect(env(&[("TERM_PROGRAM", "rio")])), Protocol::Kitty);
-    }
-
-    #[test]
-    fn detect_konsole_new_enough() {
-        assert_eq!(
-            detect(env(&[("KONSOLE_VERSION", "220400")])),
-            Protocol::Kitty
-        );
-        assert_eq!(
-            detect(env(&[("KONSOLE_VERSION", "230000")])),
-            Protocol::Kitty
-        );
-    }
-
-    #[test]
-    fn detect_konsole_too_old() {
-        assert_eq!(
-            detect(env(&[("KONSOLE_VERSION", "210000")])),
-            Protocol::None
-        );
+    fn detect_unverified_terminals_are_none() {
+        for vars in [
+            [("TERM", "foot")],
+            [("TERM", "foot-extra")],
+            [("TERM_PROGRAM", "rio")],
+            [("KONSOLE_VERSION", "230000")],
+        ] {
+            assert_eq!(detect(env(&vars)), Protocol::None, "{vars:?}");
+        }
     }
 
     #[test]
@@ -430,17 +532,15 @@ mod tests {
     // ── delete() ─────────────────────────────────────────────────────────────
 
     #[test]
-    fn delete_produces_correct_escape() {
-        let d = delete(7);
-        assert_eq!(d, b"\x1b_Ga=d,d=i,i=7,q=2\x1b\\");
+    fn delete_names_the_placement() {
+        assert_eq!(delete(7, 2), b"\x1b_Ga=d,d=i,i=7,p=2,q=2\x1b\\");
     }
 
     // ── place() ──────────────────────────────────────────────────────────────
 
     #[test]
-    fn place_produces_correct_escape() {
-        let p = place(3, 20, 6);
-        assert_eq!(p, b"\x1b_Ga=p,i=3,c=20,r=6,q=2\x1b\\");
+    fn place_names_the_placement() {
+        assert_eq!(place(3, 1, 20, 6), b"\x1b_Ga=p,i=3,p=1,c=20,r=6,q=2\x1b\\");
     }
 
     // ── transmit() ───────────────────────────────────────────────────────────
@@ -457,17 +557,15 @@ mod tests {
     #[test]
     fn transmit_single_chunk_for_small_image() {
         let png = red_png(2, 2);
-        let out = transmit(1, &png, 4, 2);
+        let out = transmit(1, 1, &png, 4, 2);
         let s = String::from_utf8(out).unwrap();
-        // Must start with the first-chunk header.
+        // Must start with the first-chunk header, placement id included.
         assert!(
-            s.starts_with("\x1b_Ga=T,i=1,f=100,c=4,r=2,m=0,q=2;"),
+            s.starts_with("\x1b_Ga=T,i=1,p=1,f=100,c=4,r=2,m=0,q=2;"),
             "{s:?}"
         );
         // Must end with ST.
         assert!(s.ends_with("\x1b\\"), "{s:?}");
-        // m=0 on the only chunk.
-        assert!(s.contains("m=0"), "{s:?}");
         // No continuation frames.
         assert_eq!(s.matches("\x1b_G").count(), 1, "expected exactly one chunk");
     }
@@ -476,18 +574,17 @@ mod tests {
     fn transmit_multi_chunk_for_large_image() {
         // transmit() doesn't validate PNG content — use varied bytes that
         // base64-encode to more than CHUNK_SIZE bytes.
-        // ceil(CHUNK_SIZE * 3 / 4) + 1 raw bytes → encoded length > CHUNK_SIZE.
         let n = CHUNK_SIZE * 3 / 4 + 2;
-        // `i % 251` is always in 0..251, which fits in u8; the cast is safe.
-        #[allow(clippy::cast_possible_truncation)]
-        let png: Vec<u8> = (0..n).map(|i| (i % 251) as u8).collect();
+        let png: Vec<u8> = (0..n)
+            .map(|i| u8::try_from(i % 251).unwrap_or_default())
+            .collect();
         let encoded_len = base64::engine::general_purpose::STANDARD.encode(&png).len();
         assert!(
             encoded_len > CHUNK_SIZE,
             "test requires encoded_len > CHUNK_SIZE but got {encoded_len}"
         );
 
-        let out = transmit(2, &png, 10, 5);
+        let out = transmit(2, 3, &png, 10, 5);
         let s = String::from_utf8(out).unwrap();
 
         let chunks: Vec<&str> = s.split("\x1b_G").skip(1).collect();
@@ -496,7 +593,7 @@ mod tests {
 
         // First chunk carries display parameters and m=1.
         assert!(
-            chunks[0].starts_with("a=T,i=2,f=100,c=10,r=5,m=1"),
+            chunks[0].starts_with("a=T,i=2,p=3,f=100,c=10,r=5,m=1"),
             "{}",
             chunks[0]
         );
@@ -539,114 +636,177 @@ mod tests {
         }
     }
 
-    fn tiny_png() -> Vec<u8> {
-        red_png(2, 2)
+    fn at<'a>(image_id: u32, slot: PlacementSlot, rect: Rect, png: &'a [u8]) -> Placement<'a> {
+        Placement {
+            image_id,
+            slot,
+            rect,
+            png,
+        }
+    }
+
+    fn chat<'a>(image_id: u32, rect: Rect, png: &'a [u8]) -> Placement<'a> {
+        at(image_id, PlacementSlot::ChatThumbnail, rect, png)
+    }
+
+    fn sync_to_string(gs: &mut GraphicsState, wanted: &[Placement<'_>]) -> String {
+        let mut out = Vec::new();
+        gs.sync(&mut out, wanted).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn slots_have_distinct_nonzero_placement_ids() {
+        let ids: HashSet<u32> = [
+            PlacementSlot::ChatThumbnail,
+            PlacementSlot::PendingThumbnail,
+            PlacementSlot::Detail,
+        ]
+        .iter()
+        .map(|slot| slot.placement_id())
+        .collect();
+        assert_eq!(ids.len(), 3);
+        assert!(!ids.contains(&0));
     }
 
     #[test]
     fn sync_no_op_under_protocol_none() {
         let mut gs = GraphicsState::new(Protocol::None);
-        let png = tiny_png();
-        let mut out = Vec::new();
-        gs.sync(&mut out, &[(1, rect(0, 0, 10, 4), &png)]).unwrap();
-        assert!(out.is_empty(), "Protocol::None must write nothing");
+        let png = red_png(2, 2);
+        let s = sync_to_string(&mut gs, &[chat(1, rect(0, 0, 10, 4), &png)]);
+        assert!(s.is_empty(), "Protocol::None must write nothing");
     }
 
     #[test]
-    fn sync_new_image_transmits() {
+    fn sync_new_image_transmits_with_placement_id() {
         let mut gs = GraphicsState::new(Protocol::Kitty);
-        let png = tiny_png();
-        let mut out = Vec::new();
-        gs.sync(&mut out, &[(42, rect(0, 0, 10, 4), &png)]).unwrap();
-        let s = String::from_utf8(out).unwrap();
-        assert!(s.contains("a=T"), "new image must use a=T: {s:?}");
-        assert!(s.contains("i=42"), "id must appear: {s:?}");
+        let png = red_png(2, 2);
+        let s = sync_to_string(&mut gs, &[chat(42, rect(0, 0, 10, 4), &png)]);
+        assert!(s.contains("a=T,i=42,p=1,"), "transmit names p=1: {s:?}");
         assert!(gs.transmitted.contains(&42));
+    }
+
+    #[test]
+    fn sync_restores_the_cursor_around_output() {
+        let mut gs = GraphicsState::new(Protocol::Kitty);
+        let png = red_png(2, 2);
+        let s = sync_to_string(&mut gs, &[chat(1, rect(3, 4, 10, 4), &png)]);
+        assert!(s.starts_with("\x1b7\x1b[5;4H"), "{s:?}");
+        assert!(s.ends_with("\x1b8"), "{s:?}");
     }
 
     #[test]
     fn sync_unchanged_image_is_noop() {
         let mut gs = GraphicsState::new(Protocol::Kitty);
-        let png = tiny_png();
+        let png = red_png(2, 2);
         let r = rect(0, 0, 10, 4);
-        // First frame: transmit.
-        let mut out = Vec::new();
-        gs.sync(&mut out, &[(1, r, &png)]).unwrap();
-        // Second frame: same position/size — must produce no additional output.
-        let mut out2 = Vec::new();
-        gs.sync(&mut out2, &[(1, r, &png)]).unwrap();
-        // The only write should be the flush; an empty flush writes nothing.
-        assert!(
-            out2.is_empty(),
-            "no-op frame must write nothing, got {out2:?}"
-        );
+        sync_to_string(&mut gs, &[chat(1, r, &png)]);
+        let s = sync_to_string(&mut gs, &[chat(1, r, &png)]);
+        assert!(s.is_empty(), "no-op frame must write nothing, got {s:?}");
     }
 
     #[test]
-    fn sync_moved_image_replaces_without_retransmitting() {
+    fn sync_moved_image_replaces_its_placement_without_delete() {
         let mut gs = GraphicsState::new(Protocol::Kitty);
-        let png = tiny_png();
-        // First frame: transmit at (0,0).
-        let mut out = Vec::new();
-        gs.sync(&mut out, &[(5, rect(0, 0, 10, 4), &png)]).unwrap();
-        // Second frame: same id at a different position.
-        let mut out2 = Vec::new();
-        gs.sync(&mut out2, &[(5, rect(20, 5, 10, 4), &png)])
-            .unwrap();
-        let s = String::from_utf8(out2).unwrap();
-        // Must use a=p (place) not a=T (transmit).
-        assert!(s.contains("a=p"), "moved image must use a=p: {s:?}");
+        let png = red_png(2, 2);
+        sync_to_string(&mut gs, &[chat(5, rect(0, 0, 10, 4), &png)]);
+        let s = sync_to_string(&mut gs, &[chat(5, rect(20, 5, 10, 4), &png)]);
+        // Same image, same placement id: the terminal moves the placement.
+        assert!(
+            s.contains("\x1b[6;21H\x1b_Ga=p,i=5,p=1,c=10,r=4,q=2"),
+            "moved image must re-place p=1: {s:?}"
+        );
         assert!(!s.contains("a=T"), "moved image must NOT retransmit: {s:?}");
+        assert!(
+            !s.contains("a=d"),
+            "re-placing must not need a delete: {s:?}"
+        );
+        assert_eq!(gs.placed.len(), 1);
+    }
+
+    #[test]
+    fn sync_same_image_in_two_slots_is_two_stable_placements() {
+        let mut gs = GraphicsState::new(Protocol::Kitty);
+        let png = red_png(2, 2);
+        let wanted = [
+            chat(7, rect(0, 0, 10, 4), &png),
+            at(7, PlacementSlot::Detail, rect(5, 2, 40, 20), &png),
+        ];
+        let s = sync_to_string(&mut gs, &wanted);
+        assert_eq!(s.matches("a=T").count(), 1, "data is sent once: {s:?}");
+        assert!(s.contains("a=T,i=7,p=1,"), "{s:?}");
+        assert!(s.contains("a=p,i=7,p=3,c=40,r=20"), "{s:?}");
+        assert_eq!(gs.placed.len(), 2);
+
+        // Both are where they were: the next frame writes nothing, instead
+        // of the two fighting over one slot every frame.
+        let s = sync_to_string(&mut gs, &wanted);
+        assert!(s.is_empty(), "{s:?}");
+
+        // Closing the detail view deletes only its placement.
+        let s = sync_to_string(&mut gs, &wanted[..1]);
+        assert!(s.contains("a=d,d=i,i=7,p=3,"), "{s:?}");
+        assert!(!s.contains("p=1"), "{s:?}");
+    }
+
+    #[test]
+    fn sync_duplicate_placement_keeps_the_first_rect() {
+        let mut gs = GraphicsState::new(Protocol::Kitty);
+        let png = red_png(2, 2);
+        let wanted = [
+            chat(8, rect(0, 0, 10, 4), &png),
+            chat(8, rect(0, 10, 10, 4), &png),
+        ];
+        sync_to_string(&mut gs, &wanted);
+        let s = sync_to_string(&mut gs, &wanted);
+        assert!(s.is_empty(), "{s:?}");
+        assert_eq!(
+            gs.placed.get(&(8, PlacementSlot::ChatThumbnail)),
+            Some(&rect(0, 0, 10, 4))
+        );
     }
 
     #[test]
     fn sync_removed_image_is_deleted() {
         let mut gs = GraphicsState::new(Protocol::Kitty);
-        let png = tiny_png();
-        // First frame.
-        let mut out = Vec::new();
-        gs.sync(&mut out, &[(9, rect(0, 0, 10, 4), &png)]).unwrap();
-        // Second frame: image is gone.
-        let mut out2 = Vec::new();
-        gs.sync(&mut out2, &[]).unwrap();
-        let s = String::from_utf8(out2).unwrap();
-        assert!(s.contains("a=d"), "removed image must be deleted: {s:?}");
-        assert!(s.contains("i=9"), "delete must name the id: {s:?}");
-        assert!(!gs.placed.contains_key(&9));
+        let png = red_png(2, 2);
+        sync_to_string(&mut gs, &[chat(9, rect(0, 0, 10, 4), &png)]);
+        let s = sync_to_string(&mut gs, &[]);
+        assert!(s.contains("a=d,d=i,i=9,p=1,"), "{s:?}");
+        assert!(gs.placed.is_empty());
     }
 
     #[test]
     fn sync_empty_wanted_deletes_everything() {
         let mut gs = GraphicsState::new(Protocol::Kitty);
-        let png = tiny_png();
-        // Place two images.
-        let mut out = Vec::new();
-        gs.sync(
-            &mut out,
-            &[(10, rect(0, 0, 5, 3), &png), (11, rect(10, 0, 5, 3), &png)],
-        )
-        .unwrap();
-        // Clear everything.
-        let mut out2 = Vec::new();
-        gs.sync(&mut out2, &[]).unwrap();
-        let s = String::from_utf8(out2).unwrap();
-        assert!(s.contains("i=10"), "id 10 must be deleted: {s:?}");
-        assert!(s.contains("i=11"), "id 11 must be deleted: {s:?}");
+        let png = red_png(2, 2);
+        sync_to_string(
+            &mut gs,
+            &[
+                chat(10, rect(0, 0, 5, 3), &png),
+                chat(11, rect(10, 0, 5, 3), &png),
+            ],
+        );
+        let s = sync_to_string(&mut gs, &[]);
+        assert!(s.contains("i=10,"), "id 10 must be deleted: {s:?}");
+        assert!(s.contains("i=11,"), "id 11 must be deleted: {s:?}");
         assert!(gs.placed.is_empty());
     }
 
     #[test]
     fn sync_skips_empty_rect() {
         let mut gs = GraphicsState::new(Protocol::Kitty);
-        let png = tiny_png();
-        let mut out = Vec::new();
-        // A zero-width rect is empty and should be skipped.
-        gs.sync(&mut out, &[(1, rect(0, 0, 0, 4), &png)]).unwrap();
-        assert!(out.is_empty(), "empty rect must produce no output");
+        let png = red_png(2, 2);
+        let s = sync_to_string(&mut gs, &[chat(1, rect(0, 0, 0, 4), &png)]);
+        assert!(s.is_empty(), "empty rect must produce no output");
     }
 
-    // Silence the unused import warning that the HashMap bring-in can cause
-    // in some configurations; it's used by the env() helper above.
-    #[allow(dead_code)]
-    fn _use_hashmap(_: HashMap<(), ()>) {}
+    #[test]
+    fn sync_placement_shrunk_to_empty_is_deleted() {
+        let mut gs = GraphicsState::new(Protocol::Kitty);
+        let png = red_png(2, 2);
+        sync_to_string(&mut gs, &[chat(1, rect(0, 0, 4, 4), &png)]);
+        let s = sync_to_string(&mut gs, &[chat(1, rect(0, 0, 0, 4), &png)]);
+        assert!(s.contains("a=d,d=i,i=1,p=1,"), "{s:?}");
+    }
 }

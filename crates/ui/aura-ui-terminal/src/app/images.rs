@@ -7,6 +7,7 @@ use super::image_preview::{ImagePreview, ImageView};
 use super::{App, AppState, NotificationType};
 use crate::clipboard::Clipboard;
 use crate::events::ImageAttachment;
+use crate::graphics::PlacementSlot;
 use base64::Engine;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -223,7 +224,7 @@ impl App {
     /// All image placements visible this frame, for the Kitty graphics
     /// protocol layer.
     ///
-    /// Returns `(id, rect, preview)` triples for:
+    /// Returns `(slot, rect, preview)` for:
     /// - chat thumbnails whose tile row is currently scrolled into view,
     /// - pending-input thumbnails,
     /// - the full-size detail view image.
@@ -232,7 +233,7 @@ impl App {
     /// the caller should skip them or they would produce a no-op.
     pub(crate) fn visible_image_placements(
         &self,
-    ) -> Vec<(u32, ratatui::layout::Rect, Arc<ImagePreview>)> {
+    ) -> Vec<(PlacementSlot, ratatui::layout::Rect, Arc<ImagePreview>)> {
         let mut out = Vec::new();
 
         // ── Chat thumbnails ────────────────────────────────────────────────
@@ -269,7 +270,7 @@ impl App {
                     .map(Arc::clone);
                 if let Some(preview) = preview {
                     if preview.graphics_png().is_some() {
-                        out.push((preview.id(), rect, preview));
+                        out.push((PlacementSlot::ChatThumbnail, rect, preview));
                     }
                 }
             }
@@ -287,7 +288,7 @@ impl App {
                 .map(|p| Arc::clone(&p.preview))
             {
                 if preview.graphics_png().is_some() {
-                    out.push((preview.id(), rect, preview));
+                    out.push((PlacementSlot::PendingThumbnail, rect, preview));
                 }
             }
         }
@@ -297,7 +298,7 @@ impl App {
             (self.detail_image_rect, &self.detail)
         {
             if !rect.is_empty() && view.preview.graphics_png().is_some() {
-                out.push((view.preview.id(), rect, Arc::clone(&view.preview)));
+                out.push((PlacementSlot::Detail, rect, Arc::clone(&view.preview)));
             }
         }
 

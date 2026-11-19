@@ -149,13 +149,18 @@ impl Terminal {
             // for terminals that silently ignore APC sequences.
             if self.graphics.protocol().is_kitty() {
                 let placements = app.visible_image_placements();
-                let triples: Vec<(u32, ratatui::layout::Rect, &[u8])> = placements
+                let wanted: Vec<graphics::Placement<'_>> = placements
                     .iter()
-                    .filter_map(|(id, rect, preview)| {
-                        preview.graphics_png().map(|png| (*id, *rect, png))
+                    .filter_map(|(slot, rect, preview)| {
+                        preview.graphics_png().map(|png| graphics::Placement {
+                            image_id: preview.id(),
+                            slot: *slot,
+                            rect: *rect,
+                            png,
+                        })
                     })
                     .collect();
-                if let Err(e) = self.graphics.sync(self.inner.backend_mut(), &triples) {
+                if let Err(e) = self.graphics.sync(self.inner.backend_mut(), &wanted) {
                     warn!(error = %e, "Kitty graphics sync failed");
                 }
             }
