@@ -1942,6 +1942,26 @@ fn test_pane_shows_only_the_running_command_and_input_keeps_the_prompt() {
 }
 
 #[test]
+fn test_user_prompt_renders_markdown_under_its_prompt() {
+    use crate::components::{Message, MessageRole};
+
+    let mut app = app_with_model(None);
+    app.add_message(Message::new(
+        MessageRole::User,
+        "Read-only. Use `git show` here.\n\n- **first** item\n- second item",
+    ));
+    let screen = render_rows(&mut app, 100).join("\n");
+    assert!(
+        screen.contains("→ Read-only. Use git show here."),
+        "{screen}"
+    );
+    assert!(screen.contains("  • first item"), "{screen}");
+    assert!(screen.contains("  • second item"), "{screen}");
+    assert!(!screen.contains("**"), "{screen}");
+    assert!(!screen.contains('`'), "{screen}");
+}
+
+#[test]
 fn test_terminal_pane_shows_only_commands_and_chat_hides_them() {
     use crate::components::{Message, MessageRole};
     use crate::events::UiCommand;

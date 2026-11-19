@@ -125,19 +125,62 @@ pub(super) fn render_text_segment(
         lines.extend(markdown);
         return flow;
     }
-    let (measure, flow) = if role == MessageRole::User {
-        (
-            measure,
-            Some(u16::try_from(display_width(prompt)).unwrap_or(0)),
-        )
-    } else {
-        (Measure::GRID, None)
-    };
     let indent = " ".repeat(display_width(prompt));
     let lead = if first { prompt } else { indent.as_str() };
-    let plain = prefixed_lines((lead, prompt_color), text, msg_color, width, measure);
-    let prose = vec![flow; plain.len()];
+    if role == MessageRole::User {
+        // Prompts are often written by another agent (a task or a message
+        // sent back to a sub-agent) and carry markdown: lists, code spans,
+        // bold. Render it the way replies are, under the `→ ` prompt.
+        return user_markdown_lines(
+            lines,
+            text,
+            (lead, prompt_color),
+            msg_color,
+            width,
+            theme,
+            measure,
+        );
+    }
+    let plain = prefixed_lines((lead, prompt_color), text, msg_color, width, Measure::GRID);
+    let prose = vec![None; plain.len()];
     lines.extend(plain);
+    prose
+}
+
+/// A user message as markdown, `lead` before its first row and later rows
+/// indented under it. Prose columns count the lead too.
+fn user_markdown_lines(
+    lines: &mut Vec<Line<'_>>,
+    text: &str,
+    (lead, lead_color): (&str, ratatui::style::Color),
+    text_color: ratatui::style::Color,
+    width: usize,
+    theme: &Theme,
+    measure: Measure,
+) -> Vec<Option<u16>> {
+    let indent = display_width(lead);
+    let indent_cols = u16::try_from(indent).unwrap_or(u16::MAX);
+    let base = Style::default().fg(text_color);
+    let room = width.saturating_sub(indent).max(1);
+    let (mut rendered, mut flow) = render_markdown_flow(text, room, base, theme, measure);
+    if rendered.is_empty() {
+        rendered.push(Line::default());
+        flow.push(Some(0));
+    }
+    flow.resize(rendered.len(), None);
+    for (i, line) in rendered.iter_mut().enumerate() {
+        let span = if i == 0 {
+            Span::styled(lead.to_string(), Style::default().fg(lead_color))
+        } else {
+            Span::raw(" ".repeat(indent))
+        };
+        line.spans.insert(0, span);
+    }
+    let prose = flow
+        .into_iter()
+        .map(|cols| cols.map(|cols| cols.saturating_add(indent_cols)))
+        .collect();
+    lines.extend(rendered);
     prose
 }
 
