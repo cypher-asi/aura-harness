@@ -618,9 +618,13 @@ async fn send_queued_now_cancels_the_turn_and_runs_the_message_next() {
     handle_ui_event(&mut state, message(first, "later", false), &links).await;
     assert_eq!(state.queued[&first].len(), 2);
 
-    // The slow turn is never released: only the cancellation ends it.
+    // The slow turn is never released: only the cancellation ends it. The
+    // cancelled turn leaves "slow start" as the last user message and the
+    // next prompt joins it, so the mock holds the later turns too; these
+    // permits let them through.
     handle_ui_event(&mut state, UiEvent::SendQueuedNow(first.to_hex()), &links).await;
     let finished = next_done(&mut done).await;
+    fixture.gate.add_permits(2);
     handle_work_done(&mut state, finished).await;
 
     assert!(state.hub.is_running(first), "the queued message started");
