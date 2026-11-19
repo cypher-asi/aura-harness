@@ -1361,6 +1361,121 @@ fn test_clicking_a_projects_plus_adds_an_agent_to_it() {
     assert!(rx.try_recv().is_err());
 }
 
+/// Projects `notes`, with every agent archived, and `site`, holding `a1`.
+/// Rows from line 4: notes 4; gap 5; site 6, a1 7.
+fn app_with_an_empty_project() -> (App, mpsc::Receiver<UiEvent>) {
+    let (tx, rx) = mpsc::channel(16);
+    let mut app = App::new();
+    app.event_tx = Some(tx);
+    let project = |id: &str| crate::events::ProjectSummary {
+        id: id.to_string(),
+        name: id.to_string(),
+        ..Default::default()
+    };
+    app.process_command(UiCommand::SetProjects(vec![
+        project("notes"),
+        project("site"),
+    ]));
+    app.process_command(UiCommand::SetAgents(vec![crate::events::AgentSummary {
+        project_id: Some("site".to_string()),
+        ..agent("a1", "A1")
+    }]));
+    (with_agent_areas(app), rx)
+}
+
+#[test]
+fn test_a_project_with_every_agent_archived_keeps_its_header() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let (mut app, mut rx) = app_with_an_empty_project();
+    assert_eq!(
+        app.project_rows(),
+        [
+            ProjectListRow::EmptyProject { project: 0 },
+            ProjectListRow::Gap,
+            ProjectListRow::Project {
+                root: 0,
+                expanded: true
+            },
+            ProjectListRow::Agent { index: 0 },
+            ProjectListRow::NewProject,
+        ]
+    );
+
+    // A click on it has nothing to fold; its "+" adds an agent to it.
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 4));
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 5, 4));
+    assert!(rx.try_recv().is_err());
+    app.handle_mouse(mouse(MouseEventKind::Moved, 17, 4));
+    assert_eq!(app.hover(), Some(HoverTarget::AddToProject(0)));
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 17, 4));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::AddAgentToProject(id)) if id == "notes"));
+
+    // Its menu has what applies to a project with no agents.
+    assert!(app.open_context_menu(5, 4));
+    let menu = app.context_menu().expect("open");
+    assert_eq!(
+        menu.target,
+        super::context_menu::MenuTarget::Project("notes".to_string())
+    );
+    assert_eq!(
+        menu.items,
+        [
+            super::context_menu::MenuItem::AddAgent,
+            super::context_menu::MenuItem::Info,
+            super::context_menu::MenuItem::RemoveProject,
+        ]
+    );
+
+    // Removing it names it and waits for a yes.
+    app.request_remove_project("notes".to_string());
+    assert!(app
+        .notification()
+        .is_some_and(|(text, _)| text.contains("Remove project notes")));
+    app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::RemoveProject(id)) if id == "notes"));
+}
+
+#[test]
+fn test_an_empty_project_keeps_its_place_while_others_are_dragged() {
+    let (tx, mut rx) = mpsc::channel(16);
+    let mut app = App::new();
+    app.event_tx = Some(tx);
+    let project = |id: &str| crate::events::ProjectSummary {
+        id: id.to_string(),
+        name: id.to_string(),
+        ..Default::default()
+    };
+    let at = |project: &str, id: &str| crate::events::AgentSummary {
+        project_id: Some(project.to_string()),
+        ..agent(id, id)
+    };
+    app.process_command(UiCommand::SetProjects(vec![
+        project("aa"),
+        project("ee"),
+        project("bb"),
+    ]));
+    app.process_command(UiCommand::SetAgents(vec![at("aa", "a1"), at("bb", "b1")]));
+    let mut app = with_agent_areas(app);
+    let headers = |app: &App| -> Vec<String> {
+        app.project_rows()
+            .into_iter()
+            .filter_map(|row| app.header_key(row))
+            .collect()
+    };
+    assert_eq!(headers(&app), ["aa", "ee", "bb"]);
+
+    // Rows from line 4: aa 4, a1 5; gap 6; ee 7; gap 8; bb 9, b1 10.
+    // bb dragged onto aa takes the first place; ee stays second.
+    left(&mut app, MouseEventKind::Down, 9);
+    left(&mut app, MouseEventKind::Drag, 4);
+    assert_eq!(headers(&app), ["bb", "ee", "aa"]);
+    left(&mut app, MouseEventKind::Up, 4);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::ReorderProjects(order)) if order == ["bb", "aa"]
+    ));
+}
+
 fn app_with_agent_areas() -> (App, mpsc::Receiver<UiEvent>) {
     let (app, rx) = app_with_agents();
     (with_agent_areas(app), rx)

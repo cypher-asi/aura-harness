@@ -18,7 +18,10 @@
 //! tab that asked for it; `+` asks for one in a tab of its own.
 
 use crate::tab::{Settings, Tab};
-use aura_ui::events::{starts_project, AgentSummary, ProcessSummary, UiCommand, UiEvent};
+use aura_ui::events::{
+    empty_projects, starts_project, AgentSummary, ProcessSummary, ProjectSummary, UiCommand,
+    UiEvent,
+};
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 
@@ -66,10 +69,13 @@ pub struct Tabs {
     next_id: u64,
     /// Every agent of the session, as last listed.
     agents: Vec<AgentSummary>,
+    /// Every listed project of the session, as last listed. Those with
+    /// every agent archived are in no run of `agents`.
+    projects: Vec<ProjectSummary>,
     /// Every process of the session, as last listed.
     processes: Vec<ProcessSummary>,
     /// The latest of each list all tabs show whole, for tabs opened later.
-    lists: [Option<UiCommand>; 5],
+    lists: [Option<UiCommand>; 4],
     /// The session's active agent, as it last reported.
     session_active: String,
     /// Agent the session was asked to make active and hasn't confirmed.
@@ -96,8 +102,9 @@ impl Tabs {
             settings,
             next_id: 2,
             agents: Vec::new(),
+            projects: Vec::new(),
             processes: Vec::new(),
-            lists: [None, None, None, None, None],
+            lists: [None, None, None, None],
             session_active: String::new(),
             focus_sent: None,
             opening: false,
@@ -213,6 +220,11 @@ impl Tabs {
                 self.processes = processes;
                 self.send_processes();
             }
+            UiCommand::SetProjects(projects) => {
+                self.projects = projects;
+                self.place_projects();
+                self.send_agents();
+            }
             // Each tab's GRAPH shows the flow of its own agent and ignores
             // the others'; so does its BENCH with sessions and estimates.
             // Every tab lists every benchmark.
@@ -226,7 +238,6 @@ impl Tabs {
             | UiCommand::EndLink
             | UiCommand::SetAgentDefinitions(_)
             | UiCommand::SetArchivedAgents(_)
-            | UiCommand::SetProjects(_)
             | UiCommand::SetModels { .. }
             | UiCommand::SetApiStatus { .. } => {
                 let slot = match command {
@@ -234,7 +245,6 @@ impl Tabs {
                     UiCommand::SetModels { .. } => Some(1),
                     UiCommand::SetApiStatus { .. } => Some(2),
                     UiCommand::SetArchivedAgents(_) => Some(3),
-                    UiCommand::SetProjects(_) => Some(4),
                     _ => None,
                 };
                 if let Some(slot) = slot {
@@ -285,11 +295,25 @@ impl Tabs {
         }
     }
 
+    /// Keys of the listed projects in list order, with those that have
+    /// no agent listed in their places.
+    fn project_keys(&self) -> Vec<String> {
+        let mut keys = Vec::new();
+        let mut empty = empty_projects(&self.projects, &self.agents)
+            .into_iter()
+            .peekable();
+        for index in (0..self.agents.len()).filter(|&i| starts_project(&self.agents, i)) {
+            while let Some((_, at)) = empty.next_if(|&(before, _)| before <= index) {
+                keys.push(self.projects[at].id.clone());
+            }
+            keys.push(self.agents[index].project_key().to_string());
+        }
+        keys.extend(empty.map(|(_, at)| self.projects[at].id.clone()));
+        keys
+    }
+
     fn place_projects(&mut self) {
-        let roots: Vec<String> = (0..self.agents.len())
-            .filter(|&index| starts_project(&self.agents, index))
-            .map(|index| self.agents[index].project_key().to_string())
-            .collect();
+        let roots = self.project_keys();
         for tab in &mut self.tabs {
             tab.projects.retain(|project| roots.contains(project));
         }
@@ -375,19 +399,37 @@ impl Tabs {
     /// Take the order of projects the front tab's list now has, after the
     /// pointer dragged one, to write with the tabs. The session keeps the
     /// order itself, from the tab's `ReorderProjects`.
+    /// Projects with no agent listed keep their places.
     pub fn adopt_project_order(&mut self) {
         let tab = &mut self.tabs[self.front];
         let order = tab.tui.project_order();
-        let same_projects =
-            order.len() == tab.projects.len() && order.iter().all(|id| tab.projects.contains(id));
-        if same_projects {
-            tab.projects = order;
+        let slots: Vec<usize> = (0..tab.projects.len())
+            .filter(|&i| order.contains(&tab.projects[i]))
+            .collect();
+        if slots.len() == order.len() {
+            for (slot, key) in slots.into_iter().zip(order) {
+                tab.projects[slot] = key;
+            }
         }
     }
 
+    /// The summaries of the projects in `tab`.
+    fn projects_of(&self, tab: &Tab) -> Vec<ProjectSummary> {
+        self.projects
+            .iter()
+            .filter(|project| tab.projects.contains(&project.id))
+            .cloned()
+            .collect()
+    }
+
     fn send_agents(&mut self) {
-        let lists: Vec<_> = self.tabs.iter().map(|tab| self.agents_of(tab)).collect();
-        for (tab, agents) in self.tabs.iter_mut().zip(lists) {
+        let lists: Vec<_> = self
+            .tabs
+            .iter()
+            .map(|tab| (self.projects_of(tab), self.agents_of(tab)))
+            .collect();
+        for (tab, (projects, agents)) in self.tabs.iter_mut().zip(lists) {
+            tab.tui.process_command(UiCommand::SetProjects(projects));
             tab.tui.process_command(UiCommand::SetAgents(agents));
         }
     }
@@ -535,11 +577,11 @@ impl Tabs {
     }
 
     /// Make the session follow the tab in front. A tab that has shown
-    /// nothing yet opens on its first project.
+    /// nothing yet opens on its first project with an agent listed.
     fn sync_focus(&mut self) {
         let tab = self.front();
         if tab.agent().is_empty() {
-            let first = tab.projects.first().and_then(|key| {
+            let first = tab.projects.iter().find_map(|key| {
                 self.agents
                     .iter()
                     .find(|agent| agent.project_key() == key)
@@ -772,6 +814,39 @@ mod tests {
         tabs.apply(UiCommand::SetAgents(agents));
         assert_eq!(tabs.arrangement(), [vec!["a1", "p2"], vec!["a3"]]);
         assert_eq!(held(&tabs), [vec!["a1", "a1.1", "a1.2", "p2"], vec!["a3"]]);
+    }
+
+    #[test]
+    fn a_project_with_every_agent_archived_stays_in_its_tab_until_removed() {
+        let (mut tabs, _events) = two_tabs();
+        let projects = |ids: &[&str]| {
+            UiCommand::SetProjects(
+                ids.iter()
+                    .map(|id| ProjectSummary {
+                        id: (*id).into(),
+                        name: (*id).into(),
+                        ..ProjectSummary::default()
+                    })
+                    .collect(),
+            )
+        };
+        let listed = |tab: &Tab| -> Vec<String> {
+            tab.tui.projects().iter().map(|p| p.id.clone()).collect()
+        };
+
+        // p2's agent and then a3, the only one of its tab, are archived.
+        tabs.apply(projects(&["a1", "p2", "a3"]));
+        tabs.apply(list(&[("a1", 0), ("a1.1", 1), ("a3", 0)], "a3"));
+        tabs.apply(list(&[("a1", 0), ("a1.1", 1)], "a1"));
+        assert_eq!(tabs.arrangement(), [vec!["a1", "p2"], vec!["a3"]]);
+        assert_eq!(listed(&tabs.tabs[0]), ["a1", "p2"]);
+        assert_eq!(listed(&tabs.tabs[1]), ["a3"]);
+
+        // Removed, they leave their tabs, and the tab left with nothing
+        // closes.
+        tabs.apply(projects(&["a1"]));
+        tabs.apply(list(&[("a1", 0), ("a1.1", 1)], "a1"));
+        assert_eq!(tabs.arrangement(), [["a1"]]);
     }
 
     #[test]

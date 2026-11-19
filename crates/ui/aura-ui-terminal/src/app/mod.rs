@@ -50,8 +50,8 @@ use crate::{
     alerts::AlertSettings,
     components::{Activity, Message},
     events::{
-        starts_project, AgentDefinitionSummary, AgentSummary, ModelOptionView, PlanView,
-        ProcessSummary, ProjectSummary, RecordSummary, UiCommand, UiEvent,
+        empty_projects, starts_project, AgentDefinitionSummary, AgentSummary, ModelOptionView,
+        PlanView, ProcessSummary, ProjectSummary, RecordSummary, UiCommand, UiEvent,
     },
     input::InputHistory,
     renderer::{ChatLineCache, GroupState},
@@ -591,6 +591,10 @@ pub(crate) const PROJECT_ADD_WIDTH: u16 = 3;
 pub(crate) enum ProjectListRow {
     /// Foldable header. `root` is the index of the project's first agent.
     Project { root: usize, expanded: bool },
+    /// Header of a project with every agent archived, which stays listed
+    /// until it is removed. `project` is its index in
+    /// [`App::projects`].
+    EmptyProject { project: usize },
     /// An agent under a project.
     Agent { index: usize },
     /// The "+ New project" row.
@@ -1194,7 +1198,7 @@ impl App {
                 self.request_agent_switch(agent_id);
             }
             Some(ProjectListRow::NewProject) | None => self.prompt_new_project(),
-            Some(ProjectListRow::Gap) => {}
+            Some(ProjectListRow::EmptyProject { .. } | ProjectListRow::Gap) => {}
         }
     }
 
@@ -1344,7 +1348,12 @@ impl App {
         let root = match self.project_rows().get(self.selected_agent).copied() {
             Some(ProjectListRow::Project { root, .. }) => Some(root),
             Some(ProjectListRow::Agent { index }) => self.project_root(index),
-            Some(ProjectListRow::NewProject | ProjectListRow::Gap) | None => None,
+            Some(
+                ProjectListRow::EmptyProject { .. }
+                | ProjectListRow::NewProject
+                | ProjectListRow::Gap,
+            )
+            | None => None,
         };
         if let Some(root) = root {
             self.toggle_project(root);
@@ -1699,30 +1708,37 @@ impl App {
         let index = self.agents_scroll + usize::from(row - list.y);
         matches!(
             rows[..new_project].get(index)?,
-            ProjectListRow::Project { .. } | ProjectListRow::Agent { .. }
+            ProjectListRow::Project { .. }
+                | ProjectListRow::EmptyProject { .. }
+                | ProjectListRow::Agent { .. }
         )
         .then_some(index)
     }
 
-    /// Root agent of the project whose "+" is at `column` on projects-list
-    /// row `index`.
-    fn project_add_at(&self, index: usize, column: u16) -> Option<usize> {
-        let list = self.areas.agent_rows?;
-        let ProjectListRow::Project { root, .. } = *self.project_rows().get(index)? else {
-            return None;
-        };
-        (column + PROJECT_ADD_WIDTH >= list.x + list.width).then_some(root)
+    /// Key of the project whose header is `row`.
+    pub(super) fn header_key(&self, row: ProjectListRow) -> Option<String> {
+        match row {
+            ProjectListRow::Project { root, .. } => self.project_key(root),
+            ProjectListRow::EmptyProject { project } => {
+                self.projects.get(project).map(|p| p.id.clone())
+            }
+            ProjectListRow::Agent { .. } | ProjectListRow::NewProject | ProjectListRow::Gap => None,
+        }
     }
 
-    /// Unfold the project whose first agent is `root` and ask for a new
-    /// agent in it.
-    pub(super) fn add_agent_to_project(&mut self, root: usize) {
-        let Some(id) = self.project_key(root) else {
-            return;
-        };
-        self.collapsed_projects.remove(&id);
+    /// Key of the project whose "+" is at `column` on projects-list row
+    /// `index`.
+    fn project_add_at(&self, index: usize, column: u16) -> Option<String> {
+        let list = self.areas.agent_rows?;
+        let key = self.header_key(*self.project_rows().get(index)?)?;
+        (column + PROJECT_ADD_WIDTH >= list.x + list.width).then_some(key)
+    }
+
+    /// Unfold the project with key `key` and ask for a new agent in it.
+    pub(super) fn add_agent_to_project(&mut self, key: &str) {
+        self.collapsed_projects.remove(key);
         if let Some(tx) = &self.event_tx {
-            let _ = tx.try_send(UiEvent::AddAgentToProject(id));
+            let _ = tx.try_send(UiEvent::AddAgentToProject(key.to_string()));
         }
     }
 
@@ -1837,10 +1853,12 @@ impl App {
         let Some(index) = self.project_row_at(column, row) else {
             return;
         };
-        if let Some(root) = self.project_add_at(index, column) {
-            self.add_agent_to_project(root);
+        if let Some(key) = self.project_add_at(index, column) {
+            self.add_agent_to_project(&key);
         } else if let Some(ProjectListRow::Project { root, .. }) = self.project_rows().get(index) {
             self.toggle_project(*root);
+        } else if let Some(ProjectListRow::EmptyProject { .. }) = self.project_rows().get(index) {
+            // Nothing to fold or open.
         } else {
             self.selected_agent = index;
             self.activate_agent_row();
@@ -1921,14 +1939,24 @@ impl App {
     /// A gap row separates each project from the one above it.
     #[must_use]
     pub(crate) fn project_rows(&self) -> Vec<ProjectListRow> {
+        let gap = |rows: &mut Vec<ProjectListRow>| {
+            if !rows.is_empty() {
+                rows.push(ProjectListRow::Gap);
+            }
+        };
+        let mut empty = empty_projects(&self.projects, &self.agents)
+            .into_iter()
+            .peekable();
         let mut rows = Vec::new();
         let mut index = 0;
         while index < self.agents.len() {
             if starts_project(&self.agents, index) {
-                let root = index;
-                if !rows.is_empty() {
-                    rows.push(ProjectListRow::Gap);
+                while let Some((_, project)) = empty.next_if(|&(before, _)| before <= index) {
+                    gap(&mut rows);
+                    rows.push(ProjectListRow::EmptyProject { project });
                 }
+                let root = index;
+                gap(&mut rows);
                 let end = self.project_end(root);
                 let expanded = !self
                     .collapsed_projects
@@ -1944,6 +1972,10 @@ impl App {
                 rows.push(ProjectListRow::Agent { index });
                 index += 1;
             }
+        }
+        for (_, project) in empty {
+            gap(&mut rows);
+            rows.push(ProjectListRow::EmptyProject { project });
         }
         rows.push(ProjectListRow::NewProject);
         rows
@@ -2006,7 +2038,9 @@ impl App {
         let selected_inside = before.is_some_and(|row| match row {
             ProjectListRow::Project { root: found, .. } => found == root,
             ProjectListRow::Agent { index } => span.contains(&index),
-            ProjectListRow::NewProject | ProjectListRow::Gap => false,
+            ProjectListRow::EmptyProject { .. }
+            | ProjectListRow::NewProject
+            | ProjectListRow::Gap => false,
         });
         let opened = self.collapsed_projects.remove(&id);
         if !opened {

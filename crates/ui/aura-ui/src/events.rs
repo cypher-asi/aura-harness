@@ -1239,6 +1239,31 @@ pub fn starts_project(agents: &[AgentSummary], index: usize) -> bool {
     }
 }
 
+/// Where the projects with no agent in `agents`, every one of theirs
+/// being archived, go among the projects of `agents`: for each,
+/// the index of the agent it goes before (`agents.len()` for the end) and
+/// its index in `projects`, in list order. Each keeps its place: as many
+/// projects of `agents` come before it as come before it in `projects`,
+/// however those were reordered since.
+#[must_use]
+pub fn empty_projects(projects: &[ProjectSummary], agents: &[AgentSummary]) -> Vec<(usize, usize)> {
+    let starts: Vec<usize> = (0..agents.len())
+        .filter(|&i| starts_project(agents, i))
+        .collect();
+    let shown = |project: &ProjectSummary| agents.iter().any(|a| a.project_key() == project.id);
+    let mut above = 0;
+    let mut out = Vec::new();
+    for (at, project) in projects.iter().enumerate() {
+        if shown(project) {
+            above += 1;
+        } else {
+            let before = starts.get(above).copied().unwrap_or(agents.len());
+            out.push((before, at));
+        }
+    }
+    out
+}
+
 /// A project of the projects list: a folder its agents work in.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectSummary {

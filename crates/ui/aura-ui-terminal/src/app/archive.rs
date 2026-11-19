@@ -157,16 +157,21 @@ impl App {
 
     /// Ask to confirm removing the project with key `key`.
     pub(super) fn request_remove_project(&mut self, key: String) {
-        let Some(root) = self.project_root_of_key(&key) else {
+        let named = |name: Option<&str>| {
+            name.map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+        };
+        let summary = self.projects.iter().find(|p| p.id == key);
+        let head = self
+            .project_root_of_key(&key)
+            .map(|root| &self.agents[root]);
+        let Some(name) = named(summary.map(|p| p.name.as_str()))
+            .or_else(|| head.and_then(|head| named(head.project.as_deref())))
+            .or_else(|| head.map(|head| head.name.clone()))
+        else {
             return;
         };
-        let head = &self.agents[root];
-        let name = head
-            .project
-            .as_deref()
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .unwrap_or(&head.name);
         self.notification = Some((
             format!(
                 "Remove project {name} and its agents from the list? Its files and records \

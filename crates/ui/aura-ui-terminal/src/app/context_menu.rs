@@ -127,6 +127,15 @@ impl App {
                     MenuItem::RemoveProject,
                 ],
             ),
+            Some(row @ ProjectListRow::EmptyProject { .. }) => {
+                let Some(key) = self.header_key(row) else {
+                    return false;
+                };
+                (
+                    MenuTarget::Project(key),
+                    vec![MenuItem::AddAgent, MenuItem::Info, MenuItem::RemoveProject],
+                )
+            }
             Some(ProjectListRow::Agent { index }) => (
                 MenuTarget::Agent(self.agents[index].id.clone()),
                 vec![MenuItem::Open, MenuItem::Archive, MenuItem::RemoveProject],
@@ -256,18 +265,17 @@ impl App {
                     self.restore_agent(id);
                 }
             }
-            MenuTarget::Project(key) => {
-                let Some(root) = self.project_root_of_key(&key) else {
-                    return;
-                };
-                match item {
-                    MenuItem::AddAgent => self.add_agent_to_project(root),
-                    MenuItem::Fold => self.toggle_project(root),
-                    MenuItem::Info => self.show_project_info(&key),
-                    MenuItem::RemoveProject => self.request_remove_project(key),
-                    MenuItem::Open | MenuItem::Archive | MenuItem::Restore => {}
+            MenuTarget::Project(key) => match item {
+                MenuItem::AddAgent => self.add_agent_to_project(&key),
+                MenuItem::Fold => {
+                    if let Some(root) = self.project_root_of_key(&key) {
+                        self.toggle_project(root);
+                    }
                 }
-            }
+                MenuItem::Info => self.show_project_info(&key),
+                MenuItem::RemoveProject => self.request_remove_project(key),
+                MenuItem::Open | MenuItem::Archive | MenuItem::Restore => {}
+            },
             MenuTarget::Agent(id) => {
                 if !self.agents.iter().any(|agent| agent.id == id) {
                     return;

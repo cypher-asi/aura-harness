@@ -323,11 +323,36 @@ fn archiving_a_projects_first_agent_leaves_the_rest_of_the_project_listed() {
     );
     assert_eq!(registry.project_counts(&project), (1, 2));
 
-    // Archiving every agent of a project takes the project off the list,
-    // without removing it.
+    // With every agent archived the project stays listed, empty, until
+    // it is removed.
     registry.archive(second.agent_id()).unwrap();
+    assert_eq!(names(registry.tree()), [(legacy.name.clone(), 0)]);
+    assert_eq!(project_names(&registry).len(), 2);
+    assert_eq!(registry.project_counts(&project), (0, 3));
+    registry.remove_project(&project).unwrap();
     assert_eq!(project_names(&registry).len(), 1);
-    assert!(!registry.project(&project).unwrap().removed);
+    assert_eq!(registry.archived_tree().len(), 3);
+}
+
+#[test]
+fn a_version_2_project_with_every_agent_archived_stays_off_the_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let launch = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let mut registry = open(dir.path(), launch.path());
+    let (agent, _) = registry.open_project(folder.path()).unwrap();
+    let project = agent.project_id.clone().unwrap();
+    registry.archive(agent.agent_id()).unwrap();
+    registry.file.version = 2;
+    registry.save().unwrap();
+
+    // Before version 3 it was not shown, so it stays hidden until one of
+    // its agents is restored.
+    let mut registry = open(dir.path(), launch.path());
+    assert_eq!(project_names(&registry).len(), 1);
+    assert!(registry.project(&project).unwrap().removed);
+    registry.restore(agent.agent_id()).unwrap();
+    assert_eq!(project_names(&registry).len(), 2);
 }
 
 #[test]
@@ -587,7 +612,7 @@ fn a_version_0_registry_becomes_one_project_per_folder() {
 
     let body = fs::read_to_string(dir.path().join(REGISTRY_FILE)).unwrap();
     assert!(!body.contains("member_of"), "{body}");
-    assert!(body.contains("\"version\": 2"), "{body}");
+    assert!(body.contains("\"version\": 3"), "{body}");
 }
 
 #[test]

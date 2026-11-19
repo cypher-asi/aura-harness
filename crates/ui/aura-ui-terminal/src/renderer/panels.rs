@@ -984,7 +984,9 @@ fn build_swarm_lines<'a>(
             continue;
         }
         let is_selected = match row {
-            ProjectListRow::Project { .. } | ProjectListRow::Gap => false,
+            ProjectListRow::Project { .. }
+            | ProjectListRow::EmptyProject { .. }
+            | ProjectListRow::Gap => false,
             _ if is_focused => row_index == selected,
             ProjectListRow::Agent { index } => app.agents()[index].id == active_id,
             ProjectListRow::NewProject => false,
@@ -994,6 +996,9 @@ fn build_swarm_lines<'a>(
         let menu_on = match (row, menu_target) {
             (ProjectListRow::Project { root, .. }, Some(MenuTarget::Project(key))) => {
                 app.agents()[root].project_key() == key
+            }
+            (ProjectListRow::EmptyProject { project }, Some(MenuTarget::Project(key))) => {
+                app.projects().get(project).is_some_and(|p| p.id == *key)
             }
             (ProjectListRow::Agent { index }, Some(MenuTarget::Agent(id))) => {
                 app.agents()[index].id == *id
@@ -1029,6 +1034,20 @@ fn build_swarm_lines<'a>(
                     cell,
                     Some("+"),
                 ));
+            }
+            ProjectListRow::EmptyProject { project } => {
+                let name = app
+                    .projects()
+                    .get(project)
+                    .map(|p| p.name.to_uppercase())
+                    .unwrap_or_default();
+                let mut cell =
+                    cell_style(theme, CellState::of(is_selected, is_hovered), project_name);
+                if add_hovered {
+                    cell.time = theme.colors.foreground;
+                }
+                let icon = StatusIcon::new("🗀", theme.colors.muted);
+                lines.push(list_row(width, 0, icon, &name, cell, Some("+")));
             }
             ProjectListRow::Agent { index } => {
                 let agent = &app.agents()[index];

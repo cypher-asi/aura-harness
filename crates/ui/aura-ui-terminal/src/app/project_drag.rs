@@ -227,7 +227,7 @@ impl App {
             match rows.get(at) {
                 Some(ProjectListRow::Project { root, .. }) => return Some(*root),
                 Some(ProjectListRow::Agent { index }) => return self.project_root(*index),
-                Some(ProjectListRow::Gap) => at += 1,
+                Some(ProjectListRow::EmptyProject { .. } | ProjectListRow::Gap) => at += 1,
                 Some(ProjectListRow::NewProject) | None => {
                     return rows.iter().rev().find_map(|row| match row {
                         ProjectListRow::Project { root, .. } => Some(*root),
@@ -283,7 +283,9 @@ impl App {
                 Some((self.agents[*root].project_key().to_string(), true))
             }
             ProjectListRow::Agent { index } => Some((self.agents[*index].id.clone(), false)),
-            ProjectListRow::NewProject | ProjectListRow::Gap => None,
+            ProjectListRow::EmptyProject { .. }
+            | ProjectListRow::NewProject
+            | ProjectListRow::Gap => None,
         }
     }
 
@@ -294,7 +296,9 @@ impl App {
         let found = self.project_rows().iter().position(|row| match *row {
             ProjectListRow::Project { root, .. } => header && self.agents[root].project_key() == id,
             ProjectListRow::Agent { index } => !header && self.agents[index].id == id,
-            ProjectListRow::NewProject | ProjectListRow::Gap => false,
+            ProjectListRow::EmptyProject { .. }
+            | ProjectListRow::NewProject
+            | ProjectListRow::Gap => false,
         });
         if let Some(row) = found {
             self.selected_agent = row;

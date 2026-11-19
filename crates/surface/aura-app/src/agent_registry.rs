@@ -24,8 +24,9 @@ const LEGACY_IDENTITY_FILE: &str = "agent_identity.txt";
 /// of the agents that headed them before projects had ids of their own.
 const DESKTOP_TABS_FILE: &str = "desktop_tabs";
 /// Registries written before projects were their own entries are
-/// version 0.
-const REGISTRY_VERSION: u32 = 2;
+/// version 0. From version 3 a project with every agent archived stays
+/// listed.
+const REGISTRY_VERSION: u32 = 3;
 const DEFAULT_AGENT_NAME: &str = "Terminal Agent";
 /// Name of the agent created with a new project.
 const DEFAULT_PROJECT_AGENT: &str = "Agent";
@@ -251,8 +252,14 @@ impl AgentRegistry {
             file,
         };
         let mut changed = false;
-        if registry.file.version < REGISTRY_VERSION {
+        if registry.file.version < 2 {
             registry.migrate(data_dir);
+        }
+        if registry.file.version < 3 {
+            registry.hide_empty_projects();
+        }
+        if registry.file.version < REGISTRY_VERSION {
+            registry.file.version = REGISTRY_VERSION;
             changed = true;
         }
         if registry.file.agents.is_empty() {
@@ -366,7 +373,22 @@ impl AgentRegistry {
             agent.legacy_member_of = None;
         }
         self.file.projects = projects;
-        self.file.version = REGISTRY_VERSION;
+    }
+
+    /// Before version 3 a project showed only while it had an agent
+    /// listed. Take those with none off the list, as removed, so the list
+    /// looks as it did; restoring one of their agents brings them back.
+    fn hide_empty_projects(&mut self) {
+        let shown: Vec<String> = self
+            .tree()
+            .iter()
+            .filter_map(|(agent, _)| agent.project_id.clone())
+            .collect();
+        for project in &mut self.file.projects {
+            if !shown.contains(&project.id) {
+                project.removed = true;
+            }
+        }
     }
 
     #[must_use]
@@ -908,18 +930,11 @@ impl AgentRegistry {
             && !self.spawners(agent).iter().any(|p| p.archived || p.removed)
     }
 
-    /// Projects on the list, in order: not removed, with an agent listed.
+    /// Projects on the list, in order: every project not removed, with
+    /// its agents listed or all of them archived.
     #[must_use]
     pub fn listed_projects(&self) -> Vec<&Project> {
-        let tree = self.tree();
-        self.file
-            .projects
-            .iter()
-            .filter(|p| {
-                tree.iter()
-                    .any(|(a, _)| a.project_id.as_deref() == Some(p.id.as_str()))
-            })
-            .collect()
+        self.file.projects.iter().filter(|p| !p.removed).collect()
     }
 
     /// How many agents of project `project_id` are listed, and how many
