@@ -279,6 +279,21 @@ mod tests {
                 self.key(NONE, Press::typing(ch.encode_utf8(&mut buffer)));
             }
         }
+
+        /// Pick the folder highlighted in the folder browser, as Space
+        /// does, which asks the session to open it as a project.
+        pub fn pick_folder(&mut self) {
+            assert!(
+                self.shell.tabs.front().tui.folder_picker().is_some(),
+                "a folder browser is open"
+            );
+            self.key(NONE, Press::typing(" "));
+            let asked = self.asked();
+            assert!(
+                asked.iter().any(|event| event.starts_with("CreateProject")),
+                "{asked:?}"
+            );
+        }
     }
 
     #[test]
@@ -421,8 +436,9 @@ mod tests {
         let _ = stage.asked();
         let held = CTRL | SHIFT;
         stage.key(held, Press::typing("T"));
-        assert_eq!(stage.asked(), ["CreateAgent(None)"]);
-        assert_eq!(stage.shell.tabs.len(), 1, "the tab opens with its agent");
+        assert!(stage.asked().is_empty(), "nothing until a folder is picked");
+        stage.pick_folder();
+        assert_eq!(stage.shell.tabs.len(), 1, "the tab opens with its project");
         stage.created("a3", "agent03");
         assert_eq!(stage.shell.tabs.len(), 2);
         assert_eq!(stage.shell.tabs.front_index(), 1);

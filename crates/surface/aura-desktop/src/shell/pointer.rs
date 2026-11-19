@@ -709,8 +709,9 @@ mod tests {
         let _ = stage.asked();
 
         stage.click(Hit::New, MouseButton::Left);
-        assert_eq!(stage.asked(), ["CreateAgent(None)"]);
-        assert_eq!(stage.shell.tabs.len(), 1, "the tab opens with its agent");
+        assert!(stage.asked().is_empty(), "nothing until a folder is picked");
+        stage.pick_folder();
+        assert_eq!(stage.shell.tabs.len(), 1, "the tab opens with its project");
         stage.created("a3", "agent03");
         assert_eq!(stage.shell.tabs.len(), 2);
         assert_eq!(stage.shell.tabs.front_index(), 1);

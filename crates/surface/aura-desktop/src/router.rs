@@ -80,8 +80,11 @@ pub struct Tabs {
     session_active: String,
     /// Agent the session was asked to make active and hasn't confirmed.
     focus_sent: Option<String>,
-    /// `+` was pressed and the agent it asked for is yet to be listed.
+    /// `+` asked for a project and it is yet to be listed.
     opening: bool,
+    /// Tab, by id, whose folder browser `+` opened: the project picked
+    /// there gets a tab of its own.
+    picking: Option<u64>,
     /// Tab, by id, whose UI last asked for a new project or agent.
     asker: Option<u64>,
     /// An agent the session switched to before listing it, and what it
@@ -108,6 +111,7 @@ impl Tabs {
             session_active: String::new(),
             focus_sent: None,
             opening: false,
+            picking: None,
             asker: None,
             unlisted: None,
             restore: Some(restore),
@@ -478,13 +482,34 @@ impl Tabs {
         self.tabs.len() - 1
     }
 
-    /// `+`: ask the session for a new agent, which gets a tab of its own
-    /// once the session lists it.
+    /// `+`: ask for a folder in the tab in front. The project picked gets
+    /// a tab of its own once the session lists it; one already listed
+    /// brings its tab forward instead.
     pub fn new_tab(&mut self) {
         self.forward_events();
-        self.opening = true;
-        self.asker = None;
-        self.send(UiEvent::CreateAgent(None));
+        let tab = &mut self.tabs[self.front];
+        tab.tui.ask_for_project_folder();
+        self.picking = tab.tui.folder_picker().is_some().then_some(tab.id);
+    }
+
+    /// The tab holding the listed project in `folder`, and that project's
+    /// first agent when it has one listed.
+    fn tab_of_folder(&self, folder: &Path) -> Option<(usize, Option<String>)> {
+        let folder = folder.canonicalize().ok()?;
+        let project = self
+            .projects
+            .iter()
+            .find(|project| Path::new(&project.folder) == folder)?;
+        let tab = self
+            .tabs
+            .iter()
+            .position(|tab| tab.projects.contains(&project.id))?;
+        let agent = self
+            .agents
+            .iter()
+            .find(|agent| agent.project_key() == project.id)
+            .map(|agent| agent.id.clone());
+        Some((tab, agent))
     }
 
     /// Bring the tab at `index` to the front.
@@ -550,10 +575,53 @@ impl Tabs {
                 self.forward(index, event);
             }
         }
+        // The browser `+` opened was closed without a pick.
+        if let Some(id) = self.picking {
+            let open = self
+                .tabs
+                .iter()
+                .any(|tab| tab.id == id && tab.tui.folder_picker().is_some());
+            if !open {
+                self.picking = None;
+            }
+        }
         self.sync_focus();
     }
 
     fn forward(&mut self, from: usize, event: UiEvent) {
+        if let UiEvent::CreateProject { folder } = &event {
+            if self.picking == Some(self.tabs[from].id) {
+                self.picking = None;
+                match self.tab_of_folder(folder) {
+                    Some((owner, Some(agent))) => {
+                        self.front = owner;
+                        let shown = self.tabs[owner].agent();
+                        if self.root_of(shown) != self.root_of(&agent) {
+                            self.request(&agent, true);
+                        }
+                        return;
+                    }
+                    // Listed with every agent archived: the session adds
+                    // one to it, in its tab.
+                    Some((owner, None)) => {
+                        self.front = owner;
+                        self.asker = Some(self.tabs[owner].id);
+                        let agent = self.tabs[owner].agent().to_string();
+                        self.request(&agent, false);
+                        self.send(event);
+                        return;
+                    }
+                    None => {
+                        self.opening = true;
+                        self.asker = None;
+                        let agent = self.tabs[from].agent().to_string();
+                        self.request(&agent, false);
+                        self.send(event);
+                        return;
+                    }
+                }
+            }
+        }
         match &event {
             UiEvent::SelectAgent(agent) => {
                 // An agent of another tab: go to that tab instead.
@@ -710,12 +778,26 @@ mod tests {
     const ONE: Agents<'static> = &[("a1", 0), ("a1.1", 1), ("p2", 0)];
     const TWO: Agents<'static> = &[("a1", 0), ("a1.1", 1), ("p2", 0), ("a3", 0)];
 
+    /// `+`, then a folder that is no project yet picked in the browser it
+    /// opens in the tab in front.
+    fn plus(tabs: &mut Tabs) {
+        tabs.new_tab();
+        assert!(
+            tabs.front().tui.folder_picker().is_some(),
+            "+ asks for a folder"
+        );
+        let event = UiEvent::CreateProject {
+            folder: "/new/project".into(),
+        };
+        tabs.forward(tabs.front_index(), event);
+    }
+
     /// Two tabs: every project of [`ONE`], and `a3` opened with `+` and
     /// in front.
     fn two_tabs() -> (Tabs, mpsc::Receiver<UiEvent>) {
         let (mut tabs, mut events) = tabs();
         start(&mut tabs, ONE, "a1");
-        tabs.new_tab();
+        plus(&mut tabs);
         switch(&mut tabs, TWO, "a3");
         let _ = sent(&mut events);
         (tabs, events)
@@ -741,12 +823,26 @@ mod tests {
     }
 
     #[test]
-    fn plus_opens_a_tab_holding_the_new_agent_only() {
+    fn plus_opens_a_tab_holding_the_project_picked_only() {
         let (mut tabs, mut events) = tabs();
         start(&mut tabs, ONE, "a1");
+        let _ = sent(&mut events);
         tabs.new_tab();
-        assert_eq!(sent(&mut events), ["CreateAgent(None)"]);
-        assert_eq!(tabs.len(), 1, "no tab until the agent exists");
+        assert!(tabs.front().tui.folder_picker().is_some());
+        tabs.forward_events();
+        assert!(
+            sent(&mut events).is_empty(),
+            "nothing until a folder is picked"
+        );
+        let event = UiEvent::CreateProject {
+            folder: "/new/project".into(),
+        };
+        tabs.forward(0, event);
+        assert_eq!(
+            sent(&mut events),
+            [r#"CreateProject { folder: "/new/project" }"#]
+        );
+        assert_eq!(tabs.len(), 1, "no tab until the project exists");
 
         // The session switches to the agent before it lists it.
         let before = messages(&tabs)[0];
@@ -850,10 +946,67 @@ mod tests {
     }
 
     #[test]
+    fn plus_closed_without_a_folder_opens_no_tab() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let (mut tabs, mut events) = tabs();
+        start(&mut tabs, ONE, "a1");
+        tabs.new_tab();
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        tabs.front_mut().tui.handle_key(esc);
+        tabs.forward_events();
+        assert!(tabs.front().tui.folder_picker().is_none());
+        let _ = sent(&mut events);
+
+        // A project asked for later, as with Ctrl+N, joins the tab asking.
+        let event = UiEvent::CreateProject {
+            folder: "/later".into(),
+        };
+        tabs.forward(0, event);
+        switch(&mut tabs, TWO, "a3");
+        assert_eq!(tabs.arrangement(), [["a1", "p2", "a3"]]);
+    }
+
+    #[test]
+    fn plus_on_a_folder_already_a_project_brings_its_tab_forward() {
+        let (mut tabs, mut events) = two_tabs();
+        let folder = std::env::temp_dir().canonicalize().expect("temp dir");
+        let project = |id: &str, folder: &Path| ProjectSummary {
+            id: id.into(),
+            name: id.into(),
+            folder: folder.display().to_string(),
+            ..ProjectSummary::default()
+        };
+        tabs.apply(UiCommand::SetProjects(vec![
+            project("a1", Path::new("/site")),
+            project("p2", Path::new("/notes")),
+            project("a3", &folder),
+        ]));
+        tabs.focus(0);
+        tabs.forward_events();
+        let _ = sent(&mut events);
+
+        tabs.new_tab();
+        tabs.forward(0, UiEvent::CreateProject { folder });
+        assert_eq!(tabs.front_index(), 1);
+        assert_eq!(tabs.len(), 2);
+        assert!(
+            !sent(&mut events)
+                .iter()
+                .any(|e| e.starts_with("CreateProject")),
+            "nothing to create"
+        );
+        // A later project is not taken for the one `+` asked for.
+        tabs.focus(0);
+        let more: Agents = &[("a1", 0), ("a1.1", 1), ("p2", 0), ("a3", 0), ("p4", 0)];
+        switch(&mut tabs, more, "p4");
+        assert_eq!(tabs.len(), 2);
+    }
+
+    #[test]
     fn a_failed_create_opens_no_tab() {
         let (mut tabs, _events) = tabs();
         start(&mut tabs, ONE, "a1");
-        tabs.new_tab();
+        plus(&mut tabs);
         tabs.apply(UiCommand::ShowError("Could not create agent".into()));
         assert_eq!(tabs.len(), 1);
         assert!(matches!(

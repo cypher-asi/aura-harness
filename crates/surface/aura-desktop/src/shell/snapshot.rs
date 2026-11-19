@@ -304,8 +304,9 @@ fn tabs_are_workspaces_with_their_own_projects() {
     let _ = h.asked();
 
     h.click(Hit::New, MouseButton::Left);
-    assert_eq!(h.asked(), ["CreateAgent(None)"]);
-    assert_eq!(h.shell.tabs.len(), 1, "the tab opens with its agent");
+    assert!(h.asked().is_empty(), "nothing until a folder is picked");
+    h.pick_folder();
+    assert_eq!(h.shell.tabs.len(), 1, "the tab opens with its project");
     h.joined("a3", "Agent03");
     assert_eq!(h.shell.tabs.len(), 2);
     assert_eq!(h.shell.bar.title(), Some("AGENT03"));
@@ -343,6 +344,7 @@ fn tabs_drag_into_a_new_order() {
     let mut h = stage();
     seed(&mut h);
     h.click(Hit::New, MouseButton::Left);
+    h.pick_folder();
     h.joined("a3", "Agent03");
     let _ = h.asked();
     assert_eq!(h.shell.tabs.arrangement(), [vec!["a1"], vec!["a3"]]);
@@ -365,7 +367,7 @@ fn a_closed_tab_hands_its_projects_to_the_one_before_it() {
     let _ = h.asked();
     let held = ModifiersState::CONTROL | ModifiersState::SHIFT;
     h.key(held, Press::typing("T"));
-    assert_eq!(h.asked(), ["CreateAgent(None)"]);
+    h.pick_folder();
     h.joined("a3", "Agent03");
     assert_eq!(h.shell.tabs.len(), 2);
 
