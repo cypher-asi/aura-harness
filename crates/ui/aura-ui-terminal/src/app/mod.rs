@@ -97,6 +97,14 @@ const ERROR_NOTIFICATION_TTL: Duration = Duration::from_secs(6);
 /// Maximum number of records to keep in the list.
 const MAX_RECORDS: usize = 100;
 
+/// Time between steps of the chat scrolling under a selection dragged
+/// past its top or bottom.
+const SELECTION_SCROLL_EVERY: Duration = Duration::from_millis(40);
+
+/// Most rows the chat scrolls in one step under a dragged selection; it
+/// scrolls a row per row the pointer is past the edge, up to this.
+const SELECTION_SCROLL_MOST: u16 = 8;
+
 /// Which panel has focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PanelFocus {
@@ -327,10 +335,15 @@ pub struct App {
     /// Absolute cell rect where the detail-view image was drawn in the last
     /// frame; `None` when no image detail view is open or nothing was drawn.
     pub(super) detail_image_rect: Option<Rect>,
-    /// Text selected with the mouse, in screen cells
+    /// Text selected with the mouse
     pub(super) selection: Option<Selection>,
-    /// Whether the left button is still held for `selection`
-    pub(super) selecting: bool,
+    /// Where the pointer is while the left button is still held for
+    /// `selection`
+    pub(super) selecting: Option<Position>,
+    /// Whether `selection` is in the conversation, whose rows scroll
+    pub(super) selection_scrolls: bool,
+    /// When the chat last scrolled for a selection dragged past its edge
+    pub(super) selection_scrolled: Option<Instant>,
     /// Whether the selection should be copied after the next frame
     pub(super) copy_requested: bool,
     /// Which list the agents panel shows
@@ -704,7 +717,9 @@ impl App {
             pending_image_areas: Vec::new(),
             detail_image_rect: None,
             selection: None,
-            selecting: false,
+            selecting: None,
+            selection_scrolls: false,
+            selection_scrolled: None,
             copy_requested: false,
             agents_tab: AgentsTab::default(),
             definitions: Vec::new(),
@@ -1497,7 +1512,9 @@ impl App {
     /// sandbox row selects it and opens or closes a directory, or shows a
     /// file over the chat panel.
     /// Dragging with the left button selects text inside the panel the
-    /// drag started in and copies it when the button is released.
+    /// drag started in and copies it when the button is released; in the
+    /// conversation, holding the pointer past its top or bottom scrolls it
+    /// (see [`Self::tick`]), and the wheel scrolls it under the selection.
     /// Moving over a clickable item highlights it until the pointer leaves.
     ///
     /// Returns whether the screen may look different: false for a move or
@@ -1505,9 +1522,10 @@ impl App {
     pub fn handle_mouse(&mut self, mouse: MouseEvent) -> bool {
         let pointing = matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Drag(_));
         let menu = |app: &Self| app.context_menu.as_ref().map(|menu| menu.selected);
-        let before = (self.hover, self.selection, menu(self), self.project_moves);
+        let ends = |app: &Self| app.selection.as_ref().map(Selection::ends);
+        let before = (self.hover, ends(self), menu(self), self.project_moves);
         self.mouse(mouse);
-        !pointing || before != (self.hover, self.selection, menu(self), self.project_moves)
+        !pointing || before != (self.hover, ends(self), menu(self), self.project_moves)
     }
 
     fn mouse(&mut self, mouse: MouseEvent) {
@@ -1548,8 +1566,11 @@ impl App {
                 if self.drag_flow(mouse.column, mouse.row) {
                     return;
                 }
-                if let Some(selection) = self.selection.as_mut().filter(|_| self.selecting) {
+                if let Some(selection) =
+                    self.selection.as_mut().filter(|_| self.selecting.is_some())
+                {
                     selection.extend_to(at);
+                    self.selecting = Some(at);
                 }
                 return;
             }
@@ -1561,8 +1582,11 @@ impl App {
                 if self.release_flow() {
                     return;
                 }
-                if std::mem::take(&mut self.selecting) {
-                    if self.selection.is_some_and(|s| !s.is_empty()) {
+                if self.selecting.take().is_some() {
+                    if let Some(selection) = self.selection.as_mut() {
+                        selection.extend_to(at);
+                    }
+                    if self.selection.as_ref().is_some_and(|s| !s.is_empty()) {
                         self.copy_requested = true;
                     } else {
                         self.selection = None;
@@ -1605,11 +1629,15 @@ impl App {
                 self.scroll_flow(mouse.kind, mouse.modifiers, step);
             }
             MouseEventKind::ScrollUp => {
-                self.clear_selection();
+                if !self.wheel_keeps_selection(panel) {
+                    self.clear_selection();
+                }
                 self.scroll_panel_up(panel, step);
             }
             MouseEventKind::ScrollDown => {
-                self.clear_selection();
+                if !self.wheel_keeps_selection(panel) {
+                    self.clear_selection();
+                }
                 self.scroll_panel_down(panel, step);
             }
             MouseEventKind::Down(MouseButton::Left) => {
@@ -1619,10 +1647,16 @@ impl App {
                     self.hover = None;
                     return;
                 }
+                self.selection_scrolls = panel == PanelFocus::Chat && self.chat_scrolls_by_rows();
+                let top = if self.selection_scrolls {
+                    self.chat_first_line
+                } else {
+                    0
+                };
                 self.selection = self
                     .selectable_area(panel)
-                    .map(|bounds| Selection::new(bounds, at));
-                self.selecting = self.selection.is_some();
+                    .map(|bounds| Selection::new(bounds, top, at));
+                self.selecting = self.selection.is_some().then_some(at);
                 match panel {
                     PanelFocus::Swarm => {
                         if !self.press_project(mouse.column, mouse.row) {
@@ -1803,8 +1837,79 @@ impl App {
     /// Drop the mouse selection.
     pub fn clear_selection(&mut self) {
         self.selection = None;
-        self.selecting = false;
+        self.selecting = None;
+        self.selection_scrolled = None;
         self.copy_requested = false;
+    }
+
+    /// Whether the chat shows the conversation, which scrolls by rows: no
+    /// record, file, flow or benchmarks over it.
+    fn chat_scrolls_by_rows(&self) -> bool {
+        self.detail.is_none() && !self.flow.is_open() && !self.bench.is_open()
+    }
+
+    /// Whether the wheel over `panel` scrolls a selection along with its
+    /// text rather than dropping it.
+    fn wheel_keeps_selection(&self, panel: PanelFocus) -> bool {
+        panel == PanelFocus::Chat
+            && self.selection_scrolls
+            && self.selection.is_some()
+            && self.chat_scrolls_by_rows()
+    }
+
+    /// Fit the selection to the frame just drawn into `buffer`: follow the
+    /// conversation's scroll, move the held end to the pointer, and keep
+    /// the rows in view for copying once they scroll away.
+    pub(crate) fn track_selection(&mut self, buffer: &Buffer) {
+        if !self.selection_scrolls || !self.chat_scrolls_by_rows() {
+            return;
+        }
+        let Some(selection) = self.selection.as_mut() else {
+            return;
+        };
+        if self.areas.chat_text != Some(selection.bounds()) {
+            return;
+        }
+        selection.scroll_to(self.chat_first_line);
+        if let Some(at) = self.selecting {
+            selection.extend_to(at);
+        }
+        selection.keep(buffer);
+    }
+
+    /// How the chat should scroll for a selection being dragged past its
+    /// top (`true`) or bottom, and by how many rows.
+    fn selection_scroll(&self) -> Option<(bool, usize)> {
+        let at = self.selecting?;
+        let bounds = self.selection.as_ref()?.bounds();
+        if !self.selection_scrolls || !self.chat_scrolls_by_rows() {
+            return None;
+        }
+        let (up, past) = if at.y < bounds.top() {
+            (true, bounds.top() - at.y)
+        } else if at.y >= bounds.bottom() {
+            (false, at.y + 1 - bounds.bottom())
+        } else {
+            return None;
+        };
+        Some((up, usize::from(past.min(SELECTION_SCROLL_MOST))))
+    }
+
+    /// Whether a selection is held past the chat's top or bottom, so the
+    /// chat keeps scrolling under it while time passes.
+    #[must_use]
+    pub fn selection_scrolling(&self) -> bool {
+        self.selection_scroll().is_some()
+    }
+
+    /// Scroll the chat one step under a selection dragged past its top or
+    /// bottom. The selection's held end follows on the next frame.
+    pub(crate) fn scroll_selection(&mut self) {
+        match self.selection_scroll() {
+            Some((true, rows)) => self.scroll_offset = self.scroll_offset.saturating_add(rows),
+            Some((false, rows)) => self.scroll_offset = self.scroll_offset.saturating_sub(rows),
+            None => {}
+        }
     }
 
     /// Whether a copy is waiting for the next frame to be drawn.
@@ -1816,7 +1921,7 @@ impl App {
     /// Ask for the current selection to be copied after the next frame.
     /// Returns `false` when nothing is selected.
     pub fn request_copy(&mut self) -> bool {
-        self.copy_requested = self.selection.is_some_and(|s| !s.is_empty());
+        self.copy_requested = self.selection.as_ref().is_some_and(|s| !s.is_empty());
         self.copy_requested
     }
 
@@ -1826,7 +1931,7 @@ impl App {
         if !std::mem::take(&mut self.copy_requested) {
             return None;
         }
-        let text = self.selection?.text(buffer);
+        let text = self.selection.as_ref()?.text(buffer);
         (!text.is_empty()).then_some(text)
     }
 
@@ -2455,10 +2560,20 @@ impl App {
         }
     }
 
-    /// Process pending updates from the command channel.
+    /// Process pending updates from the command channel, and scroll the
+    /// chat under a selection held past its top or bottom.
     pub fn tick(&mut self) {
         self.animation_frame = self.animation_frame.wrapping_add(1);
         self.expire_notification();
+        if !self.selection_scrolling() {
+            self.selection_scrolled = None;
+        } else if self
+            .selection_scrolled
+            .is_none_or(|at| at.elapsed() >= SELECTION_SCROLL_EVERY)
+        {
+            self.scroll_selection();
+            self.selection_scrolled = Some(Instant::now());
+        }
 
         self.receive_commands();
         if std::mem::take(&mut self.sandbox_stale) && self.sandbox_panel_visible {

@@ -98,6 +98,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     let chat = render_content_panels(frame, (swarm, chat_column[0], right), app, theme);
     images::render_pending_images(frame, chat, app, theme);
     detail::render_detail_view(frame, chat, app, theme);
+    app.track_selection(frame.buffer_mut());
     if let Some(selection) = app.selection() {
         selection.highlight(frame.buffer_mut());
     }

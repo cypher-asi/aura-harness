@@ -2825,6 +2825,75 @@ fn test_truncate_record_info_zero_width() {
     assert_eq!(truncate_record_info("", 20), "");
 }
 
+#[test]
+fn test_a_selection_dragged_past_the_chat_scrolls_it_and_copies_it_all() {
+    use crate::events::UiCommand;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let mut app = crate::App::new().with_event_sender(tx);
+    let lines: String = (0..60).map(|n| format!("line {n:02}\n\n")).collect();
+    app.process_command(UiCommand::StartStreaming);
+    app.process_command(UiCommand::AppendText(lines));
+    let mouse = |app: &mut crate::App, kind, (column, row): (u16, u16)| {
+        app.handle_mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        });
+    };
+    let buffer = render_buffer(&mut app, 120);
+    let chat_row = row_of(&buffer, "line 59");
+    for _ in 0..100 {
+        mouse(&mut app, MouseEventKind::ScrollUp, (60, chat_row));
+    }
+    let buffer = render_buffer(&mut app, 120);
+    let first = row_of(&buffer, "line 00");
+    let (column, _) = find_cell(&buffer, first, "line 00").unwrap();
+    assert!(!(0..30).any(|y| find_cell(&buffer, y, "line 40").is_some()));
+
+    mouse(
+        &mut app,
+        MouseEventKind::Down(MouseButton::Left),
+        (column, first),
+    );
+    let below = (column + 2, 29);
+    mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), below);
+    assert!(app.selection_scrolling(), "held past the bottom");
+    let on_screen = |buffer: &ratatui::buffer::Buffer, needle| {
+        (0..30).find(|&y| find_cell(buffer, y, needle).is_some())
+    };
+    let mut buffer = render_buffer(&mut app, 120);
+    for _ in 0..40 {
+        if on_screen(&buffer, "line 40").is_some() {
+            break;
+        }
+        app.scroll_selection();
+        buffer = render_buffer(&mut app, 120);
+    }
+    assert!(on_screen(&buffer, "line 00").is_none(), "scrolled away");
+    let shown = on_screen(&buffer, "line 40").expect("scrolled into view");
+    assert!(
+        buffer[(column, shown)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED),
+        "the rows scrolled into view are selected"
+    );
+    mouse(&mut app, MouseEventKind::Up(MouseButton::Left), below);
+    assert!(!app.selection_scrolling());
+    let buffer = render_buffer(&mut app, 120);
+
+    let text = app.take_copy_text(&buffer).expect("copied on release");
+    let copied: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+    assert_eq!(copied.first(), Some(&"line 00"));
+    let numbers: Vec<String> = (0..=40).map(|n| format!("line {n:02}")).collect();
+    assert!(
+        numbers.iter().all(|n| copied.contains(&n.as_str())),
+        "{copied:?}"
+    );
+}
+
 fn render_buffer(app: &mut crate::App, width: u16) -> ratatui::buffer::Buffer {
     let mut terminal =
         ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 30)).unwrap();
