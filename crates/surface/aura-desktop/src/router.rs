@@ -767,6 +767,24 @@ mod tests {
             .collect()
     }
 
+    /// The listed projects, by id.
+    fn projects(ids: &[&str]) -> UiCommand {
+        UiCommand::SetProjects(
+            ids.iter()
+                .map(|id| ProjectSummary {
+                    id: (*id).into(),
+                    name: (*id).into(),
+                    ..ProjectSummary::default()
+                })
+                .collect(),
+        )
+    }
+
+    /// The projects `tab` lists, by id.
+    fn listed(tab: &Tab) -> Vec<String> {
+        tab.tui.projects().iter().map(|p| p.id.clone()).collect()
+    }
+
     fn message(text: &str) -> UiCommand {
         UiCommand::ShowMessage(MessageData::new(MessageRole::System, text))
     }
@@ -915,20 +933,6 @@ mod tests {
     #[test]
     fn a_project_with_every_agent_archived_stays_in_its_tab_until_removed() {
         let (mut tabs, _events) = two_tabs();
-        let projects = |ids: &[&str]| {
-            UiCommand::SetProjects(
-                ids.iter()
-                    .map(|id| ProjectSummary {
-                        id: (*id).into(),
-                        name: (*id).into(),
-                        ..ProjectSummary::default()
-                    })
-                    .collect(),
-            )
-        };
-        let listed = |tab: &Tab| -> Vec<String> {
-            tab.tui.projects().iter().map(|p| p.id.clone()).collect()
-        };
 
         // p2's agent and then a3, the only one of its tab, are archived.
         tabs.apply(projects(&["a1", "p2", "a3"]));
@@ -1120,6 +1124,16 @@ mod tests {
         switch(&mut tabs, TWO, "p2");
         assert_eq!(shown(&tabs), ["p2", "a1"]);
         assert_eq!(tabs.front_index(), 0);
+    }
+
+    #[test]
+    fn a_project_with_every_agent_archived_comes_back_in_its_tab() {
+        let (mut tabs, _events) = tabs_with(&[&["a1", "p2"], &["a3"]]);
+        tabs.apply(projects(&["a1", "p2", "a3"]));
+        start(&mut tabs, &[("a1", 0), ("a1.1", 1), ("a3", 0)], "a3");
+        assert_eq!(tabs.arrangement(), [vec!["a1", "p2"], vec!["a3"]]);
+        assert_eq!(listed(&tabs.tabs[0]), ["a1", "p2"]);
+        assert_eq!(listed(&tabs.tabs[1]), ["a3"]);
     }
 
     #[test]

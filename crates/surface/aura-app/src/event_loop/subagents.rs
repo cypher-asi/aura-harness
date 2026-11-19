@@ -740,24 +740,31 @@ impl AgentHub {
         }
     }
 
-    /// Send the Agents panel rows and the active agent to the UI.
-    pub async fn send_agent_list(&self) {
+    /// The projects, the Agents panel rows and the Archive, in the order
+    /// the UI takes them: the projects first, so one with every agent
+    /// archived is known when the rows arrive.
+    pub fn agent_lists(&self) -> [UiCommand; 3] {
         self.name_agents();
         let summaries = self.agent_summaries();
-        let (projects, archived, active) = {
-            let registry = lock(&self.registry);
-            (
-                crate::record_loader::project_summaries(&registry),
-                crate::record_loader::archived_summaries(&registry, self.factory.store.as_ref()),
-                registry.active().agent_id(),
-            )
-        };
-        let _ = self.commands.send(UiCommand::SetProjects(projects)).await;
-        let _ = self.commands.send(UiCommand::SetAgents(summaries)).await;
-        let _ = self
-            .commands
-            .send(UiCommand::SetArchivedAgents(archived))
-            .await;
+        let registry = lock(&self.registry);
+        [
+            UiCommand::SetProjects(crate::record_loader::project_summaries(&registry)),
+            UiCommand::SetAgents(summaries),
+            UiCommand::SetArchivedAgents(crate::record_loader::archived_summaries(
+                &registry,
+                self.factory.store.as_ref(),
+            )),
+        ]
+    }
+
+    /// Send the projects, the Agents panel rows, the Archive and the
+    /// active agent to the UI.
+    pub async fn send_agent_list(&self) {
+        let lists = self.agent_lists();
+        let active = lock(&self.registry).active().agent_id();
+        for list in lists {
+            let _ = self.commands.send(list).await;
+        }
         let _ = self
             .commands
             .send(UiCommand::SetActiveAgent(active.to_hex()))

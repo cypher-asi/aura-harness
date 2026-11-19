@@ -230,7 +230,9 @@ pub async fn start(
     hub.processes
         .keep_history(data_dir.join(PROCESS_HISTORY_FILE));
     flow_inbox.serve(&hub, cmd_tx.clone());
-    let _ = cmd_tx.try_send(UiCommand::SetAgents(hub.agent_summaries()));
+    for list in hub.agent_lists() {
+        let _ = cmd_tx.try_send(list);
+    }
     let _ = cmd_tx.try_send(UiCommand::SetActiveAgent(identity.agent_id.to_hex()));
     let _ = cmd_tx.try_send(UiCommand::SetAgentDefinitions(hub.definition_summaries()));
     let session = hub.factory.open(&active_agent, Vec::new(), active_folder)?;
