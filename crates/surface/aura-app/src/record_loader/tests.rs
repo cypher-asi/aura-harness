@@ -885,3 +885,48 @@ fn plan_usage_is_read_from_model_calls_only() {
     let prompt = text_tx(agent, TransactionType::UserPrompt, "plan_usage");
     assert!(plan_usage(&prompt).is_empty());
 }
+
+/// The app was killed while the agent on screen, a spawn, was still queued:
+/// on the next start it is archived and the app opens on its parent rather
+/// than on the empty chat.
+#[test]
+fn an_unstarted_spawn_left_active_is_archived_and_not_opened() {
+    let data = tempfile::tempdir().unwrap();
+    let db = tempfile::tempdir().unwrap();
+    let store = RocksStore::open(db.path(), false).unwrap();
+    let mut registry = AgentRegistry::load_or_init(data.path()).unwrap();
+    let root = registry.active().clone();
+    append(
+        &store,
+        1,
+        text_tx(root.agent_id(), TransactionType::UserPrompt, "go"),
+    );
+    let stuck = registry
+        .create_instance("rust-engineer", Some(root.zns_id.clone()))
+        .unwrap();
+    let ran = registry
+        .create_instance("explorer", Some(root.zns_id.clone()))
+        .unwrap();
+    append(
+        &store,
+        1,
+        text_tx(ran.agent_id(), TransactionType::UserPrompt, "look"),
+    );
+    registry.set_active(stuck.agent_id()).unwrap();
+
+    let archived = archive_unstarted_spawns(&mut registry, &store);
+
+    assert_eq!(archived, [stuck.agent_id()]);
+    assert_eq!(registry.active().agent_id(), root.agent_id());
+    assert!(!registry.find(ran.agent_id()).unwrap().archived);
+    // Archived and titled for good: the next start finds nothing to do.
+    let reloaded = AgentRegistry::load_or_init(data.path()).unwrap();
+    let stuck = reloaded.find(stuck.agent_id()).unwrap();
+    assert!(stuck.archived);
+    assert_eq!(
+        stuck.title.as_deref(),
+        Some("Did not start before the app closed")
+    );
+    let mut reloaded = reloaded;
+    assert!(archive_unstarted_spawns(&mut reloaded, &store).is_empty());
+}

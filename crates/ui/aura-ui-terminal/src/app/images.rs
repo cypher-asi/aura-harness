@@ -215,6 +215,95 @@ impl App {
         self.pending_image_areas = areas;
     }
 
+    /// Record where the full-size image was drawn in the detail view this frame.
+    pub(crate) fn set_detail_image_rect(&mut self, rect: Option<ratatui::layout::Rect>) {
+        self.detail_image_rect = rect;
+    }
+
+    /// All image placements visible this frame, for the Kitty graphics
+    /// protocol layer.
+    ///
+    /// Returns `(id, rect, preview)` triples for:
+    /// - chat thumbnails whose tile row is currently scrolled into view,
+    /// - pending-input thumbnails,
+    /// - the full-size detail view image.
+    ///
+    /// Images whose `graphics_png` is `None` (decode failed) are excluded;
+    /// the caller should skip them or they would produce a no-op.
+    pub(crate) fn visible_image_placements(
+        &self,
+    ) -> Vec<(u32, ratatui::layout::Rect, Arc<ImagePreview>)> {
+        let mut out = Vec::new();
+
+        // ── Chat thumbnails ────────────────────────────────────────────────
+        if let Some(area) = self.areas.chat_text {
+            let first = self.chat_first_line;
+            let last = first + usize::from(area.height);
+            for hit in &self.image_hits {
+                // Skip hits entirely outside the visible scroll window.
+                if hit.line + hit.rows <= first || hit.line >= last {
+                    continue;
+                }
+                let row = area.y.saturating_add(
+                    u16::try_from(hit.line.saturating_sub(first)).unwrap_or(u16::MAX),
+                );
+                let col = area.x.saturating_add(hit.x);
+                // Clip height to what's actually visible.
+                let visible_rows = u16::try_from(
+                    (hit.line + hit.rows)
+                        .min(last)
+                        .saturating_sub(hit.line.max(first)),
+                )
+                .unwrap_or(1);
+                let rect = ratatui::layout::Rect {
+                    x: col,
+                    y: row,
+                    width: hit.width,
+                    height: visible_rows,
+                };
+                let preview = self
+                    .messages
+                    .iter()
+                    .find(|m| m.version().0 == hit.message)
+                    .and_then(|m| m.images().get(hit.index))
+                    .map(Arc::clone);
+                if let Some(preview) = preview {
+                    if preview.graphics_png().is_some() {
+                        out.push((preview.id(), rect, preview));
+                    }
+                }
+            }
+        }
+
+        // ── Pending-input thumbnails ───────────────────────────────────────
+        for &(rect, label) in &self.pending_image_areas {
+            if rect.is_empty() {
+                continue;
+            }
+            if let Some(preview) = self
+                .images
+                .iter()
+                .find(|p| p.label == label)
+                .map(|p| Arc::clone(&p.preview))
+            {
+                if preview.graphics_png().is_some() {
+                    out.push((preview.id(), rect, preview));
+                }
+            }
+        }
+
+        // ── Detail-view image ──────────────────────────────────────────────
+        if let (Some(rect), Some(super::DetailView::Image(view))) =
+            (self.detail_image_rect, &self.detail)
+        {
+            if !rect.is_empty() && view.preview.graphics_png().is_some() {
+                out.push((view.preview.id(), rect, Arc::clone(&view.preview)));
+            }
+        }
+
+        out
+    }
+
     /// Open `preview` over the chat panel.
     fn open_image(&mut self, preview: Arc<ImagePreview>, label: usize) {
         let view = ImageView::new(preview, format!("IMAGE {label}"));

@@ -1,10 +1,11 @@
 {
   "id": "01a1f4f81f400005",
   "title": "it doesn't really show this task was finished or what happened here [image 1]",
-  "state": "running",
+  "state": "completed",
   "agent_id": "56bb1be0edf0be136cca339c0c5c6afb4eace2b2a7d90f9a0b8b11126940a7c9",
   "agent_name": "Agent 21",
   "items": [],
-  "updated_ms": 1795111273590,
+  "summary": "You're right. The turn ended on the preamble (\"I'll start by finding the left panel...\") with no result, no summary and no sign of whether any files changed. I'll check the workspace for what happened and then continue the drag-and-drop task.Now how a project gets added today (`prompt_new_project`) and how the shell reaches the app.Next I'll add a test, then build.The turn in your screenshot stop…",
+  "updated_ms": 1795111339340,
   "created_ms": 1795111264064
 }

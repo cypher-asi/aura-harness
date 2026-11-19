@@ -1019,6 +1019,39 @@ async fn cancel_stops_only_the_named_agent() {
     let _ = drain(&mut commands);
 }
 
+/// Archiving is reversible, so it does not refuse an agent with work in
+/// flight: it stops that work and archives anyway.
+#[tokio::test]
+async fn archiving_a_busy_agent_stops_its_turn() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+
+    handle_ui_event(&mut state, message(first, "slow job", true), &links).await;
+    assert!(state.hub.is_running(first));
+
+    handle_ui_event(&mut state, UiEvent::ArchiveAgent(first.to_hex()), &links).await;
+    assert!(
+        subagents::lock(&state.hub.registry)
+            .find(first)
+            .unwrap()
+            .archived,
+        "archived right away, not blocked on the busy turn"
+    );
+    let stopped = drain(&mut commands).into_iter().any(|(_, c)| {
+        matches!(c, UiCommand::ShowSuccess(text) if text.contains("Archived") && text.contains("stopped"))
+    });
+    assert!(stopped, "the success message says the turn was stopped");
+
+    let finished = next_done(&mut done).await;
+    assert_eq!(finished.agent_id, first);
+    handle_work_done(&mut state, finished).await;
+    assert!(!state.hub.is_running(first), "the stopped turn ended");
+}
+
 #[tokio::test]
 async fn switching_to_a_busy_agent_keeps_its_live_chat() {
     let (fixture, mut commands) = fixture();

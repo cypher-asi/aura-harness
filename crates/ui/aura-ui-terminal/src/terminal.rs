@@ -2,7 +2,7 @@
 //!
 //! Provides a high-level interface for terminal operations using ratatui and crossterm.
 
-use crate::{alerts, clipboard, layout::LayoutMode, renderer, App, Theme};
+use crate::{alerts, clipboard, graphics, layout::LayoutMode, renderer, App, Theme};
 use crossterm::{
     cursor::{SetCursorStyle, Show},
     event::{
@@ -35,6 +35,9 @@ pub struct Terminal {
     height: u16,
     /// Whether mouse capture is currently enabled
     mouse_capture_enabled: bool,
+    /// Kitty graphics protocol state; a no-op when the terminal doesn't
+    /// support it.
+    graphics: graphics::GraphicsState,
 }
 
 impl Terminal {
@@ -58,6 +61,7 @@ impl Terminal {
         let mut inner = RatatuiTerminal::new(backend)?;
         inner.clear()?;
         let size = inner.size()?;
+        let protocol = graphics::detect(|name| std::env::var(name).ok());
 
         Ok(Self {
             inner,
@@ -65,6 +69,7 @@ impl Terminal {
             width: size.width,
             height: size.height,
             mouse_capture_enabled: true,
+            graphics: graphics::GraphicsState::new(protocol),
         })
     }
 
@@ -137,6 +142,22 @@ impl Terminal {
             if let Some(text) = app.take_copy_text(frame.buffer) {
                 let result = clipboard::copy(self.inner.backend_mut(), &text);
                 app.notify_copied(text.chars().count(), &result);
+            }
+            // Overlay Kitty graphics-protocol images over the cells ratatui
+            // just painted, if the terminal supports it.  The half-block
+            // rendering already in the buffer acts as an automatic fallback
+            // for terminals that silently ignore APC sequences.
+            if self.graphics.protocol().is_kitty() {
+                let placements = app.visible_image_placements();
+                let triples: Vec<(u32, ratatui::layout::Rect, &[u8])> = placements
+                    .iter()
+                    .filter_map(|(id, rect, preview)| {
+                        preview.graphics_png().map(|png| (*id, *rect, png))
+                    })
+                    .collect();
+                if let Err(e) = self.graphics.sync(self.inner.backend_mut(), &triples) {
+                    warn!(error = %e, "Kitty graphics sync failed");
+                }
             }
 
             // Wait for input until the next animation frame, then take every

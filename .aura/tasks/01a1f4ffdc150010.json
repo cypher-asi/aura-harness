@@ -1,0 +1,42 @@
+{
+  "id": "01a1f4ffdc150010",
+  "title": "Crate: crates/ui/aura-ui-terminal (the TUI). Goal: fix low-quality image previews correctly by rendering real images vi…",
+  "state": "running",
+  "agent_id": "d0628f0980cc1fb4f1f60f5350b47f091da8cde5e266ddfa51747e60ef8425b3",
+  "agent_name": "rust-engineer #5",
+  "assignee": "rust-engineer",
+  "parent": "01a1f4fca595000c",
+  "items": [
+    {
+      "content": "Switch FilterType::Triangle to Lanczos3 in image_preview.rs (both resize calls), adjust tests",
+      "state": "completed"
+    },
+    {
+      "content": "Add stable id (AtomicU32) and graphics_png (cached PNG bytes) to ImagePreview; expose id() and graphics_png()",
+      "state": "completed"
+    },
+    {
+      "content": "Create src/graphics.rs: Protocol enum, detect(), wire-format fns (transmit/place/delete/move_cursor), GraphicsState with sync()",
+      "state": "completed"
+    },
+    {
+      "content": "Add visible_image_placements() on App and detail_view_rect tracking for the image detail view",
+      "state": "completed"
+    },
+    {
+      "content": "Add GraphicsState to Terminal; call graphics.sync() in the post-draw step in terminal.rs::run()",
+      "state": "completed"
+    },
+    {
+      "content": "Add unit tests: graphics.rs (detect, escape builders, GraphicsState diffing), image_preview.rs (id uniqueness, graphics_png presence)",
+      "state": "completed"
+    },
+    {
+      "content": "Run cargo fmt, cargo clippy -D warnings, cargo test -p aura-ui-terminal; fix any issues",
+      "state": "completed"
+    }
+  ],
+  "updated_ms": 1795112215325,
+  "created_ms": 1795111771157,
+  "tool_use_id": "toolu_01BCe5fU8yteMF1Kr89xbWpE"
+}

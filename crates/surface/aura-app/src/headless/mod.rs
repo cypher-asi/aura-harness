@@ -388,6 +388,9 @@ async fn build(
         post_edit_check: post_edit_check_from_env(),
         trace_snapshots: false,
     });
+    // See the matching call in session.rs: clean up spawns an earlier,
+    // killed run never got to start.
+    hub.archive_unstarted_spawns();
     let notices = hub.take_notices();
     Ok(Headless {
         hub,

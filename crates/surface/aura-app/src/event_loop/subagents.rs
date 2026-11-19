@@ -617,6 +617,26 @@ impl AgentHub {
         )
     }
 
+    /// Archive spawns from an earlier run of the app that never got to
+    /// record anything: the app closed or was killed while a `task` call
+    /// was still being dispatched, or while a writer waited for the
+    /// workspace (see [`Self::write_slot`]). Nothing was recorded for
+    /// them, so there is no prompt or turn to resume; left alone they sit
+    /// in the Agents panel with a chat that stays empty forever.
+    ///
+    /// Only agents a `task` call spawned (`parent` is set) are candidates:
+    /// a user-created project or agent legitimately starts with an empty
+    /// record before its first message, and is left untouched.
+    ///
+    /// See [`crate::record_loader::archive_unstarted_spawns`], which this
+    /// runs on the hub's registry.
+    pub fn archive_unstarted_spawns(&self) -> Vec<AgentId> {
+        crate::record_loader::archive_unstarted_spawns(
+            &mut lock(&self.registry),
+            self.factory.store.as_ref(),
+        )
+    }
+
     /// Give `agent` the chat title `title` and show it in the Agents panel
     /// right away, unless the agent got a name or title in the meantime.
     pub(super) async fn apply_title(&self, agent: AgentId, title: &str) {

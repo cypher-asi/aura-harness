@@ -468,6 +468,51 @@ fn instance(fixture: &Fixture, definition: &str) -> AgentSession {
     fixture.hub.factory.open(&agent, Vec::new(), None).unwrap()
 }
 
+#[tokio::test]
+async fn unstarted_spawns_are_archived_but_started_ones_are_left_alone() {
+    let fixture = fixture("Looks good.");
+    let parent = lock(&fixture.hub.registry).active().agent_id();
+    let parent_zns = lock(&fixture.hub.registry)
+        .find(parent)
+        .unwrap()
+        .zns_id
+        .clone();
+
+    // Never opened: the app closed before a `task` call got anywhere.
+    let unstarted = lock(&fixture.hub.registry)
+        .create_instance("reviewer", Some(parent_zns.clone()))
+        .unwrap();
+    // Opened and ran a turn: there is a record to show and resume.
+    let started = lock(&fixture.hub.registry)
+        .create_instance("reviewer", Some(parent_zns))
+        .unwrap();
+    let session = fixture
+        .hub
+        .factory
+        .open(&started, Vec::new(), None)
+        .unwrap();
+    crate::event_loop::handlers::mark_session_start(&session)
+        .await
+        .unwrap();
+
+    fixture.hub.archive_unstarted_spawns();
+
+    let registry = lock(&fixture.hub.registry);
+    assert!(registry.find(unstarted.agent_id()).unwrap().archived);
+    assert_eq!(
+        registry
+            .find(unstarted.agent_id())
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Did not start before the app closed")
+    );
+    assert!(!registry.find(started.agent_id()).unwrap().archived);
+    // A project the user created, not a `task` spawn, is never touched
+    // even though it has no record yet.
+    assert!(!registry.find(parent).unwrap().archived);
+}
+
 fn attempt(session: &AgentSession, kind: &str, prompt: &str) -> Attempt {
     Attempt {
         kind: kind.to_string(),

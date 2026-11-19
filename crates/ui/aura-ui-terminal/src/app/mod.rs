@@ -326,6 +326,9 @@ pub struct App {
     pub(super) image_hits: Vec<ImageHit>,
     /// Thumbnails of the images waiting in the input, in the last frame
     pub(super) pending_image_areas: Vec<(Rect, usize)>,
+    /// Absolute cell rect where the detail-view image was drawn in the last
+    /// frame; `None` when no image detail view is open or nothing was drawn.
+    pub(super) detail_image_rect: Option<Rect>,
     /// Text selected with the mouse, in screen cells
     pub(super) selection: Option<Selection>,
     /// Whether the left button is still held for `selection`
@@ -694,6 +697,7 @@ impl App {
             queued_images: VecDeque::new(),
             image_hits: Vec::new(),
             pending_image_areas: Vec::new(),
+            detail_image_rect: None,
             selection: None,
             selecting: false,
             copy_requested: false,

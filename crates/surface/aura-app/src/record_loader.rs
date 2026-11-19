@@ -458,6 +458,45 @@ pub fn latest_plan_path(store: &dyn ReadStore, agent_id: AgentId) -> Option<Stri
         })
 }
 
+/// Archive spawns from an earlier run of the app that never got to record
+/// anything: the app closed or was killed while a `task` call was still
+/// being dispatched, or while a writer waited for the workspace. Nothing
+/// was recorded for them, so there is no prompt or turn to resume; left
+/// alone they sit in the Agents panel with a chat that stays empty.
+///
+/// Only agents a `task` call spawned (`parent` is set) are candidates: a
+/// user-created project or agent legitimately has an empty record before
+/// its first message. Run it before reading [`AgentRegistry::active`] at
+/// startup, which skips archived agents, so the app never opens on one it
+/// just archived. Returns the agents archived.
+pub fn archive_unstarted_spawns(
+    registry: &mut AgentRegistry,
+    store: &dyn ReadStore,
+) -> Vec<AgentId> {
+    let candidates: Vec<AgentId> = registry
+        .agents()
+        .iter()
+        .filter(|agent| !agent.archived && agent.parent.is_some())
+        .map(crate::agent_registry::RegisteredAgent::agent_id)
+        .filter(|&agent_id| matches!(store.get_head_seq(agent_id), Ok(0)))
+        .collect();
+    let mut archived = Vec::with_capacity(candidates.len());
+    for agent_id in candidates {
+        // Best-effort: say why before archiving, but archive either way.
+        if let Err(e) = registry.set_title(agent_id, "Did not start before the app closed") {
+            warn!(%agent_id, error = %e, "Could not note an unstarted spawn");
+        }
+        match registry.archive(agent_id) {
+            Ok(()) => {
+                tracing::info!(%agent_id, "Archived a spawn an earlier run never started");
+                archived.push(agent_id);
+            }
+            Err(e) => warn!(%agent_id, error = %e, "Could not archive an unstarted spawn"),
+        }
+    }
+    archived
+}
+
 /// Build the agents-column rows for every registered agent in the order of
 /// [`AgentRegistry::tree`]. `running` holds the agents currently working
 /// on a task for their parent.

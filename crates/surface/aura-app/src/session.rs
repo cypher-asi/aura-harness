@@ -125,15 +125,21 @@ pub async fn start(
     let workspace_root = std::env::current_dir().context("resolving working directory")?;
     tokio::fs::create_dir_all(&data_dir).await?;
 
-    let registry = AgentRegistry::load_or_init(&data_dir).context("loading agent registry")?;
-    let active_agent = registry.active().clone();
-    let identity = active_agent.identity();
-    let active_folder = registry.project_folder(identity.agent_id);
+    let mut registry = AgentRegistry::load_or_init(&data_dir).context("loading agent registry")?;
     let definitions =
         AgentDefinitions::load_or_seed(&data_dir).context("loading permanent agents")?;
 
     let store_path = session_helpers::resolve_store_path(&data_dir);
     let store = session_helpers::open_store(&store_path)?;
+
+    // A spawn the app closed or was killed on before its turn recorded
+    // anything can't resume: there is nothing to resume from. Archive it
+    // before the active agent is read, which skips archived agents, so the
+    // app never opens on an empty chat it just archived.
+    record_loader::archive_unstarted_spawns(&mut registry, store.as_ref());
+    let active_agent = registry.active().clone();
+    let identity = active_agent.identity();
+    let active_folder = registry.project_folder(identity.agent_id);
 
     record_loader::load_existing_records(store.as_ref(), identity.agent_id, &cmd_tx);
     match record_loader::conversation_history(store.as_ref(), identity.agent_id) {

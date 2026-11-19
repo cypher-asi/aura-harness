@@ -46,6 +46,7 @@ pub mod themes;
 
 mod app;
 mod clipboard;
+mod graphics;
 mod renderer;
 mod terminal;
 

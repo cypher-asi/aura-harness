@@ -464,7 +464,7 @@ impl App {
         }
         let text = text
             .trim()
-            .trim_end_matches(|c: char| matches!(c, '.' | '!'))
+            .trim_end_matches(['.', '!'])
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ")

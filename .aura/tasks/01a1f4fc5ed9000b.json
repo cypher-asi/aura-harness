@@ -1,0 +1,11 @@
+{
+  "id": "01a1f4fc5ed9000b",
+  "title": "need to recover from this if app closes or gets killed",
+  "state": "completed",
+  "agent_id": "e1795bac410d2588a53d657b187ca181443f68241aacd1a3636e0e646e32be01",
+  "agent_name": "Agent 17",
+  "items": [],
+  "summary": "Now let's find where the hub is used after creation, where I can add a recovery call, and look at AgentRegistry for archive helpers.Good, I'll add the call right after `build_hub` in both places.Now implement `archive_unstarted_spawns` on `AgentHub` in subagents.rs.Now let's check `registry.agents()` signature and `RegisteredAgent::agent_id`.Good, `agents()` returns a slice. Now add the method af…",
+  "updated_ms": 1795111870732,
+  "created_ms": 1795111542489
+}

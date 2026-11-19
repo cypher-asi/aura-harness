@@ -5,13 +5,28 @@
 //! tall as wide, so those pixels come out roughly square. This works in
 //! any truecolor terminal, and in the desktop app, which draws the same
 //! cells, without a graphics protocol.
+//!
+//! When the terminal supports the Kitty graphics protocol, `graphics_png`
+//! provides the PNG bytes that the protocol layer sends; the half-block
+//! rendering remains in the ratatui buffer as a fallback underneath.
 
-use image::{imageops::FilterType, RgbaImage};
+use image::{imageops::FilterType, ImageFormat, RgbaImage};
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
 };
-use std::sync::Arc;
+use std::io::Cursor;
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Arc,
+};
+
+/// Process-wide counter for assigning unique ids to `ImagePreview` instances.
+///
+/// Invariant: ids are never zero (the counter starts at 1 and wraps are
+/// astronomically unlikely in a single process run). Ids are stable for
+/// the lifetime of the owning `ImagePreview`.
+static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 
 /// Largest side kept of a decoded image: enough for a full-screen view,
 /// which has at most a few hundred half-block pixels a side.
@@ -29,6 +44,8 @@ const TRANSPARENT: u8 = 96;
 /// A pasted image: the bytes as pasted, and a decoded copy small enough
 /// to draw quickly.
 pub struct ImagePreview {
+    /// Stable, process-unique id assigned at construction; never zero.
+    id: u32,
     /// The image as pasted
     bytes: Vec<u8>,
     /// `image/png`, `image/jpeg`, `image/gif` or `image/webp`
@@ -40,12 +57,18 @@ pub struct ImagePreview {
     size: Option<(u32, u32)>,
     /// The thumbnail's rows, drawn once
     thumbnail: Vec<Line<'static>>,
+    /// PNG-encoded bytes of `pixels` for the Kitty graphics protocol;
+    /// `None` when the image did not decode (the half-block placeholder
+    /// is used instead).
+    graphics_png: Option<Vec<u8>>,
 }
 
 impl std::fmt::Debug for ImagePreview {
     // The bytes are megabytes; logging them would bury everything else.
+    // graphics_png is also omitted for the same reason.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ImagePreview")
+            .field("id", &self.id)
             .field("media_type", &self.media_type)
             .field("bytes", &self.bytes.len())
             .field("size", &self.size)
@@ -56,6 +79,11 @@ impl std::fmt::Debug for ImagePreview {
 impl ImagePreview {
     /// Decode `bytes` for drawing. An image that does not decode is still
     /// kept, and draws as a placeholder.
+    ///
+    /// PNG bytes are encoded from the downscaled pixels and cached in
+    /// `graphics_png` for use by the Kitty graphics protocol layer. If PNG
+    /// encoding fails the field is `None` and the half-block renderer is
+    /// used instead (non-fatal).
     #[must_use]
     pub fn new(bytes: Vec<u8>, media_type: &str) -> Arc<Self> {
         let decoded = image::load_from_memory(&bytes);
@@ -66,18 +94,34 @@ impl ImagePreview {
         let size = decoded.as_ref().map(|img| (img.width(), img.height()));
         let pixels = decoded.map(|img| {
             if img.width() > KEEP_SIDE || img.height() > KEEP_SIDE {
-                img.resize(KEEP_SIDE, KEEP_SIDE, FilterType::Triangle)
+                img.resize(KEEP_SIDE, KEEP_SIDE, FilterType::Lanczos3)
                     .to_rgba8()
             } else {
                 img.to_rgba8()
             }
         });
+        // Encode the downscaled pixels as PNG once, for the Kitty graphics
+        // protocol.  Failure is non-fatal: the half-block renderer is used
+        // instead, and the protocol layer skips images whose `graphics_png`
+        // is `None`.
+        let graphics_png = pixels.as_ref().and_then(|px| {
+            let mut buf = Cursor::new(Vec::new());
+            px.write_to(&mut buf, ImageFormat::Png)
+                .map(|()| buf.into_inner())
+                .map_err(|e| {
+                    tracing::debug!(error = %e, "Could not encode image for graphics protocol");
+                })
+                .ok()
+        });
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let mut preview = Self {
+            id,
             bytes,
             media_type: media_type.to_string(),
             pixels,
             size,
             thumbnail: Vec::new(),
+            graphics_png,
         };
         preview.thumbnail = preview.lines(THUMB_COLS, THUMB_ROWS);
         Arc::new(preview)
@@ -87,6 +131,23 @@ impl ImagePreview {
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    /// Stable, process-unique id assigned at construction; never zero.
+    ///
+    /// Two `ImagePreview` values have the same id only when they point to
+    /// the same allocation (i.e. `Arc::ptr_eq`).
+    #[must_use]
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+
+    /// PNG-encoded bytes of the downscaled pixels, for the Kitty graphics
+    /// protocol. `None` when the image did not decode or could not be
+    /// re-encoded.
+    #[must_use]
+    pub fn graphics_png(&self) -> Option<&[u8]> {
+        self.graphics_png.as_deref()
     }
 
     /// `image/png` and the like.
@@ -348,5 +409,34 @@ mod tests {
             .map(|s| s.content.as_ref())
             .collect();
         assert!(text.contains("no preview"), "{text}");
+    }
+
+    #[test]
+    fn ids_are_unique_across_previews() {
+        let a = ImagePreview::new(png(4, 4), "image/png");
+        let b = ImagePreview::new(png(4, 4), "image/png");
+        assert_ne!(a.id(), b.id(), "each ImagePreview must get a unique id");
+        assert_ne!(a.id(), 0, "id must never be zero");
+        assert_ne!(b.id(), 0, "id must never be zero");
+    }
+
+    #[test]
+    fn graphics_png_present_for_decodable_image() {
+        let preview = ImagePreview::new(png(8, 8), "image/png");
+        let png_bytes = preview.graphics_png().expect("expected PNG bytes");
+        // Must be a valid PNG: check the magic signature.
+        assert!(
+            png_bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+            "graphics_png must be a PNG"
+        );
+    }
+
+    #[test]
+    fn graphics_png_absent_for_broken_image() {
+        let preview = ImagePreview::new(b"\x89PNG\r\n\x1a\nbroken".to_vec(), "image/png");
+        assert!(
+            preview.graphics_png().is_none(),
+            "graphics_png must be None for images that do not decode"
+        );
     }
 }

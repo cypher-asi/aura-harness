@@ -93,9 +93,12 @@ pub(super) fn render_detail_view(frame: &mut Frame, area: Rect, app: &mut App, t
     };
     let hosted = app.host_chrome();
     if let Some(view) = app.image_view_mut() {
-        draw_image(frame, (area, rows, hosted), view, theme);
+        let rect = draw_image(frame, (area, rows, hosted), view, theme);
+        app.set_detail_image_rect(Some(rect));
         return;
     }
+    // Not an image view: clear any stale detail image rect.
+    app.set_detail_image_rect(None);
     let bounds = match app.file_view_mut() {
         Some((file, scroll)) => Some(draw_file(frame, (area, rows, hosted), file, scroll, theme)),
         None => draw_record(frame, (area, rows, hosted), app, theme),
@@ -149,12 +152,13 @@ fn draw_record(
 }
 
 /// Draw the image as large as fits, centered in the panel.
+/// Returns the absolute cell rect of the drawn image for the graphics layer.
 fn draw_image(
     frame: &mut Frame,
     (area, rows, hosted): (Rect, Rect, bool),
     view: &mut ImageView,
     theme: &Theme,
-) {
+) -> Rect {
     let lines = view.lines(rows.width, rows.height).to_vec();
     let width = lines.iter().map(Line::width).max().unwrap_or(0);
     let width = u16::try_from(width).unwrap_or(u16::MAX).min(rows.width);
@@ -173,6 +177,7 @@ fn draw_image(
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(lines), centered);
+    centered
 }
 
 /// Draw `file` with its cursor in view, moving `scroll` to follow it.

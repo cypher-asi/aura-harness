@@ -1,0 +1,13 @@
+{
+  "id": "01a1f504a3410018",
+  "title": "Explore the following areas in depth and return exact file paths, type definitions, function signatures, and relevant c…",
+  "state": "running",
+  "agent_id": "d529fe18b48bfa7f2510c5062e64448a1deb1a786c1c5e35fc59075603c76684",
+  "agent_name": "explorer #11",
+  "assignee": "explorer",
+  "parent": "01a1f502686e0014",
+  "items": [],
+  "updated_ms": 1795112084289,
+  "created_ms": 1795112084289,
+  "tool_use_id": "toolu_01M94CjrsTVSJobqXxbJyiUy"
+}

@@ -487,6 +487,28 @@ fn busy_agent(state: &LoopState<'_>, agents: &[AgentId]) -> Option<String> {
     )
 }
 
+/// Stop the work of every agent in `agents` that still has work in
+/// flight. Returns the display name of each one stopped, in order.
+///
+/// A turn waiting on an approval is denied first so it sees the
+/// cancellation rather than hanging until its prompt times out.
+async fn stop_busy(state: &mut LoopState<'_>, agents: &[AgentId]) -> Vec<String> {
+    let mut stopped = Vec::new();
+    for &id in agents {
+        if !state.hub.is_running(id) {
+            continue;
+        }
+        state.approvals.cancel_agent(id).await;
+        if state.hub.cancel(id) {
+            let name = lock(&state.hub.registry)
+                .find(id)
+                .map_or_else(|| "an agent".to_string(), |a| a.display_name().to_string());
+            stopped.push(name);
+        }
+    }
+    stopped
+}
+
 /// After agents left the list, show the one the registry opens now if the
 /// active agent was among them; otherwise just refresh the list.
 async fn after_list_shrank(state: &mut LoopState<'_>, gone: &[AgentId]) {
@@ -516,20 +538,20 @@ pub(super) async fn handle_archive_agent(state: &mut LoopState<'_>, agent_hex: &
         show_error(state, "Unknown agent".to_string()).await;
         return;
     };
-    if let Some(busy) = busy_agent(state, &subtree) {
-        show_error(
-            state,
-            format!("Cannot archive {name}: {busy} is still working"),
-        )
-        .await;
-        return;
-    }
+    // Archiving is reversible, so it does not wait for work in flight to
+    // finish on its own: it stops it and carries on.
+    let stopped = stop_busy(state, &subtree).await;
     let archived = lock(&state.hub.registry).archive(agent_id);
     match archived {
         Ok(()) => {
-            info!(%agent_id, %name, "Archived agent");
+            info!(%agent_id, %name, stopped = stopped.len(), "Archived agent");
             after_list_shrank(state, &subtree).await;
-            show_success(state, format!("Archived {name}")).await;
+            let message = if stopped.is_empty() {
+                format!("Archived {name}")
+            } else {
+                format!("Archived {name}; stopped {}", stopped.join(", "))
+            };
+            show_success(state, message).await;
         }
         Err(e) => show_error(state, format!("Could not archive {name}: {e}")).await,
     }

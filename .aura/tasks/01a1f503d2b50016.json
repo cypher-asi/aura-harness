@@ -1,0 +1,23 @@
+{
+  "id": "01a1f503d2b50016",
+  "title": "implement the above correctly",
+  "state": "running",
+  "agent_id": "dee0195d4d8b00ae6a7c9bad3534406520918c6cbaf9dde8bc41fb809bbad3a4",
+  "agent_name": "Agent",
+  "items": [
+    {
+      "content": "Check whether the 2 gate tests fail on clean HEAD (separate worktree + target dir)",
+      "state": "in_progress"
+    },
+    {
+      "content": "Clear a spawn's running entry even when its future is dropped (RAII guard in subagents.rs), plus a regression test",
+      "state": "pending"
+    },
+    {
+      "content": "Review the change, run the aura-app tests, and confirm archiving a once-stuck child works",
+      "state": "pending"
+    }
+  ],
+  "updated_ms": 1795112099625,
+  "created_ms": 1795112030901
+}
