@@ -469,7 +469,7 @@ mod tests {
 
         let result: ToolResult = serde_json::from_slice(&effect.payload).unwrap();
         assert!(result.ok);
-        assert_eq!(&result.stdout[..], b"Hello, Aura!");
+        assert_eq!(&result.stdout[..], b"1|Hello, Aura!");
     }
 
     #[tokio::test]

@@ -453,16 +453,27 @@ const STDOUT_TRUNCATE_LIMIT: usize = 8_000;
 /// Truncation limit for stderr.
 const STDERR_TRUNCATE_LIMIT: usize = 4_000;
 
-/// Truncate a string to at most `limit` bytes on a char boundary.
+/// Truncate a string to about `limit` bytes on char boundaries, keeping
+/// its start and, with the larger share, its end: errors, failing tests
+/// and summaries are printed last.
 fn truncate_output(s: &str, limit: usize) -> String {
     if s.len() <= limit {
         return s.to_string();
     }
-    let mut end = limit;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
+    let mut head = limit * 3 / 8;
+    while head > 0 && !s.is_char_boundary(head) {
+        head -= 1;
     }
-    format!("{}\n... (truncated, {limit} char limit)", &s[..end])
+    let mut tail = s.len() - (limit - head);
+    while tail < s.len() && !s.is_char_boundary(tail) {
+        tail += 1;
+    }
+    format!(
+        "{}\n... (truncated: {} bytes cut from the middle) ...\n{}",
+        &s[..head],
+        tail - head,
+        &s[tail..]
+    )
 }
 
 /// Convert process output to a tool result.

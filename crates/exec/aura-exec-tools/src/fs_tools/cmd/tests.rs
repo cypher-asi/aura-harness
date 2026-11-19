@@ -257,6 +257,15 @@ fn test_truncate_output_over_limit() {
 }
 
 #[test]
+fn test_truncate_output_keeps_start_and_end() {
+    let s = format!("BEGIN{}error: the end", "x".repeat(20_000));
+    let result = truncate_output(&s, STDOUT_TRUNCATE_LIMIT);
+    assert!(result.starts_with("BEGIN"));
+    assert!(result.ends_with("error: the end"));
+    assert!(result.contains("bytes cut from the middle"));
+}
+
+#[test]
 fn test_truncate_output_multibyte_boundary() {
     let s = "\u{20ac}".repeat(4000);
     let result = truncate_output(&s, 10);

@@ -6,6 +6,13 @@ use crate::env::{lookup_bool, AURA_AGENT_DISABLE_COMPACTION, FALSY_LITERALS, TRU
 // Compile-time tier thresholds (percentage-of-context utilization).
 // ---------------------------------------------------------------------------
 
+/// Context pressure below which the agent loop leaves the transcript
+/// untouched (`AgentLoopConfig::compaction_trigger`). Every trim rewrites
+/// the cached prompt prefix and drops content the model may read again,
+/// so compacting rarely and in bulk is cheaper than trimming a little on
+/// every call.
+pub const COMPACTION_TRIGGER_DEFAULT: f64 = 0.70;
+
 /// Tier-A history compaction kicks in at 85% utilization.
 pub const COMPACTION_TIER_HISTORY: f64 = 0.85;
 

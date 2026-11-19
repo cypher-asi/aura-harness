@@ -10,6 +10,9 @@ use tracing::{debug, instrument};
 /// Directories that are filtered from `fs_ls` output to reduce noise.
 const LS_NOISE_DIRS: &[&str] = &["node_modules", "target", ".git", "__pycache__"];
 
+/// Most entries one `list_files` call returns; directories come first.
+const MAX_LS_ENTRIES: usize = 500;
+
 /// List directory contents.
 ///
 /// Results are sorted with directories first, then alphabetical within each
@@ -73,8 +76,16 @@ pub fn fs_ls(sandbox: &Sandbox, path: &str) -> Result<ToolResult, ToolError> {
         entries.push(format!("{kind}\t{size}\t{name}"));
     }
 
-    let output = entries.join("\n");
-    Ok(ToolResult::success("list_files", output))
+    let total = entries.len();
+    if total > MAX_LS_ENTRIES {
+        entries.truncate(MAX_LS_ENTRIES);
+        entries.push(format!(
+            "... [truncated: showing {MAX_LS_ENTRIES} of {total} entries; use find_files with a pattern to locate specific files.]"
+        ));
+        return Ok(ToolResult::success("list_files", entries.join("\n"))
+            .with_metadata("truncated", "true"));
+    }
+    Ok(ToolResult::success("list_files", entries.join("\n")))
 }
 
 /// `fs_ls` tool: list directory contents.
@@ -218,6 +229,23 @@ mod tests {
         // Then files, sorted alphabetically
         assert!(lines[2].contains("aaa_file.txt"));
         assert!(lines[3].contains("zzz_file.txt"));
+    }
+
+    #[test]
+    fn test_fs_ls_caps_huge_directories() {
+        let (sandbox, dir) = create_test_sandbox();
+        for i in 0..(MAX_LS_ENTRIES + 10) {
+            fs::write(dir.path().join(format!("f{i:04}.txt")), "").unwrap();
+        }
+
+        let result = fs_ls(&sandbox, ".").unwrap();
+        let output = String::from_utf8_lossy(&result.stdout);
+        assert_eq!(output.lines().count(), MAX_LS_ENTRIES + 1);
+        assert!(output.contains(&format!("of {} entries", MAX_LS_ENTRIES + 10)));
+        assert_eq!(
+            result.metadata.get("truncated").map(String::as_str),
+            Some("true")
+        );
     }
 
     #[test]

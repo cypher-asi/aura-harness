@@ -953,6 +953,94 @@ pub fn dedup_read_results_by_content_hash(messages: &mut [Message]) -> usize {
     folded
 }
 
+/// Marker the `read_file` tool ends a cut result with.
+const READ_TRUNCATION_MARKER: &str = "\n... [truncated";
+
+/// The lines a `read_file` call with arguments `input` asked for, as an
+/// inclusive range; an open end runs to the end of the file.
+fn read_window(input: &Value) -> (usize, usize) {
+    let line = |key: &str| {
+        input
+            .get(key)
+            .and_then(Value::as_u64)
+            .and_then(|n| usize::try_from(n).ok())
+    };
+    (
+        line("start_line").unwrap_or(1).max(1),
+        line("end_line").unwrap_or(usize::MAX),
+    )
+}
+
+/// Fold older `read_file` results that a later read of the same path
+/// shows in full: the later read is the file as it is now, so the older
+/// copy is at best a duplicate and at worst stale (the file was edited in
+/// between). Returns the number of folds applied.
+///
+/// A later read supersedes an older one when its line window contains the
+/// older window and it was not cut short (no truncation marker) and did
+/// not fail. Unlike [`dedup_read_results_by_content_hash`] this catches
+/// re-reads after an edit, whose bytes differ. Folded results become the
+/// same `_redacted` marker shape, so neither pass folds a marker again,
+/// and the tool_use / tool_result pairing stays intact.
+pub fn supersede_older_reads(messages: &mut [Message]) -> usize {
+    let mut reads: HashMap<String, (String, (usize, usize))> = HashMap::new();
+    for msg in messages.iter() {
+        for block in &msg.content {
+            if let ContentBlock::ToolUse {
+                id, name, input, ..
+            } = block
+            {
+                if name == "read_file" {
+                    if let Some(path) = input.get("path").and_then(Value::as_str) {
+                        let path = path.trim_start_matches("./").to_string();
+                        reads.insert(id.clone(), (path, read_window(input)));
+                    }
+                }
+            }
+        }
+    }
+    if reads.is_empty() {
+        return 0;
+    }
+
+    let mut complete: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
+    let mut folded = 0usize;
+    for msg in messages.iter_mut().rev() {
+        for block in &mut msg.content {
+            let ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            } = block
+            else {
+                continue;
+            };
+            let Some((path, (start, end))) = reads.get(tool_use_id.as_str()) else {
+                continue;
+            };
+            let ToolResultContent::Text(text) = content else {
+                continue;
+            };
+            if *is_error || is_dedup_marker_text(text) {
+                continue;
+            }
+            let windows = complete.entry(path.clone()).or_default();
+            if windows.iter().any(|(s, e)| s <= start && end <= e) {
+                let marker = serde_json::json!({
+                    "_redacted": "read_file",
+                    "path": path,
+                    "note": "superseded by a later read of the same lines",
+                });
+                *content = ToolResultContent::Text(marker.to_string());
+                folded += 1;
+            } else if !text.contains(READ_TRUNCATION_MARKER) {
+                windows.push((*start, *end));
+            }
+        }
+    }
+    folded
+}
+
 /// Choose and apply a compaction tier using context-window utilization
 /// and explicit request-body caps.
 #[allow(clippy::needless_pass_by_value)]
@@ -979,6 +1067,13 @@ pub fn compact_messages(input: CompactionInput<'_>) -> CompactionReport {
             debug!(
                 folded,
                 "content_hash dedup folded older read-only tool results"
+            );
+        }
+        let superseded = supersede_older_reads(input.messages);
+        if superseded > 0 {
+            debug!(
+                superseded,
+                "folded read_file results a later read supersedes"
             );
         }
         compact_older_messages(input.messages, &tier);
@@ -2129,6 +2224,115 @@ mod tests {
             },
             other => panic!("expected ToolResult, got {other:?}"),
         }
+    }
+
+    fn ranged_read_tool_use(id: &str, path: &str, start: u64, end: u64) -> Message {
+        Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::tool_use(
+                id,
+                "read_file",
+                serde_json::json!({ "path": path, "start_line": start, "end_line": end }),
+            )],
+        }
+    }
+
+    fn result_text(message: &Message) -> &str {
+        match &message.content[0] {
+            ContentBlock::ToolResult {
+                content: ToolResultContent::Text(t),
+                ..
+            } => t,
+            other => panic!("expected a text ToolResult, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn supersede_folds_an_edited_files_older_read() {
+        let before = "1|fn a() {}\n2|fn b() {}".repeat(20);
+        let after = "1|fn a() { edited }\n2|fn b() {}".repeat(20);
+        let mut messages = vec![
+            read_tool_use("tu_old", "src/lib.rs"),
+            read_tool_result("tu_old", &before),
+            write_tool_use("tu_w", "src/lib.rs"),
+            write_tool_result("tu_w", "ok"),
+            read_tool_use("tu_new", "./src/lib.rs"),
+            read_tool_result("tu_new", &after),
+        ];
+
+        assert_eq!(dedup_read_results_by_content_hash(&mut messages), 0);
+        assert_eq!(supersede_older_reads(&mut messages), 1);
+
+        let marker: Value = serde_json::from_str(result_text(&messages[1])).unwrap();
+        assert_eq!(marker["_redacted"], "read_file");
+        assert_eq!(marker["path"], "src/lib.rs");
+        assert_eq!(result_text(&messages[5]), after);
+        assert_eq!(result_text(&messages[3]), "ok");
+    }
+
+    #[test]
+    fn supersede_needs_the_later_read_to_cover_the_older_window() {
+        let body = "x".repeat(200);
+        let mut messages = vec![
+            read_tool_use("tu_whole", "a.rs"),
+            read_tool_result("tu_whole", &body),
+            ranged_read_tool_use("tu_part", "a.rs", 10, 20),
+            read_tool_result("tu_part", &body),
+        ];
+        assert_eq!(supersede_older_reads(&mut messages), 0);
+        assert_eq!(result_text(&messages[1]), body);
+
+        let mut messages = vec![
+            ranged_read_tool_use("tu_part", "a.rs", 10, 20),
+            read_tool_result("tu_part", &body),
+            ranged_read_tool_use("tu_wide", "a.rs", 1, 100),
+            read_tool_result("tu_wide", &body),
+        ];
+        assert_eq!(supersede_older_reads(&mut messages), 1);
+    }
+
+    #[test]
+    fn supersede_ignores_cut_and_failed_later_reads() {
+        let body = "x".repeat(200);
+        let cut = format!(
+            "{body}\n... [truncated: showing lines 1-2000 of 5000; continue with start_line=2001.]"
+        );
+        let mut messages = vec![
+            read_tool_use("tu_old", "a.rs"),
+            read_tool_result("tu_old", &body),
+            read_tool_use("tu_cut", "a.rs"),
+            read_tool_result("tu_cut", &cut),
+            read_tool_use("tu_err", "a.rs"),
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::tool_result(
+                    "tu_err",
+                    ToolResultContent::Text("permission denied".into()),
+                    true,
+                )],
+            },
+        ];
+        assert_eq!(supersede_older_reads(&mut messages), 0);
+        assert_eq!(result_text(&messages[1]), body);
+    }
+
+    #[test]
+    fn compaction_folds_superseded_reads() {
+        let old = "old ".repeat(2_000);
+        let new = "new ".repeat(2_000);
+        let mut messages = vec![
+            Message::user("task"),
+            read_tool_use("tu_old", "a.rs"),
+            read_tool_result("tu_old", &old),
+            read_tool_use("tu_new", "a.rs"),
+            read_tool_result("tu_new", &new),
+        ];
+        let report = compact_messages(CompactionInput {
+            messages: &mut messages,
+            policy: CompactionPolicy::new(Some(10_000), 9_000, 0),
+        });
+        assert!(!matches!(report.action, CompactionAction::None));
+        assert!(result_text(&messages[2]).contains("superseded"));
     }
 
     #[test]

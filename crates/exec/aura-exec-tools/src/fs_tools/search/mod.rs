@@ -4,6 +4,7 @@ use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
 use aura_core_types::ToolDefinition;
 use aura_core_types::ToolResult;
+use std::borrow::Cow;
 use std::fs;
 use tracing::{debug, instrument};
 
@@ -29,6 +30,53 @@ const SEARCH_SKIP_DIRS: &[&str] = &[
     ".mypy_cache",
 ];
 
+/// Most results one call returns, whatever `max_results` asks for.
+const MAX_RESULTS_CEILING: usize = 500;
+
+/// Longest line `search_code` prints. Longer lines (minified code, data
+/// files) are cut so a single match cannot flood the context.
+const MAX_LINE_CHARS: usize = 300;
+
+/// What `search_code` returns for the files it matched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputMode {
+    /// Matching lines as `path:line:text`, or blocks with context lines.
+    Content,
+    /// Each matching file once.
+    FilesWithMatches,
+    /// Each matching file with its number of matching lines.
+    Count,
+}
+
+impl OutputMode {
+    fn parse(raw: Option<&str>) -> Result<Self, ToolError> {
+        match raw {
+            None | Some("content") => Ok(Self::Content),
+            Some("files_with_matches") => Ok(Self::FilesWithMatches),
+            Some("count") => Ok(Self::Count),
+            Some(other) => Err(ToolError::InvalidArguments(format!(
+                "Invalid output_mode '{other}': use content, files_with_matches or count"
+            ))),
+        }
+    }
+}
+
+fn should_skip_dir(name: &str) -> bool {
+    SEARCH_SKIP_DIRS.contains(&name)
+}
+
+/// `line` cut to [`MAX_LINE_CHARS`] with a note of how much was left off.
+fn clip_line(line: &str) -> Cow<'_, str> {
+    if line.len() <= MAX_LINE_CHARS {
+        return Cow::Borrowed(line);
+    }
+    let mut end = MAX_LINE_CHARS;
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    Cow::Owned(format!("{}… [+{} chars]", &line[..end], line.len() - end))
+}
+
 /// Format a single match with context lines.
 fn format_match_with_context(
     relative_path: &str,
@@ -44,7 +92,12 @@ fn format_match_with_context(
     for (ctx_idx, ctx_line) in lines[start..end].iter().enumerate() {
         let abs_idx = start + ctx_idx;
         let marker = if abs_idx == line_idx { ">" } else { " " };
-        let _ = write!(block, "\n{marker} {:>4}|{ctx_line}", abs_idx + 1);
+        let _ = write!(
+            block,
+            "\n{marker} {:>4}|{}",
+            abs_idx + 1,
+            clip_line(ctx_line)
+        );
     }
     block
 }
@@ -69,9 +122,13 @@ fn zero_match_diagnostic(sandbox: &Sandbox, path: Option<&str>, pattern: &str) -
 /// Marker appended when `search_code` hits the `max_results` cap, so the model
 /// knows the result set is capped (not exhaustive) and how to recover the rest.
 /// Mirrors the truncation signal `fs_read` already emits in `read.rs`.
-fn search_truncation_marker(max_results: usize) -> String {
+fn search_truncation_marker(max_results: usize, mode: OutputMode) -> String {
+    let unit = match mode {
+        OutputMode::Content => "matches",
+        OutputMode::FilesWithMatches | OutputMode::Count => "files",
+    };
     format!(
-        "\n... [truncated at {max_results} matches (max_results cap); more matches may exist — refine the pattern, narrow with path/file_pattern, or raise max_results.]"
+        "\n... [truncated at {max_results} {unit} (max_results cap); more may exist — refine the pattern, narrow with path/file_pattern, or use output_mode files_with_matches first.]"
     )
 }
 
@@ -102,8 +159,11 @@ fn glob_to_regex(glob: &str) -> String {
 
 /// Search for patterns in code.
 ///
-/// Supports a `context_lines` parameter (0-10) that, when > 0, includes
-/// surrounding lines with `>` marking each match line.
+/// Walks the tree honouring `.gitignore` and [`SEARCH_SKIP_DIRS`]. In
+/// [`OutputMode::Content`], `context_lines` (0-10) adds surrounding lines
+/// with `>` marking each match line. `max_results` counts matches in
+/// content mode and files otherwise, and never exceeds
+/// [`MAX_RESULTS_CEILING`].
 #[instrument(skip(sandbox), fields(pattern = %pattern))]
 pub fn search_code(
     sandbox: &Sandbox,
@@ -112,11 +172,12 @@ pub fn search_code(
     file_pattern: Option<&str>,
     max_results: usize,
     context_lines: usize,
+    mode: OutputMode,
 ) -> Result<ToolResult, ToolError> {
     use regex::Regex;
-    use walkdir::WalkDir;
 
     let context_lines = context_lines.min(10);
+    let max_results = max_results.clamp(1, MAX_RESULTS_CEILING);
 
     let search_root = match path {
         Some(p) => sandbox.resolve_existing(p)?,
@@ -140,25 +201,15 @@ pub fn search_code(
         .map_err(|e| ToolError::InvalidArguments(format!("Invalid file pattern: {e}")))?;
 
     let mut results = Vec::new();
+    let mut match_count = 0usize;
 
-    for entry in WalkDir::new(&search_root)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|e| {
-            if e.file_type().is_dir() {
-                let name = e.file_name().to_string_lossy();
-                return !SEARCH_SKIP_DIRS.contains(&name.as_ref());
-            }
-            true
-        })
-        .filter_map(Result::ok)
-    {
+    for entry in super::walk::walk(&search_root, should_skip_dir).filter_map(Result::ok) {
         if results.len() >= max_results {
             break;
         }
 
         let entry_path = entry.path();
-        if !entry_path.is_file() {
+        if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
 
@@ -190,20 +241,43 @@ pub fn search_code(
                 .unwrap_or(entry_path)
                 .to_string_lossy();
 
-            for (line_idx, line) in lines.iter().enumerate() {
-                if results.len() >= max_results {
-                    break;
+            match mode {
+                OutputMode::Content => {
+                    for (line_idx, line) in lines.iter().enumerate() {
+                        if results.len() >= max_results {
+                            break;
+                        }
+                        if !regex.is_match(line) {
+                            continue;
+                        }
+                        match_count += 1;
+                        if context_lines == 0 {
+                            results.push(format!(
+                                "{relative_path}:{}:{}",
+                                line_idx + 1,
+                                clip_line(line)
+                            ));
+                        } else {
+                            results.push(format_match_with_context(
+                                &relative_path,
+                                &lines,
+                                line_idx,
+                                context_lines,
+                            ));
+                        }
+                    }
                 }
-                if regex.is_match(line) {
-                    if context_lines == 0 {
-                        results.push(format!("{relative_path}:{}:{line}", line_idx + 1));
-                    } else {
-                        results.push(format_match_with_context(
-                            &relative_path,
-                            &lines,
-                            line_idx,
-                            context_lines,
-                        ));
+                OutputMode::FilesWithMatches => {
+                    if lines.iter().any(|line| regex.is_match(line)) {
+                        match_count += 1;
+                        results.push(relative_path.into_owned());
+                    }
+                }
+                OutputMode::Count => {
+                    let count = lines.iter().filter(|line| regex.is_match(line)).count();
+                    if count > 0 {
+                        match_count += count;
+                        results.push(format!("{relative_path}:{count}"));
                     }
                 }
             }
@@ -220,10 +294,13 @@ pub fn search_code(
     let truncated = results.len() >= max_results;
     let mut output = results.join("\n");
     if truncated {
-        output.push_str(&search_truncation_marker(max_results));
+        output.push_str(&search_truncation_marker(max_results, mode));
     }
     let mut result = ToolResult::success("search_code", output)
-        .with_metadata("match_count", results.len().to_string());
+        .with_metadata("match_count", match_count.to_string());
+    if mode != OutputMode::Content {
+        result = result.with_metadata("file_count", results.len().to_string());
+    }
     if truncated {
         result = result.with_metadata("truncated", "true");
     }
@@ -273,7 +350,7 @@ impl Tool for SearchCodeTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "search_code".into(),
-            description: "Search for patterns in code using regex. Useful for finding function definitions, usages, and patterns across files.".into(),
+            description: "Search file contents with a regex, skipping files the project's .gitignore excludes. For a broad question start with output_mode \"files_with_matches\" (or \"count\") to see where matches are, then search a narrower path or read just the lines you need. Content mode returns path:line:text per match, with long lines cut.".into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -293,13 +370,18 @@ impl Tool for SearchCodeTool {
                         "type": "string",
                         "description": "Glob pattern for files to search (alias for file_pattern)"
                     },
+                    "output_mode": {
+                        "type": "string",
+                        "enum": ["content", "files_with_matches", "count"],
+                        "description": "content (default): matching lines; files_with_matches: each matching file once; count: matching lines per file"
+                    },
                     "max_results": {
                         "type": "integer",
-                        "description": "Maximum number of results to return (default: 100)"
+                        "description": "Maximum matches (content) or files (other modes) to return (default: 100, at most 500)"
                     },
                     "context_lines": {
                         "type": "integer",
-                        "description": "Number of surrounding lines to show (0-10, default: 0)"
+                        "description": "Surrounding lines to show per match in content mode (0-10, default: 0)"
                     }
                 },
                 "required": ["pattern"]
@@ -329,6 +411,7 @@ impl Tool for SearchCodeTool {
         let context_lines = args["context_lines"]
             .as_u64()
             .map_or(0, |n| usize::try_from(n).unwrap_or(0));
+        let mode = OutputMode::parse(args["output_mode"].as_str())?;
         let sandbox = ctx.sandbox.clone();
         super::spawn_blocking_tool(move || {
             search_code(
@@ -338,6 +421,7 @@ impl Tool for SearchCodeTool {
                 file_pattern.as_deref(),
                 max_results,
                 context_lines,
+                mode,
             )
         })
         .await

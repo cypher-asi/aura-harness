@@ -17,7 +17,7 @@ fn test_search_code_simple_pattern() {
     )
     .unwrap();
 
-    let result = search_code(&sandbox, "fn main", None, None, 100, 0).unwrap();
+    let result = search_code(&sandbox, "fn main", None, None, 100, 0, OutputMode::Content).unwrap();
     assert!(result.ok);
     let output = String::from_utf8_lossy(&result.stdout);
     assert!(output.contains("fn main"));
@@ -30,7 +30,16 @@ fn test_search_code_regex_pattern() {
 
     fs::write(dir.path().join("code.rs"), "let x = 42;\nlet y = 123;").unwrap();
 
-    let result = search_code(&sandbox, r"let \w+ = \d+", None, None, 100, 0).unwrap();
+    let result = search_code(
+        &sandbox,
+        r"let \w+ = \d+",
+        None,
+        None,
+        100,
+        0,
+        OutputMode::Content,
+    )
+    .unwrap();
     assert!(result.ok);
     assert_eq!(result.metadata.get("match_count").unwrap(), "2");
 }
@@ -41,7 +50,16 @@ fn test_search_code_no_matches() {
 
     fs::write(dir.path().join("code.rs"), "fn main() {}").unwrap();
 
-    let result = search_code(&sandbox, "nonexistent_pattern_xyz", None, None, 100, 0).unwrap();
+    let result = search_code(
+        &sandbox,
+        "nonexistent_pattern_xyz",
+        None,
+        None,
+        100,
+        0,
+        OutputMode::Content,
+    )
+    .unwrap();
     assert!(result.ok);
     let output = String::from_utf8_lossy(&result.stdout);
     assert!(output.contains("No matches found"));
@@ -54,7 +72,16 @@ fn test_search_code_file_pattern() {
     fs::write(dir.path().join("code.rs"), "let rust_var = 1;").unwrap();
     fs::write(dir.path().join("code.ts"), "let ts_var = 2;").unwrap();
 
-    let result = search_code(&sandbox, "let", None, Some("*.rs"), 100, 0).unwrap();
+    let result = search_code(
+        &sandbox,
+        "let",
+        None,
+        Some("*.rs"),
+        100,
+        0,
+        OutputMode::Content,
+    )
+    .unwrap();
     assert!(result.ok);
     let output = String::from_utf8_lossy(&result.stdout);
     assert!(output.contains("rust_var"));
@@ -69,7 +96,16 @@ fn test_search_code_file_pattern_braces() {
     fs::write(dir.path().join("Cargo.toml"), "let toml_var = 2;").unwrap();
     fs::write(dir.path().join("code.ts"), "let ts_var = 3;").unwrap();
 
-    let result = search_code(&sandbox, "let", None, Some("*.{rs,toml}"), 100, 0).unwrap();
+    let result = search_code(
+        &sandbox,
+        "let",
+        None,
+        Some("*.{rs,toml}"),
+        100,
+        0,
+        OutputMode::Content,
+    )
+    .unwrap();
     assert!(result.ok);
     let output = String::from_utf8_lossy(&result.stdout);
     assert!(output.contains("rust_var"));
@@ -84,7 +120,16 @@ fn test_search_code_file_pattern_escapes_regex_metacharacters() {
     fs::write(dir.path().join("c++.rs"), "let plus_var = 1;").unwrap();
     fs::write(dir.path().join("cc.rs"), "let cc_var = 2;").unwrap();
 
-    let result = search_code(&sandbox, "let", None, Some("c++.rs"), 100, 0).unwrap();
+    let result = search_code(
+        &sandbox,
+        "let",
+        None,
+        Some("c++.rs"),
+        100,
+        0,
+        OutputMode::Content,
+    )
+    .unwrap();
     assert!(result.ok);
     let output = String::from_utf8_lossy(&result.stdout);
     assert!(output.contains("plus_var"));
@@ -101,7 +146,7 @@ fn test_search_code_max_results() {
         .join("\n");
     fs::write(dir.path().join("many.txt"), content).unwrap();
 
-    let result = search_code(&sandbox, "line", None, None, 5, 0).unwrap();
+    let result = search_code(&sandbox, "line", None, None, 5, 0, OutputMode::Content).unwrap();
     assert!(result.ok);
     assert_eq!(result.metadata.get("match_count").unwrap(), "5");
 }
@@ -113,7 +158,16 @@ fn test_search_code_in_subdirectory() {
     fs::create_dir_all(dir.path().join("src/nested")).unwrap();
     fs::write(dir.path().join("src/nested/code.rs"), "fn nested_fn() {}").unwrap();
 
-    let result = search_code(&sandbox, "nested_fn", Some("src"), None, 100, 0).unwrap();
+    let result = search_code(
+        &sandbox,
+        "nested_fn",
+        Some("src"),
+        None,
+        100,
+        0,
+        OutputMode::Content,
+    )
+    .unwrap();
     assert!(result.ok);
     let output = String::from_utf8_lossy(&result.stdout);
     assert!(output.contains("nested_fn"));
@@ -123,7 +177,15 @@ fn test_search_code_in_subdirectory() {
 fn test_search_code_invalid_regex() {
     let (sandbox, _dir) = create_test_sandbox();
 
-    let result = search_code(&sandbox, "[invalid(regex", None, None, 100, 0);
+    let result = search_code(
+        &sandbox,
+        "[invalid(regex",
+        None,
+        None,
+        100,
+        0,
+        OutputMode::Content,
+    );
     assert!(matches!(result, Err(ToolError::InvalidArguments(_))));
 }
 
@@ -134,7 +196,7 @@ fn test_search_code_context_lines() {
     let content = "alpha\nbeta\ngamma\ndelta\nepsilon\n";
     fs::write(dir.path().join("ctx.txt"), content).unwrap();
 
-    let result = search_code(&sandbox, "gamma", None, None, 100, 1).unwrap();
+    let result = search_code(&sandbox, "gamma", None, None, 100, 1, OutputMode::Content).unwrap();
     assert!(result.ok);
     let output = String::from_utf8_lossy(&result.stdout);
     assert!(output.contains("beta"));
@@ -153,7 +215,7 @@ fn test_search_code_skip_dirs() {
     fs::write(dir.path().join("target/out.rs"), "let hidden = true;").unwrap();
     fs::write(dir.path().join("visible.rs"), "let visible = true;").unwrap();
 
-    let result = search_code(&sandbox, "let", None, None, 100, 0).unwrap();
+    let result = search_code(&sandbox, "let", None, None, 100, 0, OutputMode::Content).unwrap();
     let output = String::from_utf8_lossy(&result.stdout);
     assert!(output.contains("visible"));
     assert!(!output.contains("hidden"));
@@ -169,7 +231,16 @@ fn test_search_code_complex_regex_lookahead_character_class() {
     )
     .unwrap();
 
-    let result = search_code(&sandbox, r"fn [a-z_]+\d*\(\)", None, None, 100, 0).unwrap();
+    let result = search_code(
+        &sandbox,
+        r"fn [a-z_]+\d*\(\)",
+        None,
+        None,
+        100,
+        0,
+        OutputMode::Content,
+    )
+    .unwrap();
     assert!(result.ok);
     let output = String::from_utf8_lossy(&result.stdout);
     assert!(output.contains("baz123"));
@@ -185,7 +256,16 @@ fn test_search_code_alternation_regex() {
     )
     .unwrap();
 
-    let result = search_code(&sandbox, r"alpha|gamma", None, None, 100, 0).unwrap();
+    let result = search_code(
+        &sandbox,
+        r"alpha|gamma",
+        None,
+        None,
+        100,
+        0,
+        OutputMode::Content,
+    )
+    .unwrap();
     assert_eq!(result.metadata.get("match_count").unwrap(), "2");
 }
 
@@ -200,7 +280,7 @@ fn test_search_code_binary_file_skipped() {
     .unwrap();
     fs::write(dir.path().join("code.rs"), "let x = 1;").unwrap();
 
-    let result = search_code(&sandbox, "let x", None, None, 100, 0).unwrap();
+    let result = search_code(&sandbox, "let x", None, None, 100, 0, OutputMode::Content).unwrap();
     let output = String::from_utf8_lossy(&result.stdout);
     assert!(output.contains("code.rs"));
     assert!(!output.contains("image.png"));
@@ -210,7 +290,15 @@ fn test_search_code_binary_file_skipped() {
 fn test_search_code_nonexistent_path_diagnostic() {
     let (sandbox, _dir) = create_test_sandbox();
 
-    let result = search_code(&sandbox, "anything", Some("no_such_dir"), None, 100, 0);
+    let result = search_code(
+        &sandbox,
+        "anything",
+        Some("no_such_dir"),
+        None,
+        100,
+        0,
+        OutputMode::Content,
+    );
     assert!(result.is_err());
 }
 
@@ -220,7 +308,16 @@ fn test_search_code_zero_match_regex_hint() {
 
     fs::write(dir.path().join("hint.rs"), "normal code").unwrap();
 
-    let result = search_code(&sandbox, r"foo\(bar\[baz\]", None, None, 100, 0).unwrap();
+    let result = search_code(
+        &sandbox,
+        r"foo\(bar\[baz\]",
+        None,
+        None,
+        100,
+        0,
+        OutputMode::Content,
+    )
+    .unwrap();
     let output = String::from_utf8_lossy(&result.stdout);
     assert!(output.contains("No matches found"));
     assert!(output.contains("regex characters"));
@@ -231,7 +328,15 @@ fn test_search_code_regex_size_limit() {
     let (sandbox, _dir) = create_test_sandbox();
 
     let huge_pattern = "a".repeat(SEARCH_REGEX_SIZE_LIMIT + 1);
-    let result = search_code(&sandbox, &huge_pattern, None, None, 100, 0);
+    let result = search_code(
+        &sandbox,
+        &huge_pattern,
+        None,
+        None,
+        100,
+        0,
+        OutputMode::Content,
+    );
     assert!(matches!(result, Err(ToolError::InvalidArguments(_))));
 }
 
@@ -245,7 +350,16 @@ fn test_search_code_context_lines_clamped_to_10() {
         .join("\n");
     fs::write(dir.path().join("ctx.txt"), &content).unwrap();
 
-    let result = search_code(&sandbox, "line_15", None, None, 100, 100).unwrap();
+    let result = search_code(
+        &sandbox,
+        "line_15",
+        None,
+        None,
+        100,
+        100,
+        OutputMode::Content,
+    )
+    .unwrap();
     assert!(result.ok);
     let output = String::from_utf8_lossy(&result.stdout);
     assert!(output.contains("line_15"));
@@ -276,7 +390,7 @@ fn test_search_code_signals_truncation_when_results_capped() {
         .join("\n");
     fs::write(dir.path().join("many.txt"), content).unwrap();
 
-    let result = search_code(&sandbox, "line", None, None, 5, 0).unwrap();
+    let result = search_code(&sandbox, "line", None, None, 5, 0, OutputMode::Content).unwrap();
     assert!(result.ok);
     // The cap is enforced (existing behavior)...
     assert_eq!(result.metadata.get("match_count").unwrap(), "5");
@@ -300,7 +414,7 @@ fn test_search_code_no_truncation_signal_when_under_cap() {
     let (sandbox, dir) = create_test_sandbox();
     fs::write(dir.path().join("few.txt"), "line0\nline1\nline2").unwrap();
 
-    let result = search_code(&sandbox, "line", None, None, 100, 0).unwrap();
+    let result = search_code(&sandbox, "line", None, None, 100, 0, OutputMode::Content).unwrap();
     assert!(result.ok);
     assert_eq!(result.metadata.get("match_count").unwrap(), "3");
     assert_eq!(result.metadata.get("truncated"), None);
@@ -319,7 +433,7 @@ fn test_search_code_finds_unlisted_text_extensions() {
     fs::write(dir.path().join("styles.scss"), "/* needle */").unwrap();
     fs::write(dir.path().join("App.vue"), "<!-- needle -->").unwrap();
 
-    let result = search_code(&sandbox, "needle", None, None, 100, 0).unwrap();
+    let result = search_code(&sandbox, "needle", None, None, 100, 0, OutputMode::Content).unwrap();
     assert!(result.ok);
     let output = String::from_utf8_lossy(&result.stdout);
     assert!(output.contains("Component.tsx"), "missed .tsx:\n{output}");
@@ -336,7 +450,7 @@ fn test_search_code_still_skips_binary_files() {
     fs::write(dir.path().join("font.woff2"), "needle in font").unwrap();
     fs::write(dir.path().join("real.ts"), "const c = needle;").unwrap();
 
-    let result = search_code(&sandbox, "needle", None, None, 100, 0).unwrap();
+    let result = search_code(&sandbox, "needle", None, None, 100, 0, OutputMode::Content).unwrap();
     let output = String::from_utf8_lossy(&result.stdout);
     assert!(output.contains("real.ts"));
     assert!(!output.contains("img.png"), "should skip .png");
@@ -352,4 +466,110 @@ fn test_is_text_file_denylist_and_case_insensitive() {
     assert!(is_text_file(Path::new("Main.RS"))); // uppercase source still text
     assert!(!is_text_file(Path::new("photo.PNG"))); // uppercase binary still skipped
     assert!(!is_text_file(Path::new("lib.dylib")));
+}
+
+#[test]
+fn test_search_code_respects_gitignore() {
+    let (sandbox, dir) = create_test_sandbox();
+    fs::write(dir.path().join(".gitignore"), "generated/\n").unwrap();
+    fs::create_dir_all(dir.path().join("generated")).unwrap();
+    fs::write(dir.path().join("generated/out.rs"), "let needle = 1;").unwrap();
+    fs::write(dir.path().join("src.rs"), "let needle = 2;").unwrap();
+
+    let result = search_code(&sandbox, "needle", None, None, 100, 0, OutputMode::Content).unwrap();
+    let output = String::from_utf8_lossy(&result.stdout);
+    assert!(output.contains("src.rs"), "{output}");
+    assert!(!output.contains("generated"), "{output}");
+}
+
+#[test]
+fn test_search_code_files_with_matches_lists_each_file_once() {
+    let (sandbox, dir) = create_test_sandbox();
+    fs::write(dir.path().join("a.rs"), "needle\nneedle\nneedle").unwrap();
+    fs::write(dir.path().join("b.rs"), "needle").unwrap();
+    fs::write(dir.path().join("c.rs"), "nothing").unwrap();
+
+    let result = search_code(
+        &sandbox,
+        "needle",
+        None,
+        None,
+        100,
+        0,
+        OutputMode::FilesWithMatches,
+    )
+    .unwrap();
+    let output = String::from_utf8_lossy(&result.stdout);
+    assert_eq!(output, "a.rs\nb.rs");
+    assert_eq!(result.metadata.get("file_count").unwrap(), "2");
+}
+
+#[test]
+fn test_search_code_count_mode_reports_matches_per_file() {
+    let (sandbox, dir) = create_test_sandbox();
+    fs::write(dir.path().join("a.rs"), "needle\nneedle\nneedle").unwrap();
+    fs::write(dir.path().join("b.rs"), "needle").unwrap();
+
+    let result = search_code(&sandbox, "needle", None, None, 100, 0, OutputMode::Count).unwrap();
+    let output = String::from_utf8_lossy(&result.stdout);
+    assert_eq!(output, "a.rs:3\nb.rs:1");
+    assert_eq!(result.metadata.get("match_count").unwrap(), "4");
+}
+
+#[test]
+fn test_search_code_cuts_long_lines() {
+    let (sandbox, dir) = create_test_sandbox();
+    let minified = format!("needle{}", "x".repeat(10_000));
+    fs::write(dir.path().join("bundle.js"), &minified).unwrap();
+
+    let result = search_code(&sandbox, "needle", None, None, 100, 0, OutputMode::Content).unwrap();
+    let output = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        output.len() < 500,
+        "line must be cut, got {} bytes",
+        output.len()
+    );
+    assert!(output.contains("[+"), "{output}");
+}
+
+#[test]
+fn test_search_code_max_results_has_a_ceiling() {
+    let (sandbox, dir) = create_test_sandbox();
+    let content = (0..1_000)
+        .map(|i| format!("line{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(dir.path().join("many.txt"), content).unwrap();
+
+    let result = search_code(
+        &sandbox,
+        "line",
+        None,
+        None,
+        100_000,
+        0,
+        OutputMode::Content,
+    )
+    .unwrap();
+    assert_eq!(
+        result.metadata.get("match_count").unwrap(),
+        &MAX_RESULTS_CEILING.to_string()
+    );
+    assert_eq!(
+        result.metadata.get("truncated").map(String::as_str),
+        Some("true")
+    );
+}
+
+#[test]
+fn test_output_mode_parse_rejects_unknown_modes() {
+    assert_eq!(OutputMode::parse(None).unwrap(), OutputMode::Content);
+    assert_eq!(
+        OutputMode::parse(Some("files_with_matches")).unwrap(),
+        OutputMode::FilesWithMatches
+    );
+    assert!(matches!(
+        OutputMode::parse(Some("lines")),
+        Err(ToolError::InvalidArguments(_))
+    ));
 }

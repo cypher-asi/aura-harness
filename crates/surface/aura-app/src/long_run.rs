@@ -74,7 +74,7 @@ impl WebTools {
 }
 
 /// Context pressure at which the terminal starts compacting.
-const DEFAULT_COMPACTION_TRIGGER: f64 = 0.70;
+const DEFAULT_COMPACTION_TRIGGER: f64 = aura_config::COMPACTION_TRIGGER_DEFAULT;
 
 /// Timeout of a foreground `run_command` that doesn't set one. Builds and
 /// test suites routinely take a minute or two; anything longer should set

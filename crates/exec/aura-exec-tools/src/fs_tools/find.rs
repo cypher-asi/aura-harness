@@ -4,8 +4,16 @@ use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
 use aura_core_types::ToolDefinition;
 use aura_core_types::ToolResult;
-use std::fs;
+use std::fmt::Write;
+use std::time::SystemTime;
 use tracing::{debug, instrument, warn};
+
+/// Most paths one `find_files` call returns.
+const MAX_RESULTS: usize = 200;
+
+/// Matches collected before sorting stops, so a pattern like `*` over a
+/// huge tree stays bounded.
+const MAX_SCANNED_MATCHES: usize = 20_000;
 
 /// Skip directories that shouldn't be included in find results.
 fn should_skip_dir(name: &str) -> bool {
@@ -35,65 +43,70 @@ pub fn fs_find(
     let glob_pattern = Pattern::new(pattern)
         .map_err(|e| ToolError::InvalidArguments(format!("Invalid glob pattern: {e}")))?;
 
-    let max_results = max_results.min(200);
-    let mut results = Vec::new();
+    let max_results = max_results.min(MAX_RESULTS);
+    let mut matches: Vec<(SystemTime, String)> = Vec::new();
 
-    fn walk(
-        dir: &std::path::Path,
-        root: &std::path::Path,
-        pattern: &Pattern,
-        results: &mut Vec<String>,
-        max: usize,
-    ) {
-        let entries = match fs::read_dir(dir) {
-            Ok(entries) => entries,
+    for entry in super::walk::walk(&search_root, should_skip_dir) {
+        let entry = match entry {
+            Ok(entry) => entry,
             Err(e) => {
-                warn!(path = %dir.display(), error = %e, "Failed to read directory during find");
-                return;
+                warn!(error = %e, "skipping unreadable entry during find");
+                continue;
             }
         };
-        for entry in entries.filter_map(|entry| {
-            entry
-                .map_err(|e| warn!(path = %dir.display(), error = %e, "skipping unreadable directory entry"))
-                .ok()
-        }) {
-            if results.len() >= max {
-                return;
-            }
-            let path = entry.path();
-            let file_name = entry.file_name();
-            let name = file_name.to_string_lossy();
-
-            if path.is_dir() {
-                if should_skip_dir(&name) {
-                    continue;
-                }
-                walk(&path, root, pattern, results, max);
-            } else {
-                let relative = path.strip_prefix(root).unwrap_or(&path).to_string_lossy();
-                if pattern.matches(&relative) || pattern.matches(&name) {
-                    results.push(relative.to_string());
-                }
-            }
+        if !entry.file_type().is_some_and(|t| t.is_file()) {
+            continue;
+        }
+        let path = entry.path();
+        let relative = path.strip_prefix(&search_root).unwrap_or(path);
+        let relative = relative.to_string_lossy();
+        let name = entry.file_name().to_string_lossy();
+        if !(glob_pattern.matches(&relative) || glob_pattern.matches(&name)) {
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        matches.push((modified, relative.into_owned()));
+        if matches.len() >= MAX_SCANNED_MATCHES {
+            break;
         }
     }
 
-    walk(
-        &search_root,
-        &search_root,
-        &glob_pattern,
-        &mut results,
-        max_results,
-    );
+    matches.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    let total = matches.len();
+    let truncated = total > max_results;
+    let shown: Vec<String> = matches
+        .into_iter()
+        .take(max_results)
+        .map(|(_, path)| path)
+        .collect();
 
-    let output = if results.is_empty() {
+    let mut output = if shown.is_empty() {
         "No files found".to_string()
     } else {
-        results.join("\n")
+        shown.join("\n")
     };
+    if truncated {
+        let more = if total >= MAX_SCANNED_MATCHES {
+            "more than ".to_string()
+        } else {
+            String::new()
+        };
+        let _ = write!(
+            output,
+            "\n... [truncated: showing the {max_results} most recently modified of {more}{total} matches; narrow the pattern or path.]"
+        );
+    }
 
-    Ok(ToolResult::success("find_files", output)
-        .with_metadata("match_count", results.len().to_string()))
+    let mut result = ToolResult::success("find_files", output)
+        .with_metadata("match_count", shown.len().to_string());
+    if truncated {
+        result = result.with_metadata("truncated", "true");
+    }
+    Ok(result)
 }
 
 /// `fs_find` tool: find files by glob pattern.
@@ -108,7 +121,7 @@ impl Tool for FsFindTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "find_files".into(),
-            description: "Find files matching a glob pattern. Skips node_modules, target, .git, __pycache__, and dot-prefixed directories. Results capped at 200.".into(),
+            description: "Find files matching a glob pattern, most recently modified first. Skips files the project's .gitignore excludes, plus node_modules, target, __pycache__ and dot-prefixed directories. Returns at most 200 paths and says when more matched.".into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -139,13 +152,17 @@ impl Tool for FsFindTool {
             .to_string();
         let path = args["path"].as_str().map(String::from);
         let sandbox = ctx.sandbox.clone();
-        super::spawn_blocking_tool(move || fs_find(&sandbox, &pattern, path.as_deref(), 200)).await
+        super::spawn_blocking_tool(move || {
+            fs_find(&sandbox, &pattern, path.as_deref(), MAX_RESULTS)
+        })
+        .await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::TempDir;
 
     fn create_test_sandbox() -> (Sandbox, TempDir) {
@@ -216,5 +233,56 @@ mod tests {
         let result = fs_find(&sandbox, "*.rs", Some("/"), 200).unwrap();
         let output = String::from_utf8_lossy(&result.stdout);
         assert!(output.contains("hello.rs"));
+    }
+
+    #[test]
+    fn test_fs_find_skips_gitignored_files() {
+        let (sandbox, dir) = create_test_sandbox();
+        fs::write(dir.path().join(".gitignore"), "gen/\n").unwrap();
+        fs::create_dir_all(dir.path().join("gen")).unwrap();
+        fs::write(dir.path().join("gen/out.rs"), "").unwrap();
+        fs::write(dir.path().join("lib.rs"), "").unwrap();
+
+        let result = fs_find(&sandbox, "*.rs", None, 200).unwrap();
+        let output = String::from_utf8_lossy(&result.stdout);
+        assert_eq!(output, "lib.rs");
+    }
+
+    #[test]
+    fn test_fs_find_says_when_results_are_capped() {
+        let (sandbox, dir) = create_test_sandbox();
+        for i in 0..5 {
+            fs::write(dir.path().join(format!("f{i}.rs")), "").unwrap();
+        }
+
+        let result = fs_find(&sandbox, "*.rs", None, 3).unwrap();
+        let output = String::from_utf8_lossy(&result.stdout);
+        assert_eq!(output.lines().filter(|l| l.ends_with(".rs")).count(), 3);
+        assert!(output.contains("[truncated"), "{output}");
+        assert!(output.contains("of 5 matches"), "{output}");
+        assert_eq!(
+            result.metadata.get("truncated").map(String::as_str),
+            Some("true")
+        );
+    }
+
+    #[test]
+    fn test_fs_find_lists_newest_first() {
+        let (sandbox, dir) = create_test_sandbox();
+        let old = dir.path().join("old.rs");
+        let new = dir.path().join("new.rs");
+        fs::write(&old, "").unwrap();
+        fs::write(&new, "").unwrap();
+        let past = SystemTime::now() - std::time::Duration::from_secs(3600);
+        fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(past)
+            .unwrap();
+
+        let result = fs_find(&sandbox, "*.rs", None, 200).unwrap();
+        let output = String::from_utf8_lossy(&result.stdout);
+        assert_eq!(output, "new.rs\nold.rs");
     }
 }

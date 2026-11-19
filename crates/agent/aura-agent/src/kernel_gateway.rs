@@ -390,7 +390,10 @@ mod tests {
         // base64-on-the-wire form back to plain UTF-8 text before
         // handing content to the LLM, so the LLM no longer sees the
         // JSON-wrapped payload.
-        assert_eq!(results[0].content, "This file lives in the workspace root.");
+        assert_eq!(
+            results[0].content,
+            "1|This file lives in the workspace root."
+        );
     }
 
     #[tokio::test]

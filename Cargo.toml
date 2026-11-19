@@ -189,6 +189,7 @@ unicode-width = "0.2"
 
 # Filesystem traversal / matching
 walkdir = "2.5"
+ignore = "0.4"
 glob = "0.3"
 regex = "1.11"
 

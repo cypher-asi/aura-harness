@@ -250,7 +250,8 @@ pub fn default_autonomous_dev_loop_binaries() -> Vec<String> {
 pub struct ToolConfig {
     /// Command execution guardrails.
     pub command: CommandPolicy,
-    /// Maximum read bytes
+    /// Most bytes one `read_file` result may hold, numbered lines and
+    /// truncation marker included.
     pub max_read_bytes: usize,
     /// Sync threshold for command execution (milliseconds).
     /// Commands that complete within this threshold return immediately.
@@ -310,7 +311,7 @@ impl ToolConfig {
     pub fn restricted() -> Self {
         Self {
             command: CommandPolicy::restricted(),
-            max_read_bytes: 64 * 1024,
+            max_read_bytes: 32 * 1024,
             sync_threshold_ms: 5_000,
             max_async_timeout_ms: 600_000,
             // 10s per attempt × 2 attempts + 1s backoff = ~21s
@@ -378,14 +379,13 @@ mod default_tests {
     }
 
     #[test]
-    fn default_max_read_bytes_is_64k() {
+    fn default_max_read_bytes_is_32k() {
         let cfg = ToolConfig::default();
         assert_eq!(
             cfg.max_read_bytes,
-            64 * 1024,
-            "default max_read_bytes must stay capped at 64 KB so a single read_file cannot \
-             dwarf the proxy per-message envelope; bumping this is a deliberate trade-off and \
-             should be paired with a matching change to the agent-loop compaction tier."
+            32 * 1024,
+            "default max_read_bytes must stay at 32 KB: every later request resends a read, so \
+             bigger files are read in ranges instead."
         );
     }
 

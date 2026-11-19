@@ -145,7 +145,7 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 pub use agent::AgentConfig;
 pub use aura_home::{AuraHome, AuraHomeError, AuraHomeSource};
 pub use automaton::AutomatonConfig;
-pub use compaction::CompactionConfig;
+pub use compaction::{CompactionConfig, COMPACTION_TRIGGER_DEFAULT};
 pub use conflict::ConflictConfig;
 pub use env::{ConfigError, ENV_VAR_NAMES};
 pub use gate::GateConfig;

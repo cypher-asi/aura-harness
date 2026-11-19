@@ -11,6 +11,7 @@ mod module_link;
 mod read;
 mod search;
 mod stat;
+mod walk;
 mod write;
 
 pub use cmd::{

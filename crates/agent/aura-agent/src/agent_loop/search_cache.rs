@@ -26,13 +26,26 @@ use serde_json::Value;
 #[must_use]
 pub(crate) fn normalized_search_key(tool: &str, input: &Value) -> Option<String> {
     match tool {
-        "search_code" => Some(build_key(
-            "search_code",
-            &normalize_pattern(input.get("pattern").and_then(Value::as_str)),
-            &normalize_scalar(input.get("include").and_then(Value::as_str)),
-            &normalize_path(input.get("path").and_then(Value::as_str)),
-            &normalize_scalar(input.get("context_lines").map(value_to_display).as_deref()),
-        )),
+        "search_code" => {
+            let include = input
+                .get("include")
+                .or_else(|| input.get("file_pattern"))
+                .and_then(Value::as_str);
+            let shape = [
+                input.get("context_lines").map(value_to_display),
+                input.get("output_mode").map(value_to_display),
+                input.get("max_results").map(value_to_display),
+            ]
+            .map(|part| normalize_scalar(part.as_deref()))
+            .join(",");
+            Some(build_key(
+                "search_code",
+                &normalize_pattern(input.get("pattern").and_then(Value::as_str)),
+                &normalize_scalar(include),
+                &normalize_path(input.get("path").and_then(Value::as_str)),
+                &shape,
+            ))
+        }
         "find_files" => {
             let pattern = input
                 .get("pattern")
@@ -188,6 +201,28 @@ mod tests {
         )
         .unwrap();
         assert_ne!(base, different_include);
+
+        let same_include_other_name = normalized_search_key(
+            "search_code",
+            &json!({"pattern": "NeuralKey", "path": "crates/agent/aura-agent", "file_pattern": "*.rs"}),
+        )
+        .unwrap();
+        assert_eq!(different_include, same_include_other_name);
+    }
+
+    #[test]
+    fn normalized_key_buckets_by_output_mode_and_max_results() {
+        let content = normalized_search_key("search_code", &json!({"pattern": "foo"})).unwrap();
+        let files = normalized_search_key(
+            "search_code",
+            &json!({"pattern": "foo", "output_mode": "files_with_matches"}),
+        )
+        .unwrap();
+        let capped =
+            normalized_search_key("search_code", &json!({"pattern": "foo", "max_results": 5}))
+                .unwrap();
+        assert_ne!(content, files);
+        assert_ne!(content, capped);
     }
 
     #[test]

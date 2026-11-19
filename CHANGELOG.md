@@ -68,6 +68,41 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - With five tabs, the side panel shows short labels (`SBX`, `PRC`) for
   tabs whose full label doesn't fit its cell.
 
+### Reading code with less context
+
+##### Changed
+
+- `read_file` returns numbered lines (`  12|text`, the number as wide as
+  the last one shown) for whole files too: at most 2000 lines and 32 KB
+  (`ToolConfig::max_read_bytes`, was 64 KB), cut at a whole line, ending
+  with the `start_line` to continue from. Lines over 2000 characters are
+  cut, and binary files are described instead of dumped. The schema no
+  longer offers `max_bytes` or claims a 1 MB default.
+- `search_code` and `find_files` skip what the project's `.gitignore`
+  (and `.ignore`, git's excludes) leave out, in a git repository or not,
+  and walk in name order. `search_code` gains `output_mode`:
+  `files_with_matches` and `count` locate matches without printing them.
+  It returns at most 500 results whatever `max_results` asks for, and
+  cuts matched lines over 300 characters.
+- `find_files` lists the most recently modified matches first and says
+  when it stopped at 200; `list_files` stops at 500 entries and says so.
+- A `run_command` output over its limit keeps its first 3/8 and its last
+  5/8 around a note of how much was cut, instead of only its start, so
+  errors and test summaries printed last survive.
+- Every agent loop leaves its transcript untouched below 70% context
+  use (`AgentLoopConfig::compaction_trigger` now defaults to
+  `aura_config::COMPACTION_TRIGGER_DEFAULT`), as the terminal already
+  did; the node's chat sessions, automatons and spawned agents used to
+  start trimming old tool results at 15%.
+- Compaction folds a `read_file` result once a later, complete read of
+  the same path shows the same lines (`supersede_older_reads`), so a
+  file edited and read again is not carried twice.
+- The run cache keys `search_code` on `output_mode`, `max_results` and
+  `file_pattern` too.
+- The chat system prompt asks the model to locate before reading, read
+  ranges, batch independent reads and hand broad exploration to an
+  explorer subagent.
+
 ### Terminal and desktop — chat restyle
 
 ##### Changed

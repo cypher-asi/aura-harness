@@ -271,24 +271,13 @@ fn range_cache_lookup(cache: &ToolResultCache, input: &Value) -> Option<String> 
 
 /// Slice a cached `read_file` entry down to the requested window.
 ///
-/// Three paths, in priority order:
-///
-/// 1. Cached entry is `(Some(s), Some(e))` — its `rendered` text is
-///    line-numbered. We walk the lines (split on `\n`), trust the
-///    leading `{:>6}|` prefix, and pick the rows whose original line
-///    number falls inside the request.
-/// 2. Cached entry is whole-file (`(None, None)`) — its `rendered`
-///    text is the raw file bytes (utf-8 lossy). We split on `\n` and
-///    re-render the requested window with the standard
-///    `{:>6}|{content}` prefix to mirror what `fs_read` would emit.
-/// 3. Anything else (half-bounded cached windows) is rejected by
-///    `entry_covers` above, so this slot is unreachable today; the
-///    final `None` keeps the function total.
+/// Every `read_file` result is numbered (`N|content`, the number padded
+/// to the width of the last line shown), so we walk the rendered rows,
+/// parse each leading number and keep the rows inside the request.
 ///
 /// On any truncation marker in the rendered text we bail out (return
-/// `None`) so the caller falls through to a fresh `fs_read` rather
-/// than serving a sliced truncated body whose line numbering may not
-/// match the original file.
+/// `None`) so the caller falls through to a fresh `fs_read`: a cut
+/// result does not hold every line its window names.
 fn slice_entry(
     entry: &ReadRangeEntry,
     req_start: Option<usize>,
@@ -304,12 +293,7 @@ fn slice_entry(
         return None;
     }
 
-    match (entry.start_line, entry.end_line) {
-        (Some(_), Some(_)) | (Some(_), None) | (None, Some(_)) => {
-            slice_line_numbered(&entry.rendered, want_start, want_end)
-        }
-        (None, None) => slice_raw_to_line_numbered(&entry.rendered, want_start, want_end),
-    }
+    slice_line_numbered(&entry.rendered, want_start, want_end)
 }
 
 fn slice_line_numbered(rendered: &str, want_start: usize, want_end: usize) -> Option<String> {
@@ -325,29 +309,6 @@ fn slice_line_numbered(rendered: &str, want_start: usize, want_end: usize) -> Op
         return None;
     }
     Some(kept.join("\n"))
-}
-
-fn slice_raw_to_line_numbered(
-    rendered: &str,
-    want_start: usize,
-    want_end: usize,
-) -> Option<String> {
-    let lines: Vec<&str> = rendered.lines().collect();
-    let total = lines.len();
-    if total == 0 || want_start > total {
-        return None;
-    }
-    let end = want_end.min(total);
-    let start = want_start.max(1);
-    if end < start {
-        return None;
-    }
-    let body: Vec<String> = lines[(start - 1)..end]
-        .iter()
-        .enumerate()
-        .map(|(i, line)| format!("{:>6}|{}", start + i, line))
-        .collect();
-    Some(body.join("\n"))
 }
 
 /// Compute the same `content_hash` that `aura_exec_tools::fs_tools::read`

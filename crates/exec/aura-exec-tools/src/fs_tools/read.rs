@@ -6,7 +6,7 @@ use aura_core_types::ToolDefinition;
 use aura_core_types::ToolResult;
 use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::io::Read;
+use std::io::{BufRead, BufReader};
 use tracing::{debug, instrument};
 
 /// Compute a short, stable hex digest of the bytes returned to the
@@ -23,19 +23,58 @@ fn content_hash_hex(bytes: &[u8]) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-/// Build the standard truncation marker used by `fs_read` so the LLM gets a
-/// consistent, machine-readable hint about how to recover the missing bytes.
-fn truncation_marker(dropped: usize, total: usize) -> String {
+/// Lines one `read_file` call returns when it names no `end_line`.
+pub const DEFAULT_READ_LINES: usize = 2000;
+
+/// Longest line `read_file` shows; longer lines (minified code, data)
+/// are cut with a note of how much was left off.
+const MAX_LINE_CHARS: usize = 2000;
+
+/// Bytes at the start of a file checked for a NUL to tell binary files
+/// from text.
+const BINARY_SNIFF_BYTES: usize = 8 * 1024;
+
+/// Bytes of the output budget kept free for the truncation marker.
+const MARKER_RESERVE: usize = 160;
+
+/// The marker ending a cut `read_file` result. Starts with
+/// `"\n... [truncated"`, which the agent loop's read cache looks for.
+fn truncation_marker(start: usize, last: usize, total: usize) -> String {
     format!(
-        "\n... [truncated {dropped} of {total} bytes; use start_line/end_line for slicing or pass max_bytes to read more.]"
+        "\n... [truncated: showing lines {start}-{last} of {total}; continue with start_line={}.]",
+        last + 1
     )
 }
 
-/// Read file contents, optionally restricted to a line range.
+fn io_error(e: &std::io::Error, what: &str, path: &std::path::Path) -> ToolError {
+    ToolError::Io(std::io::Error::new(
+        e.kind(),
+        format!("{what}({}): {e}", path.display()),
+    ))
+}
+
+/// `line` without its trailing `\r`, cut to [`MAX_LINE_CHARS`].
+fn display_line(raw: &[u8]) -> String {
+    let raw = raw.strip_suffix(b"\r").unwrap_or(raw);
+    let text = String::from_utf8_lossy(raw);
+    if text.len() <= MAX_LINE_CHARS {
+        return text.into_owned();
+    }
+    let mut end = MAX_LINE_CHARS;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}… [line cut, +{} chars]", &text[..end], text.len() - end)
+}
+
+/// Read a text file as numbered lines (`N|content`), `start_line` to
+/// `end_line` (1-indexed, inclusive).
 ///
-/// When `start_line` / `end_line` are provided (1-indexed, inclusive), only
-/// the requested slice of lines is returned, prefixed with line numbers.
-/// This avoids dumping entire large files into the context window.
+/// Without `end_line` at most [`DEFAULT_READ_LINES`] lines come back, and
+/// the output never exceeds `max_bytes`; a cut result ends with a marker
+/// naming the `start_line` to continue from. The number column is as wide
+/// as the last line number shown. Binary files (a NUL in their first
+/// [`BINARY_SNIFF_BYTES`]) are described, not dumped.
 #[instrument(skip(sandbox), fields(path = %path, max_bytes))]
 pub fn fs_read(
     sandbox: &Sandbox,
@@ -51,88 +90,89 @@ pub fn fs_read(
         return Err(ToolError::InvalidArguments(format!("{path} is not a file")));
     }
 
-    let metadata = fs::metadata(&resolved).map_err(|e| {
-        ToolError::Io(std::io::Error::new(
-            e.kind(),
-            format!("metadata({}): {e}", resolved.display()),
-        ))
-    })?;
+    let metadata = fs::metadata(&resolved).map_err(|e| io_error(&e, "metadata", &resolved))?;
     let size = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
+    let file = fs::File::open(&resolved).map_err(|e| io_error(&e, "open", &resolved))?;
+    let mut reader = BufReader::with_capacity(64 * 1024, file);
 
-    let truncated = size > max_bytes;
-    let read_len = size.min(max_bytes);
-    let file = fs::File::open(&resolved).map_err(|e| {
-        ToolError::Io(std::io::Error::new(
-            e.kind(),
-            format!("open({}): {e}", resolved.display()),
-        ))
-    })?;
-    let mut contents = Vec::with_capacity(read_len);
-    file.take(read_len as u64)
-        .read_to_end(&mut contents)
-        .map_err(|e| {
-            ToolError::Io(std::io::Error::new(
-                e.kind(),
-                format!("read({}): {e}", resolved.display()),
-            ))
-        })?;
-    if truncated {
-        contents.extend_from_slice(truncation_marker(size - read_len, size).as_bytes());
-    }
-
-    if start_line.is_some() || end_line.is_some() {
-        let text = String::from_utf8_lossy(&contents);
-        let lines: Vec<&str> = text.lines().collect();
-        let total = lines.len();
-        let start = start_line.unwrap_or(1).max(1);
-        let end = end_line.unwrap_or(total).min(total);
-
-        if start > total {
-            return Ok(ToolResult::success(
-                "read_file",
-                format!("(file has {total} lines, requested start_line={start})"),
-            )
-            .with_metadata("total_lines", total.to_string()));
-        }
-
-        let sliced: Vec<String> = lines[(start - 1)..end]
-            .iter()
-            .enumerate()
-            .map(|(i, line)| format!("{:>6}|{}", start + i, line))
-            .collect();
-        let mut output = sliced.join("\n");
-        let mut output_truncated = false;
-        if output.len() > max_bytes {
-            let original_len = output.len();
-            let mut idx = max_bytes;
-            while idx > 0 && !output.is_char_boundary(idx) {
-                idx -= 1;
-            }
-            output.truncate(idx);
-            output.push_str(&truncation_marker(original_len - idx, original_len));
-            output_truncated = true;
-        }
+    let head = reader
+        .fill_buf()
+        .map_err(|e| io_error(&e, "read", &resolved))?;
+    if head[..head.len().min(BINARY_SNIFF_BYTES)].contains(&0) {
+        let output = format!("(binary file, {size} bytes; not shown)");
         let content_hash = content_hash_hex(output.as_bytes());
-        let mut result = ToolResult::success("read_file", output)
+        return Ok(ToolResult::success("read_file", output)
             .with_metadata("size", size.to_string())
-            .with_metadata("total_lines", total.to_string())
-            .with_metadata("start_line", start.to_string())
-            .with_metadata("end_line", end.to_string())
-            .with_metadata("content_hash", content_hash);
-        if truncated || output_truncated {
-            result = result.with_metadata("truncated", "true");
-        }
-        Ok(result)
-    } else {
-        let content_hash = content_hash_hex(&contents);
-        let mut result = ToolResult::success("read_file", contents)
-            .with_metadata("size", size.to_string())
-            .with_metadata("content_hash", content_hash);
-        if truncated {
-            result = result.with_metadata("truncated", "true");
-        }
-        Ok(result)
+            .with_metadata("binary", "true")
+            .with_metadata("content_hash", content_hash));
     }
+
+    let start = start_line.unwrap_or(1).max(1);
+    let last_wanted = end_line.unwrap_or_else(|| start.saturating_add(DEFAULT_READ_LINES - 1));
+    let mut window: Vec<String> = Vec::new();
+    let mut total = 0usize;
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        let n = reader
+            .read_until(b'\n', &mut buf)
+            .map_err(|e| io_error(&e, "read", &resolved))?;
+        if n == 0 {
+            break;
+        }
+        total += 1;
+        if (start..=last_wanted).contains(&total) {
+            let line = buf.strip_suffix(b"\n").unwrap_or(&buf);
+            window.push(display_line(line));
+        }
+    }
+
+    if total == 0 {
+        return Ok(ToolResult::success("read_file", String::new())
+            .with_metadata("size", size.to_string())
+            .with_metadata("total_lines", "0")
+            .with_metadata("content_hash", content_hash_hex(b"")));
+    }
+    if start > total {
+        return Ok(ToolResult::success(
+            "read_file",
+            format!("(file has {total} lines, requested start_line={start})"),
+        )
+        .with_metadata("total_lines", total.to_string()));
+    }
+
+    let budget = max_bytes.saturating_sub(MARKER_RESERVE);
+    let width = (start + window.len() - 1).to_string().len();
+    let mut output = String::new();
+    let mut last = start - 1;
+    for (i, line) in window.iter().enumerate() {
+        let number = start + i;
+        let row = format!("{number:>width$}|{line}");
+        if i > 0 && output.len() + 1 + row.len() > budget {
+            break;
+        }
+        if i > 0 {
+            output.push('\n');
+        }
+        output.push_str(&row);
+        last = number;
+    }
+    let truncated = last < total && last < end_line.unwrap_or(usize::MAX);
+    if truncated {
+        output.push_str(&truncation_marker(start, last, total));
+    }
+
+    let content_hash = content_hash_hex(output.as_bytes());
+    let mut result = ToolResult::success("read_file", output)
+        .with_metadata("size", size.to_string())
+        .with_metadata("total_lines", total.to_string())
+        .with_metadata("start_line", start.to_string())
+        .with_metadata("end_line", last.to_string())
+        .with_metadata("content_hash", content_hash);
+    if truncated {
+        result = result.with_metadata("truncated", "true");
+    }
+    Ok(result)
 }
 
 /// `fs_read` tool: read file contents.
@@ -147,7 +187,7 @@ impl Tool for FsReadTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "read_file".into(),
-            description: "Read a file's contents. Default returns up to 64 KB; larger files are truncated with a clear marker. Prefer start_line/end_line for slicing big files; only set max_bytes explicitly when a single call must exceed 64 KB.".into(),
+            description: "Read a text file as numbered lines, `N|content`; the number and `|` are not part of the file. Returns up to 2000 lines from start_line (default 1), at most 32 KB; when more remains the result ends with the start_line to continue from. For big files, search first and read only the range you need. Binary files are described, not shown.".into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -155,17 +195,13 @@ impl Tool for FsReadTool {
                         "type": "string",
                         "description": "Path to the file to read (relative to workspace root)"
                     },
-                    "max_bytes": {
-                        "type": "integer",
-                        "description": "Maximum bytes to read (default: 1MB). Useful for large files."
-                    },
                     "start_line": {
                         "type": "integer",
                         "description": "First line to return (1-indexed, inclusive). Omit to start from the beginning."
                     },
                     "end_line": {
                         "type": "integer",
-                        "description": "Last line to return (1-indexed, inclusive). Omit to read to the end."
+                        "description": "Last line to return (1-indexed, inclusive). Omit to read up to 2000 lines."
                     }
                 },
                 "required": ["path"]
@@ -224,7 +260,7 @@ mod tests {
 
         let result = fs_read(&sandbox, "test.txt", 1024, None, None).unwrap();
         assert!(result.ok);
-        assert_eq!(&result.stdout[..], content.as_bytes());
+        assert_eq!(&result.stdout[..], b"1|Hello, Aura!");
         assert!(
             result.metadata.contains_key("content_hash"),
             "content_hash must be stamped on every read so dedup tracking works"
@@ -267,118 +303,92 @@ mod tests {
         assert!(result.metadata.contains_key("content_hash"));
     }
 
-    #[test]
-    fn test_fs_read_size_limit() {
-        let (sandbox, dir) = create_test_sandbox();
-
-        let content = "Hello, Aura!";
-        fs::write(dir.path().join("test.txt"), content).unwrap();
-
-        let max_bytes = 5usize;
-        let result = fs_read(&sandbox, "test.txt", max_bytes, None, None).unwrap();
-        assert!(result.ok, "truncation must surface as a successful result");
-        let expected_marker = truncation_marker(content.len() - max_bytes, content.len());
-        let expected_len = max_bytes + expected_marker.len();
-        assert_eq!(
-            result.stdout.len(),
-            expected_len,
-            "body must equal max_bytes plus the truncation marker"
-        );
-        assert!(
-            result.stdout.starts_with(&content.as_bytes()[..max_bytes]),
-            "body must begin with the first max_bytes of the file"
-        );
-        assert!(
-            result.stdout.ends_with(expected_marker.as_bytes()),
-            "body must end with the standard truncation marker"
-        );
-        assert_eq!(
-            result.metadata.get("truncated").map(String::as_str),
-            Some("true"),
-            "truncation must be flagged in metadata"
-        );
-        assert_eq!(
-            result.metadata.get("size").map(String::as_str),
-            Some(content.len().to_string().as_str()),
-            "size metadata must report the full file size, not the truncated length"
-        );
+    fn numbered(n: usize) -> String {
+        (1..=n).map(|i| format!("line {i}\n")).collect()
     }
 
     #[test]
-    fn test_fs_read_default_cap_truncates_large_file() {
+    fn test_fs_read_byte_cap_stops_at_a_whole_line() {
         let (sandbox, dir) = create_test_sandbox();
+        fs::write(dir.path().join("lines.txt"), numbered(500)).unwrap();
 
-        let total = 200 * 1024;
-        let content = vec![b'a'; total];
-        fs::write(dir.path().join("big.txt"), &content).unwrap();
-
-        let max_bytes = 64 * 1024;
-        let result = fs_read(&sandbox, "big.txt", max_bytes, None, None).unwrap();
-        assert!(result.ok);
-        let expected_marker = truncation_marker(total - max_bytes, total);
-        let expected_len = max_bytes + expected_marker.len();
-        assert_eq!(
-            result.stdout.len(),
-            expected_len,
-            "body must be exactly max_bytes plus the truncation marker"
-        );
+        let max_bytes = 1024usize;
+        let result = fs_read(&sandbox, "lines.txt", max_bytes, None, None).unwrap();
+        assert!(result.ok, "truncation must surface as a successful result");
+        let body = String::from_utf8(result.stdout.to_vec()).unwrap();
+        assert!(body.len() <= max_bytes, "{} > {max_bytes}", body.len());
+        let (kept, marker) = body.split_once("\n... [truncated").unwrap();
+        let last = kept.lines().last().unwrap();
+        let last_number: usize = last.split_once('|').unwrap().0.trim().parse().unwrap();
+        assert_eq!(last, format!("{last_number:>3}|line {last_number}"));
         assert!(
-            result.stdout.ends_with(expected_marker.as_bytes()),
-            "body must end with the standard truncation marker"
+            marker.contains(&format!("continue with start_line={}", last_number + 1)),
+            "{marker}"
         );
         assert_eq!(
             result.metadata.get("truncated").map(String::as_str),
             Some("true")
         );
         assert_eq!(
-            result.metadata.get("size").map(String::as_str),
-            Some(total.to_string().as_str())
+            result.metadata.get("total_lines").map(String::as_str),
+            Some("500")
+        );
+        assert_eq!(
+            result.metadata.get("end_line").map(String::as_str),
+            Some(last_number.to_string().as_str())
         );
     }
 
     #[test]
-    fn test_fs_read_line_range_output_cap() {
+    fn test_fs_read_returns_at_most_default_lines_without_end_line() {
         let (sandbox, dir) = create_test_sandbox();
+        fs::write(
+            dir.path().join("long.txt"),
+            numbered(DEFAULT_READ_LINES + 50),
+        )
+        .unwrap();
 
-        let line_count = 100usize;
-        let line_body_len = 10usize;
-        let line_body: String = "a".repeat(line_body_len);
-        let lines: Vec<String> = (0..line_count).map(|_| line_body.clone()).collect();
-        let content = lines.join("\n");
-        fs::write(dir.path().join("lines.txt"), &content).unwrap();
+        let result = fs_read(&sandbox, "long.txt", usize::MAX, None, None).unwrap();
+        let body = String::from_utf8(result.stdout.to_vec()).unwrap();
+        assert!(body.contains(&format!("{DEFAULT_READ_LINES}|line {DEFAULT_READ_LINES}")));
+        assert!(!body.contains(&format!("|line {}", DEFAULT_READ_LINES + 1)));
+        assert!(body.ends_with(&format!(
+            "showing lines 1-{DEFAULT_READ_LINES} of {}; continue with start_line={}.]",
+            DEFAULT_READ_LINES + 50,
+            DEFAULT_READ_LINES + 1
+        )));
+    }
 
-        let file_size = content.len();
-        let line_numbered_len = line_count * (6 + 1 + line_body_len) + (line_count - 1);
-        let max_bytes = file_size + 100;
-        assert!(
-            max_bytes >= file_size,
-            "max_bytes must accommodate the raw file so the cap fires on the rendered output, not the file"
-        );
-        assert!(
-            line_numbered_len > max_bytes,
-            "line-numbered output must exceed max_bytes for this test to exercise the line-render cap"
-        );
+    #[test]
+    fn test_fs_read_explicit_range_is_not_marked_truncated() {
+        let (sandbox, dir) = create_test_sandbox();
+        fs::write(dir.path().join("lines.txt"), numbered(100)).unwrap();
 
-        let result = fs_read(&sandbox, "lines.txt", max_bytes, Some(1), Some(line_count)).unwrap();
-        assert!(result.ok);
+        let result = fs_read(&sandbox, "lines.txt", 32 * 1024, Some(10), Some(12)).unwrap();
+        let body = String::from_utf8(result.stdout.to_vec()).unwrap();
+        assert_eq!(body, "10|line 10\n11|line 11\n12|line 12");
+        assert_eq!(result.metadata.get("truncated"), None);
+    }
 
-        let body = String::from_utf8(result.stdout.to_vec())
-            .expect("line-numbered output is always UTF-8");
-        let marker_prefix = "\n... [truncated";
-        assert!(
-            body.contains(marker_prefix),
-            "rendered output must carry the truncation marker"
-        );
-        let marker_offset = body.find(marker_prefix).unwrap();
-        assert!(
-            marker_offset <= max_bytes,
-            "kept body length must not exceed max_bytes (got {marker_offset}, cap {max_bytes})"
-        );
-        assert_eq!(
-            result.metadata.get("truncated").map(String::as_str),
-            Some("true"),
-            "line-render truncation must surface in metadata"
-        );
+    #[test]
+    fn test_fs_read_cuts_very_long_lines() {
+        let (sandbox, dir) = create_test_sandbox();
+        let minified = "x".repeat(MAX_LINE_CHARS + 500);
+        fs::write(dir.path().join("min.js"), format!("{minified}\nnext\n")).unwrap();
+
+        let result = fs_read(&sandbox, "min.js", 32 * 1024, None, None).unwrap();
+        let body = String::from_utf8(result.stdout.to_vec()).unwrap();
+        assert!(body.contains("[line cut, +500 chars]"), "{body}");
+        assert!(body.ends_with("2|next"), "{body}");
+    }
+
+    #[test]
+    fn test_fs_read_strips_carriage_returns() {
+        let (sandbox, dir) = create_test_sandbox();
+        fs::write(dir.path().join("crlf.txt"), "a\r\nb\r\n").unwrap();
+
+        let result = fs_read(&sandbox, "crlf.txt", 1024, None, None).unwrap();
+        assert_eq!(&result.stdout[..], b"1|a\n2|b");
     }
 
     #[test]
@@ -390,7 +400,11 @@ mod tests {
 
         let result = fs_read(&sandbox, "binary.bin", 1024, None, None).unwrap();
         assert!(result.ok);
-        assert_eq!(&result.stdout[..], content.as_slice());
+        assert_eq!(&result.stdout[..], b"(binary file, 6 bytes; not shown)");
+        assert_eq!(
+            result.metadata.get("binary").map(String::as_str),
+            Some("true")
+        );
     }
 
     #[test]

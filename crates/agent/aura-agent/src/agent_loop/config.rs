@@ -274,10 +274,11 @@ pub struct AgentLoopConfig {
     /// left guessing. Defaults to `true`.
     pub auto_continue_no_op_turns: bool,
     /// Context pressure (0.0–1.0) below which compaction is skipped
-    /// entirely. `None` keeps the tiered behaviour, which starts
-    /// trimming old tool results at low pressure. Every trim rewrites
-    /// the start of the transcript, so long interactive sessions set
-    /// this to get cache hits until compaction is really needed.
+    /// entirely. Defaults to [`aura_config::COMPACTION_TRIGGER_DEFAULT`]:
+    /// every trim rewrites the start of the transcript, so the cached
+    /// prefix stays valid until compaction is really needed. `None`
+    /// keeps the tiered behaviour, which starts trimming old tool
+    /// results at low pressure.
     pub compaction_trigger: Option<f64>,
     /// Todo list carried in from the previous run of this session.
     pub initial_todos: Vec<aura_exec_tools::todo::TodoItem>,
@@ -376,7 +377,7 @@ impl AgentLoopConfig {
             // Never-silent default: re-prompt once when a turn ends
             // having done nothing visible (see `turn::run_turn`).
             auto_continue_no_op_turns: true,
-            compaction_trigger: None,
+            compaction_trigger: Some(aura_config::COMPACTION_TRIGGER_DEFAULT),
             initial_todos: Vec::new(),
             continue_open_todos: false,
             trace_blobs: None,

@@ -54,10 +54,9 @@ pub(crate) struct ToolResultCache {
 ///
 /// We store the rendered tool output (the exact bytes the model saw).
 /// Slicing for a subset request lifts lines out of `rendered` by
-/// their leading `{:>6}|` line-number prefix — no `fs::read` call, no
+/// their leading `N|` line-number prefix — no `fs::read` call, no
 /// second pass through the tool. Whole-file entries (`start_line` and
-/// `end_line` both `None`) carry the raw bytes in `rendered` and are
-/// re-rendered in memory on demand.
+/// `end_line` both `None`) are numbered the same way.
 #[derive(Debug, Clone)]
 pub(crate) struct ReadRangeEntry {
     pub(crate) start_line: Option<usize>,

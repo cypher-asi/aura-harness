@@ -125,15 +125,6 @@ fn line_body(path: &str, n: usize) -> String {
     )
 }
 
-fn full_file_text(path: &str, line_count: usize) -> String {
-    let mut out = String::with_capacity(line_count * 80);
-    for n in 1..=line_count {
-        out.push_str(&line_body(path, n));
-        out.push('\n');
-    }
-    out
-}
-
 fn line_numbered_slice(
     path: &str,
     line_count: usize,
@@ -153,11 +144,8 @@ fn line_numbered_slice(
 }
 
 /// Derive the canonical rendered `read_file` output for a fixture
-/// entry. Unbounded calls return the raw whole-file body (matches
-/// what `aura_exec_tools::fs_tools::read::fs_read` emits when neither
-/// `start_line` nor `end_line` is supplied); bounded calls return the
-/// `{:>6}|{content}` line-numbered slice (matches the same tool's
-/// bounded branch).
+/// entry: the `{:>6}|{content}` line-numbered slice, the whole file
+/// when neither `start_line` nor `end_line` is supplied.
 fn synthesize_result_bytes(
     entry: &TranscriptEntry,
     line_counts: &HashMap<String, usize>,
@@ -178,11 +166,7 @@ fn synthesize_result_bytes(
         .get("end_line")
         .and_then(Value::as_u64)
         .and_then(|n| usize::try_from(n).ok());
-    if start.is_none() && end.is_none() {
-        full_file_text(path, line_count)
-    } else {
-        line_numbered_slice(path, line_count, start, end)
-    }
+    line_numbered_slice(path, line_count, start, end)
 }
 
 /// Mirror of `aura_exec_tools::fs_tools::read::content_hash_hex` /
