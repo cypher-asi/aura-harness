@@ -3,11 +3,12 @@
 //! diffs split per file for the diff view.
 
 use aura_agent_gate::compare::{
-    judge_cost_usd, summarize, too_close, turn_cells, ArmSummary, Estimate, TurnCell, NO_DELEGATE,
+    judge_cost_usd, summarize, task_cells, too_close, turn_cells, ArmSummary, Estimate, TaskCell,
+    TurnCell, NO_DELEGATE,
 };
 use aura_core_types::{
-    ArmSpec, BenchSource, CompareArm, ComparePayload, CompareRun, CompareStatus, ModelTokens, Plan,
-    PlanShare,
+    ArmSpec, BenchSource, CompareArm, ComparePayload, CompareRun, CompareStatus, ExampleTaskInfo,
+    ModelTokens, Plan, PlanShare,
 };
 use aura_model::model_catalog::route_label;
 use aura_ui_terminal::events::FileDiffData;
@@ -90,6 +91,8 @@ pub(super) struct EstimateView<'a> {
     pub prompts: usize,
     /// The replayed session's title, when the work is one
     pub session: Option<&'a str>,
+    /// The example tasks, when the work is those
+    pub examples: &'a [ExampleTaskInfo],
     /// Arm A as it reads, with Gate's likely pick when Gate routes it
     pub a: String,
     pub b: String,
@@ -105,6 +108,20 @@ pub(super) struct EstimateView<'a> {
 impl EstimateView<'_> {
     pub(super) fn render(&self) -> String {
         let mut out = match self.session {
+            _ if !self.examples.is_empty() => format!(
+                "Benchmark: {} example coding task{}: {}",
+                self.examples.len(),
+                if self.examples.len() == 1 { "" } else { "s" },
+                headline(
+                    &self
+                        .examples
+                        .iter()
+                        .map(|t| t.id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    160
+                ),
+            ),
             Some(title) => format!(
                 "Benchmark: replay the session \"{}\", {} prompt{} in order",
                 headline(title, 72),
@@ -113,16 +130,33 @@ impl EstimateView<'_> {
             ),
             None => format!("Compare: \"{}\"", headline(self.task, 80)),
         };
-        let _ = write!(
-            out,
-            "\n  A {} vs B {}, {} run{} each, up to {} at a time, each in its own copy of the workspace",
-            self.a,
-            self.b,
-            self.repeats,
-            if self.repeats == 1 { "" } else { "s" },
-            self.concurrency,
-        );
+        if self.examples.is_empty() {
+            let _ = write!(
+                out,
+                "\n  A {} vs B {}, {} run{} each, up to {} at a time, each in its own copy of the workspace",
+                self.a,
+                self.b,
+                self.repeats,
+                if self.repeats == 1 { "" } else { "s" },
+                self.concurrency,
+            );
+        } else {
+            let runs = self.repeats as usize * self.examples.len();
+            let _ = write!(
+                out,
+                "\n  A {} vs B {}, {} run{} of each task per arm ({runs} per arm), up to {} at a time, \
+                 each in a fresh copy of its task's files",
+                self.a,
+                self.b,
+                self.repeats,
+                if self.repeats == 1 { "" } else { "s" },
+                self.concurrency,
+            );
+        }
         match self.check {
+            _ if !self.examples.is_empty() => out.push_str(
+                "\n  Check after each run: its task's own command, with any hidden checks put in only then",
+            ),
             Some(check) => {
                 let _ = write!(out, "\n  Check after each run: `{check}`");
             }
@@ -255,17 +289,28 @@ pub(super) fn render(name: &str, payload: &ComparePayload) -> String {
             if payload.prompts.len() == 1 { "" } else { "s" },
         );
     }
+    let examples = payload.source.examples();
     let _ = write!(
         out,
-        "\n  A {} vs B {}, {} run{} each{}",
+        "\n  A {} vs B {}, {} run{} {}{}",
         arm_label(&payload.arm_a),
         arm_label(&payload.arm_b),
         payload.repeats,
         if payload.repeats == 1 { "" } else { "s" },
-        payload.check.as_deref().map_or_else(
-            || ", no check command".to_string(),
-            |c| format!(", check `{c}`")
-        ),
+        if examples.is_empty() {
+            "each".to_string()
+        } else {
+            format!(
+                "of each of {} example task{} per arm",
+                examples.len(),
+                if examples.len() == 1 { "" } else { "s" }
+            )
+        },
+        match payload.check.as_deref() {
+            _ if !examples.is_empty() => ", each task's own check".to_string(),
+            Some(c) => format!(", check `{c}`"),
+            None => ", no check command".to_string(),
+        },
     );
 
     let width = a_label.chars().count().max(24);
@@ -345,6 +390,24 @@ pub(super) fn render(name: &str, payload: &ComparePayload) -> String {
         );
     }
 
+    if !examples.is_empty() {
+        out.push_str("\n\n  Per task (checks passed; mean run cost)");
+        let (a_cells, b_cells) = (
+            task_cells(payload, CompareArm::A),
+            task_cells(payload, CompareArm::B),
+        );
+        for (i, task) in examples.iter().enumerate() {
+            let cell = |cells: &[TaskCell]| cells.get(i).map_or_else(|| "-".to_string(), task_cell);
+            let _ = write!(
+                out,
+                "\n    {:<34}{:<width$}  {}",
+                headline(&task.id, 32),
+                cell(&a_cells),
+                cell(&b_cells),
+            );
+        }
+    }
+
     if payload.prompts.len() > 1 {
         out.push_str(
             "\n\n  Per prompt (mean turn cost; test or build commands that passed or failed)",
@@ -408,11 +471,29 @@ pub(super) fn render(name: &str, payload: &ComparePayload) -> String {
         let _ = write!(out, "\n  Note: {note}");
     }
     if payload.status.has_copies() && payload.status != CompareStatus::Running {
-        out.push_str(
-            "\n\n  /compare diff [run] · /compare pick a|b · /compare apply <run> · /compare dismiss",
-        );
+        out.push_str(if examples.is_empty() {
+            "\n\n  /compare diff [run] · /compare pick a|b · /compare apply <run> · /compare dismiss"
+        } else {
+            "\n\n  /compare diff [run] · /compare pick a|b · /compare dismiss"
+        });
     }
     out
+}
+
+/// `2/3 passed, $0.40` for one arm's runs of one example task.
+fn task_cell(cell: &TaskCell) -> String {
+    if cell.runs == 0 {
+        return "-".to_string();
+    }
+    let cost = cell.mean_cost_usd.map_or_else(|| "-".to_string(), money);
+    if cell.checked == 0 {
+        return format!(
+            "{} run{}, {cost}",
+            cell.runs,
+            if cell.runs == 1 { "" } else { "s" }
+        );
+    }
+    format!("{}/{} passed, {cost}", cell.passed, cell.checked)
 }
 
 fn run_line(run: &CompareRun) -> String {
@@ -430,6 +511,9 @@ fn run_line(run: &CompareRun) -> String {
         run.files_changed,
         if run.files_changed == 1 { "" } else { "s" },
     );
+    if let Some(task) = &run.task {
+        let _ = write!(line, "  {task}");
+    }
     if let Some(error) = &run.error {
         let _ = write!(line, "  ({})", headline(error, 80));
     }
@@ -558,6 +642,7 @@ mod tests {
             check_passed: Some(check),
             files_changed: 2,
             error: None,
+            task: None,
         }
     }
 
@@ -725,6 +810,7 @@ mod tests {
             task: "fix it",
             prompts: 1,
             session: None,
+            examples: &[],
             a: "gate (likely aura-claude-sonnet-4-6 (cloud))".to_string(),
             b: "aura-claude-opus-4-7 (cloud)".to_string(),
             judge: "aura-claude-opus-4-7",
@@ -758,6 +844,7 @@ mod tests {
             task: "fix it",
             prompts: 4,
             session: Some("fix the parser"),
+            examples: &[],
             a: "claude-sonnet-4-6".to_string(),
             b: "claude-opus-4-7".to_string(),
             judge: "claude-opus-4-7",
@@ -832,6 +919,92 @@ mod tests {
         assert!(first.contains(&"$0.02, 3 pass"), "{first:?}");
         let second = line(&text, "2.");
         assert!(second.contains(&"$0.04, 3 fail"), "{second:?}");
+    }
+
+    fn example(id: &str) -> ExampleTaskInfo {
+        ExampleTaskInfo {
+            id: id.to_string(),
+            title: id.to_string(),
+            prompts: vec![format!("do {id}")],
+            check: "true".to_string(),
+        }
+    }
+
+    #[test]
+    fn example_tasks_show_per_task_passes_and_offer_no_apply() {
+        let mut bench = payload();
+        bench.task = "2 example coding tasks".to_string();
+        bench.prompts = Vec::new();
+        bench.check = None;
+        bench.source = BenchSource::Examples {
+            tasks: vec![
+                example("coding/write-file"),
+                example("coding/fix-shell-bug"),
+            ],
+        };
+        for (i, run) in bench.runs.iter_mut().enumerate() {
+            let id = if (i / 2) % 2 == 0 {
+                "coding/write-file"
+            } else {
+                "coding/fix-shell-bug"
+            };
+            run.task = Some(id.to_string());
+        }
+        let text = render("Compare #1", &bench);
+        assert!(
+            text.contains("3 runs of each of 2 example tasks per arm, each task's own check"),
+            "{text}"
+        );
+        assert!(text.contains("Per task"), "{text}");
+        let write_file = line(&text, "coding/write-file");
+        assert_eq!(write_file.len(), 3, "{write_file:?}");
+        assert!(
+            write_file[1].starts_with("1/2 passed, $0.0"),
+            "{write_file:?}"
+        );
+        assert!(
+            write_file[2].starts_with("2/2 passed, $0.4"),
+            "{write_file:?}"
+        );
+        assert!(line(&text, "a-2").contains(&"coding/fix-shell-bug"));
+        assert!(!text.contains("/compare apply"), "{text}");
+
+        let tasks = [
+            example("coding/write-file"),
+            example("gate_hard/retry-spec"),
+        ];
+        let estimate = EstimateView {
+            task: "2 example coding tasks",
+            prompts: 1,
+            session: None,
+            examples: &tasks,
+            a: "gate".to_string(),
+            b: "opus".to_string(),
+            judge: "opus",
+            repeats: 2,
+            check: None,
+            budget_usd: None,
+            concurrency: 4,
+            estimate: Estimate {
+                a_usd: Some(1.0),
+                b_usd: Some(2.0),
+                judge_usd: Some(0.5),
+            },
+            notes: &[],
+        }
+        .render();
+        assert!(
+            estimate.starts_with(
+                "Benchmark: 2 example coding tasks: coding/write-file, gate_hard/retry-spec"
+            ),
+            "{estimate}"
+        );
+        assert!(
+            estimate.contains("2 runs of each task per arm (4 per arm)"),
+            "{estimate}"
+        );
+        assert!(estimate.contains("its task's own command"), "{estimate}");
+        assert!(!estimate.contains("No check command"), "{estimate}");
     }
 
     #[test]

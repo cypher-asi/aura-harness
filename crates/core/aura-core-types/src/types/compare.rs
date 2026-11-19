@@ -207,6 +207,10 @@ pub struct CompareRun {
     /// Why the run did not finish, if it did not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Id of the example task it worked on, in a benchmark of example
+    /// tasks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
 }
 
 /// How the judge rated an attempt against the reference: what the user
@@ -318,6 +322,22 @@ pub enum BenchSource {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reference: Option<Reference>,
     },
+    /// Built-in example coding tasks, each in its own fixture and checked
+    /// by its own command. Run `n` of either arm works on task
+    /// `(n - 1) % tasks.len()`.
+    Examples { tasks: Vec<ExampleTaskInfo> },
+}
+
+/// One example coding task of a benchmark.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExampleTaskInfo {
+    /// `<suite>/<task>`, as `coding/write-file`.
+    pub id: String,
+    pub title: String,
+    /// The prompts its runs get, in order.
+    pub prompts: Vec<String>,
+    /// Command run in its copy after the run; exit 0 passes.
+    pub check: String,
 }
 
 impl BenchSource {
@@ -326,7 +346,7 @@ impl BenchSource {
     pub const fn reference(&self) -> Option<&Reference> {
         match self {
             Self::Session { reference, .. } => reference.as_ref(),
-            Self::Prompt => None,
+            Self::Prompt | Self::Examples { .. } => None,
         }
     }
 
@@ -335,8 +355,25 @@ impl BenchSource {
     pub const fn baseline(&self) -> Option<&SessionBaseline> {
         match self {
             Self::Session { baseline, .. } => Some(baseline),
-            Self::Prompt => None,
+            Self::Prompt | Self::Examples { .. } => None,
         }
+    }
+
+    /// The example tasks, if this is a benchmark of them.
+    #[must_use]
+    pub fn examples(&self) -> &[ExampleTaskInfo] {
+        match self {
+            Self::Examples { tasks } => tasks,
+            Self::Prompt | Self::Session { .. } => &[],
+        }
+    }
+
+    /// The example task run `n` (from 1) works on, if any.
+    #[must_use]
+    pub fn example_for(&self, n: u32) -> Option<&ExampleTaskInfo> {
+        let tasks = self.examples();
+        let n = usize::try_from(n.max(1) - 1).ok()?;
+        (!tasks.is_empty()).then(|| &tasks[n % tasks.len()])
     }
 }
 
@@ -470,7 +507,7 @@ impl ComparePayload {
         let mut payload = serde_json::from_value::<Self>(value)
             .ok()
             .filter(|payload| payload.system_kind == SystemKind::Compare)?;
-        if payload.prompts.is_empty() {
+        if payload.prompts.is_empty() && payload.source.examples().is_empty() {
             payload.prompts.push(payload.task.clone());
         }
         Some(payload)
@@ -537,6 +574,7 @@ mod tests {
                 check_passed: Some(true),
                 files_changed: 2,
                 error: None,
+                task: None,
             }],
             judgments: vec![CompareJudgment {
                 a_run: "a-1".to_string(),
@@ -662,6 +700,31 @@ mod tests {
             back.judgments[0].vs_reference(CompareArm::B),
             Some(RefVerdict::Worse)
         );
+    }
+
+    #[test]
+    fn example_tasks_take_turns_by_run_number_and_keep_no_prompts() {
+        let mut payload = payload();
+        payload.prompts = Vec::new();
+        let task = |id: &str| ExampleTaskInfo {
+            id: id.to_string(),
+            title: id.to_string(),
+            prompts: vec![format!("do {id}")],
+            check: "true".to_string(),
+        };
+        payload.source = BenchSource::Examples {
+            tasks: vec![task("coding/one"), task("coding/two")],
+        };
+        payload.runs[0].task = Some("coding/one".to_string());
+        let back = ComparePayload::from_bytes(&payload.to_bytes()).unwrap();
+        assert_eq!(back, payload);
+        assert!(back.prompts.is_empty());
+        let id = |n| back.source.example_for(n).map(|t| t.id.as_str());
+        assert_eq!(
+            (id(1), id(2), id(3)),
+            (Some("coding/one"), Some("coding/two"), Some("coding/one"))
+        );
+        assert_eq!(BenchSource::Prompt.example_for(1), None);
     }
 
     #[test]

@@ -27,6 +27,7 @@ pub enum FormField {
     #[default]
     Work,
     Prompt,
+    Tasks,
     A,
     B,
     Repeats,
@@ -36,9 +37,10 @@ pub enum FormField {
 }
 
 impl FormField {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Work,
         Self::Prompt,
+        Self::Tasks,
         Self::A,
         Self::B,
         Self::Repeats,
@@ -52,6 +54,7 @@ impl FormField {
         match self {
             Self::Work => "Work",
             Self::Prompt => "Prompt",
+            Self::Tasks => "Tasks",
             Self::A => "Arm A",
             Self::B => "Arm B",
             Self::Repeats => "Runs per arm",
@@ -77,11 +80,16 @@ impl FormField {
 pub enum WorkChoice<'a> {
     LastPrompt,
     Prompt,
+    /// The built-in example coding tasks
+    Examples,
     Session(&'a BenchSession),
 }
 
 /// Most runs per arm the form offers.
 const MAX_REPEATS: u32 = 10;
+
+/// Example tasks the form starts at.
+const DEFAULT_TASKS: usize = 5;
 
 /// The new-benchmark form.
 #[derive(Debug, Clone, PartialEq)]
@@ -90,6 +98,8 @@ pub struct BenchForm {
     /// Index into [`BenchState::work_choices`]
     pub work: usize,
     pub prompt: String,
+    /// How many of the example tasks to run, the first ones first
+    pub tasks: usize,
     /// `gate`, `gate:nodelegate` or a model id
     pub a: String,
     /// As `a`; empty for the strongest Opus
@@ -110,6 +120,7 @@ impl Default for BenchForm {
             field: FormField::Work,
             work: 0,
             prompt: String::new(),
+            tasks: DEFAULT_TASKS,
             a: "gate".to_string(),
             b: String::new(),
             repeats: 3,
@@ -139,6 +150,9 @@ pub struct BenchState {
     pub benches: Vec<BenchView>,
     /// Sessions of the agent on screen, to replay
     pub sessions: Vec<BenchSession>,
+    /// Titles of the built-in example tasks, in the order a benchmark
+    /// takes them
+    pub examples: Vec<String>,
     pub mode: BenchMode,
     /// Row of the list
     pub selected: usize,
@@ -176,7 +190,11 @@ impl BenchState {
     /// What the form's work row cycles through.
     #[must_use]
     pub fn work_choices(&self) -> Vec<WorkChoice<'_>> {
-        let mut choices = vec![WorkChoice::LastPrompt, WorkChoice::Prompt];
+        let mut choices = vec![
+            WorkChoice::LastPrompt,
+            WorkChoice::Prompt,
+            WorkChoice::Examples,
+        ];
         choices.extend(self.sessions.iter().map(WorkChoice::Session));
         choices
     }
@@ -260,6 +278,11 @@ impl App {
         &self.bench
     }
 
+    #[cfg(test)]
+    pub(crate) fn bench_mut(&mut self) -> &mut BenchState {
+        &mut self.bench
+    }
+
     fn send_bench(&self, request: BenchRequest) {
         if let Some(tx) = &self.event_tx {
             let _ = tx.try_send(UiEvent::Bench {
@@ -302,11 +325,20 @@ impl App {
         self.bench.upsert(view);
     }
 
-    pub(super) fn cmd_bench_sessions(&mut self, agent_id: &str, sessions: Vec<BenchSession>) {
+    pub(super) fn cmd_bench_sessions(
+        &mut self,
+        agent_id: &str,
+        sessions: Vec<BenchSession>,
+        examples: Vec<String>,
+    ) {
         if agent_id == self.active_agent_id {
             self.bench.sessions = sessions;
             let choices = self.bench.work_choices().len();
             self.bench.form.work = self.bench.form.work.min(choices.saturating_sub(1));
+            if !examples.is_empty() {
+                self.bench.form.tasks = self.bench.form.tasks.clamp(1, examples.len());
+            }
+            self.bench.examples = examples;
         }
     }
 
@@ -406,6 +438,7 @@ impl App {
         };
         let runs = view.runs.len();
         let has_copies = view.status.has_copies() && view.status != BenchStatus::Running;
+        let examples = !view.tasks.is_empty();
         let run = self
             .bench
             .run
@@ -433,6 +466,13 @@ impl App {
             KeyCode::Char(c @ ('a' | 'b')) if has_copies => {
                 let arm = usize::from(c == 'b');
                 self.send_bench(BenchRequest::Pick { id, arm });
+            }
+            KeyCode::Char('y') if has_copies && examples => {
+                self.notification = Some((
+                    "Example tasks ran in their own fixtures; there is nothing to apply"
+                        .to_string(),
+                    NotificationType::Warning,
+                ));
             }
             KeyCode::Char('y') if has_copies => match run {
                 Some(run) => self.send_bench(BenchRequest::Apply { id, run }),
@@ -514,6 +554,18 @@ impl App {
                 };
                 *value = cycle(&choices, value, forward);
             }
+            FormField::Tasks => {
+                let most = self.bench.examples.len();
+                if most == 0 {
+                    return;
+                }
+                let form = &mut self.bench.form;
+                form.tasks = if forward {
+                    (form.tasks + 1).min(most)
+                } else {
+                    form.tasks.saturating_sub(1).max(1)
+                };
+            }
             FormField::Repeats => {
                 let form = &mut self.bench.form;
                 form.repeats = if forward {
@@ -542,6 +594,7 @@ impl App {
             WorkChoice::LastPrompt => Some(BenchWork::LastPrompt),
             WorkChoice::Prompt if form.prompt.trim().is_empty() => None,
             WorkChoice::Prompt => Some(BenchWork::Prompt(form.prompt.clone())),
+            WorkChoice::Examples => Some(BenchWork::Examples { tasks: form.tasks }),
             WorkChoice::Session(session) if session.current => Some(BenchWork::CurrentSession),
             WorkChoice::Session(session) => Some(BenchWork::Session(session.started_ms)),
         };
@@ -630,9 +683,32 @@ mod tests {
             ..BenchState::default()
         };
         let choices = state.work_choices();
-        assert_eq!(choices.len(), 3);
-        assert!(matches!(choices[2], WorkChoice::Session(s) if s.started_ms == 5));
-        state.form.work = 2;
+        assert_eq!(choices.len(), 4);
+        assert_eq!(choices[2], WorkChoice::Examples);
+        assert!(matches!(choices[3], WorkChoice::Session(s) if s.started_ms == 5));
+        state.form.work = 3;
         assert!(matches!(state.work(), WorkChoice::Session(_)));
+    }
+
+    #[test]
+    fn the_tasks_row_counts_from_one_to_the_example_tasks() {
+        let mut app = App::new();
+        let id = app.active_agent_id.clone();
+        let titles: Vec<String> = (1..=7).map(|i| format!("task {i}")).collect();
+        app.cmd_bench_sessions(&id, Vec::new(), titles);
+        assert_eq!(app.bench.form.tasks, DEFAULT_TASKS);
+        app.bench.form.field = FormField::Tasks;
+        for _ in 0..5 {
+            app.change_form_value(true);
+        }
+        assert_eq!(app.bench.form.tasks, 7, "stops at the last task");
+        for _ in 0..10 {
+            app.change_form_value(false);
+        }
+        assert_eq!(app.bench.form.tasks, 1, "and at one");
+        app.cmd_bench_sessions(&id, Vec::new(), vec!["only".to_string()]);
+        app.bench.form.tasks = 4;
+        app.cmd_bench_sessions(&id, Vec::new(), vec!["only".to_string()]);
+        assert_eq!(app.bench.form.tasks, 1, "clamped to what there is");
     }
 }

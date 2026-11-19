@@ -458,11 +458,13 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-util",
+ "toml",
  "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "walkdir",
  "which",
 ]
 

@@ -47,6 +47,10 @@ blake3 = { workspace = true }
 bytes = { workspace = true }
 similar = "2"
 tempfile = { workspace = true }
+toml = { workspace = true }
+
+[build-dependencies]
+walkdir = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true }

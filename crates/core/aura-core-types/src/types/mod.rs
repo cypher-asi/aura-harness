@@ -22,7 +22,7 @@ mod transaction;
 pub use action::{Action, ActionKind};
 pub use compare::{
     ArmSpec, BenchSource, CompareArm, CompareCopy, CompareJudgment, ComparePayload, CompareRun,
-    CompareStatus, ModelTokens, RefVerdict, Reference, RunTurn, SessionBaseline,
+    CompareStatus, ExampleTaskInfo, ModelTokens, RefVerdict, Reference, RunTurn, SessionBaseline,
 };
 pub use context_hash::ContextHash;
 pub use effect::{Effect, EffectKind, EffectStatus};

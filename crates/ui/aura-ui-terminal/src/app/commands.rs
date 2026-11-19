@@ -835,8 +835,12 @@ impl App {
             } => self.upsert_flow(&agent_id, lanes, nodes),
             UiCommand::BenchList(benches) => self.cmd_bench_list(benches),
             UiCommand::BenchUpsert(view) => self.cmd_bench_upsert(*view),
-            UiCommand::BenchSessions { agent_id, sessions } => {
-                self.cmd_bench_sessions(&agent_id, sessions);
+            UiCommand::BenchSessions {
+                agent_id,
+                sessions,
+                examples,
+            } => {
+                self.cmd_bench_sessions(&agent_id, sessions, examples);
             }
             UiCommand::BenchEstimate { agent_id, estimate } => {
                 self.cmd_bench_estimate(&agent_id, estimate);

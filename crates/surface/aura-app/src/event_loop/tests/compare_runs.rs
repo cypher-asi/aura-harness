@@ -762,6 +762,174 @@ async fn two_models_replay_a_session_from_its_start_prompt_by_prompt() {
 }
 
 #[tokio::test]
+async fn example_tasks_run_in_their_own_fixtures_with_their_own_checks() {
+    let (fixture, mut commands) = fixture_with_gate(steady_gate_without_delegation());
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+    state.sync_turn_base();
+    let pack = crate::bench_pack::tasks();
+
+    bench(&mut state, &links, BenchRequest::Sessions).await;
+    let examples = drain(&mut commands)
+        .into_iter()
+        .find_map(|(_, c)| match c {
+            UiCommand::BenchSessions { examples, .. } => Some(examples),
+            _ => None,
+        })
+        .expect("the example tasks are listed");
+    assert_eq!(examples.len(), pack.len());
+    assert_eq!(examples[0], pack[0].title);
+
+    let spec = BenchSpec {
+        work: BenchWork::Examples { tasks: 2 },
+        a: "sonnet".to_string(),
+        b: "opus".to_string(),
+        repeats: 1,
+        check: None,
+        budget_usd: None,
+    };
+    bench(&mut state, &links, BenchRequest::Prepare(spec)).await;
+    let estimate = drain(&mut commands)
+        .into_iter()
+        .find_map(|(_, c)| match c {
+            UiCommand::BenchEstimate { estimate, .. } => Some(estimate),
+            _ => None,
+        })
+        .expect("an estimate")
+        .expect("the benchmark is set up");
+    assert!(
+        estimate.starts_with(&format!(
+            "Benchmark: 2 example coding tasks: {}, {}",
+            pack[0].id, pack[1].id
+        )),
+        "{estimate}"
+    );
+    assert!(estimate.contains("(2 per arm)"), "{estimate}");
+
+    bench(&mut state, &links, BenchRequest::Start).await;
+    tokio::time::timeout(Duration::from_secs(60), state.compare.finished())
+        .await
+        .expect("the benchmark did not end");
+    let payload = latest(&state);
+
+    assert_eq!(payload.status, CompareStatus::Done, "{payload:#?}");
+    assert!(payload.prompts.is_empty());
+    let ids: Vec<&str> = payload
+        .source
+        .examples()
+        .iter()
+        .map(|t| t.id.as_str())
+        .collect();
+    assert_eq!(ids, [pack[0].id.as_str(), pack[1].id.as_str()]);
+    let runs: Vec<(&str, Option<&str>)> = payload
+        .runs
+        .iter()
+        .map(|r| (r.name.as_str(), r.task.as_deref()))
+        .collect();
+    assert_eq!(
+        runs,
+        [
+            ("a-1", Some(ids[0])),
+            ("b-1", Some(ids[0])),
+            ("a-2", Some(ids[1])),
+            ("b-2", Some(ids[1])),
+        ]
+    );
+    for run in &payload.runs {
+        let task = crate::bench_pack::by_id(run.task.as_deref().unwrap()).unwrap();
+        assert_eq!(run.error, None, "{}", run.name);
+        assert!(
+            !run.copy.workdir.starts_with(&fixture.workspace),
+            "{} works outside the user's folder",
+            run.name
+        );
+        assert!(run.check_passed.is_some(), "{} was checked", run.name);
+        assert!(!run.copy.workdir.join(".gate_checks").exists());
+        let prompts: Vec<String> = entries(&state, run.agent_id)
+            .iter()
+            .filter_map(|e| e.tx.prompt_payload())
+            .map(|p| p.text)
+            .collect();
+        assert_eq!(prompts, task.prompts, "{}", run.name);
+        let checks: Vec<serde_json::Value> = entries(&state, run.agent_id)
+            .iter()
+            .filter_map(check_proposal)
+            .map(|p| p.args["shell_script"].clone())
+            .collect();
+        assert_eq!(checks, [task.verify.as_str()], "{}", run.name);
+    }
+    let first = crate::bench_pack::by_id(ids[0]).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    first.materialize(dir.path()).unwrap();
+    for entry in std::fs::read_dir(dir.path()).unwrap() {
+        let name = entry.unwrap().file_name();
+        assert!(
+            payload.runs[0].copy.workdir.join(&name).exists(),
+            "a-1 has {name:?} from its task"
+        );
+        assert!(
+            !fixture.workspace.join(&name).exists(),
+            "the user's folder is untouched"
+        );
+    }
+    let pairs: Vec<(&str, &str)> = payload
+        .judgments
+        .iter()
+        .map(|j| (j.a_run.as_str(), j.b_run.as_str()))
+        .collect();
+    assert_eq!(pairs, [("a-1", "b-1"), ("a-2", "b-2")]);
+
+    let shown = drain(&mut commands);
+    let last = shown
+        .iter()
+        .rev()
+        .find_map(|(_, c)| match c {
+            UiCommand::BenchUpsert(view) => Some(view),
+            _ => None,
+        })
+        .expect("the BENCH tab follows the benchmark");
+    assert_eq!(last.source, "2 example tasks");
+    assert_eq!(last.tasks.len(), 2);
+    assert!(last
+        .tasks
+        .iter()
+        .all(|t| t.arms[0].runs == 1 && t.arms[1].runs == 1));
+    assert_eq!(last.runs[2].task.as_deref(), Some(ids[1]));
+
+    let id = last.id.clone();
+    bench(
+        &mut state,
+        &links,
+        BenchRequest::Apply {
+            id: id.clone(),
+            run: "a-1".to_string(),
+        },
+    )
+    .await;
+    let notice = drain(&mut commands)
+        .into_iter()
+        .find_map(|(_, c)| match c {
+            UiCommand::BenchNotice(notice) => Some(notice),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        notice
+            .as_ref()
+            .is_err_and(|e| e.contains("nothing to apply")),
+        "{notice:?}"
+    );
+    bench(&mut state, &links, BenchRequest::Dismiss { id }).await;
+    assert_eq!(latest(&state).status, CompareStatus::Dismissed);
+    assert!(
+        !payload.runs[0].copy.root.exists(),
+        "the copies are removed"
+    );
+}
+
+#[tokio::test]
 async fn both_arms_must_differ_and_an_unknown_session_is_refused() {
     let (fixture, mut commands) = fixture();
     let mut b = borrowed(&fixture);

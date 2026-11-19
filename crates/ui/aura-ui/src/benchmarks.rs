@@ -121,6 +121,30 @@ pub struct BenchRun {
     pub check_passed: Option<bool>,
     pub files_changed: u32,
     pub error: Option<String>,
+    /// Id of the example task it worked on, in a benchmark of them
+    pub task: Option<String>,
+}
+
+/// How an arm's runs did on one example task.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BenchTaskCell {
+    /// Runs that worked on it
+    pub runs: usize,
+    /// Runs whose check passed
+    pub passed: usize,
+    /// Runs whose check ran
+    pub checked: usize,
+    pub mean_cost_usd: Option<f64>,
+}
+
+/// One example task of a benchmark of them.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BenchTaskRow {
+    /// `coding/write-file`, ...
+    pub id: String,
+    pub title: String,
+    /// Arm A, then arm B
+    pub arms: [BenchTaskCell; 2],
 }
 
 /// The judge's verdict on one pair of runs.
@@ -166,11 +190,13 @@ pub struct BenchView {
     /// What it is about: its prompt, or a replayed session's first one
     pub title: String,
     pub started_ms: u64,
-    /// `prompt`, `plan <file>`, or `session "<title>"`
+    /// `prompt`, `plan <file>`, `session "<title>"`, or `5 example tasks`
     pub source: String,
     pub status: BenchStatus,
-    /// Runs per arm
+    /// Runs per arm, or per example task and arm
     pub repeats: u32,
+    /// The example tasks it ran, when its work is example tasks
+    pub tasks: Vec<BenchTaskRow>,
     pub check: Option<String>,
     pub budget_usd: Option<f64>,
     /// The prompts each run got, in order
@@ -212,6 +238,9 @@ pub enum BenchWork {
     CurrentSession,
     /// The session that started at this Unix millisecond, replayed
     Session(u64),
+    /// The first `tasks` built-in example coding tasks, each in its own
+    /// fixture and checked by its own command
+    Examples { tasks: usize },
 }
 
 /// A new benchmark as the BENCH tab's form sets it up.
@@ -222,9 +251,10 @@ pub struct BenchSpec {
     pub a: String,
     /// Arm B
     pub b: String,
-    /// Runs per arm
+    /// Runs per arm, or per example task and arm
     pub repeats: u32,
-    /// Command run in each copy after its run; `None` for the project's
+    /// Command run in each copy after its run; `None` for the project's.
+    /// Example tasks use their own.
     pub check: Option<String>,
     pub budget_usd: Option<f64>,
 }
@@ -234,7 +264,7 @@ pub struct BenchSpec {
 pub enum BenchRequest {
     /// Every benchmark ([`crate::UiCommand::BenchList`])
     List,
-    /// The sessions of the agent on screen
+    /// The sessions of the agent on screen and the example tasks
     /// ([`crate::UiCommand::BenchSessions`])
     Sessions,
     /// Set up `spec` and say what it should cost

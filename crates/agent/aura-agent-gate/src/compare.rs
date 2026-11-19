@@ -77,6 +77,9 @@ pub struct CompareRequest {
     pub check: Option<String>,
     /// Spend after which no new run starts, in USD.
     pub budget_usd: Option<f64>,
+    /// How many of the built-in example coding tasks to run instead of a
+    /// prompt; `repeats` runs of each per arm.
+    pub examples: Option<usize>,
 }
 
 impl Default for CompareRequest {
@@ -90,6 +93,7 @@ impl Default for CompareRequest {
             repeats: DEFAULT_REPEATS,
             check: None,
             budget_usd: None,
+            examples: None,
         }
     }
 }
@@ -119,7 +123,7 @@ pub enum CompareCommand {
 }
 
 /// How `/compare` is used, for error messages.
-pub const USAGE: &str = "Usage: /compare [prompt | --plan <file> | --session current|<started_ms>] \
+pub const USAGE: &str = "Usage: /compare [prompt | --plan <file> | --session current|<started_ms> | --examples N] \
 [--a <model|gate>] [--against <model|gate|gate:nodelegate>] [--repeats N] [--check <cmd>] [--budget $] · \
 /compare go | cancel | show [n] | diff [run] | pick <a|b> | apply <run> | dismiss";
 
@@ -238,15 +242,18 @@ pub fn parse(args: &str) -> Result<CompareCommand, String> {
     }
     let prompt = prompt.join(" ");
     let prompt = prompt.trim();
-    if request.plan.is_some() && request.session.is_some() {
-        return Err(format!("Give --plan or --session, not both. {USAGE}"));
+    let sources = [
+        !prompt.is_empty(),
+        request.plan.is_some(),
+        request.session.is_some(),
+        request.examples.is_some(),
+    ];
+    if sources.into_iter().filter(|given| *given).count() > 1 {
+        return Err(format!(
+            "Give a prompt, --plan, --session or --examples, not more than one. {USAGE}"
+        ));
     }
     if !prompt.is_empty() {
-        if request.plan.is_some() || request.session.is_some() {
-            return Err(format!(
-                "Give a prompt, --plan or --session, not more than one. {USAGE}"
-            ));
-        }
         request.prompt = Some(prompt.to_string());
     }
     Ok(CompareCommand::Start(request))
@@ -301,6 +308,12 @@ fn set_flag(request: &mut CompareRequest, name: &str, value: &str) -> Result<(),
                     format!("--session takes `current` or a session's start time, not `{value}`")
                 })?)
             });
+        }
+        "examples" | "tasks" => {
+            let tasks = value.trim().parse::<usize>().ok().filter(|n| *n > 0);
+            request.examples = Some(tasks.ok_or_else(|| {
+                format!("--examples takes how many example tasks to run, not `{value}`")
+            })?);
         }
         "a" => request.a = Some(value_of(name)?),
         "against" | "vs" | "b" => request.against = Some(value_of(name)?),
@@ -891,6 +904,44 @@ pub fn turn_cells(payload: &ComparePayload, arm: CompareArm) -> Vec<TurnCell> {
         .collect()
 }
 
+/// How the runs of one arm did on one example task.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TaskCell {
+    /// Runs that worked on it.
+    pub runs: usize,
+    /// Runs whose check passed.
+    pub passed: usize,
+    /// Runs whose check ran.
+    pub checked: usize,
+    /// Mean cost of its runs.
+    pub mean_cost_usd: Option<f64>,
+}
+
+/// One cell per example task of `payload`, for the runs of `arm`; empty
+/// unless the work is example tasks.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn task_cells(payload: &ComparePayload, arm: CompareArm) -> Vec<TaskCell> {
+    payload
+        .source
+        .examples()
+        .iter()
+        .map(|task| {
+            let runs: Vec<_> = payload
+                .arm_runs(arm)
+                .filter(|run| run.task.as_deref() == Some(task.id.as_str()))
+                .collect();
+            TaskCell {
+                runs: runs.len(),
+                passed: runs.iter().filter(|r| r.check_passed == Some(true)).count(),
+                checked: runs.iter().filter(|r| r.check_passed.is_some()).count(),
+                mean_cost_usd: (!runs.is_empty())
+                    .then(|| runs.iter().map(|r| r.cost_usd).sum::<f64>() / runs.len() as f64),
+            }
+        })
+        .collect()
+}
+
 /// What every judge call of `payload` cost.
 #[must_use]
 pub fn judge_cost_usd(payload: &ComparePayload) -> f64 {
@@ -944,6 +995,7 @@ mod tests {
                 repeats: 5,
                 check: Some("cargo test -p parser".to_string()),
                 budget_usd: Some(2.5),
+                examples: None,
             }
         );
     }
@@ -962,6 +1014,7 @@ mod tests {
             start("--plan .aura/plans/x.plan.md").plan.as_deref(),
             Some(".aura/plans/x.plan.md")
         );
+        assert_eq!(start("--examples 5 --repeats 1").examples, Some(5));
     }
 
     #[test]
@@ -1002,7 +1055,10 @@ mod tests {
         assert!(error("--colour red x").contains("Unknown option --colour"));
         assert!(error("fix it --check").contains("needs a value"));
         assert!(error("fix it --plan p.plan.md").contains("not more than one"));
-        assert!(error("--plan p.plan.md --session current").contains("not both"));
+        assert!(error("--plan p.plan.md --session current").contains("not more than one"));
+        assert!(error("fix it --examples 3").contains("not more than one"));
+        assert!(error("--examples none").contains("how many example tasks"));
+        assert!(error("--examples 0").contains("how many example tasks"));
         assert!(error("--session yesterday").contains("start time"));
         assert!(error("\"unclosed").contains("Unclosed quote"));
     }
@@ -1308,6 +1364,7 @@ mod tests {
             check_passed: check,
             files_changed: 1,
             error: None,
+            task: None,
         }
     }
 
@@ -1581,5 +1638,56 @@ mod tests {
         assert_eq!((a.ref_better, a.ref_as_good, a.ref_worse), (1, 1, 0));
         let b = summarize(&payload, CompareArm::B);
         assert_eq!((b.ref_better, b.ref_as_good, b.ref_worse), (0, 0, 1));
+    }
+
+    #[test]
+    fn example_tasks_count_passes_per_task_and_arm() {
+        let on = |mut run: CompareRun, task: &str| {
+            run.task = Some(task.to_string());
+            run
+        };
+        let task = |id: &str| aura_core_types::ExampleTaskInfo {
+            id: id.to_string(),
+            ..aura_core_types::ExampleTaskInfo::default()
+        };
+        let payload = ComparePayload {
+            system_kind: SystemKind::Compare,
+            task: "2 example coding tasks".to_string(),
+            plan: None,
+            arm_a: ArmSpec::from_label("sonnet"),
+            arm_b: ArmSpec::from_label("opus"),
+            against: "opus".to_string(),
+            prompts: Vec::new(),
+            source: aura_core_types::BenchSource::Examples {
+                tasks: vec![task("coding/one"), task("coding/two")],
+            },
+            repeats: 2,
+            check: None,
+            budget_usd: None,
+            requested_by: AgentId::generate(),
+            apply_root: PathBuf::new(),
+            started_ms: 0,
+            runs: vec![
+                on(run(CompareArm::A, 1, 1, 0.2, Some(true)), "coding/one"),
+                on(run(CompareArm::B, 1, 1, 0.8, Some(true)), "coding/one"),
+                on(run(CompareArm::A, 2, 1, 0.4, Some(false)), "coding/two"),
+                on(run(CompareArm::A, 3, 1, 0.4, Some(true)), "coding/one"),
+            ],
+            judgments: Vec::new(),
+            notes: Vec::new(),
+            status: CompareStatus::Done,
+        };
+        let a = task_cells(&payload, CompareArm::A);
+        assert_eq!(a.len(), 2);
+        assert_eq!((a[0].runs, a[0].passed, a[0].checked), (2, 2, 2));
+        assert!((a[0].mean_cost_usd.unwrap() - 0.3).abs() < 1e-9);
+        assert_eq!((a[1].runs, a[1].passed, a[1].checked), (1, 0, 1));
+        let b = task_cells(&payload, CompareArm::B);
+        assert_eq!((b[1].runs, b[1].mean_cost_usd), (0, None));
+        let prompt = ComparePayload {
+            source: aura_core_types::BenchSource::Prompt,
+            ..payload
+        };
+        assert!(task_cells(&prompt, CompareArm::A).is_empty());
     }
 }

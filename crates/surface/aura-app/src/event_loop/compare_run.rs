@@ -37,6 +37,7 @@ use super::subagents::{lock, AgentHub, ArmRouting};
 use super::task_check;
 use super::turns::{ended_signal, record_prompt};
 use crate::agent_registry::RegisteredAgent;
+use crate::bench_pack::{self, ExampleTask};
 use crate::isolation::changes::{self, BUILD_OUTPUT};
 use crate::isolation::{
     CopyIsolation, IsolatedWorkspace, Isolation, IsolationStrategy, WorktreeIsolation,
@@ -77,8 +78,13 @@ const MAX_REASONING: usize = 2_000;
 pub(super) struct ComparePlan {
     /// What it is about: its prompt, or a replayed session's first one
     pub task: String,
-    /// The prompts each run sends in order (the build prompt for a plan)
+    /// The prompts each run sends in order (the build prompt for a plan);
+    /// empty when the work is example tasks
     pub prompts: Vec<String>,
+    /// Example tasks: run `n` of either arm works on task
+    /// `(n - 1) % examples.len()`, in a copy of its own files, with its
+    /// prompts and its check
+    pub examples: Vec<&'static ExampleTask>,
     /// Plan file each run builds, relative to the workspace
     pub plan: Option<String>,
     /// What arm A and arm B run on
@@ -107,6 +113,29 @@ pub(super) struct ComparePlan {
     pub root: PathBuf,
     /// Runs that may work at once
     pub concurrency: usize,
+}
+
+impl ComparePlan {
+    /// Runs each arm gets: `repeats` of each example task, else `repeats`.
+    pub(super) fn runs_per_arm(&self) -> u32 {
+        let tasks = u32::try_from(self.examples.len().max(1)).unwrap_or(u32::MAX);
+        self.repeats.saturating_mul(tasks)
+    }
+
+    /// The example task run `n` works on, if the work is example tasks.
+    fn example(&self, n: u32) -> Option<&'static ExampleTask> {
+        let i = usize::try_from(n.max(1) - 1).ok()?;
+        (!self.examples.is_empty()).then(|| self.examples[i % self.examples.len()])
+    }
+}
+
+/// Folder of a comparison's copies that holds the example tasks' files
+/// the copies are made from.
+const FIXTURES: &str = "fixtures";
+
+/// Where `task`'s files are kept in the comparison's folder `dir`.
+fn fixture(dir: &Path, task: &ExampleTask) -> PathBuf {
+    dir.join(FIXTURES).join(task.id.replace('/', "__"))
 }
 
 /// What the runs of one comparison share.
@@ -210,7 +239,7 @@ pub(super) async fn run(
         notes: plan.notes.clone(),
         status: CompareStatus::Running,
     };
-    if dir.starts_with(&payload.apply_root) {
+    if plan.examples.is_empty() && dir.starts_with(&payload.apply_root) {
         payload.notes.push(format!(
             "The copies would land inside {}, the folder they copy (AURA_HOME is in it); \
              set AURA_HOME elsewhere to compare here",
@@ -221,6 +250,24 @@ pub(super) async fn run(
         return;
     }
     save(&session.kernel, &commands, (host_id, &host.name), &payload).await;
+    if !plan.examples.is_empty() {
+        let (tasks, fixtures) = (plan.examples.clone(), dir.clone());
+        let written = tokio::task::spawn_blocking(move || {
+            tasks.iter().try_for_each(|task| {
+                task.materialize(&fixture(&fixtures, task))
+                    .map_err(|e| format!("writing the files of {}: {e}", task.id))
+            })
+        })
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|written| written);
+        if let Err(problem) = written {
+            payload.notes.push(problem);
+            payload.status = CompareStatus::Cancelled;
+            finish(&hub, &commands, &user_ui, &host, session, &payload).await;
+            return;
+        }
+    }
 
     let ctx = Arc::new(Context {
         hub: Arc::clone(&hub),
@@ -288,7 +335,7 @@ async fn run_all(
     payload: &mut ComparePayload,
 ) -> Vec<Ran> {
     let plan = &ctx.plan;
-    let mut schedule = Schedule::new(plan.repeats, plan.concurrency, plan.budget_usd);
+    let mut schedule = Schedule::new(plan.runs_per_arm(), plan.concurrency, plan.budget_usd);
     let mut tasks = JoinSet::new();
     let mut ran = Vec::new();
     loop {
@@ -372,6 +419,7 @@ fn not_run(ctx: &Context, arm: CompareArm, n: u32, error: String) -> Ran {
             check_passed: None,
             files_changed: 0,
             error: Some(error),
+            task: ctx.plan.example(n).map(|task| task.id.clone()),
         },
         order: (n, arm),
         reply: String::new(),
@@ -446,11 +494,15 @@ fn prepare_copy(
 /// Run `n` of `arm` from its copy to its check, and hand its agent back.
 async fn run_one(ctx: Arc<Context>, arm: CompareArm, n: u32) -> Ran {
     let name = run_name(arm, n);
-    let (dir, workspace, repo) = (
-        ctx.dir.clone(),
-        ctx.plan.workspace.clone(),
-        ctx.repo.clone(),
-    );
+    let example = ctx.plan.example(n);
+    let (dir, workspace, repo) = match example {
+        Some(task) => (ctx.dir.clone(), fixture(&ctx.dir, task), None),
+        None => (
+            ctx.dir.clone(),
+            ctx.plan.workspace.clone(),
+            ctx.repo.clone(),
+        ),
+    };
     let (plan_file, start, copy_name) = (
         ctx.plan.plan.clone(),
         Arc::clone(&ctx.plan.start),
@@ -487,7 +539,7 @@ async fn run_one(ctx: Arc<Context>, arm: CompareArm, n: u32) -> Ran {
         Ok(session) => session,
         Err(e) => return not_run(&ctx, arm, n, format!("opening the run: {e:#}")),
     };
-    let mut ran = run_turn(&ctx, session, arm, &name, copy).await;
+    let mut ran = run_turn(&ctx, session, (arm, &name, example), copy).await;
     ran.order = (n, arm);
     ran.note = note;
     ran
@@ -513,13 +565,13 @@ fn spent(hub: &AgentHub, agent: AgentId) -> f64 {
         .sum()
 }
 
-/// Run the prompts of the run `name` on `session` one after the other,
-/// then its check, and measure it.
+/// Run the prompts of the run `name` (those of `example`, when it works
+/// on one) on `session` one after the other, then its check, and measure
+/// it.
 async fn run_turn(
     ctx: &Context,
     mut session: AgentSession,
-    arm: CompareArm,
-    name: &str,
+    (arm, name, example): (CompareArm, &str, Option<&'static ExampleTask>),
     copy: CompareCopy,
 ) -> Ran {
     let hub = &ctx.hub;
@@ -550,16 +602,18 @@ async fn run_turn(
 
     let cancel = ctx.cancel.child_token();
     let ui = AgentUi::new(ctx.commands.clone(), agent_id);
-    let mut row = turn_summary(agent_id, &plan.task, spec.label());
+    let task = example.map_or(plan.task.as_str(), |task| task.title.as_str());
+    let mut row = turn_summary(agent_id, task, spec.label());
     row.label = format!("{} {name}: {}", ctx.host.name, row.label);
     hub.processes.start(row, Some(cancel.clone()));
     hub.start_running(agent_id, Arc::clone(&session.kernel), cancel.clone(), None);
 
+    let prompts = example.map_or(plan.prompts.as_slice(), |task| task.prompts.as_slice());
     let started = Instant::now();
-    let mut turns = Vec::with_capacity(plan.prompts.len());
+    let mut turns = Vec::with_capacity(prompts.len());
     let mut first: Option<(Option<Hash>, String)> = None;
     let (mut reply, mut error, mut last) = (String::new(), None, None);
-    for (i, prompt) in plan.prompts.iter().enumerate() {
+    for (i, prompt) in prompts.iter().enumerate() {
         if cancel.is_cancelled() {
             error = Some("stopped by the user".to_string());
             break;
@@ -570,7 +624,7 @@ async fn run_turn(
             &mut session,
             (arm, name),
             &routing,
-            (i, prompt),
+            (i, prompts.len(), prompt),
             &cancel,
             &ui,
         )
@@ -592,14 +646,32 @@ async fn run_turn(
     let wall_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let (prompt_tx, model) = first.unwrap_or_default();
 
-    let check_passed = match plan.check.as_deref() {
+    let check = example.map_or(plan.check.as_deref(), |task| Some(task.verify.as_str()));
+    let check_passed = match check {
         Some(check) if !cancel.is_cancelled() && !turns.is_empty() => {
-            let run = task_check::run_script(&session, check, CHECK_SOURCE).await;
-            ui.send(system_message(run.describe())).await;
-            if let (Some(signal), Some(ended)) = (run.signal(), &last) {
-                gate_record::record(&session.kernel, agent_id, &ended.with_signal(signal)).await;
+            let hidden = match example {
+                Some(task) => task
+                    .place_checks(&workdir)
+                    .map_err(|e| format!("putting the hidden checks of {} in place: {e}", task.id)),
+                None => Ok(Vec::new()),
+            };
+            match hidden {
+                Ok(hidden) => {
+                    let run = task_check::run_script(&session, check, CHECK_SOURCE).await;
+                    bench_pack::remove_checks(&hidden);
+                    ui.send(system_message(run.describe())).await;
+                    if let (Some(signal), Some(ended)) = (run.signal(), &last) {
+                        gate_record::record(&session.kernel, agent_id, &ended.with_signal(signal))
+                            .await;
+                    }
+                    run.passed
+                }
+                Err(problem) => {
+                    warn!(%agent_id, %problem, "Could not check an example run");
+                    ui.send(UiCommand::ShowWarning(problem)).await;
+                    None
+                }
             }
-            run.passed
         }
         _ => None,
     };
@@ -651,6 +723,7 @@ async fn run_turn(
             turns,
             check_passed,
             error,
+            task: example.map(|task| task.id.clone()),
         },
         order: (0, arm),
         reply,
@@ -660,13 +733,14 @@ async fn run_turn(
     }
 }
 
-/// Send prompt `i` of the run `name` on `session` and run its turn.
+/// Send prompt `i` of the `of` of the run `name` on `session` and run its
+/// turn.
 async fn run_prompt(
     ctx: &Context,
     session: &mut AgentSession,
     (arm, name): (CompareArm, &str),
     routing: &ArmRouting,
-    (i, text): (usize, &str),
+    (i, of, text): (usize, usize, &str),
     cancel: &CancellationToken,
     ui: &AgentUi,
 ) -> Turned {
@@ -718,8 +792,8 @@ async fn run_prompt(
         prompt: Some(text.to_string()),
     })
     .await;
-    let step = if plan.prompts.len() > 1 {
-        format!(" · prompt {} of {}", i + 1, plan.prompts.len())
+    let step = if of > 1 {
+        format!(" · prompt {} of {of}", i + 1)
     } else {
         String::new()
     };
@@ -832,16 +906,28 @@ async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<Co
             .filter(|r| r.run.arm == arm && r.run.error.is_none())
             .collect()
     };
-    let pairs: Vec<(&Ran, &Ran)> = finished(CompareArm::A)
-        .into_iter()
-        .zip(finished(CompareArm::B))
-        .collect();
+    let pairs: Vec<(&Ran, &Ran)> = if ctx.plan.examples.is_empty() {
+        finished(CompareArm::A)
+            .into_iter()
+            .zip(finished(CompareArm::B))
+            .collect()
+    } else {
+        // Only runs of the same number worked on the same task.
+        let b = finished(CompareArm::B);
+        finished(CompareArm::A)
+            .into_iter()
+            .filter_map(|a| {
+                let n = a.order.0;
+                b.iter().find(|b| b.order.0 == n).map(|b| (a, *b))
+            })
+            .collect()
+    };
     if pairs.is_empty() || ctx.plan.judge.is_empty() {
         return Vec::new();
     }
     let auth_token = ctx.hub.turn(None, &ctx.plan.workspace).0.auth_token;
     let seed = seed(ctx.host.agent_id());
-    let task = judge_task(&ctx.plan.prompts);
+    let shared_task = judge_task(&ctx.plan.prompts);
     let reference = ctx.plan.source.reference().map(|r| judge::Attempt {
         diff: r.diff.clone(),
         reply: r.reply.clone(),
@@ -868,6 +954,10 @@ async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<Co
             cost_usd: 0.0,
             reasoning: String::new(),
         };
+        let task = ctx
+            .plan
+            .example(a.order.0)
+            .map_or_else(|| shared_task.clone(), |task| judge_task(&task.prompts));
         let request = judge::request(
             &ctx.plan.judge,
             &task,
@@ -954,6 +1044,12 @@ pub(super) fn remove_copies(payload: &ComparePayload) -> Vec<String> {
         }
     }
     for parent in parents {
+        let fixtures = parent.join(FIXTURES);
+        if !payload.source.examples().is_empty() && fixtures.is_dir() {
+            if let Err(e) = std::fs::remove_dir_all(&fixtures) {
+                problems.push(format!("{}: {e}", fixtures.display()));
+            }
+        }
         // Only once it is empty; anything else in it is not ours.
         let _ = std::fs::remove_dir(parent);
     }

@@ -6,7 +6,8 @@
 
 pub use crate::benchmarks::{
     arm_letter, BenchArm, BenchBaseline, BenchJudge, BenchRequest, BenchRun, BenchSession,
-    BenchSpec, BenchStatus, BenchTokens, BenchTurn, BenchVerdict, BenchView, BenchWork,
+    BenchSpec, BenchStatus, BenchTaskCell, BenchTaskRow, BenchTokens, BenchTurn, BenchVerdict,
+    BenchView, BenchWork,
 };
 pub use crate::flow::{FlowKind, FlowLane, FlowNode, FlowUsage};
 use crate::mode_command::{ApprovalLevel, PermissionMode};
@@ -620,11 +621,14 @@ pub enum UiCommand {
     /// it there
     BenchUpsert(Box<BenchView>),
 
-    /// The sessions of `agent_id` the BENCH tab can replay, newest first.
-    /// Ignored by a UI showing another agent.
+    /// The sessions of `agent_id` the BENCH tab can replay, newest first,
+    /// and the titles of the built-in example tasks it can run, in the
+    /// order a benchmark takes them. Ignored by a UI showing another
+    /// agent.
     BenchSessions {
         agent_id: String,
         sessions: Vec<BenchSession>,
+        examples: Vec<String>,
     },
 
     /// What the benchmark the BENCH tab set up for `agent_id` should cost,

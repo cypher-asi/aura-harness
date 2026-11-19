@@ -5,14 +5,14 @@ use super::agent_events::AgentUi;
 use super::compare;
 use super::LoopState;
 use aura_agent_gate::compare::{
-    judge_cost_usd, summarize, turn_cells, CompareRequest, SessionPick,
+    judge_cost_usd, summarize, task_cells, turn_cells, CompareRequest, SessionPick,
 };
 use aura_core_types::{
     AgentId, BenchSource, CompareArm, ComparePayload, CompareStatus, ModelTokens, RefVerdict,
 };
 use aura_ui_terminal::events::{
     BenchArm, BenchBaseline, BenchJudge, BenchRequest, BenchRun, BenchSpec, BenchStatus,
-    BenchTokens, BenchTurn, BenchVerdict, BenchView, BenchWork,
+    BenchTaskCell, BenchTaskRow, BenchTokens, BenchTurn, BenchVerdict, BenchView, BenchWork,
 };
 use aura_ui_terminal::UiCommand;
 
@@ -27,11 +27,16 @@ pub(super) async fn handle(state: &mut LoopState<'_>, agent_id: AgentId, request
         }
         BenchRequest::Sessions => {
             let sessions = super::bench_source::sessions(state, agent_id);
+            let examples = crate::bench_pack::tasks()
+                .iter()
+                .map(|task| task.title.clone())
+                .collect();
             let _ = state
                 .commands
                 .send(UiCommand::BenchSessions {
                     agent_id: agent_id.to_hex(),
                     sessions,
+                    examples,
                 })
                 .await;
             return;
@@ -84,16 +89,18 @@ fn host(id: &str) -> Result<AgentId, String> {
 
 /// The comparison the BENCH tab's form set up.
 fn request_of(spec: BenchSpec) -> CompareRequest {
-    let (prompt, session) = match spec.work {
-        BenchWork::Prompt(prompt) => (Some(prompt), None),
-        BenchWork::LastPrompt => (None, None),
-        BenchWork::CurrentSession => (None, Some(SessionPick::Current)),
-        BenchWork::Session(started_ms) => (None, Some(SessionPick::Started(started_ms))),
+    let (prompt, session, examples) = match spec.work {
+        BenchWork::Prompt(prompt) => (Some(prompt), None, None),
+        BenchWork::LastPrompt => (None, None, None),
+        BenchWork::CurrentSession => (None, Some(SessionPick::Current), None),
+        BenchWork::Session(started_ms) => (None, Some(SessionPick::Started(started_ms)), None),
+        BenchWork::Examples { tasks } => (None, None, Some(tasks)),
     };
     CompareRequest {
         prompt,
         plan: None,
         session,
+        examples,
         a: Some(spec.a),
         against: Some(spec.b),
         repeats: spec.repeats.max(1),
@@ -180,7 +187,37 @@ pub(super) fn view(host: AgentId, name: &str, payload: &ComparePayload) -> Bench
                 .map_or_else(|| "prompt".to_string(), |plan| format!("plan {plan}"));
             (title, source)
         }
+        BenchSource::Examples { tasks } => (
+            payload.task.clone(),
+            format!(
+                "{} example task{}",
+                tasks.len(),
+                if tasks.len() == 1 { "" } else { "s" }
+            ),
+        ),
     };
+    let cells = CompareArm::BOTH.map(|arm| task_cells(payload, arm));
+    let tasks = payload
+        .source
+        .examples()
+        .iter()
+        .enumerate()
+        .map(|(i, task)| BenchTaskRow {
+            id: task.id.clone(),
+            title: task.title.clone(),
+            arms: CompareArm::BOTH.map(|arm| {
+                cells[arm.index()]
+                    .get(i)
+                    .map(|cell| BenchTaskCell {
+                        runs: cell.runs,
+                        passed: cell.passed,
+                        checked: cell.checked,
+                        mean_cost_usd: cell.mean_cost_usd,
+                    })
+                    .unwrap_or_default()
+            }),
+        })
+        .collect();
     let judge = payload.judgments.first().map(|first| BenchJudge {
         model: first.model.clone(),
         cost_usd: judge_cost_usd(payload),
@@ -206,6 +243,7 @@ pub(super) fn view(host: AgentId, name: &str, payload: &ComparePayload) -> Bench
         source,
         status: status(&payload.status),
         repeats: payload.repeats,
+        tasks,
         check: payload.check.clone(),
         budget_usd: payload.budget_usd,
         prompts: payload.prompts.clone(),
@@ -222,6 +260,7 @@ pub(super) fn view(host: AgentId, name: &str, payload: &ComparePayload) -> Bench
                 check_passed: run.check_passed,
                 files_changed: run.files_changed,
                 error: run.error.clone(),
+                task: run.task.clone(),
             })
             .collect(),
         judge,

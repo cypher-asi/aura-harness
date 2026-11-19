@@ -3,7 +3,9 @@
 
 use super::panels::body_block;
 use crate::app::benchmarks::{BenchMode, BenchState, FormField, WorkChoice};
-use crate::events::{arm_letter, BenchArm, BenchRun, BenchStatus, BenchTurn, BenchView};
+use crate::events::{
+    arm_letter, BenchArm, BenchRun, BenchStatus, BenchTaskCell, BenchTurn, BenchView,
+};
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
@@ -213,6 +215,22 @@ fn row<'a>(label: &str, (a, b): (&str, &str), column: usize, theme: &Theme) -> L
     ])
 }
 
+/// `2/3 passed, $0.40` for an arm's runs of one example task.
+fn task_cell(cell: &BenchTaskCell) -> String {
+    if cell.runs == 0 {
+        return "-".to_string();
+    }
+    let cost = cell.mean_cost_usd.map_or_else(|| "-".to_string(), money);
+    if cell.checked == 0 {
+        return format!(
+            "{} run{}, {cost}",
+            cell.runs,
+            if cell.runs == 1 { "" } else { "s" }
+        );
+    }
+    format!("{}/{} passed, {cost}", cell.passed, cell.checked)
+}
+
 fn turn_cell(turn: Option<&BenchTurn>) -> String {
     let Some(turn) = turn.filter(|t| t.runs > 0) else {
         return "-".to_string();
@@ -255,6 +273,9 @@ fn run_line<'a>(run: &BenchRun, selected: bool, theme: &Theme) -> Line<'a> {
         run.files_changed,
         if run.files_changed == 1 { "" } else { "s" },
     );
+    if let Some(task) = &run.task {
+        text.push_str(&format!("  {task}"));
+    }
     if let Some(error) = &run.error {
         text.push_str(&format!("  ({})", headline(error, 60)));
     }
@@ -296,14 +317,20 @@ fn detail_lines<'a>(
         ]),
         muted_line(
             format!(
-                "{} · {} run{} per arm · {}{}",
+                "{} · {} run{} per {}arm · {}{}",
                 view.source,
                 view.repeats,
                 if view.repeats == 1 { "" } else { "s" },
-                view.check.as_deref().map_or_else(
-                    || "no check command".to_string(),
-                    |c| format!("check `{c}`")
-                ),
+                if view.tasks.is_empty() {
+                    ""
+                } else {
+                    "task and "
+                },
+                match view.check.as_deref() {
+                    _ if !view.tasks.is_empty() => "each task's own check".to_string(),
+                    Some(c) => format!("check `{c}`"),
+                    None => "no check command".to_string(),
+                },
                 view.budget_usd
                     .map_or_else(String::new, |usd| format!(" · budget {}", money(usd))),
             ),
@@ -400,6 +427,23 @@ fn detail_lines<'a>(
             "\"vs yours\": the judge rated each run against the diff and reply the session ended with.",
             theme,
         ));
+    }
+
+    if !view.tasks.is_empty() {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            "Per task: checks passed, then mean run cost",
+            bold,
+        )));
+        for task in &view.tasks {
+            let label = headline(&task.id, LABEL - 1);
+            lines.push(row(
+                &label,
+                (&task_cell(&task.arms[0]), &task_cell(&task.arms[1])),
+                column,
+                theme,
+            ));
+        }
     }
 
     if view.prompts.len() > 1 {
@@ -510,7 +554,10 @@ fn detail_lines<'a>(
     }
     lines.push(Line::default());
     let running = view.status == BenchStatus::Running;
-    let keys = if view.status.has_copies() && !running {
+    let keys = if view.status.has_copies() && !running && !view.tasks.is_empty() {
+        "←/→ pick a run · d diff it (or both arms' first) · a/b A or B was better · \
+         x remove the copies · Esc back"
+    } else if view.status.has_copies() && !running {
         "←/→ pick a run · d diff it (or both arms' first) · y apply it · a/b A or B was better · \
          x remove the copies · Esc back"
     } else if running {
@@ -550,6 +597,7 @@ fn form_lines<'a>(app: &App, theme: &Theme, width: usize) -> Vec<Line<'a>> {
         Line::default(),
     ];
     let typed_prompt = matches!(state.work(), WorkChoice::Prompt);
+    let examples = matches!(state.work(), WorkChoice::Examples);
     for field in FormField::ALL {
         let focused = field == form.field;
         let (value, faint) = match field {
@@ -557,6 +605,9 @@ fn form_lines<'a>(app: &App, theme: &Theme, width: usize) -> Vec<Line<'a>> {
                 match state.work() {
                     WorkChoice::LastPrompt => "your last prompt".to_string(),
                     WorkChoice::Prompt => "a prompt typed below".to_string(),
+                    WorkChoice::Examples => {
+                        format!("example coding tasks (built in, {})", state.examples.len())
+                    }
                     WorkChoice::Session(session) => format!(
                         "replay {}session \"{}\" · {} prompt{}{}",
                         if session.current { "this " } else { "the " },
@@ -577,9 +628,26 @@ fn form_lines<'a>(app: &App, theme: &Theme, width: usize) -> Vec<Line<'a>> {
                 ("type it in the input line, then Enter".to_string(), true)
             }
             FormField::Prompt => (headline(&form.prompt, width.saturating_sub(24)), false),
+            FormField::Tasks if !examples => {
+                ("(only when the work is example tasks)".to_string(), true)
+            }
+            FormField::Tasks => {
+                let total = state.examples.len();
+                let names = state.examples[..form.tasks.min(total)].join(", ");
+                (
+                    format!(
+                        "{} of {total} · {}",
+                        form.tasks.min(total),
+                        headline(&names, width.saturating_sub(36))
+                    ),
+                    false,
+                )
+            }
             FormField::A => (arm_reads(&form.a, false), false),
             FormField::B => (arm_reads(&form.b, true), false),
+            FormField::Repeats if examples => (format!("{} per task", form.repeats), false),
             FormField::Repeats => (form.repeats.to_string(), false),
+            FormField::Check if examples => ("each task's own".to_string(), true),
             FormField::Check if form.check.is_empty() => (
                 "the project's (AURA_CHECK_COMMAND or detected)".to_string(),
                 true,
@@ -601,7 +669,7 @@ fn form_lines<'a>(app: &App, theme: &Theme, width: usize) -> Vec<Line<'a>> {
         let cycles = matches!(
             field,
             FormField::Work | FormField::A | FormField::B | FormField::Repeats
-        );
+        ) || (field == FormField::Tasks && examples);
         let value = if focused && cycles {
             format!("‹ {value} ›")
         } else {
@@ -778,5 +846,78 @@ mod tests {
         let screen = format!("{:?}", terminal.backend().buffer());
         assert!(screen.contains("Compare #1"), "{screen}");
         assert!(screen.contains("A gate $0.06 1/2 pass"), "{screen}");
+    }
+
+    #[test]
+    fn example_tasks_show_a_row_each_and_no_apply() {
+        use crate::events::{BenchTaskCell, BenchTaskRow};
+        let theme = Theme::default();
+        let mut view = view();
+        view.source = "2 example tasks".to_string();
+        view.prompts = Vec::new();
+        view.baseline = None;
+        view.tasks = vec![
+            BenchTaskRow {
+                id: "coding/write-file".to_string(),
+                title: "Write a file".to_string(),
+                arms: [
+                    BenchTaskCell {
+                        runs: 2,
+                        passed: 2,
+                        checked: 2,
+                        mean_cost_usd: Some(0.02),
+                    },
+                    BenchTaskCell {
+                        runs: 2,
+                        passed: 1,
+                        checked: 2,
+                        mean_cost_usd: Some(0.30),
+                    },
+                ],
+            },
+            BenchTaskRow {
+                id: "coding/fix-shell-bug".to_string(),
+                ..BenchTaskRow::default()
+            },
+        ];
+        view.runs[0].task = Some("coding/write-file".to_string());
+        let shown = text(&detail_lines(&view, None, &theme, 120));
+        assert!(shown.contains("2 runs per task and arm"), "{shown}");
+        assert!(shown.contains("each task's own check"), "{shown}");
+        assert!(shown.contains("Per task"), "{shown}");
+        assert!(shown.contains("2/2 passed, $0.02"), "{shown}");
+        assert!(shown.contains("1/2 passed, $0.30"), "{shown}");
+        assert!(shown.contains("coding/write-file"), "{shown}");
+        assert!(!shown.contains("y apply"), "{shown}");
+        assert!(!shown.contains("Per prompt"), "{shown}");
+    }
+
+    #[test]
+    fn the_form_offers_the_example_tasks_and_how_many() {
+        let theme = Theme::default();
+        let mut app = App::new();
+        let state = app.bench_mut();
+        state.examples = vec!["Write a file".to_string(), "Fix a bug".to_string()];
+        state.form.tasks = 2;
+        state.form.work = 2;
+        state.form.field = FormField::Tasks;
+        let shown = text(&form_lines(&app, &theme, 120));
+        assert!(
+            shown.contains("example coding tasks (built in, 2)"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("‹ 2 of 2 · Write a file, Fix a bug ›"),
+            "{shown}"
+        );
+        assert!(shown.contains("3 per task"), "{shown}");
+        assert!(shown.contains("each task's own"), "{shown}");
+
+        app.bench_mut().form.work = 0;
+        let shown = text(&form_lines(&app, &theme, 120));
+        assert!(
+            shown.contains("(only when the work is example tasks)"),
+            "{shown}"
+        );
     }
 }

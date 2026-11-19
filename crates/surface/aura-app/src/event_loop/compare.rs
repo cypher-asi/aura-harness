@@ -18,6 +18,7 @@ use super::compare_view::{self, arm_label, split_patch, EstimateView};
 use super::handlers::system_message;
 use super::subagents::lock;
 use super::LoopState;
+use crate::bench_pack::{self, ExampleTask};
 use aura_agent_gate::compare::{
     default_against, estimate, parse, resolve_arms, CompareCommand, CompareRequest,
     DEFAULT_CONCURRENCY,
@@ -219,6 +220,22 @@ pub(super) fn kernel_of(
     Ok(kernel)
 }
 
+/// The first `n` built-in example tasks.
+fn example_tasks(n: usize) -> Result<Vec<&'static ExampleTask>, String> {
+    let all = bench_pack::tasks();
+    if all.is_empty() {
+        return Err("No example tasks are built into this build".to_string());
+    }
+    if n == 0 || n > all.len() {
+        return Err(format!(
+            "There are {} example tasks; ask for 1 to {}",
+            all.len(),
+            all.len()
+        ));
+    }
+    Ok(all[..n].iter().collect())
+}
+
 /// Prepare the comparison `request` asks for from `agent_id`'s chat and
 /// say what it should cost.
 pub(super) async fn prepare(
@@ -238,7 +255,12 @@ pub(super) async fn prepare(
     let last = super::gate_record::last_turn(kernel.store().as_ref(), agent_id);
     let mut category = PromptCategory::Unclassified;
     let mut replay = None;
+    let examples = match request.examples {
+        Some(n) => example_tasks(n)?,
+        None => Vec::new(),
+    };
     let prompts = match (request.session, &request.plan, &request.prompt) {
+        _ if !examples.is_empty() => Vec::new(),
         (Some(pick), _, _) => {
             let loaded = bench_source::load(state, agent_id, pick, &workspace)?;
             let prompts = loaded.prompts.clone();
@@ -289,11 +311,15 @@ pub(super) async fn prepare(
         (ArmSpec::Model { model }, _) | (_, ArmSpec::Model { model }) => model.clone(),
         _ => String::new(),
     });
-    let check = request.check.clone().or_else(|| {
-        crate::harness::post_edit_check_from_env()
-            .resolve(&workspace)
-            .map(|check| check.command)
-    });
+    let check = if examples.is_empty() {
+        request.check.clone().or_else(|| {
+            crate::harness::post_edit_check_from_env()
+                .resolve(&workspace)
+                .map(|check| check.command)
+        })
+    } else {
+        None
+    };
     let no_exploring = GateConfig {
         explore_rate: 0.0,
         ..*state.hub.gate.settings()
@@ -317,13 +343,32 @@ pub(super) async fn prepare(
         }
         _ => arm_label(spec),
     };
-    let (source, start, notes) = match replay {
+    let (source, start, mut notes) = match replay {
         Some(replay) => (replay.source, replay.start, replay.notes),
+        None if !examples.is_empty() => (
+            BenchSource::Examples {
+                tasks: examples.iter().map(|task| task.info()).collect(),
+            },
+            Vec::new(),
+            Vec::new(),
+        ),
         None => (BenchSource::Prompt, Vec::new(), Vec::new()),
     };
+    if request.check.is_some() && !examples.is_empty() {
+        notes.push("Example tasks use their own check commands; --check is ignored".to_string());
+    }
+    let task = match prompts.first() {
+        Some(first) => first.clone(),
+        None => format!(
+            "{} example coding task{}",
+            examples.len(),
+            if examples.len() == 1 { "" } else { "s" }
+        ),
+    };
     let plan = ComparePlan {
-        task: prompts[0].clone(),
+        task,
         prompts,
+        examples,
         plan: request.plan,
         arms: [arm_a, arm_b],
         source,
@@ -342,12 +387,19 @@ pub(super) async fn prepare(
     };
     let session = match &plan.source {
         BenchSource::Session { title, .. } => Some(title.as_str()),
-        BenchSource::Prompt => None,
+        BenchSource::Prompt | BenchSource::Examples { .. } => None,
+    };
+    let prompts_per_run = if plan.examples.is_empty() {
+        plan.prompts.len()
+    } else {
+        let prompts: usize = plan.examples.iter().map(|t| t.prompts.len()).sum();
+        prompts.div_ceil(plan.examples.len())
     };
     let text = EstimateView {
         task: &plan.task,
         prompts: plan.prompts.len(),
         session,
+        examples: plan.source.examples(),
         a: reads(&plan.arms[0]),
         b: reads(&plan.arms[1]),
         judge: &plan.judge,
@@ -359,8 +411,8 @@ pub(super) async fn prepare(
             &model_of(&plan.arms[0]),
             &model_of(&plan.arms[1]),
             &plan.judge,
-            plan.repeats,
-            plan.prompts.len(),
+            plan.runs_per_arm(),
+            prompts_per_run,
         ),
         notes: &plan.notes,
     }
@@ -394,16 +446,18 @@ pub(super) async fn start(state: &mut LoopState<'_>) -> Result<String, String> {
         compare = %host.name,
         repeats = plan.repeats,
         prompts = plan.prompts.len(),
+        examples = plan.examples.len(),
         a = %plan.arms[0].label(),
         b = %plan.arms[1].label(),
         "Starting a comparison"
     );
+    let runs = plan.runs_per_arm();
     let text = format!(
         "{} started: {} run{} per arm, up to {} at a time; they show in the Agents panel. \
          /compare cancel stops it.",
         host.name,
-        plan.repeats,
-        if plan.repeats == 1 { "" } else { "s" },
+        runs,
+        if runs == 1 { "" } else { "s" },
         plan.concurrency,
     );
     let cancel = CancellationToken::new();
@@ -523,6 +577,12 @@ pub(super) async fn apply(
     name: &str,
 ) -> Result<String, String> {
     let (host, compare, mut payload) = ended(state, host)?;
+    if !payload.source.examples().is_empty() {
+        return Err(format!(
+            "{compare} ran example tasks in their own files; there is nothing to apply to your \
+             workspace"
+        ));
+    }
     if !payload.status.has_copies() {
         return Err(format!("{compare}'s copies were already removed"));
     }
