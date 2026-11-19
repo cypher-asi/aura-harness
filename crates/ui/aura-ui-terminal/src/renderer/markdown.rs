@@ -279,7 +279,8 @@ pub enum ContentSegment {
     CodeBlock { language: String, code: String },
 }
 
-/// Parse message content into segments of text and code blocks.
+/// Parse message content into segments of text and code blocks. A fence
+/// left open runs to the end, so code still streaming in is drawn as code.
 pub fn parse_content_segments(content: &str) -> Vec<ContentSegment> {
     let mut segments = Vec::new();
     let mut current_text = String::new();
@@ -317,21 +318,12 @@ pub fn parse_content_segments(content: &str) -> Vec<ContentSegment> {
         }
     }
 
-    // Flush remaining content
     if in_code_block {
-        if current_text.is_empty() {
-            current_text = format!("```{code_language}");
-        } else {
-            current_text.push_str("\n```");
-            current_text.push_str(&code_language);
-        }
-        if !code_content.is_empty() {
-            current_text.push('\n');
-            current_text.push_str(&code_content);
-        }
-    }
-
-    if !current_text.is_empty() {
+        segments.push(ContentSegment::CodeBlock {
+            language: code_language,
+            code: code_content,
+        });
+    } else if !current_text.is_empty() {
         segments.push(ContentSegment::Text(current_text));
     }
 

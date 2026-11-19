@@ -4,10 +4,11 @@
 
 use super::command::wrap_spans;
 use super::diff::diff_stat_spans;
+use super::markdown::{parse_content_segments, render_markdown, ContentSegment};
 use super::panels::format_elapsed;
 use super::text::{display_width, wrap_words};
 use crate::app::format::{file_name, format_tool_label, is_complete_json, parse_tool_args};
-use crate::components::{Activity, DiffView, ThinkingStep, ToolStatus, ToolStep};
+use crate::components::{Activity, CodeBlock, DiffView, ThinkingStep, ToolStatus, ToolStep};
 use crate::Theme;
 use ratatui::{
     style::Style,
@@ -31,6 +32,10 @@ const MAX_RESULT_LINES: usize = 200;
 
 /// Streaming tool input at least this large shows its size in the header.
 const STREAMING_SIZE_MIN_BYTES: usize = 1024;
+
+/// A list or object argument longer than this, as compact JSON, is
+/// pretty-printed under its key.
+const INLINE_ARG_MAX: usize = 60;
 
 /// Thinking shorter than this reads `Thought briefly`.
 const BRIEF_THOUGHT_MS: u64 = 2000;
@@ -432,7 +437,11 @@ fn tool_lines(
         }
     } else {
         for line in pretty_args(&step.args).lines() {
-            body.push_wrapped(&mut lines, line, muted, theme);
+            if line.is_empty() {
+                lines.push(body.line(String::new(), muted, theme));
+            } else {
+                body.push_wrapped(&mut lines, line, muted, theme);
+            }
         }
     }
 
@@ -454,10 +463,19 @@ fn tool_lines(
             theme.colors.error
         },
     );
-    let total = result.lines().count();
-    for line in result.lines().take(MAX_RESULT_LINES) {
-        body.push_wrapped(&mut lines, line, style, theme);
-    }
+    let total = if step.name == "task" {
+        let reply = markdown_lines(result, body.width, style, theme);
+        let total = reply.len();
+        for line in reply.into_iter().take(MAX_RESULT_LINES) {
+            lines.push(body.wrap_line(line, theme));
+        }
+        total
+    } else {
+        for line in result.lines().take(MAX_RESULT_LINES) {
+            body.push_wrapped(&mut lines, line, style, theme);
+        }
+        result.lines().count()
+    };
     if total > MAX_RESULT_LINES {
         lines.push(body.line(
             format!("… {} more lines", total - MAX_RESULT_LINES),
@@ -568,13 +586,55 @@ fn tool_meta(step: &ToolStep) -> String {
     parts.into_iter().map(|p| format!(" · {p}")).collect()
 }
 
-/// Arguments pretty-printed when they are complete JSON; empty for `{}`.
-fn pretty_args(args: &str) -> String {
-    match serde_json::from_str::<serde_json::Value>(args) {
-        Ok(serde_json::Value::Object(map)) if map.is_empty() => String::new(),
-        Ok(value) => serde_json::to_string_pretty(&value).unwrap_or_else(|_| args.to_string()),
-        Err(_) => args.trim().to_string(),
+/// `text` as markdown, fenced code drawn as code blocks.
+fn markdown_lines(text: &str, width: usize, base: Style, theme: &Theme) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for segment in parse_content_segments(text) {
+        match segment {
+            ContentSegment::Text(text) => lines.extend(render_markdown(&text, width, base, theme)),
+            ContentSegment::CodeBlock { language, code } => {
+                lines.extend(CodeBlock::new(language, code).render(theme, width));
+            }
+        }
     }
+    lines
+}
+
+/// Complete JSON object arguments as `key: value` lines, strings unescaped
+/// and multi-line values indented under their key; empty for `{}`. Other
+/// arguments, such as a prefix still streaming in, are shown as they are.
+fn pretty_args(args: &str) -> String {
+    use serde_json::Value;
+    let map = match serde_json::from_str::<Value>(args) {
+        Ok(Value::Object(map)) => map,
+        Ok(value) => {
+            return serde_json::to_string_pretty(&value).unwrap_or_else(|_| args.to_string())
+        }
+        Err(_) => return args.trim().to_string(),
+    };
+    let mut out = Vec::new();
+    for (key, value) in &map {
+        let text = match value {
+            Value::String(text) => text.trim_end().to_string(),
+            Value::Array(_) | Value::Object(_) if value.to_string().len() > INLINE_ARG_MAX => {
+                serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+            }
+            _ => value.to_string(),
+        };
+        if text.contains('\n') {
+            out.push(format!("{key}:"));
+            out.extend(text.lines().map(|line| {
+                if line.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!("  {line}")
+                }
+            }));
+        } else {
+            out.push(format!("{key}: {text}"));
+        }
+    }
+    out.join("\n")
 }
 
 /// Time since `started`, once it reaches a second.
@@ -715,8 +775,35 @@ mod tests {
             text.starts_with("  ▾ ✗ Read main.rs · no such file"),
             "{text}"
         );
-        assert!(text.contains("│   \"path\": \"src/main.rs\""), "{text}");
+        assert!(text.contains("│ path: src/main.rs"), "{text}");
         assert!(text.ends_with("│ no such file"), "{text}");
+    }
+
+    #[test]
+    fn expanded_task_shows_its_prompt_as_text_and_its_reply_as_markdown() {
+        let args = serde_json::json!({
+            "subagent_type": "explore",
+            "prompt": "Read-only.\n\nDo two things.",
+        });
+        let step = tool_step(
+            "task",
+            &args.to_string(),
+            ToolStatus::Success,
+            Some("**Done**\n\n| a | b |\n|---|---|\n| 1 | 2 |"),
+        );
+        let lines = activity_lines(&step, true, None, "⠋", 80, &Theme::default());
+        let text = texts(&lines).join("\n");
+        assert!(
+            text.starts_with("  ▾ Delegated to explore: Read-only."),
+            "{text}"
+        );
+        assert!(
+            text.contains("│ prompt:\n    │   Read-only.\n    │ \n    │   Do two things."),
+            "{text}"
+        );
+        assert!(text.contains("│ subagent_type: explore"), "{text}");
+        assert!(!text.contains("**"), "{text}");
+        assert!(!text.contains("|---|"), "{text}");
     }
 
     #[test]

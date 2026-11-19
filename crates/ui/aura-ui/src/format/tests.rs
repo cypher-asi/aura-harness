@@ -75,6 +75,40 @@ fn tool_labels_say_what_the_call_did() {
         "Ran cargo test"
     );
     assert_eq!(label("git_push", json!({})), "git_push");
+    assert_eq!(
+        label(
+            "task",
+            json!({ "subagent_type": "explore", "prompt": "\nFind the router.\n\nThen stop." })
+        ),
+        "Delegated to explore: Find the router."
+    );
+}
+
+#[test]
+fn task_result_is_the_subagent_reply() {
+    let result = json!({
+        "child_agent_id": "99",
+        "final_message": "| a | b |\n|---|---|\n",
+        "total_input_tokens": 10,
+        "total_output_tokens": 2,
+        "files_changed": [],
+        "exit": { "kind": "completed" },
+    });
+    assert_eq!(
+        format_tool_result("task", &result.to_string()),
+        "| a | b |\n|---|---|"
+    );
+
+    let failed = json!({
+        "final_message": "",
+        "files_changed": ["src/a.rs"],
+        "exit": { "kind": "failed", "reason": "budget spent" },
+    });
+    assert_eq!(
+        format_tool_result("task", &failed.to_string()),
+        "failed: budget spent\n\nfiles changed: src/a.rs"
+    );
+    assert_eq!(format_tool_result("task", "not json"), "not json");
 }
 
 #[test]

@@ -124,10 +124,12 @@ fn test_parse_content_segments_unclosed_code_block() {
     let content = "Before\n```rust\nfn main() {}";
     let segments = parse_content_segments(content);
 
-    assert!(!segments.is_empty());
-    for segment in &segments {
-        assert!(matches!(segment, ContentSegment::Text(_)));
-    }
+    assert_eq!(segments.len(), 2);
+    assert!(matches!(&segments[0], ContentSegment::Text(text) if text == "Before"));
+    assert!(matches!(
+        &segments[1],
+        ContentSegment::CodeBlock { language, code } if language == "rust" && code == "fn main() {}"
+    ));
 }
 
 // ========================================================================

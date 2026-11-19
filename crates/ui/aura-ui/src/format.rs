@@ -46,6 +46,16 @@ pub fn format_tool_label(tool_name: &str, args_json: &str) -> String {
         }
         "find_files" => in_path(format!("Found {}", text("pattern").unwrap_or_default())),
         "run_command" => format!("Ran {}", format_tool_summary_from_value(tool_name, &args)),
+        "task" => {
+            let agent = match text("subagent_type") {
+                Some(kind) => format!("Delegated to {kind}"),
+                None => "Delegated".to_string(),
+            };
+            match text("prompt").and_then(|p| p.lines().map(str::trim).find(|l| !l.is_empty())) {
+                Some(line) => format!("{agent}: {line}"),
+                None => agent,
+            }
+        }
         _ => {
             let summary = format_tool_summary_from_value(tool_name, &args);
             if summary.is_empty() {
@@ -138,12 +148,54 @@ pub fn file_name(path: &str) -> &str {
 /// Format a tool result for display.
 ///
 /// `run_command` results arrive as the `{ ok, exit_code, stdout, stderr }`
-/// envelope; they are shown as the command's output text. Anything else
-/// (or an envelope that fails to parse) is returned unchanged.
+/// envelope; they are shown as the command's output text. `task` results
+/// are shown as the subagent's reply, after why it stopped if it didn't
+/// complete. Anything else (or an envelope that fails to parse) is
+/// returned unchanged.
 pub fn format_tool_result(tool_name: &str, result: &str) -> String {
-    if tool_name != "run_command" {
-        return result.to_string();
+    match tool_name {
+        "run_command" => format_command_result(result),
+        "task" => format_task_result(result).unwrap_or_else(|| result.to_string()),
+        _ => result.to_string(),
     }
+}
+
+/// A `SubagentResult`: why the subagent stopped unless it completed, its
+/// reply, and the files it changed.
+fn format_task_result(result: &str) -> Option<String> {
+    let outcome = serde_json::from_str::<serde_json::Value>(result).ok()?;
+    let reply = outcome.get("final_message")?.as_str()?.trim();
+    let exit = outcome.get("exit")?;
+    let reason = exit
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let stopped = match exit.get("kind")?.as_str()? {
+        "completed" => None,
+        "cancelled" => Some("cancelled".to_string()),
+        "timeout" => Some("timed out".to_string()),
+        kind if reason.is_empty() => Some(kind.to_string()),
+        kind => Some(format!("{kind}: {reason}")),
+    };
+
+    let mut parts: Vec<String> = stopped.into_iter().collect();
+    if !reply.is_empty() {
+        parts.push(reply.to_string());
+    } else if parts.is_empty() {
+        parts.push("(no reply)".to_string());
+    }
+    let files: Vec<&str> = outcome
+        .get("files_changed")
+        .and_then(serde_json::Value::as_array)
+        .map(|files| files.iter().filter_map(serde_json::Value::as_str).collect())
+        .unwrap_or_default();
+    if !files.is_empty() {
+        parts.push(format!("files changed: {}", files.join(", ")));
+    }
+    Some(parts.join("\n\n"))
+}
+
+fn format_command_result(result: &str) -> String {
     let Ok(envelope) = serde_json::from_str::<serde_json::Value>(result) else {
         return result.to_string();
     };
