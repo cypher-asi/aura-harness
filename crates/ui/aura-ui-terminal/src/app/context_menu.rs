@@ -321,15 +321,20 @@ mod tests {
         (app, rx)
     }
 
-    /// Draw the app `height` rows tall, a line per row.
-    fn screen(app: &mut App, height: u16) -> Vec<String> {
+    /// Draw the app 120 columns wide and `height` rows tall.
+    fn draw(app: &mut App, height: u16) -> ratatui::buffer::Buffer {
         use ratatui::{backend::TestBackend, Terminal};
         let mut terminal = Terminal::new(TestBackend::new(120, height)).unwrap();
         let theme = crate::Theme::cyber();
         terminal
             .draw(|frame| crate::renderer::render(frame, app, &theme))
             .unwrap();
-        let buffer = terminal.backend().buffer();
+        terminal.backend().buffer().clone()
+    }
+
+    /// Draw the app `height` rows tall, a line per row.
+    fn screen(app: &mut App, height: u16) -> Vec<String> {
+        let buffer = draw(app, height);
         let width = usize::from(buffer.area.width);
         buffer
             .content
@@ -393,6 +398,39 @@ mod tests {
             );
         }
         assert_eq!(app.focus(), PanelFocus::Swarm);
+    }
+
+    #[test]
+    fn the_item_under_the_pointer_and_the_row_clicked_are_lit() {
+        let (mut app, _rx) = app();
+        let rows = screen(&mut app, 30);
+        let project = cell_of(&rows, "CC");
+        press(&mut app, MouseButton::Right, project);
+        let rows = screen(&mut app, 30);
+        let (add, rename) = (cell_of(&rows, "Add agent"), cell_of(&rows, "Project info"));
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: rename.0,
+            row: rename.1,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.context_menu().map(|menu| menu.selected), Some(1));
+
+        let buffer = draw(&mut app, 30);
+        let hover = Some(crate::Theme::cyber().colors.surface_hover);
+        let area = app
+            .context_menu()
+            .and_then(|menu| menu.area)
+            .expect("drawn");
+        let row_end = area.right() - 2;
+        assert_eq!(buffer[rename].style().bg, hover, "the item hovered");
+        assert_eq!(
+            buffer[(row_end, rename.1)].style().bg,
+            hover,
+            "across its row"
+        );
+        assert_ne!(buffer[add].style().bg, hover, "the other items");
+        assert_eq!(buffer[project].style().bg, hover, "the project behind");
     }
 
     #[test]
