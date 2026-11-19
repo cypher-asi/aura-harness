@@ -128,6 +128,40 @@ async fn both_arms_run_repeatedly_in_separate_copies_and_their_checks_feed_gate(
     assert_eq!(payload.against, OPUS);
     let names: Vec<&str> = payload.runs.iter().map(|r| r.name.as_str()).collect();
     assert_eq!(names, ["a-1", "b-1", "a-2", "b-2"]);
+    {
+        let registry = subagents::lock(&state.hub.registry);
+        let host = registry.compares().last().unwrap().zns_id.clone();
+        let rows = registry.tree();
+        let at = rows
+            .iter()
+            .position(|(agent, _)| agent.zns_id == host)
+            .unwrap();
+        let arm = rows[at].1 + 1;
+        let tree: Vec<(&str, usize)> = rows[at + 1..]
+            .iter()
+            .take_while(|(_, depth)| *depth >= arm)
+            .map(|(agent, depth)| (agent.name.as_str(), *depth))
+            .collect();
+        let (a, b) = (
+            format!("A · {}", payload.arm_a.label()),
+            format!("B · {OPUS}"),
+        );
+        assert_eq!(
+            tree,
+            [
+                (a.as_str(), arm),
+                ("a-1", arm + 1),
+                ("a-2", arm + 1),
+                (b.as_str(), arm),
+                ("b-1", arm + 1),
+                ("b-2", arm + 1),
+            ],
+            "each arm's runs are listed under an agent of its own"
+        );
+        for run in &payload.runs {
+            assert!(registry.under_compare(run.agent_id), "{}", run.name);
+        }
+    }
     let mut workdirs = Vec::new();
     for run in &payload.runs {
         assert_eq!(run.error, None, "{}", run.name);

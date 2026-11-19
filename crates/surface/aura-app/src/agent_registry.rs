@@ -36,6 +36,8 @@ const HEADLESS_ZNS_ID: &str = "0://terminal/headless";
 const HEADLESS_AGENT_NAME: &str = "Headless";
 /// ZNS id prefix of the agents that hold a `/compare` and its runs.
 const COMPARE_ZNS_PREFIX: &str = "0://terminal/compare/";
+/// ZNS id prefix of the agents that group one arm's runs of a `/compare`.
+const COMPARE_ARM_ZNS_PREFIX: &str = "0://terminal/compare-arm/";
 
 /// A folder the agents of the terminal UI work in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,6 +130,12 @@ impl RegisteredAgent {
         self.zns_id.starts_with(COMPARE_ZNS_PREFIX)
     }
 
+    /// Whether this agent groups the runs of one arm of a `/compare`.
+    #[must_use]
+    pub fn is_compare_arm(&self) -> bool {
+        self.zns_id.starts_with(COMPARE_ARM_ZNS_PREFIX)
+    }
+
     /// What the UI calls the agent: its title once it has one.
     #[must_use]
     pub fn display_name(&self) -> &str {
@@ -159,6 +167,7 @@ fn is_placeholder_name(name: &str) -> bool {
 fn run_order(name: &str) -> (bool, Option<(u32, &str)>) {
     let order = name
         .rsplit_once('-')
+        .filter(|(arm, _)| !arm.is_empty() && arm.bytes().all(|b| b.is_ascii_lowercase()))
         .and_then(|(arm, n)| Some((n.parse().ok()?, arm)));
     (order.is_none(), order)
 }
@@ -640,13 +649,17 @@ impl AgentRegistry {
     }
 
     /// Whether `agent_id` works under a `/compare`: one of its runs, or a
-    /// subtask of one.
+    /// subtask of one. The agents grouping an arm's runs do no work.
     #[must_use]
     pub fn under_compare(&self, agent_id: AgentId) -> bool {
-        self.ancestry(agent_id)
-            .into_iter()
-            .skip(1)
-            .any(|id| self.find(id).is_some_and(RegisteredAgent::is_compare))
+        !self
+            .find(agent_id)
+            .is_some_and(RegisteredAgent::is_compare_arm)
+            && self
+                .ancestry(agent_id)
+                .into_iter()
+                .skip(1)
+                .any(|id| self.find(id).is_some_and(RegisteredAgent::is_compare))
     }
 
     /// Register an agent named `name` under the agent with ZNS id
@@ -680,6 +693,24 @@ impl AgentRegistry {
             parent: Some(parent.to_string()),
             project_id: self.project_id_of_zns(parent),
             ..Self::new_agent(format!("Compare #{n}"))
+        })
+    }
+
+    /// Register the agent named `name` that groups one arm's runs of the
+    /// comparison with ZNS id `compare`.
+    ///
+    /// # Errors
+    /// Returns an error if the registry cannot be written.
+    pub fn create_compare_arm(
+        &mut self,
+        name: &str,
+        compare: &str,
+    ) -> anyhow::Result<RegisteredAgent> {
+        self.push(RegisteredAgent {
+            zns_id: format!("{COMPARE_ARM_ZNS_PREFIX}{}", uuid::Uuid::new_v4()),
+            parent: Some(compare.to_string()),
+            project_id: self.project_id_of_zns(compare),
+            ..Self::new_agent(name.to_string())
         })
     }
 
@@ -903,7 +934,7 @@ impl AgentRegistry {
             .filter(|a| a.parent.as_deref() == Some(agent.zns_id.as_str()))
             .filter(|a| with_archived || !(a.archived || a.removed))
             .collect();
-        if agent.is_compare() {
+        if agent.is_compare() || agent.is_compare_arm() {
             // Runs register as their copies become ready, in no set order.
             spawned.sort_by(|x, y| run_order(&x.name).cmp(&run_order(&y.name)));
         }

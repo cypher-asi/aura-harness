@@ -139,6 +139,14 @@ fn fixture(dir: &Path, task: &ExampleTask) -> PathBuf {
     dir.join(FIXTURES).join(task.id.replace('/', "__"))
 }
 
+/// What the agent grouping `arm`'s runs, on `spec`, is called:
+/// `A · gate`, `B · claude-opus-5-5`.
+fn arm_name(arm: CompareArm, spec: &ArmSpec) -> String {
+    let label = spec.label();
+    let short = label.rsplit('/').next().unwrap_or(label);
+    format!("{} · {short}", arm.as_str().to_uppercase())
+}
+
 /// The task records a run's subtasks left in its copy, moved out of it
 /// while its check runs: they quote the prompts, so a check that greps the
 /// copy would find them.
@@ -180,6 +188,8 @@ struct Context {
     commands: mpsc::Sender<UiCommand>,
     plan: ComparePlan,
     host: RegisteredAgent,
+    /// ZNS ids of the agents each arm's runs are registered under, A first
+    arms: [String; 2],
     /// Where this comparison's copies go
     dir: PathBuf,
     /// Root of the user's git repository, when the workspace is in one
@@ -305,11 +315,22 @@ pub(super) async fn run(
         }
     }
 
+    let arms = CompareArm::BOTH.map(|arm| {
+        let name = arm_name(arm, &plan.arms[arm.index()]);
+        match lock(&hub.registry).create_compare_arm(&name, &host.zns_id) {
+            Ok(agent) => agent.zns_id,
+            Err(e) => {
+                warn!(arm = %arm, error = %e, "Could not register an arm; its runs go under the comparison");
+                host.zns_id.clone()
+            }
+        }
+    });
     let ctx = Arc::new(Context {
         hub: Arc::clone(&hub),
         commands,
         plan,
         host: host.clone(),
+        arms,
         dir,
         repo,
         cancel,
@@ -563,7 +584,7 @@ async fn run_one(ctx: Arc<Context>, arm: CompareArm, n: u32) -> Ran {
     };
     let hub = &ctx.hub;
     let registered =
-        lock(&hub.registry).create_child(&name, &ctx.host.zns_id, Some(copy.workdir.clone()));
+        lock(&hub.registry).create_child(&name, &ctx.arms[arm.index()], Some(copy.workdir.clone()));
     let agent = match registered {
         Ok(agent) => agent,
         Err(e) => return not_run(&ctx, arm, n, format!("registering the run: {e:#}")),
@@ -1132,7 +1153,10 @@ mod tests {
         std::fs::write(records.join("1.json"), "rename calc_total").unwrap();
 
         let aside = RecordsAside::take(&root, &root, "a-3");
-        assert!(!records.exists(), "a check grepping the copy can't see them");
+        assert!(
+            !records.exists(),
+            "a check grepping the copy can't see them"
+        );
         aside.put_back();
         assert_eq!(
             std::fs::read_to_string(records.join("1.json")).unwrap(),
