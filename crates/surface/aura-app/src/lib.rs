@@ -39,6 +39,7 @@ pub mod model_selection;
 pub mod project_instructions;
 pub mod record_loader;
 pub mod recorded_runs;
+pub mod repo_source;
 pub mod session;
 pub mod session_checkpoint;
 pub mod session_helpers;

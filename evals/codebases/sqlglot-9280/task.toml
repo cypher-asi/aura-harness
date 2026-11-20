@@ -1,0 +1,44 @@
+# Issue: https://github.com/tobymao/sqlglot/issues/9280
+# Fix:   https://github.com/tobymao/sqlglot/pull/9297
+title = "sqlglot: SQLite: END and END TRANSACTION are parsed as a column and an alias instead of COMMIT"
+category = "codebase"
+tags = ["hard", "python", "sqlglot"]
+prompt = """
+You are working in a checkout of tobymao/sqlglot (Python). Resolve this GitHub issue.
+
+# SQLite: END and END TRANSACTION are parsed as a column and an alias instead of COMMIT
+
+`END` and `END TRANSACTION` are aliases for `COMMIT` in SQLite, but they parse as a column and an alias. So `END TRANSACTION` is written back as `END AS TRANSACTION`, which SQLite rejects.
+
+**Fully reproducible code snippet**
+
+```python
+import sqlglot
+
+sqlglot.parse_one("END TRANSACTION", read="sqlite").sql("sqlite")
+# 'END AS TRANSACTION'
+
+type(sqlglot.parse_one("END", read="sqlite"))
+# <class 'sqlglot.expressions.core.Column'>
+
+sqlglot.parse_one("COMMIT TRANSACTION", read="sqlite").sql("sqlite")
+# 'COMMIT'
+```
+
+Expected: both should parse to a `Commit`, like `COMMIT` does. SQLite 3.45.3 accepts `END` and `END TRANSACTION` as a commit.
+
+**Official Documentation**
+
+https://www.sqlite.org/lang_transaction.html
+
+Found by running a set of statements through SQLite 3.45.3 and through sqlglot (30.33.1.dev54, main at b812ff95a) and comparing the results.
+
+Fix it in the library's code. Tests that check the fix are hidden and run after you finish; the repository's existing tests must keep passing. Use only what is in the repository and the standard library.
+
+"""
+verify = "sh .gate_checks/run.sh"
+max_iterations = 80
+
+[source]
+repo = "https://github.com/tobymao/sqlglot"
+commit = "f95fca8a6a9b34faabc05f31109f6fb10d051f40"

@@ -1,0 +1,68 @@
+# Issue: https://github.com/tobymao/sqlglot/issues/8891
+# Fix:   https://github.com/tobymao/sqlglot/pull/8897
+title = "sqlglot: TABLE t shorthand doesn't parse (duckdb, postgres, mysql)"
+category = "codebase"
+tags = ["hard", "python", "sqlglot"]
+prompt = """
+You are working in a checkout of tobymao/sqlglot (Python). Resolve this GitHub issue.
+
+# TABLE t shorthand doesn't parse (duckdb, postgres, mysql)
+
+And the last finding for now :)
+
+DuckDB, Postgres and MySQL accept the `TABLE t` query form, shorthand for `SELECT * FROM t`. DuckDB's own tests use it a lot to compare results, e.g. `(TABLE actual EXCEPT ALL TABLE expected)`. SQLGlot parses it on its own as the column `TABLE` aliased `t`, and fails to parse it after `UNION`/`EXCEPT` or inside parentheses. This is closer to a missing feature than a bug.
+
+## Fully reproducible code snippet
+
+Read and write dialect: `duckdb` (`postgres` and `mysql` give the same trees and errors).
+
+```python
+import duckdb, sqlglot
+print("sqlglot", sqlglot.__version__, "duckdb", duckdb.__version__)
+con = duckdb.connect()
+con.execute("CREATE TABLE t AS SELECT 1 AS x"); con.execute("CREATE TABLE a AS SELECT 1 AS x"); con.execute("CREATE TABLE b AS SELECT 2 AS x")
+for s in ["TABLE t", "SELECT 1 EXCEPT ALL TABLE t", "(TABLE a EXCEPT ALL TABLE b)", "TABLE a UNION ALL TABLE b"]:
+    try: d = con.execute(s).fetchall()
+    except Exception as e: d = "ERROR " + str(e).splitlines()[0]
+    try:
+        e = sqlglot.parse_one(s, read="duckdb"); g = f"{e.sql('duckdb')!r}  tree={e!r}".replace("\\n", " ")
+    except Exception as e:
+        g = "ERROR " + str(e).splitlines()[0]
+    print(f"{s!r}\\n  DuckDB:  {d}\\n  SQLGlot: {g}")
+```
+
+Output with sqlglot 30.29.0 (same with 30.22.0), DuckDB 1.4.1 (same with 2.0.0), Python 3.13:
+
+```
+sqlglot 30.29.0 duckdb 1.4.1
+'TABLE t'
+  DuckDB:  [(1,)]
+  SQLGlot: '"TABLE" AS t'  tree=Alias(   this=Column(     this=Identifier(this=TABLE, quoted=False)),   alias=Identifier(this=t, quoted=False))
+'SELECT 1 EXCEPT ALL TABLE t'
+  DuckDB:  []
+  SQLGlot: ERROR Required keyword: 'expression' missing for <class 'sqlglot.expressions.query.Except'>. Line 1, Col: 25.
+'(TABLE a EXCEPT ALL TABLE b)'
+  DuckDB:  [(1,)]
+  SQLGlot: ERROR Expecting ). Line 1, Col: 15.
+'TABLE a UNION ALL TABLE b'
+  DuckDB:  [(1,), (2,)]
+  SQLGlot: ERROR Required keyword: 'expression' missing for <class 'sqlglot.expressions.query.Union'>. Line 1, Col: 23.
+```
+
+Expected: `TABLE t` parsed as `SELECT * FROM t` (or as a dedicated node that generates back to `TABLE t`), so that these give, for example, `SELECT 1 EXCEPT ALL SELECT * FROM t` and `(SELECT * FROM a EXCEPT ALL SELECT * FROM b)`.
+
+## Official Documentation
+
+- Postgres, the TABLE command: https://www.postgresql.org/docs/current/sql-select.html#SQL-TABLE
+- MySQL, TABLE statement: https://dev.mysql.com/doc/refman/8.4/en/table.html
+- DuckDB accepts the same form (its parser follows Postgres) and uses it in its tests, e.g. https://github.com/duckdb/duckdb/blob/v1.4.1/test/sql/filter/null_selection.test
+
+Fix it in the library's code. Tests that check the fix are hidden and run after you finish; the repository's existing tests must keep passing. Use only what is in the repository and the standard library.
+
+"""
+verify = "sh .gate_checks/run.sh"
+max_iterations = 80
+
+[source]
+repo = "https://github.com/tobymao/sqlglot"
+commit = "6612c1e55adfd2e23015fe2d5789e95bc74e3eb9"

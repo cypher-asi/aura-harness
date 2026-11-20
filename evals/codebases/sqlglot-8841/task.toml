@@ -1,0 +1,40 @@
+# Issue: https://github.com/tobymao/sqlglot/issues/8841
+# Fix:   https://github.com/tobymao/sqlglot/pull/8843
+title = "sqlglot: PostgreSQL to SQLite transpilation generates invalid SQL for parenthesized set operation with ORDER BY"
+category = "codebase"
+tags = ["hard", "python", "sqlglot"]
+prompt = """
+You are working in a checkout of tobymao/sqlglot (Python). Resolve this GitHub issue.
+
+# PostgreSQL to SQLite transpilation generates invalid SQL for parenthesized set operation with ORDER BY
+
+Hello i found that after fixing [issue 8390](https://github.com/tobymao/sqlglot/issues/8390) one case now processed with error. Is this logic expected? 
+
+```
+import sqlite3
+import sqlglot
+
+source = "SELECT 3 UNION ALL ((SELECT 2 INTERSECT SELECT 2) ORDER BY 1)"
+sql = sqlglot.transpile(source, read="postgres", write="sqlite")[0]
+
+print(sql)
+# SELECT 3 UNION ALL SELECT * FROM ((SELECT 2 INTERSECT SELECT 2) ORDER BY 1 NULLS LAST)
+
+try:
+    print(sqlite3.connect(":memory:").execute(sql).fetchall())
+except sqlite3.OperationalError as error:
+    print(f"{type(error).__name__}: {error}")
+    # OperationalError: near "ORDER": syntax error
+```
+
+SQLGlot 30.26.0 with SQLite 3.40.1
+
+Fix it in the library's code. Tests that check the fix are hidden and run after you finish; the repository's existing tests must keep passing. Use only what is in the repository and the standard library.
+
+"""
+verify = "sh .gate_checks/run.sh"
+max_iterations = 80
+
+[source]
+repo = "https://github.com/tobymao/sqlglot"
+commit = "6f90b498078d65515bf57cf71c94332daf282009"

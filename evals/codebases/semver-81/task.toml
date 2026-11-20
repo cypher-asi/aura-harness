@@ -1,0 +1,50 @@
+# Issue: https://github.com/Masterminds/semver/issues/81
+# Fix:   https://github.com/Masterminds/semver/pull/108
+title = "semver: Pre-release versions handling not consistent"
+category = "codebase"
+tags = ["hard", "go", "semver"]
+prompt = """
+You are working in a checkout of Masterminds/semver (Go). Resolve this GitHub issue.
+
+# Pre-release versions handling not consistent
+
+In the documentation about pre-release version:
+
+> In the order of precidence, pre-releases come before their associated releases. In this example 1.2.3-beta.1 < 1.2.3.
+
+But code prove this claim to be not respected and behavior not consistent:
+
+```
+v, _ := semver.NewVersion("1.2.3-beta.1")
+
+c1, _ := semver.NewConstraint("> 1.2.3")
+c2, _ := semver.NewConstraint("< 1.2.3")
+
+if ok, reasons := c1.Validate(v); !ok {
+	for _, reason := range reasons {
+		fmt.Println(reason)
+	}
+}
+
+if ok, reasons := c2.Validate(v); !ok {
+	for _, reason := range reasons {
+		fmt.Println(reason)
+	}
+}
+```
+Will output:
+
+```
+1.2.3-beta.1 is less than or equal to 1.2.3
+1.2.3-beta.1 is greater than or equal to 1.2.3
+```
+
+Fix it in the library's code. Tests that check the fix are hidden and run after you finish; the repository's existing tests must keep passing. Use only what is in the repository and the standard library.
+
+"""
+verify = "sh .gate_checks/run.sh"
+max_iterations = 80
+
+[source]
+repo = "https://github.com/Masterminds/semver"
+commit = "e21c53f7d6964027e53cce6b8a03d23bde7a7fee"

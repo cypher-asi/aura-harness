@@ -1,0 +1,55 @@
+# Issue: https://github.com/tobymao/sqlglot/issues/9083
+# Fix:   https://github.com/tobymao/sqlglot/pull/9085
+title = "sqlglot: Snowflake to Spark: DATEADD/TIMESTAMPADD with HOUR, MINUTE or SECOND becomes day-based DATE_ADD"
+category = "codebase"
+tags = ["hard", "python", "sqlglot"]
+prompt = """
+You are working in a checkout of tobymao/sqlglot (Python). Resolve this GitHub issue.
+
+# Snowflake to Spark: DATEADD/TIMESTAMPADD with HOUR, MINUTE or SECOND becomes day-based DATE_ADD
+
+**Read dialect:** `snowflake`
+**Write dialect:** `spark` (`hive` gives the same output)
+**Checked on:** `main` at 79716c77f
+
+**Fully reproducible code snippet**
+
+```python
+import sqlglot
+
+sqlglot.transpile("SELECT DATEADD(HOUR, 2, ts) FROM t", read="snowflake", write="spark")
+# ['SELECT DATE_ADD(ts, 2) FROM t']
+```
+
+`MINUTE` and `SECOND` give the same output, and so does `TIMESTAMPADD`. Spark's two-argument `DATE_ADD(start_date, num_days)` adds days and returns a `DATE`, so the generated query runs but returns a different value.
+
+Results on Spark 4.1.2, with `ts = TIMESTAMP_NTZ '2024-01-01 10:00:00'`:
+
+| Snowflake | Generated Spark | Spark 4.1.2 result | Expected |
+|---|---|---|---|
+| `DATEADD(SECOND, 2, ts)` | `DATE_ADD(ts, 2)` | `2024-01-03` (DATE) | `2024-01-01 10:00:02` |
+| `DATEADD(MINUTE, 2, ts)` | `DATE_ADD(ts, 2)` | `2024-01-03` (DATE) | `2024-01-01 10:02:00` |
+| `DATEADD(HOUR, 2, ts)` | `DATE_ADD(ts, 2)` | `2024-01-03` (DATE) | `2024-01-01 12:00:00` |
+
+On the same Spark version, `TIMESTAMPADD(HOUR, 2, ts)` returns `2024-01-01 12:00:00` as `timestamp_ntz`. The output comes from the `("DATE_ADD", 1)` fallback in `_add_date_sql` (`sqlglot/generators/hive.py`), which Spark uses for `exp.DateAdd`.
+
+**Question about #8405**
+
+#8405 reported this exact case and proposed `col + INTERVAL n UNIT` for `HOUR`, `MINUTE` and `SECOND`. It was closed the same day without a comment. @tobymao @winklemad, could you share why it was closed? Was it the approach, the scope, or something else? Knowing that would show what kind of fix would be accepted.
+
+Related: #4939 covers a timestamp input coming back as a `DATE` for day units, closed as not planned because a full fix needs type information. The sub-day case does not depend on types: the two-argument `DATE_ADD` cannot add hours to any input.
+
+**Official documentation**
+- Snowflake `DATEADD`: https://docs.snowflake.com/en/sql-reference/functions/dateadd
+- Spark `date_add`: https://spark.apache.org/docs/latest/api/sql/datetime-functions/#date_add
+- Spark `timestamp_add`: https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.timestamp_add.html
+
+Fix it in the library's code. Tests that check the fix are hidden and run after you finish; the repository's existing tests must keep passing. Use only what is in the repository and the standard library.
+
+"""
+verify = "sh .gate_checks/run.sh"
+max_iterations = 80
+
+[source]
+repo = "https://github.com/tobymao/sqlglot"
+commit = "35916abf778be027b31faf00564cf126d8c7dbf0"

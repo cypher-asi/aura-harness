@@ -1,0 +1,108 @@
+# Issue: https://github.com/pelletier/go-toml/issues/1075
+# Fix:   https://github.com/pelletier/go-toml/pull/1076
+title = "go-toml: The serialization regression with 2.4.0"
+category = "codebase"
+tags = ["hard", "go", "go-toml"]
+prompt = """
+You are working in a checkout of pelletier/go-toml (Go). Resolve this GitHub issue.
+
+# The serialization regression with 2.4.0
+
+**Describe the bug**
+
+The PR https://github.com/pelletier/go-toml/pull/1067 creates a regression.
+
+**To Reproduce**
+
+Serialize a struct to toml
+
+**Expected behavior**
+
+<details>
+<summary>before</summary>
+
+```toml
+version = '2'
+
+[linters]
+[linters.exclusions]
+generated = 'lax'
+presets = [
+  'comments',
+  'common-false-positives',
+  'legacy',
+  'std-error-handling'
+]
+paths = [
+  'third_party$',
+  'builtin$',
+  'examples$'
+]
+
+[formatters]
+[formatters.exclusions]
+generated = 'lax'
+paths = [
+  'third_party$',
+  'builtin$',
+  'examples$'
+]
+
+```
+
+</details>
+
+<details>
+<summary>after</summary>
+
+```toml
+version = \"\"\"
+2\"\"\"
+
+[linters]
+[linters.settings]
+[linters.settings.tagliatelle]
+[linters.settings.tagliatelle.case]
+[linters.exclusions]
+generated = \"\"\"
+lax\"\"\"
+presets = [
+      'comments',
+      'common-false-positives',
+      'legacy',
+      'std-error-handling'
+    ]
+paths = [
+      'third_party$',
+      'builtin$',
+      'examples$'
+    ]
+
+[formatters]
+[formatters.exclusions]
+generated = \"\"\"
+lax\"\"\"
+paths = [
+      'third_party$',
+      'builtin$',
+      'examples$'
+    ]
+
+```
+
+</details>
+
+**Versions**
+ - go-toml: v2.4.0
+ - go: go1.25, go1.26, etc.
+ - operating system: all
+
+Fix it in the library's code. Tests that check the fix are hidden and run after you finish; the repository's existing tests must keep passing. Use only what is in the repository and the standard library.
+
+"""
+verify = "sh .gate_checks/run.sh"
+max_iterations = 80
+
+[source]
+repo = "https://github.com/pelletier/go-toml"
+commit = "e3b2270ea02fefb96169e7506da90c34bb440912"

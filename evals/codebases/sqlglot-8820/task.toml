@@ -1,0 +1,46 @@
+# Issue: https://github.com/tobymao/sqlglot/issues/8820
+# Fix:   https://github.com/tobymao/sqlglot/pull/8832
+title = "sqlglot: Snowflake to DuckDB: TO_CHAR date format elements in mixed case aren't converted, and lower-case 'dy' and 'dd' are converted wrongly"
+category = "codebase"
+tags = ["hard", "python", "sqlglot"]
+prompt = """
+You are working in a checkout of tobymao/sqlglot (Python). Resolve this GitHub issue.
+
+# Snowflake to DuckDB: TO_CHAR date format elements in mixed case aren't converted, and lower-case 'dy' and 'dd' are converted wrongly
+
+**Fully reproducible code snippet**
+
+Snowflake's date and time format elements are case-insensitive, but `Snowflake.TIME_MAPPING` lists only an upper-case and a lower-case spelling of each. Mixed-case elements stay as literal text, and two lower-case ones map to different directives than their upper-case forms. Checked on `main` (a32ef63), with each output run in DuckDB 2.0:
+
+```python
+import sqlglot
+
+for fmt in ["Mon", "Dy", "Mmmm", "dy", "dd"]:
+    print(fmt, sqlglot.transpile(f"SELECT TO_CHAR(CAST('2024-05-09' AS DATE), '{fmt}')", read="snowflake", write="duckdb")[0])
+```
+
+| format | sqlglot's DuckDB output | DuckDB result | Snowflake result |
+|---|---|---|---|
+| `Mon` | `STRFTIME(..., 'Mon')` | `Mon` | `May` |
+| `Dy` | `STRFTIME(..., 'Dy')` | `Dy` | `Thu` |
+| `Mmmm` | `STRFTIME(..., 'Mmmm')` | `Mmmm` | `May` |
+| `dy` | `STRFTIME(..., '%w')` | `4` | `Thu` |
+| `dd` | `STRFTIME(..., '%-d')` | `9` | `09` |
+
+`MON`, `mon`, `DY`, `DD` and `MMMM` give the same result as Snowflake. Snowflake results were checked on a live account (10.38): `Mon`, `MON` and `mon` all give `May`, `DY`, `Dy` and `dy` all give `Thu`, and `DD` and `dd` both give `09`. Expected every case variant of an element to convert like the upper-case form.
+
+`'DD Mon YYYY'` is a common format, and it currently produces `'09 Mon 2024'`.
+
+**Official Documentation**
+
+https://docs.snowflake.com/en/sql-reference/functions-conversion#date-and-time-formats-in-conversion-functions: "using the following case-insensitive elements to describe the format".
+
+Fix it in the library's code. Tests that check the fix are hidden and run after you finish; the repository's existing tests must keep passing. Use only what is in the repository and the standard library.
+
+"""
+verify = "sh .gate_checks/run.sh"
+max_iterations = 80
+
+[source]
+repo = "https://github.com/tobymao/sqlglot"
+commit = "ffced07542da094bb068d09a61b8f9ebe41d19f7"

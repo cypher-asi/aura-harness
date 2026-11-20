@@ -1091,7 +1091,10 @@ async fn example_tasks_run_in_their_own_fixtures_with_their_own_checks() {
     }
     let first = crate::bench_pack::by_id(ids[0]).unwrap();
     let dir = tempfile::tempdir().unwrap();
-    first.materialize(dir.path()).unwrap();
+    first
+        .materialize(dir.path(), std::path::Path::new("/nowhere"))
+        .await
+        .unwrap();
     for entry in std::fs::read_dir(dir.path()).unwrap() {
         let name = entry.unwrap().file_name();
         assert!(

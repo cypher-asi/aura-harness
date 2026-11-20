@@ -1,0 +1,46 @@
+# Issue: https://github.com/buger/jsonparser/issues/177
+# Fix:   https://github.com/buger/jsonparser/pull/190
+title = "jsonparser: Invalid arguments passed to EachKey can cause a panic"
+category = "codebase"
+tags = ["hard", "go", "jsonparser"]
+prompt = """
+You are working in a checkout of buger/jsonparser (Go). Resolve this GitHub issue.
+
+# Invalid arguments passed to EachKey can cause a panic
+
+The following test will cause a panic:
+
+```
+func TestJsonLibrary(t *testing.T) {
+		cb := func(idx int, val []byte, vt jsonparser.ValueType, err error) {
+		}
+		badval = []byte(`{"foo": [{"bar": "baz"}]}`)
+		jsonparser.EachKey(badval, cb, []string{"foo", "["})
+}
+```
+
+```
+--- FAIL: TestJsonLibrary (0.00s)
+panic: runtime error: slice bounds out of range [1:0] [recovered]
+	panic: runtime error: slice bounds out of range [1:0]
+
+goroutine 20 [running]:
+testing.tRunner.func1(0xc000118200)
+	/usr/local/go/src/testing/testing.go:874 +0x3a3
+panic(0x768280, 0xc0000fa140)
+	/usr/local/go/src/runtime/panic.go:679 +0x1b2
+github.com/buger/jsonparser.EachKey(0xc0000fa120, 0x19, 0x19, 0x7adf40, 0xc00004cf48, 0x1, 0x1, 0x0)
+	/home/john/go/pkg/mod/github.com/buger/jsonparser@v0.0.0-20191004114745-ee4c978eae7e/parser.go:492 +0x10af
+```
+
+I acknowledge that it is bad code, but I managed to trigger it via careless parsing on my end
+
+Fix it in the library's code. Tests that check the fix are hidden and run after you finish; the repository's existing tests must keep passing. Use only what is in the repository and the standard library.
+
+"""
+verify = "sh .gate_checks/run.sh"
+max_iterations = 80
+
+[source]
+repo = "https://github.com/buger/jsonparser"
+commit = "111244564385963cb30ffd1f2c7c84bc0a389689"

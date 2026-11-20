@@ -1,0 +1,138 @@
+# Issue: https://github.com/pelletier/go-toml/issues/1109
+# Fix:   https://github.com/pelletier/go-toml/pull/1113
+title = "go-toml: Regression: encoding.TextUnmarshaler no longer invoked for named types whose underlying Kind matches a native TOML scalar (broken since v2.4.0)"
+category = "codebase"
+tags = ["hard", "go", "go-toml"]
+prompt = """
+You are working in a checkout of pelletier/go-toml (Go). Resolve this GitHub issue.
+
+# Regression: encoding.TextUnmarshaler no longer invoked for named types whose underlying Kind matches a native TOML scalar (broken since v2.4.0)
+
+**Describe the bug**
+
+A named type based on a Go scalar kind (e.g. `type Secret string`) that
+implements `encoding.TextUnmarshaler` stops having `UnmarshalText` invoked
+during `Unmarshal`/`Decode` whenever the TOML value's kind matches the
+target's underlying Go kind (e.g. a TOML string decoding into a
+`type X string`). The raw TOML value is assigned directly instead, and no
+error is returned — the failure is silent.
+
+This affects any named scalar type (string, int, float, bool), not just
+strings. In our case, a custom string type used to store an encrypted config
+secret stopped being decrypted after upgrading from v2.3.1 to v2.4.3, with
+no error raised.
+
+**To Reproduce**
+
+`config.toml`:
+```toml
+ID = "raw"
+```
+
+`main.go`:
+```go
+package main
+
+import (
+	"fmt"
+
+	"github.com/pelletier/go-toml/v2"
+)
+
+type Secret string
+
+func (s *Secret) UnmarshalText(data []byte) error {
+	*s = Secret("DECODED:" + string(data))
+	return nil
+}
+
+type Config struct {
+	ID Secret `toml:"ID"`
+}
+
+func main() {
+	var c Config
+	err := toml.Unmarshal([]byte(`ID = "raw"`), &c)
+	fmt.Println(err, c.ID)
+}
+```
+
+Run with each version:
+- v2.3.1: `<nil> DECODED:raw` (correct — `UnmarshalText` is invoked)
+- v2.4.0, v2.4.1, v2.4.2, v2.4.3: `<nil> raw` (`UnmarshalText` is never called)
+
+**Expected behavior**
+
+`UnmarshalText` should be invoked for any addressable target implementing
+`encoding.TextUnmarshaler`, regardless of whether its `Kind()` happens to
+match a native TOML scalar kind — i.e. the output should be
+`<nil> DECODED:raw`, matching v2.3.1 behavior — while still preserving the
+#974 fix that lets inline tables/arrays fall back to field-by-field struct
+decoding.
+
+**Versions**
+ - go-toml: v2.4.0 through v2.4.3 (regression range); last known-good v2.3.1
+ - go: 1.21+ (reproduced with go1.21, not version-specific)
+ - operating system: Linux (not OS-specific)
+
+**Additional context**
+
+Root cause is in `assignString` (and equally in `assignInteger`,
+`assignFloat`, `assignBool`), which now switches on `v.Kind()` *before*
+checking whether the addressable value implements `TextUnmarshaler`:
+
+```go
+func (d *decoder) assignString(v reflect.Value, value *unstable.Node) (reflect.Value, error) {
+	switch v.Kind() {
+	case reflect.String:
+		v.SetString(string(value.Data))
+		return v, nil
+	case reflect.Interface:
+		return boxInto(v, reflect.ValueOf(string(value.Data)))
+	default:
+	}
+	if v.CanAddr() && v.Addr().Type().Implements(textUnmarshalerType) {
+		err := v.Addr().Interface().(encoding.TextUnmarshaler).UnmarshalText(value.Data)
+		...
+	}
+	return reflect.Value{}, d.typeMismatchError("string", v.Type(), d.p.Raw(value.Raw))
+}
+```
+(`unmarshaler.go`, `assignString`, v2.4.3)
+
+Since `type Secret string` has `Kind() == reflect.String`, it always hits the
+first `case` and returns before the `TextUnmarshaler` check is reached.
+
+In v2.3.1, `tryTextUnmarshaler` was tried *before* switching on kind, based
+only on whether the addressable target implemented the interface — the
+target's Go `Kind()` was irrelevant:
+
+```go
+// v2.3.1 handleValue
+if value.Kind != unstable.Array && value.Kind != unstable.InlineTable {
+    ok, err := d.tryTextUnmarshaler(value, v)
+    if ok || err != nil {
+        return err
+    }
+}
+switch value.Kind {
+case unstable.String:
+    return d.unmarshalString(value, v)
+...
+```
+
+This looks like an unintended side effect of the fix for #974 (falling back
+to struct field-by-field decoding for inline tables): the tests added for
+that issue only cover `struct`-kind targets implementing `UnmarshalText`, so
+the regression for named scalar kinds (string/int/float/bool) went
+unnoticed.
+
+Fix it in the library's code. Tests that check the fix are hidden and run after you finish; the repository's existing tests must keep passing. Use only what is in the repository and the standard library.
+
+"""
+verify = "sh .gate_checks/run.sh"
+max_iterations = 80
+
+[source]
+repo = "https://github.com/pelletier/go-toml"
+commit = "6762d83b130fc3271462ee7c0555cd53c3ba10dd"

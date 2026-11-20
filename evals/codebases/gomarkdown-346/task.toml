@@ -1,0 +1,66 @@
+# Issue: https://github.com/gomarkdown/markdown/issues/346
+# Fix:   https://github.com/gomarkdown/markdown/pull/354
+title = "markdown: When a fenced code block is on a list, a line starting from dash breaks formatting."
+category = "codebase"
+tags = ["hard", "go", "markdown"]
+prompt = """
+You are working in a checkout of gomarkdown/markdown (Go). Resolve this GitHub issue.
+
+# When a fenced code block is on a list, a line starting from dash breaks formatting.
+
+example:
+
+````
+- test1
+
+    ```
+    - test
+    ```
+- test2
+
+    ```
+      - test
+    ```
+- test3
+
+    ```
+        - test
+    ```
+
+````
+
+output:
+<ul>
+<li><p>test1</p>
+
+<p>&rdquo;`</p>
+
+<ul>
+<li>test</li>
+</ul>
+
+<p>&rdquo;`</p></li>
+
+<li><p>test2</p>
+
+<p>&rdquo;`</p>
+
+<pre><code> - test
+</code></pre>
+<p>&rdquo;`</p></li>
+
+<li><p>test3</p>
+
+<pre><code>    - test
+</code></pre></li>
+</ul>
+
+Fix it in the library's code. Tests that check the fix are hidden and run after you finish; the repository's existing tests must keep passing. Use only what is in the repository and the standard library.
+
+"""
+verify = "sh .gate_checks/run.sh"
+max_iterations = 80
+
+[source]
+repo = "https://github.com/gomarkdown/markdown"
+commit = "c901e061be45ca67a0ffca654bbc52b64d9b2ca6"

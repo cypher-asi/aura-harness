@@ -1,0 +1,58 @@
+# Issue: https://github.com/gomarkdown/markdown/issues/279
+# Fix:   https://github.com/gomarkdown/markdown/pull/355
+title = "markdown: Parsing error when parsing nested bold+ital"
+category = "codebase"
+tags = ["hard", "go", "markdown"]
+prompt = """
+You are working in a checkout of gomarkdown/markdown (Go). Resolve this GitHub issue.
+
+# Parsing error when parsing nested bold+ital
+
+I want to parse the following text: `**bold *ital***`, expecting **bold** ***ital***, but I'm getting **bold \\*ital**\\*.
+
+This is caused by close the strong tag on the first instance of 2 \\*s, even though there is an open ital tag \\*.
+
+what its being parsed as now:
+ 
+```json
+[
+	{
+		"content": "bold *ital",
+		"type": "bold"
+	},
+	{
+		"content": "*",
+		"type": "text"
+	}
+]
+```
+
+what it should be parsed as:
+ 
+```json
+[
+	{
+		"type": "bold",
+                "children": [
+	           {
+		     "content": "bold ",
+		     "type": "text"
+	           },
+	           {
+		     "content": "ital",
+		     "type": "ital"
+	           }
+                ]
+	}
+]
+```
+
+Fix it in the library's code. Tests that check the fix are hidden and run after you finish; the repository's existing tests must keep passing. Use only what is in the repository and the standard library.
+
+"""
+verify = "sh .gate_checks/run.sh"
+max_iterations = 80
+
+[source]
+repo = "https://github.com/gomarkdown/markdown"
+commit = "9458c5ebcea7a8201eba49f94609ad681a82b4da"

@@ -310,16 +310,14 @@ pub(super) async fn run(
     )
     .await;
     if !plan.examples.is_empty() {
-        let (tasks, fixtures) = (plan.examples.clone(), dir.clone());
-        let written = tokio::task::spawn_blocking(move || {
-            tasks.iter().try_for_each(|task| {
-                task.materialize(&fixture(&fixtures, task))
-                    .map_err(|e| format!("writing the files of {}: {e}", task.id))
-            })
-        })
-        .await
-        .map_err(|e| e.to_string())
-        .and_then(|written| written);
+        let cache = crate::repo_source::cache_dir();
+        let mut written = Ok(());
+        for task in &plan.examples {
+            if let Err(e) = task.materialize(&fixture(&dir, task), &cache).await {
+                written = Err(format!("writing the files of {}: {e}", task.id));
+                break;
+            }
+        }
         if let Err(problem) = written {
             payload.notes.push(problem);
             payload.status = CompareStatus::Cancelled;

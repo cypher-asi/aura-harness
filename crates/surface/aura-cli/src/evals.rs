@@ -5,7 +5,9 @@
 //! `task.toml`, an optional `workspace/` fixture that is copied into a
 //! fresh directory before the run, and an optional `checks/` directory
 //! copied in after the run, before `verify`, so the agent never sees the
-//! hidden checks:
+//! hidden checks. A task set in an existing codebase names a `[source]`,
+//! a GitHub repository at a commit, whose files go into the directory
+//! first (downloaded once into `AURA_HOME/evals/sources`):
 //!
 //! ```toml
 //! title = "Fix the off-by-one"
@@ -14,6 +16,10 @@
 //! prompt = "The tests in src/lib.rs fail. Fix the bug."
 //! verify = "cargo test --offline"
 //! max_iterations = 30
+//!
+//! [source]
+//! repo = "https://github.com/<owner>/<name>"
+//! commit = "<the full hash of the commit before the fix>"
 //! ```
 //!
 //! On a model, each run is the plain agent loop with a kernel of its own
@@ -43,6 +49,7 @@ use serde_json::json;
 use aura_app::headless::EvalTurn;
 pub use aura_app::headless::{copy_dir, GateUse};
 use aura_app::recorded_runs::{self, HeadlessRun};
+use aura_app::repo_source::{self, RepoSource};
 
 /// Task definition file inside a task directory.
 pub const TASK_FILE: &str = "task.toml";
@@ -83,6 +90,9 @@ pub struct EvalTask {
     /// Iteration cap for each turn.
     #[serde(default)]
     pub max_iterations: Option<usize>,
+    /// Repository the workspace starts from, before `workspace/`.
+    #[serde(default)]
+    pub source: Option<RepoSource>,
 }
 
 /// Load every task under `suite`, sorted by id.
@@ -342,6 +352,10 @@ async fn run_task(task: &EvalTask, opts: &EvalOptions) -> anyhow::Result<EvalRes
 
     let workspace = opts.work_root.join(format!("{}-{}", task.id, meta.run_id));
     std::fs::create_dir_all(&workspace)?;
+    if let Some(source) = &task.source {
+        let repository = source.fetch(&repo_source::in_home(&opts.home)).await?;
+        copy_dir(&repository, &workspace)?;
+    }
     let fixture = task.dir.join(FIXTURE_DIR);
     if fixture.is_dir() {
         copy_dir(&fixture, &workspace)?;

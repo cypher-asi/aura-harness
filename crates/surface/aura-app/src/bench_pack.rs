@@ -1,10 +1,13 @@
 //! The example coding tasks the BENCH tab offers, built in: every task of
-//! `evals/coding`, then `evals/gate_cost`, `evals/gate_hard` and
-//! `evals/polyglot`, each
-//! with its fixture, its prompts, its check command and the hidden
-//! checks that command reads. A benchmark of `n` of them takes the first
-//! `n`.
+//! `evals/coding`, then `evals/gate_cost`, `evals/gate_hard`,
+//! `evals/polyglot` and `evals/codebases`, each with its fixture, its
+//! prompts, its check command and the hidden checks that command reads. A
+//! task set in an existing codebase names the repository and commit its
+//! fixture starts from ([`RepoSource`]), downloaded when it first runs. A
+//! benchmark of `n` of them takes the first `n`.
 
+use crate::headless::copy_dir;
+use crate::repo_source::RepoSource;
 use aura_core_types::ExampleTaskInfo;
 use serde::Deserialize;
 use std::path::{Component, Path, PathBuf};
@@ -34,6 +37,8 @@ struct TaskToml {
     #[serde(default)]
     follow_ups: Vec<String>,
     verify: String,
+    #[serde(default)]
+    source: Option<RepoSource>,
 }
 
 /// One built-in example task.
@@ -47,6 +52,9 @@ pub struct ExampleTask {
     pub prompts: Vec<String>,
     /// Command run in the copy after the run; exit 0 passes
     pub verify: String,
+    /// The repository its fixture starts from, for a task set in an
+    /// existing codebase
+    pub source: Option<RepoSource>,
     workspace: Files,
     checks: Files,
 }
@@ -78,6 +86,7 @@ pub fn tasks() -> &'static [ExampleTask] {
                     category: parsed.category,
                     prompts,
                     verify: parsed.verify,
+                    source: parsed.source,
                     workspace: entry.workspace,
                     checks: entry.checks,
                 })
@@ -152,13 +161,27 @@ impl ExampleTask {
         !self.checks.is_empty()
     }
 
-    /// Write its fixture into `dir`, which may not exist yet.
+    /// Write its fixture into `dir`, which may not exist yet: its
+    /// repository's files when it names one (downloaded into `cache` the
+    /// first time), then its own.
     ///
     /// # Errors
-    /// The first file that could not be written.
-    pub fn materialize(&self, dir: &Path) -> std::io::Result<()> {
-        std::fs::create_dir_all(dir)?;
-        write(dir, self.workspace)
+    /// A download that failed, or the first file that could not be written.
+    pub async fn materialize(&self, dir: &Path, cache: &Path) -> std::io::Result<()> {
+        let repository = match &self.source {
+            Some(source) => Some(source.fetch(cache).await?),
+            None => None,
+        };
+        let (dir, workspace) = (dir.to_path_buf(), self.workspace);
+        tokio::task::spawn_blocking(move || {
+            std::fs::create_dir_all(&dir)?;
+            if let Some(repository) = repository {
+                copy_dir(&repository, &dir)?;
+            }
+            write(&dir, workspace)
+        })
+        .await
+        .map_err(std::io::Error::other)?
     }
 
     /// Put its hidden checks in `workdir`. Returns what was added there
@@ -214,8 +237,19 @@ mod tests {
         let order: Vec<String> = all.iter().map(suite).collect();
         let first = |name: &str| order.iter().position(|s| s == name).unwrap();
         assert!(first("coding") < first("gate_cost") && first("gate_cost") < first("gate_hard"));
-        assert!(first("gate_hard") < first("polyglot"));
-        assert_eq!(suites(), ["coding", "gate_cost", "gate_hard", "polyglot"]);
+        assert!(first("gate_hard") < first("polyglot") && first("polyglot") < first("codebases"));
+        assert_eq!(
+            suites(),
+            ["coding", "gate_cost", "gate_hard", "polyglot", "codebases"]
+        );
+        for task in all {
+            assert_eq!(
+                task.source.is_some(),
+                task.suite() == "codebases",
+                "{}",
+                task.id
+            );
+        }
         assert_eq!(
             by_id("gate_hard/semver-precedence").unwrap().suite(),
             "gate_hard"
@@ -248,11 +282,13 @@ mod tests {
         assert!(!by_id("coding/write-file").unwrap().has_hidden_checks());
     }
 
-    #[test]
-    fn a_fixture_is_written_and_its_checks_come_and_go() {
+    #[tokio::test]
+    async fn a_fixture_is_written_and_its_checks_come_and_go() {
         let dir = tempfile::tempdir().unwrap();
         let task = by_id("gate_cost/bugfix-py-median").unwrap();
-        task.materialize(dir.path()).unwrap();
+        task.materialize(dir.path(), Path::new("/nowhere"))
+            .await
+            .unwrap();
         assert!(dir.path().join("stats.py").is_file());
         let added = task.place_checks(dir.path()).unwrap();
         assert_eq!(added, vec![dir.path().join(".gate_checks")]);
@@ -260,5 +296,25 @@ mod tests {
         remove_checks(&added);
         assert!(!dir.path().join(".gate_checks").exists());
         assert!(dir.path().join("stats.py").is_file());
+    }
+
+    #[tokio::test]
+    async fn a_codebase_task_starts_from_its_repository_then_its_own_files() {
+        let cache = tempfile::tempdir().unwrap();
+        let task = tasks()
+            .iter()
+            .find(|t| t.source.is_some())
+            .expect("a codebase task");
+        let repository = task.source.as_ref().unwrap().dir(cache.path()).unwrap();
+        std::fs::create_dir_all(repository.join("pkg")).unwrap();
+        std::fs::write(repository.join("pkg/code.txt"), "before the fix").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        task.materialize(dir.path(), cache.path()).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("pkg/code.txt")).unwrap(),
+            "before the fix"
+        );
+        assert!(task.has_hidden_checks());
+        assert!(!dir.path().join(".gate_checks").exists());
     }
 }

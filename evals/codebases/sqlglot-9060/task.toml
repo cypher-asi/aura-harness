@@ -1,0 +1,53 @@
+# Issue: https://github.com/tobymao/sqlglot/issues/9060
+# Fix:   https://github.com/tobymao/sqlglot/pull/9075
+title = "sqlglot: Oracle: VARIANCE and VAR_SAMP parse to the same expression but differ for a single value"
+category = "codebase"
+tags = ["hard", "python", "sqlglot"]
+prompt = """
+You are working in a checkout of tobymao/sqlglot (Python). Resolve this GitHub issue.
+
+# Oracle: VARIANCE and VAR_SAMP parse to the same expression but differ for a single value
+
+In Oracle, `VARIANCE` returns 0 when there is exactly one non-NULL value, while `VAR_SAMP` returns NULL. sqlglot parses both into `exp.Variance`, so one of them is always rewritten (read and write `oracle`, and read `oracle` / write `postgres`; checked on main):
+
+```python
+from sqlglot import parse_one
+
+parse_one("SELECT VAR_SAMP(x) FROM t", read="oracle").sql("oracle")
+# 'SELECT VARIANCE(x) FROM t'
+
+parse_one("SELECT VARIANCE(x) FROM t", read="oracle").sql("postgres")
+# 'SELECT VAR_SAMP(x) FROM t'
+```
+
+Results on Oracle 23ai Free:
+
+| values of x | `VARIANCE(x)` | `VAR_SAMP(x)` |
+|---|---|---|
+| 1 | 0 | NULL |
+| 1, NULL | 0 | NULL |
+| NULL | NULL | NULL |
+| (no rows) | NULL | NULL |
+| 1, 2, 2 | 0.333 | 0.333 |
+
+So Oracle `VAR_SAMP` -> Oracle `VARIANCE` turns single-value groups from NULL into 0, and Oracle `VARIANCE` -> Postgres or DuckDB turns them from 0 into NULL (`VARIANCE` returns NULL for one row there).
+
+#2810 discussed an approach: an optional arg on `exp.Variance`, set by an Oracle `FUNCTIONS` entry for `VARIANCE` so the round trip holds, and generated elsewhere as something like `IFNULL(VAR_SAMP(x), 0)`. One catch: `IFNULL`/`COALESCE` gives 0 for empty or all-NULL input, where Oracle returns NULL. `CASE WHEN COUNT(x) = 1 THEN 0 ELSE VAR_SAMP(x) END` matches every row of the table above; as a window function the `COUNT` needs the same `OVER` clause.
+
+Happy to send a PR along those lines if that approach still works for you.
+
+**Official Documentation**
+- https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/VARIANCE.html
+- https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/VAR_SAMP.html
+
+I used Claude Code to help investigate this and write it up.
+
+Fix it in the library's code. Tests that check the fix are hidden and run after you finish; the repository's existing tests must keep passing. Use only what is in the repository and the standard library.
+
+"""
+verify = "sh .gate_checks/run.sh"
+max_iterations = 80
+
+[source]
+repo = "https://github.com/tobymao/sqlglot"
+commit = "c264a46d5030c185e742edf4af5971e3c6350774"

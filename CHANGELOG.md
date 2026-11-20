@@ -19,6 +19,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   task's hidden check is the exercise's own tests. The tasks are
   imported by `scripts/import_polyglot.py`, which keeps only tasks that
   fail as shipped and pass with the reference solution.
+- `evals/codebases`: 21 real fixes from open-source repositories
+  (sqlglot, Python-Markdown, go-toml, gomarkdown, expr, jsonparser,
+  semver), built as SWE-bench builds its tasks: the whole repository at
+  the commit before the fix, the issue the fix closed as the prompt, and
+  the fix's own tests as the hidden check. A task names its repository
+  and commit as `[source]`; `/compare`, the BENCH tab and `aura eval run`
+  download it once into `AURA_HOME/evals/sources`.
+  `scripts/import_repo_tasks.py` mines merged pull requests for more and
+  keeps a fix only when its check fails before it and passes after it.
 
 ### Gate — cheaper defaults
 

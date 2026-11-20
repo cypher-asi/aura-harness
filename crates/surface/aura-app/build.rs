@@ -1,13 +1,13 @@
 //! Embeds the example coding tasks the BENCH tab offers: every task of
-//! `evals/coding`, `evals/gate_cost`, `evals/gate_hard` and
-//! `evals/polyglot`, as
+//! `evals/coding`, `evals/gate_cost`, `evals/gate_hard`, `evals/polyglot`
+//! and `evals/codebases`, as
 //! `$OUT_DIR/bench_pack.rs` (see `src/bench_pack.rs`).
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 /// Suites in the order the BENCH tab offers their tasks: easiest first.
-const SUITES: [&str; 4] = ["coding", "gate_cost", "gate_hard", "polyglot"];
+const SUITES: [&str; 5] = ["coding", "gate_cost", "gate_hard", "polyglot", "codebases"];
 
 fn files(dir: &Path) -> Vec<(String, PathBuf)> {
     if !dir.is_dir() {

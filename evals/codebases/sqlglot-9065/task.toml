@@ -1,0 +1,79 @@
+# Issue: https://github.com/tobymao/sqlglot/issues/9065
+# Fix:   https://github.com/tobymao/sqlglot/pull/9066
+title = "sqlglot: Window functions without ORDER BY transpile to SQL that Snowflake, Databricks and BigQuery reject"
+category = "codebase"
+tags = ["hard", "python", "sqlglot"]
+prompt = """
+You are working in a checkout of tobymao/sqlglot (Python). Resolve this GitHub issue.
+
+# Window functions without ORDER BY transpile to SQL that Snowflake, Databricks and BigQuery reject
+
+**Fully reproducible code snippet**
+
+Checked on `main` and on 30.31.0.
+
+```python
+import sqlglot
+
+for func in ("ROW_NUMBER()", "RANK()", "FIRST_VALUE(x)"):
+    sql = f"SELECT {func} OVER (PARTITION BY a) FROM t"
+    for dialect in ("snowflake", "databricks", "bigquery"):
+        print(dialect, "=>", sqlglot.transpile(sql, read="trino", write=dialect)[0])
+```
+
+Every output is the input unchanged, e.g. `SELECT ROW_NUMBER() OVER (PARTITION BY a) FROM t`.
+
+Trino accepts a window without `ORDER BY` for these functions (its docs require an ordering only for `lead()` and `lag()`), but the targets reject the generated SQL:
+
+- Snowflake: `002061 (42601): Window function type [ROW_NUMBER] requires ORDER BY in window specification.`
+- Databricks: `[WINDOW_FUNCTION_FRAME_NOT_ORDERED] Window function row_number requires the window to be ordered.`
+- BigQuery: `Window ORDER BY is required for analytic function rank`
+
+I ran each function with `OVER (PARTITION BY x)` against the three engines. "fails" means the engine rejects the query for the missing `ORDER BY`:
+
+| Function | Snowflake | Databricks | BigQuery |
+|---|---|---|---|
+| `ROW_NUMBER` | fails | fails | ok |
+| `RANK` | fails | fails | fails |
+| `DENSE_RANK` | fails | fails | fails |
+| `PERCENT_RANK` | fails | fails | fails |
+| `CUME_DIST` | fails | fails | fails |
+| `NTILE` | fails | fails | fails |
+| `NTH_VALUE` | fails | fails | fails |
+| `FIRST_VALUE` | fails | ok | fails |
+| `LAST_VALUE` | fails | ok | fails |
+
+**Expected output**
+
+Add an ordering when the target requires one and the window has none. Ordering by the partition keys keeps the meaning: without an `ORDER BY` all rows of a partition are peers, and they still are when ordered by the keys they share.
+
+```sql
+SELECT ROW_NUMBER() OVER (PARTITION BY a ORDER BY a) FROM t
+```
+
+With no partition keys, `ORDER BY NULL` does the same job (`ROW_NUMBER() OVER (ORDER BY NULL)`). All nine functions run on the three engines with the partition-key form. I preferred it over a constant because Databricks fails `CUME_DIST() OVER (PARTITION BY x ORDER BY NULL)` with `EvalBatch not supported for window function`.
+
+This is the same idea `eliminate_distinct_on` already uses for the `ROW_NUMBER` window it builds.
+
+**Context**
+
+This is the general form of #5582 (DuckDB -> Snowflake `ROW_NUMBER() OVER ()`), which was closed over the question of whether an arbitrary order is good enough. For the sources that allow the missing `ORDER BY`, the row order inside the window is unspecified to begin with, so any ordering is a valid result. It shows up in practice: Lightdash generates `ROW_NUMBER() OVER (PARTITION BY ...)` for Trino connections when it pivots in SQL.
+
+I have a PR ready and will link it here.
+
+**Official Documentation**
+
+- Trino: https://trino.io/docs/current/functions/window.html
+- Snowflake: https://docs.snowflake.com/en/sql-reference/functions-window-syntax
+- Databricks: https://docs.databricks.com/aws/en/sql/language-manual/sql-ref-window-functions
+- BigQuery: https://cloud.google.com/bigquery/docs/reference/standard-sql/window-function-calls
+
+Fix it in the library's code. Tests that check the fix are hidden and run after you finish; the repository's existing tests must keep passing. Use only what is in the repository and the standard library.
+
+"""
+verify = "sh .gate_checks/run.sh"
+max_iterations = 80
+
+[source]
+repo = "https://github.com/tobymao/sqlglot"
+commit = "38437a3bf91f908927f4980fbf6cb7963e523d8b"

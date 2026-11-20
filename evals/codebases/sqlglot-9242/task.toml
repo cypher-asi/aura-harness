@@ -1,0 +1,69 @@
+# Issue: https://github.com/tobymao/sqlglot/issues/9242
+# Fix:   https://github.com/tobymao/sqlglot/pull/9243
+title = "sqlglot: (tokenizer)Snowflake: comment markers inside unquoted stage paths are tokenized as comments"
+category = "codebase"
+tags = ["hard", "python", "sqlglot"]
+prompt = """
+You are working in a checkout of tobymao/sqlglot (Python). Resolve this GitHub issue.
+
+# (tokenizer)Snowflake: comment markers inside unquoted stage paths are tokenized as comments
+
+**Fully reproducible code snippet**
+
+With `read="snowflake"`, `--`, `//` and `/*` inside an unquoted stage path or `file://` URI are tokenized as comment starts, so the path gets truncated or tokenization fails:
+
+```python
+from sqlglot import parse_one
+
+parse_one("select $1 from @s/a--b", read="snowflake").sql("snowflake")
+# actual:   'SELECT $1 FROM @s/a /* b */'
+# expected: 'SELECT $1 FROM @s/a--b'
+
+parse_one("select $1 from @s/a//b", read="snowflake").sql("snowflake")
+# actual:   'SELECT $1 FROM @s/a /* b */'
+# expected: 'SELECT $1 FROM @s/a//b'
+
+parse_one("select $1 from @s/a/*b", read="snowflake")
+# actual:   TokenError
+# expected: 'SELECT $1 FROM @s/a/*b'
+
+parse_one("copy into t from @s/a--b/c", read="snowflake").sql("snowflake")
+# actual:   'COPY INTO t FROM @s/a /* b/c */'
+# expected: 'COPY INTO t FROM @s/a--b/c'
+
+parse_one("put file:///tmp/a--b @s/p", read="snowflake").sql("snowflake")
+# actual:   "PUT 'file:///tmp/a' put file:///tmp/a /* b @s/p */"
+# expected: "PUT 'file:///tmp/a--b' @s/p"
+```
+
+`LIST @s/a--b` has the same problem. Quoted paths such as `'@s/a--b'` are handled correctly.
+
+This is easy to miss because `@s/a--b` and `@s/a--c` parse to the same statement, so regenerated SQL silently reads from a different location.
+
+Reproduced on main (83622a530).
+
+**Snowflake behavior**
+
+The docs don't spell out where an unquoted path ends, so I checked against a live account by unloading files to unquoted paths and listing them:
+
+- `copy into @stg/a--b/ from (select 1)` writes to `a--b/`, and `select $1 from @stg/a--b/c` reads only that prefix. `//`, `/*`, `*/`, `#`, `=` and `"` inside the path behave the same way.
+- The path ends at whitespace or at one of ``, ; ( ) ' ` ~ < > |``. The exception is `~` right after `@`, since `@~` is the user stage.
+- A comment after whitespace is still a comment: `select $1 from @stg/a -- note` works as expected.
+- The same rules apply to `file://` URIs in `PUT`: `put file:///dir/a--b.csv @stg` uploads `a--b.csv`.
+
+**Official Documentation**
+
+- https://docs.snowflake.com/en/user-guide/querying-stage
+- https://docs.snowflake.com/en/sql-reference/sql/list
+- https://docs.snowflake.com/en/sql-reference/sql/copy-into-table
+- https://docs.snowflake.com/en/sql-reference/sql/put
+
+Fix it in the library's code. Tests that check the fix are hidden and run after you finish; the repository's existing tests must keep passing. Use only what is in the repository and the standard library.
+
+"""
+verify = "sh .gate_checks/run.sh"
+max_iterations = 80
+
+[source]
+repo = "https://github.com/tobymao/sqlglot"
+commit = "670dd01c53e7d4a9beb426e76a4a982010f07af7"

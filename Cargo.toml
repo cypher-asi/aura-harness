@@ -96,6 +96,10 @@ crossterm = "0.28"
 blake3 = "1.5"
 zstd = { version = "0.13", default-features = false }
 
+# Archives
+flate2 = "1"
+tar = "0.4"
+
 # YAML
 serde_yaml = "0.9"
 

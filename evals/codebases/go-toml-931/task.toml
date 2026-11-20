@@ -1,0 +1,71 @@
+# Issue: https://github.com/pelletier/go-toml/issues/931
+# Fix:   https://github.com/pelletier/go-toml/pull/934
+title = "go-toml: Slices of structs are not properly reset when unmarshalling"
+category = "codebase"
+tags = ["hard", "go", "go-toml"]
+prompt = """
+You are working in a checkout of pelletier/go-toml (Go). Resolve this GitHub issue.
+
+# Slices of structs are not properly reset when unmarshalling
+
+**Describe the bug**
+When unmarshalling a slice of structs (array of tables in TOML terminology) into a Go slice, any elements already present in the slice are not reset, leading to compounding slices. This did not happen in v1.
+
+**To Reproduce**
+
+`main.go`:
+```go
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/pelletier/go-toml/v2"
+)
+
+type item struct {
+	Name string
+}
+
+type items struct {
+	Slice []item
+}
+
+func main() {
+	its := items{[]item{{"a"}, {"b"}}}
+	b, _ := os.ReadFile("slice.toml")
+	toml.Unmarshal(b, &its)
+	fmt.Println(its) // should be {[{c} {d}]}, but get {[{a} {b} {c} {d}]}
+}
+```
+
+`slice.toml`:
+```toml
+[[Slice]]
+  Name = 'c'
+
+[[Slice]]
+  Name = 'd'
+```
+
+**Expected behavior**
+As stated in the code, I expected `{[{c} {d}]}` but got `{[{a} {b} {c} {d}]}`.
+
+**Versions**
+ - go-toml: v2.1.1 (34765b4)
+ - go: 1.21.4
+ - operating system: Windows and macOS
+
+**Additional context**
+As stated above, I have confirmed that this issue did not happen in v1.
+
+Fix it in the library's code. Tests that check the fix are hidden and run after you finish; the repository's existing tests must keep passing. Use only what is in the repository and the standard library.
+
+"""
+verify = "sh .gate_checks/run.sh"
+max_iterations = 80
+
+[source]
+repo = "https://github.com/pelletier/go-toml"
+commit = "2e087bdf5f676bd8c3cf0ea9ed3e8bf1fdc6a72c"

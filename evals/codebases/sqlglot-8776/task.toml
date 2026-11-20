@@ -1,0 +1,73 @@
+# Issue: https://github.com/tobymao/sqlglot/issues/8776
+# Fix:   https://github.com/tobymao/sqlglot/pull/8792
+title = "sqlglot: postgres: TABLESPACE in CREATE TABLE / INDEX / MATERIALIZED VIEW and USING INDEX TABLESPACE after UNIQUE / PRIMARY KEY fall back to Command"
+category = "codebase"
+tags = ["hard", "python", "sqlglot"]
+prompt = """
+You are working in a checkout of tobymao/sqlglot (Python). Resolve this GitHub issue.
+
+# postgres: TABLESPACE in CREATE TABLE / INDEX / MATERIALIZED VIEW and USING INDEX TABLESPACE after UNIQUE / PRIMARY KEY fall back to Command
+
+**Fully reproducible code snippet**
+
+```python
+import sqlglot
+
+for sql in [
+    "CREATE TABLE m (a INT PRIMARY KEY) TABLESPACE ts",
+    "CREATE TABLE m (a INT) WITH (fillfactor=70) TABLESPACE ts",
+    "CREATE INDEX i ON t (a) TABLESPACE ts",
+    "CREATE MATERIALIZED VIEW mv TABLESPACE ts AS SELECT 1",
+    "CREATE TABLE m (a INT, CONSTRAINT pk PRIMARY KEY (a) USING INDEX TABLESPACE ts)",
+    "CREATE TABLE m (a INT, UNIQUE (a) USING INDEX TABLESPACE ts)",
+    "CREATE TABLE m (a INT PRIMARY KEY USING INDEX TABLESPACE ts)",
+]:
+    try:
+        print(type(sqlglot.parse_one(sql, read="postgres")).__name__, "|", sql)
+    except sqlglot.errors.ParseError:
+        print("ParseError |", sql)
+```
+
+Output on 30.24.0 and on main (78b24a7):
+
+```
+Command | CREATE TABLE m (a INT PRIMARY KEY) TABLESPACE ts
+Command | CREATE TABLE m (a INT) WITH (fillfactor=70) TABLESPACE ts
+Command | CREATE INDEX i ON t (a) TABLESPACE ts
+Command | CREATE MATERIALIZED VIEW mv TABLESPACE ts AS SELECT 1
+ParseError | CREATE TABLE m (a INT, CONSTRAINT pk PRIMARY KEY (a) USING INDEX TABLESPACE ts)
+ParseError | CREATE TABLE m (a INT, UNIQUE (a) USING INDEX TABLESPACE ts)
+ParseError | CREATE TABLE m (a INT PRIMARY KEY USING INDEX TABLESPACE ts)
+```
+
+The first four log "contains unsupported syntax. Falling back to parsing as a 'Command'", so the columns, constraints, indexed columns and the view's query are lost.
+
+**Expected**
+
+An `exp.Create` with the schema, index or query parsed and the tablespace kept, round-tripping in the postgres dialect.
+
+**Context**
+
+- #8605 added `exp.TableSpaceProperty` but only the Oracle parser registers `TABLESPACE`; the base generator marks it `UNSUPPORTED`.
+- The base parser already reads `USING INDEX TABLESPACE` in `_parse_index_params`, so `EXCLUDE USING gist (a WITH =) USING INDEX TABLESPACE ts` parses, but the clause is not accepted after `UNIQUE` / `PRIMARY KEY`.
+- PostgreSQL 16.14 accepts all seven statements: each fails with `42704: tablespace "ts" does not exist`, raised after parsing, and the same statements with `pg_default` succeed.
+
+**Official documentation**
+
+- CREATE TABLE (`TABLESPACE tablespace_name`; `USING INDEX TABLESPACE` in `index_parameters`): https://www.postgresql.org/docs/current/sql-createtable.html
+- CREATE INDEX: https://www.postgresql.org/docs/current/sql-createindex.html
+- CREATE MATERIALIZED VIEW: https://www.postgresql.org/docs/current/sql-creatematerializedview.html
+
+---
+
+_This issue was prepared by Claude (Anthropic's AI assistant) on behalf of @cmodiano._
+
+Fix it in the library's code. Tests that check the fix are hidden and run after you finish; the repository's existing tests must keep passing. Use only what is in the repository and the standard library.
+
+"""
+verify = "sh .gate_checks/run.sh"
+max_iterations = 80
+
+[source]
+repo = "https://github.com/tobymao/sqlglot"
+commit = "ebd5fb4d74f6e849ef989c2a81ab8e69e0395569"

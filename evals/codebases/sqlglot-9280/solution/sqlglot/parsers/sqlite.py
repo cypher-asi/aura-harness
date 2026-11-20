@@ -1,0 +1,420 @@
+from __future__ import annotations
+
+import typing as t
+
+from sqlglot import exp, parser
+from sqlglot.helper import seq_get
+from sqlglot.parser import IsPredicatePrecedence, binary_range_parser
+from sqlglot.tokens import Token, TokenType
+
+
+SQLITE_NOW = exp.AtTimeZone(this=exp.CurrentTimestamp(), zone=exp.Literal.string("UTC"))
+
+
+def _build_time_value(value: exp.Expr | None, *, as_timestamp: bool = False) -> exp.Expr:
+    # https://www.sqlite.org/lang_datefunc.html#time_values
+    if value is None or (value.is_string and value.name.lower() == "now"):
+        return SQLITE_NOW.copy()
+    return exp.TsOrDsToTimestamp(this=value) if as_timestamp else value
+
+
+def _build_date(args: list) -> exp.Date | exp.Anonymous:
+    if len(args) <= 1:
+        return exp.Date(this=_build_time_value(args[0]) if args else None)
+    return exp.Anonymous(this="DATE", expressions=args)
+
+
+def _build_strftime(args: list, dialect: t.Any) -> exp.Anonymous | exp.TimeToStr:
+    if 1 <= len(args) <= 2:
+        return exp.TimeToStr(
+            this=_build_time_value(seq_get(args, 1), as_timestamp=True),
+            format=dialect.format_time(args[0]),
+        )
+    return exp.Anonymous(this="STRFTIME", expressions=args)
+
+
+def _build_max(args: list) -> exp.Max | exp.Greatest:
+    # The multi-argument max() is a scalar that returns NULL if any argument is NULL
+    if len(args) > 1:
+        return exp.Greatest(this=args[0], expressions=args[1:], ignore_nulls=False)
+    return exp.Max.from_arg_list(args)
+
+
+def _build_min(args: list) -> exp.Min | exp.Least:
+    # The multi-argument min() is a scalar that returns NULL if any argument is NULL
+    if len(args) > 1:
+        return exp.Least(this=args[0], expressions=args[1:], ignore_nulls=False)
+    return exp.Min.from_arg_list(args)
+
+
+def _build_dpipe(
+    self: parser.Parser, this: exp.Expr | None, expression: exp.Expr | None
+) -> exp.DPipe:
+    return self.expression(
+        exp.DPipe(this=this, expression=expression, safe=not self.dialect.STRICT_STRING_CONCAT)
+    )
+
+
+def _build_json_extract(args: list, dialect: t.Any) -> exp.JSONExtract | exp.JSONExtractScalar:
+    # Single-path json_extract() returns an SQL representation like ->>, except
+    # that object/array results keep the JSON subtype (json_subtype); the
+    # multi-path form returns a JSON array. https://www.sqlite.org/json1.html#jex
+    if len(args) == 2:
+        extract = parser.build_extract_json_with_path(exp.JSONExtractScalar)(args, dialect)
+        extract.set("json_subtype", True)
+        return extract
+    return parser.build_extract_json_with_path(exp.JSONExtract)(args, dialect)
+
+
+class SQLiteParser(parser.Parser):
+    IS_PREDICATE_PRECEDENCE = IsPredicatePrecedence.EQUALITY
+
+    # Unary + removes SQLite column affinity and must survive SQL generation.
+    # https://www.sqlite.org/datatype3.html#affinity_of_expressions
+    UNARY_PARSERS = {
+        **parser.Parser.UNARY_PARSERS,
+        TokenType.PLUS: lambda self: self.expression(exp.Pos(this=self._parse_unary())),
+    }
+
+    PRIMARY_PARSERS = {
+        **parser.Parser.PRIMARY_PARSERS,
+        TokenType.HEX_STRING: lambda self, token: self._parse_hex_string(token),
+    }
+
+    STRING_ALIASES = True
+    ALTER_RENAME_REQUIRES_COLUMN = False
+    JOINS_HAVE_EQUAL_PRECEDENCE = True
+    ADD_JOIN_ON_TRUE = True
+
+    TABLE_ALIAS_TOKENS = parser.Parser.TABLE_ALIAS_TOKENS | {
+        TokenType.ANTI,
+        TokenType.SEMI,
+    }
+
+    COLUMN_OPERATORS = {
+        k: v
+        for k, v in parser.Parser.COLUMN_OPERATORS.items()
+        if k not in (TokenType.ARROW, TokenType.DARROW)
+    }
+
+    # ||, -> and ->> form a single left-associative precedence tier that binds tighter
+    # than multiplication, so it's consumed in _parse_factor_operand rather than in
+    # _parse_bitwise: https://sqlite.org/lang_expr.html
+    CONCAT_OPERATORS: t.ClassVar[dict[TokenType, t.Callable]] = {
+        TokenType.DPIPE: _build_dpipe,
+        TokenType.ARROW: parser.build_json_extract,
+        TokenType.DARROW: parser.build_json_extract_scalar,
+    }
+
+    ARITHMETIC_TOKENS = {
+        *parser.Parser.BITWISE,
+        *parser.Parser.TERM,
+        *parser.Parser.FACTOR,
+    } - {TokenType.COLLATE}
+
+    FUNCTIONS = {
+        **parser.Parser.FUNCTIONS,
+        "DATE": _build_date,
+        "DATETIME": lambda args: exp.Anonymous(this="DATETIME", expressions=args),
+        "EDITDIST3": exp.Levenshtein.from_arg_list,
+        "JSON_EXTRACT": _build_json_extract,
+        "JSON_GROUP_ARRAY": exp.JSONArrayAgg.from_arg_list,
+        "JSON_GROUP_OBJECT": lambda args: exp.JSONObjectAgg(expressions=args),
+        "LENGTH": lambda args: exp.Length(this=seq_get(args, 0), null_terminated=True),
+        "MAX": _build_max,
+        "MIN": _build_min,
+        "RANDOM": lambda args: exp.Rand(
+            lower=exp.Literal.number(-9223372036854775807),
+            upper=exp.Literal.number(9223372036854775807),
+        ),
+        "ROUND": lambda args: exp.Round(
+            this=seq_get(args, 0), decimals=seq_get(args, 1), negative_decimals_are_zero=True
+        ),
+        "STRFTIME": _build_strftime,
+        "SQLITE_VERSION": exp.CurrentVersion.from_arg_list,
+        "TIME": lambda args: exp.Anonymous(this="TIME", expressions=args),
+        "UNICODE": lambda args: exp.Unicode(this=seq_get(args, 0), empty_is_null=True),
+    }
+
+    FUNCTION_PARSERS = {
+        **parser.Parser.FUNCTION_PARSERS,
+        "GROUP_CONCAT": lambda self: self._parse_string_agg(),
+        "IF": lambda self: self._parse_iif(),
+        "IIF": lambda self: self._parse_iif(),
+    }
+
+    PROPERTY_PARSERS = {
+        **parser.Parser.PROPERTY_PARSERS,
+        "USING": lambda self, **kwargs: self._parse_module_property(),
+        "VIRTUAL": lambda self: self.expression(exp.VirtualProperty()),
+        "WITHOUT": lambda self: self._parse_without_rowid(),
+    }
+
+    STATEMENT_PARSERS = {
+        **parser.Parser.STATEMENT_PARSERS,
+        TokenType.ATTACH: lambda self: self._parse_attach_detach(),
+        TokenType.DETACH: lambda self: self._parse_attach_detach(is_attach=False),
+        TokenType.PRAGMA: lambda self: self._parse_pragma(),
+    }
+
+    RANGE_PARSERS = {
+        **parser.Parser.RANGE_PARSERS,
+        # https://www.sqlite.org/lang_expr.html
+        TokenType.MATCH: binary_range_parser(exp.Match),
+    }
+
+    def _parse_statement(self) -> exp.Expr | None:
+        if (not self._next and self._match(TokenType.END)) or (
+            self._tokens_size - self._index == 2 and self._match_text_seq("END", "TRANSACTION")
+        ):
+            return self.expression(exp.Commit())
+        return super()._parse_statement()
+
+    def _parse_batch_end(self) -> exp.Expr:
+        # A trigger body can span several semicolon-delimited statements before its END.
+        for i in range(self._chunk_index - 2, -1, -1):
+            chunk = self._chunks[i]
+            if not chunk:
+                continue
+            if chunk[0].token_type == TokenType.END:
+                break
+
+            if (
+                len(chunk) > 1
+                and chunk[0].token_type == TokenType.COMMAND
+                and chunk[0].text.upper() == "EXPLAIN"
+            ):
+                # The tokenizer keeps the rest of an EXPLAIN command in a single string.
+                chunk = self.dialect.tokenize(chunk[1].text)
+                if chunk and chunk[0].text.upper() == "QUERY":
+                    chunk = chunk[2:]  # QUERY PLAN
+
+            if len(chunk) >= 2 and chunk[0].token_type == TokenType.CREATE:
+                kind = seq_get(chunk, 2) if chunk[1].token_type == TokenType.TEMPORARY else chunk[1]
+                if kind and kind.token_type == TokenType.TRIGGER:
+                    return super()._parse_batch_end()
+
+        return self.expression(exp.Commit())
+
+    def _parse_is(self, this: exp.Expr | None) -> exp.Expr | None:
+        """SQLite's IS / IS NOT is a null-safe equality against any expression.
+
+        Other dialects only accept NULL, TRUE, FALSE or UNKNOWN on the right
+        side, so anything else is parsed as IS [NOT] DISTINCT FROM; each
+        transpiler then emits the syntax it supports (SQLite keeps IS / IS
+        NOT) (#8855).
+        """
+        this = super()._parse_is(this)
+
+        is_node = this
+        wrapped_in_not = False
+        if isinstance(this, exp.Not) and isinstance(this.this, exp.Is):
+            is_node = this.this
+            wrapped_in_not = True
+
+        if isinstance(is_node, exp.Is):
+            rhs = is_node.expression.unnest()
+            if isinstance(rhs, (exp.Null, exp.Boolean)):
+                is_node.set("expression", rhs)
+            else:
+                cls = exp.NullSafeNEQ if wrapped_in_not else exp.NullSafeEQ
+                this = cls(this=is_node.this, expression=is_node.expression)
+
+        return this
+
+    def _parse_if(self) -> exp.Expr | None:
+        if not self._match(TokenType.L_PAREN):
+            return super()._parse_if()
+
+        expression = self._parse_iif()
+
+        # Keep the marker on anonymous calls without moving comments on keyword IF.
+        self._match(
+            TokenType.R_PAREN,
+            expression=expression if isinstance(expression, exp.Anonymous) else None,
+        )
+        return expression
+
+    def _parse_iif(self) -> exp.If | exp.Case | exp.Anonymous:
+        token = self._tokens[self._index - 2]
+        args = self._parse_function_args()
+
+        if self._curr.token_type != TokenType.R_PAREN:
+            self.raise_error("Expecting )")
+
+        if (comments := self._curr.comments) and any(
+            comment.lstrip().startswith(exp.SQLGLOT_ANONYMOUS) for comment in comments
+        ):
+            name: str | exp.Identifier = token.text
+            if token.token_type == TokenType.IDENTIFIER:
+                name = exp.Identifier(this=name, quoted=True).update_positions(token)
+            return self.expression(exp.Anonymous(this=name, expressions=args), token)
+
+        if len(args) <= 3:
+            return self.validate_expression(exp.If.from_arg_list(args), args).update_positions(
+                token
+            )
+
+        return self.expression(
+            exp.Case(
+                ifs=[exp.If(this=args[i], true=args[i + 1]) for i in range(0, len(args) - 1, 2)],
+                default=args[-1] if len(args) % 2 else None,
+            ),
+            token,
+        )
+
+    def _parse_string_agg(self) -> exp.GroupConcat:
+        expression = super()._parse_string_agg()
+        expression.set("null_separator_is_empty", True)
+        return expression
+
+    def _parse_is_rhs(self, distinct: bool = False) -> exp.Expr | None:
+        # Ordering comparisons bind above IS, but range predicates bind below it.
+        this = self._parse_bitwise()
+        while self._match_set(self.COMPARISON):
+            comments = self._prev_comments
+            this = self.expression(
+                self.COMPARISON[self._prev.token_type](this=this, expression=self._parse_bitwise()),
+                comments=comments,
+            )
+        return this
+
+    def _parse_hex_string(self, token: Token) -> exp.Expr:
+        if self.sql.startswith(("0x", "0X"), token.start):
+            value = int(token.text, 16)
+            # SQLite interprets hex integers as signed 64-bit two's-complement values.
+            if value >= 1 << 63:
+                value -= 1 << 64
+            return self.expression(exp.Literal.number(value), token)
+
+        return self.expression(exp.HexString(this=token.text), token)
+
+    def _parse_factor_operand(self) -> exp.Expr | None:
+        in_arithmetic_operand = self._prev.token_type in self.ARITHMETIC_TOKENS
+        this = self._parse_concat_operand()
+        parsed_op = False
+
+        while self._curr and (build := self.CONCAT_OPERATORS.get(self._curr.token_type)):
+            if self._curr.token_type != TokenType.DPIPE and isinstance(this, exp.DPipe):
+                # Parenthesize so that dialects where the arrows bind tighter
+                # than || still produce the same, left-associative grouping
+                this = self.expression(exp.Paren(this=this))
+
+            self._advance()
+            this = build(self, this, self._parse_concat_operand())
+            parsed_op = True
+
+        if parsed_op and (
+            in_arithmetic_operand
+            or (self._curr and self._curr.token_type in self.ARITHMETIC_TOKENS)
+        ):
+            # This tier binds tighter than arithmetic in SQLite but looser elsewhere,
+            # so parenthesize it to preserve the grouping in other dialects
+            this = self.expression(exp.Paren(this=this))
+
+        return this
+
+    def _parse_concat_operand(self) -> exp.Expr | None:
+        this = self._parse_unary()
+
+        # COLLATE binds tighter than any binary operator, including this tier
+        while self._match(TokenType.COLLATE):
+            collate = self.expression(exp.Collate(this=this, expression=self._parse_unary()))
+            self._normalize_collate(collate)
+            this = collate
+
+        return this
+
+    def _parse_unique(self) -> exp.UniqueColumnConstraint:
+        # Do not consume more tokens if UNIQUE is used as a standalone constraint, e.g:
+        # CREATE TABLE foo (bar TEXT UNIQUE REFERENCES baz ...)
+        if self._curr.text.upper() in self.CONSTRAINT_PARSERS:
+            return self.expression(exp.UniqueColumnConstraint())
+
+        return super()._parse_unique()
+
+    def _parse_limit(
+        self,
+        this: exp.Expr | None = None,
+        top: bool = False,
+        skip_limit_token: bool = False,
+    ) -> exp.Expr | None:
+        limit = super()._parse_limit(this=this, top=top, skip_limit_token=skip_limit_token)
+
+        # A negative LIMIT means there is no upper bound on the number of rows returned
+        # https://www.sqlite.org/lang_select.html#limitoffset
+        if isinstance(limit, exp.Limit):
+            expression = limit.args.get("expression")
+            if expression and expression.is_int and expression.to_py() < 0:
+                limit.set("expression", exp.var("ALL"))
+
+        return limit
+
+    def _parse_without_rowid(self) -> exp.WithoutRowidProperty | None:
+        index = self._index
+        if self._match_text_seq("ROWID"):
+            return self.expression(exp.WithoutRowidProperty())
+        self._retreat(index)
+        return None
+
+    def _parse_module_property(self, **kwargs: t.Any) -> exp.ModuleProperty:
+        name = self._parse_id_var()
+        expressions = (
+            self._parse_wrapped_csv(self._parse_id_var)
+            if self._match(TokenType.L_PAREN, advance=False)
+            else None
+        )
+        return self.expression(exp.ModuleProperty(this=name, expressions=expressions))
+
+    def _parse_pragma(self) -> exp.Pragma:
+        name = self._parse_id_var()
+
+        if self._match(TokenType.DOT):
+            name = exp.Dot(this=name, expression=self._parse_id_var())
+
+        self._match(TokenType.EQ)
+
+        value = self._parse_wrapped(
+            lambda: self._parse_unary() or self._parse_var(any_token=True), optional=True
+        )
+
+        if value:
+            return self.expression(exp.Pragma(this=exp.EQ(this=name, expression=value)))
+
+        return self.expression(exp.Pragma(this=name))
+
+    def _parse_attach_detach(self, is_attach=True) -> exp.Attach | exp.Detach:
+        self._match(TokenType.DATABASE)
+        this = self._parse_expression()
+
+        return (
+            self.expression(exp.Attach(this=this))
+            if is_attach
+            else self.expression(exp.Detach(this=this))
+        )
+
+    # https://www.sqlite.org/gencol.html
+    def _parse_generated_as_identity(
+        self,
+    ) -> (
+        exp.GeneratedAsIdentityColumnConstraint
+        | exp.ComputedColumnConstraint
+        | exp.GeneratedAsRowColumnConstraint
+    ):
+        this = super()._parse_generated_as_identity()
+
+        # Only expression-bearing GENERATED ALWAYS AS (expr) forms are computed
+        # columns. Match STORED/VIRTUAL inside this branch so true identity
+        # (AS IDENTITY) does not silently consume a trailing storage keyword.
+        if (
+            isinstance(this, exp.GeneratedAsIdentityColumnConstraint)
+            and this.expression is not None
+        ):
+            persisted = (
+                self._match_texts(("STORED", "VIRTUAL")) and self._prev.text.upper() == "STORED"
+            )
+            return self.expression(
+                exp.ComputedColumnConstraint(this=this.expression, persisted=persisted)
+            )
+
+        return this

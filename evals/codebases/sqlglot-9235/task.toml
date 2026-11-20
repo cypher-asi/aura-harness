@@ -1,0 +1,39 @@
+# Issue: https://github.com/tobymao/sqlglot/issues/9235
+# Fix:   https://github.com/tobymao/sqlglot/pull/9240
+title = "sqlglot: SQLite: date arithmetic with + / - INTERVAL produces invalid SQL"
+category = "codebase"
+tags = ["hard", "python", "sqlglot"]
+prompt = """
+You are working in a checkout of tobymao/sqlglot (Python). Resolve this GitHub issue.
+
+# SQLite: date arithmetic with + / - INTERVAL produces invalid SQL
+
+SQLite has no `INTERVAL` syntax, but date/time arithmetic written with `+`/`-` and an interval is emitted unchanged, so the SQLite output is a syntax error:
+
+```python
+import sqlglot
+
+sqlglot.transpile("SELECT CAST(d AS DATE) + INTERVAL '1 day'", read="postgres", write="sqlite")
+# ["SELECT DATE(d) + INTERVAL '1' DAY"]
+# SQLite: near "DAY": syntax error
+
+sqlglot.transpile("SELECT d + INTERVAL 1 MONTH", read="mysql", write="sqlite")
+# ["SELECT d + INTERVAL '1' MONTH"]
+```
+
+The function form already works, e.g. `DATE_ADD(d, INTERVAL 1 MONTH)` from MySQL becomes `DATE(d, '1 MONTH')`. Since the right operand is an `INTERVAL`, the operator form is unambiguous, so I'd expect `x + INTERVAL n unit` / `x - INTERVAL n unit` to go through the same `DATE(...)` / `DATETIME(...)` modifier path in the SQLite generator.
+
+Tested on main (`374f0e67`).
+
+**Official Documentation**
+https://www.sqlite.org/lang_datefunc.html#modifiers
+
+Fix it in the library's code. Tests that check the fix are hidden and run after you finish; the repository's existing tests must keep passing. Use only what is in the repository and the standard library.
+
+"""
+verify = "sh .gate_checks/run.sh"
+max_iterations = 80
+
+[source]
+repo = "https://github.com/tobymao/sqlglot"
+commit = "d53acffcf3ab0cb8ae8da9151b740e0a59d52baf"

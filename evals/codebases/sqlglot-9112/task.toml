@@ -1,0 +1,59 @@
+# Issue: https://github.com/tobymao/sqlglot/issues/9112
+# Fix:   https://github.com/tobymao/sqlglot/pull/9176
+title = "sqlglot: DuckDB: printf-style FORMAT from BigQuery/Spark/SQLite/Postgres is written as DuckDB FORMAT, which uses {} placeholders"
+category = "codebase"
+tags = ["hard", "python", "sqlglot"]
+prompt = """
+You are working in a checkout of tobymao/sqlglot (Python). Resolve this GitHub issue.
+
+# DuckDB: printf-style FORMAT from BigQuery/Spark/SQLite/Postgres is written as DuckDB FORMAT, which uses {} placeholders
+
+**Fully reproducible code snippet**
+
+BigQuery `FORMAT`, Spark `FORMAT_STRING`, SQLite `FORMAT` and Postgres `FORMAT` all use printf-style `%` specifiers and parse to `exp.Format`. The DuckDB generator writes that as DuckDB `FORMAT`, but DuckDB's `FORMAT` uses fmt-style `{}` placeholders, so the query runs and just returns the format string:
+
+```python
+import sqlglot, duckdb
+
+for d, q in [
+    ("bigquery", "SELECT FORMAT('%d-%s', 1, 'a')"),
+    ("spark", "SELECT FORMAT_STRING('%d-%s', 1, 'a')"),
+    ("sqlite", "SELECT FORMAT('%d-%s', 1, 'a')"),
+    ("postgres", "SELECT FORMAT('%s-%s', 1, 'a')"),
+]:
+    out = sqlglot.transpile(q, read=d, write="duckdb")[0]
+    print(d, out, "->", duckdb.sql(out).fetchall()[0][0])
+```
+
+On main (b294f7f) with DuckDB 2.0.0:
+
+```
+bigquery SELECT FORMAT('%d-%s', 1, 'a') -> %d-%s
+spark    SELECT FORMAT('%d-%s', 1, 'a') -> %d-%s
+sqlite   SELECT FORMAT('%d-%s', 1, 'a') -> %d-%s
+postgres SELECT FORMAT('%s-%s', 1, 'a') -> %s-%s
+```
+
+Expected `1-a` in all four. DuckDB has `PRINTF` for this (`SELECT PRINTF('%d-%s', 1, 'a')` -> `1-a`). One catch: DuckDB's `PRINTF` only takes strings for `%s` (`PRINTF('%s', 1)` errors), so a `%s`-only format like the Postgres one is better written as `FORMAT('{}-{}', 1, 'a')`. `DuckDBGenerator.format_sql` already does this for the single `'%s'` case.
+
+The other direction has the same mix-up: DuckDB `FORMAT('{}-{}', 1, 2)` parses to `exp.Format` too and is written as BigQuery `FORMAT('{}-{}', 1, 2)` / Spark `FORMAT_STRING('{}-{}', 1, 2)`, and DuckDB `PRINTF` parses as `Anonymous`.
+
+So `exp.Format` currently means printf-style when read from BigQuery/Spark/SQLite/Postgres and fmt-style when read from DuckDB (the DuckDB UUID_STRING template also builds `FORMAT('{:02x}', ...)` as `exp.Format`). Possible fix: treat `exp.Format` as printf-style, parse DuckDB `PRINTF` into it, generate `PRINTF` for DuckDB (or `FORMAT` with `{}` when `%s` is the only specifier), and give DuckDB's fmt-style `FORMAT` its own handling. I have a branch for the generator side and can open a PR if this direction sounds right.
+
+**Official Documentation**
+
+- DuckDB `format` (fmt syntax) and `printf`: https://duckdb.org/docs/stable/sql/functions/text#formatformat-parameters
+- BigQuery `FORMAT`: https://cloud.google.com/bigquery/docs/reference/standard-sql/string_functions#format_string
+- Spark `format_string`: https://spark.apache.org/docs/latest/api/sql/index.html#format_string
+- SQLite `format`/`printf`: https://www.sqlite.org/printf.html
+- Postgres `format`: https://www.postgresql.org/docs/current/functions-string.html#FUNCTIONS-STRING-FORMAT
+
+Fix it in the library's code. Tests that check the fix are hidden and run after you finish; the repository's existing tests must keep passing. Use only what is in the repository and the standard library.
+
+"""
+verify = "sh .gate_checks/run.sh"
+max_iterations = 80
+
+[source]
+repo = "https://github.com/tobymao/sqlglot"
+commit = "1a6309ade5b784e79033b924e55884a9545395f0"

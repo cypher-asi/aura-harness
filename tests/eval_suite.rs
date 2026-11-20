@@ -19,6 +19,7 @@ const SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/evals/coding");
 const GATE_SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/evals/gate_cost");
 const GATE_HARD_SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/evals/gate_hard");
 const POLYGLOT_SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/evals/polyglot");
+const CODEBASES_SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/evals/codebases");
 
 fn write_greeting() -> MockProvider {
     MockProvider::new().with_responses(vec![
@@ -233,7 +234,42 @@ fn polyglot_tasks_fail_as_shipped_and_pass_when_solved() {
     assert_fail_as_shipped_and_pass_when_solved(&tasks);
 }
 
+/// Same for the real fixes in open-source repositories, each checked out
+/// at the commit before its fix; their checks are the fix's own tests.
+#[test]
+#[ignore = "downloads every task's repository"]
+fn codebase_tasks_fail_as_shipped_and_pass_when_solved() {
+    let tasks = evals::load_suite(Path::new(CODEBASES_SUITE)).unwrap();
+    assert!(tasks.len() >= 20, "suite has {} tasks", tasks.len());
+    assert!(tasks.iter().all(|task| task.source.is_some()));
+    assert_fail_as_shipped_and_pass_when_solved(&tasks);
+}
+
+/// The codebase tasks name a repository at a commit and leave its files
+/// out; the rest of a task is here.
+#[test]
+fn codebase_tasks_name_their_repository_and_carry_hidden_tests() {
+    let tasks = evals::load_suite(Path::new(CODEBASES_SUITE)).unwrap();
+    for task in &tasks {
+        let source = task.source.as_ref().expect("a [source]");
+        assert!(
+            source.dir(Path::new("/cache")).is_ok(),
+            "{}: {source:?}",
+            task.id
+        );
+        assert!(!task.dir.join("workspace").exists(), "{}", task.id);
+        assert!(
+            task.dir.join("checks/.gate_checks/run.sh").is_file(),
+            "{}",
+            task.id
+        );
+        assert!(task.dir.join("solution").is_dir(), "{}", task.id);
+    }
+}
+
 fn assert_fail_as_shipped_and_pass_when_solved(tasks: &[evals::EvalTask]) {
+    let cache = aura_app::repo_source::cache_dir();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
     let mut wrong = Vec::new();
     for task in tasks {
         for (solved, layers) in [
@@ -241,6 +277,10 @@ fn assert_fail_as_shipped_and_pass_when_solved(tasks: &[evals::EvalTask]) {
             (true, &["workspace", "solution", "checks"][..]),
         ] {
             let dir = tempfile::tempdir().unwrap();
+            if let Some(source) = &task.source {
+                let repository = runtime.block_on(source.fetch(&cache)).unwrap();
+                evals::copy_dir(&repository, dir.path()).unwrap();
+            }
             for layer in layers {
                 let from = task.dir.join(layer);
                 if from.is_dir() {
