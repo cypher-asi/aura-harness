@@ -12,17 +12,80 @@ use crate::events::PlanView;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 
-/// 0-based line of `view` that first mentions a todo's `content` (its
-/// first line), so opening a plan from a todo lands on it.
+/// Line ending the generated header of a plan file, as
+/// `aura_exec_tools::plan_tools::HEADER_END` writes it (this crate does
+/// not depend on the tools crate).
+const PLAN_HEADER_END: &str = "<!-- end of generated header: edit below -->";
+
+/// Text of a generated checklist item `- [x] text`, or `None` when
+/// `line` is not one.
+fn checklist_text(line: &str) -> Option<&str> {
+    let mut rest = line.strip_prefix("- [")?.chars();
+    rest.next()?;
+    rest.as_str().strip_prefix("] ")
+}
+
+/// 0-based lines of the items in a plan's generated `## Todos`
+/// checklist, in todo order. Empty for files without a generated header,
+/// so a `## Todos` the author wrote in an old plan's body is not used.
+fn checklist_lines(lines: &[&str]) -> Vec<usize> {
+    let Some(start) = lines.iter().position(|line| *line == "## Todos") else {
+        return Vec::new();
+    };
+    let mut items = Vec::new();
+    for (index, line) in lines.iter().enumerate().skip(start + 1) {
+        if line.trim_end() == PLAN_HEADER_END {
+            return items;
+        }
+        if checklist_text(line).is_some() {
+            items.push(index);
+        }
+    }
+    Vec::new()
+}
+
+/// 0-based line of `view` showing a todo's `content` (its first line):
+/// its checklist item when the plan has one, else the first line that
+/// mentions it, so opening a plan from a todo lands on it.
 fn todo_line(view: &FileView, content: &str) -> Option<usize> {
     let needle = content.lines().next()?.trim();
     if needle.is_empty() {
         return None;
     }
-    view.body
-        .lines()
+    let lines = view.body.lines();
+    let assigned = format!("{needle} (@");
+    checklist_lines(&lines)
+        .into_iter()
+        .find(|&index| {
+            lines
+                .get(index)
+                .and_then(|line| checklist_text(line))
+                .is_some_and(|text| text == needle || text.starts_with(&assigned))
+        })
+        .or_else(|| lines.iter().position(|line| line.contains(needle)))
+}
+
+/// 0-based line of `view` showing the todo with id `id`: its checklist
+/// item when the plan has one, else its `id:` line in the frontmatter.
+fn todo_id_line(view: &FileView, id: &str) -> Option<usize> {
+    let lines = view.body.lines();
+    let wanted = format!("id: {id}");
+    let id_line = lines
         .iter()
-        .position(|line| line.contains(needle))
+        .position(|line| line.trim_start_matches(['-', ' ']) == wanted)?;
+    // Todos are the only top-level `- ` items in the frontmatter, so the
+    // number before this one is its place in the checklist.
+    let ordinal = lines
+        .iter()
+        .take(id_line)
+        .filter(|line| line.starts_with("- "))
+        .count();
+    Some(
+        checklist_lines(&lines)
+            .get(ordinal)
+            .copied()
+            .unwrap_or(id_line),
+    )
 }
 
 /// One row of the tab.
@@ -251,13 +314,7 @@ impl App {
             return;
         };
         let mut view = FileView::load(&root.join(path), Some(root));
-        let line = todo.and_then(|id| {
-            view.body
-                .lines()
-                .iter()
-                .position(|line| line.trim_start_matches(['-', ' ']) == format!("id: {id}"))
-        });
-        if let Some(line) = line {
+        if let Some(line) = todo.and_then(|id| todo_id_line(&view, id)) {
             view.jump_to(line);
         }
         self.open_detail(DetailView::File(Box::new(view)));
@@ -465,6 +522,49 @@ mod tests {
         assert_eq!(shape(app.plan_list()), ["+a"], "Space folds");
         app.handle_key(KeyEvent::from(KeyCode::Enter));
         assert!(matches!(app.detail_view(), Some(DetailView::File(_))));
+    }
+
+    #[test]
+    fn plans_with_a_generated_header_open_at_the_checklist_item() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".aura/plans")).unwrap();
+        std::fs::write(
+            dir.path().join(".aura/plans/a.plan.md"),
+            format!(
+                "---\nname: a\noverview: ''\ntodos:\n\
+                 - id: x\n  content: a 0\n  status: pending\n\
+                 - id: y\n  content: a 1\n  status: completed\n---\n\n\
+                 # a\n\n## Todos\n\n- [ ] a 0\n- [x] a 1 (@bot)\n\n\
+                 {PLAN_HEADER_END}\n\nBody mentions a 1.\n"
+            ),
+        )
+        .unwrap();
+        let mut app = App::new();
+        app.process_command(UiCommand::SetSandboxRoot(dir.path().to_path_buf()));
+        app.process_command(UiCommand::SetPlans(vec![plan("a", &[P, P])]));
+        app.focus = super::super::PanelFocus::Sandbox;
+        app.show_side_tab(super::super::SidePanelTab::Plans);
+
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        let Some(DetailView::File(view)) = app.detail_view() else {
+            panic!("the plan opens as a file");
+        };
+        assert_eq!(
+            view.vim.line(),
+            17,
+            "the cursor lands on the checklist item"
+        );
+
+        for (id, line) in [("x", 16), ("y", 17)] {
+            app.close_detail();
+            app.open_plan_at(".aura/plans/a.plan.md", Some(id));
+            let Some(DetailView::File(view)) = app.detail_view() else {
+                panic!("the plan opens as a file");
+            };
+            assert_eq!(view.vim.line(), line, "todo {id}");
+        }
     }
 
     #[test]

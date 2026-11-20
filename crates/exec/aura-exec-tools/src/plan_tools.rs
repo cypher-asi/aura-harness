@@ -1,11 +1,27 @@
 //! Plan files and the tool that writes them.
 //!
-//! A plan lives in `.aura/plans/<slug>_<id>.plan.md` inside the workspace:
-//! YAML frontmatter (`name`, `overview`, `todos`) followed by a Markdown
-//! body. `create_plan` writes one (in plan mode the agent can't edit code,
-//! but plans are Markdown). While a plan is built, its todos are the
-//! agent's `todo_write` list: [`todo_items`] seeds the list from the plan
-//! and [`sync_todo_list`] writes the list's progress back to the file.
+//! A plan lives in `.aura/plans/<slug>_<id>.plan.md` inside the workspace.
+//! `create_plan` writes one (in plan mode the agent can't edit code, but
+//! plans are Markdown). The file has four parts, in order:
+//!
+//! 1. YAML frontmatter between `---` lines: `name`, `overview` and `todos`
+//!    (id, content, status, assignee). This is the source of truth; code
+//!    reads the plan's metadata and todos from here only.
+//! 2. A generated, human-readable header: `# <name>`, the overview
+//!    paragraph and a `## Todos` checklist (`- [x] ...`). It exists because
+//!    the file is often read raw, where the frontmatter alone says little.
+//!    It is rebuilt from the frontmatter on every write, so it never needs
+//!    hand edits and is never parsed.
+//! 3. The [`HEADER_END`] marker, an HTML comment that Markdown renderers
+//!    hide, separating generated text from authored text.
+//! 4. The body the plan's author wrote, tidied by [`normalize_body`].
+//!
+//! Files written before the header existed have no marker; their body is
+//! everything after the frontmatter, and the next write upgrades them.
+//!
+//! While a plan is built, its todos are the agent's `todo_write` list:
+//! [`todo_items`] seeds the list from the plan and [`sync_todo_list`]
+//! writes the list's progress back to the frontmatter and the checklist.
 
 use crate::error::ToolError;
 use crate::sandbox::Sandbox;
@@ -29,6 +45,10 @@ pub const CREATE_PLAN_TOOL_NAME: &str = "create_plan";
 /// Start of the first output line of `create_plan`, followed by the plan
 /// path. See [`plan_path_from_output`].
 const SAVED_PREFIX: &str = "Plan saved: ";
+
+/// Line that ends the generated header of a plan file; the authored body
+/// follows it. The terminal UI looks for it too, so keep the two in step.
+pub const HEADER_END: &str = "<!-- end of generated header: edit below -->";
 
 /// One step of a plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,11 +76,18 @@ pub struct PlanMeta {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PlanFile {
     pub meta: PlanMeta,
+    /// Markdown the plan's author wrote, without the generated header and
+    /// without a trailing newline ([`PlanFile::render`] adds one).
     pub body: String,
 }
 
 impl PlanFile {
     /// Parse `---`-delimited YAML frontmatter followed by the body.
+    ///
+    /// The generated header is skipped, never read: metadata and todos
+    /// come from the frontmatter only. Without a [`HEADER_END`] marker
+    /// (files from before the header) the body is all text after the
+    /// frontmatter.
     ///
     /// # Errors
     /// When the frontmatter is missing or isn't valid plan YAML.
@@ -74,9 +101,14 @@ impl PlanFile {
         let meta: PlanMeta =
             serde_yaml::from_str(yaml).map_err(|e| format!("invalid plan frontmatter: {e}"))?;
         let body = body.strip_prefix('\n').unwrap_or(body);
+        let body = body.trim_start_matches('\n');
+        let body = match after_header(&meta, body) {
+            Some(authored) => authored.trim_start_matches('\n').trim_end_matches('\n'),
+            None => body,
+        };
         Ok(Self {
             meta,
-            body: body.trim_start_matches('\n').to_string(),
+            body: body.to_string(),
         })
     }
 
@@ -89,11 +121,19 @@ impl PlanFile {
         Self::parse(&text)
     }
 
-    /// The file's text: frontmatter, blank line, body.
+    /// The file's text: frontmatter, generated header, [`HEADER_END`],
+    /// body, ending in exactly one newline.
     #[must_use]
     pub fn render(&self) -> String {
         let yaml = serde_yaml::to_string(&self.meta).unwrap_or_default();
-        format!("---\n{yaml}---\n\n{}", self.body)
+        let mut out = format!("---\n{yaml}---\n\n{}", generated_header(&self.meta));
+        let body = self.body.trim_end_matches('\n');
+        if !body.is_empty() {
+            out.push('\n');
+            out.push_str(body);
+            out.push('\n');
+        }
+        out
     }
 
     /// `(closed, total)` todo counts.
@@ -107,6 +147,140 @@ impl PlanFile {
             .count();
         (closed, self.meta.todos.len())
     }
+}
+
+/// `# name`, the overview, the `## Todos` checklist and the
+/// [`HEADER_END`] line, each block followed by a blank line except the
+/// marker.
+fn generated_header(meta: &PlanMeta) -> String {
+    // A heading is one line; a name with newlines would spill into the body.
+    let title = meta.name.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut out = format!("# {title}\n\n");
+    let overview = meta.overview.trim();
+    if !overview.is_empty() {
+        out.push_str(overview);
+        out.push_str("\n\n");
+    }
+    if !meta.todos.is_empty() {
+        out.push_str("## Todos\n\n");
+        for todo in &meta.todos {
+            out.push_str(&checklist_item(todo));
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+    out.push_str(HEADER_END);
+    out.push('\n');
+    out
+}
+
+/// `- [x] content (@assignee)`, with continuation lines indented so a
+/// multi-line todo stays one list item.
+fn checklist_item(todo: &PlanTodo) -> String {
+    let mut out = format!("- {} ", todo.status.checkbox());
+    for (index, line) in todo.content.trim().lines().enumerate() {
+        let line = line.trim_end();
+        if index > 0 {
+            out.push('\n');
+            if !line.is_empty() {
+                out.push_str("  ");
+            }
+        }
+        out.push_str(line);
+    }
+    if let Some(assignee) = todo.assignee.as_deref().filter(|a| !a.trim().is_empty()) {
+        out.push_str(&format!(" (@{})", assignee.trim()));
+    }
+    out
+}
+
+/// The text after the generated header in `text` (what follows the
+/// frontmatter), or `None` when there is no header.
+///
+/// The header `meta` renders to is matched first, so a marker line inside
+/// the overview or a todo can't cut the header short; failing that (the
+/// header was edited by hand) the first marker line ends it.
+fn after_header<'a>(meta: &PlanMeta, text: &'a str) -> Option<&'a str> {
+    if let Some(rest) = text.strip_prefix(generated_header(meta).as_str()) {
+        return Some(rest);
+    }
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        offset += line.len();
+        if line.trim_end() == HEADER_END {
+            return text.get(offset..);
+        }
+    }
+    None
+}
+
+/// Whether `line` opens or closes a code fence: the fence character and
+/// how many of it start the line.
+fn fence_of(line: &str) -> Option<(char, usize)> {
+    let trimmed = line.trim_start();
+    let first = trimmed.chars().next().filter(|c| matches!(c, '`' | '~'))?;
+    let run = trimmed.chars().take_while(|&c| c == first).count();
+    (run >= 3).then_some((first, run))
+}
+
+/// Whether `line` is the `# ` heading `name`, which the generated header
+/// already shows.
+fn is_title_heading(line: &str, name: &str) -> bool {
+    line.strip_prefix("# ").is_some_and(|text| {
+        text.trim_end_matches('#').trim().to_lowercase() == name.trim().to_lowercase()
+    })
+}
+
+/// Tidy a plan body the model sent, without reformatting its Markdown:
+///
+/// - CRLF becomes LF; a body with no newline but literal `\n` sequences
+///   (escaped twice by the model) gets real newlines.
+/// - Trailing whitespace is stripped from every line.
+/// - Runs of blank lines outside code fences collapse to one.
+/// - A leading `# ` heading equal to `name` (ignoring case) is dropped,
+///   since the generated header shows the title.
+/// - Leading and trailing blank lines are trimmed; there is no trailing
+///   newline.
+pub(crate) fn normalize_body(body: &str, name: &str) -> String {
+    let mut text = body.replace("\r\n", "\n");
+    if !text.contains('\n') && text.contains("\\n") {
+        text = text.replace("\\r\\n", "\n").replace("\\n", "\n");
+    }
+    let mut lines = text.lines().map(str::trim_end).skip_while(|l| l.is_empty());
+    let mut kept: Vec<&str> = Vec::new();
+    match lines.next() {
+        Some(first) if is_title_heading(first, name) => {}
+        Some(first) => kept.push(first),
+        None => return String::new(),
+    }
+    // The open fence's character and length; it closes on a run at least
+    // as long with nothing after it.
+    let mut fence: Option<(char, usize)> = None;
+    if let Some(&first) = kept.first() {
+        fence = fence_of(first);
+    }
+    for line in lines {
+        if kept.is_empty() && line.is_empty() {
+            continue;
+        }
+        match (fence, fence_of(line)) {
+            (None, Some(open)) => fence = Some(open),
+            (Some((ch, len)), Some((c, run)))
+                if c == ch && run >= len && line.trim().chars().all(|x| x == ch) =>
+            {
+                fence = None;
+            }
+            (None, None) if line.is_empty() && kept.last().is_some_and(|l| l.is_empty()) => {
+                continue;
+            }
+            _ => {}
+        }
+        kept.push(line);
+    }
+    while kept.last().is_some_and(|l| l.is_empty()) {
+        kept.pop();
+    }
+    kept.join("\n")
 }
 
 /// The plan path a successful `create_plan` reported.
@@ -222,7 +396,7 @@ pub fn create_plan(sandbox: &Sandbox, args: &serde_json::Value) -> Result<ToolRe
         .unwrap_or_default()
         .trim()
         .to_string();
-    let body = required_str(args, "plan")?.to_string();
+    let body = normalize_body(required_str(args, "plan")?, &name);
     let todos = todo_args(args)?;
 
     let (path, previous) = match str_arg(args, "path").filter(|p| !p.trim().is_empty()) {
@@ -357,8 +531,12 @@ impl Tool for CreatePlanTool {
                     },
                     "plan": {
                         "type": "string",
-                        "description": "The plan in Markdown: approach, files to change, \
-                                        key snippets, risks"
+                        "description": "The plan body in Markdown. The title, overview and \
+                                        todo checklist are added for you, so do not repeat \
+                                        them. Use `##` sections (e.g. Approach, Files to \
+                                        change, Risks), short paragraphs and bullet lists, \
+                                        `inline code` for paths and symbols, and fenced code \
+                                        blocks with a language tag for snippets"
                     },
                     "todos": {
                         "type": "array",
@@ -526,5 +704,192 @@ mod tests {
     fn slug_is_filesystem_safe() {
         assert_eq!(slug("Add a /plan mode!"), "add-a-plan-mode");
         assert_eq!(slug("???"), "plan");
+    }
+
+    fn todo(id: &str, content: &str, status: TodoStatus) -> PlanTodo {
+        PlanTodo {
+            id: id.into(),
+            content: content.into(),
+            status,
+            assignee: None,
+        }
+    }
+
+    /// The rendered file after the frontmatter.
+    fn readable_part(text: &str) -> &str {
+        let rest = text.strip_prefix("---\n").unwrap();
+        rest.split_once("\n---\n").unwrap().1
+    }
+
+    #[test]
+    fn render_shows_title_overview_and_checklist() {
+        let mut second = todo("b", "second\nwith details", TodoStatus::InProgress);
+        second.assignee = Some("rust-engineer".into());
+        let plan = PlanFile {
+            meta: PlanMeta {
+                name: "Add Parser".into(),
+                overview: "Parse things.".into(),
+                todos: vec![
+                    todo("a", "first", TodoStatus::Completed),
+                    second,
+                    todo("c", "third", TodoStatus::Pending),
+                    todo("d", "fourth", TodoStatus::Cancelled),
+                ],
+            },
+            body: "## Steps\n\nDo it.".into(),
+        };
+        let text = plan.render();
+        assert_eq!(
+            readable_part(&text),
+            format!(
+                "\n# Add Parser\n\nParse things.\n\n## Todos\n\n\
+                 - [x] first\n\
+                 - [~] second\n  with details (@rust-engineer)\n\
+                 - [ ] third\n\
+                 - [-] fourth\n\n\
+                 {HEADER_END}\n\n## Steps\n\nDo it.\n"
+            )
+        );
+        assert!(text.starts_with("---\nname: Add Parser\n"), "{text}");
+    }
+
+    #[test]
+    fn render_omits_empty_overview_and_todos_and_ends_in_one_newline() {
+        let plan = PlanFile {
+            meta: PlanMeta {
+                name: "Bare".into(),
+                ..PlanMeta::default()
+            },
+            body: "Body.\n\n".into(),
+        };
+        assert_eq!(
+            readable_part(&plan.render()),
+            format!("\n# Bare\n\n{HEADER_END}\n\nBody.\n")
+        );
+        let empty = PlanFile {
+            body: String::new(),
+            ..plan
+        };
+        assert!(empty.render().ends_with(&format!("{HEADER_END}\n")));
+    }
+
+    #[test]
+    fn rendered_plans_round_trip() {
+        let full = PlanFile {
+            meta: PlanMeta {
+                name: "Full".into(),
+                overview: "Over\nview".into(),
+                todos: vec![todo("a", "multi\n\nline", TodoStatus::Pending)],
+            },
+            body: "# Other\n\ntext".into(),
+        };
+        let bare = PlanFile {
+            meta: PlanMeta {
+                name: "Bare".into(),
+                ..PlanMeta::default()
+            },
+            body: String::new(),
+        };
+        let tricky = PlanFile {
+            meta: PlanMeta {
+                name: "Tricky".into(),
+                overview: format!("mentions\n{HEADER_END}\ninside"),
+                todos: vec![],
+            },
+            body: format!("before\n{HEADER_END}\nafter"),
+        };
+        for plan in [full, bare, tricky] {
+            assert_eq!(PlanFile::parse(&plan.render()).unwrap(), plan);
+        }
+    }
+
+    #[test]
+    fn old_files_without_a_header_keep_their_body() {
+        let text = "---\nname: Old\ntodos:\n- id: a\n  content: first\n---\n\n# Steps\n\nDo it.";
+        let plan = PlanFile::parse(text).unwrap();
+        assert_eq!(plan.body, "# Steps\n\nDo it.");
+        assert_eq!(plan.meta.todos[0].content, "first");
+        assert_eq!(PlanFile::parse(&plan.render()).unwrap(), plan, "upgrades");
+    }
+
+    #[test]
+    fn a_hand_edited_header_is_skipped_at_the_marker() {
+        let text = format!("---\nname: P\n---\n\n# Renamed\n\n- [x] stale\n\n{HEADER_END}\n\nBody");
+        let plan = PlanFile::parse(&text).unwrap();
+        assert_eq!(plan.body, "Body");
+        assert!(plan.meta.todos.is_empty(), "todos come from the YAML only");
+    }
+
+    #[test]
+    fn the_checklist_follows_the_todo_list() {
+        let (sandbox, dir) = sandbox();
+        let path = new_plan(&sandbox);
+        let file = dir.path().join(&path);
+        let text = fs::read_to_string(&file).unwrap();
+        assert!(text
+            .contains("# Add Parser!\n\nParse things\n\n## Todos\n\n- [ ] first\n- [ ] second\n"));
+
+        let mut items = todo_items(&PlanFile::load(&file).unwrap());
+        items[0].status = TodoStatus::Completed;
+        items[1].status = TodoStatus::InProgress;
+        sync_todo_list(&file, &items).unwrap();
+        let text = fs::read_to_string(&file).unwrap();
+        assert!(text.contains("- [x] first\n- [~] second\n"), "{text}");
+        assert!(text.ends_with(&format!("{HEADER_END}\n\n# Steps\n\nDo it.\n")));
+    }
+
+    #[test]
+    fn normalize_body_tidies_without_reformatting() {
+        let cases = [
+            ("crlf", "a\r\nb\r\n", "a\nb"),
+            (
+                "literal newlines",
+                "# Steps\\n\\n- one\\n- two",
+                "# Steps\n\n- one\n- two",
+            ),
+            ("real newline keeps literal", "a\\nb\nc", "a\\nb\nc"),
+            ("duplicate title", "\n#  plan NAME \n\nText", "Text"),
+            ("other title kept", "# Steps\n\nText", "# Steps\n\nText"),
+            (
+                "title only first line",
+                "Intro\n# Plan Name",
+                "Intro\n# Plan Name",
+            ),
+            ("trailing whitespace", "a  \n\tb\t\n", "a\n\tb"),
+            ("blank runs", "\n\na\n\n\n\nb\n \n\n", "a\n\nb"),
+            (
+                "fences keep blank lines",
+                "x\n\n\n```rust\nfn a() {}   \n\n\n\n}\n```\n\n\ny",
+                "x\n\n```rust\nfn a() {}\n\n\n\n}\n```\n\ny",
+            ),
+            (
+                "tilde fence with inner backticks",
+                "~~~\n```\n\n\n~~~\n\n\nz",
+                "~~~\n```\n\n\n~~~\n\nz",
+            ),
+        ];
+        for (label, input, expected) in cases {
+            assert_eq!(normalize_body(input, "Plan Name"), expected, "{label}");
+        }
+    }
+
+    #[test]
+    fn create_plan_stores_the_normalized_body() {
+        let (sandbox, dir) = sandbox();
+        let result = create_plan(
+            &sandbox,
+            &json!({
+                "name": "Tidy",
+                "overview": "",
+                "plan": "# Tidy\r\n\r\n\r\n\r\nStep one.  \r\n",
+                "todos": []
+            }),
+        )
+        .unwrap();
+        let path = plan_path_from_output(&output(&result)).unwrap().to_string();
+        let text = fs::read_to_string(dir.path().join(&path)).unwrap();
+        assert!(!text.contains("## Todos"));
+        assert!(text.ends_with(&format!("\n\n# Tidy\n\n{HEADER_END}\n\nStep one.\n")));
+        assert_eq!(PlanFile::parse(&text).unwrap().body, "Step one.");
     }
 }
