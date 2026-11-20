@@ -46,10 +46,12 @@ pub struct Way {
 /// ([`GateStats::way_row`]), judged on success and on the cost of the
 /// whole work, the subtasks' included:
 ///
-/// 1. the cheaper of the ways proven: at least `min_tries` outcomes with
-///    a success rate of at least `target`;
+/// 1. the cheaper of the two ways once both are proven: at least
+///    `min_tries` outcomes with a success rate of at least `target`;
 /// 2. else by the model itself, unless its outcomes rule that out
-///    ([`Row::can_still_reach`]) and leading's do not;
+///    ([`Row::can_still_reach`]) and leading is proven or not ruled out
+///    either. Leading proven alone does not win: the model doing the work
+///    itself gets its tries until it is proven too, or ruled out;
 /// 3. with probability `explore_rate`, the other way instead, unless its
 ///    outcomes rule it out.
 ///
@@ -85,7 +87,7 @@ pub fn choose_way(
     };
     let led = match (proven(row(true)), proven(row(false))) {
         (Some(led), Some(direct)) if led != direct => led < direct,
-        (Some(_), None) => true,
+        (Some(_), None) => !open(false),
         (None, Some(_)) => false,
         _ => !open(false) && open(true),
     };
@@ -435,13 +437,25 @@ mod tests {
         }
 
         #[test]
-        fn a_proven_way_beats_an_unproven_one_and_a_ruled_out_one_is_left() {
+        fn proven_leading_waits_until_working_directly_is_proven_or_ruled_out() {
             let category = PromptCategory::Debugging;
             let mut entries = Vec::new();
+            turns(&mut entries, 10, category, true, true, (0.1, 0.1));
+            assert!(
+                !way(&entries, category, KEPT).led,
+                "only the led way is proven: working directly gets its tries"
+            );
+            turns(&mut entries, 9, category, false, true, (0.4, 0.0));
+            assert!(!way(&entries, category, KEPT).led, "not proven yet");
+            turns(&mut entries, 1, category, false, true, (0.4, 0.0));
+            assert!(way(&entries, category, KEPT).led, "0.20 beats 0.40");
+
+            let mut entries = Vec::new();
             turns(&mut entries, 10, category, true, true, (1.0, 1.0));
+            turns(&mut entries, 3, category, false, false, (0.1, 0.0));
             assert!(
                 way(&entries, category, KEPT).led,
-                "only the led way is proven"
+                "working directly is ruled out"
             );
 
             let category = PromptCategory::MultiFileChange;

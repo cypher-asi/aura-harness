@@ -448,8 +448,8 @@ impl GateStats {
             })
     }
 
-    /// Mean cost per try of `model` at `level`, over every category;
-    /// `None` before its first try there.
+    /// Mean cost per try of `model` at `level`, its subtasks' included,
+    /// over every category; `None` before its first try there.
     #[must_use]
     pub fn mean_cost_usd(&self, level: RouteLevel, model: &str) -> Option<f64> {
         let (tries, cost) = self
@@ -457,7 +457,10 @@ impl GateStats {
             .iter()
             .filter(|(key, _)| key.level == level && key.model == model)
             .fold((0_u32, 0.0), |(tries, cost), (_, row)| {
-                (tries + row.tries, cost + row.cost_usd)
+                (
+                    tries + row.tries,
+                    cost + row.cost_usd + row.subtask_cost_usd,
+                )
             });
         (tries > 0).then(|| cost / f64::from(tries))
     }
@@ -690,6 +693,15 @@ mod tests {
             assert_eq!(debugging(&stats, RouteLevel::Subtask, HAIKU), None);
             assert_eq!(stats.rows().len(), 1);
         }
+    }
+
+    #[test]
+    fn a_models_mean_cost_counts_what_its_subtasks_cost() {
+        let mut log = Log::new();
+        let led = log.shaped("fix it", RouteLevel::Turn, None, Some(true));
+        log.outcome_costing(led, SONNET, OutcomeSignal::ChecksPassed, 0.75);
+        let stats = GateStats::from_entries(&log.entries);
+        assert_eq!(stats.mean_cost_usd(RouteLevel::Turn, SONNET), Some(1.0));
     }
 
     #[test]

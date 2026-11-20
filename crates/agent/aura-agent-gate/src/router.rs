@@ -699,8 +699,9 @@ pub fn belief(stats: &GateStats, work: &Work<'_>, candidate: &Candidate, min_tri
 /// strongest tier; a subtask goes on once. `p` is each model's [`belief`]
 /// mean, and a model must be expected to succeed at least
 /// [`MIN_START_SUCCESS`] of the time to start the work unless it is of
-/// the strongest tier. `c` is a model's mean cost on the category once it
-/// has [`COST_TRIES`] outcomes there, else its [`expected_costs`].
+/// the strongest tier. `c` is a model's mean cost on the category, its
+/// subtasks' included, once it has [`COST_TRIES`] outcomes there, else
+/// its [`expected_costs`].
 ///
 /// With probability `explore_rate`, the success rates are drawn from the
 /// beliefs instead of taken at their means (Thompson sampling): a model
@@ -733,7 +734,7 @@ fn cascade(
         .zip(&rows)
         .map(|((_, cost), row)| {
             row.filter(|row| row.settled(COST_TRIES))
-                .and_then(|row| row.mean_cost_usd())
+                .and_then(|row| row.mean_total_cost_usd())
                 .unwrap_or(*cost)
         })
         .collect();

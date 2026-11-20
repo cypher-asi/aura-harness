@@ -138,15 +138,17 @@ async fn under_gate_the_lead_has_no_file_tools_and_a_limited_run_command() {
 }
 
 /// Gate has seen leading succeed on `model` for changes across files,
-/// with nothing known of the model doing that work itself.
+/// and the model doing that work itself fail.
 fn prove_leading(fixture: &Fixture, model: &str) {
-    fixture.hub.gate.learn(
-        RouteLevel::Turn,
-        PromptCategory::MultiFileChange,
-        model,
-        Some(true),
-        (10, true),
-    );
+    for (led, outcomes) in [(true, (10, true)), (false, (3, false))] {
+        fixture.hub.gate.learn(
+            RouteLevel::Turn,
+            PromptCategory::MultiFileChange,
+            model,
+            Some(led),
+            outcomes,
+        );
+    }
 }
 
 #[tokio::test]

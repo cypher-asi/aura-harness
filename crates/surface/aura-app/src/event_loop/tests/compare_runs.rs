@@ -517,13 +517,15 @@ async fn gate_is_compared_with_itself_without_enforced_delegation() {
     let mut state = loop_state(&fixture, &mut b);
     state.models = gate_on_zos(&fixture);
     state.sync_turn_base();
-    state.hub.gate.learn(
-        RouteLevel::Turn,
-        PromptCategory::MultiFileChange,
-        GPT,
-        Some(true),
-        (10, true),
-    );
+    for (led, outcomes) in [(true, (10, true)), (false, (3, false))] {
+        state.hub.gate.learn(
+            RouteLevel::Turn,
+            PromptCategory::MultiFileChange,
+            GPT,
+            Some(led),
+            outcomes,
+        );
+    }
 
     compare(
         &mut state,
