@@ -35,6 +35,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   standard one. For work a check verifies, the difficulty scales the
   expected chance of failing, learned per model and difficulty.
 
+##### Added
+
+- Each Gate run in `/compare` lists its turns' categories and
+  difficulties, whether the lead did the work or led, the lead's and
+  subtasks' cost, and how often a turn moved up a tier.
+- `/compare --learn` lets Gate arms explore as routed turns do, recording
+  each pick's propensity, so a benchmark teaches Gate about models it
+  would not pick yet.
+
 ### Benchmarks — two arms on the same work
 
 ##### Added

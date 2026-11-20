@@ -80,6 +80,9 @@ pub struct CompareRequest {
     /// How many of the built-in example coding tasks to run instead of a
     /// prompt; `repeats` runs of each per arm.
     pub examples: Option<usize>,
+    /// Whether Gate arms explore as routed turns do, so the runs teach
+    /// Gate about models it would not pick yet.
+    pub learn: bool,
 }
 
 impl Default for CompareRequest {
@@ -94,6 +97,7 @@ impl Default for CompareRequest {
             check: None,
             budget_usd: None,
             examples: None,
+            learn: false,
         }
     }
 }
@@ -124,7 +128,7 @@ pub enum CompareCommand {
 
 /// How `/compare` is used, for error messages.
 pub const USAGE: &str = "Usage: /compare [prompt | --plan <file> | --session current|<started_ms> | --examples N] \
-[--a <model|gate>] [--against <model|gate|gate:nodelegate>] [--repeats N] [--check <cmd>] [--budget $] · \
+[--a <model|gate>] [--against <model|gate|gate:nodelegate>] [--repeats N] [--check <cmd>] [--budget $] [--learn] · \
 /compare go | cancel | show [n] | diff [run] | pick <a|b> | apply <run> | dismiss";
 
 /// One word of the arguments: its text with quotes removed, and where it
@@ -227,6 +231,11 @@ pub fn parse(args: &str) -> Result<CompareCommand, String> {
             Some((name, value)) => (name, Some(value.trim_matches(['"', '\'']).to_string())),
             None => (flag, None),
         };
+        if name == "learn" && inline.is_none() {
+            request.learn = true;
+            i += 1;
+            continue;
+        }
         let value = match inline {
             Some(value) => value,
             None => {
@@ -318,6 +327,16 @@ fn set_flag(request: &mut CompareRequest, name: &str, value: &str) -> Result<(),
         "a" => request.a = Some(value_of(name)?),
         "against" | "vs" | "b" => request.against = Some(value_of(name)?),
         "check" => request.check = Some(value_of(name)?),
+        "learn" => {
+            let on = |words: &[&str]| words.iter().any(|w| w.eq_ignore_ascii_case(value.trim()));
+            request.learn = if on(&["on", "yes", "true", "1"]) {
+                true
+            } else if on(&["off", "no", "false", "0"]) {
+                false
+            } else {
+                return Err(format!("--learn takes on or off, not `{value}`"));
+            };
+        }
         "repeats" | "runs" | "n" => {
             let repeats = value.trim().parse::<u32>().ok();
             request.repeats = repeats
@@ -997,8 +1016,21 @@ mod tests {
                 check: Some("cargo test -p parser".to_string()),
                 budget_usd: Some(2.5),
                 examples: None,
+                learn: false,
             }
         );
+    }
+
+    #[test]
+    fn learn_mode_needs_no_value() {
+        let request = start("--learn --examples 4");
+        assert!(request.learn);
+        assert_eq!(request.examples, Some(4));
+        assert_eq!(request.repeats, DEFAULT_REPEATS);
+        assert!(start("fix it --learn=on").learn);
+        assert!(!start("fix it --learn=off").learn);
+        assert_eq!(start("fix it --learn").prompt.as_deref(), Some("fix it"));
+        assert!(parse("fix it --learn=maybe").is_err());
     }
 
     #[test]
@@ -1610,12 +1642,7 @@ mod tests {
     }
 
     fn turn(cost: f64, signal: OutcomeSignal) -> RunTurn {
-        RunTurn {
-            model: "m".to_string(),
-            cost_usd: cost,
-            wall_ms: 1,
-            signal,
-        }
+        RunTurn::new("m", cost, 1, signal)
     }
 
     #[test]

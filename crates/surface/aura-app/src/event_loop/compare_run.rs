@@ -116,6 +116,8 @@ pub(super) struct ComparePlan {
     pub root: PathBuf,
     /// Runs that may work at once
     pub concurrency: usize,
+    /// Whether Gate arms explore, to learn
+    pub learn: bool,
 }
 
 impl ComparePlan {
@@ -614,6 +616,9 @@ struct Turned {
     wall_ms: u64,
     /// Its outcome as recorded, for the check's verdict to follow
     ended: Option<OutcomePayload>,
+    /// How it was routed and what its subtasks cost, for the run's
+    /// record; its model, cost, time and signal are filled in there
+    routed: RunTurn,
 }
 
 /// What `agent`'s calls and its subtasks' have cost so far.
@@ -693,6 +698,7 @@ async fn run_turn(
             cost_usd: (spent(hub, agent_id) - before).max(0.0),
             wall_ms: turned.wall_ms,
             signal: turned.signal,
+            ..turned.routed
         });
         first.get_or_insert_with(|| (turned.prompt_tx, turned.model.clone()));
         reply = turned.reply;
@@ -829,11 +835,14 @@ async fn run_prompt(
         .await
     };
     let category = label.category;
+    let work = Work::turn(category).of(label.difficulty);
+    let decision = match routing {
+        ArmRouting::Gate { .. } if plan.learn => hub.gate.decide(&work, &plan.candidates),
+        ArmRouting::Gate { .. } => hub.gate.redecide(&work, &plan.candidates),
+        ArmRouting::Pinned(_) => None,
+    };
     let routed_to = match routing {
-        ArmRouting::Gate { .. } => hub
-            .gate
-            .redecide(&Work::turn(category).of(label.difficulty), &plan.candidates)
-            .map(|decision| decision.model.id),
+        ArmRouting::Gate { .. } => decision.as_ref().map(|d| d.model.id.clone()),
         ArmRouting::Pinned(model) => Some(model.clone()),
     };
     if let Some(model) = routed_to.filter(|model| *model != config.model) {
@@ -849,7 +858,11 @@ async fn run_prompt(
     let prompt = PromptPayload {
         category,
         classifier: plan.classifier.clone(),
-        route: Route::turn(model.clone(), RouteReason::Compare),
+        route: Route {
+            explored: decision.as_ref().is_some_and(|d| d.explored),
+            propensity: decision.as_ref().map_or(1.0, |d| d.propensity),
+            ..Route::turn(model.clone(), RouteReason::Compare)
+        },
         led: Some(led),
         difficulty: label.difficulty,
         ..PromptPayload::new(text.to_string())
@@ -888,6 +901,7 @@ async fn run_prompt(
     let first_tx = prompt_tx;
     let (mut model, mut prompt_tx) = (model, prompt_tx);
     let (mut attempt_started, mut attempt_ms) = (started, started_ms);
+    let mut escalations = 0;
     let mut turn_start = session.messages.len();
     session.messages.push(Message::user(text.to_string()));
     // A Gate run's failed attempt goes on in the same conversation on the
@@ -982,6 +996,7 @@ async fn run_prompt(
         hub.model_limits().configure(&mut config, &next.model.id);
         hub.gate.note_model(agent_id, &next.model.id);
         model.clone_from(&next.model.id);
+        escalations += 1;
         (attempt_started, attempt_ms) = (Instant::now(), super::processes::now_ms());
         turn_start = session.messages.len();
         session.messages.push(Message::user(takeover));
@@ -992,6 +1007,14 @@ async fn run_prompt(
     if let Some(ended) = &ended {
         gate_record::record(&session.kernel, agent_id, ended).await;
     }
+    let routed = RunTurn {
+        category: Some(category),
+        difficulty: label.difficulty,
+        led: Some(led),
+        escalations,
+        subtask_cost_usd: hub.subtask_cost_usd(agent_id, started_ms),
+        ..RunTurn::new(model.clone(), 0.0, 0, signal)
+    };
     Turned {
         prompt_tx: first_tx,
         model,
@@ -1000,6 +1023,7 @@ async fn run_prompt(
         error,
         wall_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         ended,
+        routed,
     }
 }
 

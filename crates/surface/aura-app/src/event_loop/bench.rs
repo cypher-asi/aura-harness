@@ -106,6 +106,7 @@ fn request_of(spec: BenchSpec) -> CompareRequest {
         repeats: spec.repeats.max(1),
         check: spec.check,
         budget_usd: spec.budget_usd,
+        learn: false,
     }
 }
 

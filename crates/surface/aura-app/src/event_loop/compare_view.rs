@@ -8,7 +8,7 @@ use aura_agent_gate::compare::{
 };
 use aura_core_types::{
     ArmSpec, BenchSource, CompareArm, ComparePayload, CompareRun, CompareStatus, ExampleTaskInfo,
-    ModelTokens, Plan, PlanShare,
+    ModelTokens, Plan, PlanShare, RunTurn,
 };
 use aura_model::model_catalog::route_label;
 use aura_ui_terminal::events::{cost_shares, FileDiffData};
@@ -542,10 +542,59 @@ fn run_line(run: &CompareRun) -> String {
     if let Some(task) = &run.task {
         let _ = write!(line, "  {task}");
     }
+    if let Some(routing) = routing(run) {
+        let _ = write!(line, "  · {routing}");
+    }
     if let Some(error) = &run.error {
         let _ = write!(line, "  ({})", headline(error, 80));
     }
     line
+}
+
+/// How a run's turns went: what they asked for and how hard, whether
+/// they were led (and then what the lead and its subtasks cost), and how
+/// often a failed attempt moved up a tier, e.g. `debugging/hard, direct,
+/// moved up 1×`. `None` when its turns do not say.
+fn routing(run: &CompareRun) -> Option<String> {
+    let routed: Vec<&RunTurn> = run.turns.iter().filter(|t| t.category.is_some()).collect();
+    let mut asked: Vec<String> = Vec::new();
+    for turn in &routed {
+        let Some(category) = turn.category else {
+            continue;
+        };
+        let what = turn
+            .difficulty
+            .map_or_else(|| category.to_string(), |d| format!("{category}/{d}"));
+        if !asked.contains(&what) {
+            asked.push(what);
+        }
+    }
+    if asked.is_empty() {
+        return None;
+    }
+    let mut text = asked.join(", ");
+    match routed.iter().filter(|t| t.led == Some(true)).count() {
+        0 => text.push_str(", direct"),
+        led if led == routed.len() => text.push_str(", led"),
+        led => {
+            let _ = write!(text, ", {led} of {} turns led", routed.len());
+        }
+    }
+    let subtasks: f64 = routed.iter().map(|t| t.subtask_cost_usd).sum();
+    if subtasks > 0.0 {
+        let total: f64 = routed.iter().map(|t| t.cost_usd).sum();
+        let _ = write!(
+            text,
+            ": lead {} + subtasks {}",
+            money((total - subtasks).max(0.0)),
+            money(subtasks)
+        );
+    }
+    let moved: u32 = routed.iter().map(|t| t.escalations).sum();
+    if moved > 0 {
+        let _ = write!(text, ", moved up {moved}×");
+    }
+    Some(text)
 }
 
 fn model_tokens(rows: &[ModelTokens]) -> String {
@@ -771,6 +820,47 @@ mod tests {
         assert!(!text.contains("vs yours"), "{text}");
         let a_3 = line(&text, "a-3");
         assert!(a_3.contains(&"check failed"), "{a_3:?}");
+        assert!(
+            !text.contains(" · direct"),
+            "older runs say nothing of routing"
+        );
+    }
+
+    #[test]
+    fn each_run_says_how_its_turns_were_routed() {
+        use aura_core_types::{Difficulty, PromptCategory};
+        let mut payload = payload();
+        payload.runs[0].turns = vec![RunTurn {
+            category: Some(PromptCategory::Debugging),
+            difficulty: Some(Difficulty::Hard),
+            led: Some(false),
+            escalations: 1,
+            ..RunTurn::new("m", 0.05, 1, OutcomeSignal::ChecksPassed)
+        }];
+        payload.runs[2].turns = vec![
+            RunTurn {
+                category: Some(PromptCategory::MultiFileChange),
+                led: Some(true),
+                subtask_cost_usd: 0.17,
+                ..RunTurn::new("m", 0.77, 1, OutcomeSignal::ChecksPassed)
+            },
+            RunTurn {
+                category: Some(PromptCategory::Question),
+                led: Some(false),
+                ..RunTurn::new("m", 0.03, 1, OutcomeSignal::None)
+            },
+        ];
+        let text = render("Compare #1", &payload);
+        assert!(
+            line(&text, "a-1").contains(&"· debugging/hard, direct, moved up 1×"),
+            "{text}"
+        );
+        assert!(
+            line(&text, "a-2").contains(
+                &"· multi_file_change, question, 1 of 2 turns led: lead $0.63 + subtasks $0.17"
+            ),
+            "{text}"
+        );
     }
 
     fn share(plan: Plan, window: &str, used: f64) -> PlanShare {
@@ -949,12 +1039,7 @@ mod tests {
             },
             reference: None,
         };
-        let turn = |cost: f64, signal: OutcomeSignal| RunTurn {
-            model: String::new(),
-            cost_usd: cost,
-            wall_ms: 1,
-            signal,
-        };
+        let turn = |cost: f64, signal: OutcomeSignal| RunTurn::new("", cost, 1, signal);
         for run in &mut replay.runs {
             run.turns = vec![
                 turn(0.02, OutcomeSignal::ChecksPassed),

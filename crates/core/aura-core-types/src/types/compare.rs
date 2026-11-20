@@ -15,7 +15,7 @@
 
 use std::path::PathBuf;
 
-use super::gate::OutcomeSignal;
+use super::gate::{Difficulty, OutcomeSignal, PromptCategory};
 use super::plan_usage::PlanShare;
 use super::transaction::SystemKind;
 use crate::ids::{AgentId, Hash};
@@ -162,6 +162,46 @@ pub struct RunTurn {
     pub wall_ms: u64,
     /// How the turn ended, as its `Outcome` records it.
     pub signal: OutcomeSignal,
+    /// What its prompt asked for; `None` in older records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<PromptCategory>,
+    /// How hard the classifier judged it, when it said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub difficulty: Option<Difficulty>,
+    /// Whether the agent led it, handing its work to subtasks; `None` in
+    /// older records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub led: Option<bool>,
+    /// Times a failed attempt moved it to a stronger model.
+    #[serde(default)]
+    pub escalations: u32,
+    /// The part of `cost_usd` its subtasks spent.
+    #[serde(default)]
+    pub subtask_cost_usd: f64,
+}
+
+impl RunTurn {
+    /// A turn on `model` that cost `cost_usd`, took `wall_ms` and ended
+    /// with `signal`, with nothing known of how it was routed.
+    #[must_use]
+    pub fn new(
+        model: impl Into<String>,
+        cost_usd: f64,
+        wall_ms: u64,
+        signal: OutcomeSignal,
+    ) -> Self {
+        Self {
+            model: model.into(),
+            cost_usd,
+            wall_ms,
+            signal,
+            category: None,
+            difficulty: None,
+            led: None,
+            escalations: 0,
+            subtask_cost_usd: 0.0,
+        }
+    }
 }
 
 /// One run of a comparison.
@@ -559,10 +599,16 @@ mod tests {
                     ..ModelTokens::default()
                 }],
                 turns: vec![RunTurn {
-                    model: "claude/claude-sonnet-4-6".to_string(),
-                    cost_usd: 0.12,
-                    wall_ms: 42_000,
-                    signal: OutcomeSignal::ChecksPassed,
+                    category: Some(PromptCategory::Debugging),
+                    difficulty: Some(Difficulty::Hard),
+                    led: Some(false),
+                    escalations: 1,
+                    ..RunTurn::new(
+                        "claude/claude-sonnet-4-6",
+                        0.12,
+                        42_000,
+                        OutcomeSignal::ChecksPassed,
+                    )
                 }],
                 plan_usage: vec![PlanShare {
                     plan: crate::Plan::Claude,
@@ -605,6 +651,8 @@ mod tests {
         assert_eq!(json["arm_a"]["kind"], "gate");
         assert_eq!(json["arm_b"]["model"], "claude/claude-opus-4-7");
         assert_eq!(json["runs"][0]["turns"][0]["signal"], "checks_passed");
+        assert_eq!(json["runs"][0]["turns"][0]["category"], "debugging");
+        assert_eq!(json["runs"][0]["turns"][0]["escalations"], 1);
         assert!(json["runs"][0].get("error").is_none());
         assert!(json["judgments"][0].get("a_vs_reference").is_none());
         assert_eq!(json["runs"][0]["plan_usage"][0]["plan"], "claude");
@@ -613,12 +661,33 @@ mod tests {
         let mut without = serde_json::to_value(&payload).unwrap();
         let run = without["runs"][0].as_object_mut().unwrap();
         run.remove("plan_usage");
-        run.remove("turns");
+        let turn = run["turns"][0].as_object_mut().unwrap();
+        for field in [
+            "category",
+            "difficulty",
+            "led",
+            "escalations",
+            "subtask_cost_usd",
+        ] {
+            turn.remove(field);
+        }
         let older = ComparePayload::from_bytes(&serde_json::to_vec(&without).unwrap()).unwrap();
         assert!(
-            older.runs[0].plan_usage.is_empty() && older.runs[0].turns.is_empty(),
+            older.runs[0].plan_usage.is_empty(),
             "older records still load"
         );
+        assert_eq!(
+            older.runs[0].turns,
+            [RunTurn::new(
+                "claude/claude-sonnet-4-6",
+                0.12,
+                42_000,
+                OutcomeSignal::ChecksPassed
+            )]
+        );
+        without["runs"][0].as_object_mut().unwrap().remove("turns");
+        let oldest = ComparePayload::from_bytes(&serde_json::to_vec(&without).unwrap()).unwrap();
+        assert!(oldest.runs[0].turns.is_empty());
     }
 
     #[test]

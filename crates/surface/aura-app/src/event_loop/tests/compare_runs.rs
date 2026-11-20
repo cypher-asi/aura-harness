@@ -607,11 +607,63 @@ async fn a_gate_run_that_fails_its_checks_carries_on_on_a_stronger_model() {
     );
     assert_eq!(gate.model, SONNET, "the run ends on the model it moved to");
     assert_eq!(
+        (
+            gate.turns[0].category,
+            gate.turns[0].led,
+            gate.turns[0].escalations
+        ),
+        (Some(PromptCategory::Debugging), Some(false), 1),
+        "the run records how its turn was routed"
+    );
+    assert_eq!(
         signals_of(&state, gate.agent_id)[0],
         OutcomeSignal::ChecksFailed,
         "the failed attempt is recorded on its own"
     );
     assert_eq!(routes("b-1").len(), 1, "a run on one model stays on it");
+}
+
+#[tokio::test]
+async fn gate_arms_explore_only_in_learn_mode() {
+    for (args, explored) in [("", false), (" --learn", true)] {
+        let gate = GateLive::with_rng(
+            aura_config::GateConfig {
+                explore_rate: 1.0,
+                ..aura_config::GateConfig::defaults()
+            },
+            aura_agent_gate::SplitMix64::seeded(3),
+        );
+        let (fixture, mut commands) = fixture_with_gate(gate);
+        let mut b = borrowed(&fixture);
+        let links = b.links.clone();
+        let mut state = loop_state(&fixture, &mut b);
+        state.models = gate_on_zos(&fixture);
+        state.sync_turn_base();
+
+        let payload = run_comparison(
+            &mut state,
+            &links,
+            &mut commands,
+            &format!("what does gate do? --repeats 1 --against opus{args}"),
+        )
+        .await;
+
+        assert_eq!(payload.status, CompareStatus::Done, "{payload:#?}");
+        let route = entries(&state, payload.run("a-1").unwrap().agent_id)
+            .iter()
+            .find_map(|e| e.tx.prompt_payload())
+            .unwrap()
+            .route;
+        assert_eq!(
+            (route.reason, route.explored),
+            (RouteReason::Compare, explored),
+            "{args}"
+        );
+        assert_eq!(
+            payload.notes.iter().any(|n| n.starts_with("Learn mode")),
+            explored
+        );
+    }
 }
 
 #[tokio::test]

@@ -356,6 +356,13 @@ pub(super) async fn prepare(
     if request.check.is_some() && !examples.is_empty() {
         notes.push("Example tasks use their own check commands; --check is ignored".to_string());
     }
+    if request.learn {
+        notes.push(format!(
+            "Learn mode: Gate arms explore as routed turns do ({:.0}% of turns), so the runs \
+             teach Gate about models it would not pick yet",
+            state.hub.gate.settings().explore_rate * 100.0
+        ));
+    }
     let task = match prompts.first() {
         Some(first) => first.clone(),
         None => format!(
@@ -383,6 +390,7 @@ pub(super) async fn prepare(
         user: agent_id,
         root: state.compare.root.clone(),
         concurrency: state.compare.concurrency,
+        learn: request.learn,
     };
     let session = match &plan.source {
         BenchSource::Session { title, .. } => Some(title.as_str()),
