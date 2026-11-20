@@ -1,5 +1,6 @@
 //! The example coding tasks the BENCH tab offers, built in: every task of
-//! `evals/coding`, then `evals/gate_cost`, then `evals/gate_hard`, each
+//! `evals/coding`, then `evals/gate_cost`, `evals/gate_hard` and
+//! `evals/polyglot`, each
 //! with its fixture, its prompts, its check command and the hidden
 //! checks that command reads. A benchmark of `n` of them takes the first
 //! `n`.
@@ -83,6 +84,26 @@ pub fn tasks() -> &'static [ExampleTask] {
             })
             .collect()
     })
+}
+
+impl ExampleTask {
+    /// The suite it is from, as `gate_hard`.
+    #[must_use]
+    pub fn suite(&self) -> &str {
+        self.id.split_once('/').map_or("", |(suite, _)| suite)
+    }
+}
+
+/// The suites of the built-in tasks, in the order a benchmark takes them.
+#[must_use]
+pub fn suites() -> Vec<&'static str> {
+    let mut suites: Vec<&'static str> = Vec::new();
+    for task in tasks() {
+        if !suites.contains(&task.suite()) {
+            suites.push(task.suite());
+        }
+    }
+    suites
 }
 
 /// The task with id `id`.
@@ -193,6 +214,12 @@ mod tests {
         let order: Vec<String> = all.iter().map(suite).collect();
         let first = |name: &str| order.iter().position(|s| s == name).unwrap();
         assert!(first("coding") < first("gate_cost") && first("gate_cost") < first("gate_hard"));
+        assert!(first("gate_hard") < first("polyglot"));
+        assert_eq!(suites(), ["coding", "gate_cost", "gate_hard", "polyglot"]);
+        assert_eq!(
+            by_id("gate_hard/semver-precedence").unwrap().suite(),
+            "gate_hard"
+        );
         for task in all {
             assert!(
                 !task.prompts[0].trim().is_empty(),

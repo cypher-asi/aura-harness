@@ -220,20 +220,37 @@ pub(super) fn kernel_of(
     Ok(kernel)
 }
 
-/// The first `n` built-in example tasks.
-fn example_tasks(n: usize) -> Result<Vec<&'static ExampleTask>, String> {
+/// The first `n` built-in example tasks of `suite` (of every suite when
+/// `None`); all of them when `n` is `None`.
+fn example_tasks(
+    n: Option<usize>,
+    suite: Option<&str>,
+) -> Result<Vec<&'static ExampleTask>, String> {
     let all = bench_pack::tasks();
     if all.is_empty() {
         return Err("No example tasks are built into this build".to_string());
     }
-    if n == 0 || n > all.len() {
+    let pool: Vec<&'static ExampleTask> = all
+        .iter()
+        .filter(|task| suite.is_none_or(|suite| task.suite() == suite))
+        .collect();
+    if pool.is_empty() {
         return Err(format!(
-            "There are {} example tasks; ask for 1 to {}",
-            all.len(),
-            all.len()
+            "No suite `{}`; the suites are {}",
+            suite.unwrap_or_default(),
+            bench_pack::suites().join(", ")
         ));
     }
-    Ok(all[..n].iter().collect())
+    let n = n.unwrap_or(pool.len());
+    if n == 0 || n > pool.len() {
+        return Err(format!(
+            "There are {} example tasks{}; ask for 1 to {}",
+            pool.len(),
+            suite.map_or_else(String::new, |suite| format!(" in {suite}")),
+            pool.len()
+        ));
+    }
+    Ok(pool[..n].to_vec())
 }
 
 /// Prepare the comparison `request` asks for from `agent_id`'s chat and
@@ -255,9 +272,9 @@ pub(super) async fn prepare(
     let last = super::gate_record::last_turn(kernel.store().as_ref(), agent_id);
     let mut category = PromptCategory::Unclassified;
     let mut replay = None;
-    let examples = match request.examples {
-        Some(n) => example_tasks(n)?,
-        None => Vec::new(),
+    let examples = match (request.examples, request.suite.as_deref()) {
+        (None, None) => Vec::new(),
+        (n, suite) => example_tasks(n, suite)?,
     };
     let prompts = match (request.session, &request.plan, &request.prompt) {
         _ if !examples.is_empty() => Vec::new(),

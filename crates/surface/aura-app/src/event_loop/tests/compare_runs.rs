@@ -924,6 +924,67 @@ async fn two_models_replay_a_session_from_its_start_prompt_by_prompt() {
 }
 
 #[tokio::test]
+async fn a_suites_example_tasks_can_be_run_on_their_own() {
+    let (fixture, mut commands) = fixture_with_gate(steady_gate_without_delegation());
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+    state.sync_turn_base();
+    let hard: Vec<&str> = crate::bench_pack::tasks()
+        .iter()
+        .filter(|t| t.suite() == "gate_hard")
+        .map(|t| t.id.as_str())
+        .collect();
+
+    let spec_for = |suite: &str, tasks: usize| BenchSpec {
+        work: BenchWork::Examples {
+            suite: Some(suite.to_string()),
+            tasks,
+        },
+        a: "sonnet".to_string(),
+        b: "opus".to_string(),
+        repeats: 1,
+        check: None,
+        budget_usd: None,
+    };
+    bench(
+        &mut state,
+        &links,
+        BenchRequest::Prepare(spec_for("gate_hard", 2)),
+    )
+    .await;
+    let shown = drain(&mut commands)
+        .into_iter()
+        .find_map(|(_, c)| match c {
+            UiCommand::BenchEstimate { estimate, .. } => Some(estimate),
+            _ => None,
+        })
+        .expect("an estimate")
+        .expect("the benchmark is set up");
+    assert!(
+        shown.contains(&format!("Tasks         {}, {}\n", hard[0], hard[1])),
+        "{shown}"
+    );
+
+    bench(
+        &mut state,
+        &links,
+        BenchRequest::Prepare(spec_for("nope", 1)),
+    )
+    .await;
+    let problem = drain(&mut commands)
+        .into_iter()
+        .find_map(|(_, c)| match c {
+            UiCommand::BenchEstimate { estimate, .. } => Some(estimate),
+            _ => None,
+        })
+        .expect("an answer")
+        .expect_err("no such suite");
+    assert!(problem.contains("gate_hard, polyglot"), "{problem}");
+}
+
+#[tokio::test]
 async fn example_tasks_run_in_their_own_fixtures_with_their_own_checks() {
     let (fixture, mut commands) = fixture_with_gate(steady_gate_without_delegation());
     let mut b = borrowed(&fixture);
@@ -942,10 +1003,16 @@ async fn example_tasks_run_in_their_own_fixtures_with_their_own_checks() {
         })
         .expect("the example tasks are listed");
     assert_eq!(examples.len(), pack.len());
-    assert_eq!(examples[0], pack[0].title);
+    assert_eq!(
+        (examples[0].suite.as_str(), examples[0].title.as_str()),
+        (pack[0].suite(), pack[0].title.as_str())
+    );
 
     let spec = BenchSpec {
-        work: BenchWork::Examples { tasks: 2 },
+        work: BenchWork::Examples {
+            suite: None,
+            tasks: 2,
+        },
         a: "sonnet".to_string(),
         b: "opus".to_string(),
         repeats: 1,

@@ -18,6 +18,7 @@ use serde_json::json;
 const SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/evals/coding");
 const GATE_SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/evals/gate_cost");
 const GATE_HARD_SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/evals/gate_hard");
+const POLYGLOT_SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/evals/polyglot");
 
 fn write_greeting() -> MockProvider {
     MockProvider::new().with_responses(vec![
@@ -220,6 +221,15 @@ fn gate_cost_tasks_fail_as_shipped_and_pass_when_solved() {
 fn gate_hard_tasks_fail_as_shipped_and_pass_when_solved() {
     let tasks = evals::load_suite(Path::new(GATE_HARD_SUITE)).unwrap();
     assert!(tasks.len() >= 8, "suite has {} tasks", tasks.len());
+    assert_fail_as_shipped_and_pass_when_solved(&tasks);
+}
+
+/// Same for the Exercism exercises imported from the polyglot benchmark,
+/// whose checks are the exercises' own tests.
+#[test]
+fn polyglot_tasks_fail_as_shipped_and_pass_when_solved() {
+    let tasks = evals::load_suite(Path::new(POLYGLOT_SUITE)).unwrap();
+    assert!(tasks.len() >= 24, "suite has {} tasks", tasks.len());
     assert_fail_as_shipped_and_pass_when_solved(&tasks);
 }
 

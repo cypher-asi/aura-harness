@@ -610,7 +610,7 @@ fn form_lines<'a>(app: &App, theme: &Theme, width: usize) -> Vec<Line<'a>> {
         Line::default(),
     ];
     let typed_prompt = matches!(state.work(), WorkChoice::Prompt);
-    let examples = matches!(state.work(), WorkChoice::Examples);
+    let examples = matches!(state.work(), WorkChoice::Examples(_));
     for field in FormField::ALL {
         let focused = field == form.field;
         let (value, faint) = match field {
@@ -618,9 +618,16 @@ fn form_lines<'a>(app: &App, theme: &Theme, width: usize) -> Vec<Line<'a>> {
                 match state.work() {
                     WorkChoice::LastPrompt => "your last prompt".to_string(),
                     WorkChoice::Prompt => "a prompt typed below".to_string(),
-                    WorkChoice::Examples => {
-                        format!("example coding tasks (built in, {})", state.examples.len())
+                    WorkChoice::Examples(None) => {
+                        format!(
+                            "example coding tasks, every suite ({})",
+                            state.examples.len()
+                        )
                     }
+                    WorkChoice::Examples(Some(suite)) => format!(
+                        "example coding tasks: {suite} ({})",
+                        state.examples_of(Some(suite)).len()
+                    ),
                     WorkChoice::Session(session) => format!(
                         "replay {}session \"{}\" · {} prompt{}{}",
                         if session.current { "this " } else { "the " },
@@ -645,8 +652,17 @@ fn form_lines<'a>(app: &App, theme: &Theme, width: usize) -> Vec<Line<'a>> {
                 ("(only when the work is example tasks)".to_string(), true)
             }
             FormField::Tasks => {
-                let total = state.examples.len();
-                let names = state.examples[..form.tasks.min(total)].join(", ");
+                let total = state.example_count();
+                let chosen = match state.work() {
+                    WorkChoice::Examples(suite) => state.examples_of(suite),
+                    _ => Vec::new(),
+                };
+                let names = chosen
+                    .iter()
+                    .take(form.tasks)
+                    .map(|e| e.title.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 (
                     format!(
                         "{} of {total} · {}",
@@ -915,13 +931,18 @@ mod tests {
         let theme = Theme::default();
         let mut app = App::new();
         let state = app.bench_mut();
-        state.examples = vec!["Write a file".to_string(), "Fix a bug".to_string()];
+        state.examples = ["Write a file", "Fix a bug"]
+            .map(|title| aura_ui::benchmarks::BenchExample {
+                suite: "coding".to_string(),
+                title: title.to_string(),
+            })
+            .to_vec();
         state.form.tasks = 2;
         state.form.work = 2;
         state.form.field = FormField::Tasks;
         let shown = text(&form_lines(&app, &theme, 120));
         assert!(
-            shown.contains("example coding tasks (built in, 2)"),
+            shown.contains("example coding tasks, every suite (2)"),
             "{shown}"
         );
         assert!(

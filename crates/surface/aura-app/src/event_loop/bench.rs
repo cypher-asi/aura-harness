@@ -12,8 +12,9 @@ use aura_core_types::{
     AgentId, BenchSource, CompareArm, ComparePayload, CompareStatus, ModelTokens, RefVerdict,
 };
 use aura_ui_terminal::events::{
-    BenchArm, BenchBaseline, BenchJudge, BenchRequest, BenchRun, BenchSpec, BenchStatus,
-    BenchTaskCell, BenchTaskRow, BenchTokens, BenchTurn, BenchVerdict, BenchView, BenchWork,
+    BenchArm, BenchBaseline, BenchExample, BenchJudge, BenchRequest, BenchRun, BenchSpec,
+    BenchStatus, BenchTaskCell, BenchTaskRow, BenchTokens, BenchTurn, BenchVerdict, BenchView,
+    BenchWork,
 };
 use aura_ui_terminal::UiCommand;
 
@@ -38,7 +39,10 @@ pub(super) async fn handle(state: &mut LoopState<'_>, agent_id: AgentId, request
             let sessions = super::bench_source::sessions(state, agent_id);
             let examples = crate::bench_pack::tasks()
                 .iter()
-                .map(|task| task.title.clone())
+                .map(|task| BenchExample {
+                    suite: task.suite().to_string(),
+                    title: task.title.clone(),
+                })
                 .collect();
             let _ = state
                 .commands
@@ -98,12 +102,14 @@ fn host(id: &str) -> Result<AgentId, String> {
 
 /// The comparison the BENCH tab's form set up.
 fn request_of(spec: BenchSpec) -> CompareRequest {
-    let (prompt, session, examples) = match spec.work {
-        BenchWork::Prompt(prompt) => (Some(prompt), None, None),
-        BenchWork::LastPrompt => (None, None, None),
-        BenchWork::CurrentSession => (None, Some(SessionPick::Current), None),
-        BenchWork::Session(started_ms) => (None, Some(SessionPick::Started(started_ms)), None),
-        BenchWork::Examples { tasks } => (None, None, Some(tasks)),
+    let (prompt, session, examples, suite) = match spec.work {
+        BenchWork::Prompt(prompt) => (Some(prompt), None, None, None),
+        BenchWork::LastPrompt => (None, None, None, None),
+        BenchWork::CurrentSession => (None, Some(SessionPick::Current), None, None),
+        BenchWork::Session(started_ms) => {
+            (None, Some(SessionPick::Started(started_ms)), None, None)
+        }
+        BenchWork::Examples { suite, tasks } => (None, None, Some(tasks), suite),
     };
     CompareRequest {
         prompt,
@@ -116,6 +122,7 @@ fn request_of(spec: BenchSpec) -> CompareRequest {
         check: spec.check,
         budget_usd: spec.budget_usd,
         learn: false,
+        suite,
     }
 }
 

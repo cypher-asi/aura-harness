@@ -83,6 +83,9 @@ pub struct CompareRequest {
     /// Whether Gate arms explore as routed turns do, so the runs teach
     /// Gate about models it would not pick yet.
     pub learn: bool,
+    /// The suite the example tasks are taken from; `None` for every
+    /// suite. With no `examples`, every task of the suite.
+    pub suite: Option<String>,
 }
 
 impl Default for CompareRequest {
@@ -98,6 +101,7 @@ impl Default for CompareRequest {
             budget_usd: None,
             examples: None,
             learn: false,
+            suite: None,
         }
     }
 }
@@ -127,7 +131,7 @@ pub enum CompareCommand {
 }
 
 /// How `/compare` is used, for error messages.
-pub const USAGE: &str = "Usage: /compare [prompt | --plan <file> | --session current|<started_ms> | --examples N] \
+pub const USAGE: &str = "Usage: /compare [prompt | --plan <file> | --session current|<started_ms> | --examples N | --suite <name>] \
 [--a <model|gate>] [--against <model|gate|gate:nodelegate>] [--repeats N] [--check <cmd>] [--budget $] [--learn] · \
 /compare go | cancel | show [n] | diff [run] | pick <a|b> | apply <run> | dismiss";
 
@@ -255,7 +259,7 @@ pub fn parse(args: &str) -> Result<CompareCommand, String> {
         !prompt.is_empty(),
         request.plan.is_some(),
         request.session.is_some(),
-        request.examples.is_some(),
+        request.examples.is_some() || request.suite.is_some(),
     ];
     if sources.into_iter().filter(|given| *given).count() > 1 {
         return Err(format!(
@@ -324,6 +328,7 @@ fn set_flag(request: &mut CompareRequest, name: &str, value: &str) -> Result<(),
                 format!("--examples takes how many example tasks to run, not `{value}`")
             })?);
         }
+        "suite" => request.suite = Some(value_of(name)?),
         "a" => request.a = Some(value_of(name)?),
         "against" | "vs" | "b" => request.against = Some(value_of(name)?),
         "check" => request.check = Some(value_of(name)?),
@@ -1017,7 +1022,22 @@ mod tests {
                 budget_usd: Some(2.5),
                 examples: None,
                 learn: false,
+                suite: None,
             }
+        );
+    }
+
+    #[test]
+    fn a_suite_picks_where_example_tasks_come_from() {
+        let request = start("--suite gate_hard --examples 3");
+        assert_eq!(
+            (request.suite.as_deref(), request.examples),
+            (Some("gate_hard"), Some(3))
+        );
+        assert_eq!(start("--suite polyglot").suite.as_deref(), Some("polyglot"));
+        assert!(
+            parse("fix it --suite polyglot").is_err(),
+            "a prompt or a suite"
         );
     }
 

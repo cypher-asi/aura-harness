@@ -238,6 +238,14 @@ pub struct BenchView {
     pub notes: Vec<String>,
 }
 
+/// A built-in example task, as the BENCH tab lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BenchExample {
+    /// The suite it is from, as `gate_hard`
+    pub suite: String,
+    pub title: String,
+}
+
 /// An earlier session of the agent on screen, to replay.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct BenchSession {
@@ -264,9 +272,10 @@ pub enum BenchWork {
     CurrentSession,
     /// The session that started at this Unix millisecond, replayed
     Session(u64),
-    /// The first `tasks` built-in example coding tasks, each in its own
-    /// fixture and checked by its own command
-    Examples { tasks: usize },
+    /// The first `tasks` built-in example coding tasks of `suite` (of
+    /// every suite when `None`), each in its own fixture and checked by
+    /// its own command
+    Examples { suite: Option<String>, tasks: usize },
 }
 
 /// A new benchmark as the BENCH tab's form sets it up.

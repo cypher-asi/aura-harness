@@ -7,6 +7,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Benchmarks — suites and harder tasks
+
+##### Added
+
+- `/compare --suite <name>` and the BENCH form run the example tasks of
+  one suite (`coding`, `gate_cost`, `gate_hard` or `polyglot`) instead
+  of every suite. With `--suite` and no `--examples`, all its tasks run.
+- `evals/polyglot`: 24 of the hardest exercises of Aider's polyglot
+  benchmark (Exercism, MIT), eight each in Python, Rust and Go. Each
+  task's hidden check is the exercise's own tests. The tasks are
+  imported by `scripts/import_polyglot.py`, which keeps only tasks that
+  fail as shipped and pass with the reference solution.
+
 ### Gate — cheaper defaults
 
 ##### Changed
