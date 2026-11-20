@@ -510,12 +510,20 @@ impl Headless {
         if let Some(max) = limits.max_iterations {
             config.max_iterations = max;
         }
-        let (payload, routed) = self
+        let (mut payload, routed) = self
             .route_turn(session, &mut config, &text, escalation)
             .await;
         if let Some(lead) = lead.filter(|_| routed) {
-            session.lead = lead.apply(payload.category, &mut config, &mut tools);
+            let explore = payload.route.reason != RouteReason::Escalate;
+            let led = self
+                .hub
+                .gate
+                .way(payload.category, &config.model, explore)
+                .led;
+            session.lead = lead.apply(led, &mut config, &mut tools);
+            payload.led = Some(led);
         }
+        let started_ms = crate::event_loop::processes::now_ms();
         let prompt_tx = match record_prompt(session, &payload).await {
             Ok((tx, _)) => tx.hash,
             Err(problem) => {
@@ -667,6 +675,7 @@ impl Headless {
                 success: signal.success(),
                 signal,
                 cost_usd: tally.usage.cost_usd,
+                subtask_cost_usd: self.hub.subtask_cost_usd(session.agent_id(), started_ms),
                 latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
             };
             gate_record::record(&session.kernel, session.agent_id(), &outcome).await;
@@ -754,7 +763,7 @@ impl Headless {
         let route = match self
             .hub
             .gate
-            .decide(RouteLevel::Turn, category, &candidates)
+            .decide(RouteLevel::Turn, category, None, &candidates)
         {
             Some(decision) => {
                 info!(

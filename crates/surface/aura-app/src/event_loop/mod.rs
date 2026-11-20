@@ -849,6 +849,7 @@ fn gate_turn(
         live: Arc::clone(&state.hub.gate),
         models: state.models.ui_command(),
         lead,
+        hub: Arc::clone(&state.hub),
     })
 }
 

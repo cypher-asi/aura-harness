@@ -1168,6 +1168,14 @@ impl App {
         self.agents = agents;
         self.collapsed_projects
             .retain(|key| self.agents.iter().any(|agent| agent.project_key() == key));
+        // An agent that lost its spawns drops its fold, so a new spawn
+        // under it later shows up instead of hiding.
+        let foldable: std::collections::HashSet<&str> = (0..self.agents.len())
+            .filter(|&i| self.agent_has_spawns(i))
+            .map(|i| self.agents[i].id.as_str())
+            .collect();
+        self.collapsed_agents
+            .retain(|id| foldable.contains(id.as_str()));
         self.select_visible_active();
     }
 
@@ -1192,6 +1200,13 @@ impl App {
         }
         for agent in &mut self.agents {
             agent.is_active = agent.id == self.active_agent_id;
+        }
+        if switched {
+            // Switching to an agent folded out of sight opens the agents
+            // above it; a folded project stays folded.
+            if let Some(index) = self.agents.iter().position(|a| a.id == agent_id) {
+                self.open_ancestors(index);
+            }
         }
         self.agents_scroll_detached = false;
         self.select_visible_active();

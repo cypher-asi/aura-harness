@@ -9,21 +9,102 @@
 //! inspection commands ([`allows_command`]). Subagents are never
 //! restricted this way.
 
+use aura_config::GateConfig;
 use aura_core_types::PromptCategory;
 use serde_json::Value;
 
 use crate::checks::is_check_part;
+use crate::router::Random;
+use crate::stats::{GateStats, Row};
 
-/// Whether a turn asking for `category` is led: work to split up and
-/// plan. Anything smaller costs less done by the model it is routed to
-/// than handed on, since a subtask starts from nothing and reads the
-/// files again.
+/// Whether a turn asking for `category` is led by default: work to split
+/// up and plan. Anything smaller costs less done by the model it is
+/// routed to than handed on, since a subtask starts from nothing and
+/// reads the files again.
 #[must_use]
 pub const fn leads(category: PromptCategory) -> bool {
     matches!(
         category,
         PromptCategory::MultiFileChange | PromptCategory::Planning
     )
+}
+
+/// Whether a turn asking for `category` may be led at all: work that can
+/// be handed to subtasks. A question, a small change or prose is always
+/// done by the model it is routed to.
+#[must_use]
+pub const fn may_lead(category: PromptCategory) -> bool {
+    matches!(
+        category,
+        PromptCategory::MultiFileChange
+            | PromptCategory::Planning
+            | PromptCategory::Debugging
+            | PromptCategory::Research
+    )
+}
+
+/// How a turn is done: led, or by its model itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Way {
+    pub led: bool,
+    /// Whether it was taken to learn about it rather than as the best
+    /// known way
+    pub explored: bool,
+}
+
+/// How a turn asking for `category` on `model` is done, given what
+/// `stats` has learned of both ways on the category and model
+/// ([`GateStats::way_row`]), judged on success and on the cost of the
+/// whole work, the subtasks' included:
+///
+/// 1. the cheaper of the ways proven: at least `min_tries` outcomes with
+///    a success rate of at least `target`;
+/// 2. else the way [`leads`] says, unless its outcomes rule it out
+///    ([`Row::can_still_reach`]) and the other's do not;
+/// 3. with probability `explore_rate`, the other way instead, unless its
+///    outcomes rule it out.
+///
+/// Never led when the category [`may_lead`] not.
+pub fn choose_way(
+    stats: &GateStats,
+    category: PromptCategory,
+    model: &str,
+    settings: &GateConfig,
+    rng: &mut impl Random,
+) -> Way {
+    if !may_lead(category) {
+        return Way {
+            led: false,
+            explored: false,
+        };
+    }
+    let row = |led| stats.way_row(category, model, led);
+    let proven = |row: Option<&Row>| {
+        row.filter(|row| row.settled(settings.min_tries))
+            .and_then(|row| Some((row.success_rate()?, row.mean_total_cost_usd()?)))
+            .filter(|(rate, _)| *rate >= settings.target)
+            .map(|(_, cost)| cost)
+    };
+    let open =
+        |led| row(led).is_none_or(|row| row.can_still_reach(settings.target, settings.min_tries));
+    let default = leads(category);
+    let led = match (proven(row(true)), proven(row(false))) {
+        (Some(led), Some(direct)) if led != direct => led < direct,
+        (Some(_), None) => true,
+        (None, Some(_)) => false,
+        _ => default != (!open(default) && open(!default)),
+    };
+    let rate = settings.explore_rate.clamp(0.0, 1.0);
+    if rate > 0.0 && open(!led) && rng.unit() < rate {
+        return Way {
+            led: !led,
+            explored: true,
+        };
+    }
+    Way {
+        led,
+        explored: false,
+    }
 }
 
 /// Lines of one `read_file` result the lead sees.
@@ -254,7 +335,130 @@ pub fn cap_search(content: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aura_core_types::{
+        AgentId, OutcomePayload, OutcomeSignal, PromptPayload, RecordEntry, Route, RouteReason,
+        Transaction,
+    };
     use serde_json::json;
+
+    mod ways {
+        use super::*;
+
+        const SONNET: &str = "claude/claude-sonnet-4-6";
+
+        /// `n` turns on Sonnet asking for `category`, led or not, that
+        /// all passed or all failed, each costing `cost_usd` in the lead
+        /// and `subtask_cost_usd` in subtasks.
+        fn turns(
+            entries: &mut Vec<RecordEntry>,
+            n: usize,
+            category: PromptCategory,
+            led: bool,
+            ok: bool,
+            (cost_usd, subtask_cost_usd): (f64, f64),
+        ) {
+            let signal = if ok {
+                OutcomeSignal::ChecksPassed
+            } else {
+                OutcomeSignal::ChecksFailed
+            };
+            for _ in 0..n {
+                let agent = AgentId::generate();
+                let mut prompt = PromptPayload::new(format!("turn {}", entries.len()));
+                prompt.category = category;
+                prompt.route = Route::turn(SONNET, RouteReason::Default);
+                prompt.led = Some(led);
+                let prompt = Transaction::user_prompt_with(agent, &prompt);
+                let outcome = OutcomePayload {
+                    prompt_tx: prompt.hash,
+                    category,
+                    model: SONNET.to_string(),
+                    success: signal.success(),
+                    signal,
+                    cost_usd,
+                    subtask_cost_usd,
+                    latency_ms: 10,
+                };
+                for tx in [prompt, Transaction::outcome(agent, &outcome)] {
+                    let seq = u64::try_from(entries.len()).unwrap() + 1;
+                    entries.push(RecordEntry::builder(seq, tx).build());
+                }
+            }
+        }
+
+        fn settings(explore_rate: f64) -> GateConfig {
+            GateConfig {
+                explore_rate,
+                ..GateConfig::defaults()
+            }
+        }
+
+        fn way(entries: &[RecordEntry], category: PromptCategory, roll: f64) -> Way {
+            let stats = GateStats::from_entries(entries);
+            choose_way(&stats, category, SONNET, &settings(0.05), &mut || roll)
+        }
+
+        const KEPT: f64 = 0.99;
+        const EXPLORED: f64 = 0.0;
+
+        #[test]
+        fn with_nothing_learned_the_category_decides() {
+            let led = |category| way(&[], category, KEPT).led;
+            assert!(led(PromptCategory::MultiFileChange));
+            assert!(led(PromptCategory::Planning));
+            assert!(!led(PromptCategory::Debugging));
+            assert!(!led(PromptCategory::Question));
+            let tried = way(&[], PromptCategory::Debugging, EXPLORED);
+            assert_eq!((tried.led, tried.explored), (true, true));
+            let never = way(&[], PromptCategory::Question, EXPLORED);
+            assert_eq!((never.led, never.explored), (false, false));
+        }
+
+        #[test]
+        fn of_two_proven_ways_the_cheaper_in_total_wins() {
+            let category = PromptCategory::MultiFileChange;
+            let mut entries = Vec::new();
+            turns(&mut entries, 10, category, true, true, (0.10, 0.50));
+            turns(&mut entries, 10, category, false, true, (0.40, 0.0));
+            assert!(!way(&entries, category, KEPT).led, "0.40 beats 0.60");
+
+            let mut entries = Vec::new();
+            turns(&mut entries, 10, category, true, true, (0.10, 0.20));
+            turns(&mut entries, 10, category, false, true, (0.40, 0.0));
+            assert!(way(&entries, category, KEPT).led, "0.30 beats 0.40");
+        }
+
+        #[test]
+        fn a_proven_way_beats_an_unproven_one_and_a_ruled_out_one_is_left() {
+            let category = PromptCategory::Debugging;
+            let mut entries = Vec::new();
+            turns(&mut entries, 10, category, true, true, (1.0, 1.0));
+            assert!(
+                way(&entries, category, KEPT).led,
+                "only the led way is proven"
+            );
+
+            let category = PromptCategory::MultiFileChange;
+            let mut entries = Vec::new();
+            turns(&mut entries, 3, category, true, false, (0.1, 0.1));
+            let left = way(&entries, category, KEPT);
+            assert!(!left.led, "3 failures rule leading out");
+            turns(&mut entries, 3, category, false, false, (0.1, 0.0));
+            assert!(
+                way(&entries, category, KEPT).led,
+                "both ruled out: the default"
+            );
+        }
+
+        #[test]
+        fn exploring_never_takes_a_ruled_out_way() {
+            let category = PromptCategory::Research;
+            let mut entries = Vec::new();
+            turns(&mut entries, 3, category, true, false, (0.1, 0.1));
+            let way = way(&entries, category, EXPLORED);
+            assert_eq!((way.led, way.explored), (false, false));
+        }
+    }
 
     #[test]
     fn the_lead_keeps_every_tool_but_the_file_changing_ones() {

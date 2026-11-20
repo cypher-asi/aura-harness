@@ -1458,6 +1458,7 @@ mod tests {
             success: Some(false),
             signal: OutcomeSignal::Error,
             cost_usd: 0.0123,
+            subtask_cost_usd: 0.0,
             latency_ms: 2500,
         };
         flow.push(&records.entry(lead, TransactionType::Outcome, outcome.to_bytes()));
@@ -1646,6 +1647,7 @@ mod tests {
             success: Some(false),
             signal: OutcomeSignal::ChecksFailed,
             cost_usd: 0.02,
+            subtask_cost_usd: 0.0,
             latency_ms: 9000,
         };
         flow.push(&prompt);

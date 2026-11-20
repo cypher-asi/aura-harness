@@ -245,6 +245,8 @@ pub struct App {
     pub(super) selected_agent: usize,
     /// Root-agent ids whose project row is folded shut
     pub(super) collapsed_projects: HashSet<String>,
+    /// Ids of agents folded shut, hiding the agents they spawned
+    pub(super) collapsed_agents: HashSet<String>,
     /// The left button is down on a project's header: a click folds it, a
     /// drag moves it
     pub(super) project_press: Option<project_drag::ProjectPress>,
@@ -340,7 +342,7 @@ pub struct App {
     /// Where the pointer is while the left button is still held for
     /// `selection`
     pub(super) selecting: Option<Position>,
-    /// Whether `selection` is in the conversation, whose rows scroll
+    /// Whether `selection` is in the chat panel's body, whose rows scroll
     pub(super) selection_scrolls: bool,
     /// When the chat last scrolled for a selection dragged past its edge
     pub(super) selection_scrolled: Option<Instant>,
@@ -432,6 +434,12 @@ pub struct PanelAreas {
     pub chat_expand: Option<Rect>,
     /// Message text area inside the chat panel
     pub chat_text: Option<Rect>,
+    /// Rows of the chat panel's body that scroll by rows: the
+    /// conversation, the terminal, the benchmarks, or a record or file
+    /// shown over them. `None` under the graph or an image.
+    pub chat_rows: Option<Rect>,
+    /// Content row shown at the top of `chat_rows`
+    pub chat_rows_top: usize,
     /// Input box under the chat panel (including border)
     pub input: Option<Rect>,
     /// Record panel (including border)
@@ -675,6 +683,7 @@ impl App {
             agents: Vec::new(),
             selected_agent: 0,
             collapsed_projects: HashSet::new(),
+            collapsed_agents: HashSet::new(),
             project_press: None,
             project_moves: 0,
             active_agent_id: String::new(),
@@ -1364,8 +1373,33 @@ impl App {
         self.state = AppState::Idle;
     }
 
-    /// Fold or open the project under the highlight. An agent row folds the
-    /// project that contains it.
+    /// Fold or open what is under the highlight: an agent with spawns
+    /// folds over them, any other agent row folds the project that
+    /// contains it, as does a project's header.
+    pub(super) fn toggle_selected_fold(&mut self) {
+        self.agents_scroll_detached = false;
+        let root = match self.project_rows().get(self.selected_agent).copied() {
+            Some(ProjectListRow::Project { root, .. }) => Some(root),
+            Some(ProjectListRow::Agent { index }) if self.agent_has_spawns(index) => {
+                self.toggle_agent(index);
+                return;
+            }
+            Some(ProjectListRow::Agent { index }) => self.project_root(index),
+            Some(
+                ProjectListRow::EmptyProject { .. }
+                | ProjectListRow::NewProject
+                | ProjectListRow::Gap,
+            )
+            | None => None,
+        };
+        if let Some(root) = root {
+            self.toggle_project(root);
+        }
+    }
+
+    /// Fold or open the project that contains the highlighted row, from
+    /// any agent in it or its header, even an agent that could fold over
+    /// its own spawns.
     pub(super) fn toggle_selected_project(&mut self) {
         self.agents_scroll_detached = false;
         let root = match self.project_rows().get(self.selected_agent).copied() {
@@ -1459,6 +1493,14 @@ impl App {
         self.areas.chat_text = Some(area);
     }
 
+    /// Record the rows the chat panel's body scrolls through this frame
+    /// and the content row on top of them, or that it shows nothing that
+    /// scrolls by rows.
+    pub(crate) fn set_chat_rows(&mut self, rows: Option<(Rect, usize)>) {
+        self.areas.chat_rows = rows.map(|(area, _)| area);
+        self.areas.chat_rows_top = rows.map_or(0, |(_, top)| top);
+    }
+
     /// Record where the input box was drawn this frame.
     pub fn set_input_area(&mut self, area: Rect) {
         self.areas.input = Some(area);
@@ -1513,8 +1555,9 @@ impl App {
     /// file over the chat panel.
     /// Dragging with the left button selects text inside the panel the
     /// drag started in and copies it when the button is released; in the
-    /// conversation, holding the pointer past its top or bottom scrolls it
-    /// (see [`Self::tick`]), and the wheel scrolls it under the selection.
+    /// chat panel, unless it shows the graph or an image, holding the
+    /// pointer past its top or bottom scrolls it (see [`Self::tick`]), and
+    /// the wheel scrolls it under the selection.
     /// Moving over a clickable item highlights it until the pointer leaves.
     ///
     /// Returns whether the screen may look different: false for a move or
@@ -1610,15 +1653,16 @@ impl App {
         let picks_a_row = panel == PanelFocus::Swarm && self.agents_tab != AgentsTab::Projects;
         let step = if picks_a_row { 1 } else { 3 };
         let over_detail = panel == PanelFocus::Chat && self.detail.is_some();
+        if matches!(
+            mouse.kind,
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+        ) && !self.wheel_keeps_selection(panel)
+        {
+            self.clear_selection();
+        }
         match mouse.kind {
-            MouseEventKind::ScrollUp if over_detail => {
-                self.clear_selection();
-                self.scroll_detail_up(step);
-            }
-            MouseEventKind::ScrollDown if over_detail => {
-                self.clear_selection();
-                self.scroll_detail_down(step);
-            }
+            MouseEventKind::ScrollUp if over_detail => self.scroll_detail_up(step),
+            MouseEventKind::ScrollDown if over_detail => self.scroll_detail_down(step),
             MouseEventKind::ScrollUp
             | MouseEventKind::ScrollDown
             | MouseEventKind::ScrollLeft
@@ -1628,18 +1672,8 @@ impl App {
                 self.clear_selection();
                 self.scroll_flow(mouse.kind, mouse.modifiers, step);
             }
-            MouseEventKind::ScrollUp => {
-                if !self.wheel_keeps_selection(panel) {
-                    self.clear_selection();
-                }
-                self.scroll_panel_up(panel, step);
-            }
-            MouseEventKind::ScrollDown => {
-                if !self.wheel_keeps_selection(panel) {
-                    self.clear_selection();
-                }
-                self.scroll_panel_down(panel, step);
-            }
+            MouseEventKind::ScrollUp => self.scroll_panel_up(panel, step),
+            MouseEventKind::ScrollDown => self.scroll_panel_down(panel, step),
             MouseEventKind::Down(MouseButton::Left) => {
                 self.focus = panel;
                 if panel == PanelFocus::Chat && self.open_image_at(mouse.column, mouse.row) {
@@ -1647,9 +1681,10 @@ impl App {
                     self.hover = None;
                     return;
                 }
-                self.selection_scrolls = panel == PanelFocus::Chat && self.chat_scrolls_by_rows();
+                self.selection_scrolls =
+                    panel == PanelFocus::Chat && self.areas.chat_rows.is_some();
                 let top = if self.selection_scrolls {
-                    self.chat_first_line
+                    self.areas.chat_rows_top
                 } else {
                     0
                 };
@@ -1810,10 +1845,12 @@ impl App {
     }
 
     /// Cells of `panel` that hold text: inside its border, and for the chat
-    /// only the message area unless a record or file covers it. The agents
-    /// panel on the left is navigation, so its text is never selected.
+    /// only the rows its body scrolls through, or its message area. The
+    /// agents panel on the left is navigation, so its text is never
+    /// selected.
     fn selectable_area(&self, panel: PanelFocus) -> Option<Rect> {
         let area = match panel {
+            PanelFocus::Chat if self.areas.chat_rows.is_some() => return self.areas.chat_rows,
             PanelFocus::Chat if self.detail.is_some() => self.areas.chat,
             PanelFocus::Chat => return self.areas.chat_text.or(self.areas.chat),
             PanelFocus::Swarm => return None,
@@ -1842,35 +1879,33 @@ impl App {
         self.copy_requested = false;
     }
 
-    /// Whether the chat shows the conversation, which scrolls by rows: no
-    /// record, file, flow or benchmarks over it.
-    fn chat_scrolls_by_rows(&self) -> bool {
-        self.detail.is_none() && !self.flow.is_open() && !self.bench.is_open()
+    /// Whether the selection is in the rows the chat panel's body scrolls
+    /// through, as drawn in the last frame.
+    fn selection_in_chat_rows(&self) -> bool {
+        self.selection_scrolls
+            && self
+                .selection
+                .as_ref()
+                .is_some_and(|s| self.areas.chat_rows == Some(s.bounds()))
     }
 
     /// Whether the wheel over `panel` scrolls a selection along with its
     /// text rather than dropping it.
     fn wheel_keeps_selection(&self, panel: PanelFocus) -> bool {
-        panel == PanelFocus::Chat
-            && self.selection_scrolls
-            && self.selection.is_some()
-            && self.chat_scrolls_by_rows()
+        panel == PanelFocus::Chat && self.selection_in_chat_rows()
     }
 
     /// Fit the selection to the frame just drawn into `buffer`: follow the
-    /// conversation's scroll, move the held end to the pointer, and keep
-    /// the rows in view for copying once they scroll away.
+    /// chat body's scroll, move the held end to the pointer, and keep the
+    /// rows in view for copying once they scroll away.
     pub(crate) fn track_selection(&mut self, buffer: &Buffer) {
-        if !self.selection_scrolls || !self.chat_scrolls_by_rows() {
+        if !self.selection_in_chat_rows() {
             return;
         }
         let Some(selection) = self.selection.as_mut() else {
             return;
         };
-        if self.areas.chat_text != Some(selection.bounds()) {
-            return;
-        }
-        selection.scroll_to(self.chat_first_line);
+        selection.scroll_to(self.areas.chat_rows_top);
         if let Some(at) = self.selecting {
             selection.extend_to(at);
         }
@@ -1882,7 +1917,7 @@ impl App {
     fn selection_scroll(&self) -> Option<(bool, usize)> {
         let at = self.selecting?;
         let bounds = self.selection.as_ref()?.bounds();
-        if !self.selection_scrolls || !self.chat_scrolls_by_rows() {
+        if !self.selection_in_chat_rows() {
             return None;
         }
         let (up, past) = if at.y < bounds.top() {
@@ -1905,10 +1940,14 @@ impl App {
     /// Scroll the chat one step under a selection dragged past its top or
     /// bottom. The selection's held end follows on the next frame.
     pub(crate) fn scroll_selection(&mut self) {
-        match self.selection_scroll() {
-            Some((true, rows)) => self.scroll_offset = self.scroll_offset.saturating_add(rows),
-            Some((false, rows)) => self.scroll_offset = self.scroll_offset.saturating_sub(rows),
-            None => {}
+        let Some((up, rows)) = self.selection_scroll() else {
+            return;
+        };
+        match (self.detail.is_some(), up) {
+            (true, true) => self.scroll_detail_up(rows),
+            (true, false) => self.scroll_detail_down(rows),
+            (false, true) => self.scroll_panel_up(PanelFocus::Chat, rows),
+            (false, false) => self.scroll_panel_down(PanelFocus::Chat, rows),
         }
     }
 
@@ -1951,13 +1990,19 @@ impl App {
     }
 
     /// Clicking a project folds or opens it and leaves the highlight where
-    /// it was; clicking an agent or "+ New project" highlights and acts on it.
+    /// it was, as does clicking the fold marker of an agent with spawns;
+    /// clicking an agent elsewhere or "+ New project" highlights and acts
+    /// on it.
     fn click_agent_row(&mut self, column: u16, row: u16) {
         let Some(index) = self.project_row_at(column, row) else {
             return;
         };
         if let Some(key) = self.project_add_at(index, column) {
             self.add_agent_to_project(&key);
+        } else if let Some(agent) = self.fold_marker_at(index, column) {
+            // Like a project's header, the marker leaves a list the wheel
+            // scrolled where it is.
+            self.toggle_agent(agent);
         } else if let Some(ProjectListRow::Project { root, .. }) = self.project_rows().get(index) {
             self.toggle_project(*root);
         } else if let Some(ProjectListRow::EmptyProject { .. }) = self.project_rows().get(index) {
@@ -2066,14 +2111,16 @@ impl App {
                     .contains(self.agents[root].project_key());
                 rows.push(ProjectListRow::Project { root, expanded });
                 if expanded {
-                    for agent_index in root..end {
+                    let mut agent_index = root;
+                    while agent_index < end {
                         rows.push(ProjectListRow::Agent { index: agent_index });
+                        agent_index = self.next_shown_agent(agent_index);
                     }
                 }
                 index = end;
             } else {
                 rows.push(ProjectListRow::Agent { index });
-                index += 1;
+                index = self.next_shown_agent(index);
             }
         }
         for (_, project) in empty {
@@ -2110,7 +2157,8 @@ impl App {
             .find(|&i| starts_project(&self.agents, i) && self.agents[i].project_key() == key)
     }
 
-    /// Open a folded project so `index` has a visible row.
+    /// Open a folded project, and any folded agent above it, so `index`
+    /// has a visible row.
     fn reveal_agent(&mut self, index: usize) {
         if let Some(key) = self
             .project_root(index)
@@ -2118,6 +2166,164 @@ impl App {
         {
             self.collapsed_projects.remove(&key);
         }
+        self.open_ancestors(index);
+    }
+
+    /// Open every folded agent that agent `index` is spawned under.
+    pub(super) fn open_ancestors(&mut self, index: usize) {
+        let ancestors: Vec<usize> =
+            std::iter::successors(self.parent_of(index), |&i| self.parent_of(i)).collect();
+        for ancestor in ancestors {
+            self.collapsed_agents.remove(&self.agents[ancestor].id);
+        }
+    }
+
+    /// The agent that spawned agent `index`: the nearest one above it in
+    /// its project with a smaller depth.
+    fn parent_of(&self, index: usize) -> Option<usize> {
+        let depth = self.agents.get(index)?.depth;
+        if depth == 0 || starts_project(&self.agents, index) {
+            return None;
+        }
+        let root = self.project_root(index)?;
+        (root..index).rev().find(|&i| self.agents[i].depth < depth)
+    }
+
+    /// Index just past agent `index` and the agents spawned under it. Its
+    /// spawns stop at the next agent no deeper than it, or at the next
+    /// project.
+    pub(crate) fn spawn_end(&self, index: usize) -> usize {
+        let Some(depth) = self.agents.get(index).map(|agent| agent.depth) else {
+            return self.agents.len();
+        };
+        (index + 1..self.agents.len())
+            .find(|&i| self.agents[i].depth <= depth || starts_project(&self.agents, i))
+            .unwrap_or(self.agents.len())
+    }
+
+    /// Whether agent `index` has spawned agents listed under it, so it
+    /// can fold.
+    pub(crate) fn agent_has_spawns(&self, index: usize) -> bool {
+        self.spawn_end(index) > index + 1
+    }
+
+    /// Whether agent `index` is folded shut over the agents it spawned.
+    pub(crate) fn agent_folded(&self, index: usize) -> bool {
+        self.agents
+            .get(index)
+            .is_some_and(|agent| self.collapsed_agents.contains(&agent.id))
+            && self.agent_has_spawns(index)
+    }
+
+    /// The agent listed after agent `index`, past its spawns when folded.
+    fn next_shown_agent(&self, index: usize) -> usize {
+        if self.agent_folded(index) {
+            self.spawn_end(index)
+        } else {
+            index + 1
+        }
+    }
+
+    /// Fold or open agent `index` over the agents it spawned. Folding it
+    /// parks the highlight on it when the highlight was on one of the
+    /// rows it hides; opening it again while the highlight is parked there
+    /// brings the highlight back to the agent shown in the chat if it is
+    /// one of the spawns. Otherwise the highlight stays on the same row as
+    /// rows above it come and go.
+    pub(crate) fn toggle_agent(&mut self, index: usize) {
+        if !self.agent_has_spawns(index) {
+            return;
+        }
+        let id = self.agents[index].id.clone();
+        let spawns = index + 1..self.spawn_end(index);
+        let before = self.project_rows().get(self.selected_agent).copied();
+        let opened = self.collapsed_agents.remove(&id);
+        if !opened {
+            self.collapsed_agents.insert(id);
+        }
+        let on_agent = before == Some(ProjectListRow::Agent { index });
+        let hidden = matches!(before, Some(ProjectListRow::Agent { index: found }) if spawns.contains(&found))
+            && self.agent_folded(index);
+        let active_row = || {
+            spawns
+                .clone()
+                .find(|&i| self.agents[i].id == self.active_agent_id)
+                .and_then(|i| self.row_of_agent(i))
+        };
+        let kept = if hidden {
+            self.row_of_agent(index)
+        } else if opened && on_agent {
+            active_row().or_else(|| self.row_of_agent(index))
+        } else {
+            let rows = self.project_rows();
+            before.and_then(|before| rows.iter().position(|row| *row == before))
+        };
+        if let Some(pos) = kept {
+            self.selected_agent = pos;
+        }
+        let len = self.project_rows().len();
+        self.selected_agent = self.selected_agent.min(len.saturating_sub(1));
+    }
+
+    /// Whether `agent` is thinking: it runs, or it is the agent on screen
+    /// and a turn is in flight.
+    pub(crate) fn agent_thinking(&self, agent: &crate::events::AgentSummary) -> bool {
+        agent.running || (agent.id == self.active_agent_id && self.is_processing())
+    }
+
+    /// Whether the row of agent `index` shows the aura ring: the agent is
+    /// thinking, or it is folded over a spawn that is.
+    pub(crate) fn agent_row_busy(&self, index: usize) -> bool {
+        let Some(agent) = self.agents.get(index) else {
+            return false;
+        };
+        let hidden = if self.agent_folded(index) {
+            self.agents.get(index + 1..self.spawn_end(index))
+        } else {
+            None
+        };
+        self.agent_thinking(agent)
+            || hidden.is_some_and(|hidden| hidden.iter().any(|a| self.agent_thinking(a)))
+    }
+
+    /// The agent whose row stands for the agent shown in the chat: that
+    /// agent when it has a row, else the nearest agent above it folded
+    /// over it. `None` when neither is shown, as under a folded project.
+    pub(crate) fn shown_active_agent(&self) -> Option<usize> {
+        let index = self
+            .agents
+            .iter()
+            .position(|agent| agent.id == self.active_agent_id)?;
+        let rows = self.project_rows();
+        let shown = |i: usize| rows.contains(&ProjectListRow::Agent { index: i });
+        std::iter::successors(Some(index), |&i| self.parent_of(i)).find(|&i| shown(i))
+    }
+
+    /// Agent whose fold marker is at `column` on projects-list row `row`.
+    /// An agent with spawns draws its marker as `tree_row` lays the icon
+    /// column out: after one leading space and the spawn guides,
+    /// `AURA_WIDTH + 2` columns per level. An idle agent's marker opens the
+    /// icon column, and the blank rest of that column counts too, as it
+    /// does for [`processes::on_row_icon`]. A busy agent's ring fills the
+    /// icon column, so its marker takes the spare column after it, and
+    /// only that column is the button.
+    fn fold_marker_at(&self, row: usize, column: u16) -> Option<usize> {
+        use crate::animation::AURA_WIDTH;
+        let list = self.areas.agent_rows?;
+        let ProjectListRow::Agent { index } = *self.project_rows().get(row)? else {
+            return None;
+        };
+        if !self.agent_has_spawns(index) {
+            return None;
+        }
+        let start = 1 + self.agents[index].depth * (AURA_WIDTH + 2);
+        let offset = usize::from(column.checked_sub(list.x)?);
+        let hit = if self.agent_row_busy(index) {
+            offset == start + AURA_WIDTH
+        } else {
+            (start..=start + AURA_WIDTH).contains(&offset)
+        };
+        hit.then_some(index)
     }
 
     /// Visible row of agent `index`, when its project is expanded.
@@ -2171,17 +2377,21 @@ impl App {
         self.selected_agent = self.selected_agent.min(len.saturating_sub(1));
     }
 
-    /// Move the highlight to the active agent, or to its project when folded.
+    /// Move the highlight to the active agent, to the folded agent it is
+    /// under, or to its project when folded.
     fn select_visible_active(&mut self) {
+        if let Some(row) = self
+            .shown_active_agent()
+            .and_then(|index| self.row_of_agent(index))
+        {
+            self.selected_agent = row;
+            return;
+        }
         if let Some(index) = self
             .agents
             .iter()
             .position(|agent| agent.id == self.active_agent_id)
         {
-            if let Some(row) = self.row_of_agent(index) {
-                self.selected_agent = row;
-                return;
-            }
             if let Some(root) = self.project_root(index) {
                 if let Some(row) = self.project_rows().iter().position(|row| {
                     matches!(row, ProjectListRow::Project { root: found, .. } if *found == root)
@@ -2369,6 +2579,7 @@ impl App {
         self.detail = Some(view);
         self.detail_scroll = 0;
         self.graph.behind = false;
+        self.clear_selection();
     }
 
     /// Close the view over the chat panel.
@@ -2376,6 +2587,7 @@ impl App {
         self.detail = None;
         self.detail_scroll = 0;
         self.graph.behind = false;
+        self.clear_selection();
     }
 
     /// Record where the close button of the view over the chat panel was

@@ -213,6 +213,11 @@ pub struct PromptPayload {
     /// `task` call named); `None` for a turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    /// Whether the turn was led: its model planned the work and handed it
+    /// to subtasks instead of doing it. `None` for a subtask, and for a
+    /// turn recorded before this was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub led: Option<bool>,
 }
 
 impl PromptPayload {
@@ -225,6 +230,7 @@ impl PromptPayload {
             classifier: String::new(),
             route: Route::default(),
             kind: None,
+            led: None,
         }
     }
 
@@ -273,6 +279,12 @@ pub enum OutcomeSignal {
     /// failed, a request that can't be done). The work then counts neither
     /// for nor against the model.
     JudgedExcused,
+    /// The turn ended because the model could not be reached or refused
+    /// the request: the provider was overloaded or rate-limiting, the
+    /// connection failed, the stream went silent, or the sign-in was
+    /// refused. It says nothing about the model's work, so like
+    /// [`Self::JudgedExcused`] it counts neither way.
+    Unavailable,
 }
 
 impl OutcomeSignal {
@@ -289,7 +301,7 @@ impl OutcomeSignal {
             | Self::Bad
             | Self::Redone
             | Self::JudgedFail => Some(false),
-            Self::None | Self::JudgedExcused => None,
+            Self::None | Self::JudgedExcused | Self::Unavailable => None,
         }
     }
 
@@ -304,7 +316,7 @@ impl OutcomeSignal {
     /// work, so that it counts neither as a success nor as a failure.
     #[must_use]
     pub const fn voids(self) -> bool {
-        matches!(self, Self::JudgedExcused)
+        matches!(self, Self::JudgedExcused | Self::Unavailable)
     }
 
     /// Whether this is written when the work ends, rather than later.
@@ -312,7 +324,7 @@ impl OutcomeSignal {
     pub const fn is_turn_end(self) -> bool {
         matches!(
             self,
-            Self::Error | Self::ChecksFailed | Self::ChecksPassed | Self::None
+            Self::Error | Self::ChecksFailed | Self::ChecksPassed | Self::None | Self::Unavailable
         )
     }
 
@@ -331,6 +343,7 @@ impl OutcomeSignal {
             Self::Redone => "redone",
             Self::JudgedFail => "judged_fail",
             Self::JudgedExcused => "judged_excused",
+            Self::Unavailable => "unavailable",
         }
     }
 }
@@ -359,8 +372,17 @@ pub struct OutcomePayload {
     pub signal: OutcomeSignal,
     /// List-price cost of the work's model calls in USD.
     pub cost_usd: f64,
+    /// List-price cost of the model calls of the subtasks the work
+    /// dispatched, in USD; not part of `cost_usd`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub subtask_cost_usd: f64,
     /// Wall time of the work.
     pub latency_ms: u64,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(cost: &f64) -> bool {
+    *cost == 0.0
 }
 
 impl OutcomePayload {
@@ -407,6 +429,7 @@ mod tests {
             classifier: "claude/claude-haiku-4-5".to_string(),
             route: Route::turn("claude/claude-sonnet-4-6", RouteReason::Default),
             kind: None,
+            led: Some(true),
         };
         let bytes = payload.to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
@@ -415,7 +438,10 @@ mod tests {
         assert_eq!(json["route"]["reason"], "default");
         assert_eq!(json["route"]["propensity"], 1.0);
         assert!(json.get("kind").is_none(), "a turn names no kind");
+        assert_eq!(json["led"], true);
         assert_eq!(PromptPayload::from_bytes(&bytes).unwrap(), payload);
+        let older = br#"{"text":"fix it","category":"debugging","classifier":"","route":{"level":"turn","model":"m","reason":"default","explored":false,"propensity":1.0}}"#;
+        assert_eq!(PromptPayload::from_bytes(older).unwrap().led, None);
     }
 
     #[test]
@@ -447,6 +473,7 @@ mod tests {
             success: Some(false),
             signal: OutcomeSignal::ChecksFailed,
             cost_usd: 0.042,
+            subtask_cost_usd: 0.0,
             latency_ms: 12_345,
         };
         let bytes = outcome.to_bytes();
@@ -463,6 +490,8 @@ mod tests {
         assert_eq!(OutcomeSignal::JudgedExcused.success(), None);
         assert!(OutcomeSignal::JudgedExcused.voids());
         assert!(!OutcomeSignal::JudgedFail.voids());
+        assert_eq!(OutcomeSignal::Unavailable.success(), None);
+        assert!(OutcomeSignal::Unavailable.voids() && OutcomeSignal::Unavailable.is_turn_end());
         assert!(!OutcomeSignal::JudgedExcused.is_turn_end());
         for failure in [
             OutcomeSignal::Error,
@@ -492,6 +521,7 @@ mod tests {
             success: None,
             signal: OutcomeSignal::None,
             cost_usd: 0.5,
+            subtask_cost_usd: 0.0,
             latency_ms: 10,
         };
         let good = outcome.with_signal(OutcomeSignal::Good);

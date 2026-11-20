@@ -278,6 +278,14 @@ impl App {
         &self.bench
     }
 
+    /// Keep the detail view's scroll at most `top`, the line the last
+    /// frame showed on top, so scrolling back up starts moving at once.
+    pub(crate) fn clamp_bench_scroll(&mut self, top: u16) {
+        if matches!(self.bench.mode, BenchMode::Detail(_)) {
+            self.bench.scroll = self.bench.scroll.min(top);
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn bench_mut(&mut self) -> &mut BenchState {
         &mut self.bench

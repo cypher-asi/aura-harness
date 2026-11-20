@@ -568,6 +568,7 @@ async fn a_subtask_redone_while_still_running_fails_once_it_ends() {
         success: None,
         signal: OutcomeSignal::None,
         cost_usd: 0.0,
+        subtask_cost_usd: 0.0,
         latency_ms: 1,
     };
     let redo = fixture

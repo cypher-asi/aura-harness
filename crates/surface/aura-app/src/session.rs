@@ -211,6 +211,7 @@ pub async fn start(
             limits: models.limits(),
             gate: event_loop::GateBase::of(&models),
         },
+        gate: aura_config::gate(),
         policy: mode_policy(permissions, &tool_names),
         record_observer: Some(record_observer),
         record_panel: record_panel.clone(),

@@ -33,6 +33,9 @@ pub(super) enum LlmCallError {
     /// so clients can react (e.g. surface a retry affordance) rather than
     /// treat it as a generic fatal LLM error.
     RateLimited(String),
+    /// The model could not be reached: upstream 5xx, a failed
+    /// connection, a timeout, or a stream that died or went silent.
+    Unavailable(String),
     Fatal(String),
 }
 
@@ -42,6 +45,13 @@ impl LlmCallError {
         result: &mut AgentLoopResult,
         event_tx: Option<&Sender<AgentLoopEvent>>,
     ) {
+        result.llm_unavailable = matches!(
+            self,
+            Self::InsufficientCredits(_)
+                | Self::Unauthorized(_)
+                | Self::RateLimited(_)
+                | Self::Unavailable(_)
+        );
         match self {
             Self::InsufficientCredits(msg) => {
                 result.insufficient_credits = true;
@@ -82,7 +92,7 @@ impl LlmCallError {
                 );
                 result.llm_error = Some(msg);
             }
-            Self::PromptTooLong(msg) | Self::Fatal(msg) => {
+            Self::PromptTooLong(msg) | Self::Unavailable(msg) | Self::Fatal(msg) => {
                 streaming::emit(
                     event_tx,
                     AgentLoopEvent::Error {
@@ -124,6 +134,7 @@ impl LlmCallError {
             }
             other if other.rejects_credentials() => Self::Unauthorized(other.to_string()),
             other if other.is_context_overflow() => Self::PromptTooLong(other.to_string()),
+            other if other.is_unavailable() => Self::Unavailable(other.to_string()),
             other => Self::Fatal(other.to_string()),
         }
     }

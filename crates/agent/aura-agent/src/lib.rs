@@ -211,6 +211,20 @@ pub enum AgentError {
     Internal(String),
 }
 
+impl AgentError {
+    /// Whether the model could not be reached or refused the request
+    /// (see [`aura_model::ReasonerError::is_unavailable`]): a stream that
+    /// went silent or broke counts too.
+    #[must_use]
+    pub const fn is_unavailable(&self) -> bool {
+        match self {
+            Self::Reason(e) => e.is_unavailable(),
+            Self::StreamTimeout { .. } | Self::Stream(_) => true,
+            _ => false,
+        }
+    }
+}
+
 impl From<aura_agent_kernel::KernelError> for AgentError {
     /// Flatten `KernelError::Reasoner(inner)` into
     /// [`AgentError::Reason`] so the typed `ReasonerError` survives a

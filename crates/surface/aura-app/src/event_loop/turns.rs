@@ -14,7 +14,7 @@ use super::gate_record;
 use super::handlers::{handle_agent_success, record_response, run_agent_turn, system_message};
 use super::run_command::run_user_command;
 use super::steering::{SteerSource, Steering};
-use super::subagents::LeadProfile;
+use super::subagents::{AgentHub, LeadProfile};
 use super::task_check::takeover_prompt;
 use super::tasks::{request_state, summary_of};
 use crate::long_run::LongRunSettings;
@@ -118,9 +118,11 @@ pub(super) struct GateTurn {
     /// The model selector and status line as they stand, for showing the
     /// turn's route
     pub models: UiCommand,
-    /// How the turn leads when its prompt asks for work a lead takes;
-    /// `None` when the agent never leads
+    /// How the turn leads when Gate has it led; `None` when the agent
+    /// never leads
     pub lead: Option<LeadProfile>,
+    /// For what the turn's subtasks cost
+    pub hub: Arc<AgentHub>,
 }
 
 impl GateTurn {
@@ -131,7 +133,7 @@ impl GateTurn {
         if refused.is_empty() {
             return self
                 .live
-                .decide(RouteLevel::Turn, category, &self.candidates);
+                .decide(RouteLevel::Turn, category, None, &self.candidates);
         }
         let left: Vec<Candidate> = self
             .candidates
@@ -139,7 +141,7 @@ impl GateTurn {
             .filter(|c| !refused.contains(&c.id))
             .cloned()
             .collect();
-        self.live.redecide(RouteLevel::Turn, category, &left)
+        self.live.redecide(RouteLevel::Turn, category, None, &left)
     }
 
     /// Point `agent_loop`, running `agent`'s turn, at `decision`'s model.
@@ -153,25 +155,31 @@ impl GateTurn {
         *agent_loop = AgentLoop::new(config);
     }
 
-    /// Make the turn on `agent_loop` with `tools` a lead's when its
-    /// prompt asks for `category` (see [`LeadProfile::apply`]). Returns
-    /// whether its calls must stay within the lead's limits.
+    /// Have Gate decide whether the turn on `agent_loop` with `tools`,
+    /// asking for `category`, is led ([`GateLive::way`]), and make it a
+    /// lead's if so (see [`LeadProfile::apply`]). Returns whether it is
+    /// led (`None` when the agent never leads) and whether its calls must
+    /// stay within the lead's limits.
     fn lead(
         &self,
         category: PromptCategory,
         agent_loop: &mut AgentLoop,
         tools: &mut Vec<ToolDefinition>,
-    ) -> bool {
+    ) -> (Option<bool>, bool) {
         let Some(lead) = self.lead else {
-            return false;
+            return (None, false);
         };
         let mut config = agent_loop.config().clone();
+        let way = self.live.way(category, &config.model, true);
+        if way.explored {
+            info!(led = way.led, %category, "Gate explores the other way of working");
+        }
         let before = config.system_prompt.len();
-        let enforced = lead.apply(category, &mut config, tools);
+        let enforced = lead.apply(way.led, &mut config, tools);
         if config.system_prompt.len() != before {
             *agent_loop = AgentLoop::new(config);
         }
-        enforced
+        (Some(way.led), enforced)
     }
 
     /// Show the model and route of `decision` in the status line.
@@ -376,80 +384,87 @@ async fn run_prompt(
         classifier: turn.routing.classifier.clone(),
         auth_token: turn.agent_loop.config().auth_token.clone(),
         route: Route::turn(model, turn.routing.reason),
+        led: None,
     };
+    let started_ms = super::processes::now_ms();
+    let hub = turn.gate.as_ref().map(|gate| Arc::clone(&gate.hub));
     let mut turn_start = session.messages.len();
     let mut started = started;
 
-    let (process_result, forwarded, attempts, recorded) =
-        if turn.routing.reason == RouteReason::Pinned {
-            begin_files(session, &prompt.text);
-            session.messages.push(model_message(session, prompt).await);
-            // The prompt is recorded once classified, which is normally
-            // before the turn's first model call ends; a classifier slower
-            // than that call records it after the call's entry.
-            let (recorded, (result, forwarded)) = tokio::join!(
-                label.classify_and_record(session),
-                run_agent_turn(
-                    session,
-                    &turn.agent_loop,
-                    turn.tools.clone(),
-                    ui,
-                    cancel,
-                    turn.steering,
-                    turn.limits,
-                    turn.recorder.clone(),
-                )
-            );
-            let recorded = match recorded {
-                Ok(recorded) => Some(recorded),
-                Err(problem) => {
-                    ui.send(UiCommand::ShowError(problem)).await;
-                    None
-                }
-            };
-            (result, forwarded, Attempts::default(), recorded)
-        } else {
-            let category = label.classify(session).await;
-            if let Some(gate) = turn.gate.as_deref() {
-                let agent = session.agent_id();
-                if route_turn(gate, agent, &mut turn.agent_loop, &mut label, category, ui).await {
-                    session.lead = gate.lead(category, &mut turn.agent_loop, &mut turn.tools);
-                }
+    let (process_result, forwarded, attempts, recorded) = if turn.routing.reason
+        == RouteReason::Pinned
+    {
+        begin_files(session, &prompt.text);
+        session.messages.push(model_message(session, prompt).await);
+        // The prompt is recorded once classified, which is normally
+        // before the turn's first model call ends; a classifier slower
+        // than that call records it after the call's entry.
+        let (recorded, (result, forwarded)) = tokio::join!(
+            label.classify_and_record(session),
+            run_agent_turn(
+                session,
+                &turn.agent_loop,
+                turn.tools.clone(),
+                ui,
+                cancel,
+                turn.steering,
+                turn.limits,
+                turn.recorder.clone(),
+            )
+        );
+        let recorded = match recorded {
+            Ok(recorded) => Some(recorded),
+            Err(problem) => {
+                ui.send(UiCommand::ShowError(problem)).await;
+                None
             }
-            let recorded = match label.record(session, category).await {
-                Ok(recorded) => recorded,
-                Err(problem) => {
-                    ui.send(UiCommand::ShowError(problem)).await;
-                    ui.send(UiCommand::Complete).await;
-                    return Outcome::default();
-                }
-            };
-            begin_files(session, &prompt.text);
-            if let Some(files) = &session.file_checkpoints {
-                files.note_prompt_tx(session.agent_id(), recorded.0);
-            }
-            session.messages.push(model_message(session, prompt).await);
-            let asked = Asked {
-                task: &label.text,
-                prompt_tx: recorded.0,
-                category,
-                turn_start,
-                started,
-            };
-            let (result, forwarded, attempts) =
-                run_attempts(session, &mut turn, asked, ui, cancel).await;
-            // The outcome below is the last attempt's.
-            let mut recorded = Some(recorded);
-            if let Some((prompt_tx, start, at)) = attempts.moved {
-                recorded = Some((prompt_tx, category));
-                turn_start = start;
-                started = at;
-            }
-            if attempts.settled {
-                recorded = None;
-            }
-            (result, forwarded, attempts, recorded)
         };
+        (result, forwarded, Attempts::default(), recorded)
+    } else {
+        let category = label.classify(session).await;
+        if let Some(gate) = turn.gate.as_deref() {
+            let agent = session.agent_id();
+            if route_turn(gate, agent, &mut turn.agent_loop, &mut label, category, ui).await {
+                let (led, enforced) = gate.lead(category, &mut turn.agent_loop, &mut turn.tools);
+                label.led = led;
+                session.lead = enforced;
+            }
+        }
+        let recorded = match label.record(session, category).await {
+            Ok(recorded) => recorded,
+            Err(problem) => {
+                ui.send(UiCommand::ShowError(problem)).await;
+                ui.send(UiCommand::Complete).await;
+                return Outcome::default();
+            }
+        };
+        begin_files(session, &prompt.text);
+        if let Some(files) = &session.file_checkpoints {
+            files.note_prompt_tx(session.agent_id(), recorded.0);
+        }
+        session.messages.push(model_message(session, prompt).await);
+        let asked = Asked {
+            task: &label.text,
+            prompt_tx: recorded.0,
+            category,
+            turn_start,
+            started,
+            started_ms,
+        };
+        let (result, forwarded, attempts) =
+            run_attempts(session, &mut turn, asked, ui, cancel).await;
+        // The outcome below is the last attempt's.
+        let mut recorded = Some(recorded);
+        if let Some((prompt_tx, start, at)) = attempts.moved {
+            recorded = Some((prompt_tx, category));
+            turn_start = start;
+            started = at;
+        }
+        if attempts.settled {
+            recorded = None;
+        }
+        (result, forwarded, attempts, recorded)
+    };
     if let Some(files) = &session.file_checkpoints {
         files.end_turn(session.agent_id());
     }
@@ -513,6 +528,9 @@ async fn run_prompt(
             success: signal.success(),
             signal,
             cost_usd: attempts.cost_usd + forwarded.usage.cost_usd,
+            subtask_cost_usd: hub.map_or(0.0, |hub| {
+                hub.subtask_cost_usd(session.agent_id(), started_ms)
+            }),
             latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         };
         gate_record::record(&session.kernel, session.agent_id(), &outcome).await;
@@ -558,6 +576,8 @@ struct Label {
     classifier: String,
     auth_token: Option<String>,
     route: Route,
+    /// Whether Gate had the turn led; `None` when it did not decide
+    led: Option<bool>,
 }
 
 impl Label {
@@ -595,6 +615,7 @@ impl Label {
             classifier: self.classifier.clone(),
             route: self.route.clone(),
             kind: None,
+            led: self.led,
         };
         let (tx, _) = record_prompt(session, &payload).await?;
         if let Some(files) = &session.file_checkpoints {
@@ -617,13 +638,19 @@ fn begin_files(session: &AgentSession, text: &str) {
 }
 
 /// The signal of a turn that ran to its end with `result`, whose messages
-/// from `turn_start` on are the turn's own.
+/// from `turn_start` on are the turn's own. A turn the model's provider
+/// cut short is [`OutcomeSignal::Unavailable`] whatever it did before,
+/// since its work stopped where the model did not choose to stop it.
 pub(crate) fn ended_signal(
     result: &Result<aura_agent::AgentLoopResult, aura_agent::AgentError>,
     turn_start: usize,
 ) -> OutcomeSignal {
     match result {
+        Err(e) if e.is_unavailable() => OutcomeSignal::Unavailable,
         Err(_) => OutcomeSignal::Error,
+        Ok(result) if result.llm_error.is_some() && result.llm_unavailable => {
+            OutcomeSignal::Unavailable
+        }
         Ok(result) => {
             let errored = result.llm_error.is_some() && result.total_text.trim().is_empty();
             let messages = result.messages.get(turn_start..).unwrap_or_default();
@@ -687,6 +714,8 @@ struct Asked<'a> {
     /// Where the turn's messages start in the session
     turn_start: usize,
     started: Instant,
+    /// When it started, in Unix milliseconds
+    started_ms: u64,
 }
 
 /// Run the turn of the prompt `asked`. When Gate routes it, Gate is asked
@@ -775,6 +804,7 @@ async fn run_attempts(
             success: signal.success(),
             signal,
             cost_usd: attempts.cost_usd + forwarded.usage.cost_usd,
+            subtask_cost_usd: gate.hub.subtask_cost_usd(agent, asked.started_ms),
             latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         };
         let stronger = |live: &GateLive| {

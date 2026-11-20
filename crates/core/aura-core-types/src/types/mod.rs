@@ -216,6 +216,7 @@ mod tests {
             success: None,
             signal: OutcomeSignal::None,
             cost_usd: 0.0,
+            subtask_cost_usd: 0.0,
             latency_ms: 900,
         };
         let outcome_tx = Transaction::outcome(agent_id, &outcome);

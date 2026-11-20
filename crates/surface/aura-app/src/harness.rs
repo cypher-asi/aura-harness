@@ -89,6 +89,8 @@ pub(crate) struct HubSetup {
     pub provider: Arc<dyn ModelProvider + Send + Sync>,
     pub tool_config: ToolConfig,
     pub base: event_loop::TurnBase,
+    /// The settings Gate routes with
+    pub gate: aura_config::GateConfig,
     /// Kernel policy for every agent: mode and tool permissions
     pub policy: aura_agent_kernel::PolicyConfig,
     /// Sees every record entry of every agent, including background ones
@@ -190,6 +192,7 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
         provider,
         tool_config,
         base,
+        gate,
         policy,
         record_observer,
         record_panel,
@@ -206,7 +209,7 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
         post_edit_check,
         trace_snapshots,
     } = setup;
-    let gate = Arc::new(event_loop::GateLive::new(aura_config::gate()));
+    let gate = Arc::new(event_loop::GateLive::new(gate));
     gate.rebuild_in_background(
         store.clone() as Arc<dyn aura_store_db::ReadStore>,
         registry.agents().iter().map(|a| a.agent_id()).collect(),

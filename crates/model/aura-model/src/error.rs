@@ -173,6 +173,25 @@ impl ReasonerError {
     pub const fn is_retryable_transient(&self) -> bool {
         matches!(self, Self::RateLimited { .. } | Self::Transient { .. })
     }
+
+    /// Whether the model could not be reached or refused the request,
+    /// as opposed to failing at it: rate limits and overload, upstream
+    /// 5xx and request timeouts, a failed connection or a stream that
+    /// died, and a refused sign-in or plan. Such a failure says nothing
+    /// about how well the model works.
+    #[must_use]
+    pub const fn is_unavailable(&self) -> bool {
+        match self {
+            Self::RateLimited { .. }
+            | Self::InsufficientCredits(_)
+            | Self::Transient { .. }
+            | Self::Request(_)
+            | Self::Timeout
+            | Self::StreamAbortedWithPartial { .. } => true,
+            Self::Api { status, .. } => matches!(*status, 401 | 403 | 408 | 429 | 500..=599),
+            Self::Parse(_) | Self::ModelRequestContractViolation(_) | Self::Internal(_) => false,
+        }
+    }
 }
 
 fn message_indicates_context_overflow(message: &str) -> bool {
@@ -218,6 +237,27 @@ mod tests {
         };
         assert_eq!(err.retry_after(), Some(Duration::from_secs(7)));
         assert!(err.is_retryable_transient());
+    }
+
+    #[test]
+    fn unreachable_models_are_told_from_failed_requests() {
+        let overloaded = ReasonerError::Api {
+            status: 529,
+            message: "overloaded".to_string(),
+        };
+        let refused = ReasonerError::Api {
+            status: 401,
+            message: "bad token".to_string(),
+        };
+        let bad_request = ReasonerError::Api {
+            status: 400,
+            message: "invalid tool schema".to_string(),
+        };
+        assert!(overloaded.is_unavailable() && refused.is_unavailable());
+        assert!(ReasonerError::Timeout.is_unavailable());
+        assert!(ReasonerError::Request("connection reset".to_string()).is_unavailable());
+        assert!(!bad_request.is_unavailable());
+        assert!(!ReasonerError::Parse("bad json".to_string()).is_unavailable());
     }
 
     #[test]

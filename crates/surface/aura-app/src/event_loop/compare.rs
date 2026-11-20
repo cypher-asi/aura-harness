@@ -328,6 +328,7 @@ pub(super) async fn prepare(
         &state.hub.gate.stats(),
         RouteLevel::Turn,
         category,
+        None,
         &candidates,
         &no_exploring,
         &mut || 1.0,

@@ -417,7 +417,7 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "Shift+Tab  Approval level (yolo→ask→strict)",
         "↑/↓        Navigate / History",
         "Ctrl+N     New project (pick its folder)",
-        "Space      Fold the selected project",
+        "Space/Shift+Space  Fold agent / its project",
         "Shift+←/→  Panel tabs (chat: TERMINAL, GRAPH)",
         "Ctrl+X /expand  Chat panel full screen",
         "o / k / l  Process: open agent, kill, log",

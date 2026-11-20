@@ -250,6 +250,7 @@ fn an_outcome_shows_its_signal_verdict_and_work() {
         success: Some(false),
         signal: aura_core_types::OutcomeSignal::ChecksFailed,
         cost_usd: 0.0123,
+        subtask_cost_usd: 0.0,
         latency_ms: 12_300,
     };
     let t = Transaction::outcome(AgentId::generate(), &outcome);

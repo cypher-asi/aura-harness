@@ -36,6 +36,7 @@ fn outcome(
             success: signal.success(),
             signal,
             cost_usd: 0.01,
+            subtask_cost_usd: 0.0,
             latency_ms: 5,
         },
     )
@@ -133,8 +134,13 @@ fn decisions_are_remembered_up_to_the_limit() {
         |_| false,
     );
     for _ in 0..RECENT_DECISIONS + 5 {
-        live.decide(RouteLevel::Turn, PromptCategory::Debugging, &candidates)
-            .unwrap();
+        live.decide(
+            RouteLevel::Turn,
+            PromptCategory::Debugging,
+            None,
+            &candidates,
+        )
+        .unwrap();
     }
     let recent = live.recent();
     assert_eq!(recent.len(), RECENT_DECISIONS);
@@ -142,7 +148,7 @@ fn decisions_are_remembered_up_to_the_limit() {
         .iter()
         .all(|r| r.category == PromptCategory::Debugging && r.level == RouteLevel::Turn));
     assert!(live
-        .decide(RouteLevel::Turn, PromptCategory::Debugging, &[])
+        .decide(RouteLevel::Turn, PromptCategory::Debugging, None, &[])
         .is_none());
     assert_eq!(live.recent().len(), RECENT_DECISIONS);
 }

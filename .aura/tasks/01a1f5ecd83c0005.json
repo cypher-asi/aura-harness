@@ -1,0 +1,22 @@
+{
+  "id": "01a1f5ecd83c0005",
+  "title": "Should be able to collapse / open agents with subagents",
+  "state": "completed",
+  "agent_id": "9030959640f3cd15c4c3432849848e124cdbe469029422731ceedbfcc30903a8",
+  "agent_name": "Agent 106",
+  "items": [
+    {
+      "content": "Fold/open agents that spawned subagents in the terminal projects list (state, rows, render, keys, mouse, context menu, tests)",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Review the change",
+      "state": "completed",
+      "assignee": "reviewer"
+    }
+  ],
+  "summary": "The project list in `app/mod.rs` already folds projects; agents nest their spawned agents. Let me read that section.Several files outside this feature were already modified in the working tree before this change (other work in progress), so I'll leave those alone and not commit. Next, a review of the fold change.The reviewer found four real UX problems. I'm sending them back for fixes.The check f…",
+  "updated_ms": 1795128402866,
+  "created_ms": 1795127302204
+}

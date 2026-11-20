@@ -11,7 +11,7 @@
 //! each agent's routed work is on, which decides what the subtasks it
 //! dispatches are routed among ([`aura_agent_gate::below_lead`]).
 
-use aura_agent_gate::{Candidate, Decision, GateStats, SplitMix64};
+use aura_agent_gate::{Candidate, Decision, GateStats, SplitMix64, Way};
 use aura_agent_kernel::RecordObserver;
 use aura_config::GateConfig;
 use aura_core_types::{AgentId, PromptCategory, RecordEntry, RouteLevel, RouteReason};
@@ -106,15 +106,16 @@ impl GateLive {
     }
 
     /// Gate's decision for work at `level` asking for `category`, among
-    /// `candidates`, remembered for `/gate`. `None` when there are no
-    /// candidates.
+    /// `candidates`, remembered for `/gate`; `kind` is the permanent agent
+    /// a subtask goes to. `None` when there are no candidates.
     pub(crate) fn decide(
         &self,
         level: RouteLevel,
         category: PromptCategory,
+        kind: Option<&str>,
         candidates: &[Candidate],
     ) -> Option<Decision> {
-        self.decide_with(level, category, candidates, &self.settings)
+        self.decide_with(level, category, kind, candidates, &self.settings)
     }
 
     /// [`Self::decide`] with no exploring: where work goes again when the
@@ -123,26 +124,33 @@ impl GateLive {
         &self,
         level: RouteLevel,
         category: PromptCategory,
+        kind: Option<&str>,
         candidates: &[Candidate],
     ) -> Option<Decision> {
-        let settings = GateConfig {
+        self.decide_with(level, category, kind, candidates, &self.no_exploring())
+    }
+
+    fn no_exploring(&self) -> GateConfig {
+        GateConfig {
             explore_rate: 0.0,
             ..self.settings
-        };
-        self.decide_with(level, category, candidates, &settings)
+        }
     }
 
     fn decide_with(
         &self,
         level: RouteLevel,
         category: PromptCategory,
+        kind: Option<&str>,
         candidates: &[Candidate],
         settings: &GateConfig,
     ) -> Option<Decision> {
         let decision = {
             let stats = lock(&self.stats);
             let mut rng = lock(&self.rng);
-            aura_agent_gate::pick(&stats, level, category, candidates, settings, &mut *rng)?
+            aura_agent_gate::pick(
+                &stats, level, category, kind, candidates, settings, &mut *rng,
+            )?
         };
         self.remember(RecentRoute {
             ts_ms: super::processes::now_ms(),
@@ -177,6 +185,20 @@ impl GateLive {
             reason: decision.reason,
         });
         Some(decision)
+    }
+
+    /// Whether a turn asking for `category` on `model` is led (see
+    /// [`aura_agent_gate::choose_way`]); it explores the other way only
+    /// when `explore`.
+    pub(crate) fn way(&self, category: PromptCategory, model: &str, explore: bool) -> Way {
+        let settings = if explore {
+            self.settings
+        } else {
+            self.no_exploring()
+        };
+        let stats = lock(&self.stats);
+        let mut rng = lock(&self.rng);
+        aura_agent_gate::choose_way(&stats, category, model, &settings, &mut *rng)
     }
 
     fn remember(&self, route: RecentRoute) {

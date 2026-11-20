@@ -373,6 +373,7 @@ async fn build(
             limits: models.limits(),
             gate: crate::event_loop::GateBase::of(&models),
         },
+        gate: aura_config::gate(),
         policy: tool_filter.apply(mode_policy(permissions, &tool_names), &tool_names),
         record_observer: None,
         record_panel: crate::event_loop::RecordPanelAgent::default(),

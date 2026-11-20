@@ -81,6 +81,7 @@ impl AgentLoop {
                 | LlmCallError::Unauthorized(m)
                 | LlmCallError::PromptTooLong(m)
                 | LlmCallError::RateLimited(m)
+                | LlmCallError::Unavailable(m)
                 | LlmCallError::Fatal(m) => CompactHistoryError::Model(m),
             })?;
 

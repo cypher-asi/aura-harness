@@ -100,6 +100,8 @@ pub(super) fn render_benchmarks(
         },
         BenchMode::Form => (form_lines(app, theme, width), 0),
     };
+    app.clamp_bench_scroll(scroll);
+    app.set_chat_rows(Some((inner, usize::from(scroll))));
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })

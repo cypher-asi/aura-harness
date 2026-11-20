@@ -40,6 +40,8 @@ pub struct Row {
     pub successes: u32,
     /// Their list-price cost, in USD.
     pub cost_usd: f64,
+    /// The list-price cost of the subtasks they dispatched, in USD.
+    pub subtask_cost_usd: f64,
     /// Their wall time, in milliseconds.
     pub latency_ms: u64,
 }
@@ -55,6 +57,18 @@ impl Row {
     #[must_use]
     pub fn mean_cost_usd(&self) -> Option<f64> {
         (self.tries > 0).then(|| self.cost_usd / f64::from(self.tries))
+    }
+
+    /// Mean cost per try with its subtasks'; `None` before the first try.
+    #[must_use]
+    pub fn mean_total_cost_usd(&self) -> Option<f64> {
+        (self.tries > 0).then(|| (self.cost_usd + self.subtask_cost_usd) / f64::from(self.tries))
+    }
+
+    /// Whether this row decides on its own: it has at least `min_tries`.
+    #[must_use]
+    pub const fn settled(&self, min_tries: u32) -> bool {
+        self.tries >= min_tries
     }
 
     /// Whether the model can still have a success rate of at least
@@ -74,6 +88,7 @@ impl Row {
         self.tries += 1;
         self.successes += u32::from(success);
         self.cost_usd += counted.cost_usd;
+        self.subtask_cost_usd += counted.subtask_cost_usd;
         self.latency_ms = self.latency_ms.saturating_add(counted.latency_ms);
     }
 
@@ -84,6 +99,7 @@ impl Row {
         self.tries = self.tries.saturating_sub(1);
         self.successes = self.successes.saturating_sub(u32::from(success));
         self.cost_usd = (self.cost_usd - counted.cost_usd).max(0.0);
+        self.subtask_cost_usd = (self.subtask_cost_usd - counted.subtask_cost_usd).max(0.0);
         self.latency_ms = self.latency_ms.saturating_sub(counted.latency_ms);
     }
 }
@@ -97,6 +113,27 @@ pub struct RowKey {
     pub category: PromptCategory,
     /// Model that did the work.
     pub model: String,
+}
+
+/// A finer row of the table: one model on one category at one level, for
+/// one kind of subagent (`None` for a turn) done one way (led or not).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DetailKey {
+    pub level: RouteLevel,
+    pub category: PromptCategory,
+    pub model: String,
+    /// The permanent agent a subtask went to
+    pub kind: Option<String>,
+    /// Whether the turn was led; `None` when its prompt does not say
+    pub led: Option<bool>,
+}
+
+/// What a prompt says about how its work was done.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Shape {
+    level: RouteLevel,
+    kind: Option<String>,
+    led: Option<bool>,
 }
 
 /// The outcome a prompt is counted with.
@@ -113,6 +150,7 @@ struct Counted {
     /// prompt then counts in no row.
     success: Option<bool>,
     cost_usd: f64,
+    subtask_cost_usd: f64,
     latency_ms: u64,
 }
 
@@ -128,6 +166,7 @@ impl Counted {
             success: outcome.success,
             model: outcome.model,
             cost_usd: outcome.cost_usd,
+            subtask_cost_usd: outcome.subtask_cost_usd,
             latency_ms: outcome.latency_ms,
         })
     }
@@ -148,13 +187,23 @@ impl Counted {
             model: self.model.clone(),
         }
     }
+
+    fn detail_key(&self, shape: &Shape) -> DetailKey {
+        DetailKey {
+            level: shape.level,
+            category: self.category,
+            model: self.model.clone(),
+            kind: shape.kind.clone(),
+            led: shape.led,
+        }
+    }
 }
 
 /// What is known about one prompt.
 #[derive(Debug, Clone, Default, PartialEq)]
 struct PromptState {
-    /// From the prompt's route, once the prompt has been seen.
-    level: Option<RouteLevel>,
+    /// From the prompt, once it has been seen.
+    shape: Option<Shape>,
     /// The prompt is an escalated retry, which is never counted.
     ignored: bool,
     /// The outcome it counts with, once one with a known result has
@@ -166,6 +215,8 @@ struct PromptState {
 #[derive(Debug, Clone, Default)]
 pub struct GateStats {
     rows: HashMap<RowKey, Row>,
+    /// The same outcomes, split by kind of subagent and way of working
+    details: HashMap<DetailKey, Row>,
     prompts: HashMap<(AgentId, Hash), PromptState>,
 }
 
@@ -193,23 +244,59 @@ impl GateStats {
                     .ignored = true;
                 return;
             }
-            self.observe_prompt((agent, entry.tx.hash), prompt.route.level);
+            let shape = Shape {
+                level: prompt.route.level,
+                kind: prompt
+                    .kind
+                    .filter(|_| prompt.route.level == RouteLevel::Subtask),
+                led: prompt
+                    .led
+                    .filter(|_| prompt.route.level == RouteLevel::Turn),
+            };
+            self.observe_prompt((agent, entry.tx.hash), shape);
         } else if let Some(outcome) = entry.tx.outcome_payload() {
             self.observe_outcome(agent, entry.seq, outcome);
         }
     }
 
-    fn observe_prompt(&mut self, prompt: (AgentId, Hash), level: RouteLevel) {
+    fn observe_prompt(&mut self, prompt: (AgentId, Hash), shape: Shape) {
         let state = self.prompts.entry(prompt).or_default();
-        if state.level.is_some() {
+        if state.shape.is_some() {
             return;
         }
-        state.level = Some(level);
-        if let Some(counted) = state.counted.as_ref().filter(|c| c.success.is_some()) {
-            self.rows
-                .entry(counted.key(level))
-                .or_default()
-                .add(counted);
+        if let Some(counted) = state.counted.clone().filter(|c| c.success.is_some()) {
+            self.add(&counted, &shape);
+        }
+        if let Some(state) = self.prompts.get_mut(&prompt) {
+            state.shape = Some(shape);
+        }
+    }
+
+    fn add(&mut self, counted: &Counted, shape: &Shape) {
+        self.rows
+            .entry(counted.key(shape.level))
+            .or_default()
+            .add(counted);
+        self.details
+            .entry(counted.detail_key(shape))
+            .or_default()
+            .add(counted);
+    }
+
+    fn remove(&mut self, counted: &Counted, shape: &Shape) {
+        let key = counted.key(shape.level);
+        if let Some(row) = self.rows.get_mut(&key) {
+            row.remove(counted);
+            if row.tries == 0 {
+                self.rows.remove(&key);
+            }
+        }
+        let key = counted.detail_key(shape);
+        if let Some(row) = self.details.get_mut(&key) {
+            row.remove(counted);
+            if row.tries == 0 {
+                self.details.remove(&key);
+            }
         }
     }
 
@@ -229,21 +316,15 @@ impl GateStats {
         {
             return;
         }
-        if let Some(level) = state.level {
-            if let Some(old) = &state.counted {
-                let key = old.key(level);
-                if let Some(row) = self.rows.get_mut(&key) {
-                    row.remove(old);
-                    if row.tries == 0 {
-                        self.rows.remove(&key);
-                    }
-                }
+        let (shape, old) = (state.shape.clone(), state.counted.replace(new.clone()));
+        if let Some(shape) = shape {
+            if let Some(old) = old.filter(|old| old.success.is_some()) {
+                self.remove(&old, &shape);
             }
             if new.success.is_some() {
-                self.rows.entry(new.key(level)).or_default().add(&new);
+                self.add(&new, &shape);
             }
         }
-        state.counted = Some(new);
     }
 
     /// The row of `model` on `category` at `level`, if it has tries.
@@ -254,6 +335,41 @@ impl GateStats {
             category,
             model: model.to_string(),
         })
+    }
+
+    /// The row of `model` on `category` for subtasks that went to the
+    /// permanent agent `kind`, if it has tries.
+    #[must_use]
+    pub fn kind_row(&self, category: PromptCategory, kind: &str, model: &str) -> Option<&Row> {
+        self.details.get(&DetailKey {
+            level: RouteLevel::Subtask,
+            category,
+            model: model.to_string(),
+            kind: Some(kind.to_string()),
+            led: None,
+        })
+    }
+
+    /// The row of `model` on turns asking for `category` that were led
+    /// (`led`) or done by the model itself, if it has tries. Turns whose
+    /// prompt does not say are in neither.
+    #[must_use]
+    pub fn way_row(&self, category: PromptCategory, model: &str, led: bool) -> Option<&Row> {
+        self.details.get(&DetailKey {
+            level: RouteLevel::Turn,
+            category,
+            model: model.to_string(),
+            kind: None,
+            led: Some(led),
+        })
+    }
+
+    /// Every finer row with tries, by level, category, model, kind and way.
+    #[must_use]
+    pub fn details(&self) -> Vec<(&DetailKey, &Row)> {
+        let mut rows: Vec<(&DetailKey, &Row)> = self.details.iter().collect();
+        rows.sort_by(|a, b| a.0.cmp(b.0));
+        rows
     }
 
     /// Mean cost per try of `model` at `level`, over every category;
@@ -309,16 +425,38 @@ mod tests {
         }
 
         fn prompt(&mut self, text: &str, level: RouteLevel) -> Hash {
+            self.shaped(text, level, None, None)
+        }
+
+        fn shaped(
+            &mut self,
+            text: &str,
+            level: RouteLevel,
+            kind: Option<&str>,
+            led: Option<bool>,
+        ) -> Hash {
             let mut payload = PromptPayload::new(text);
             payload.category = PromptCategory::Debugging;
             payload.route = Route {
                 level,
                 ..Route::turn(SONNET, RouteReason::Default)
             };
+            payload.kind = kind.map(str::to_string);
+            payload.led = led;
             self.push(Transaction::user_prompt_with(self.agent, &payload))
         }
 
         fn outcome(&mut self, prompt_tx: Hash, model: &str, signal: OutcomeSignal) {
+            self.outcome_costing(prompt_tx, model, signal, 0.0);
+        }
+
+        fn outcome_costing(
+            &mut self,
+            prompt_tx: Hash,
+            model: &str,
+            signal: OutcomeSignal,
+            subtask_cost_usd: f64,
+        ) {
             let outcome = OutcomePayload {
                 prompt_tx,
                 category: PromptCategory::Debugging,
@@ -326,6 +464,7 @@ mod tests {
                 success: signal.success(),
                 signal,
                 cost_usd: 0.25,
+                subtask_cost_usd,
                 latency_ms: 1_000,
             };
             self.push(Transaction::outcome(self.agent, &outcome));
@@ -513,5 +652,81 @@ mod tests {
         assert_eq!(debugging(&stats, RouteLevel::Subtask, SONNET), Some((1, 0)));
         assert_eq!(stats.mean_cost_usd(RouteLevel::Turn, SONNET), Some(0.25));
         assert_eq!(stats.mean_cost_usd(RouteLevel::Turn, HAIKU), None);
+    }
+
+    #[test]
+    fn subtask_kinds_learn_apart_from_the_level_row() {
+        let mut log = Log::new();
+        let rust = log.shaped(
+            "fix the borrow",
+            RouteLevel::Subtask,
+            Some("rust-engineer"),
+            None,
+        );
+        log.outcome(rust, SONNET, OutcomeSignal::ChecksPassed);
+        let tests = log.shaped("cover the parser", RouteLevel::Subtask, Some("tests"), None);
+        log.outcome(tests, SONNET, OutcomeSignal::ChecksFailed);
+        let turn = log.shaped("fix it", RouteLevel::Turn, Some("rust-engineer"), None);
+        log.outcome(turn, SONNET, OutcomeSignal::ChecksPassed);
+
+        for stats in [
+            GateStats::from_entries(&log.entries),
+            GateStats::from_entries(log.entries.iter().rev()),
+        ] {
+            assert_eq!(debugging(&stats, RouteLevel::Subtask, SONNET), Some((2, 1)));
+            let kind = |kind| {
+                stats
+                    .kind_row(PromptCategory::Debugging, kind, SONNET)
+                    .map(|row| (row.tries, row.successes))
+            };
+            assert_eq!(
+                kind("rust-engineer"),
+                Some((1, 1)),
+                "the turn's kind is not a subtask's"
+            );
+            assert_eq!(kind("tests"), Some((1, 0)));
+            assert_eq!(kind("explorer"), None);
+        }
+    }
+
+    #[test]
+    fn led_and_direct_turns_learn_apart_with_subtask_costs() {
+        let mut log = Log::new();
+        let led = log.shaped("move the module", RouteLevel::Turn, None, Some(true));
+        log.outcome_costing(led, SONNET, OutcomeSignal::ChecksPassed, 1.0);
+        let direct = log.shaped("move the other", RouteLevel::Turn, None, Some(false));
+        log.outcome(direct, SONNET, OutcomeSignal::ChecksFailed);
+        let unsaid = log.prompt("move a third", RouteLevel::Turn);
+        log.outcome(unsaid, SONNET, OutcomeSignal::ChecksPassed);
+        let mut stats = GateStats::from_entries(&log.entries);
+
+        assert_eq!(debugging(&stats, RouteLevel::Turn, SONNET), Some((3, 2)));
+        let led_row = stats
+            .way_row(PromptCategory::Debugging, SONNET, true)
+            .unwrap();
+        assert_eq!((led_row.tries, led_row.successes), (1, 1));
+        assert_eq!(led_row.mean_total_cost_usd(), Some(1.25));
+        let direct_row = stats
+            .way_row(PromptCategory::Debugging, SONNET, false)
+            .unwrap();
+        assert_eq!((direct_row.tries, direct_row.successes), (1, 0));
+        assert_eq!(direct_row.mean_total_cost_usd(), Some(0.25));
+
+        log.outcome(led, SONNET, OutcomeSignal::Bad);
+        stats.observe(log.entries.last().unwrap());
+        let led_row = stats
+            .way_row(PromptCategory::Debugging, SONNET, true)
+            .unwrap();
+        assert_eq!(
+            (led_row.tries, led_row.successes),
+            (1, 0),
+            "replaced, not added"
+        );
+        assert_eq!(led_row.mean_total_cost_usd(), Some(0.25));
+        assert_eq!(
+            stats.details().len(),
+            3,
+            "the unsaid turn is in a row of its own"
+        );
     }
 }

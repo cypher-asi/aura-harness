@@ -90,7 +90,11 @@ impl App {
             MenuItem::AddAgent => "Add agent",
             MenuItem::Info => "Project info",
             MenuItem::Fold => {
-                let folded = matches!(&menu.target, MenuTarget::Project(id) if self.collapsed_projects.contains(id));
+                let folded = match &menu.target {
+                    MenuTarget::Project(id) => self.collapsed_projects.contains(id),
+                    MenuTarget::Agent(id) => self.collapsed_agents.contains(id),
+                    MenuTarget::Archived(_) => false,
+                };
                 if folded {
                     "Expand"
                 } else {
@@ -136,10 +140,19 @@ impl App {
                     vec![MenuItem::AddAgent, MenuItem::Info, MenuItem::RemoveProject],
                 )
             }
-            Some(ProjectListRow::Agent { index }) => (
-                MenuTarget::Agent(self.agents[index].id.clone()),
-                vec![MenuItem::Open, MenuItem::Archive, MenuItem::RemoveProject],
-            ),
+            Some(ProjectListRow::Agent { index }) => {
+                let items = if self.agent_has_spawns(index) {
+                    vec![
+                        MenuItem::Open,
+                        MenuItem::Fold,
+                        MenuItem::Archive,
+                        MenuItem::RemoveProject,
+                    ]
+                } else {
+                    vec![MenuItem::Open, MenuItem::Archive, MenuItem::RemoveProject]
+                };
+                (MenuTarget::Agent(self.agents[index].id.clone()), items)
+            }
             _ => return false,
         };
         self.focus = PanelFocus::Swarm;
@@ -277,15 +290,16 @@ impl App {
                 MenuItem::Open | MenuItem::Archive | MenuItem::Restore => {}
             },
             MenuTarget::Agent(id) => {
-                if !self.agents.iter().any(|agent| agent.id == id) {
+                let Some(index) = self.agents.iter().position(|agent| agent.id == id) else {
                     return;
-                }
+                };
                 match item {
                     MenuItem::Open => self.request_agent_switch(id),
+                    MenuItem::Fold => self.toggle_agent(index),
                     MenuItem::Archive => self.archive_agent(id),
                     MenuItem::RemoveProject => self.request_remove_project_of(&id),
                     MenuItem::Restore => self.restore_agent(id),
-                    MenuItem::AddAgent | MenuItem::Fold | MenuItem::Info => {}
+                    MenuItem::AddAgent | MenuItem::Info => {}
                 }
             }
         }
@@ -455,6 +469,39 @@ mod tests {
         app.handle_key(key(KeyCode::Enter));
         assert!(app.context_menu().is_none());
         assert!(matches!(rx.try_recv(), Ok(UiEvent::ArchiveAgent(id)) if id == "bb"));
+    }
+
+    #[test]
+    fn an_agent_with_spawns_folds_from_its_menu() {
+        let (mut app, _rx) = app();
+        // The project's header reads "AA" too; the agent is the next row.
+        let agent_aa = |rows: &[String]| {
+            let (column, row) = cell_of(rows, "AA");
+            (column, row + 1)
+        };
+        let rows = screen(&mut app, 30);
+        press(&mut app, MouseButton::Right, agent_aa(&rows));
+        let menu = app.context_menu().expect("the menu opened");
+        assert_eq!(menu.target, MenuTarget::Agent("aa".into()));
+        assert!(menu.items.contains(&MenuItem::Fold));
+        let rows = screen(&mut app, 30);
+        press(&mut app, MouseButton::Left, cell_of(&rows, "Collapse"));
+        assert!(app.agent_folded(0));
+        assert!(!app
+            .project_rows()
+            .contains(&ProjectListRow::Agent { index: 1 }));
+
+        let rows = screen(&mut app, 30);
+        press(&mut app, MouseButton::Right, agent_aa(&rows));
+        let rows = screen(&mut app, 30);
+        press(&mut app, MouseButton::Left, cell_of(&rows, "Expand"));
+        assert!(!app.agent_folded(0));
+
+        // A leaf has nothing to fold.
+        let rows = screen(&mut app, 30);
+        press(&mut app, MouseButton::Right, cell_of(&rows, "BB"));
+        let menu = app.context_menu().expect("the menu opened");
+        assert!(!menu.items.contains(&MenuItem::Fold));
     }
 
     /// The app with two archived agents, showing the Archive tab.

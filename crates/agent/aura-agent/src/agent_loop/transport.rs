@@ -219,15 +219,16 @@ impl ModelTransport for PumpTransport {
             StreamPumpOutcome::Error(err) => {
                 let llm_err = match err {
                     crate::AgentError::Reason(inner) => LlmCallError::from_reasoner_error(&inner),
+                    other if other.is_unavailable() => LlmCallError::Unavailable(other.to_string()),
                     other => LlmCallError::Fatal(other.to_string()),
                 };
                 Err(llm_err)
             }
-            StreamPumpOutcome::AbortedWithPartial { .. } => Err(LlmCallError::Fatal(
+            StreamPumpOutcome::AbortedWithPartial { .. } => Err(LlmCallError::Unavailable(
                 "stream pump returned an unretried partial tool-use abort".to_string(),
             )),
             StreamPumpOutcome::RetryableTransport { error, .. } => {
-                Err(LlmCallError::Fatal(error.to_string()))
+                Err(LlmCallError::Unavailable(error.to_string()))
             }
         }
     }

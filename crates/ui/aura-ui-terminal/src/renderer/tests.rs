@@ -286,7 +286,10 @@ fn test_default_layout_shows_agents_column() {
     assert!(!screen.contains("12│"));
     let above_footer = rows[..rows.len() - 1].join("\n");
     assert!(!above_footer.contains("# ") && !above_footer.contains("@ "));
-    assert!(!screen.contains('↳') && !screen.contains('▾') && !screen.contains('▸'));
+    assert!(!screen.contains('↳') && !screen.contains('▸'));
+    // Only Researcher has a spawn; its open marker sits after its ring.
+    assert_eq!(rows_with("▾"), [researcher_agent]);
+    assert!(rows[researcher_agent].contains("▾Researcher"));
 
     // A thinking agent shows the two-cell aura ring in the icon column.
     let ring_col = char_col(&rows[terminal_project], "🗁");
@@ -2845,73 +2848,197 @@ fn test_truncate_record_info_zero_width() {
     assert_eq!(truncate_record_info("", 20), "");
 }
 
+fn mouse_at(
+    app: &mut crate::App,
+    kind: crossterm::event::MouseEventKind,
+    (column, row): (u16, u16),
+) {
+    app.handle_mouse(crossterm::event::MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    });
+}
+
+/// Turn the wheel up over the chat panel until it shows its top.
+fn scroll_chat_to_top(app: &mut crate::App, on: &str) {
+    let buffer = render_buffer(app, 120);
+    let row = row_of(&buffer, on);
+    for _ in 0..100 {
+        mouse_at(app, crossterm::event::MouseEventKind::ScrollUp, (60, row));
+    }
+}
+
+/// Press on `first` in the chat panel, hold the pointer below the screen
+/// until the chat scrolls `last` into view, then let go. Checks that the
+/// rows scrolled in are selected and that the copy holds `first` and
+/// everything after it up to `last`, which it returns, a line per row.
+fn select_past_the_bottom(app: &mut crate::App, first: &str, last: &str) -> Vec<String> {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let on_screen = |buffer: &ratatui::buffer::Buffer, needle| {
+        (0..30).find(|&y| find_cell(buffer, y, needle).is_some())
+    };
+    let buffer = render_buffer(app, 120);
+    let top = row_of(&buffer, first);
+    let (column, _) = find_cell(&buffer, top, first).unwrap();
+    assert!(on_screen(&buffer, last).is_none(), "{last:?} starts below");
+
+    mouse_at(app, MouseEventKind::Down(MouseButton::Left), (column, top));
+    let below = (119, 29);
+    mouse_at(app, MouseEventKind::Drag(MouseButton::Left), below);
+    assert!(app.selection_scrolling(), "held past the bottom");
+    let mut buffer = render_buffer(app, 120);
+    for _ in 0..40 {
+        if on_screen(&buffer, last).is_some() {
+            break;
+        }
+        app.scroll_selection();
+        buffer = render_buffer(app, 120);
+    }
+    assert!(on_screen(&buffer, first).is_none(), "scrolled away");
+    let shown = on_screen(&buffer, last).expect("scrolled into view");
+    let (at, _) = find_cell(&buffer, shown, last).unwrap();
+    assert!(
+        buffer[(at, shown)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED),
+        "the rows scrolled into view are selected"
+    );
+    mouse_at(app, MouseEventKind::Up(MouseButton::Left), below);
+    assert!(!app.selection_scrolling());
+    let buffer = render_buffer(app, 120);
+
+    let text = app.take_copy_text(&buffer).expect("copied on release");
+    let copied: Vec<String> = text
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
+    assert!(copied[0].contains(first), "{copied:?}");
+    assert!(copied.iter().any(|l| l.contains(last)), "{copied:?}");
+    copied
+}
+
+/// `line 00` to `line 40`, all in `copied`.
+fn assert_copied_lines_to_40(copied: &[String]) {
+    for n in 0..=40 {
+        let line = format!("line {n:02}");
+        assert!(
+            copied.iter().any(|l| l.contains(&line)),
+            "{line}: {copied:?}"
+        );
+    }
+}
+
 #[test]
 fn test_a_selection_dragged_past_the_chat_scrolls_it_and_copies_it_all() {
     use crate::events::UiCommand;
-    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
     let (tx, _rx) = tokio::sync::mpsc::channel(8);
     let mut app = crate::App::new().with_event_sender(tx);
     let lines: String = (0..60).map(|n| format!("line {n:02}\n\n")).collect();
     app.process_command(UiCommand::StartStreaming);
     app.process_command(UiCommand::AppendText(lines));
-    let mouse = |app: &mut crate::App, kind, (column, row): (u16, u16)| {
-        app.handle_mouse(MouseEvent {
-            kind,
-            column,
-            row,
-            modifiers: KeyModifiers::empty(),
-        });
-    };
-    let buffer = render_buffer(&mut app, 120);
-    let chat_row = row_of(&buffer, "line 59");
-    for _ in 0..100 {
-        mouse(&mut app, MouseEventKind::ScrollUp, (60, chat_row));
-    }
-    let buffer = render_buffer(&mut app, 120);
-    let first = row_of(&buffer, "line 00");
-    let (column, _) = find_cell(&buffer, first, "line 00").unwrap();
-    assert!(!(0..30).any(|y| find_cell(&buffer, y, "line 40").is_some()));
+    scroll_chat_to_top(&mut app, "line 59");
 
-    mouse(
-        &mut app,
-        MouseEventKind::Down(MouseButton::Left),
-        (column, first),
-    );
-    let below = (column + 2, 29);
-    mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), below);
-    assert!(app.selection_scrolling(), "held past the bottom");
-    let on_screen = |buffer: &ratatui::buffer::Buffer, needle| {
-        (0..30).find(|&y| find_cell(buffer, y, needle).is_some())
-    };
-    let mut buffer = render_buffer(&mut app, 120);
-    for _ in 0..40 {
-        if on_screen(&buffer, "line 40").is_some() {
-            break;
-        }
-        app.scroll_selection();
-        buffer = render_buffer(&mut app, 120);
-    }
-    assert!(on_screen(&buffer, "line 00").is_none(), "scrolled away");
-    let shown = on_screen(&buffer, "line 40").expect("scrolled into view");
-    assert!(
-        buffer[(column, shown)]
-            .modifier
-            .contains(ratatui::style::Modifier::REVERSED),
-        "the rows scrolled into view are selected"
-    );
-    mouse(&mut app, MouseEventKind::Up(MouseButton::Left), below);
-    assert!(!app.selection_scrolling());
-    let buffer = render_buffer(&mut app, 120);
+    let copied = select_past_the_bottom(&mut app, "line 00", "line 40");
+    assert_eq!(copied[0], "line 00");
+    assert_copied_lines_to_40(&copied);
+}
 
-    let text = app.take_copy_text(&buffer).expect("copied on release");
-    let copied: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
-    assert_eq!(copied.first(), Some(&"line 00"));
-    let numbers: Vec<String> = (0..=40).map(|n| format!("line {n:02}")).collect();
-    assert!(
-        numbers.iter().all(|n| copied.contains(&n.as_str())),
-        "{copied:?}"
-    );
+#[test]
+fn test_a_selection_dragged_past_the_terminal_scrolls_it() {
+    use crate::events::UiCommand;
+
+    let mut app = app_with_model(None);
+    submit_message(&mut app, "$seq");
+    let output: String = (0..60).map(|n| format!("line {n:02}\n")).collect();
+    app.process_command(UiCommand::CommandFinished {
+        output,
+        exit_code: None,
+    });
+    app.process_command(UiCommand::Complete);
+    assert_eq!(app.chat_tab(), crate::app::ChatTab::Terminal);
+    scroll_chat_to_top(&mut app, "line 59");
+
+    let copied = select_past_the_bottom(&mut app, "line 00", "line 40");
+    assert_copied_lines_to_40(&copied);
+}
+
+#[test]
+fn test_a_selection_dragged_past_a_benchmark_scrolls_it() {
+    use crate::events::{BenchArm, BenchRun, BenchView, UiCommand};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::BenchList(vec![BenchView {
+        id: "ab".to_string(),
+        name: "Compare #1".to_string(),
+        arms: [BenchArm::default(), BenchArm::default()],
+        runs: (0..60)
+            .map(|n| BenchRun {
+                name: format!("line {n:02}"),
+                ..BenchRun::default()
+            })
+            .collect(),
+        ..BenchView::default()
+    }]));
+    app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    assert_eq!(app.chat_tab(), crate::app::ChatTab::Bench);
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+
+    let copied = select_past_the_bottom(&mut app, "Compare #1", "line 40");
+    assert_copied_lines_to_40(&copied);
+
+    let buffer = render_buffer(&mut app, 120);
+    let row = row_of(&buffer, "line 40");
+    for _ in 0..3 {
+        mouse_at(
+            &mut app,
+            crossterm::event::MouseEventKind::ScrollUp,
+            (60, row),
+        );
+    }
+    assert!(app.selection().is_some(), "the wheel keeps the selection");
+}
+
+#[test]
+fn test_a_selection_dragged_past_a_record_scrolls_it() {
+    use crate::events::{RecordStatus, RecordSummary, UiCommand};
+    use crossterm::event::{KeyCode, KeyEvent};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::NewRecord(RecordSummary {
+        seq: 7,
+        timestamp: "12:00:00".to_string(),
+        full_hash: String::new(),
+        hash_suffix: String::new(),
+        tx_kind: "Prompt".to_string(),
+        sender: String::new(),
+        message: (0..60).map(|n| format!("line {n:02}\n\n")).collect(),
+        action_count: 0,
+        effect_status: String::new(),
+        status: RecordStatus::Ok,
+        info: String::new(),
+        what: String::new(),
+        group: String::new(),
+        detail: String::new(),
+        error_details: String::new(),
+        tx_id: String::new(),
+        agent_id: String::new(),
+        ts_ms: 0,
+        policy: None,
+    }));
+    while app.focus() != crate::app::PanelFocus::Records {
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+    }
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert_eq!(app.detail_view(), Some(&crate::app::DetailView::Record));
+
+    let copied = select_past_the_bottom(&mut app, "Sequence:", "line 40");
+    assert_copied_lines_to_40(&copied);
 }
 
 fn render_buffer(app: &mut crate::App, width: u16) -> ratatui::buffer::Buffer {
@@ -3033,7 +3160,7 @@ fn test_chat_bottom_leaves_room_below_latest_prompt() {
 }
 
 #[test]
-fn test_chat_bottom_leaves_room_below_a_long_reply() {
+fn test_chat_runs_from_the_top_border_to_the_bottom_one() {
     use crate::components::{Message, MessageRole};
 
     let mut app = crate::App::new();
@@ -3049,12 +3176,23 @@ fn test_chat_bottom_leaves_room_below_a_long_reply() {
     let column = rows[last][..rows[last].find("line 59").unwrap()]
         .chars()
         .count();
-    let blank_below = rows[last + 1..]
-        .iter()
-        .take_while(|row| row.chars().skip(column).take(7).all(char::is_whitespace))
-        .count();
-    assert!(blank_below >= 5, "{screen}");
+    let border = |row: &String| row.chars().nth(column) == Some('─');
+    assert!(
+        border(&rows[last + 1]),
+        "last line on the bottom row:\n{screen}"
+    );
     assert!(!screen.contains("lines below"), "{screen}");
+
+    app.scroll_chat_to_top();
+    let rows = render_rows(&mut app, 100);
+    let first = rows
+        .iter()
+        .position(|row| row.contains("prompt"))
+        .expect("the prompt at the top");
+    assert!(
+        border(&rows[first - 1]),
+        "first line on the top row:\n{screen}"
+    );
 }
 
 #[test]
@@ -3709,4 +3847,148 @@ fn test_tasks_tab_lists_requests_with_their_parts() {
         rows.iter().any(|r| r.contains("p plan")),
         "the hint names the plan key"
     );
+}
+
+// ========================================================================
+// Folding agents over their spawns
+// ========================================================================
+
+/// Rows of the agents panel, its first 30 columns, for `rows`.
+fn agents_panel(rows: &[String]) -> Vec<String> {
+    rows.iter()
+        .map(|row| row.chars().take(30).collect())
+        .collect()
+}
+
+/// The panel row naming `name`, which must be listed once.
+fn row_naming<'a>(panel: &'a [String], name: &str) -> &'a str {
+    let found: Vec<&String> = panel.iter().filter(|row| row.contains(name)).collect();
+    match found[..] {
+        [row] => row,
+        _ => panic!("{name:?} in {found:?}"),
+    }
+}
+
+fn is_aura_ring(text: &str) -> bool {
+    text.chars().all(|c| ('\u{2800}'..='\u{28ff}').contains(&c))
+        && text.chars().any(|c| c != '\u{2800}')
+}
+
+fn spawn_tree_app(cc_running: bool) -> crate::App {
+    use crate::events::{AgentSummary, UiCommand};
+    let agent = |id: &str, name: &str, depth: usize| AgentSummary {
+        id: id.to_string(),
+        name: name.to_string(),
+        depth,
+        ..Default::default()
+    };
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetAgents(vec![
+        agent("aa", "Lead", 0),
+        agent("bb", "planner", 1),
+        AgentSummary {
+            running: cc_running,
+            ..agent("cc", "coder", 2)
+        },
+        agent("dd", "tester", 1),
+    ]));
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    app
+}
+
+#[test]
+fn agents_with_spawns_show_a_fold_marker_and_leaves_do_not() {
+    let mut app = spawn_tree_app(false);
+    let panel = agents_panel(&render_rows(&mut app, 200));
+    assert!(row_naming(&panel, "Lead").contains("▾"), "{panel:#?}");
+    assert!(
+        row_naming(&panel, "planner").contains("├▾  planner"),
+        "{panel:#?}"
+    );
+    for leaf in ["coder", "tester"] {
+        let row = row_naming(&panel, leaf);
+        assert!(!row.contains('▾') && !row.contains('▸'), "{row:?}");
+    }
+
+    app.toggle_agent(1);
+    let panel = agents_panel(&render_rows(&mut app, 200));
+    assert!(
+        row_naming(&panel, "planner").contains("├▸  planner"),
+        "{panel:#?}"
+    );
+    assert!(!panel.iter().any(|row| row.contains("coder")), "{panel:#?}");
+    assert!(row_naming(&panel, "tester").contains("└──"), "{panel:#?}");
+}
+
+/// The `AURA_WIDTH` cells after the elbow on `row`, and the cell after them.
+fn ring_and_marker(row: &str) -> (String, Option<char>) {
+    let at = row.find(['├', '└']).expect("elbow") + '├'.len_utf8();
+    let mut cells = row[at..].chars();
+    let ring = cells.by_ref().take(crate::animation::AURA_WIDTH).collect();
+    (ring, cells.next())
+}
+
+#[test]
+fn a_thinking_agent_with_spawns_keeps_its_open_marker_beside_the_aura() {
+    let mut app = spawn_tree_app(false);
+    let bb = app.agents()[1].clone();
+    let mut agents = app.agents().to_vec();
+    agents[1] = crate::events::AgentSummary {
+        running: true,
+        ..bb
+    };
+    app.process_command(crate::events::UiCommand::SetAgents(agents));
+    let panel = agents_panel(&render_rows(&mut app, 200));
+    let planner = row_naming(&panel, "planner");
+    let (ring, marker) = ring_and_marker(planner);
+    assert!(is_aura_ring(&ring), "{planner:?}");
+    assert_eq!(marker, Some('▾'), "{planner:?}");
+    assert!(
+        planner.contains("▾planner"),
+        "names stay lined up: {planner:?}"
+    );
+}
+
+#[test]
+fn a_folded_agent_shows_the_aura_while_a_hidden_spawn_thinks() {
+    let mut app = spawn_tree_app(true);
+    let panel = agents_panel(&render_rows(&mut app, 200));
+    assert!(
+        row_naming(&panel, "planner").contains("├▾  planner"),
+        "open, its spawn shows its own ring: {panel:#?}"
+    );
+
+    app.toggle_agent(1);
+    let panel = agents_panel(&render_rows(&mut app, 200));
+    let planner = row_naming(&panel, "planner");
+    let (ring, marker) = ring_and_marker(planner);
+    assert!(is_aura_ring(&ring), "{planner:?}");
+    assert_eq!(marker, Some('▸'), "still reads folded: {planner:?}");
+
+    // Folding the top agent too carries the aura up to it.
+    app.toggle_agent(0);
+    let panel = agents_panel(&render_rows(&mut app, 200));
+    let lead = row_naming(&panel, "Lead");
+    assert!(lead.contains("▸Lead"), "{lead:?}");
+    assert!(
+        lead.chars().any(|c| ('\u{2801}'..='\u{28ff}').contains(&c)),
+        "{lead:?}"
+    );
+}
+
+#[test]
+fn unfocused_the_folded_agent_over_the_active_one_is_lit() {
+    let mut app = spawn_tree_app(false);
+    app.process_command(crate::events::UiCommand::SetActiveAgent("cc".to_string()));
+    app.toggle_agent(1);
+    assert_ne!(app.focus(), crate::app::PanelFocus::Swarm);
+    let buffer = render_buffer(&mut app, 120);
+    let selection = Some(test_theme().colors.selection);
+    let bg = |name: &str| {
+        let (_, style) = find_cell(&buffer, row_of(&buffer, name), name).unwrap();
+        style.bg
+    };
+    assert_eq!(bg("planner"), selection, "planner stands for coder");
+    assert_ne!(bg("tester"), selection);
+    assert_ne!(bg("Lead"), selection);
 }

@@ -55,7 +55,10 @@ impl App {
         let Some(index) = self.project_row_at(column, row) else {
             return false;
         };
-        if self.project_add_at(index, column).is_some() {
+        if self.project_add_at(index, column).is_some()
+            || self.fold_marker_at(index, column).is_some()
+        {
+            // The "+" and an agent's fold marker are buttons, not handles.
             return false;
         }
         let pressed = match self.project_rows().get(index).copied() {

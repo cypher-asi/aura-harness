@@ -25,7 +25,7 @@ use aura_model::model_catalog::{
 };
 use aura_model::Usage;
 
-use crate::stats::GateStats;
+use crate::stats::{GateStats, Row};
 
 /// Tokens of a typical turn, for comparing list prices.
 const REFERENCE_TURN: Usage = Usage {
@@ -313,26 +313,29 @@ pub fn by_expected_cost<'a>(
 ///    out is tried again once nothing cheaper is more promising, and
 ///    comes back when those tries prove it.
 ///
+/// A subtask for the permanent agent `kind` is judged by [`judged`] rows.
 /// Models are ordered by [`by_expected_cost`]. `None` when there are no
 /// candidates.
 pub fn pick(
     stats: &GateStats,
     level: RouteLevel,
     category: PromptCategory,
+    kind: Option<&str>,
     candidates: &[Candidate],
     settings: &GateConfig,
     rng: &mut impl Random,
 ) -> Option<Decision> {
+    let row = |model: &str| judged(stats, level, category, kind, model, settings.min_tries);
     let order = by_expected_cost(stats, level, candidates);
     let proven = order.iter().position(|c| {
-        stats.row(level, category, &c.id).is_some_and(|row| {
+        row(&c.id).is_some_and(|row| {
             row.tries >= settings.min_tries
                 && row
                     .success_rate()
                     .is_some_and(|rate| rate >= settings.target)
         })
     });
-    let start = start_index(stats, level, category, &order, settings)?;
+    let start = start_index(&row, category, &order, settings)?;
     let (index, reason) = match proven {
         Some(index) if index <= start => (index, RouteReason::Proven),
         _ => (start, RouteReason::Default),
@@ -351,8 +354,7 @@ pub fn pick(
     }
     if rate > 0.0 && rng.unit() < rate {
         let open = (0..index).rev().find(|&cheaper| {
-            stats
-                .row(level, category, &order[cheaper].id)
+            row(&order[cheaper].id)
                 .is_none_or(|row| row.can_still_reach(settings.target, settings.min_tries))
         });
         return decide(open.unwrap_or(index - 1), RouteReason::Explore, true, rate);
@@ -416,15 +418,32 @@ pub fn below_lead(candidates: &[Candidate], lead: Option<&str>) -> Vec<Candidate
     }
 }
 
-/// Position in `order` of the model work at `level` asking for
-/// `category` starts on: the cheapest model of the category's
-/// [`start_tier`], or of the lowest tier above it whose cheapest model
-/// the category's outcomes have not ruled out. The cheapest model of the
-/// strongest tier when every tier is ruled out or none is at or above
-/// the start tier.
-fn start_index(
-    stats: &GateStats,
+/// The outcomes [`pick`] judges `model` by for work at `level` asking for
+/// `category`: those of subtasks for the permanent agent `kind` once they
+/// number `min_tries`, as a model can suit one agent's work and not
+/// another's; else every outcome of the level on the category.
+#[must_use]
+pub fn judged<'s>(
+    stats: &'s GateStats,
     level: RouteLevel,
+    category: PromptCategory,
+    kind: Option<&str>,
+    model: &str,
+    min_tries: u32,
+) -> Option<&'s Row> {
+    kind.filter(|_| level == RouteLevel::Subtask)
+        .and_then(|kind| stats.kind_row(category, kind, model))
+        .filter(|row| row.settled(min_tries))
+        .or_else(|| stats.row(level, category, model))
+}
+
+/// Position in `order` of the model work asking for `category` starts
+/// on: the cheapest model of the category's [`start_tier`], or of the
+/// lowest tier above it whose cheapest model its outcomes (`row`) have
+/// not ruled out. The cheapest model of the strongest tier when every
+/// tier is ruled out or none is at or above the start tier.
+fn start_index<'s>(
+    row: &impl Fn(&str) -> Option<&'s Row>,
     category: PromptCategory,
     order: &[&Candidate],
     settings: &GateConfig,
@@ -445,8 +464,7 @@ fn start_index(
         .into_iter()
         .filter_map(|tier| order.iter().position(|c| c.tier == tier))
         .find(|&index| {
-            stats
-                .row(level, category, &order[index].id)
+            row(&order[index].id)
                 .is_none_or(|row| row.can_still_reach(settings.target, settings.min_tries))
         })
         .or(strongest)
@@ -662,6 +680,7 @@ mod tests {
                     success: signal.success(),
                     signal,
                     cost_usd,
+                    subtask_cost_usd: 0.0,
                     latency_ms: 10,
                 };
                 self.push(Transaction::outcome(agent, &outcome));
@@ -678,9 +697,91 @@ mod tests {
                 }
             }
 
+            /// `n` subtasks for the permanent agent `kind` on `model`
+            /// asking for `category`, that all passed or all failed.
+            fn subtasks(
+                &mut self,
+                n: usize,
+                category: PromptCategory,
+                model: &str,
+                kind: &str,
+                ok: bool,
+            ) {
+                let signal = if ok {
+                    OutcomeSignal::ChecksPassed
+                } else {
+                    OutcomeSignal::ChecksFailed
+                };
+                for _ in 0..n {
+                    let agent = AgentId::generate();
+                    let mut prompt = PromptPayload::new(format!("task {}", self.entries.len()));
+                    prompt.category = category;
+                    prompt.route = Route::subtask(model, RouteReason::Default);
+                    prompt.kind = Some(kind.to_string());
+                    let prompt_tx = self.push(Transaction::user_prompt_with(agent, &prompt));
+                    let outcome = OutcomePayload {
+                        prompt_tx,
+                        category,
+                        model: model.to_string(),
+                        success: signal.success(),
+                        signal,
+                        cost_usd: 0.01,
+                        subtask_cost_usd: 0.0,
+                        latency_ms: 10,
+                    };
+                    self.push(Transaction::outcome(agent, &outcome));
+                }
+            }
+
             fn stats(&self) -> GateStats {
                 GateStats::from_entries(&self.entries)
             }
+        }
+
+        #[test]
+        fn a_subtask_kind_with_enough_outcomes_is_judged_on_its_own() {
+            let mut log = Log::default();
+            let category = PromptCategory::Debugging;
+            log.subtasks(60, category, HAIKU, "explorer", true);
+            log.subtasks(10, category, HAIKU, "rust-engineer", false);
+            let stats = log.stats();
+            let chosen = |kind| {
+                let decision = pick(
+                    &stats,
+                    RouteLevel::Subtask,
+                    category,
+                    kind,
+                    &claude(),
+                    &no_exploring(),
+                    &mut || 0.0,
+                )
+                .unwrap();
+                (decision.model.id, decision.reason)
+            };
+
+            let proven = (HAIKU.to_string(), RouteReason::Proven);
+            assert_eq!(chosen(None), proven, "60 of 70 overall");
+            assert_eq!(chosen(Some("explorer")), proven);
+            assert_eq!(chosen(Some("tests")), proven, "no outcomes of its own yet");
+            let (model, reason) = chosen(Some("rust-engineer"));
+            assert_ne!(model, HAIKU, "0 of 10 for this kind rules it out");
+            assert_eq!(reason, RouteReason::Default);
+
+            let turn = pick(
+                &stats,
+                RouteLevel::Turn,
+                category,
+                Some("rust-engineer"),
+                &claude(),
+                &no_exploring(),
+                &mut || 0.0,
+            )
+            .unwrap();
+            assert_ne!(
+                turn.reason,
+                RouteReason::Proven,
+                "subtasks teach turns nothing"
+            );
         }
 
         fn chosen(
@@ -692,6 +793,7 @@ mod tests {
                 stats,
                 RouteLevel::Turn,
                 category,
+                None,
                 candidates,
                 &no_exploring(),
                 &mut || 0.0,
@@ -844,6 +946,7 @@ mod tests {
                 &empty,
                 RouteLevel::Turn,
                 PromptCategory::Question,
+                None,
                 &[],
                 &no_exploring(),
                 &mut || 0.0
@@ -1053,6 +1156,7 @@ mod tests {
                     stats,
                     RouteLevel::Turn,
                     PromptCategory::Debugging,
+                    None,
                     &claude(),
                     &settings,
                     &mut || 0.0,
@@ -1101,6 +1205,7 @@ mod tests {
                 &empty,
                 RouteLevel::Turn,
                 PromptCategory::Question,
+                None,
                 &claude(),
                 &settings,
                 &mut || 0.0,
@@ -1115,6 +1220,7 @@ mod tests {
                 &empty,
                 RouteLevel::Turn,
                 PromptCategory::Question,
+                None,
                 &claude(),
                 &settings,
                 &mut || 0.99,
@@ -1150,6 +1256,7 @@ mod tests {
                         &empty,
                         RouteLevel::Turn,
                         PromptCategory::Question,
+                        None,
                         &claude(),
                         &settings,
                         &mut rng,
@@ -1174,6 +1281,7 @@ mod tests {
                 &log.stats(),
                 RouteLevel::Turn,
                 PromptCategory::Question,
+                None,
                 &claude(),
                 &settings,
                 &mut || 0.0,

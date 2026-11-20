@@ -242,6 +242,10 @@ pub struct AgentLoopResult {
     pub stalled: bool,
     /// LLM error that terminated the loop, if any.
     pub llm_error: Option<String>,
+    /// Whether that error was the model being out of reach or refusing
+    /// the request (see [`aura_model::ReasonerError::is_unavailable`]),
+    /// rather than its call failing.
+    pub llm_unavailable: bool,
     /// Accumulated assistant text across all iterations.
     pub total_text: String,
     /// Accumulated thinking text across all iterations.

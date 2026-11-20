@@ -223,8 +223,8 @@ pub(crate) struct LeadProfile {
 }
 
 impl LeadProfile {
-    /// Make the turn set up with `config` and `tools` a lead's when its
-    /// prompt asks for `category` ([`aura_agent_gate::lead::leads`]): the
+    /// Make the turn set up with `config` and `tools` a lead's when it is
+    /// `led` (as Gate decides, [`aura_agent_gate::choose_way`]): the
     /// prompt says how to lead and, with delegation enforced, the lead's
     /// tools replace the file tools. Any other turn is left as it is, for
     /// the model Gate routes it to to do the work itself. Returns whether
@@ -232,11 +232,11 @@ impl LeadProfile {
     /// ([`AgentSession::lead`]).
     pub(crate) fn apply(
         self,
-        category: PromptCategory,
+        led: bool,
         config: &mut AgentLoopConfig,
         tools: &mut Vec<ToolDefinition>,
     ) -> bool {
-        if !aura_agent_gate::lead::leads(category) {
+        if !led {
             return false;
         }
         config.system_prompt.push_str("\n\n");
@@ -1473,12 +1473,34 @@ impl AgentHub {
         models
     }
 
+    /// List-price cost in USD of the model calls the agents under `agent`
+    /// made from `since_ms` on: what the subtasks of its turn that
+    /// started then cost.
+    pub(crate) fn subtask_cost_usd(&self, agent: AgentId, since_ms: u64) -> f64 {
+        let below = lock(&self.registry).descendants(agent);
+        let mut cost_usd = 0.0;
+        self.each_entry_of(below, |entry| {
+            if entry.tx.ts_ms < since_ms {
+                return;
+            }
+            if let Some((model, usage)) = crate::record_loader::model_call(&entry.tx) {
+                cost_usd += aura_agent_gate::compare::list_price(&model, &usage).unwrap_or(0.0);
+            }
+        });
+        cost_usd
+    }
+
     /// Call `f` with every entry in the records of `agent` and the agents
     /// under it, `agent`'s first.
-    fn each_entry(&self, agent: AgentId, mut f: impl FnMut(&RecordEntry)) {
+    fn each_entry(&self, agent: AgentId, f: impl FnMut(&RecordEntry)) {
         let agents: Vec<AgentId> = std::iter::once(agent)
             .chain(lock(&self.registry).descendants(agent))
             .collect();
+        self.each_entry_of(agents, f);
+    }
+
+    /// Call `f` with every entry in the records of `agents`, in order.
+    fn each_entry_of(&self, agents: Vec<AgentId>, mut f: impl FnMut(&RecordEntry)) {
         let store = self.factory.store.as_ref();
         for agent in agents {
             let mut from = 1;
@@ -1585,6 +1607,7 @@ impl AgentHub {
             success: end.signal.success(),
             signal: end.signal,
             cost_usd: end.cost_usd,
+            subtask_cost_usd: 0.0,
             latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         });
         if let Some(ended) = &ended {

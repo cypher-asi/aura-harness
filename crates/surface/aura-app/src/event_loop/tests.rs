@@ -2150,6 +2150,7 @@ fn learn_questions(live: &GateLive, model: &str, n: usize) {
             success: Some(true),
             signal: OutcomeSignal::ChecksPassed,
             cost_usd: 0.001,
+            subtask_cost_usd: 0.0,
             latency_ms: 10,
         };
         let seq = 2 * u64::try_from(i).unwrap();

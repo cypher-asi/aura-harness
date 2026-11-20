@@ -81,6 +81,9 @@ pub(super) fn detail_header(app: &App, theme: &Theme) -> Option<(String, Option<
 
 /// Draw the open record or file over `area`, the chat panel.
 pub(super) fn render_detail_view(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
+    if app.detail_view().is_some() {
+        app.set_chat_rows(None);
+    }
     if app.detail_view() == Some(&DetailView::Graph) {
         super::graph::render_graph(frame, area, app, theme);
         return;
@@ -103,19 +106,29 @@ pub(super) fn render_detail_view(frame: &mut Frame, area: Rect, app: &mut App, t
         Some((file, scroll)) => Some(draw_file(frame, (area, rows, hosted), file, scroll, theme)),
         None => draw_record(frame, (area, rows, hosted), app, theme),
     };
-    if let Some((max_scroll, shown)) = bounds {
-        app.set_detail_bounds(max_scroll, shown);
+    if let Some(drawn) = bounds {
+        app.set_detail_bounds(drawn.max_scroll, drawn.shown);
+        app.set_chat_rows(Some((rows, drawn.top_row)));
     }
 }
 
-/// Draw the highlighted record, returning the largest useful scroll and
-/// how many source lines are on screen.
+/// How a record or file was drawn over the chat panel.
+struct Drawn {
+    /// Largest useful scroll, in source lines
+    max_scroll: usize,
+    /// Source lines on screen
+    shown: usize,
+    /// Wrapped row on top of the view
+    top_row: usize,
+}
+
+/// Draw the highlighted record.
 fn draw_record(
     frame: &mut Frame,
     (area, rows, hosted): (Rect, Rect, bool),
     app: &App,
     theme: &Theme,
-) -> Option<(usize, usize)> {
+) -> Option<Drawn> {
     let lines = match app.detail_view()? {
         DetailView::Record => {
             let record = app.selected_record_data()?;
@@ -148,7 +161,11 @@ fn draw_record(
         first,
     };
     draw_frame(frame, (area, rows, hosted), footer, lines, view, theme);
-    Some((max_scroll, shown))
+    Some(Drawn {
+        max_scroll,
+        shown,
+        top_row: source.rows_before(first, width),
+    })
 }
 
 /// Draw the image as large as fits, centered in the panel.
@@ -181,14 +198,13 @@ fn draw_image(
 }
 
 /// Draw `file` with its cursor in view, moving `scroll` to follow it.
-/// Returns the largest useful scroll and how many lines are on screen.
 fn draw_file(
     frame: &mut Frame,
     (area, rows, hosted): (Rect, Rect, bool),
     file: &mut FileView,
     scroll: &mut usize,
     theme: &Theme,
-) -> (usize, usize) {
+) -> Drawn {
     let source = file_source(&file.body, file.extension(), file.first_line, theme);
     let vim = &mut file.vim;
     let width = usize::from(rows.width).max(1);
@@ -249,7 +265,11 @@ fn draw_file(
     };
     let footer = Line::from(footer);
     draw_frame(frame, (area, rows, hosted), footer, lines, view, theme);
-    (max_scroll, shown)
+    Drawn {
+        max_scroll,
+        shown,
+        top_row: source.rows_before(first, width),
+    }
 }
 
 /// The chat panel's body border around `lines`, with `footer` on its
@@ -400,6 +420,14 @@ impl<'a> Source<'a> {
     /// Rows line `index` wraps to with `text_width` columns per row.
     fn rows(&self, index: usize, text_width: usize) -> usize {
         self.line_width(index).div_ceil(text_width).max(1)
+    }
+
+    /// Wrapped rows of the lines before `first`, in a view `width` wide.
+    fn rows_before(&self, first: usize, width: usize) -> usize {
+        let text_width = self.text_width(width);
+        (0..first.min(self.len()))
+            .map(|index| self.rows(index, text_width))
+            .sum()
     }
 
     /// Wrapped rows for lines `first..` that fit in `visible` rows, and how

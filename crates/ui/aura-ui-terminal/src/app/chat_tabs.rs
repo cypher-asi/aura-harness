@@ -100,6 +100,7 @@ impl App {
         self.flow.set_open(tab == ChatTab::Graph);
         self.bench.set_open(tab == ChatTab::Bench);
         self.history().reset();
+        self.clear_selection();
         self.scroll_chat_to_bottom();
         match tab {
             ChatTab::Graph => self.request_flow(),

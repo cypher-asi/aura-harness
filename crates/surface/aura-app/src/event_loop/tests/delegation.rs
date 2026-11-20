@@ -103,7 +103,7 @@ async fn under_gate_the_lead_has_no_file_tools_and_a_limited_run_command() {
     let (mut config, mut tools, lead) = fixture.hub.user_turn(&mut session);
     assert!(!session.lead, "a turn starts without the lead's limits");
     let lead = lead.expect("the user's agent leads under Gate");
-    assert!(lead.apply(PromptCategory::MultiFileChange, &mut config, &mut tools));
+    assert!(lead.apply(true, &mut config, &mut tools));
     let names = names(&tools);
     for tool in ["write_file", "edit_file", "delete_file"] {
         assert!(!names.contains(&tool), "{tool} in {names:?}");
@@ -137,7 +137,7 @@ async fn under_gate_the_lead_has_no_file_tools_and_a_limited_run_command() {
 }
 
 #[tokio::test]
-async fn only_multi_file_changes_and_planning_are_led() {
+async fn with_nothing_learned_only_multi_file_changes_and_planning_are_led() {
     let (fixture, _commands) = fixture();
     let mut b = borrowed(&fixture);
     let first = fixture.first;
@@ -160,8 +160,9 @@ async fn only_multi_file_changes_and_planning_are_led() {
     ] {
         let (mut config, mut tools, lead) = fixture.hub.user_turn(&mut session);
         let before = (config.system_prompt.clone(), tools.len());
+        let led = fixture.hub.gate.way(category, &config.model, false).led;
         assert!(
-            !lead.unwrap().apply(category, &mut config, &mut tools),
+            !lead.unwrap().apply(led, &mut config, &mut tools),
             "{category}"
         );
         assert_eq!((config.system_prompt, tools.len()), before, "{category}");
@@ -169,8 +170,9 @@ async fn only_multi_file_changes_and_planning_are_led() {
     }
     for category in [PromptCategory::MultiFileChange, PromptCategory::Planning] {
         let (mut config, mut tools, lead) = fixture.hub.user_turn(&mut session);
+        let led = fixture.hub.gate.way(category, &config.model, false).led;
         assert!(
-            lead.unwrap().apply(category, &mut config, &mut tools),
+            lead.unwrap().apply(led, &mut config, &mut tools),
             "{category}"
         );
         assert!(!names(&tools).contains(&"write_file"), "{category}");
@@ -273,7 +275,7 @@ async fn with_delegation_off_or_a_pinned_model_the_lead_keeps_its_tools() {
         .unwrap();
     let (mut config, mut tools, lead) = off.hub.user_turn(&mut session);
     let lead = lead.expect("it still leads, without the limits");
-    assert!(!lead.apply(PromptCategory::MultiFileChange, &mut config, &mut tools));
+    assert!(!lead.apply(true, &mut config, &mut tools));
     assert!(names(&tools).contains(&"write_file"));
     assert!(config.system_prompt.contains("Delegating is recommended"));
 

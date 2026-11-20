@@ -284,6 +284,7 @@ impl GateView<'_> {
             self.stats,
             level,
             category,
+            None,
             self.candidates,
             &no_exploring,
             &mut || 1.0,
@@ -428,6 +429,7 @@ mod tests {
                     success: signal.success(),
                     signal,
                     cost_usd: 0.02,
+                    subtask_cost_usd: 0.0,
                     latency_ms: 100,
                 };
                 seq += 1;

@@ -125,6 +125,7 @@ mod tests {
             success: signal.success(),
             signal,
             cost_usd: 0.1,
+            subtask_cost_usd: 0.0,
             latency_ms: 1_000,
         }
     }

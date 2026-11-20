@@ -173,6 +173,7 @@ impl AgentLoop {
                                 insufficient_credits: false,
                                 stalled: false,
                                 llm_error: Some(format!("prompt blocked by plugin hook: {reason}")),
+                                llm_unavailable: false,
                                 total_text: String::new(),
                                 total_thinking: String::new(),
                                 total_input_tokens: 0,

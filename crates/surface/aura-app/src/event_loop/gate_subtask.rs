@@ -122,10 +122,13 @@ impl SubtaskGate {
         let category = label.classify(session, cancel).await;
         label.category = Some(category);
         let among = aura_agent_gate::below_lead(candidates, self.lead_model.as_deref());
+        let kind = Some(self.kind.as_str());
         let decision = if self.explore {
-            self.live.decide(RouteLevel::Subtask, category, &among)
+            self.live
+                .decide(RouteLevel::Subtask, category, kind, &among)
         } else {
-            self.live.redecide(RouteLevel::Subtask, category, &among)
+            self.live
+                .redecide(RouteLevel::Subtask, category, kind, &among)
         };
         let Some(decision) = decision else {
             label.route.reason = RouteReason::Default;
@@ -201,6 +204,7 @@ impl SubtaskLabel {
             classifier: self.classifier.clone(),
             route: self.route.clone(),
             kind: Some(self.kind.clone()),
+            led: None,
         };
         let (tx, _) = record_prompt(session, &payload).await?;
         Ok((tx.hash, category))

@@ -719,7 +719,12 @@ async fn run_turn(
                     records.put_back();
                     bench_pack::remove_checks(&hidden);
                     ui.send(system_message(run.describe())).await;
-                    if let (Some(signal), Some(ended)) = (run.signal(), &last) {
+                    // A run its provider cut short did not finish the work
+                    // the check looks at.
+                    let finished = last
+                        .as_ref()
+                        .filter(|ended| ended.signal != OutcomeSignal::Unavailable);
+                    if let (Some(signal), Some(ended)) = (run.signal(), finished) {
                         gate_record::record(&session.kernel, agent_id, &ended.with_signal(signal))
                             .await;
                     }
@@ -824,7 +829,7 @@ async fn run_prompt(
     let routed_to = match routing {
         ArmRouting::Gate { .. } => hub
             .gate
-            .redecide(RouteLevel::Turn, category, &plan.candidates)
+            .redecide(RouteLevel::Turn, category, None, &plan.candidates)
             .map(|decision| decision.model.id),
         ArmRouting::Pinned(model) => Some(model.clone()),
     };
@@ -832,14 +837,17 @@ async fn run_prompt(
         hub.model_limits().configure(&mut config, &model);
     }
     let model = config.model.clone();
-    if let Some(lead) = lead {
+    let led = lead.map(|lead| {
         hub.gate.note_model(agent_id, &model);
-        session.lead = lead.apply(category, &mut config, &mut tools);
-    }
+        let led = hub.gate.way(category, &model, false).led;
+        session.lead = lead.apply(led, &mut config, &mut tools);
+        led
+    });
     let prompt = PromptPayload {
         category,
         classifier: plan.classifier.clone(),
         route: Route::turn(model.clone(), RouteReason::Compare),
+        led,
         ..PromptPayload::new(text.to_string())
     };
 
@@ -865,6 +873,7 @@ async fn run_prompt(
     .await;
 
     let started = Instant::now();
+    let started_ms = super::processes::now_ms();
     let prompt_tx = match record_prompt(session, &prompt).await {
         Ok((tx, _)) => Some(tx.hash),
         Err(problem) => {
@@ -918,6 +927,7 @@ async fn run_prompt(
         success: signal.success(),
         signal,
         cost_usd: forwarded.usage.cost_usd,
+        subtask_cost_usd: hub.subtask_cost_usd(agent_id, started_ms),
         latency_ms: wall_ms,
     });
     if let Some(ended) = &ended {

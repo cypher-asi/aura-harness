@@ -193,6 +193,7 @@ fn summary_error_for_log(error: &iteration::LlmCallError) -> &'static str {
         iteration::LlmCallError::Unauthorized(_) => "unauthorized",
         iteration::LlmCallError::PromptTooLong(_) => "prompt_too_long",
         iteration::LlmCallError::RateLimited(_) => "rate_limited",
+        iteration::LlmCallError::Unavailable(_) => "unavailable",
         iteration::LlmCallError::Fatal(_) => "fatal",
     }
 }

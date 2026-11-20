@@ -373,7 +373,11 @@ impl App {
             && !word_motion
             && key.code == KeyCode::Char(' ')
         {
-            self.toggle_selected_project();
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                self.toggle_selected_project();
+            } else {
+                self.toggle_selected_fold();
+            }
             return KeyResult::continue_running();
         }
         if self.focus == PanelFocus::Swarm
@@ -677,8 +681,9 @@ impl App {
 
     /// Handle key when the agents panel shows Projects. Moving the
     /// highlight onto an agent switches to it; project headers are skipped.
-    /// Space folds the highlighted agent's project, and Enter on "+ New
-    /// project" creates one.
+    /// Space folds the highlighted agent over its spawns, or its project
+    /// when it has none; Shift+Space folds its project either way. Enter
+    /// on "+ New project" creates one.
     fn handle_swarm_key(&mut self, key: KeyEvent) -> KeyResult {
         match key.code {
             KeyCode::Left | KeyCode::Right => self.shift_agents_tab(key.code),
