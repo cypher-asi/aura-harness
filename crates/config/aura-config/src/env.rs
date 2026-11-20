@@ -77,6 +77,10 @@ pub const AURA_GATE_DELEGATE: &str = "AURA_GATE_DELEGATE";
 /// failed; a failed test, build or run then always counts against the
 /// model. Consumed by [`crate::GateConfig::judge`].
 pub const AURA_GATE_JUDGE: &str = "AURA_GATE_JUDGE";
+/// `off` makes Gate route work a check verifies like any other work, by
+/// success rate, instead of by the expected cost of starting cheap and
+/// moving up on a failure. Consumed by [`crate::GateConfig::cascade`].
+pub const AURA_GATE_CASCADE: &str = "AURA_GATE_CASCADE";
 
 /// The full list of env-var names this crate owns. Boundary tests use
 /// this to enforce that no other crate calls `std::env::var(...)` on
@@ -113,6 +117,7 @@ pub const ENV_VAR_NAMES: &[&str] = &[
     AURA_GATE_EXPLORE,
     AURA_GATE_DELEGATE,
     AURA_GATE_JUDGE,
+    AURA_GATE_CASCADE,
 ];
 
 // ---------------------------------------------------------------------------

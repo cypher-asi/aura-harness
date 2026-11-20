@@ -396,6 +396,21 @@ impl GateStats {
         rows
     }
 
+    /// Every counted outcome of `model` at `level`, over every category.
+    #[must_use]
+    pub fn level_row(&self, level: RouteLevel, model: &str) -> Row {
+        self.rows
+            .iter()
+            .filter(|(key, _)| key.level == level && key.model == model)
+            .fold(Row::default(), |sum, (_, row)| Row {
+                tries: sum.tries + row.tries,
+                successes: sum.successes + row.successes,
+                cost_usd: sum.cost_usd + row.cost_usd,
+                subtask_cost_usd: sum.subtask_cost_usd + row.subtask_cost_usd,
+                latency_ms: sum.latency_ms.saturating_add(row.latency_ms),
+            })
+    }
+
     /// Mean cost per try of `model` at `level`, over every category;
     /// `None` before its first try there.
     #[must_use]

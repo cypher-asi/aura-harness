@@ -26,6 +26,7 @@ use aura_model::model_catalog::{
 use aura_model::Usage;
 
 use crate::stats::{GateStats, Row};
+use crate::{compare, turn_judge};
 
 /// Tokens of a typical turn, for comparing list prices.
 const REFERENCE_TURN: Usage = Usage {
@@ -253,14 +254,14 @@ const fn tiers_apart(a: ModelTier, b: ModelTier) -> u8 {
 /// tried models of its tier, or of the nearest tiers when none of its own
 /// was tried. Heavier work goes to stronger models, so what one tier's
 /// work costs says less about another's the further apart they are.
-/// Models with no price known come last; ties keep the order of
-/// `candidates`.
+/// Models with no price known come last, with no cost; ties keep the
+/// order of `candidates`.
 #[must_use]
-pub fn by_expected_cost<'a>(
+pub fn expected_costs<'a>(
     stats: &GateStats,
     level: RouteLevel,
     candidates: &'a [Candidate],
-) -> Vec<&'a Candidate> {
+) -> Vec<(&'a Candidate, Option<f64>)> {
     let observed = |c: &Candidate| stats.mean_cost_usd(level, &c.id);
     // Tier, observed cost and list price of every tried model.
     let tried: Vec<(ModelTier, f64, f64)> = candidates
@@ -297,7 +298,21 @@ pub fn by_expected_cost<'a>(
         (None, Some(_)) => std::cmp::Ordering::Greater,
         (None, None) => std::cmp::Ordering::Equal,
     });
-    order.into_iter().map(|(c, _)| c).collect()
+    order
+}
+
+/// `candidates` ordered by what work at `level` is expected to cost on
+/// each; see [`expected_costs`].
+#[must_use]
+pub fn by_expected_cost<'a>(
+    stats: &GateStats,
+    level: RouteLevel,
+    candidates: &'a [Candidate],
+) -> Vec<&'a Candidate> {
+    expected_costs(stats, level, candidates)
+        .into_iter()
+        .map(|(c, _)| c)
+        .collect()
 }
 
 /// Where work at `level` asking for `category` goes, among `candidates`
@@ -318,6 +333,9 @@ pub fn by_expected_cost<'a>(
 /// Models are judged by their [`judged`] rows, `kind` being the permanent
 /// agent a subtask goes to, and ordered by [`by_expected_cost`]. `None`
 /// when there are no candidates.
+///
+/// Work a check verifies ([`verifiable`]) goes by [`cascade`] instead
+/// while `settings.cascade` is on.
 pub fn pick(
     stats: &GateStats,
     level: RouteLevel,
@@ -327,6 +345,11 @@ pub fn pick(
     settings: &GateConfig,
     rng: &mut impl Random,
 ) -> Option<Decision> {
+    if settings.cascade && verifiable(category) {
+        if let Some(decision) = cascade(stats, level, category, kind, candidates, settings, rng) {
+            return Some(decision);
+        }
+    }
     let row = |model: &str| judged(stats, level, category, kind, model, settings.min_tries);
     let order = by_expected_cost(stats, level, candidates);
     let proven = order.iter().position(|c| {
@@ -474,6 +497,289 @@ fn start_index(
                 .is_none_or(|row| row.can_still_reach(settings.target, settings.min_tries))
         })
         .or(strongest)
+}
+
+/// Whether a check verifies work asking for `category`: code changes and
+/// debugging end in a test or build that passes or fails, and a failed
+/// attempt goes on with a stronger model ([`escalate`]). So such work can
+/// start on a cheaper model at little risk to the result.
+#[must_use]
+pub const fn verifiable(category: PromptCategory) -> bool {
+    matches!(
+        category,
+        PromptCategory::SmallChange | PromptCategory::MultiFileChange | PromptCategory::Debugging
+    )
+}
+
+/// How often Gate expects a model of `tier` to succeed before it has
+/// seen the model work.
+const fn prior_success(tier: ModelTier) -> f64 {
+    match tier {
+        ModelTier::Local => 0.5,
+        ModelTier::Fast => 0.7,
+        ModelTier::Standard => 0.85,
+        ModelTier::Frontier => 0.92,
+    }
+}
+
+/// How many outcomes the prior of a [`Belief`] weighs as.
+const PRIOR_WEIGHT: f64 = 4.0;
+
+/// Success [`cascade`] expects of a model before starting work on it,
+/// unless it is of the strongest tier: below that, the work most likely
+/// takes two attempts, which costs the user time however cheap the
+/// first one is.
+const MIN_START_SUCCESS: f64 = 0.6;
+
+/// Tokens of a typical review of a failed attempt by the judge, for
+/// pricing it.
+const JUDGE_CALL: Usage = Usage {
+    input_tokens: 3_000,
+    output_tokens: 200,
+    cache_creation_input_tokens: None,
+    cache_read_input_tokens: None,
+};
+
+/// Outcomes a model needs on a category before their mean cost stands
+/// for what the category costs on it.
+const COST_TRIES: u32 = 3;
+
+/// Draws that estimate how often exploring picks a model.
+const PROPENSITY_DRAWS: u32 = 32;
+
+/// What Gate believes of how often a model succeeds at some work: a Beta
+/// distribution over its success rate.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Belief {
+    /// Successes, the prior's included.
+    pub alpha: f64,
+    /// Failures, the prior's included.
+    pub beta: f64,
+}
+
+impl Belief {
+    /// A prior of mean `mean` weighing [`PRIOR_WEIGHT`] outcomes, updated
+    /// with the outcomes of `row`.
+    fn new(mean: f64, row: Option<Row>) -> Self {
+        let row = row.unwrap_or_default();
+        Self {
+            alpha: PRIOR_WEIGHT.mul_add(mean, f64::from(row.successes)),
+            beta: PRIOR_WEIGHT.mul_add(
+                1.0 - mean,
+                f64::from(row.tries.saturating_sub(row.successes)),
+            ),
+        }
+    }
+
+    /// The expected success rate.
+    #[must_use]
+    pub fn mean(self) -> f64 {
+        self.alpha / (self.alpha + self.beta)
+    }
+
+    /// A success rate drawn from the belief.
+    fn sample(self, rng: &mut dyn Random) -> f64 {
+        let a = gamma(self.alpha, rng);
+        let b = gamma(self.beta, rng);
+        if a + b > 0.0 {
+            a / (a + b)
+        } else {
+            self.mean()
+        }
+    }
+}
+
+/// What Gate believes of how often `candidate` succeeds at work at `level`
+/// asking for `category`: the outcomes of its [`judged`] row, on a prior
+/// whose mean is its tier's expected success moved toward how it did on
+/// the other categories at `level`.
+#[must_use]
+pub fn belief(
+    stats: &GateStats,
+    level: RouteLevel,
+    category: PromptCategory,
+    kind: Option<&str>,
+    candidate: &Candidate,
+    min_tries: u32,
+) -> Belief {
+    let own = judged(stats, level, category, kind, &candidate.id, min_tries);
+    let elsewhere = stats.level_row(level, &candidate.id).without(
+        &stats
+            .row(level, category, &candidate.id)
+            .copied()
+            .unwrap_or_default(),
+    );
+    let mean = PRIOR_WEIGHT.mul_add(
+        prior_success(candidate.tier),
+        f64::from(elsewhere.successes),
+    ) / (PRIOR_WEIGHT + f64::from(elsewhere.tries));
+    Belief::new(mean, own)
+}
+
+/// Where verifiable work goes: the model it is expected to cost least
+/// from, counting what a failed attempt costs to go on with. An attempt
+/// on model `i` costs `c(i)` and fails with probability `1 - p(i)`; the
+/// work then pays the judge's review `j` and goes on with the cheapest
+/// model of the next tier up, so it is expected to cost
+/// `c(i) + (1 - p(i)) * (j + E(next))`. A turn goes on until the
+/// strongest tier; a subtask goes on once. `p` is each model's [`belief`]
+/// mean, and a model must be expected to succeed at least
+/// [`MIN_START_SUCCESS`] of the time to start the work unless it is of
+/// the strongest tier. `c` is a model's mean cost on the category once it
+/// has [`COST_TRIES`] outcomes there, else its [`expected_costs`].
+///
+/// With probability `explore_rate`, the success rates are drawn from the
+/// beliefs instead of taken at their means (Thompson sampling): a model
+/// little is known of is tried about as often as it may be the cheapest.
+/// `None` when no candidate's price is known.
+fn cascade(
+    stats: &GateStats,
+    level: RouteLevel,
+    category: PromptCategory,
+    kind: Option<&str>,
+    candidates: &[Candidate],
+    settings: &GateConfig,
+    rng: &mut impl Random,
+) -> Option<Decision> {
+    let priced: Vec<(&Candidate, f64)> = expected_costs(stats, level, candidates)
+        .into_iter()
+        .filter_map(|(c, cost)| Some((c, cost?)))
+        .collect();
+    let top = priced.iter().map(|(c, _)| c.tier).max()?;
+    let rows: Vec<Option<Row>> = priced
+        .iter()
+        .map(|(c, _)| judged(stats, level, category, kind, &c.id, settings.min_tries))
+        .collect();
+    let costs: Vec<f64> = priced
+        .iter()
+        .zip(&rows)
+        .map(|((_, cost), row)| {
+            row.filter(|row| row.settled(COST_TRIES))
+                .and_then(|row| row.mean_cost_usd())
+                .unwrap_or(*cost)
+        })
+        .collect();
+    let next: Vec<Option<usize>> = priced
+        .iter()
+        .map(|(c, _)| {
+            let tier = priced.iter().map(|(o, _)| o.tier).filter(|t| *t > c.tier).min()?;
+            (0..priced.len())
+                .filter(|&o| priced[o].0.tier == tier)
+                .min_by(|&a, &b| costs[a].total_cmp(&costs[b]))
+        })
+        .collect();
+    let judge = compare::default_against(candidates)
+        .filter(|_| settings.judge)
+        .and_then(|judge| Some((judge.id.as_str(), estimate_cost_usd(&judge.id, &JUDGE_CALL)?)));
+    let review = |i: usize| {
+        judge
+            .filter(|(id, _)| turn_judge::judges(id, &priced[i].0.id, candidates))
+            .map_or(0.0, |(_, cost)| cost)
+    };
+    let retries = match level {
+        RouteLevel::Turn => priced.len(),
+        RouteLevel::Subtask => 1,
+    };
+    let expected = |start: usize, success: &[f64]| {
+        let mut chain = vec![start];
+        while chain.len() <= retries {
+            match next[chain[chain.len() - 1]] {
+                Some(up) => chain.push(up),
+                None => break,
+            }
+        }
+        chain.iter().rev().fold(None, |after: Option<f64>, &i| {
+            Some(after.map_or(costs[i], |after| {
+                (1.0 - success[i]).mul_add(review(i) + after, costs[i])
+            }))
+        })
+    };
+    let best = |success: &[f64]| {
+        (0..priced.len())
+            .filter(|&i| success[i] >= MIN_START_SUCCESS || priced[i].0.tier == top)
+            .filter_map(|i| Some((i, expected(i, success)?)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+    };
+    let beliefs: Vec<Belief> = priced
+        .iter()
+        .map(|(c, _)| belief(stats, level, category, kind, c, settings.min_tries))
+        .collect();
+    let means: Vec<f64> = beliefs.iter().map(|b| b.mean()).collect();
+    let kept = best(&means)?;
+    let sampled = |rng: &mut dyn Random| {
+        let draws: Vec<f64> = beliefs.iter().map(|b| b.sample(&mut *rng)).collect();
+        best(&draws)
+    };
+    let rng: &mut dyn Random = rng;
+    let rate = settings.explore_rate.clamp(0.0, 1.0);
+    let explores = rate > 0.0 && rng.unit() < rate;
+    let chosen = if explores {
+        sampled(&mut *rng).unwrap_or(kept)
+    } else {
+        kept
+    };
+    let propensity = if rate > 0.0 {
+        let hits = (0..PROPENSITY_DRAWS)
+            .filter(|_| sampled(&mut *rng) == Some(chosen))
+            .count();
+        let hits = u32::try_from(hits).unwrap_or(PROPENSITY_DRAWS) + u32::from(explores);
+        let draws = PROPENSITY_DRAWS + u32::from(explores);
+        let kept_share = if chosen == kept { 1.0 - rate } else { 0.0 };
+        rate.mul_add(f64::from(hits) / f64::from(draws), kept_share)
+    } else {
+        1.0
+    };
+    let explored = chosen != kept;
+    let reason = if explored {
+        RouteReason::Explore
+    } else if rows[chosen].is_some_and(|row| row.settled(settings.min_tries)) {
+        RouteReason::Proven
+    } else {
+        RouteReason::Default
+    };
+    Some(Decision {
+        model: priced[chosen].0.clone(),
+        reason,
+        explored,
+        propensity,
+    })
+}
+
+/// A draw in `(0, 1)`, never exactly 0 or 1, for taking logarithms.
+fn open_unit(rng: &mut dyn Random) -> f64 {
+    rng.unit().clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON)
+}
+
+/// A draw from the standard normal distribution (Box–Muller).
+fn normal(rng: &mut dyn Random) -> f64 {
+    let radius = (-2.0 * open_unit(rng).ln()).sqrt();
+    radius * (std::f64::consts::TAU * rng.unit()).cos()
+}
+
+/// A draw from the Gamma distribution of `shape` and scale 1
+/// (Marsaglia–Tsang). Gives the mode when the draws never settle, which
+/// only a generator that keeps returning the same value makes happen.
+fn gamma(shape: f64, rng: &mut dyn Random) -> f64 {
+    if shape <= 0.0 {
+        return 0.0;
+    }
+    if shape < 1.0 {
+        return gamma(shape + 1.0, rng) * open_unit(rng).powf(1.0 / shape);
+    }
+    let d = shape - 1.0 / 3.0;
+    let c = 1.0 / (9.0 * d).sqrt();
+    for _ in 0..64 {
+        let x = normal(rng);
+        let v = c.mul_add(x, 1.0).powi(3);
+        if v <= 0.0 {
+            continue;
+        }
+        if open_unit(rng).ln() < (0.5 * x).mul_add(x, d - d * v + d * v.ln()) {
+            return d * v;
+        }
+    }
+    d
 }
 
 #[cfg(test)]
@@ -644,9 +950,11 @@ mod tests {
             candidates(&with_local(), signed_in(&[ProviderKind::Claude]), |_| false)
         }
 
+        /// Routing by success rate only, without exploring.
         fn no_exploring() -> GateConfig {
             GateConfig {
                 explore_rate: 0.0,
+                cascade: false,
                 ..GateConfig::defaults()
             }
         }
@@ -1187,7 +1495,10 @@ mod tests {
 
         #[test]
         fn exploring_skips_ruled_out_models_until_nothing_else_is_cheaper() {
-            let settings = GateConfig::defaults();
+            let settings = GateConfig {
+                cascade: false,
+                ..GateConfig::defaults()
+            };
             let explored = |stats: &GateStats| {
                 let decision = pick(
                     stats,
@@ -1328,6 +1639,205 @@ mod tests {
             assert_eq!(decision.reason, RouteReason::Proven);
             assert!(!decision.explored);
             assert_eq!(decision.propensity, 1.0);
+        }
+
+        fn cascading() -> GateConfig {
+            GateConfig {
+                explore_rate: 0.0,
+                ..GateConfig::defaults()
+            }
+        }
+
+        fn cascaded(stats: &GateStats, level: RouteLevel, category: PromptCategory) -> Decision {
+            pick(
+                stats,
+                level,
+                category,
+                None,
+                &claude(),
+                &cascading(),
+                &mut || 0.0,
+            )
+            .unwrap()
+        }
+
+        #[test]
+        fn verifiable_work_starts_where_it_is_expected_to_cost_least() {
+            let empty = GateStats::default();
+            for category in [
+                PromptCategory::SmallChange,
+                PromptCategory::MultiFileChange,
+                PromptCategory::Debugging,
+            ] {
+                let decision = cascaded(&empty, RouteLevel::Turn, category);
+                assert_eq!(decision.model.id, HAIKU, "{category:?}");
+                assert_eq!(decision.reason, RouteReason::Default);
+                assert_eq!(decision.propensity, 1.0);
+            }
+            assert_eq!(
+                cascaded(&empty, RouteLevel::Turn, PromptCategory::Question).model.id,
+                SONNET,
+                "no check verifies an answer"
+            );
+            assert_eq!(
+                pick(
+                    &empty,
+                    RouteLevel::Turn,
+                    PromptCategory::Debugging,
+                    None,
+                    &claude(),
+                    &no_exploring(),
+                    &mut || 0.0,
+                )
+                .unwrap()
+                .model
+                .id,
+                SONNET,
+                "with the cascade off it starts on its start tier"
+            );
+        }
+
+        #[test]
+        fn a_model_failing_verifiable_work_no_longer_starts_it() {
+            let mut log = Log::default();
+            log.turns(6, PromptCategory::Debugging, HAIKU, false);
+            assert_eq!(
+                cascaded(&log.stats(), RouteLevel::Turn, PromptCategory::SmallChange)
+                    .model
+                    .id,
+                SONNET,
+                "failing elsewhere lowers what is expected of it"
+            );
+            log.turns(6, PromptCategory::SmallChange, HAIKU, true);
+            let stats = log.stats();
+            assert_eq!(
+                cascaded(&stats, RouteLevel::Turn, PromptCategory::Debugging).model.id,
+                SONNET
+            );
+            assert_eq!(
+                cascaded(&stats, RouteLevel::Turn, PromptCategory::SmallChange).model.id,
+                HAIKU,
+                "its own outcomes outweigh the others"
+            );
+        }
+
+        #[test]
+        fn a_model_proven_on_verifiable_work_starts_it_as_proven() {
+            let mut log = Log::default();
+            log.turns(12, PromptCategory::Debugging, HAIKU, true);
+            let decision = cascaded(&log.stats(), RouteLevel::Turn, PromptCategory::Debugging);
+            assert_eq!(
+                (decision.model.id, decision.reason),
+                (HAIKU.to_string(), RouteReason::Proven)
+            );
+        }
+
+        #[test]
+        fn success_on_other_work_raises_what_is_expected_of_a_model() {
+            let empty = GateStats::default();
+            let local = claude()
+                .into_iter()
+                .find(|c| c.tier == ModelTier::Local)
+                .unwrap();
+            let unseen = belief(
+                &empty,
+                RouteLevel::Turn,
+                PromptCategory::Debugging,
+                None,
+                &local,
+                10,
+            );
+            assert!((unseen.mean() - 0.5).abs() < 1e-9);
+            assert_ne!(
+                cascaded(&empty, RouteLevel::Turn, PromptCategory::Debugging).model.id,
+                local.id,
+                "too likely to fail to start on"
+            );
+
+            let mut log = Log::default();
+            log.turns(20, PromptCategory::Question, &local.id, true);
+            let stats = log.stats();
+            let seen = belief(
+                &stats,
+                RouteLevel::Turn,
+                PromptCategory::Debugging,
+                None,
+                &local,
+                10,
+            );
+            assert!(seen.mean() > 0.9, "{seen:?}");
+            assert_eq!(
+                cascaded(&stats, RouteLevel::Turn, PromptCategory::Debugging).model.id,
+                local.id
+            );
+        }
+
+        #[test]
+        fn exploring_verifiable_work_draws_from_the_beliefs() {
+            let empty = GateStats::default();
+            let settings = GateConfig {
+                explore_rate: 1.0,
+                ..GateConfig::defaults()
+            };
+            let mut rng = SplitMix64::seeded(11);
+            let mut seen: HashMap<String, usize> = HashMap::new();
+            for _ in 0..500 {
+                let decision = pick(
+                    &empty,
+                    RouteLevel::Turn,
+                    PromptCategory::Debugging,
+                    None,
+                    &claude(),
+                    &settings,
+                    &mut rng,
+                )
+                .unwrap();
+                assert!(decision.propensity > 0.0 && decision.propensity <= 1.0);
+                assert_eq!(decision.explored, decision.model.id != HAIKU);
+                assert_eq!(
+                    decision.reason == RouteReason::Explore,
+                    decision.explored
+                );
+                *seen.entry(decision.model.id).or_default() += 1;
+            }
+            assert!(seen.len() >= 2, "{seen:?}");
+            assert_eq!(
+                seen.iter().max_by_key(|(_, n)| **n).map(|(id, _)| id.as_str()),
+                Some(HAIKU),
+                "the expected cheapest stays the most likely: {seen:?}"
+            );
+
+            for unit in [0.0, 0.5, 1.0 - f64::EPSILON] {
+                let decision = pick(
+                    &empty,
+                    RouteLevel::Turn,
+                    PromptCategory::Debugging,
+                    None,
+                    &claude(),
+                    &settings,
+                    &mut || unit,
+                );
+                assert!(decision.is_some(), "a constant generator still decides");
+            }
+        }
+
+        #[test]
+        fn belief_draws_average_to_its_mean() {
+            let belief = Belief {
+                alpha: 3.0,
+                beta: 7.0,
+            };
+            let mut rng = SplitMix64::seeded(3);
+            let draws = 20_000;
+            let sum: f64 = (0..draws).map(|_| belief.sample(&mut rng)).sum();
+            let mean = sum / f64::from(draws);
+            assert!((mean - 0.3).abs() < 0.01, "{mean}");
+            let small = Belief {
+                alpha: 0.4,
+                beta: 0.2,
+            };
+            let sum: f64 = (0..draws).map(|_| small.sample(&mut rng)).sum();
+            assert!((sum / f64::from(draws) - small.mean()).abs() < 0.02);
         }
 
         #[test]

@@ -2196,20 +2196,21 @@ async fn gate_routes_each_category_and_records_why() {
     assert_eq!(prompts[1].2.category, PromptCategory::Debugging);
     assert_eq!(
         prompts[1].2.route,
-        Route::turn("aura-claude-sonnet-4-6", RouteReason::Default),
-        "debugging starts on the cheapest standard model"
+        Route::turn("aura-gpt-5-4", RouteReason::Default),
+        "debugging starts where it is expected to cost least: on gpt-5.4, \
+         stronger than sonnet and cheaper"
     );
     let models: Vec<String> = outcomes_of(&state, first)
         .into_iter()
         .map(|(_, o)| o.model)
         .collect();
-    assert_eq!(models, ["aura-claude-haiku-4-5", "aura-claude-sonnet-4-6"]);
+    assert_eq!(models, ["aura-claude-haiku-4-5", "aura-gpt-5-4"]);
     let shown = route_lines(&mut commands);
     assert_eq!(
         shown,
         [
             "gate → aura-claude-haiku-4-5 (cloud) · question, proven",
-            "gate → aura-claude-sonnet-4-6 (cloud) · debugging, default",
+            "gate → aura-gpt-5-4 (cloud) · debugging, default",
         ]
     );
     let recent = fixture.hub.gate.recent();
@@ -2217,10 +2218,10 @@ async fn gate_routes_each_category_and_records_why() {
     assert_eq!(recent[1].reason, RouteReason::Default);
 }
 
-/// Run `text` as a debugging turn under Gate, which starts it on Sonnet,
+/// Run `text` as a debugging turn under Gate, which starts it on Haiku,
 /// and return the routes of its prompts, its outcomes, the chat's system
-/// lines, and the tries and successes of the debugging rows of Sonnet and
-/// of GPT, the cheapest model of the next tier up.
+/// lines, and the tries and successes of the debugging rows of Haiku and
+/// of Sonnet, the cheapest model of the next tier up.
 async fn debugging_turn_under_gate(
     text: &str,
 ) -> (
@@ -2256,63 +2257,63 @@ async fn debugging_turn_under_gate(
             .row(RouteLevel::Turn, PromptCategory::Debugging, model)
             .map(|row| (row.tries, row.successes))
     };
-    let rows = [row("aura-claude-sonnet-4-6"), row("aura-gpt-5-4")];
+    let rows = [row("aura-claude-haiku-4-5"), row("aura-claude-sonnet-4-6")];
     (routes, outcomes, system_texts(&drain(&mut commands)), rows)
 }
 
 #[tokio::test]
 async fn a_failed_turn_the_judge_blames_on_the_model_carries_on_on_a_stronger_one() {
+    const HAIKU: &str = "aura-claude-haiku-4-5";
     const SONNET: &str = "aura-claude-sonnet-4-6";
-    const GPT: &str = "aura-gpt-5-4";
     let (routes, outcomes, shown, rows) =
         debugging_turn_under_gate("fix it: run failing check (judge: blame)").await;
 
     assert_eq!(
         routes,
         [
-            Route::turn(SONNET, RouteReason::Default),
-            Route::turn(GPT, RouteReason::Escalate),
+            Route::turn(HAIKU, RouteReason::Default),
+            Route::turn(SONNET, RouteReason::Escalate),
         ]
     );
     assert_eq!(
         outcomes,
         [
-            (SONNET.to_string(), OutcomeSignal::ChecksFailed),
-            (SONNET.to_string(), OutcomeSignal::JudgedFail),
-            (GPT.to_string(), OutcomeSignal::None),
+            (HAIKU.to_string(), OutcomeSignal::ChecksFailed),
+            (HAIKU.to_string(), OutcomeSignal::JudgedFail),
+            (SONNET.to_string(), OutcomeSignal::None),
         ]
     );
     assert!(
-        shown.contains("the failure is aura-claude-sonnet-4-6 (cloud)'s. The change is wrong."),
+        shown.contains("the failure is aura-claude-haiku-4-5 (cloud)'s. The change is wrong."),
         "{shown}"
     );
     assert!(
-        shown.contains("gate → aura-gpt-5-4 (cloud) · debugging, escalate"),
+        shown.contains("gate → aura-claude-sonnet-4-6 (cloud) · debugging, escalate"),
         "{shown}"
     );
     assert_eq!(
         rows,
         [Some((1, 0)), None],
-        "the failure counts once for Sonnet; the stronger model's work is not counted"
+        "the failure counts once for Haiku; the stronger model's work is not counted"
     );
 }
 
 #[tokio::test]
 async fn a_failed_turn_the_judge_excuses_ends_where_it_is() {
-    const SONNET: &str = "aura-claude-sonnet-4-6";
+    const HAIKU: &str = "aura-claude-haiku-4-5";
     let (routes, outcomes, shown, rows) =
         debugging_turn_under_gate("fix it: run failing check (judge: excuse)").await;
 
-    assert_eq!(routes, [Route::turn(SONNET, RouteReason::Default)]);
+    assert_eq!(routes, [Route::turn(HAIKU, RouteReason::Default)]);
     assert_eq!(
         outcomes,
         [
-            (SONNET.to_string(), OutcomeSignal::ChecksFailed),
-            (SONNET.to_string(), OutcomeSignal::JudgedExcused),
+            (HAIKU.to_string(), OutcomeSignal::ChecksFailed),
+            (HAIKU.to_string(), OutcomeSignal::JudgedExcused),
         ]
     );
     assert!(
-        shown.contains("the failure is not aura-claude-sonnet-4-6 (cloud)'s doing"),
+        shown.contains("the failure is not aura-claude-haiku-4-5 (cloud)'s doing"),
         "{shown}"
     );
     assert!(!shown.contains("escalate"), "{shown}");
@@ -2321,22 +2322,22 @@ async fn a_failed_turn_the_judge_excuses_ends_where_it_is() {
 
 #[tokio::test]
 async fn a_failed_turn_with_no_verdict_carries_on_on_a_stronger_model() {
+    const HAIKU: &str = "aura-claude-haiku-4-5";
     const SONNET: &str = "aura-claude-sonnet-4-6";
-    const GPT: &str = "aura-gpt-5-4";
     let (routes, outcomes, _, rows) = debugging_turn_under_gate("fix it: run failing check").await;
 
     assert_eq!(
         routes,
         [
-            Route::turn(SONNET, RouteReason::Default),
-            Route::turn(GPT, RouteReason::Escalate),
+            Route::turn(HAIKU, RouteReason::Default),
+            Route::turn(SONNET, RouteReason::Escalate),
         ]
     );
     assert_eq!(
         outcomes,
         [
-            (SONNET.to_string(), OutcomeSignal::ChecksFailed),
-            (GPT.to_string(), OutcomeSignal::None),
+            (HAIKU.to_string(), OutcomeSignal::ChecksFailed),
+            (SONNET.to_string(), OutcomeSignal::None),
         ],
         "the turn's own signal stands and is recorded once"
     );

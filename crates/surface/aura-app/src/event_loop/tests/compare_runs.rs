@@ -9,6 +9,7 @@ use aura_ui_terminal::events::{BenchRequest, BenchSpec, BenchWork};
 
 const SONNET: &str = "aura-claude-sonnet-4-6";
 const OPUS: &str = "aura-claude-opus-4-7";
+const GPT: &str = "aura-gpt-5-4";
 
 /// Send `/compare <args>` from the first agent's chat.
 async fn compare(state: &mut LoopState<'_>, links: &mpsc::Sender<auth::LinkOutcome>, args: &str) {
@@ -519,7 +520,7 @@ async fn gate_is_compared_with_itself_without_enforced_delegation() {
     state.hub.gate.learn(
         RouteLevel::Turn,
         PromptCategory::MultiFileChange,
-        SONNET,
+        GPT,
         Some(true),
         (10, true),
     );
@@ -544,28 +545,76 @@ async fn gate_is_compared_with_itself_without_enforced_delegation() {
     assert_eq!(payload.against, "gate:nodelegate");
     let gate = payload.run("a-1").unwrap();
     let other = payload.run("b-1").unwrap();
-    // A change across several files, where leading is proven, is led,
-    // and starts on the cheapest standard model.
+    // A change across several files starts where it is expected to cost
+    // least, gpt-5.4, and is led there, where leading is proven.
     for run in [gate, other] {
         assert_eq!(run.error, None, "{}", run.name);
-        assert_eq!(run.model, SONNET, "both arms are routed by Gate");
+        assert_eq!(run.model, GPT, "both arms are routed by Gate");
         let prompts: Vec<PromptPayload> = entries(&state, run.agent_id)
             .iter()
             .filter_map(|e| e.tx.prompt_payload())
             .collect();
-        assert_eq!(prompts[0].route, Route::turn(SONNET, RouteReason::Compare));
+        assert_eq!(prompts[0].route, Route::turn(GPT, RouteReason::Compare));
     }
     assert_eq!(gate.files_changed, 0, "the enforced lead may not write");
     assert!(!gate.copy.workdir.join("answer.txt").exists());
     assert_eq!(other.files_changed, 1, "the other lead writes itself");
     assert_eq!(
         std::fs::read_to_string(other.copy.workdir.join("answer.txt")).unwrap(),
-        SONNET
+        GPT
     );
     let shown = system_texts(&drain(&mut commands));
     assert!(
         shown.contains("A gate vs B gate without enforced delegation"),
         "{shown}"
+    );
+}
+
+#[tokio::test]
+async fn a_gate_run_that_fails_its_checks_carries_on_on_a_stronger_model() {
+    const HAIKU: &str = "aura-claude-haiku-4-5";
+    let (fixture, mut commands) = fixture_with_gate(steady_gate_without_delegation());
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+    state.sync_turn_base();
+
+    let payload = run_comparison(
+        &mut state,
+        &links,
+        &mut commands,
+        "fix it: run failing check --repeats 1 --against opus",
+    )
+    .await;
+
+    assert_eq!(payload.status, CompareStatus::Done, "{payload:#?}");
+    let routes = |name: &str| -> Vec<Route> {
+        entries(&state, payload.run(name).unwrap().agent_id)
+            .iter()
+            .filter_map(|e| e.tx.prompt_payload())
+            .map(|p| p.route)
+            .collect()
+    };
+    let gate = payload.run("a-1").unwrap();
+    assert_eq!(gate.error, None);
+    assert_eq!(
+        routes("a-1"),
+        [
+            Route::turn(HAIKU, RouteReason::Compare),
+            Route::turn(SONNET, RouteReason::Escalate),
+        ]
+    );
+    assert_eq!(gate.model, SONNET, "the run ends on the model it moved to");
+    assert_eq!(
+        signals_of(&state, gate.agent_id)[0],
+        OutcomeSignal::ChecksFailed,
+        "the failed attempt is recorded on its own"
+    );
+    assert_eq!(
+        routes("b-1").len(),
+        1,
+        "a run on one model stays on it"
     );
 }
 

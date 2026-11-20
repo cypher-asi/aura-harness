@@ -97,8 +97,9 @@ Read once at startup by `GateConfig::from_env` ([`crates/config/aura-config/src/
 | `AURA_GATE_TARGET` | `0.85` | Success rate (0–1) a model needs in a category to become its pick. |
 | `AURA_GATE_MIN_TRIES` | `10` | Counted outcomes a model needs in a category before its success rate is trusted. At least 1. |
 | `AURA_GATE_EXPLORE` | `0.05` | Share of routed turns and subtasks (0–1) sent to a cheaper model instead of the pick (the nearest one not ruled out for the category, else the nearest), to learn how it does. `/compare` always routes with `0`. |
-| `AURA_GATE_DELEGATE` | `on` | Applies to the turns the agent leads under Gate (`multi_file_change` and `planning`). `off` (or `0`, `false`, `no`) lets the lead keep its file tools and every command, with delegating only recommended. `on` (or `1`, `true`, `yes`) enforces delegation. Any other value keeps delegation enforced, with a warning. |
+| `AURA_GATE_DELEGATE` | `on` | Applies to the turns the agent leads under Gate (where leading has proven cheaper, or is being explored). `off` (or `0`, `false`, `no`) lets the lead keep its file tools and every command, with delegating only recommended. `on` (or `1`, `true`, `yes`) enforces delegation. Any other value keeps delegation enforced, with a warning. |
 | `AURA_GATE_JUDGE` | `on` | Whether a judge model (the strongest Opus you can use) reviews routed work that failed and says whether the model was at fault; only that failure then counts against the model and moves the work to a stronger one. `off` (or `0`, `false`, `no`) makes no judge call: every failure counts and moves up. See [Gate](cli.md#gate). |
+| `AURA_GATE_CASCADE` | `on` | Whether work a check verifies (`small_change`, `multi_file_change`, `debugging`) starts on the model it is expected to cost least from, counting the stronger models a failed attempt moves up to. `off` (or `0`, `false`, `no`) routes it like other work, by success rate. See [Gate](cli.md#gate). |
 
 ## Node runtime
 

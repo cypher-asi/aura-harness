@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 const SONNET: &str = "aura-claude-sonnet-4-6";
 const GPT: &str = "aura-gpt-5-4";
+const HAIKU: &str = "aura-claude-haiku-4-5";
 
 fn task(parent: AgentId, kind: &str, prompt: &str, check: Option<&str>) -> SubagentDispatchRequest {
     serde_json::from_value(serde_json::json!({
@@ -217,7 +218,9 @@ async fn the_lead_is_held_to_its_limits_when_it_tries_anyway() {
     let mut state = loop_state(&fixture, &mut b);
     select_gate(&fixture, &mut state);
     fixture.hub.set_permissions(first, yolo());
-    prove_leading(&fixture, SONNET);
+    for model in [HAIKU, GPT, SONNET] {
+        prove_leading(&fixture, model);
+    }
     let big: String = (1..=300).map(|n| format!("line {n}\n")).collect();
     std::fs::write(fixture.workspace.join("big.txt"), big).unwrap();
 

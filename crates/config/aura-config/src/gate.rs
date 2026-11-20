@@ -1,6 +1,7 @@
 //! How Gate decides a model has proven itself, how often it tries a
-//! cheaper one, whether the lead agent must delegate its work, and
-//! whether a judge model reviews routed turns that failed.
+//! cheaper one, whether the lead agent must delegate its work, whether a
+//! judge model reviews routed turns that failed, and whether work a check
+//! verifies starts where it is expected to cost least.
 //!
 //! ## Owned env vars
 //!
@@ -11,6 +12,7 @@
 //! | `AURA_GATE_EXPLORE` | f64 (0..=1) | `0.05` | [`GateConfig::explore_rate`] |
 //! | `AURA_GATE_DELEGATE` | `on` / `off` | `on` | [`GateConfig::delegate`] |
 //! | `AURA_GATE_JUDGE` | `on` / `off` | `on` | [`GateConfig::judge`] |
+//! | `AURA_GATE_CASCADE` | `on` / `off` | `on` | [`GateConfig::cascade`] |
 //!
 //! A value outside what a variable accepts keeps that setting's default
 //! and logs a warning naming the variable and its accepted values; the
@@ -21,8 +23,8 @@ use std::fmt::Display;
 use serde::{Deserialize, Serialize};
 
 use crate::env::{
-    lookup_string, AURA_GATE_DELEGATE, AURA_GATE_EXPLORE, AURA_GATE_JUDGE, AURA_GATE_MIN_TRIES,
-    AURA_GATE_TARGET, FALSY_LITERALS, TRUTHY_LITERALS,
+    lookup_string, AURA_GATE_CASCADE, AURA_GATE_DELEGATE, AURA_GATE_EXPLORE, AURA_GATE_JUDGE,
+    AURA_GATE_MIN_TRIES, AURA_GATE_TARGET, FALSY_LITERALS, TRUTHY_LITERALS,
 };
 use crate::ConfigError;
 
@@ -66,6 +68,13 @@ pub struct GateConfig {
     ///
     /// env: `AURA_GATE_JUDGE` (default: `on`)
     pub judge: bool,
+    /// Whether work a check verifies (code changes and debugging) starts
+    /// on the model it is expected to cost least from, counting the
+    /// stronger models a failed attempt moves up to. When off it is
+    /// routed like other work, by success rate.
+    ///
+    /// env: `AURA_GATE_CASCADE` (default: `on`)
+    pub cascade: bool,
 }
 
 impl GateConfig {
@@ -78,6 +87,7 @@ impl GateConfig {
             explore_rate: DEFAULT_EXPLORE_RATE,
             delegate: true,
             judge: true,
+            cascade: true,
         }
     }
 
@@ -142,6 +152,15 @@ impl GateConfig {
         ) {
             cfg.judge = v;
         }
+        if let Some(v) = read(
+            AURA_GATE_CASCADE,
+            SWITCH_ACCEPTS,
+            "on",
+            parse_switch,
+            &mut rejected,
+        ) {
+            cfg.cascade = v;
+        }
         (cfg, rejected)
     }
 }
@@ -204,6 +223,7 @@ mod tests {
         std::env::remove_var(AURA_GATE_EXPLORE);
         std::env::remove_var(AURA_GATE_DELEGATE);
         std::env::remove_var(AURA_GATE_JUDGE);
+        std::env::remove_var(AURA_GATE_CASCADE);
     }
 
     #[test]
@@ -214,6 +234,7 @@ mod tests {
         assert_eq!(cfg.explore_rate, 0.05);
         assert!(cfg.delegate);
         assert!(cfg.judge);
+        assert!(cfg.cascade);
     }
 
     #[test]
@@ -234,6 +255,7 @@ mod tests {
         std::env::set_var(AURA_GATE_EXPLORE, "0");
         std::env::set_var(AURA_GATE_DELEGATE, "off");
         std::env::set_var(AURA_GATE_JUDGE, "no");
+        std::env::set_var(AURA_GATE_CASCADE, "off");
         let cfg = GateConfig::from_env();
         clear_gate_env();
         assert_eq!(
@@ -244,6 +266,7 @@ mod tests {
                 explore_rate: 0.0,
                 delegate: false,
                 judge: false,
+                cascade: false,
             }
         );
     }
@@ -279,6 +302,7 @@ mod tests {
             (AURA_GATE_MIN_TRIES, "2.5", MIN_TRIES_ACCEPTS),
             (AURA_GATE_DELEGATE, "maybe", SWITCH_ACCEPTS),
             (AURA_GATE_JUDGE, "sometimes", SWITCH_ACCEPTS),
+            (AURA_GATE_CASCADE, "sometimes", SWITCH_ACCEPTS),
         ] {
             clear_gate_env();
             std::env::set_var(name, raw);
@@ -312,6 +336,7 @@ mod tests {
                 explore_rate: DEFAULT_EXPLORE_RATE,
                 delegate: false,
                 judge: true,
+                cascade: true,
             }
         );
         let names: Vec<&str> = rejected

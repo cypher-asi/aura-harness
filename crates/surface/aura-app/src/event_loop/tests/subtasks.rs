@@ -102,14 +102,14 @@ async fn a_task_under_gate_runs_on_the_model_gate_picks_for_it() {
         [PromptPayload {
             category: PromptCategory::Debugging,
             classifier: state.models.classifier_model(),
-            route: Route::subtask(SONNET, RouteReason::Default),
+            route: Route::subtask(HAIKU, RouteReason::Default),
             kind: Some("reviewer".to_string()),
             ..PromptPayload::new("fix the flaky parser test")
         }],
-        "debugging starts on the cheapest standard model, as for turns"
+        "debugging starts where it is expected to cost least, as for turns"
     );
     assert_eq!(outcomes.len(), 1);
-    assert_eq!(outcomes[0].model, SONNET);
+    assert_eq!(outcomes[0].model, HAIKU);
     assert_eq!(outcomes[0].signal, OutcomeSignal::None);
     assert!(
         prompts_of(&state, first).is_empty(),
@@ -123,10 +123,10 @@ async fn a_task_under_gate_runs_on_the_model_gate_picks_for_it() {
         .iter()
         .find(|r| r.id == processes::task_id(child))
         .unwrap();
-    assert_eq!(row.model.as_deref(), Some(SONNET));
+    assert_eq!(row.model.as_deref(), Some(HAIKU));
     assert_eq!(
         route_lines(&mut commands),
-        ["gate → aura-claude-sonnet-4-6 (cloud) · subtask, debugging, default"]
+        ["gate → aura-claude-haiku-4-5 (cloud) · subtask, debugging, default"]
     );
 }
 

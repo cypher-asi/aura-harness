@@ -20,6 +20,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `small_change`; the frontier tier is reached by moving up.
 - A turn model is judged on the turns it did itself, so failed led turns
   no longer move a whole category up a tier.
+- Work a check verifies (`small_change`, `multi_file_change`,
+  `debugging`) starts on the model it is expected to cost least from,
+  counting the judge's review and the stronger models a failed attempt
+  moves up to. Success rates are estimated from the model's outcomes on
+  a prior from its tier and its other categories; exploring samples
+  those estimates. `AURA_GATE_CASCADE=off` routes such work by success
+  rate again.
+- A Gate run in `/compare` whose turn fails its test or build goes on in
+  the same conversation on the next tier up, as routed turns do.
 
 ### Benchmarks — two arms on the same work
 

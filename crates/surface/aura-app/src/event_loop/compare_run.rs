@@ -32,9 +32,9 @@ use super::gate_record;
 use super::handlers::{handle_agent_success, run_agent_turn, system_message, turn_summary};
 use super::modes::Permissions;
 use super::processes::{now_ms, turn_id};
-use super::steering::Steering;
+use super::steering::{SteerSource, Steering};
 use super::subagents::{lock, AgentHub, ArmRouting};
-use super::task_check;
+use super::task_check::{self, takeover_prompt};
 use super::tasks::TASKS_DIR;
 use super::turns::{ended_signal, record_prompt};
 use crate::agent_registry::RegisteredAgent;
@@ -45,6 +45,7 @@ use crate::isolation::{
 };
 use aura_agent::AgentLoop;
 use aura_agent_gate::compare::{list_price, plan_shares, run_name, PlanReading, Schedule};
+use aura_agent_gate::outcome::calls_for_stronger;
 use aura_agent_gate::{judge, Candidate};
 use aura_agent_kernel::Kernel;
 use aura_core_types::{
@@ -881,65 +882,120 @@ async fn run_prompt(
             None
         }
     };
-    let turn_start = session.messages.len();
+    let first_tx = prompt_tx;
+    let (mut model, mut prompt_tx) = (model, prompt_tx);
+    let (mut attempt_started, mut attempt_ms) = (started, started_ms);
+    let mut turn_start = session.messages.len();
     session.messages.push(Message::user(text.to_string()));
-    let agent_loop = AgentLoop::new(config);
-    let steering = Steering::new(cancel);
-    let (result, forwarded) = run_agent_turn(
-        session,
-        &agent_loop,
-        tools,
-        ui,
-        cancel,
-        &steering,
-        hub.long_run,
-        None,
-    )
-    .await;
-    steering.finish(&[]);
-    let wall_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    let cancelled = cancel.is_cancelled();
-    let signal = if cancelled || forwarded.credentials_rejected {
-        OutcomeSignal::None
-    } else {
-        ended_signal(&result, turn_start)
-    };
-    let (reply, mut error) = match result {
-        Ok(result) => {
-            let text = result.total_text.clone();
-            let llm_error = result.llm_error.clone().filter(|_| text.trim().is_empty());
-            handle_agent_success(session, result, &forwarded, ui, &[]).await;
-            (text, llm_error)
+    // A Gate run's failed attempt goes on in the same conversation on the
+    // next stronger model, as a routed turn does; the run's check judges
+    // the result, so no judge is asked first.
+    let (signal, reply, mut error, ended) = loop {
+        let agent_loop = AgentLoop::new(config.clone());
+        let steering = Steering::new(cancel);
+        let (result, forwarded) = run_agent_turn(
+            session,
+            &agent_loop,
+            tools.clone(),
+            ui,
+            cancel,
+            &steering,
+            hub.long_run,
+            None,
+        )
+        .await;
+        steering.finish(&[]);
+        let cancelled = cancel.is_cancelled();
+        let signal = if cancelled || forwarded.credentials_rejected {
+            OutcomeSignal::None
+        } else {
+            ended_signal(&result, turn_start)
+        };
+        let next = match routing {
+            ArmRouting::Gate { .. } if result.is_ok() && calls_for_stronger(signal) => hub
+                .gate
+                .escalate(RouteLevel::Turn, category, &model, &plan.candidates),
+            _ => None,
+        };
+        let (reply, error) = match result {
+            Ok(result) => {
+                let text = result.total_text.clone();
+                let llm_error = result.llm_error.clone().filter(|_| text.trim().is_empty());
+                handle_agent_success(session, result, &forwarded, ui, &[]).await;
+                (text, llm_error)
+            }
+            Err(e) => {
+                ui.send(UiCommand::ShowWarning(e.to_string())).await;
+                ui.send(UiCommand::Complete).await;
+                (String::new(), Some(e.to_string()))
+            }
+        };
+        let ended = prompt_tx.map(|prompt_tx| OutcomePayload {
+            prompt_tx,
+            category,
+            model: model.clone(),
+            success: signal.success(),
+            signal,
+            cost_usd: forwarded.usage.cost_usd,
+            subtask_cost_usd: hub.subtask_cost_usd(agent_id, attempt_ms),
+            latency_ms: u64::try_from(attempt_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        });
+        let Some(next) = next else {
+            break (signal, reply, error, ended);
+        };
+        if let Some(ended) = &ended {
+            gate_record::record(&session.kernel, agent_id, ended).await;
         }
-        Err(e) => {
-            ui.send(UiCommand::ShowWarning(e.to_string())).await;
-            ui.send(UiCommand::Complete).await;
-            (String::new(), Some(e.to_string()))
-        }
+        let takeover = format!(
+            "{}{}",
+            SteerSource::Harness.prefix(),
+            takeover_prompt(
+                &aura_model::model_catalog::route_label(&model),
+                signal,
+                None
+            )
+        );
+        let escalated = PromptPayload {
+            category,
+            classifier: plan.classifier.clone(),
+            route: next.route(RouteLevel::Turn),
+            ..PromptPayload::new(takeover.clone())
+        };
+        prompt_tx = match record_prompt(session, &escalated).await {
+            Ok((tx, _)) => Some(tx.hash),
+            Err(problem) => {
+                warn!(%agent_id, %problem, "Failed to record a compare run's escalated prompt");
+                None
+            }
+        };
+        info!(%agent_id, from = %model, to = %next.model.id, %signal, "Gate moves the run's turn to a stronger model");
+        ui.send(system_message(format!(
+            "{} {name} · gate → {} · {category}, {}",
+            ctx.host.name,
+            aura_model::model_catalog::route_label(&next.model.id),
+            next.reason
+        )))
+        .await;
+        hub.model_limits().configure(&mut config, &next.model.id);
+        hub.gate.note_model(agent_id, &next.model.id);
+        model.clone_from(&next.model.id);
+        (attempt_started, attempt_ms) = (Instant::now(), super::processes::now_ms());
+        turn_start = session.messages.len();
+        session.messages.push(Message::user(takeover));
     };
-    if cancelled {
+    if cancel.is_cancelled() {
         error = Some("stopped by the user".to_string());
     }
-    let ended = prompt_tx.map(|prompt_tx| OutcomePayload {
-        prompt_tx,
-        category,
-        model: model.clone(),
-        success: signal.success(),
-        signal,
-        cost_usd: forwarded.usage.cost_usd,
-        subtask_cost_usd: hub.subtask_cost_usd(agent_id, started_ms),
-        latency_ms: wall_ms,
-    });
     if let Some(ended) = &ended {
         gate_record::record(&session.kernel, agent_id, ended).await;
     }
     Turned {
-        prompt_tx,
+        prompt_tx: first_tx,
         model,
         signal,
         reply,
         error,
-        wall_ms,
+        wall_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         ended,
     }
 }
