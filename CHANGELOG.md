@@ -47,6 +47,64 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   model on its own would have done on them, estimated by weighting each
   turn by how unlikely its route was.
 
+### Side panel: one agent or the whole project
+
+##### Added
+
+- The side panel's tab bar ends in an `ALL` button (a box of its own in
+  the desktop's title bar). Off, the PROCESSES, TRACE, PLANS and TASKS
+  tabs list only the agent on screen and the agents it spawned; on, they
+  list every agent's in its project. `App::toggle_pane_scope` and
+  `PaneChrome::scope` let a front end that draws the bar work it.
+
+##### Changed
+
+- PROCESSES no longer lists every agent's processes, and PLANS and TASKS
+  no longer list the whole workspace's, unless `ALL` is on.
+- TRACE keeps one feed of every agent's steps, capped at 300 per agent,
+  instead of one feed per chat, so `ALL` can list a project's steps in the
+  order they came.
+
+### Terminal: queued-messages panel
+
+##### Added
+
+- Work waiting for a busy agent shows in a panel above the input, in run
+  order, with a `N Queued` header that folds the panel (`—` / `+`). Each
+  entry can be sent now, edited (messages only, in the input: Enter saves,
+  Esc cancels and restores the draft), removed, or dragged to another
+  place. Shift+Up in the input moves the keys to the queue: Up/Down select,
+  Alt+Up/Down move, Delete removes, Enter or `e` edits, Ctrl+Enter sends
+  now, Esc goes back. Clicking a row never moves the keys to the queue.
+- `UiEvent::{RemoveQueued, EditQueued, MoveQueued, SendQueuedItemNow}` name
+  queued entries by a stable id. The event loop applies them and sends the
+  queue again.
+
+##### Changed
+
+- `UiCommand::SetQueued(usize)` is now `UiCommand::SetQueue(Vec<QueuedItemView>)`:
+  the queue itself (id, text or label, whether it is editable), not just
+  its length.
+
+### Plans — easy to read
+
+##### Changed
+
+- Plan files now read well as Markdown. After the YAML frontmatter comes
+  a generated header with the plan's title, its overview and a `## Todos`
+  checklist (`[ ]`, `[~]`, `[x]`, `[-]`) kept in sync with the agent's
+  todo list. A `<!-- end of generated header: edit below -->` marker ends
+  the header, and the plan body follows. Older plan files still load and
+  get the header the next time they are written.
+- `create_plan` tidies the body: CRLF becomes LF, a body that came through
+  with literal `\n` gets real line breaks, trailing spaces are removed,
+  runs of blank lines outside code fences shrink to one, and a leading
+  `#` heading that repeats the plan name is dropped.
+- The tool schema and plan-mode prompt ask for `##` sections, short
+  bullets, `inline code` for paths and fenced code with a language tag.
+- Opening a plan at a todo (from PLANS or a task) now lands on its
+  checklist line.
+
 ### Benchmarks — two arms on the same work
 
 ##### Added

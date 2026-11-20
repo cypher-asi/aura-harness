@@ -4,7 +4,9 @@ use super::graph::status_glyph;
 use super::panels::{
     cell_style, list_row_with_detail, render_scrollbar, CellState, ScrollView, StatusIcon,
 };
-use super::side_list::{name_style, render_empty, render_hint, split_hint, Tone, TRACE_HINT};
+use super::side_list::{
+    name_style, render_empty, render_hidden, render_hint, split_hint, Tone, TRACE_HINT,
+};
 use crate::app::{HoverTarget, PanelFocus};
 use crate::events::TraceNodeStatus;
 use crate::{App, Theme};
@@ -20,7 +22,12 @@ pub(super) fn render_trace_feed(
     theme: &Theme,
 ) {
     let is_focused = app.focus() == PanelFocus::Sandbox;
-    if app.trace_feed().entries().is_empty() {
+    let feed = app.trace_feed();
+    if feed.is_empty() && feed.hidden() > 0 {
+        render_hidden(frame, inner, ("steps", feed.hidden()), theme);
+        return;
+    }
+    if feed.is_empty() {
         let message = [
             "No steps yet.",
             "Model calls, tool calls and",
@@ -44,7 +51,6 @@ pub(super) fn render_trace_feed(
     let selected = feed.selected();
     let lines: Vec<Line> = feed
         .entries()
-        .iter()
         .enumerate()
         .skip(scroll)
         .take(visible)
@@ -65,7 +71,7 @@ pub(super) fn render_trace_feed(
         })
         .collect();
     let view = ScrollView {
-        total: feed.entries().len(),
+        total: feed.len(),
         visible,
         first: scroll,
     };

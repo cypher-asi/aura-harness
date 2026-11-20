@@ -177,3 +177,16 @@ fn clearing_records_closes_only_a_record_view() {
     app.process_command(UiCommand::ClearRecords);
     assert_eq!(app.detail_view(), None);
 }
+
+#[test]
+fn setting_records_closes_a_record_view() {
+    let mut app = App::new();
+    app.process_command(UiCommand::NewRecord(record(1)));
+    app.focus = PanelFocus::Records;
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.detail_view(), Some(&DetailView::Record));
+
+    app.process_command(UiCommand::SetRecords(vec![record(2), record(3)]));
+    assert_eq!(app.detail_view(), None);
+    assert_eq!(app.selected_record(), 1);
+}

@@ -9,6 +9,7 @@ use crate::tab_bar::{
     unit,
 };
 use crate::text::{Align, Face, Label, Shaping, TextSystem, LABEL_LINE_EM};
+use aura_ui_terminal::SideScope;
 
 impl Chrome {
     /// The bars' quads, the grid starting `top` pixels down the
@@ -92,6 +93,39 @@ impl Chrome {
                 let arm = (unit(&model.metrics) * 0.55).round();
                 let middle = Point::new(rect.center_x(), rect.center_y());
                 cross(text, out, middle, (arm, line), ink);
+            }
+            if let Some((mut rect, on)) = bar.scope {
+                rect.y += top;
+                let over = self.hover == Some(Hit::Scope(bar.pane));
+                let ink = if on && bar.focused {
+                    fill(
+                        &mut out.under,
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height,
+                        palette.selection,
+                    );
+                    palette.fg
+                } else if on || over {
+                    let edge = if over { palette.muted } else { palette.faint };
+                    outline(&mut out.under, rect, edge, line);
+                    palette.fg
+                } else {
+                    outline(&mut out.under, rect, palette.faint, line);
+                    palette.muted
+                };
+                let label = Label {
+                    text: SideScope::BUTTON,
+                    face: Face::mono(on),
+                    color: rgba(ink),
+                    ..plain
+                };
+                text.write(
+                    &mut out.over,
+                    &label,
+                    Point::new(rect.center_x(), rect.center_y()),
+                );
             }
             if let Some((mut rect, expanded)) = bar.expand {
                 rect.y += top;

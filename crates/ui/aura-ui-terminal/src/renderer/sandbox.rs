@@ -1,6 +1,8 @@
 //! The panel below the Record panel: a SANDBOX | PROCESSES | TRACE | PLANS
-//! header bar over the file tree of the active agent's workspace, the
-//! Processes list, the trace feed, or the workspace's plans.
+//! | TASKS header bar over the file tree of the active agent's workspace,
+//! the Processes list, the trace feed, the workspace's plans or its tasks.
+//! The bar ends in an ALL button that lists the whole project's processes,
+//! steps, plans and tasks instead of the active agent's.
 
 use super::header::{self, PanelHeader};
 use super::panels::{
@@ -8,7 +10,7 @@ use super::panels::{
 };
 use super::side_list::{name_style, render_empty, render_hint, split_hint, Tone, SANDBOX_HINT};
 use crate::app::sandbox::{SandboxEntryKind, SandboxRow};
-use crate::app::{HoverTarget, Pane, PanelFocus, SidePanelTab};
+use crate::app::{HoverTarget, Pane, PanelFocus, SidePanelTab, SideScope};
 use crate::{App, Theme};
 use ratatui::{layout::Rect, text::Line, widgets::Paragraph, Frame};
 
@@ -18,21 +20,27 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
     let hosted = app.host_chrome();
     let panel = area;
     let (bar, area) = header::split(area, hosted);
+    let tabs = header::tabs_beside_scope(bar);
     if !hosted {
-        app.set_side_tabs_area(bar);
+        app.set_side_tabs_area(Rect { width: tabs, ..bar });
+        app.set_side_scope_area(header::scope_cell(bar));
     }
     let hovered = match app.hover() {
         Some(HoverTarget::SideTab(tab)) => Some(tab),
         _ => None,
     };
     let header = PanelHeader {
-        layout: SidePanelTab::layout(bar.width),
+        layout: SidePanelTab::layout(tabs),
         active: Some(app.side_tab()),
         hovered,
         title: None,
         info: None,
         close: None,
         expand: None,
+        scope: Some(header::ScopeButton {
+            on: app.side_scope() == SideScope::Project,
+            hovered: app.hover() == Some(HoverTarget::SideScope),
+        }),
         focused: is_focused,
         hosted,
     };

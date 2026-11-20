@@ -1,0 +1,11 @@
+{
+  "id": "01a1faa0fb11000c",
+  "title": "should also be a link to open that agent",
+  "state": "completed",
+  "agent_id": "753a117c3c8d6cb65541803790175da996f63760ab7fd4360418202a3fa87732",
+  "agent_name": "Agent 175",
+  "items": [],
+  "summary": "Hovering over an agent row now also shows an open button, just left of the archive button:",
+  "updated_ms": 1795206615613,
+  "created_ms": 1795206216465
+}

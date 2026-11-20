@@ -178,7 +178,7 @@ impl ChatLineCache {
             {
                 let shell = members[0].shell_run().filter(|_| self.terminal);
                 let mut settled = None;
-                let (mut lines, toggles, prose) = match (shell, view) {
+                let (mut lines, mut toggles, mut prose) = match (shell, view) {
                     (Some(run), _) => (
                         shell_lines(run, &self.prompt, width, theme),
                         Vec::new(),
@@ -240,13 +240,16 @@ impl ChatLineCache {
                     }
                     lines.push(footer);
                 }
+                let user =
+                    !self.terminal && members.len() == 1 && members[0].role() == MessageRole::User;
+                if user {
+                    frame_user_block(&mut lines, &mut toggles, &mut images, &mut prose);
+                }
                 self.entries.insert(
                     key,
                     BlockLines {
                         revision,
-                        user: !self.terminal
-                            && members.len() == 1
-                            && members[0].role() == MessageRole::User,
+                        user,
                         lines,
                         toggles,
                         images,
@@ -268,6 +271,34 @@ impl ChatLineCache {
     /// blank line goes between every two.
     pub(crate) fn blocks(&self) -> impl Iterator<Item = &BlockLines> {
         self.order.iter().filter_map(|key| self.entries.get(key))
+    }
+}
+
+/// Blank rows above and below a user's message: the frame's border, then
+/// a row of padding between it and the text.
+pub(crate) const USER_FRAME_ROWS: usize = 2;
+
+/// Make room for the frame around a user's message: [`USER_FRAME_ROWS`]
+/// blank rows before and after its lines, with the rows of its toggles,
+/// images and prose moved down to match. The panel draws the border on
+/// the outermost of them.
+fn frame_user_block(
+    lines: &mut Vec<Line<'static>>,
+    toggles: &mut [ToggleRow],
+    images: &mut [ImageHit],
+    prose: &mut Vec<Option<u16>>,
+) {
+    let pad = USER_FRAME_ROWS;
+    lines.splice(0..0, std::iter::repeat_n(Line::default(), pad));
+    lines.extend(std::iter::repeat_n(Line::default(), pad));
+    for toggle in toggles {
+        toggle.line += pad;
+    }
+    for hit in images {
+        hit.line += pad;
+    }
+    if !prose.is_empty() {
+        prose.splice(0..0, std::iter::repeat_n(None, pad));
     }
 }
 

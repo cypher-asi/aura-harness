@@ -1,0 +1,14 @@
+{
+  "id": "01a1fa97b0470004",
+  "title": "Repo: /home/n3o/code/aura-harness (Rust workspace). The native desktop UI lives in crates/surface/aura-desktop and prob…",
+  "state": "completed",
+  "agent_id": "6cb8c70f13d7f87fae90b7fce1d8886da940f7138ca3686043cd130834f13e40",
+  "agent_name": "explorer #14",
+  "assignee": "explorer",
+  "parent": "01a1fa967ccc0003",
+  "items": [],
+  "summary": "The left pane isn't drawn natively by the desktop app. `aura-desktop` draws the terminal UI (`aura_ui_terminal::App`, built with ratatui) on a GPU cell grid, as its `lib.rs` says at lines 1-13. So the agent rows, hover state, hit-testing and the archive event all live in `crates/ui/aura-ui-terminal`. The desktop side only forwards pointer events cell by cell and decides how each glyph is drawn.",
+  "updated_ms": 1795205751372,
+  "created_ms": 1795205607495,
+  "tool_use_id": "toolu_01KAo3zsJTZ9khqsL7ESNsw2"
+}

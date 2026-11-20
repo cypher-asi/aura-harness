@@ -16,7 +16,9 @@ use super::panels::{
     StatusIcon,
 };
 use super::plans::{marker, marker_color, todo_style};
-use super::side_list::{name_style, render_empty, render_hint, split_hint, Tone, TASKS_HINT};
+use super::side_list::{
+    name_style, render_empty, render_hidden, render_hint, split_hint, Tone, TASKS_HINT,
+};
 use crate::app::tasks::TaskRow;
 use crate::app::{HoverTarget, PanelFocus};
 use crate::events::{TaskState, TaskView};
@@ -44,7 +46,12 @@ pub(super) fn render_tasks(
     theme: &Theme,
 ) {
     let is_focused = app.focus() == PanelFocus::Sandbox;
-    if app.task_list().tasks().is_empty() {
+    let list = app.task_list();
+    if list.rows().is_empty() && list.hidden() > 0 {
+        render_hidden(frame, inner, ("tasks", list.hidden()), theme);
+        return;
+    }
+    if list.rows().is_empty() {
         let message = ["No tasks yet.", "Work agents do", "shows up here."];
         render_empty(frame, inner, &message, theme);
         return;

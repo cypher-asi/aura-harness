@@ -1,0 +1,13 @@
+{
+  "id": "01a1faa599d50011",
+  "title": "Bug: the KERNEL panel (top right of the terminal/desktop UI) caps at 100 records. Its header shows `app.records().len()…",
+  "state": "open",
+  "agent_id": "7a86eb4c0d714ddc6911d89c70c9cd4f62e9e8a9730dc8950950cca706a9b075",
+  "agent_name": "rust-engineer #12",
+  "assignee": "rust-engineer",
+  "parent": "01a1faa3d8350010",
+  "items": [],
+  "updated_ms": 1795206519253,
+  "created_ms": 1795206519253,
+  "tool_use_id": "toolu_01C3yeKxL2KWMZUMj4MDJtu2"
+}

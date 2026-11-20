@@ -118,6 +118,9 @@ impl App {
     /// Returns why the image was refused: not a PNG, JPEG, GIF or WebP,
     /// too large, or one too many.
     pub fn attach_image(&mut self, bytes: &[u8]) -> Result<(), String> {
+        if self.editing_queued() {
+            return Err("Images can't be added to a queued message".to_string());
+        }
         let media_type =
             media_type_of(bytes).ok_or("Only PNG, JPEG, GIF and WebP images can be attached")?;
         if bytes.len() > MAX_IMAGE_BYTES {

@@ -1,0 +1,11 @@
+{
+  "id": "01a1fa9a28e90007",
+  "title": "when expanded tho too, if showing working indicator, shouldn't show arrow",
+  "state": "completed",
+  "agent_id": "f64f1cb637a530a73540c0e4be742952d38e32cf88e61ff1c02ec6f8b26cc15e",
+  "agent_name": "Agent 258",
+  "items": [],
+  "summary": "Removing the now-unused marker support from `StatusIcon` and `indented_row`.A working agent now never shows an arrow, whether it's expanded or collapsed. The spinning ring takes the arrow's place and also acts as the fold button. Tests, clippy and rustfmt pass for `aura-ui-terminal`.",
+  "updated_ms": 1795205876629,
+  "created_ms": 1795205769449
+}

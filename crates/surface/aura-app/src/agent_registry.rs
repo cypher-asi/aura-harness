@@ -648,6 +648,13 @@ impl AgentRegistry {
         out
     }
 
+    /// The agent at the top of `agent_id`'s tree, which nothing registered
+    /// spawned; `agent_id` itself when it is at the top or unknown.
+    #[must_use]
+    pub fn root(&self, agent_id: AgentId) -> AgentId {
+        self.ancestry(agent_id).last().copied().unwrap_or(agent_id)
+    }
+
     /// Whether `agent_id` works under a `/compare`: one of its runs, or a
     /// subtask of one. The agents grouping an arm's runs do no work.
     #[must_use]

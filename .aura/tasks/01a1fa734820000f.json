@@ -1,0 +1,11 @@
+{
+  "id": "01a1fa734820000f",
+  "title": "When animated status indicator is showing on collapsed agent, don't show arrow",
+  "state": "completed",
+  "agent_id": "f64f1cb637a530a73540c0e4be742952d38e32cf88e61ff1c02ec6f8b26cc15e",
+  "agent_name": "Agent 258",
+  "items": [],
+  "summary": "Now update the test and doc comment to match.When an agent is collapsed and its spinning ring is showing, the `▸` arrow no longer appears next to it. Tests, clippy and rustfmt all pass for `aura-ui-terminal`.",
+  "updated_ms": 1795203292016,
+  "created_ms": 1795203221536
+}

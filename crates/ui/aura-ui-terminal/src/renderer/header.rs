@@ -10,7 +10,7 @@
 use super::panels::truncate_record_info;
 use super::text::display_width;
 use crate::app::tab_bar::TabLayout;
-use crate::app::{AgentsTab, ChatTab, Pane, PaneChrome, PaneTab, SidePanelTab};
+use crate::app::{AgentsTab, ChatTab, Pane, PaneChrome, PaneTab, SidePanelTab, SideScope};
 use crate::{App, Theme};
 use ratatui::{
     buffer::Buffer,
@@ -43,6 +43,13 @@ const EXPAND_COLUMNS: u16 = 4;
 /// The expand button's glyph, and the one that restores the panel.
 const EXPAND_GLYPH: &str = "⤢";
 const RESTORE_GLYPH: &str = "⤡";
+
+/// Columns a scope button takes from a tabbed bar: [`SideScope::BUTTON`],
+/// unpadded like a tight tab, and the divider before it.
+const SCOPE_COLUMNS: u16 = 4;
+
+/// Narrowest bar with room for a scope button beside its tabs.
+const SCOPE_MIN_WIDTH: u16 = 20;
 
 /// Split a panel's area into its header bar and the body below it.
 /// `hosted` bars are the front end's to draw.
@@ -101,6 +108,34 @@ pub(super) fn tabs_beside_expand(bar: Rect) -> u16 {
     }
 }
 
+/// The cells of `bar`'s scope button: a cell of its own against the
+/// right border, after the tabs' last divider.
+///
+/// ```text
+/// │ SBX │ PRC │TRACE│PLANS│TASKS│ALL│
+/// ```
+pub(super) fn scope_cell(bar: Rect) -> Option<Rect> {
+    if bar.width < SCOPE_MIN_WIDTH || bar.height == 0 {
+        return None;
+    }
+    Some(Rect::new(
+        bar.right() - SCOPE_COLUMNS,
+        label_row(bar),
+        SCOPE_COLUMNS - 1,
+        1,
+    ))
+}
+
+/// The width a tabbed bar leaves its tabs when it ends in a scope
+/// button.
+pub(super) fn tabs_beside_scope(bar: Rect) -> u16 {
+    if scope_cell(bar).is_some() {
+        bar.width - SCOPE_COLUMNS
+    } else {
+        bar.width
+    }
+}
+
 /// The row of `bar` its labels are drawn on.
 const fn label_row(bar: Rect) -> u16 {
     if bar.height >= FRAMED_HEIGHT {
@@ -115,6 +150,14 @@ const fn label_row(bar: Rect) -> u16 {
 pub(super) struct ExpandButton {
     /// Whether the panel fills the screen, so the button restores it
     pub expanded: bool,
+    pub hovered: bool,
+}
+
+/// A bar's scope button, lit while the panel's lists show the whole
+/// project's items rather than the active agent's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ScopeButton {
+    pub on: bool,
     pub hovered: bool,
 }
 
@@ -151,6 +194,9 @@ pub(super) struct PanelHeader<'a, T> {
     /// An expand button at the right end, left of any close button. A
     /// tabbed bar lays out its tabs in [`tabs_beside_expand`] columns.
     pub expand: Option<ExpandButton>,
+    /// A scope button at the right end of a tabbed bar, which lays out
+    /// its tabs in [`tabs_beside_scope`] columns.
+    pub scope: Option<ScopeButton>,
     pub focused: bool,
     /// Whether the front end draws the bar: the grid keeps only its frame
     pub hosted: bool,
@@ -205,6 +251,7 @@ impl<T: HostTab> PanelHeader<'_, T> {
             info_color: self.info.as_ref().map_or(Color::Reset, |info| info.color),
             closable: self.close.is_some(),
             expand: self.expand.map(|button| button.expanded),
+            scope: self.scope.map(|button| button.on),
             focused: self.focused,
         }
     }
@@ -276,23 +323,18 @@ pub(super) fn render_panel_header<T: Copy + PartialEq>(
             break;
         }
         let width = cell.width.min(last - cell.start);
-        let style = if header.active == Some(cell.tab) {
-            let mut style = Style::default()
-                .fg(colors.foreground)
-                .add_modifier(Modifier::BOLD);
-            if header.focused {
-                style = style.bg(colors.selection).fg(colors.on_selection);
-            }
-            style
-        } else if header.hovered == Some(cell.tab) {
-            Style::default()
-                .bg(colors.surface_hover)
-                .fg(colors.secondary)
-        } else {
-            Style::default().fg(colors.muted)
-        };
+        let style = tab_style(
+            header.active == Some(cell.tab),
+            header.hovered == Some(cell.tab),
+            header.focused,
+            theme,
+        );
         let area = Rect::new(bar.x + cell.start, middle, width, 1);
         draw_centered(buf, area, cell.label, style);
+    }
+    if let Some((button, cell)) = header.scope.zip(scope_cell(bar)) {
+        let style = tab_style(button.on, button.hovered, header.focused, theme);
+        draw_centered(buf, cell, SideScope::BUTTON, style);
     }
 
     let close = header.close.zip(close_cell(bar));
@@ -324,6 +366,28 @@ pub(super) fn render_panel_header<T: Copy + PartialEq>(
         };
         buf.set_style(cell, style);
         buf.set_string(cell.x + 1, cell.y, glyph, style);
+    }
+}
+
+/// A tab cell's style: the shown tab is bold, filled with the selection
+/// color while its panel has focus; a tab under the pointer is shaded.
+fn tab_style(active: bool, hovered: bool, focused: bool, theme: &Theme) -> Style {
+    let colors = &theme.colors;
+    if active {
+        let style = Style::default()
+            .fg(colors.foreground)
+            .add_modifier(Modifier::BOLD);
+        if focused {
+            style.bg(colors.selection).fg(colors.on_selection)
+        } else {
+            style
+        }
+    } else if hovered {
+        Style::default()
+            .bg(colors.surface_hover)
+            .fg(colors.secondary)
+    } else {
+        Style::default().fg(colors.muted)
     }
 }
 
@@ -433,6 +497,7 @@ mod tests {
             info: None,
             close: None,
             expand: None,
+            scope: None,
             focused,
             hosted: false,
         }
@@ -501,6 +566,7 @@ mod tests {
             info: None,
             close: None,
             expand: None,
+            scope: None,
             focused: true,
             hosted: true,
         };
@@ -526,6 +592,7 @@ mod tests {
             info: Some(HeaderInfo::count(128, "RECORDS", Color::Gray)),
             close: None,
             expand: None,
+            scope: None,
             focused: false,
             hosted: true,
         };
@@ -556,6 +623,7 @@ mod tests {
             info: Some(HeaderInfo::count(128, "RECORDS", Color::Gray)),
             close: None,
             expand: None,
+            scope: None,
             focused: false,
             hosted: false,
         };
@@ -579,6 +647,7 @@ mod tests {
             info: Some(HeaderInfo::count(128, "LINES", Color::Gray)),
             close: Some(hovered),
             expand: None,
+            scope: None,
             focused: true,
             hosted: false,
         };
@@ -620,6 +689,30 @@ mod tests {
     }
 
     #[test]
+    fn scoped_bars_end_in_an_all_button_lit_while_on() {
+        let bar = Rect::new(0, 0, 40, 3);
+        let tabs = tabs_beside_scope(bar);
+        assert_eq!(tabs, 36);
+        let header = |on| PanelHeader {
+            scope: Some(ScopeButton { on, hovered: false }),
+            ..chat_header(tabs, false, None)
+        };
+        let off = draw(40, 10, &header(false));
+        assert_eq!(row(&off, 0), "┌─────────────────┬────────────────┬───┐");
+        assert_eq!(row(&off, 1), "│      CHAT       │    TERMINAL    │ALL│");
+        assert_eq!(scope_cell(bar), Some(Rect::new(36, 1, 3, 1)));
+        let colors = Theme::cyber().colors;
+        assert_eq!(off[(36, 1)].style().fg, Some(colors.muted));
+
+        let on = draw(40, 10, &header(true));
+        assert_eq!(on[(36, 1)].style().fg, Some(colors.foreground));
+        assert!(on[(36, 1)].style().add_modifier.contains(Modifier::BOLD));
+
+        assert_eq!(scope_cell(Rect::new(0, 0, 16, 3)), None);
+        assert_eq!(tabs_beside_scope(Rect::new(0, 0, 16, 3)), 16);
+    }
+
+    #[test]
     fn the_expand_button_sits_left_of_a_close_button() {
         let header = PanelHeader::<()> {
             layout: TabLayout::untabbed(30),
@@ -632,6 +725,7 @@ mod tests {
                 expanded: false,
                 hovered: false,
             }),
+            scope: None,
             focused: true,
             hosted: false,
         };

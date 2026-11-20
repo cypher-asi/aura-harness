@@ -476,6 +476,17 @@ impl Shell {
         }
 
         let origin = self.metrics.origin(area, cols);
+        // The panels' outer borders, which the UI keeps a column in from
+        // the grid's edges, run through the middle of their cells; the
+        // bar's boxes line up with them.
+        let left = self.panes.iter().map(|pane| pane.x).min().unwrap_or(1);
+        let right = self
+            .panes
+            .iter()
+            .map(|pane| pane.right())
+            .max()
+            .unwrap_or_else(|| cols.saturating_sub(1))
+            .max(left + 1);
         let model = tab_bar::Model {
             items: self
                 .tabs
@@ -488,9 +499,8 @@ impl Shell {
                 .collect(),
             front: self.tabs.front_index(),
             title: self.tabs.front().title(),
-            // Panel borders run through the middle of the outermost cells.
-            x: (origin.x + cell.width / 2.0).round(),
-            width: f32::from(cols.saturating_sub(1)) * cell.width,
+            x: (origin.x + (f32::from(left) + 0.5) * cell.width).round(),
+            width: f32::from(right - left - 1) * cell.width,
             metrics: self.metrics,
             palette: self.palette,
         };

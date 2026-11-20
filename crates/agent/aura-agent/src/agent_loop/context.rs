@@ -330,21 +330,20 @@ pub(super) fn compact_for_overflow(
     after_chars < before_chars || after_tokens < before_tokens
 }
 
-/// Emit the first-write checkpoint warning once.
-pub(super) fn emit_checkpoint_if_needed(
-    event_tx: Option<&Sender<AgentLoopEvent>>,
-    state: &mut LoopState,
-) {
+pub(super) const FIRST_WRITE_CHECKPOINT: &str =
+    "NOTE: You've made your first file change. Before making more changes, \
+     consider verifying your work (e.g., run the build or tests) to catch \
+     issues early.";
+
+/// Append the first-write checkpoint note to the conversation once.
+///
+/// Model-facing only: it is not emitted as a UI warning.
+pub(super) fn emit_checkpoint_if_needed(state: &mut LoopState) {
     if !state.had_any_write || state.checkpoint_emitted {
         return;
     }
     state.checkpoint_emitted = true;
-    let msg = "NOTE: You've made your first file change. Before making more changes, \
-               consider verifying your work (e.g., run the build or tests) to catch \
-               issues early."
-        .to_string();
-    helpers::append_warning(&mut state.messages, &msg);
-    streaming::emit(event_tx, AgentLoopEvent::Warning(msg));
+    helpers::append_warning(&mut state.messages, FIRST_WRITE_CHECKPOINT);
 }
 
 /// Check and emit budget warnings.

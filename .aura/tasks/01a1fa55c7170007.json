@@ -1,0 +1,11 @@
+{
+  "id": "01a1fa55c7170007",
+  "title": "make scrolling a lot faster in main middle panel",
+  "state": "completed",
+  "agent_id": "98780f515b77b14eddbb91f45dec828194617e7945beb57e138b32c876b229b1",
+  "agent_name": "Agent 173",
+  "items": [],
+  "summary": "I'll roughly double every scroll constant for the chat panel.I made scrolling in the chat panel (the middle one) about twice as fast. The `aura-desktop` shell tests pass, including the chat wheel test.",
+  "updated_ms": 1795201356319,
+  "created_ms": 1795201287959
+}

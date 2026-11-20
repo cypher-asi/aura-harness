@@ -1,0 +1,13 @@
+{
+  "id": "01a1faa31de6000f",
+  "title": "Build a Cursor-style \"queued messages\" panel in the aura-harness Rust workspace (repo root). Follow the repo rules in .…",
+  "state": "open",
+  "agent_id": "d936481bde7ca5be99182ebd111109913bfa5fdf32de0fff5edc65a3b4c7249e",
+  "agent_name": "rust-engineer #11",
+  "assignee": "rust-engineer",
+  "parent": "01a1faa04b55000a",
+  "items": [],
+  "updated_ms": 1795206356454,
+  "created_ms": 1795206356454,
+  "tool_use_id": "toolu_01PYdsbtYcn9Vnejb6weGRU4"
+}

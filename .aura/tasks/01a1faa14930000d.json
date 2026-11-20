@@ -1,0 +1,14 @@
+{
+  "id": "01a1faa14930000d",
+  "title": "Repo: /home/n3o/code/aura-harness, crate crates/ui/aura-ui-terminal (ratatui TUI also drawn by crates/surface/aura-desk…",
+  "state": "completed",
+  "agent_id": "2dae99dc4f46c8b0a44e777f8d4eebc1f84b7417c23371d2beff2760ec0836c6",
+  "agent_name": "rust-engineer #10",
+  "assignee": "rust-engineer",
+  "parent": "01a1faa0fb11000c",
+  "items": [],
+  "summary": "Now fix the \"+\" test probing column 15 on line 5 (an agent row, now the open button):Now the renderer test.Agent rows in the Projects pane now show an open button just left of the archive button when hovered (`... name ... ↗ ✕ 5m`). Clicking it switches to that agent through the same `request_agent_switch` call the context menu's Open uses. fmt, clippy, and both crates' tests pass. Nothing is com…",
+  "updated_ms": 1795206605857,
+  "created_ms": 1795206236464,
+  "tool_use_id": "toolu_01JPTNCqaHipUXPBds33V7NC"
+}

@@ -299,7 +299,12 @@ impl Shell {
             }
         } else if matches!(
             hover,
-            Some(chrome::Hit::Tab(_) | chrome::Hit::Close(_) | chrome::Hit::Expand(_))
+            Some(
+                chrome::Hit::Tab(_)
+                    | chrome::Hit::Close(_)
+                    | chrome::Hit::Expand(_)
+                    | chrome::Hit::Scope(_)
+            )
         ) {
             CursorIcon::Pointer
         } else {
@@ -342,7 +347,8 @@ impl Shell {
 
     /// A button went down on a panel's title bar or a divider: left picks
     /// the tab, closes what covers the panel, expands or restores it,
-    /// focuses the panel or starts dragging the divider.
+    /// switches its lists between the agent's and the project's, focuses
+    /// the panel or starts dragging the divider.
     fn chrome_press(&mut self, hit: chrome::Hit, button: MouseButton) {
         if button != MouseButton::Left {
             return;
@@ -352,6 +358,7 @@ impl Shell {
             chrome::Hit::Tab(tab) => tui.select_pane_tab(tab),
             chrome::Hit::Close(pane) => tui.close_pane_view(pane),
             chrome::Hit::Expand(pane) => tui.expand_pane(pane),
+            chrome::Hit::Scope(pane) => tui.toggle_pane_scope(pane),
             chrome::Hit::Bar(pane) => tui.focus_pane(pane),
             chrome::Hit::Divider(divider) => self.pointer.dragging = Some(divider),
         }
@@ -862,6 +869,37 @@ mod tests {
     }
 
     #[test]
+    fn the_all_box_switches_the_side_panels_lists_to_the_project() {
+        use aura_ui_terminal::SideScope;
+        let mut stage = stage();
+        stage.seed(false);
+        stage.draw();
+        let side = |stage: &Stage| {
+            let tui = &stage.shell.tabs.front().tui;
+            let pane = tui.pane_chrome().iter().find(|c| c.pane == Pane::Side);
+            pane.expect("the side panel has a bar").clone()
+        };
+        assert_eq!(side(&stage).scope, Some(false));
+
+        let all = stage
+            .shell
+            .chrome
+            .scope_box(Pane::Side)
+            .expect("the ALL box is drawn");
+        let middle = Point::new(all.center_x(), all.center_y());
+        stage.shell.pointer_moved(Point::new(
+            middle.x,
+            middle.y + tab_bar::height(&stage.shell.metrics),
+        ));
+        assert_eq!(stage.shell.cursor_icon(), CursorIcon::Pointer);
+        stage.drag(middle, middle);
+        let tui = &stage.shell.tabs.front().tui;
+        assert_eq!(tui.side_scope(), SideScope::Project);
+        assert_eq!(side(&stage).scope, Some(true));
+        assert!(side(&stage).focused);
+    }
+
+    #[test]
     fn the_cross_sits_in_the_middle_of_the_close_box() {
         let mut stage = record_over_the_chat();
         // Odd and even boxes, thin and thick strokes.
@@ -1005,8 +1043,12 @@ mod tests {
         settle(&mut stage);
         assert!(offset(&stage) < before, "went back down");
 
-        stage.shell.wheel(notch(-400.0), stage.now);
-        settle(&mut stage);
+        // Each turn is capped at `MOST_LINES`, so two get back from
+        // however far the spin went.
+        for _ in 0..2 {
+            stage.shell.wheel(notch(-400.0), stage.now);
+            settle(&mut stage);
+        }
         assert_eq!(offset(&stage), 0, "and back to the bottom, on its rows");
         assert!(stage.shell.text().contains("line 199"));
         assert!(stage.pixels() == crate::shell::tests::afresh(&stage.shell));

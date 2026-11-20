@@ -1,0 +1,14 @@
+{
+  "id": "01a1fabdc7df0015",
+  "title": "Review a newly added \"queued messages\" panel feature in the aura-harness Rust workspace (Cursor-style panel above the c…",
+  "state": "completed",
+  "agent_id": "e09d93a463cac1d61c3925f564ebb71f2b2e98903737323a73ed434ea3152afd",
+  "agent_name": "reviewer #5",
+  "assignee": "reviewer",
+  "parent": "01a1fabda07d0014",
+  "items": [],
+  "summary": "I found 3 high, 5 medium and 6 low-severity problems. The feature works on the happy path, but there are real bugs in keyboard focus, id handling and edit edge cases. Both commands you asked for pass: the tests (19 in aura-app, 28 in aura-ui-terminal) and clippy with `-D warnings` on all four crates.",
+  "updated_ms": 1795208361952,
+  "created_ms": 1795208103903,
+  "tool_use_id": "toolu_01TFCRRqvNwmYW4c8JCSQbiZ"
+}

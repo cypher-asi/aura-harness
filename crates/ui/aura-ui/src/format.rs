@@ -48,7 +48,7 @@ pub fn format_tool_label(tool_name: &str, args_json: &str) -> String {
         "run_command" => format!("Ran {}", format_tool_summary_from_value(tool_name, &args)),
         "task" => {
             let agent = match text("subagent_type") {
-                Some(kind) => format!("Delegated to {kind}"),
+                Some(kind) => format!("Delegated to @{kind}"),
                 None => "Delegated".to_string(),
             };
             match text("prompt").and_then(|p| p.lines().map(str::trim).find(|l| !l.is_empty())) {

@@ -128,6 +128,11 @@ impl LoopState {
             .iter()
             .rposition(|m| m.role == Role::Assistant)
             .map_or(0, |at| at + 1);
+        let checkpoint_emitted = messages.iter().any(|m| {
+            m.role == Role::User
+                && m.text_content()
+                    .contains(super::context::FIRST_WRITE_CHECKPOINT)
+        });
         Self {
             result: AgentLoopResult {
                 todos: config.initial_todos.clone(),
@@ -141,7 +146,7 @@ impl LoopState {
             task_done_completed: false,
             output_limit_recoveries: 0,
             submit_plan_called: false,
-            checkpoint_emitted: false,
+            checkpoint_emitted,
             exploration_compaction_done: false,
             build_cooldown: 0,
             thinking: ThinkingBudget {

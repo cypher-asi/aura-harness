@@ -19,6 +19,7 @@ mod overlays;
 mod panels;
 mod plans;
 mod processes;
+mod queue_panel;
 mod sandbox;
 mod segments;
 mod side_list;
@@ -33,7 +34,7 @@ mod bench;
 mod tests;
 
 pub(crate) use chat_lines::{ChatLineCache, GroupState};
-pub(crate) use panels::format_elapsed;
+pub(crate) use panels::{format_ago, format_elapsed, now_ms};
 
 use crate::mode_command::ApprovalLevel;
 use crate::{app::PanelAreas, App, Theme};
@@ -59,8 +60,8 @@ fn inset_edges(area: Rect) -> Rect {
 }
 
 /// Render the full application UI: the header row, then the panels, with
-/// the input box and the footer under the Chat panel. The side columns end
-/// level with the input box.
+/// the input at the bottom of the Chat panel and the footer under it. The
+/// side columns end level with the input.
 pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     let area = frame.area();
     let rows = Layout::default()
@@ -72,15 +73,23 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     // The input grows upward as it wraps inside the Chat column, so its
     // height comes from where the columns fall.
     let (swarm, column, right) = columns(content, app);
+    // The queue panel gives up rows before the chat does: the chat keeps
+    // three and the input one.
+    let queue_rows = queue_panel::height(app).min(
+        content
+            .height
+            .saturating_sub(hud::FOOTER_ROWS + input::BOX_ROWS + 1 + 3),
+    );
     let max_input_rows = content
         .height
-        .saturating_sub(hud::FOOTER_ROWS + input::BOX_ROWS + 3)
+        .saturating_sub(hud::FOOTER_ROWS + input::BOX_ROWS + 3 + queue_rows)
         .max(1);
     let input_rows = input::input_rows(column, app, theme, max_input_rows);
     let chat_column = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),
+            Constraint::Length(queue_rows),
             Constraint::Length(input_rows + input::BOX_ROWS),
             Constraint::Length(hud::FOOTER_ROWS),
         ])
@@ -96,7 +105,15 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     });
     let (swarm, right) = (swarm.map(above_footer), right.map(above_footer));
 
-    render_header(frame, inset_edges(rows[0]), app, theme);
+    // The panels' outer borders run through the middle of `content`'s
+    // edge columns, so the header keeps a column in from those to stay
+    // inside them.
+    let header = inset_edges(Rect {
+        x: content.x,
+        width: content.width,
+        ..rows[0]
+    });
+    render_header(frame, header, app, theme);
 
     app.set_prose_rows(Vec::new());
     app.clear_chat_scroll();
@@ -107,9 +124,10 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     if let Some(selection) = app.selection() {
         selection.highlight(frame.buffer_mut());
     }
-    app.set_input_area(chat_column[1]);
-    input::render_input(frame, chat_column[1], app, theme);
-    let footer_gap = hud::render_footer(frame, inset_edges(chat_column[2]), app, theme);
+    queue_panel::render(frame, chat_column[1], app, theme);
+    app.set_input_area(chat_column[2]);
+    input::render_input(frame, chat_column[2], app, theme);
+    let footer_gap = hud::render_footer(frame, inset_edges(chat_column[3]), app, theme);
     if let Some(read) = hud::render_notice(frame, under_right.unwrap_or(footer_gap), app, theme) {
         app.hold_notification_for(read);
     }

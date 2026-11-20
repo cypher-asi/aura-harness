@@ -89,6 +89,10 @@ pub struct PaneChrome {
     /// screen, which [`App::expand_pane`] works; `Some(true)` while it is
     /// expanded
     pub expand: Option<bool>,
+    /// Whether the bar ends in a [`crate::SideScope::BUTTON`] box, which
+    /// [`App::toggle_pane_scope`] works; `Some(true)` while the panel's
+    /// lists show the whole project's items rather than the active agent's
+    pub scope: Option<bool>,
     pub focused: bool,
 }
 
@@ -177,6 +181,15 @@ impl App {
         self.focus_pane(pane);
         if pane == Pane::Chat {
             self.toggle_chat_expanded();
+        }
+    }
+
+    /// Switch `pane`'s lists between the active agent's items and the
+    /// whole project's, and focus it, as its bar's scope box does.
+    pub fn toggle_pane_scope(&mut self, pane: Pane) {
+        self.focus_pane(pane);
+        if pane == Pane::Side {
+            self.toggle_side_scope();
         }
     }
 }

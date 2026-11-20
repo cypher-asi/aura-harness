@@ -1,0 +1,11 @@
+{
+  "id": "01a1fa95b3e20001",
+  "title": "still shows arrow when agent working and agent collapsed",
+  "state": "completed",
+  "agent_id": "f64f1cb637a530a73540c0e4be742952d38e32cf88e61ff1c02ec6f8b26cc15e",
+  "agent_name": "Agent 258",
+  "items": [],
+  "summary": "I couldn't reproduce this from the current code. I rendered the agents panel in a temporary test (since removed) for both cases, and neither shows an arrow:",
+  "updated_ms": 1795205589011,
+  "created_ms": 1795205477346
+}

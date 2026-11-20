@@ -4,8 +4,8 @@
 
 use super::format::{format_cost, format_tokens};
 use crate::events::{
-    CallStats, ContextView, InstructionFileView, InstructionStatus, JobView, SessionTotals,
-    TodoState, TodoView,
+    CallStats, ContextView, InstructionFileView, InstructionStatus, JobView, QueuedItemView,
+    SessionTotals, TodoState, TodoView,
 };
 use crate::mode_command::{ApprovalLevel, PermissionMode};
 
@@ -106,8 +106,8 @@ pub struct Hud {
     pub todos: Vec<TodoView>,
     /// The agent's background jobs
     pub jobs: Vec<JobView>,
-    /// Work waiting for the agent's current work to end
-    pub queued: usize,
+    /// Work waiting for the agent's current work to end, oldest first
+    pub queue: Vec<QueuedItemView>,
     /// Make-up of the context as of the last turn
     pub context: Option<ContextView>,
     /// The kind of work the agent may do; `None` until the event loop
@@ -121,6 +121,12 @@ pub struct Hud {
 }
 
 impl Hud {
+    /// How much work waits for the agent's current work to end.
+    #[must_use]
+    pub fn queued(&self) -> usize {
+        self.queue.len()
+    }
+
     /// Background jobs still running.
     #[must_use]
     pub fn running_jobs(&self) -> usize {

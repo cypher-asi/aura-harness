@@ -1,0 +1,13 @@
+{
+  "id": "01a1fac1f31e0016",
+  "title": "Fix review findings in the queued-messages panel in the aura-harness Rust workspace. Other unrelated uncommitted work e…",
+  "state": "open",
+  "agent_id": "dabb8fd4491ac073262d4e967a5b7eff4a244c537d6ad37b6f7a7d0c25a8b195",
+  "agent_name": "rust-engineer #14",
+  "assignee": "rust-engineer",
+  "parent": "01a1fabda07d0014",
+  "items": [],
+  "updated_ms": 1795208377118,
+  "created_ms": 1795208377118,
+  "tool_use_id": "toolu_01XmDxU6Vq1H3GERezg3j44M"
+}

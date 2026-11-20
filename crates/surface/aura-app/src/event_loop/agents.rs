@@ -826,21 +826,20 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
         .commands
         .send(UiCommand::SetActiveAgent(agent_id.to_hex()))
         .await;
-    let _ = state.commands.send(UiCommand::ClearRecords).await;
-    match recent_record_summaries(store, agent_id) {
-        Ok(summaries) => {
-            for summary in summaries {
-                let _ = state.commands.send(UiCommand::NewRecord(summary)).await;
-            }
-        }
-        Err(e) => {
-            let _ = state
-                .commands
-                .send(UiCommand::ShowWarning(format!(
-                    "Could not load record history: {e}"
-                )))
-                .await;
-        }
+    // One replace-all command: clears the previous agent's records even
+    // when this agent's history can't be read.
+    let (records, problem) = match recent_record_summaries(store, agent_id) {
+        Ok(summaries) => (summaries, None),
+        Err(e) => (Vec::new(), Some(e)),
+    };
+    let _ = state.commands.send(UiCommand::SetRecords(records)).await;
+    if let Some(e) = problem {
+        let _ = state
+            .commands
+            .send(UiCommand::ShowWarning(format!(
+                "Could not load record history: {e}"
+            )))
+            .await;
     }
     state.hub.traces.send_history(agent_id).await;
 

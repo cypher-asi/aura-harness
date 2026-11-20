@@ -3,10 +3,9 @@
 //! Agents work in parallel, so the chat on screen is only one of several
 //! that are changing. The chat of the active agent lives in the `App`
 //! fields the rest of the UI reads; the chats of the other agents are kept
-//! as [`AgentView`]s and swapped in when their agent becomes active. Each
-//! chat has its own TRACE feed.
+//! as [`AgentView`]s and swapped in when their agent becomes active.
 
-use super::{hud::Hud, trace_feed::TraceFeed, App, AppState, NotificationType, PendingApproval};
+use super::{hud::Hud, App, AppState, NotificationType, PendingApproval};
 use crate::{
     components::Message,
     events::UiCommand,
@@ -27,7 +26,6 @@ pub(crate) struct AgentView {
     chat_lines: ChatLineCache,
     pending_approvals: VecDeque<PendingApproval>,
     hud: Hud,
-    trace_feed: TraceFeed,
     /// Whether the agent has a turn in flight
     busy: bool,
 }
@@ -44,7 +42,6 @@ impl Default for AgentView {
             chat_lines: ChatLineCache::default(),
             pending_approvals: VecDeque::new(),
             hud: Hud::default(),
-            trace_feed: TraceFeed::default(),
             busy: false,
         }
     }
@@ -75,7 +72,6 @@ impl App {
         mem::swap(&mut self.chat_lines, &mut view.chat_lines);
         mem::swap(&mut self.pending_approvals, &mut view.pending_approvals);
         mem::swap(&mut self.hud, &mut view.hud);
-        mem::swap(&mut self.trace_feed, &mut view.trace_feed);
     }
 
     /// Whether the agent with hex id `agent_id` has a turn in flight.
@@ -95,6 +91,7 @@ impl App {
         if previous == agent_id || previous.is_empty() {
             return;
         }
+        self.leave_queue_panel();
         let mut view = self.views.remove(agent_id).unwrap_or_default();
         let busy = view.busy;
         self.swap_chat(&mut view);
@@ -153,8 +150,24 @@ impl App {
     /// Apply `command` to the chat of `agent_id`, on screen or not.
     pub(super) fn process_agent_command(&mut self, agent_id: &str, command: UiCommand) {
         self.queue_alert(agent_id, &command);
+        if let UiCommand::GraphUpsert { run_id, nodes } = command {
+            self.trace_feed.push(agent_id, &run_id, &nodes);
+            self.upsert_graph(&run_id, nodes);
+            return;
+        }
         if agent_id == self.active_agent_id || self.active_agent_id.is_empty() {
             self.process_command(command);
+            return;
+        }
+        if let UiCommand::SetQueue(queue) = command {
+            // The queue panel's state is the agent on screen's; this one
+            // only stores the queue, and confirms its edits.
+            self.confirm_queued_renames(agent_id, &queue);
+            self.views
+                .entry(agent_id.to_string())
+                .or_default()
+                .hud
+                .queue = queue;
             return;
         }
         let asks = matches!(command, UiCommand::RequestApproval { .. });
@@ -162,6 +175,7 @@ impl App {
             command,
             UiCommand::NewRecord(_)
                 | UiCommand::ClearRecords
+                | UiCommand::SetRecords(_)
                 | UiCommand::SetSandboxRoot(_)
                 | UiCommand::SetPlan(_)
                 | UiCommand::SetPlans(_)

@@ -873,14 +873,29 @@ async fn two_models_replay_a_session_from_its_start_prompt_by_prompt() {
     assert!(text.contains("vs yours"), "{text}");
 
     bench(&mut state, &links, BenchRequest::List).await;
-    let listed = drain(&mut commands)
+    let (listed, root) = drain(&mut commands)
         .into_iter()
         .find_map(|(_, c)| match c {
-            UiCommand::BenchList(list) => Some(list),
+            UiCommand::BenchList { benches, root, .. } => Some((benches, root)),
             _ => None,
         })
         .unwrap();
     assert_eq!(listed.len(), 1);
+    assert_eq!(root, first.to_hex());
+    assert_eq!(listed[0].root, root);
+    assert_eq!(last.root, root, "updates name the tree too");
+
+    state.active = fixture.second;
+    bench(&mut state, &links, BenchRequest::List).await;
+    let elsewhere = drain(&mut commands)
+        .into_iter()
+        .find_map(|(_, c)| match c {
+            UiCommand::BenchList { benches, .. } => Some(benches),
+            _ => None,
+        })
+        .unwrap();
+    assert!(elsewhere.is_empty(), "another agent's tree has none");
+    state.active = first;
 
     let id = listed[0].id.clone();
     bench(

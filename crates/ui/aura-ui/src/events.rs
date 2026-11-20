@@ -101,6 +101,44 @@ pub enum UiEvent {
     /// ahead of the rest of the queue.
     SendQueuedNow(String),
 
+    /// User removed one queued message or command from an agent's queue
+    RemoveQueued {
+        /// Agent the queue belongs to (hex id)
+        agent_id: String,
+        /// [`QueuedItemView::id`] of the entry
+        id: u64,
+    },
+
+    /// User edited the text of a queued message. Entries that aren't
+    /// [`QueuedItemView::editable`] are left as they are.
+    EditQueued {
+        /// Agent the queue belongs to (hex id)
+        agent_id: String,
+        /// [`QueuedItemView::id`] of the entry
+        id: u64,
+        /// The message's new text
+        text: String,
+    },
+
+    /// User moved a queued entry to another place in the queue
+    MoveQueued {
+        /// Agent the queue belongs to (hex id)
+        agent_id: String,
+        /// [`QueuedItemView::id`] of the entry
+        id: u64,
+        /// Index the entry moves to, oldest first; clamped to the queue
+        to: usize,
+    },
+
+    /// User asked to run one queued entry now: it moves to the front of
+    /// the queue and runs as with [`Self::SendQueuedNow`].
+    SendQueuedItemNow {
+        /// Agent the queue belongs to (hex id)
+        agent_id: String,
+        /// [`QueuedItemView::id`] of the entry
+        id: u64,
+    },
+
     /// User stopped the commands the agent with this hex id is running;
     /// its turn goes on with what they printed
     StopCommand(String),
@@ -516,8 +554,9 @@ pub enum UiCommand {
     SetTodos(Vec<TodoView>),
     /// The agent's background jobs
     SetJobs(Vec<JobView>),
-    /// How many messages and commands wait for the agent's current work
-    SetQueued(usize),
+    /// The messages and commands waiting for the agent's current work,
+    /// in the order they will run (oldest first)
+    SetQueue(Vec<QueuedItemView>),
     /// What the agent's context is made of, as of its last turn
     SetContext(ContextView),
     /// Usage of the agent's session so far, when it is opened or resumed
@@ -564,6 +603,13 @@ pub enum UiCommand {
 
     /// Clear records (when switching agents)
     ClearRecords,
+
+    /// Replace the Record panel with these records, oldest first (when
+    /// loading history or switching agents). One command instead of a
+    /// [`Self::ClearRecords`] and a [`Self::NewRecord`] per record, so a
+    /// long history fits in a bounded command channel. Only the newest
+    /// [`MAX_RECORDS`] are kept.
+    SetRecords(Vec<RecordSummary>),
 
     /// Replace the conversation with an agent's history (when switching agents)
     LoadConversation(Vec<MessageData>),
@@ -614,11 +660,17 @@ pub enum UiCommand {
         nodes: Vec<FlowNode>,
     },
 
-    /// Replace the BENCH tab's list of benchmarks, oldest first
-    BenchList(Vec<BenchView>),
+    /// Replace the BENCH tab's list with the benchmarks of the tree
+    /// `agent_id` is in, whose top agent is `root`, oldest first. Ignored
+    /// by a UI showing another agent.
+    BenchList {
+        agent_id: String,
+        root: String,
+        benches: Vec<BenchView>,
+    },
 
     /// A benchmark started or changed; add it to the BENCH tab or replace
-    /// it there
+    /// it there. Ignored by a UI listing another tree's benchmarks.
     BenchUpsert(Box<BenchView>),
 
     /// The sessions of `agent_id` the BENCH tab can replay, newest first,
@@ -960,6 +1012,19 @@ pub struct JobView {
     pub running: bool,
 }
 
+/// One message or command waiting in an agent's queue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueuedItemView {
+    /// Id of the entry, stable while it waits; events naming the entry
+    /// use it
+    pub id: u64,
+    /// The message as typed, or a label for other work (`/compact`,
+    /// `! cmd`, `/build path`)
+    pub text: String,
+    /// Whether the entry is a message whose text the user may edit
+    pub editable: bool,
+}
+
 /// Estimated make-up of an agent's context.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ContextView {
@@ -1077,6 +1142,12 @@ pub struct ToolData {
     /// Tool arguments as JSON string
     pub args: String,
 }
+
+/// Most records the Record panel holds, and the most history loaded into
+/// it, newest kept. A memory guard rather than a display limit: a
+/// [`RecordSummary`] can carry up to ~20KB of pretty-printed payload in
+/// `message`, so this bounds the panel to a few hundred MB at worst.
+pub const MAX_RECORDS: usize = 10_000;
 
 /// Summary of a kernel record for display in the UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]

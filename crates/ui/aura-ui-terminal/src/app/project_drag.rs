@@ -16,11 +16,18 @@
 //! When the button comes up after a drag, the new order goes to the
 //! session, which keeps it.
 //!
+//! While a drag is on, [`App::project_drag_hit`] tells the renderer which
+//! rows are being dragged and which rows the pointer is over. The renderer
+//! draws the dragged rows lit and puts an accent rail beside the hit area,
+//! so you can see where the rows will go before they move.
+//!
 //! Invariants: only whole projects move, so the agents of a project stay
 //! together; an agent moves with everything under it. A swap happens only
 //! when the pointer lands on the dragged rows' new place. Without that a
 //! tall block and a short one would swap back and forth under a still
 //! pointer.
+
+use std::ops::Range;
 
 use super::{App, ProjectListRow};
 use crate::events::{starts_project, AgentSummary, UiEvent};
@@ -40,8 +47,23 @@ pub(crate) struct ProjectPress {
     pressed: Pressed,
     /// Screen row it went down on
     row: u16,
+    /// Screen row the pointer is on now
+    pointer: u16,
     /// The pointer has left that row
     moved: bool,
+}
+
+/// Where a drag stands, for drawing it: list rows, as indexes into
+/// [`App::project_rows`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProjectDragHit {
+    /// Rows of the project or agent being dragged
+    pub(crate) dragged: Range<usize>,
+    /// Rows of the block the pointer is over, the one the dragged rows
+    /// take the place of; the dragged rows themselves once they landed
+    /// there. `None` over nothing they may move to, such as another
+    /// project for an agent.
+    pub(crate) target: Option<Range<usize>>,
 }
 
 impl App {
@@ -56,9 +78,11 @@ impl App {
             return false;
         };
         if self.project_add_at(index, column).is_some()
+            || self.agent_button_hit(index, column).is_some()
             || self.fold_marker_at(index, column).is_some()
         {
-            // The "+" and an agent's fold marker are buttons, not handles.
+            // The "+", an agent's open and archive buttons and its fold
+            // marker are buttons, not handles.
             return false;
         }
         let pressed = match self.project_rows().get(index).copied() {
@@ -74,6 +98,7 @@ impl App {
         self.project_press = Some(ProjectPress {
             pressed,
             row,
+            pointer: row,
             moved: false,
         });
         header
@@ -87,6 +112,7 @@ impl App {
             return false;
         };
         press.moved |= row != press.row;
+        press.pointer = row;
         if press.moved {
             match press.pressed.clone() {
                 Pressed::Project(key) => self.move_project_under(&key, row),
@@ -131,6 +157,44 @@ impl App {
     #[must_use]
     pub fn project_dragging(&self) -> bool {
         self.project_press.as_ref().is_some_and(|press| press.moved)
+    }
+
+    /// The rows being dragged and the rows under the pointer, while a
+    /// project or agent is dragged; `None` otherwise, a mere press too.
+    #[must_use]
+    pub(crate) fn project_drag_hit(&self) -> Option<ProjectDragHit> {
+        let press = self.project_press.as_ref().filter(|press| press.moved)?;
+        let rows = self.project_rows();
+        let block_rows = |start: usize, end: usize, header: bool| {
+            let within = |row: &ProjectListRow| match *row {
+                ProjectListRow::Project { root, .. } => header && root == start,
+                ProjectListRow::Agent { index } => (start..end).contains(&index),
+                _ => false,
+            };
+            let first = rows.iter().position(within)?;
+            let len = rows[first..].iter().take_while(|row| within(row)).count();
+            Some(first..first + len)
+        };
+        let at = self.list_row_at(press.pointer);
+        match &press.pressed {
+            Pressed::Project(key) => {
+                let from = self.project_root_of_key(key)?;
+                let dragged = block_rows(from, self.project_end(from), true)?;
+                let target = at
+                    .and_then(|at| self.project_at_row(&rows, at))
+                    .and_then(|root| block_rows(root, self.project_end(root), true));
+                Some(ProjectDragHit { dragged, target })
+            }
+            Pressed::Agent(id) => {
+                let from = self.agents_position(id)?;
+                let dragged = block_rows(from, self.block_end(from), false)?;
+                let target = at
+                    .and_then(|at| self.agent_block_at_row(&rows, at))
+                    .filter(|&start| self.project_root(start) == self.project_root(from))
+                    .and_then(|start| block_rows(start, self.block_end(start), false));
+                Some(ProjectDragHit { dragged, target })
+            }
+        }
     }
 
     /// Keys of the projects, in the order listed.

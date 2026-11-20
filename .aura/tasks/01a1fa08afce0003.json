@@ -1,0 +1,14 @@
+{
+  "id": "01a1fa08afce0003",
+  "title": "Fact-check an article plan about the \"Gate\" model router against the actual code in /home/n3o/code/aura-harness. Read-o…",
+  "state": "completed",
+  "agent_id": "7e63f7a8056f9dd7ad09c5a5685d837cb0ad08672e3a287c17d19984be5ebe63",
+  "agent_name": "explorer #12",
+  "assignee": "explorer",
+  "parent": "01a1fa07daf40002",
+  "items": [],
+  "summary": "Check for other AURA_GATE vars elsewhere, and read lead.rs/outcome.rs key parts.The plan is mostly accurate. Of the 10 claims, 6 check out, 4 are partly right, and none is outright fabricated. The two that most need fixing are #6 (which turns are led) and #3 (\"plan first\").",
+  "updated_ms": 1795196388766,
+  "created_ms": 1795196235726,
+  "tool_use_id": "toolu_014KfYSuXwXmbA8KWv2hVSXW"
+}

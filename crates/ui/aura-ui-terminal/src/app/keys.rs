@@ -304,6 +304,9 @@ impl App {
         if let Some(result) = self.handle_slash_menu_key(key) {
             return result;
         }
+        if let Some(result) = self.handle_queue_key(key) {
+            return result;
+        }
         if self.toggle_terminal_mode(key) {
             return KeyResult::continue_running();
         }
@@ -570,7 +573,7 @@ impl App {
                 }
                 // Enter on an empty prompt sends the oldest queued message
                 // now, cancelling the turn that is running.
-                if self.state == AppState::Processing && self.hud.queued > 0 {
+                if self.state == AppState::Processing && self.hud.queued() > 0 {
                     if let Some(tx) = &self.event_tx {
                         let _ = tx.try_send(UiEvent::SendQueuedNow(self.active_agent_id.clone()));
                     }

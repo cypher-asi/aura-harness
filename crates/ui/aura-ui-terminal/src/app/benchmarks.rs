@@ -146,7 +146,9 @@ pub struct BenchState {
     open: bool,
     /// Whether the list asked for has arrived
     loaded: bool,
-    /// Benchmarks, newest first
+    /// Hex id of the agent at the top of the tree whose benchmarks it lists
+    root: Option<String>,
+    /// Benchmarks of that tree, newest first
     pub benches: Vec<BenchView>,
     /// Sessions of the agent on screen, to replay
     pub sessions: Vec<BenchSession>,
@@ -208,14 +210,28 @@ impl BenchState {
             .unwrap_or(WorkChoice::LastPrompt)
     }
 
-    fn list(&mut self, mut benches: Vec<BenchView>) {
+    fn list(&mut self, root: String, mut benches: Vec<BenchView>) {
+        if self.root.as_ref() != Some(&root) {
+            self.selected = 0;
+            self.run = None;
+            self.scroll = 0;
+        }
         benches.reverse();
+        self.root = Some(root);
         self.benches = benches;
         self.loaded = true;
         self.selected = self.selected.min(self.benches.len().saturating_sub(1));
+        if let BenchMode::Detail(id) = &self.mode {
+            if !self.benches.iter().any(|b| &b.id == id) {
+                self.mode = BenchMode::List;
+            }
+        }
     }
 
     fn upsert(&mut self, view: BenchView) {
+        if self.root.as_ref() != Some(&view.root) {
+            return;
+        }
         match self.benches.iter_mut().find(|b| b.id == view.id) {
             Some(known) => *known = view,
             None => {
@@ -300,7 +316,8 @@ impl App {
         }
     }
 
-    /// Ask for the benchmarks and for the sessions of the agent on screen.
+    /// Ask for the benchmarks of the tree of the agent on screen and for
+    /// its sessions.
     pub(super) fn request_benchmarks(&mut self) {
         self.send_bench(BenchRequest::List);
         self.send_bench(BenchRequest::Sessions);
@@ -325,8 +342,10 @@ impl App {
         choices
     }
 
-    pub(super) fn cmd_bench_list(&mut self, benches: Vec<BenchView>) {
-        self.bench.list(benches);
+    pub(super) fn cmd_bench_list(&mut self, agent_id: &str, root: String, benches: Vec<BenchView>) {
+        if agent_id == self.active_agent_id {
+            self.bench.list(root, benches);
+        }
     }
 
     pub(super) fn cmd_bench_upsert(&mut self, view: BenchView) {
@@ -648,6 +667,7 @@ mod tests {
     fn view(id: &str) -> BenchView {
         BenchView {
             id: id.to_string(),
+            root: "root".to_string(),
             name: format!("Compare {id}"),
             arms: [BenchArm::default(), BenchArm::default()],
             ..BenchView::default()
@@ -657,7 +677,7 @@ mod tests {
     #[test]
     fn the_list_is_newest_first_and_upserts_replace_in_place() {
         let mut state = BenchState::default();
-        state.list(vec![view("1"), view("2")]);
+        state.list("root".to_string(), vec![view("1"), view("2")]);
         assert_eq!(state.benches[0].id, "2");
         assert!(state.loaded());
         let mut changed = view("1");
@@ -667,6 +687,34 @@ mod tests {
         assert_eq!(state.benches[1].title, "changed");
         state.upsert(view("3"));
         assert_eq!(state.benches[0].id, "3");
+    }
+
+    #[test]
+    fn each_tree_lists_its_own_benchmarks() {
+        let mut app = App::new();
+        app.active_agent_id = "user".to_string();
+        app.cmd_bench_list("user", "root".to_string(), vec![view("1")]);
+        app.bench.mode = BenchMode::Detail("1".to_string());
+
+        let mut elsewhere = view("2");
+        elsewhere.root = "other".to_string();
+        app.cmd_bench_upsert(elsewhere.clone());
+        assert_eq!(app.bench.benches.len(), 1, "another tree's benchmark");
+
+        app.cmd_bench_list("someone else", "other".to_string(), vec![elsewhere.clone()]);
+        assert_eq!(app.bench.benches[0].id, "1", "a list for another agent");
+
+        app.active_agent_id = "other".to_string();
+        app.cmd_bench_list("other", "other".to_string(), vec![elsewhere]);
+        assert_eq!(app.bench.benches.len(), 1);
+        assert_eq!(app.bench.benches[0].id, "2");
+        assert_eq!(
+            app.bench.mode,
+            BenchMode::List,
+            "the benchmark shown is not in this tree"
+        );
+        app.cmd_bench_upsert(view("3"));
+        assert_eq!(app.bench.benches.len(), 1, "the first tree's benchmark");
     }
 
     #[test]

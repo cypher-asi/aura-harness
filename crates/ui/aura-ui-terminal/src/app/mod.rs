@@ -27,11 +27,13 @@ pub mod plans;
 mod processes;
 mod project_drag;
 mod prose;
+pub(crate) mod queue_panel;
 pub mod tasks;
 pub use aura_ui::sandbox;
 mod selection;
 pub(crate) mod shell_input;
 mod shell_prompt;
+mod side_scope;
 mod slash_menu;
 mod smooth;
 pub mod tab_bar;
@@ -43,6 +45,8 @@ pub mod vim;
 
 #[cfg(test)]
 mod detail_tests;
+#[cfg(test)]
+mod queue_panel_tests;
 #[cfg(test)]
 mod tests;
 
@@ -72,6 +76,7 @@ use ratatui::{
 };
 use sandbox::{SandboxEntryKind, SandboxTree};
 pub use selection::Selection;
+pub use side_scope::SideScope;
 pub use smooth::ChatScroll;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -98,8 +103,8 @@ const ERROR_NOTIFICATION_TTL: Duration = Duration::from_secs(6);
 /// scrolled to its end.
 const NOTIFICATION_TAIL: Duration = Duration::from_secs(2);
 
-/// Maximum number of records to keep in the list.
-const MAX_RECORDS: usize = 100;
+// Maximum number of records to keep in the list, shared with the loader.
+use crate::events::MAX_RECORDS;
 
 /// Time between steps of the chat scrolling under a selection dragged
 /// past its top or bottom.
@@ -382,6 +387,8 @@ pub struct App {
     pub(super) context_menu: Option<context_menu::ContextMenu>,
     /// Usage, todos and jobs of the agent on screen
     pub(super) hud: Hud,
+    /// The queued-messages panel above the input
+    pub(super) queue_panel: queue_panel::QueuePanel,
     /// Whether the full todo list is shown above the input
     pub(super) todos_open: bool,
     /// When to get the user's attention
@@ -390,7 +397,14 @@ pub struct App {
     pub(super) alerts: Vec<String>,
     /// Which view the panel below the Record panel shows
     pub(super) side_tab: SidePanelTab,
-    /// Rows of the Processes tab
+    /// Whose items the panel's lists show
+    pub(super) side_scope: SideScope,
+    /// Every process, of every agent
+    pub(super) all_processes: Vec<ProcessSummary>,
+    /// Agents whose processes the Processes tab lists
+    pub(super) process_filter: side_scope::AgentFilter,
+    /// Rows of the Processes tab: the processes `process_filter` lets
+    /// through
     pub(super) processes: Vec<ProcessSummary>,
     /// Highlighted row of the Processes tab
     pub(super) selected_process: usize,
@@ -458,8 +472,12 @@ pub struct PanelAreas {
     pub sandbox_rows: Option<Rect>,
     /// Tree row shown at the top of `sandbox_rows`
     pub sandbox_scroll: usize,
-    /// Header bar of the panel below the Record panel
+    /// Header bar of the panel below the Record panel, up to its ALL
+    /// button
     pub side_tabs: Option<Rect>,
+    /// Button at the right end of that bar that shows the whole
+    /// project's items in its lists, or the active agent's
+    pub side_scope: Option<Rect>,
     /// Rows of the Processes tab inside the panel
     pub process_rows: Option<Rect>,
     /// Process row shown at the top of `process_rows`
@@ -508,6 +526,12 @@ pub(crate) enum HoverTarget {
     ProjectRow(usize),
     /// The "+" at the right end of a project's row in the projects list.
     AddToProject(usize),
+    /// The archive button left of the time on an agent's row in the
+    /// projects list, shown while the row is hovered.
+    ArchiveAgent(usize),
+    /// The open button left of the archive button on an agent's row in
+    /// the projects list, shown while the row is hovered.
+    OpenAgent(usize),
     /// A row in the roster, including "+ New agent".
     DefinitionRow(usize),
     /// A row in the Archive.
@@ -518,6 +542,8 @@ pub(crate) enum HoverTarget {
     RecordRow(usize),
     /// A label in the side panel's tab bar.
     SideTab(SidePanelTab),
+    /// The ALL button at the right end of the side panel's tab bar.
+    SideScope,
     /// A row in the Processes tab.
     ProcessRow(usize),
     /// A row in the Trace tab.
@@ -613,6 +639,104 @@ pub(super) fn follow_selection(
 /// Columns of the " + " at the right end of a project's row, which adds an
 /// agent to the project when clicked.
 pub(crate) const PROJECT_ADD_WIDTH: u16 = 3;
+
+/// Glyph of the archive button drawn on a hovered agent's row in the
+/// projects list. The desktop draws it as a shape, so it lines up with the
+/// cell grid there as well.
+pub(crate) const AGENT_ARCHIVE_GLYPH: &str = "✕";
+
+/// Glyph of the open button drawn left of the archive button. Not a
+/// triangle: `▸` and `▾` already fold and unfold rows in this list. The
+/// desktop takes it from its monospace font, centered in its cell.
+pub(crate) const AGENT_OPEN_GLYPH: &str = "↗";
+
+/// A button drawn on a hovered agent's row in the projects list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AgentButton {
+    /// Shows the agent in the chat, as the context menu's Open does.
+    Open,
+    /// Archives the agent.
+    Archive,
+}
+
+impl AgentButton {
+    /// The buttons, left to right as drawn.
+    pub(crate) const ALL: [Self; 2] = [Self::Open, Self::Archive];
+
+    pub(crate) const fn glyph(self) -> &'static str {
+        match self {
+            Self::Open => AGENT_OPEN_GLYPH,
+            Self::Archive => AGENT_ARCHIVE_GLYPH,
+        }
+    }
+
+    /// What the button draws: a space, then its glyph.
+    pub(crate) fn label(self) -> String {
+        format!(" {}", self.glyph())
+    }
+
+    /// The hover target of this button on projects-list row `index`.
+    pub(crate) const fn target(self, index: usize) -> HoverTarget {
+        match self {
+            Self::Open => HoverTarget::OpenAgent(index),
+            Self::Archive => HoverTarget::ArchiveAgent(index),
+        }
+    }
+}
+
+/// What follows the buttons on a hovered agent's row: the time with a
+/// space on each side (` 5m `), or a single space that keeps the last
+/// button off the panel's edge when the agent has no time.
+pub(crate) fn agent_time_cell(ago: Option<&str>) -> String {
+    ago.map_or_else(|| " ".to_string(), |ago| format!(" {ago} "))
+}
+
+fn columns(text: &str) -> u16 {
+    use unicode_width::UnicodeWidthStr;
+    u16::try_from(text.width()).unwrap_or(u16::MAX)
+}
+
+/// Column of `button`'s glyph on an agent's row in the projects list,
+/// counted from the row's left edge, for a row `width` columns wide whose
+/// time reads `ago`. The renderer lays the row out from the same pieces:
+/// each button's [`AgentButton::label`] in [`AgentButton::ALL`] order,
+/// then [`agent_time_cell`], flush with the right edge.
+pub(crate) fn agent_button_offset(width: u16, ago: Option<&str>, button: AgentButton) -> u16 {
+    let after: u16 = AgentButton::ALL
+        .iter()
+        .skip_while(|&&b| b != button)
+        .skip(1)
+        .map(|b| columns(&b.label()))
+        .fold(0, u16::saturating_add);
+    let glyph = columns(button.glyph());
+    width.saturating_sub(
+        columns(&agent_time_cell(ago))
+            .saturating_add(after)
+            .saturating_add(glyph),
+    )
+}
+
+/// The button at column `offset` of an agent's row laid out as
+/// [`agent_button_offset`] says. Each button takes its glyph and the space
+/// left of it, so the zones don't overlap; the last also takes the space
+/// between it and the time.
+pub(crate) fn agent_button_at(width: u16, ago: Option<&str>, offset: u16) -> Option<AgentButton> {
+    let last = AgentButton::ALL.len() - 1;
+    AgentButton::ALL
+        .iter()
+        .enumerate()
+        .find(|&(i, &button)| {
+            let glyph = agent_button_offset(width, ago, button);
+            let end = glyph.saturating_add(columns(button.glyph()));
+            let end = if i == last {
+                end.saturating_add(1)
+            } else {
+                end
+            };
+            (glyph.saturating_sub(1)..end).contains(&offset)
+        })
+        .map(|(_, &button)| button)
+}
 
 /// One row of the projects list. A project is its own row; its first
 /// agent, and any agents that agent spawned, hang underneath while the
@@ -751,10 +875,14 @@ impl App {
             folder_picker: None,
             context_menu: None,
             hud: Hud::default(),
+            queue_panel: queue_panel::QueuePanel::default(),
             todos_open: false,
             alert_settings: AlertSettings::default(),
             alerts: Vec::new(),
             side_tab: SidePanelTab::default(),
+            side_scope: SideScope::default(),
+            all_processes: Vec::new(),
+            process_filter: None,
             processes: Vec::new(),
             selected_process: 0,
             processes_scroll: 0,
@@ -927,8 +1055,7 @@ impl App {
     }
 
     /// Whether the conversation ends in a group of steps that the turn in
-    /// flight may still add to. Its summary line spins in place of the
-    /// working indicator.
+    /// flight may still add to. Its summary line spins while it grows.
     #[must_use]
     pub fn ends_in_live_group(&self) -> bool {
         self.state == AppState::Processing
@@ -1573,9 +1700,19 @@ impl App {
         let pointing = matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Drag(_));
         let menu = |app: &Self| app.context_menu.as_ref().map(|menu| menu.selected);
         let ends = |app: &Self| app.selection.as_ref().map(Selection::ends);
-        let before = (self.hover, ends(self), menu(self), self.project_moves);
+        let state = |app: &Self| {
+            (
+                app.hover,
+                ends(app),
+                menu(app),
+                app.project_moves,
+                app.project_drag_hit(),
+                app.queue_pointer_state(),
+            )
+        };
+        let before = state(self);
         self.mouse(mouse);
-        !pointing || before != (self.hover, ends(self), menu(self), self.project_moves)
+        !pointing || before != state(self)
     }
 
     fn mouse(&mut self, mouse: MouseEvent) {
@@ -1583,9 +1720,14 @@ impl App {
             self.hover = None;
             self.context_menu = None;
             self.project_press = None;
+            self.drop_queue_press();
             return;
         }
         if self.context_menu_mouse(mouse.kind, mouse.column, mouse.row) {
+            self.hover = None;
+            return;
+        }
+        if self.queue_mouse(mouse.kind, mouse.column, mouse.row) {
             self.hover = None;
             return;
         }
@@ -1752,6 +1894,9 @@ impl App {
                 if self.project_add_at(index, column).is_some() {
                     return Some(HoverTarget::AddToProject(index));
                 }
+                if let Some((button, _)) = self.agent_button_hit(index, column) {
+                    return Some(button.target(index));
+                }
                 return Some(HoverTarget::ProjectRow(index));
             }
         }
@@ -1816,6 +1961,25 @@ impl App {
         let list = self.areas.agent_rows?;
         let key = self.header_key(*self.project_rows().get(index)?)?;
         (column + PROJECT_ADD_WIDTH >= list.x + list.width).then_some(key)
+    }
+
+    /// The button at `column` on projects-list row `index`, if the row is
+    /// an agent's, and the agent's id. Where the buttons sit follows the
+    /// row's time, which is formatted against the clock just as the
+    /// renderer does it.
+    fn agent_button_hit(&self, index: usize, column: u16) -> Option<(AgentButton, String)> {
+        let list = self.areas.agent_rows?;
+        let ProjectListRow::Agent { index: agent } = *self.project_rows().get(index)? else {
+            return None;
+        };
+        let agent = self.agents.get(agent)?;
+        let now = crate::renderer::now_ms();
+        let ago = agent
+            .last_active_ms
+            .map(|ms| crate::renderer::format_ago(ms, now));
+        let offset = column.checked_sub(list.x)?;
+        let button = agent_button_at(list.width, ago.as_deref(), offset)?;
+        Some((button, agent.id.clone()))
     }
 
     /// Unfold the project with key `key` and ask for a new agent in it.
@@ -2006,6 +2170,11 @@ impl App {
         };
         if let Some(key) = self.project_add_at(index, column) {
             self.add_agent_to_project(&key);
+        } else if let Some((button, id)) = self.agent_button_hit(index, column) {
+            match button {
+                AgentButton::Open => self.request_agent_switch(id),
+                AgentButton::Archive => self.archive_agent(id),
+            }
         } else if let Some(agent) = self.fold_marker_at(index, column) {
             // Like a project's header, the marker leaves a list the wheel
             // scrolled where it is.
@@ -2311,9 +2480,9 @@ impl App {
     /// column out: after one leading space and the spawn guides,
     /// `AURA_WIDTH + 2` columns per level. An idle agent's marker opens the
     /// icon column, and the blank rest of that column counts too, as it
-    /// does for [`processes::on_row_icon`]. A busy agent's ring fills the
-    /// icon column, so its marker takes the spare column after it, and
-    /// only that column is the button.
+    /// does for [`processes::on_row_icon`]. A busy agent's ring stands in
+    /// for its marker, open or folded, so the ring and the spare column
+    /// after it are the button just the same.
     fn fold_marker_at(&self, row: usize, column: u16) -> Option<usize> {
         use crate::animation::AURA_WIDTH;
         let list = self.areas.agent_rows?;
@@ -2325,12 +2494,9 @@ impl App {
         }
         let start = 1 + self.agents[index].depth * (AURA_WIDTH + 2);
         let offset = usize::from(column.checked_sub(list.x)?);
-        let hit = if self.agent_row_busy(index) {
-            offset == start + AURA_WIDTH
-        } else {
-            (start..=start + AURA_WIDTH).contains(&offset)
-        };
-        hit.then_some(index)
+        (start..=start + AURA_WIDTH)
+            .contains(&offset)
+            .then_some(index)
     }
 
     /// Visible row of agent `index`, when its project is expanded.
@@ -2549,6 +2715,12 @@ impl App {
     pub fn spinner_char(&self) -> &'static str {
         const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
         SPINNER_FRAMES[self.animation_frame % SPINNER_FRAMES.len()]
+    }
+
+    /// Frames drawn so far, to step animations by.
+    #[must_use]
+    pub const fn animation_frame(&self) -> usize {
+        self.animation_frame
     }
 
     /// Current frame of the ring shown beside thinking agents.

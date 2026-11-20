@@ -794,7 +794,7 @@ mod tests {
         let lines = activity_lines(&step, true, None, "⠋", 80, &Theme::default());
         let text = texts(&lines).join("\n");
         assert!(
-            text.starts_with("  ▾ Delegated to explore: Read-only."),
+            text.starts_with("  ▾ Delegated to @explore: Read-only."),
             "{text}"
         );
         assert!(

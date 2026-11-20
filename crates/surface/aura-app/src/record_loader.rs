@@ -16,7 +16,7 @@ use aura_store_record::{ReadStore, StoreError};
 use aura_ui_terminal::{
     events::{
         ActivityData, AgentSummary, CallUsage, MessageData, MessageRole, PolicyDetail,
-        ProjectSummary, RecordStatus, RecordSummary,
+        ProjectSummary, RecordStatus, RecordSummary, MAX_RECORDS,
     },
     UiCommand,
 };
@@ -25,8 +25,8 @@ use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc;
 use tracing::warn;
 
-/// Number of entries shown in the Record panel.
-const RECORD_PANEL_LIMIT: usize = 100;
+/// Number of entries loaded into the Record panel: as many as it holds.
+const RECORD_PANEL_LIMIT: usize = MAX_RECORDS;
 
 /// Number of trailing entries scanned when rebuilding an agent's chat.
 const HISTORY_SCAN_LIMIT: usize = 1000;
@@ -72,6 +72,8 @@ pub fn recent_record_summaries(
 ///
 /// Uses `try_send`, so it is only suitable before the UI starts draining
 /// the channel (startup); async callers should send summaries themselves.
+/// The history goes as one [`UiCommand::SetRecords`], so its length does
+/// not count against the channel's capacity.
 pub fn load_existing_records(
     store: &dyn ReadStore,
     agent_id: AgentId,
@@ -79,8 +81,8 @@ pub fn load_existing_records(
 ) {
     match recent_record_summaries(store, agent_id) {
         Ok(summaries) => {
-            for summary in summaries {
-                let _ = commands.try_send(UiCommand::NewRecord(summary));
+            if let Err(e) = commands.try_send(UiCommand::SetRecords(summaries)) {
+                warn!(error = %e, "Failed to queue record history for the UI");
             }
         }
         Err(e) => {

@@ -129,6 +129,58 @@ async fn test_checkpoint_not_repeated() {
 }
 
 #[tokio::test]
+async fn test_checkpoint_not_repeated_across_runs() {
+    let executor = MockExecutor {
+        results: vec![ToolCallResult::success("placeholder", "wrote file")],
+    };
+
+    let provider = MockProvider::new()
+        .with_response(MockResponse::tool_use(
+            "tool_1",
+            "write_file",
+            serde_json::json!({"path": "c.txt", "content": "c"}),
+        ))
+        .with_response(MockResponse::text("Done!"));
+
+    let config = AgentLoopConfig {
+        system_prompt: "test".to_string(),
+        ..AgentLoopConfig::for_agent("claude-test-model")
+    };
+    let agent = AgentLoop::new(config);
+    let messages = vec![
+        Message::user(format!(
+            "write a.txt\n{}",
+            super::context::FIRST_WRITE_CHECKPOINT
+        )),
+        Message::assistant("Wrote a.txt."),
+        Message::user("now write c.txt"),
+    ];
+    let tools = vec![ToolDefinition::new(
+        "write_file",
+        "Write a file",
+        serde_json::json!({"type": "object"}),
+    )];
+
+    let result = agent
+        .run(&provider, &executor, messages, tools)
+        .await
+        .unwrap();
+
+    let checkpoint_count = result
+        .messages
+        .iter()
+        .filter(|msg| {
+            msg.text_content()
+                .contains("You've made your first file change")
+        })
+        .count();
+    assert_eq!(
+        checkpoint_count, 1,
+        "Checkpoint from an earlier run should suppress a new one"
+    );
+}
+
+#[tokio::test]
 async fn test_no_exploration_compact_when_low() {
     let long_content = "y".repeat(3000);
     let executor = MockExecutor {

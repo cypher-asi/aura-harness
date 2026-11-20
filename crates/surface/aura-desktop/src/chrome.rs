@@ -6,7 +6,9 @@
 //! the selection color while their panel has focus; otherwise the box is
 //! only outlined. A bar over a view that closes, such as a file shown
 //! over the chat, ends in a close box; a panel that expands to fill the
-//! window has an expand box left of it.
+//! window has an expand box left of it. A panel whose lists can show the
+//! whole project's items rather than the active agent's ends in an ALL
+//! box, filled like a shown tab while it is on.
 //!
 //! The dividers between panels live here too: bands along the borders
 //! two panels share, which drag to move the border.
@@ -19,7 +21,7 @@ mod quads;
 use crate::geom::{Color, Point, Rectangle, Size};
 use crate::grid::{self, Metrics, Palette};
 use crate::tab_bar::unit;
-use aura_ui_terminal::{Pane, PaneChrome, PaneSplits, PaneTab};
+use aura_ui_terminal::{Pane, PaneChrome, PaneSplits, PaneTab, SideScope};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
@@ -51,6 +53,9 @@ pub enum Hit {
     Close(Pane),
     /// The box that expands a panel to fill the window, or restores it
     Expand(Pane),
+    /// The ALL box, which switches a panel's lists between the active
+    /// agent's items and the whole project's
+    Scope(Pane),
     /// The rest of a title bar
     Bar(Pane),
     Divider(Divider),
@@ -136,6 +141,8 @@ struct BarLayout {
     close: Option<Rectangle>,
     /// The expand box, and whether the panel is expanded
     expand: Option<(Rectangle, bool)>,
+    /// The ALL box, and whether it is on
+    scope: Option<(Rectangle, bool)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -244,6 +251,9 @@ impl Layout {
         if bar.expand.is_some_and(|(expand, _)| expand.contains(at)) {
             return Some(Hit::Expand(bar.pane));
         }
+        if bar.scope.is_some_and(|(scope, _)| scope.contains(at)) {
+            return Some(Hit::Scope(bar.pane));
+        }
         let tab = bar.boxes.iter().find_map(|boxed| match boxed.kind {
             Kind::Tab(tab) if boxed.rect.contains(at) => Some(tab),
             _ => None,
@@ -288,6 +298,14 @@ fn bar_layout(model: &Model, pane: &PaneChrome) -> BarLayout {
         .expand
         .and_then(|expanded| Some((square(true)?, expanded)));
     let width = |text: &str| ((text.width() as f32 + 2.0 * SIDE) * unit).round();
+    let scope = pane.scope.and_then(|on| {
+        let w = width(SideScope::BUTTON);
+        (end - start >= 3.0 * w).then(|| {
+            let rect = Rectangle::new(Point::new(end - w, top), Size::new(w, height));
+            end = rect.x - gap;
+            (rect, on)
+        })
+    });
 
     let items = |short: bool| -> Vec<(String, Kind)> {
         let title = pane.title.iter().map(|t| (t.clone(), Kind::Title));
@@ -342,6 +360,7 @@ fn bar_layout(model: &Model, pane: &PaneChrome) -> BarLayout {
         info,
         close,
         expand,
+        scope,
     }
 }
 
@@ -435,6 +454,13 @@ impl Chrome {
         bar.expand.map(|(rect, _)| rect)
     }
 
+    /// The ALL box of `pane`'s bar, if it is drawn.
+    #[cfg(test)]
+    pub fn scope_box(&self, pane: Pane) -> Option<Rectangle> {
+        let bar = self.layout.bars.iter().find(|bar| bar.pane == pane)?;
+        bar.scope.map(|(rect, _)| rect)
+    }
+
     /// The middle of the band of `divider`, if there is one.
     #[cfg(test)]
     pub fn band(&self, divider: Divider) -> Option<Point> {
@@ -465,6 +491,7 @@ mod tests {
             info_color: TermColor::Reset,
             closable: false,
             expand: None,
+            scope: None,
             focused: false,
         }
     }
@@ -613,6 +640,23 @@ mod tests {
         assert!(expand.x + expand.width < close.x);
         let middle = Point::new(expand.center_x(), expand.center_y());
         assert_eq!(layout.hit(middle), Some(Hit::Expand(Pane::Chat)));
+    }
+
+    #[test]
+    fn scoped_bars_end_in_an_all_box_after_their_tabs() {
+        let mut model = four_panes();
+        model.panes[3].scope = Some(true);
+        let layout = Layout::of(&model);
+        let bar = &layout.bars[3];
+        assert_eq!(bar.pane, Pane::Side);
+        let (scope, on) = bar.scope.expect("room for the ALL box");
+        assert!(on);
+        assert!(scope.x + scope.width <= bar.rect.x + bar.rect.width);
+        let last = bar.boxes.last().expect("the tabs are drawn");
+        assert!(last.rect.x + last.rect.width < scope.x);
+        let middle = Point::new(scope.center_x(), scope.center_y());
+        assert_eq!(layout.hit(middle), Some(Hit::Scope(Pane::Side)));
+        assert!(Layout::of(&four_panes()).bars[3].scope.is_none());
     }
 
     #[test]

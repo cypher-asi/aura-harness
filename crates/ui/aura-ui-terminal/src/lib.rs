@@ -58,7 +58,7 @@ pub use app::flow::{
 };
 pub use app::{
     AgentsTab, App, AppState, ChatScroll, ChatTab, Pane, PaneChrome, PaneSplits, PaneTab,
-    ProseMeasure, ProseRow, SidePanelTab,
+    ProseMeasure, ProseRow, SidePanelTab, SideScope,
 };
 pub use events::{UiCommand, UiEvent};
 pub use mode_command::{ApprovalLevel, ModeCommandError, PermissionMode, SlashModeCommand};

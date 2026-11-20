@@ -108,8 +108,9 @@ pub(super) fn status_parts(hud: &Hud, model: FooterModel, theme: &Theme) -> Vec<
     if jobs > 0 {
         parts.push((format!("{jobs} in background"), theme.colors.foreground));
     }
-    if hud.queued > 0 {
-        parts.push((format!("{} queued", hud.queued), theme.colors.foreground));
+    let queued = hud.queued();
+    if queued > 0 {
+        parts.push((format!("{queued} queued"), theme.colors.foreground));
     }
     if stats.compactions > 0 {
         parts.push((
@@ -425,7 +426,7 @@ fn todo_line(todo: &TodoView, room: usize, theme: &Theme) -> Line<'static> {
 }
 
 /// `text` cut to `width` columns, ending in `…` when cut.
-fn truncate(text: &str, width: usize) -> String {
+pub(super) fn truncate(text: &str, width: usize) -> String {
     if display_width(text) <= width {
         return text.to_string();
     }

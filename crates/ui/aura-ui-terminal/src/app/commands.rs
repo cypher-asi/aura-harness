@@ -788,7 +788,7 @@ impl App {
                 self.hud.todos = todos;
             }
             UiCommand::SetJobs(jobs) => self.hud.jobs = jobs,
-            UiCommand::SetQueued(queued) => self.hud.queued = queued,
+            UiCommand::SetQueue(queue) => self.set_queue(queue),
             UiCommand::SetSessionTotals(totals) => self.hud.stats.restore(&totals),
             UiCommand::SetInstructions(files) => self.hud.instructions = Some(files),
             UiCommand::SetContext(context) => {
@@ -815,12 +815,13 @@ impl App {
                     self.close_detail();
                 }
             }
+            UiCommand::SetRecords(records) => self.cmd_set_records(records),
             UiCommand::LoadConversation(history) => self.cmd_load_conversation(history),
             UiCommand::SetSandboxRoot(root) => self.sandbox.set_root(root),
             UiCommand::SetProcesses(processes) => self.set_processes(processes),
             UiCommand::GraphLoad { run_id, nodes } => self.load_graph(run_id, nodes),
             UiCommand::GraphUpsert { run_id, nodes } => {
-                self.trace_feed.push(&run_id, &nodes);
+                self.trace_feed.push(&self.active_agent_id, &run_id, &nodes);
                 self.upsert_graph(&run_id, nodes);
             }
             UiCommand::FlowLoad {
@@ -833,7 +834,11 @@ impl App {
                 lanes,
                 nodes,
             } => self.upsert_flow(&agent_id, lanes, nodes),
-            UiCommand::BenchList(benches) => self.cmd_bench_list(benches),
+            UiCommand::BenchList {
+                agent_id,
+                root,
+                benches,
+            } => self.cmd_bench_list(&agent_id, root, benches),
             UiCommand::BenchUpsert(view) => self.cmd_bench_upsert(*view),
             UiCommand::BenchSessions {
                 agent_id,
@@ -870,9 +875,18 @@ impl App {
                 self.plan_list.set_current(plan.as_ref());
                 self.active_plan = plan;
             }
-            UiCommand::SetPlans(plans) => self.plan_list.set_plans(plans),
-            UiCommand::SetTasks(tasks) => self.task_list.set_tasks(tasks),
-            UiCommand::UpsertTask(task) => self.task_list.upsert(task),
+            UiCommand::SetPlans(plans) => {
+                self.plan_list.set_plans(plans);
+                self.refresh_plan_scope();
+            }
+            UiCommand::SetTasks(tasks) => {
+                self.task_list.set_tasks(tasks);
+                self.refresh_plan_scope();
+            }
+            UiCommand::UpsertTask(task) => {
+                self.task_list.upsert(task);
+                self.refresh_plan_scope();
+            }
         }
     }
 
@@ -1164,6 +1178,27 @@ impl App {
         }
     }
 
+    /// Replace the records with `records`, oldest first, keeping the
+    /// newest [`super::MAX_RECORDS`]. Like a `ClearRecords` followed by a
+    /// `NewRecord` each: the Record detail view closes and the selection
+    /// follows the newest record.
+    fn cmd_set_records(&mut self, records: Vec<crate::events::RecordSummary>) {
+        if self.detail == Some(DetailView::Record) {
+            self.close_detail();
+        }
+        let active = &self.active_agent_id;
+        let mut kept: std::collections::VecDeque<_> = records
+            .into_iter()
+            .filter(|record| {
+                record.agent_id.is_empty() || active.is_empty() || record.agent_id == *active
+            })
+            .collect();
+        let excess = kept.len().saturating_sub(super::MAX_RECORDS);
+        kept.drain(..excess);
+        self.records = kept;
+        self.selected_record = self.records.len().saturating_sub(1);
+    }
+
     fn cmd_set_agents(&mut self, agents: Vec<crate::events::AgentSummary>) {
         self.agents = agents;
         self.collapsed_projects
@@ -1177,11 +1212,13 @@ impl App {
         self.collapsed_agents
             .retain(|id| foldable.contains(id.as_str()));
         self.select_visible_active();
+        self.refresh_side_scope();
     }
 
     fn cmd_set_active_agent(&mut self, agent_id: &str) {
         let switched = agent_id != self.active_agent_id;
         self.show_agent_chat(agent_id);
+        self.refresh_side_scope();
         let bench_run = self
             .agents
             .iter()
@@ -1195,7 +1232,8 @@ impl App {
             self.request_flow();
         }
         if self.bench.is_open() {
-            // Its form offers the sessions of the agent on screen.
+            // It lists the benchmarks of the tree on screen, and its form
+            // offers the sessions of the agent on screen.
             self.request_benchmarks();
         }
         for agent in &mut self.agents {

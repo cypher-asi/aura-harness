@@ -217,6 +217,7 @@ struct Ran {
 /// (named `name`) and show it in the BENCH tab. A failure to record is
 /// logged.
 pub(super) async fn save(
+    hub: &AgentHub,
     kernel: &Kernel,
     commands: &mpsc::Sender<UiCommand>,
     (agent_id, name): (AgentId, &str),
@@ -232,7 +233,8 @@ pub(super) async fn save(
             false
         }
     };
-    let view = super::bench::view(agent_id, name, payload);
+    let root = lock(&hub.registry).root(agent_id);
+    let view = super::bench::view(agent_id, root, name, payload);
     let _ = commands.send(UiCommand::BenchUpsert(Box::new(view))).await;
     recorded
 }
@@ -299,7 +301,14 @@ pub(super) async fn run(
         finish(&hub, &commands, &user_ui, &host, session, &payload).await;
         return;
     }
-    save(&session.kernel, &commands, (host_id, &host.name), &payload).await;
+    save(
+        &hub,
+        &session.kernel,
+        &commands,
+        (host_id, &host.name),
+        &payload,
+    )
+    .await;
     if !plan.examples.is_empty() {
         let (tasks, fixtures) = (plan.examples.clone(), dir.clone());
         let written = tokio::task::spawn_blocking(move || {
@@ -373,6 +382,7 @@ async fn finish(
     payload: &ComparePayload,
 ) {
     save(
+        hub,
         &session.kernel,
         commands,
         (host.agent_id(), &host.name),
@@ -419,6 +429,7 @@ async fn run_all(
             .await;
         payload.runs.push(done.run.clone());
         save(
+            &ctx.hub,
             &session.kernel,
             &ctx.commands,
             (ctx.host.agent_id(), &ctx.host.name),

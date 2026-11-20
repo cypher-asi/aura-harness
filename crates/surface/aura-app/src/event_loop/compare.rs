@@ -561,7 +561,14 @@ pub(super) async fn pick(
     }
     payload.status = CompareStatus::Picked(winner);
     let kernel = kernel_of(state, host)?;
-    save(&kernel, state.commands, (host, &compare), &payload).await;
+    save(
+        &state.hub,
+        &kernel,
+        state.commands,
+        (host, &compare),
+        &payload,
+    )
+    .await;
     let (good, bad) = (rated[winner.index()], rated[winner.opposite().index()]);
     let letter = |arm: CompareArm| arm.as_str().to_uppercase();
     Ok(format!(
@@ -618,7 +625,14 @@ pub(super) async fn apply(
     let (files, problems) = applied;
     payload.status = CompareStatus::Applied(name.to_string());
     let kernel = kernel_of(state, host)?;
-    save(&kernel, state.commands, (host, &compare), &payload).await;
+    save(
+        &state.hub,
+        &kernel,
+        state.commands,
+        (host, &compare),
+        &payload,
+    )
+    .await;
     Ok(format!(
         "{compare}: applied {name} ({files} file{}) to {}{}",
         if files == 1 { "" } else { "s" },
@@ -653,7 +667,14 @@ pub(super) async fn dismiss(
         .map_err(|e| e.to_string())?;
     payload.status = CompareStatus::Dismissed;
     let kernel = kernel_of(state, host)?;
-    save(&kernel, state.commands, (host, &compare), &payload).await;
+    save(
+        &state.hub,
+        &kernel,
+        state.commands,
+        (host, &compare),
+        &payload,
+    )
+    .await;
     Ok(format!("{compare}: dismissed{}", removed_line(&problems)))
 }
 

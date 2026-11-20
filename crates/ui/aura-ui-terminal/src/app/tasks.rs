@@ -3,10 +3,13 @@
 //! each piece of it an agent handed to another with `task` is a task under
 //! it; each shows what its agent has done and has left. Tasks still being
 //! worked on, or left with work to do, start open; the rest start folded.
+//! Only the tasks of the agents the side panel's scope lets through are
+//! listed, with every task under them.
 
 use std::collections::{HashMap, HashSet};
 
 use super::processes::SIDE_PAGE;
+use super::side_scope::AgentFilter;
 use super::{contains, follow_selection, App, NotificationType};
 use crate::events::TaskView;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -46,15 +49,50 @@ pub struct TaskList {
     tasks: Vec<TaskView>,
     /// Tasks the user folded (`false`) or opened (`true`), by id
     folds: HashMap<String, bool>,
+    /// Agents whose tasks are listed
+    filter: AgentFilter,
+    /// Which of `tasks` the filter lets through
+    scoped: Vec<bool>,
     rows: Vec<TaskRow>,
     selected: usize,
 }
 
 impl TaskList {
-    /// The tasks, newest first.
+    /// The tasks, newest first, listed or not.
     #[must_use]
     pub fn tasks(&self) -> &[TaskView] {
         &self.tasks
+    }
+
+    /// The tasks listed, newest first.
+    pub fn scoped_tasks(&self) -> impl Iterator<Item = &TaskView> {
+        self.tasks
+            .iter()
+            .zip(&self.scoped)
+            .filter_map(|(task, &scoped)| scoped.then_some(task))
+    }
+
+    /// Tasks of agents the filter leaves out.
+    #[must_use]
+    pub fn hidden(&self) -> usize {
+        self.scoped.iter().filter(|&&scoped| !scoped).count()
+    }
+
+    /// Whether some agents' tasks are left out, or would be.
+    #[must_use]
+    pub const fn filtered(&self) -> bool {
+        self.filter.is_some()
+    }
+
+    /// List only the tasks of the agents `filter` lets through, and the
+    /// tasks under those.
+    pub fn set_filter(&mut self, filter: AgentFilter) {
+        if filter == self.filter {
+            return;
+        }
+        let keep = self.selected_key();
+        self.filter = filter;
+        self.rebuild(keep);
     }
 
     /// Rows on screen, in order.
@@ -161,11 +199,51 @@ impl TaskList {
         Some((id, item))
     }
 
+    /// Which tasks the filter lets through: those of its agents, and every
+    /// task under one of those.
+    fn scope(&self) -> Vec<bool> {
+        let Some(agents) = &self.filter else {
+            return vec![true; self.tasks.len()];
+        };
+        let index: HashMap<&str, usize> = self
+            .tasks
+            .iter()
+            .enumerate()
+            .map(|(i, task)| (task.id.as_str(), i))
+            .collect();
+        let mut scoped: Vec<bool> = self
+            .tasks
+            .iter()
+            .map(|task| agents.contains(&task.agent_id))
+            .collect();
+        loop {
+            let mut grew = false;
+            for (i, task) in self.tasks.iter().enumerate() {
+                let under_scoped = task
+                    .parent
+                    .as_deref()
+                    .and_then(|parent| index.get(parent))
+                    .is_some_and(|&parent| scoped[parent]);
+                if !scoped[i] && under_scoped {
+                    scoped[i] = true;
+                    grew = true;
+                }
+            }
+            if !grew {
+                return scoped;
+            }
+        }
+    }
+
     fn rebuild(&mut self, keep: Option<(String, Option<usize>)>) {
-        let listed: HashSet<&str> = self.tasks.iter().map(|task| task.id.as_str()).collect();
+        self.scoped = self.scope();
+        let listed: HashSet<&str> = self.scoped_tasks().map(|task| task.id.as_str()).collect();
         let mut children: HashMap<&str, Vec<usize>> = HashMap::new();
         let mut tops = Vec::new();
         for (index, task) in self.tasks.iter().enumerate() {
+            if !self.scoped[index] {
+                continue;
+            }
             match task
                 .parent
                 .as_deref()

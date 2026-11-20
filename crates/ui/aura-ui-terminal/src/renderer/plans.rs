@@ -11,7 +11,9 @@
 use super::panels::{
     cell_style, list_row, list_row_with_detail, render_scrollbar, CellState, ScrollView, StatusIcon,
 };
-use super::side_list::{name_style, render_empty, render_hint, split_hint, Tone, PLANS_HINT};
+use super::side_list::{
+    name_style, render_empty, render_hidden, render_hint, split_hint, Tone, PLANS_HINT,
+};
 use crate::app::plans::PlanRow;
 use crate::app::{HoverTarget, PanelFocus};
 use crate::events::TodoState;
@@ -75,7 +77,12 @@ pub(super) fn render_plans(
     theme: &Theme,
 ) {
     let is_focused = app.focus() == PanelFocus::Sandbox;
-    if app.plan_list().plans().is_empty() {
+    let list = app.plan_list();
+    if list.rows().is_empty() && list.hidden() > 0 {
+        render_hidden(frame, inner, ("plans", list.hidden()), theme);
+        return;
+    }
+    if list.rows().is_empty() {
         let message = ["No plans yet.", "/plan asks the agent", "to write one."];
         render_empty(frame, inner, &message, theme);
         return;

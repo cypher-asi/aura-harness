@@ -94,14 +94,10 @@ pub(super) async fn send_instructions_of(state: &LoopState<'_>, agent_id: AgentI
     }
 }
 
-/// Show `agent_id` how much work waits for it.
+/// Show `agent_id` the work that waits for it.
 pub(super) async fn send_queued(state: &LoopState<'_>, agent_id: AgentId) {
-    let queued = state
-        .queued
-        .get(&agent_id)
-        .map_or(0, std::collections::VecDeque::len);
     AgentUi::new(state.commands.clone(), agent_id)
-        .send(UiCommand::SetQueued(queued))
+        .send(UiCommand::SetQueue(state.queued.views(agent_id)))
         .await;
 }
 

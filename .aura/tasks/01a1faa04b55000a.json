@@ -1,0 +1,21 @@
+{
+  "id": "01a1faa04b55000a",
+  "title": "visually should see queue like in cursor and be able to drag drop add remove edit messages in que [image 1]",
+  "state": "open",
+  "agent_id": "83a19acccaaff25dabbcdf40b7d1e255a431556804489c6da309d89876d3fa46",
+  "agent_name": "Agent 271",
+  "items": [
+    {
+      "content": "Implement Cursor-style queued-messages panel: protocol (aura-ui), id'd queue + ops (aura-app), panel render + mouse/drag/edit (aura-ui-terminal), tests",
+      "state": "pending",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Review the change for bugs/regressions",
+      "state": "pending"
+    }
+  ],
+  "summary": "I've started the queued-messages panel, but it isn't finished and the workspace doesn't build right now.",
+  "updated_ms": 1795207039970,
+  "created_ms": 1795206171477
+}

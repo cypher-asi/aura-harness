@@ -15,16 +15,16 @@ use std::time::{Duration, Instant};
 use winit::event::MouseScrollDelta;
 
 /// Rows a notch of the wheel scrolls the chat.
-pub(super) const NOTCH_ROWS: f32 = 5.0;
+pub(super) const NOTCH_ROWS: f32 = 16.0;
 /// Notches this soon after the one before are a spin of the wheel, and
 /// each goes further than the last.
-const SPIN: Duration = Duration::from_millis(120);
+const SPIN: Duration = Duration::from_millis(150);
 /// How much further each notch of a spin goes.
-const SPIN_GAIN: f32 = 0.5;
+const SPIN_GAIN: f32 = 1.5;
 /// The furthest a notch of a spin goes, in notches.
-const MOST_GAIN: f32 = 3.0;
+const MOST_GAIN: f32 = 8.0;
 /// Pixels the chat moves per pixel of a touchpad's movement.
-pub(super) const TOUCHPAD_GAIN: f32 = 2.0;
+pub(super) const TOUCHPAD_GAIN: f32 = 6.0;
 /// How quickly an eased scroll gets there: what is left of it shrinks
 /// by a factor of e every this long.
 const EASE: Duration = Duration::from_millis(30);

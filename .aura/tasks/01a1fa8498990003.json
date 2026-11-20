@@ -1,0 +1,11 @@
+{
+  "id": "01a1fa8498990003",
+  "title": "While an agent is working should have thinking at bottom using shimmer effect while it's working [image 1]",
+  "state": "completed",
+  "agent_id": "12a9cf551b4135ea8914f9f75a0079f35d9042c0b6867872a7a3fe51d5d8c346",
+  "agent_name": "Agent 263",
+  "items": [],
+  "summary": "There's already a working indicator in panels.rs. Let me look at it.Now the indicator itself: always shown while working, with the label shimmering.The working line now stays at the bottom of the chat for the whole time the agent is working, and its label has a shimmer. Tests pass (686), and Clippy reports nothing in the files I changed. The full Clippy run with warnings denied still fails, thoug…",
+  "updated_ms": 1795204497668,
+  "created_ms": 1795204356249
+}

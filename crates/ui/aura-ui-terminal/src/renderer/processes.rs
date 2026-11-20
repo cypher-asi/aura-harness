@@ -4,7 +4,9 @@
 use super::panels::{
     aura_icon, cell_style, list_row, now_ms, render_scrollbar, CellState, ScrollView, StatusIcon,
 };
-use super::side_list::{name_style, render_empty, render_hint, split_hint, Tone, PROCESSES_HINT};
+use super::side_list::{
+    name_style, render_empty, render_hidden, render_hint, split_hint, Tone, PROCESSES_HINT,
+};
 use super::text::wrap_words;
 use crate::app::{HoverTarget, PanelFocus};
 use crate::events::{ProcessStatus, ProcessSummary};
@@ -27,6 +29,10 @@ pub(super) fn render_processes(
     theme: &Theme,
 ) {
     let is_focused = app.focus() == PanelFocus::Sandbox;
+    if app.processes().is_empty() && app.hidden_processes() > 0 {
+        render_hidden(frame, inner, ("processes", app.hidden_processes()), theme);
+        return;
+    }
     if app.processes().is_empty() {
         let message = [
             "Nothing running.",

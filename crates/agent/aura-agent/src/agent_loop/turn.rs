@@ -672,7 +672,7 @@ pub(crate) async fn run_turn_stop_hooks(
 ) -> Result<StopHookOutcome, AgentError> {
     let mut outcome = StopHookOutcome::default();
 
-    context::emit_checkpoint_if_needed(event_tx, state);
+    context::emit_checkpoint_if_needed(state);
 
     context::check_budget_warnings(config, event_tx, state, iteration);
     if context::should_stop_for_budget(config, state, iteration) {

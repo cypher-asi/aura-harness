@@ -1,0 +1,14 @@
+{
+  "id": "01a1fa8523b30004",
+  "title": "Goal: make plan files written by the `create_plan` tool easy for a human to read and properly formatted Markdown. Repo:…",
+  "state": "completed",
+  "agent_id": "53ee05901c71ddb8d55e2a0c107ea69ec03f6b905126fdce99f3c7202aa7df7b",
+  "agent_name": "rust-engineer #7",
+  "assignee": "rust-engineer",
+  "parent": "01a1fa83df100002",
+  "items": [],
+  "summary": "Now the PlanFile impl.Now tests.Plan files now open with a readable title, overview and todo checklist, and `sync_todo_list` keeps the checklist up to date. The new plan tests pass, but the `aura-ui-terminal` test run had 4 failures in chat renderer tests, which look unrelated to plans (details under Test results).",
+  "updated_ms": 1795204855519,
+  "created_ms": 1795204391859,
+  "tool_use_id": "toolu_01YUiun6SDE2u8WNZ8vGMUSe"
+}

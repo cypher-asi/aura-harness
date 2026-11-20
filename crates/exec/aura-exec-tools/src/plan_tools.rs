@@ -103,9 +103,10 @@ impl PlanFile {
         let body = body.strip_prefix('\n').unwrap_or(body);
         let body = body.trim_start_matches('\n');
         let body = match after_header(&meta, body) {
-            Some(authored) => authored.trim_start_matches('\n').trim_end_matches('\n'),
+            Some(authored) => authored.trim_start_matches('\n'),
             None => body,
         };
+        let body = body.trim_end_matches('\n');
         Ok(Self {
             meta,
             body: body.to_string(),
@@ -233,8 +234,9 @@ fn is_title_heading(line: &str, name: &str) -> bool {
 
 /// Tidy a plan body the model sent, without reformatting its Markdown:
 ///
-/// - CRLF becomes LF; a body with no newline but literal `\n` sequences
-///   (escaped twice by the model) gets real newlines.
+/// - CRLF becomes LF. A body with no newline whose literal `\n`
+///   sequences clearly encode structure (escaped twice by the model; see
+///   [`has_escaped_structure`]) gets real newlines.
 /// - Trailing whitespace is stripped from every line.
 /// - Runs of blank lines outside code fences collapse to one.
 /// - A leading `# ` heading equal to `name` (ignoring case) is dropped,
@@ -243,8 +245,8 @@ fn is_title_heading(line: &str, name: &str) -> bool {
 ///   newline.
 pub(crate) fn normalize_body(body: &str, name: &str) -> String {
     let mut text = body.replace("\r\n", "\n");
-    if !text.contains('\n') && text.contains("\\n") {
-        text = text.replace("\\r\\n", "\n").replace("\\n", "\n");
+    if !text.contains('\n') && has_escaped_structure(&text) {
+        text = unescape_newlines(&text);
     }
     let mut lines = text.lines().map(str::trim_end).skip_while(|l| l.is_empty());
     let mut kept: Vec<&str> = Vec::new();
@@ -281,6 +283,58 @@ pub(crate) fn normalize_body(body: &str, name: &str) -> String {
         kept.pop();
     }
     kept.join("\n")
+}
+
+/// Whether a single-line `text` looks like Markdown whose newlines were
+/// escaped: some literal `\n` is followed by another one (a blank line)
+/// or by a line opener (`#`, `-`, `*`, `>`, a digit or a code fence).
+/// A literal `\n` alone, as in "replace `\n` with `\r\n`" or `C:\new`, is
+/// prose. An escaped backslash (`\\n`) is never an escape of `n`.
+fn has_escaped_structure(text: &str) -> bool {
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        // Consuming the escaped character keeps `\\n` from matching.
+        if c != '\\' || chars.next() != Some('n') {
+            continue;
+        }
+        let rest = chars.as_str();
+        if rest.starts_with("\\n")
+            || rest.starts_with("\\r\\n")
+            || rest.starts_with("```")
+            || rest.starts_with(|next: char| {
+                matches!(next, '#' | '-' | '*' | '>') || next.is_ascii_digit()
+            })
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// `text` with literal `\n` and `\r\n` as newlines; other escapes,
+/// including `\\`, are left as they are.
+fn unescape_newlines(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('r') if chars.as_str().starts_with("\\n") => {
+                chars.nth(1);
+                out.push('\n');
+            }
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
 }
 
 /// The plan path a successful `create_plan` reported.
@@ -805,11 +859,19 @@ mod tests {
 
     #[test]
     fn old_files_without_a_header_keep_their_body() {
-        let text = "---\nname: Old\ntodos:\n- id: a\n  content: first\n---\n\n# Steps\n\nDo it.";
+        let text =
+            "---\nname: Old\ntodos:\n- id: a\n  content: first\n---\n\n# Steps\n\nDo it.\n\n";
         let plan = PlanFile::parse(text).unwrap();
-        assert_eq!(plan.body, "# Steps\n\nDo it.");
+        assert_eq!(plan.body, "# Steps\n\nDo it.", "no trailing newline");
         assert_eq!(plan.meta.todos[0].content, "first");
         assert_eq!(PlanFile::parse(&plan.render()).unwrap(), plan, "upgrades");
+    }
+
+    #[test]
+    fn the_header_marker_is_the_literal_the_terminal_ui_looks_for() {
+        // aura-ui-terminal's `PLAN_HEADER_END` repeats this literal (it
+        // does not depend on this crate); keep the two in sync.
+        assert_eq!(HEADER_END, "<!-- end of generated header: edit below -->");
     }
 
     #[test]
@@ -848,6 +910,33 @@ mod tests {
                 "# Steps\n\n- one\n- two",
             ),
             ("real newline keeps literal", "a\\nb\nc", "a\\nb\nc"),
+            ("escaped blank line", "Intro\\n\\nMore", "Intro\n\nMore"),
+            (
+                "escaped crlf structure",
+                "# Steps\\r\\n\\r\\n1. one\\r\\n* two",
+                "# Steps\n\n1. one\n* two",
+            ),
+            (
+                "escaped quote and fence",
+                "Text\\n> quote\\n```\\ncode\\n```",
+                "Text\n> quote\n```\ncode\n```",
+            ),
+            (
+                "prose about newlines",
+                "Replace `\\n` with `\\r\\n` in `io.rs`.",
+                "Replace `\\n` with `\\r\\n` in `io.rs`.",
+            ),
+            ("windows path", "Write to C:\\new", "Write to C:\\new"),
+            (
+                "escaped backslashes",
+                "a\\\\n\\\\n- b\\\\n# c",
+                "a\\\\n\\\\n- b\\\\n# c",
+            ),
+            (
+                "escaped backslash kept when unescaping",
+                "C:\\\\new\\n\\n- item",
+                "C:\\\\new\n\n- item",
+            ),
             ("duplicate title", "\n#  plan NAME \n\nText", "Text"),
             ("other title kept", "# Steps\n\nText", "# Steps\n\nText"),
             (

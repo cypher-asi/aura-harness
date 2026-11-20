@@ -24,6 +24,7 @@ use tokio::sync::Semaphore;
 mod compare_runs;
 mod delegation;
 mod flow;
+mod queue_edits;
 mod subtasks;
 
 /// Model whose route refuses the sign-in, for Gate's re-routing.
@@ -449,7 +450,7 @@ fn loop_state<'a>(fixture: &'a Fixture, b: &'a mut Borrowed) -> LoopState<'a> {
         models: ModelSelection::fixed(&fixture.config, "mock-model"),
         active: fixture.first,
         idle: HashMap::from([(fixture.first, session)]),
-        queued: HashMap::new(),
+        queued: queue::WorkQueues::default(),
         work_done: b.done_tx.clone(),
         in_flight: 0,
         hub: Arc::clone(&fixture.hub),
@@ -612,7 +613,7 @@ async fn message_to_a_busy_agent_waits_in_the_queue() {
 
     handle_ui_event(&mut state, message(first, "slow start", true), &links).await;
     handle_ui_event(&mut state, message(first, "follow-up", false), &links).await;
-    assert_eq!(state.queued[&first].len(), 1, "the message waits its turn");
+    assert_eq!(state.queued.len(first), 1, "the message waits its turn");
 
     fixture.gate.add_permits(1);
     let finished = next_done(&mut done).await;
@@ -640,7 +641,7 @@ async fn send_queued_now_cancels_the_turn_and_runs_the_message_next() {
     handle_ui_event(&mut state, message(first, "slow start", true), &links).await;
     handle_ui_event(&mut state, message(first, "urgent", false), &links).await;
     handle_ui_event(&mut state, message(first, "later", false), &links).await;
-    assert_eq!(state.queued[&first].len(), 2);
+    assert_eq!(state.queued.len(first), 2);
 
     // The slow turn is never released: only the cancellation ends it. The
     // cancelled turn leaves "slow start" as the last user message and the
@@ -652,7 +653,7 @@ async fn send_queued_now_cancels_the_turn_and_runs_the_message_next() {
     handle_work_done(&mut state, finished).await;
 
     assert!(state.hub.is_running(first), "the queued message started");
-    assert_eq!(state.queued[&first].len(), 1, "only the first one ran");
+    assert_eq!(state.queued.len(first), 1, "only the first one ran");
     let finished = next_done(&mut done).await;
     handle_work_done(&mut state, finished).await;
     let finished = next_done(&mut done).await;
@@ -763,7 +764,7 @@ async fn an_image_for_a_busy_agent_waits_for_the_next_turn() {
     handle_ui_event(&mut state, message(first, "slow start", true), &links).await;
     let event = message_with_image(first, "[image 1] and this", false);
     handle_ui_event(&mut state, event, &links).await;
-    assert_eq!(state.queued[&first].len(), 1, "a turn can't take images");
+    assert_eq!(state.queued.len(first), 1, "a turn can't take images");
 
     fixture.gate.add_permits(1);
     let finished = next_done(&mut done).await;
@@ -1161,7 +1162,7 @@ async fn queued_work_is_counted_for_the_status_line() {
     let queued: Vec<usize> = drain(&mut commands)
         .into_iter()
         .filter_map(|(_, c)| match c {
-            UiCommand::SetQueued(n) => Some(n),
+            UiCommand::SetQueue(items) => Some(items.len()),
             _ => None,
         })
         .collect();
@@ -1175,7 +1176,7 @@ async fn queued_work_is_counted_for_the_status_line() {
     let queued: Vec<usize> = drain(&mut commands)
         .into_iter()
         .filter_map(|(_, c)| match c {
-            UiCommand::SetQueued(n) => Some(n),
+            UiCommand::SetQueue(items) => Some(items.len()),
             _ => None,
         })
         .collect();
@@ -2558,7 +2559,7 @@ async fn focusing_an_agent_makes_it_active_without_reloading_its_chat() {
     assert!(
         focused
             .iter()
-            .any(|(_, c)| matches!(c, UiCommand::ClearRecords)),
+            .any(|(_, c)| matches!(c, UiCommand::SetRecords(_))),
         "the Record panel follows the focused agent"
     );
     assert!(

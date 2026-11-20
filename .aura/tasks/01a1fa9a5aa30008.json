@@ -1,0 +1,14 @@
+{
+  "id": "01a1fa9a5aa30008",
+  "title": "Repo: /home/n3o/code/aura-harness. Crate: crates/ui/aura-ui-terminal (ratatui TUI, also rendered by the native desktop …",
+  "state": "completed",
+  "agent_id": "14bcab5a7014b584060ec6ce9bcef6483d0ceb7730138d3746d552f1527fd5c8",
+  "agent_name": "rust-engineer #9",
+  "assignee": "rust-engineer",
+  "parent": "01a1fa967ccc0003",
+  "items": [],
+  "summary": "Someone is editing this file concurrently (the `StatusIcon` marker was removed between my reads). I'll make the `indented_row` edit against the current bytes.Now the imports in panels.rs.`tree_row` had only that one caller, so I'll fold the button param into `tree_row` itself instead of leaving a dead wrapper.New tests pass. Now fmt, clippy, and the full suites.That failure is in `aura-core-types…",
+  "updated_ms": 1795206201970,
+  "created_ms": 1795205782179,
+  "tool_use_id": "toolu_01P5HWWdVFHuH1MopTjchNbb"
+}

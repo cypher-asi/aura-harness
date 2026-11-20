@@ -648,7 +648,6 @@ fn test_each_agent_has_its_own_trace_feed() {
     let feed = |app: &App| -> Vec<String> {
         app.trace_feed()
             .entries()
-            .iter()
             .map(|e| e.node.id.clone())
             .collect()
     };
@@ -677,7 +676,11 @@ fn enter_on_an_empty_prompt_sends_the_queued_message_now() {
     app.handle_key(KeyEvent::from(KeyCode::Enter));
     assert!(rx.try_recv().is_err());
 
-    app.process_command(UiCommand::SetQueued(1));
+    app.process_command(UiCommand::SetQueue(vec![crate::events::QueuedItemView {
+        id: 1,
+        text: "second".to_string(),
+        editable: true,
+    }]));
     app.handle_key(KeyEvent::from(KeyCode::Enter));
     assert!(matches!(
         rx.try_recv(),
@@ -1349,7 +1352,7 @@ fn test_clicking_a_projects_plus_adds_an_agent_to_it() {
     assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(3)));
     app.handle_mouse(mouse(MouseEventKind::Moved, 16, 7));
     assert_eq!(app.hover(), Some(HoverTarget::AddToProject(3)));
-    app.handle_mouse(mouse(MouseEventKind::Moved, 17, 5));
+    app.handle_mouse(mouse(MouseEventKind::Moved, 13, 5));
     assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(1)));
 
     app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 17, 7));
@@ -1359,6 +1362,132 @@ fn test_clicking_a_projects_plus_adds_an_agent_to_it() {
         ProjectListRow::Project { expanded: true, .. }
     ));
     assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn test_agent_buttons_sit_left_of_the_time() {
+    // ` ↗ ✕ 5m `: each glyph after a space, then the time with a space
+    // each side.
+    let at = |ago, button| agent_button_offset(18, ago, button);
+    assert_eq!(at(Some("5m"), AgentButton::Archive), 13);
+    assert_eq!(at(Some("5m"), AgentButton::Open), 11);
+    assert_eq!(at(Some("now"), AgentButton::Archive), 12);
+    assert_eq!(at(Some("now"), AgentButton::Open), 10);
+    // No time: the archive glyph one column in from the right edge.
+    assert_eq!(at(None, AgentButton::Archive), 16);
+    assert_eq!(at(None, AgentButton::Open), 14);
+    assert_eq!(agent_button_offset(1, Some("5m"), AgentButton::Open), 0);
+}
+
+#[test]
+fn test_agent_button_zones_split_the_strip_without_overlap() {
+    // Open takes its space and glyph (13, 14); archive its space, glyph
+    // and the space before the edge (15..=17).
+    let expected = [
+        (12, None),
+        (13, Some(AgentButton::Open)),
+        (14, Some(AgentButton::Open)),
+        (15, Some(AgentButton::Archive)),
+        (16, Some(AgentButton::Archive)),
+        (17, Some(AgentButton::Archive)),
+    ];
+    for (offset, button) in expected {
+        assert_eq!(agent_button_at(18, None, offset), button, "{offset}");
+    }
+    assert_eq!(
+        agent_button_at(18, Some("5m"), 14),
+        Some(AgentButton::Archive)
+    );
+    assert_eq!(agent_button_at(18, Some("5m"), 15), None, "the time");
+}
+
+#[test]
+fn test_hovering_an_agents_buttons_targets_them() {
+    use crossterm::event::MouseEventKind;
+    let (mut app, _rx) = app_with_agent_areas();
+
+    // Rows span columns 1..19. Agent `aa` (row 1, line 5) has no time, so
+    // its archive glyph is at column 17 and that button takes columns
+    // 16..=18; the open glyph is at column 15, its button 14..=15.
+    app.handle_mouse(mouse(MouseEventKind::Moved, 13, 5));
+    assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(1)));
+    for column in 14..=15 {
+        app.handle_mouse(mouse(MouseEventKind::Moved, column, 5));
+        assert_eq!(app.hover(), Some(HoverTarget::OpenAgent(1)), "{column}");
+    }
+    for column in 16..=18 {
+        app.handle_mouse(mouse(MouseEventKind::Moved, column, 5));
+        assert_eq!(app.hover(), Some(HoverTarget::ArchiveAgent(1)), "{column}");
+    }
+    app.handle_mouse(mouse(MouseEventKind::Moved, 5, 5));
+    assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(1)));
+
+    // A project's header keeps its "+" and gets neither button.
+    app.handle_mouse(mouse(MouseEventKind::Moved, 17, 4));
+    assert_eq!(app.hover(), Some(HoverTarget::AddToProject(0)));
+    app.handle_mouse(mouse(MouseEventKind::Moved, 14, 4));
+    assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(0)));
+}
+
+#[test]
+fn test_an_agents_buttons_follow_its_time() {
+    use crossterm::event::MouseEventKind;
+    let (tx, _rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    let three_minutes_ago = crate::renderer::now_ms() - 3 * 60 * 1000;
+    app.process_command(UiCommand::SetAgents(vec![crate::events::AgentSummary {
+        last_active_ms: Some(three_minutes_ago),
+        ..agent("aa", "A")
+    }]));
+    let mut app = with_agent_areas(app);
+
+    // ` ↗ ✕ 3m `: the open glyph at column 1 + 11, the archive glyph at
+    // 1 + 13, the time in columns 15..19.
+    app.handle_mouse(mouse(MouseEventKind::Moved, 12, 5));
+    assert_eq!(app.hover(), Some(HoverTarget::OpenAgent(1)));
+    app.handle_mouse(mouse(MouseEventKind::Moved, 14, 5));
+    assert_eq!(app.hover(), Some(HoverTarget::ArchiveAgent(1)));
+    app.handle_mouse(mouse(MouseEventKind::Moved, 17, 5));
+    assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(1)));
+}
+
+#[test]
+fn test_clicking_an_agents_archive_button_archives_it() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let (mut app, mut rx) = app_with_agent_areas();
+    let selected = app.selected_agent();
+    assert_ne!(selected, 4);
+
+    // Agent `bb` is row 4, line 8.
+    app.handle_mouse(mouse(MouseEventKind::Moved, 17, 8));
+    assert_eq!(app.hover(), Some(HoverTarget::ArchiveAgent(4)));
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 17, 8));
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 17, 8));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::ArchiveAgent(id)) if id == "bb"));
+    assert!(rx.try_recv().is_err(), "the click neither opens nor drags");
+    assert_eq!(app.selected_agent(), selected);
+    assert!(app.project_drag_hit().is_none());
+}
+
+#[test]
+fn test_clicking_an_agents_open_button_switches_to_it() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let (mut app, mut rx) = app_with_agent_areas();
+    let selected = app.selected_agent();
+    assert_ne!(selected, 4);
+
+    // Agent `bb` is row 4, line 8; its open glyph is at column 15.
+    app.handle_mouse(mouse(MouseEventKind::Moved, 15, 8));
+    assert_eq!(app.hover(), Some(HoverTarget::OpenAgent(4)));
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 15, 8));
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 15, 8));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
+    assert!(
+        rx.try_recv().is_err(),
+        "the click neither archives nor drags"
+    );
+    assert_eq!(app.selected_agent(), selected);
+    assert!(app.project_drag_hit().is_none());
 }
 
 /// Projects `notes`, with every agent archived, and `site`, holding `a1`.
@@ -1626,6 +1755,57 @@ fn test_a_spawned_agent_is_not_dragged_on_its_own() {
             .any(|event| matches!(event, UiEvent::ReorderAgents { .. })),
         "{sent:?}"
     );
+}
+
+#[test]
+fn test_a_project_drag_reports_the_rows_under_the_pointer() {
+    use crate::app::project_drag::ProjectDragHit;
+
+    let mut app = app_with_three_projects();
+    left(&mut app, MouseEventKind::Down, 8);
+    assert_eq!(app.project_drag_hit(), None, "a press is not a drag");
+
+    // Onto aa's child: bb would not land under the pointer, so it stays,
+    // and aa is the hit area. List rows: aa 0..3, gap, bb 4..6.
+    let redraw = app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 5, 6));
+    assert!(redraw, "a new hit area is drawn even without a move");
+    assert_eq!(agent_ids(&app), ["aa", "aa1", "bb", "cc"]);
+    assert_eq!(
+        app.project_drag_hit(),
+        Some(ProjectDragHit {
+            dragged: 4..6,
+            target: Some(0..3),
+        })
+    );
+
+    // Onto aa's header: bb takes its place and is its own hit area.
+    left(&mut app, MouseEventKind::Drag, 4);
+    assert_eq!(agent_ids(&app), ["bb", "aa", "aa1", "cc"]);
+    assert_eq!(
+        app.project_drag_hit(),
+        Some(ProjectDragHit {
+            dragged: 0..2,
+            target: Some(0..2),
+        })
+    );
+
+    left(&mut app, MouseEventKind::Up, 4);
+    assert_eq!(app.project_drag_hit(), None);
+}
+
+#[test]
+fn test_an_agent_drag_has_no_hit_area_outside_its_project() {
+    let (mut app, _rx) = app_with_agents_to_drag();
+    left(&mut app, MouseEventKind::Down, 5);
+    left(&mut app, MouseEventKind::Drag, 11);
+    let hit = app.project_drag_hit().expect("dragging");
+    // a1 and the agent it spawned, still in place.
+    assert_eq!(hit.dragged, 1..3);
+    assert_eq!(hit.target, None);
+
+    left(&mut app, MouseEventKind::Drag, 8);
+    let hit = app.project_drag_hit().expect("dragging");
+    assert_eq!(hit.target, Some(hit.dragged));
 }
 
 #[test]
@@ -3461,28 +3641,10 @@ fn test_ctrl_g_with_empty_input_starts_an_empty_file() {
 }
 
 fn new_record(app: &mut App, seq: u64) {
-    app.process_command(UiCommand::NewRecord(crate::events::RecordSummary {
-        seq,
-        timestamp: "12:00:00".to_string(),
-        full_hash: String::new(),
-        hash_suffix: String::new(),
-        tx_kind: "Prompt".to_string(),
-        sender: String::new(),
-        message: String::new(),
-        action_count: 0,
-        effect_status: String::new(),
-        status: crate::events::RecordStatus::Ok,
-        info: String::new(),
-        what: String::new(),
-        group: String::new(),
-        detail: String::new(),
-        error_details: String::new(),
-        tx_id: String::new(),
-        agent_id: String::new(),
-        ts_ms: 0,
-        policy: None,
-    }));
+    app.process_command(UiCommand::NewRecord(record_summary(seq)));
 }
+
+use super::detail_tests::record as record_summary;
 
 fn selected_seq(app: &App) -> u64 {
     app.selected_record_data().unwrap().seq
@@ -3532,6 +3694,59 @@ fn test_records_cap_drops_oldest_and_keeps_selection() {
     assert_eq!(app.records().front().unwrap().seq, 1);
     assert_eq!(app.records().back().unwrap().seq, cap);
     assert_eq!(selected_seq(&app), 10);
+}
+
+fn set_records(app: &mut App, seqs: impl IntoIterator<Item = u64>) {
+    let records = seqs.into_iter().map(record_summary).collect();
+    app.process_command(UiCommand::SetRecords(records));
+}
+
+#[test]
+fn test_set_records_replaces_existing_records_and_follows_newest() {
+    let mut app = App::new();
+    for seq in 0..5 {
+        new_record(&mut app, seq);
+    }
+    app.focus = PanelFocus::Records;
+    app.handle_key(key(KeyCode::Up));
+    assert_eq!(selected_seq(&app), 3);
+
+    set_records(&mut app, 100..103);
+    let order: Vec<u64> = app.records().iter().map(|r| r.seq).collect();
+    assert_eq!(order, [100, 101, 102]);
+    assert_eq!(selected_seq(&app), 102);
+
+    new_record(&mut app, 103);
+    assert_eq!(selected_seq(&app), 103);
+}
+
+#[test]
+fn test_set_records_empty_clears_records() {
+    let mut app = App::new();
+    new_record(&mut app, 1);
+    set_records(&mut app, []);
+    assert!(app.records().is_empty());
+    assert!(app.selected_record_data().is_none());
+}
+
+#[test]
+fn test_set_records_over_cap_keeps_newest() {
+    let mut app = App::new();
+    let cap = u64::try_from(MAX_RECORDS).unwrap();
+    set_records(&mut app, 0..cap + 5);
+    assert_eq!(app.records().len(), MAX_RECORDS);
+    assert_eq!(app.records().front().unwrap().seq, 5);
+    assert_eq!(app.records().back().unwrap().seq, cap + 4);
+    assert_eq!(selected_seq(&app), cap + 4);
+}
+
+#[test]
+fn test_records_cap_is_well_above_a_hundred() {
+    let mut app = App::new();
+    for seq in 0..150 {
+        new_record(&mut app, seq);
+    }
+    assert_eq!(app.records().len(), 150);
 }
 
 // ========================================================================
@@ -3949,7 +4164,7 @@ fn shift_space_folds_the_project_from_any_agent() {
 }
 
 #[test]
-fn a_busy_agents_marker_is_the_column_after_its_ring() {
+fn a_busy_agents_ring_is_its_fold_button() {
     use crossterm::event::{MouseButton, MouseEventKind};
     let (mut app, mut rx) = app_with_spawn_tree();
     let mut agents = app.agents().to_vec();
@@ -3959,16 +4174,21 @@ fn a_busy_agents_marker_is_the_column_after_its_ring() {
         app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), column, 6));
         app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), column, 6));
     };
-    // bb's ring takes offsets 5 and 6 of the rows, starting at column 1;
-    // the marker sits at offset 7.
+    // bb's ring takes offsets 5 and 6 of the rows, starting at column 1,
+    // and the spare column after it offset 7; no arrow is drawn in either
+    // state, but all three fold and open it.
     click(&mut app, 6);
-    assert!(!app.agent_folded(1), "the ring is no button");
-    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
+    assert!(app.agent_folded(1), "the ring folds an open agent");
+    click(&mut app, 6);
+    assert!(!app.agent_folded(1), "and opens a folded one");
     click(&mut app, 8);
     assert!(app.agent_folded(1));
     click(&mut app, 8);
     assert!(!app.agent_folded(1));
-    assert!(rx.try_recv().is_err(), "the marker switches no agent");
+    assert!(rx.try_recv().is_err(), "the ring switches no agent");
+    // Past the icon column the row still switches to the agent.
+    click(&mut app, 10);
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
 }
 
 #[test]

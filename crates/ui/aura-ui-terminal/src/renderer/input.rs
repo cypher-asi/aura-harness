@@ -1,8 +1,10 @@
-//! Input rendering: the prompt and what is being typed, in a box under
-//! the Chat panel as wide as it, growing upward as the text wraps.
+//! Input rendering: the prompt and what is being typed, at the bottom of
+//! the Chat panel, growing upward as the text wraps. The Chat body's
+//! bottom border is the line between them.
 //!
 //! ```text
-//! ┌──────────────────────────────────────┐
+//! │ ...                                  │
+//! ├──────────────────────────────────────┤
 //! │ → Add a follow-up                    │
 //! └──────────────────────────────────────┘
 //! ```
@@ -21,8 +23,9 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthChar;
 
-/// Rows the box's border adds to the rows of text.
-pub(super) const BOX_ROWS: u16 = 2;
+/// Rows the box's border adds to the rows of text: only the bottom one,
+/// since the Chat body's bottom border sits on top of the text.
+pub(super) const BOX_ROWS: u16 = 1;
 /// Blank columns inside the border on each side of the text.
 const PAD: u16 = 1;
 /// Prompt before a chat message.
@@ -208,19 +211,26 @@ pub(super) fn input_rows(area: Rect, app: &App, theme: &Theme, max_rows: u16) ->
 }
 
 /// Render the input box into `area`, whose height is the rows of text
-/// it gets (see [`input_rows`]) and the border's.
+/// it gets (see [`input_rows`]) and the bottom border's. The row above
+/// `area` is the Chat body's bottom border, already drawn.
 pub(super) fn render_input(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     if area.height < BOX_ROWS + 1 || area.width < 2 * (1 + PAD) + 2 {
         return;
     }
     let block = Block::default()
-        .borders(Borders::ALL)
+        .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
         .border_style(Style::default().fg(super::panels::border_color(
             app.focus() == PanelFocus::Chat,
             theme,
         )));
+    let block = if app.editing_queued() {
+        block.title_bottom(super::queue_panel::editing_title(theme.colors.warning))
+    } else {
+        block
+    };
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    join_divider(frame, area);
 
     let plan = plan(area, app, theme);
     let right = inner.x + inner.width;
@@ -278,6 +288,22 @@ pub(super) fn render_input(frame: &mut Frame, area: Rect, app: &App, theme: &The
             .typing_x
             .saturating_add(u16::try_from(col).unwrap_or(u16::MAX));
         frame.set_cursor_position((x, y));
+    }
+}
+
+/// Turn the bottom corners of the border above `area` into joints, so
+/// that border reads as a line across one panel. The cells keep their
+/// style, so the line stays in whatever color the body above drew it.
+pub(super) fn join_divider(frame: &mut Frame, area: Rect) {
+    let Some(y) = area.y.checked_sub(1) else {
+        return;
+    };
+    let buf = frame.buffer_mut();
+    let right = area.right().saturating_sub(1);
+    for (x, joint) in [(area.x, "├"), (right, "┤")] {
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            cell.set_symbol(joint);
+        }
     }
 }
 

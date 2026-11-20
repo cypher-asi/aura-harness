@@ -208,6 +208,9 @@ pub struct BenchBaseline {
 pub struct BenchView {
     /// Hex id of the benchmark's own agent
     pub id: String,
+    /// Hex id of the agent at the top of the tree it was asked from; the
+    /// BENCH tab of an agent lists the benchmarks of its tree
+    pub root: String,
     /// `Compare #2`
     pub name: String,
     /// What it is about: its prompt, or a replayed session's first one
@@ -285,7 +288,8 @@ pub struct BenchSpec {
 /// What the BENCH tab asks of the event loop.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BenchRequest {
-    /// Every benchmark ([`crate::UiCommand::BenchList`])
+    /// The benchmarks of the tree of the agent on screen
+    /// ([`crate::UiCommand::BenchList`])
     List,
     /// The sessions of the agent on screen and the example tasks
     /// ([`crate::UiCommand::BenchSessions`])

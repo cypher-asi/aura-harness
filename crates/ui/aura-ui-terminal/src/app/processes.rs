@@ -140,20 +140,42 @@ impl App {
     /// Replace the list, keeping the highlight on the same process when it
     /// is still listed, and refreshing an open process detail view.
     pub(super) fn set_processes(&mut self, processes: Vec<ProcessSummary>) {
+        self.all_processes = processes;
+        self.reshow_processes();
+        if let Some(DetailView::Process(open)) = self.detail.as_mut() {
+            if let Some(fresh) = self.all_processes.iter().find(|p| p.id == open.id) {
+                **open = fresh.clone();
+            }
+        }
+    }
+
+    /// List the processes the side panel's scope lets through, keeping
+    /// the highlight on the same process when it is still listed.
+    pub(super) fn reshow_processes(&mut self) {
         let selected_id = self
             .processes
             .get(self.selected_process)
             .map(|p| p.id.clone());
-        self.processes = processes;
+        self.processes = self
+            .all_processes
+            .iter()
+            .filter(|process| {
+                self.process_filter
+                    .as_ref()
+                    .is_none_or(|agents| super::side_scope::process_in_scope(process, agents))
+            })
+            .cloned()
+            .collect();
         self.selected_process = selected_id
             .and_then(|id| self.processes.iter().position(|p| p.id == id))
             .unwrap_or(self.selected_process)
             .min(self.processes.len().saturating_sub(1));
-        if let Some(DetailView::Process(open)) = self.detail.as_mut() {
-            if let Some(fresh) = self.processes.iter().find(|p| p.id == open.id) {
-                **open = fresh.clone();
-            }
-        }
+    }
+
+    /// Processes of agents the side panel's scope leaves out.
+    #[must_use]
+    pub fn hidden_processes(&self) -> usize {
+        self.all_processes.len() - self.processes.len()
     }
 
     pub(crate) fn selected_process_data(&self) -> Option<&ProcessSummary> {
@@ -335,6 +357,10 @@ impl App {
     /// Directories have nothing to open, so a click folds them; a plan
     /// folds when its fold glyph is clicked.
     pub(super) fn click_side_panel(&mut self, column: u16, row: u16) {
+        if self.side_scope_at(column, row) {
+            self.toggle_side_scope();
+            return;
+        }
         if let Some(tab) = self.side_tab_at(column, row) {
             self.show_side_tab(tab);
             return;
@@ -382,7 +408,7 @@ impl App {
             .trace_rows
             .filter(|&rows| contains(Some(rows), column, row))?;
         let index = self.areas.trace_scroll + usize::from(row - rows.y);
-        (index < self.trace_feed.entries().len()).then_some(index)
+        (index < self.trace_feed.len()).then_some(index)
     }
 
     fn process_row_at(&self, column: u16, row: u16) -> Option<usize> {
@@ -397,6 +423,9 @@ impl App {
     /// Clickable item of the side panel at a screen cell: a tab label, or
     /// a row of the open tab.
     pub(super) fn hovered_side_panel(&self, column: u16, row: u16) -> Option<HoverTarget> {
+        if self.side_scope_at(column, row) {
+            return Some(HoverTarget::SideScope);
+        }
         if let Some(tab) = self.side_tab_at(column, row) {
             return Some(HoverTarget::SideTab(tab));
         }
@@ -582,6 +611,7 @@ mod tests {
         use crate::events::{TraceNode, TraceNodeStatus};
         let mut app = App::new();
         app.trace_feed.push(
+            "",
             "r",
             &[TraceNode {
                 id: "s1".into(),

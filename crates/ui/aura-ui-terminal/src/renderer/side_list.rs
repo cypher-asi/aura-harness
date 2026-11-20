@@ -8,7 +8,7 @@
 //! and the hint at the bottom reads `⏎ open  <extras>  ⇧←→ tabs`.
 
 use super::panels::truncate_record_info;
-use crate::Theme;
+use crate::{SideScope, Theme};
 use ratatui::{
     layout::Rect,
     style::Style,
@@ -79,6 +79,21 @@ pub(super) fn render_empty(frame: &mut Frame, inner: Rect, message: &[&str], the
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Draw the empty state of a tab whose `hidden` items, `what` it lists,
+/// all belong to other agents of the project than the active one.
+pub(super) fn render_hidden(
+    frame: &mut Frame,
+    inner: Rect,
+    (what, hidden): (&str, usize),
+    theme: &Theme,
+) {
+    let message = [
+        format!("No {what} for this agent."),
+        format!("{} lists the project's {hidden}.", SideScope::BUTTON),
+    ];
+    render_empty(frame, inner, &message.each_ref().map(String::as_str), theme);
 }
 
 /// Split a tab's body into its rows and, while the panel has focus and

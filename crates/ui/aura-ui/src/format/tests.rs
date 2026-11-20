@@ -80,7 +80,7 @@ fn tool_labels_say_what_the_call_did() {
             "task",
             json!({ "subagent_type": "explore", "prompt": "\nFind the router.\n\nThen stop." })
         ),
-        "Delegated to explore: Find the router."
+        "Delegated to @explore: Find the router."
     );
 }
 

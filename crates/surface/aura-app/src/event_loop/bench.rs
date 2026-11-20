@@ -3,6 +3,7 @@
 
 use super::agent_events::AgentUi;
 use super::compare;
+use super::subagents::lock;
 use super::LoopState;
 use aura_agent_gate::compare::{
     judge_cost_usd, summarize, task_cells, turn_cells, CompareRequest, SessionPick,
@@ -21,8 +22,16 @@ pub(super) async fn handle(state: &mut LoopState<'_>, agent_id: AgentId, request
     state.park_finished_spawns().await;
     let notice = match request {
         BenchRequest::List => {
-            let views = list(state);
-            let _ = state.commands.send(UiCommand::BenchList(views)).await;
+            let root = lock(&state.hub.registry).root(agent_id);
+            let benches = list(state, root);
+            let _ = state
+                .commands
+                .send(UiCommand::BenchList {
+                    agent_id: agent_id.to_hex(),
+                    root: root.to_hex(),
+                    benches,
+                })
+                .await;
             return;
         }
         BenchRequest::Sessions => {
@@ -110,11 +119,13 @@ fn request_of(spec: BenchSpec) -> CompareRequest {
     }
 }
 
-/// Every benchmark with a record, oldest first.
-fn list(state: &LoopState<'_>) -> Vec<BenchView> {
-    compare::comparisons(state)
-        .into_iter()
-        .filter_map(|(id, name, payload)| Some(view(id, &name, &payload?)))
+/// The benchmarks with a record in the tree under `root`, oldest first.
+fn list(state: &LoopState<'_>, root: AgentId) -> Vec<BenchView> {
+    let all = compare::comparisons(state);
+    let registry = lock(&state.hub.registry);
+    all.into_iter()
+        .filter(|(id, _, _)| registry.root(*id) == root)
+        .filter_map(|(id, name, payload)| Some(view(id, root, &name, &payload?)))
         .collect()
 }
 
@@ -176,8 +187,14 @@ fn verdict(verdict: Option<RefVerdict>) -> Option<String> {
     verdict.map(|v| v.label().to_string())
 }
 
-/// The comparison held by `host` (named `name`) as the BENCH tab shows it.
-pub(super) fn view(host: AgentId, name: &str, payload: &ComparePayload) -> BenchView {
+/// The comparison held by `host` (named `name`) in the tree under `root`
+/// as the BENCH tab shows it.
+pub(super) fn view(
+    host: AgentId,
+    root: AgentId,
+    name: &str,
+    payload: &ComparePayload,
+) -> BenchView {
     let (title, source) = match &payload.source {
         BenchSource::Session { title, .. } => (title.clone(), format!("session \"{title}\"")),
         BenchSource::Prompt => {
@@ -238,6 +255,7 @@ pub(super) fn view(host: AgentId, name: &str, payload: &ComparePayload) -> Bench
     });
     BenchView {
         id: host.to_hex(),
+        root: root.to_hex(),
         name: name.to_string(),
         title,
         started_ms: payload.started_ms,

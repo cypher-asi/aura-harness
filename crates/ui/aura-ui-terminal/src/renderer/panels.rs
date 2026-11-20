@@ -7,8 +7,9 @@ use super::text::{display_width, wrap_words, Measure};
 use crate::{
     animation::AURA_WIDTH,
     app::{
-        tab_bar::TabLayout, AgentsTab, AppState, ChatScroll, ChatTab, HoverTarget, ImageHit,
-        MenuTarget, Pane, PanelFocus, ProjectListRow, ProseRow, ToggleRow, ToggleTarget,
+        agent_time_cell, tab_bar::TabLayout, AgentButton, AgentsTab, AppState, ChatScroll, ChatTab,
+        HoverTarget, ImageHit, MenuTarget, Pane, PanelFocus, ProjectListRow, ProseRow, ToggleRow,
+        ToggleTarget,
     },
     App, Theme,
 };
@@ -50,6 +51,7 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
             info,
             close: Some(app.hover() == Some(HoverTarget::CloseDetail)),
             expand,
+            scope: None,
             focused: true,
             hosted,
         };
@@ -72,6 +74,7 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
             info: None,
             close: None,
             expand,
+            scope: None,
             focused: is_focused,
             hosted,
         };
@@ -312,7 +315,7 @@ fn render_chat_lines(
                     prose.push((visible.len(), *indent));
                 }
                 if block.user {
-                    user_rows.push(visible.len());
+                    user_rows.push((visible.len(), BandEdge::at(offset, block.lines.len())));
                 }
                 visible.push(line);
             }
@@ -337,8 +340,11 @@ fn render_chat_lines(
         .filter(|(row, _)| *row == height)
         .map(|&(_, indent)| indent.min(padded.width));
     prose.retain(|(row, _)| *row < height);
-    let next_user = user_rows.last() == Some(&height);
-    user_rows.retain(|row| *row < height);
+    let next_user = user_rows
+        .last()
+        .filter(|(row, _)| *row == height)
+        .map(|&(_, edge)| edge);
+    user_rows.retain(|(row, _)| *row < height);
     let prose_lines: Vec<(usize, u16, Line<'static>)> = prose
         .into_iter()
         .map(|(row, indent)| (row, indent.min(padded.width), visible[row].clone()))
@@ -363,7 +369,7 @@ fn render_chat_lines(
         })
         .collect();
     app.set_prose_rows(prose);
-    paint_user_band(frame.buffer_mut(), padded, &user_rows, theme);
+    paint_user_band(frame.buffer_mut(), (body, padded), &user_rows, theme);
 
     let hovered_image = match app.hover() {
         Some(HoverTarget::ChatImage(message, index)) => Some((message, index)),
@@ -388,7 +394,14 @@ fn render_chat_lines(
     app.set_chat_images(image_hits);
     if smooth {
         let width = frame.buffer_mut().area.width;
-        let below = row_below(width, padded, next, (next_prose, next_user), measure, theme);
+        let below = row_below(
+            width,
+            (body, padded),
+            next,
+            (next_prose, next_user),
+            measure,
+            theme,
+        );
         let view = ChatScroll {
             body,
             above: start,
@@ -408,9 +421,9 @@ fn render_chat_lines(
 /// the band of a user's message under it when it is one (`user`).
 fn row_below(
     width: u16,
-    padded: Rect,
+    (body, padded): (Rect, Rect),
     line: Option<Line<'static>>,
-    (prose, user): (Option<u16>, bool),
+    (prose, user): (Option<u16>, Option<BandEdge>),
     measure: Measure,
     theme: &Theme,
 ) -> (Buffer, Option<ProseRow>) {
@@ -434,8 +447,13 @@ fn row_below(
         };
         ProseRow::new(&buffer, (row.x, row.y), (width, indent), code)
     });
-    if user {
-        paint_user_band(&mut buffer, row, &[0], theme);
+    if let Some(edge) = user {
+        let body = Rect {
+            y: 0,
+            height: 1,
+            ..body
+        };
+        paint_user_band(&mut buffer, (body, row), &[(0, edge)], theme);
     }
     (buffer, prose)
 }
@@ -549,23 +567,77 @@ fn pack_prose(
     (cell, code)
 }
 
-/// Shade the rows of the user's messages across the chat, one column
-/// into the inset on each side. Painted after prose is packed, since a
-/// span with the surface background reads as inline code.
-fn paint_user_band(buffer: &mut Buffer, padded: Rect, rows: &[usize], theme: &Theme) {
-    let style = Style::default().bg(theme.colors.surface);
-    for &row in rows {
+/// Where a row falls in the frame around a user's message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BandEdge {
+    /// The frame's top border
+    Top,
+    /// A row between the borders: padding or text
+    Side,
+    /// The frame's bottom border
+    Bottom,
+}
+
+impl BandEdge {
+    /// The edge of row `offset` of a user's block `len` rows long. The
+    /// block's first and last rows are left blank for the borders (see
+    /// `chat_lines::USER_FRAME_ROWS`).
+    const fn at(offset: usize, len: usize) -> Self {
+        if offset == 0 {
+            Self::Top
+        } else if offset + 1 == len {
+            Self::Bottom
+        } else {
+            Self::Side
+        }
+    }
+}
+
+/// Frame the rows of the user's messages: a border two columns out from
+/// the text on each side, clipped to `body`. The frame is not shaded, so
+/// a sent message sits on the chat's own background.
+fn paint_user_band(
+    buffer: &mut Buffer,
+    (body, padded): (Rect, Rect),
+    rows: &[(usize, BandEdge)],
+    theme: &Theme,
+) {
+    let border = Style::default().fg(theme.colors.faint);
+    let symbols = ratatui::widgets::BorderType::border_symbols(theme.border_style.to_border_type());
+    let left = padded.x.saturating_sub(2).max(body.x);
+    let right = padded
+        .right()
+        .saturating_add(1)
+        .min(body.right().saturating_sub(1));
+    if right <= left {
+        return;
+    }
+    for &(row, edge) in rows {
         let Ok(offset) = u16::try_from(row) else {
             continue;
         };
-        let band = Rect {
-            x: padded.x.saturating_sub(1),
-            y: padded.y + offset,
-            width: padded.width + 2,
-            height: 1,
+        let y = padded.y + offset;
+        let (start, middle, end) = match edge {
+            BandEdge::Top => (symbols.top_left, symbols.horizontal_top, symbols.top_right),
+            BandEdge::Bottom => (
+                symbols.bottom_left,
+                symbols.horizontal_bottom,
+                symbols.bottom_right,
+            ),
+            BandEdge::Side => (symbols.vertical_left, "", symbols.vertical_right),
+        };
+        let mut put = |x: u16, symbol: &str| {
+            if let Some(cell) = buffer.cell_mut((x, y)) {
+                cell.set_symbol(symbol).set_style(border);
+            }
+        };
+        put(left, start);
+        put(right, end);
+        if !middle.is_empty() {
+            for x in left + 1..right {
+                put(x, middle);
+            }
         }
-        .intersection(buffer.area);
-        buffer.set_style(band, style);
     }
 }
 
@@ -626,8 +698,9 @@ fn render_lines_below_hint(frame: &mut Frame, panel: Rect, below: usize, theme: 
 /// The text area of the chat and the terminal, every row of the body from
 /// its top border to its bottom one. The terminal keeps a single column
 /// on each side, so output starts at the top left like a terminal's; the
-/// chat is inset further and stops at [`MAX_CHAT_WIDTH`] columns so long
-/// lines stay readable.
+/// chat is inset further, stops at [`MAX_CHAT_WIDTH`] columns so long
+/// lines stay readable, then gives up [`CHAT_NARROW_PERCENT`] of that
+/// width and sits centered, with equal padding on both sides.
 fn terminal_text_area(area: Rect, terminal: bool) -> Rect {
     if terminal {
         return Rect {
@@ -637,15 +710,30 @@ fn terminal_text_area(area: Rect, terminal: bool) -> Rect {
         };
     }
     let inset = chat_inset(area.width);
+    let base = area.width.saturating_sub(inset * 2).min(MAX_CHAT_WIDTH);
+    let width = narrowed(base);
+    // Center the narrowed text so the blank space on either side matches.
+    let left = (area.width - width) / 2;
     Rect {
-        x: area.x.saturating_add(inset),
-        width: area.width.saturating_sub(inset * 2).min(MAX_CHAT_WIDTH),
+        x: area.x.saturating_add(left),
+        width,
         ..area
     }
 }
 
-/// Widest the chat's text runs, in columns.
+/// Widest the chat's text runs, in columns, before [`CHAT_NARROW_PERCENT`]
+/// is taken off.
 const MAX_CHAT_WIDTH: u16 = 110;
+
+/// Share of the chat's text width, in percent, given up to extra padding
+/// split evenly on both sides.
+const CHAT_NARROW_PERCENT: u32 = 17;
+
+/// `width` less [`CHAT_NARROW_PERCENT`], rounded to the nearest column.
+fn narrowed(width: u16) -> u16 {
+    let kept = (u32::from(width) * (100 - CHAT_NARROW_PERCENT) + 50) / 100;
+    u16::try_from(kept).unwrap_or(width)
+}
 
 /// Columns of blank space on each side of the chat: two, or one on narrow
 /// panels where every column of text counts.
@@ -684,21 +772,26 @@ fn live_tail(app: &App, width: usize, theme: &Theme) -> LiveTail {
 }
 
 /// `⬢ Thinking… 12s` — shown below the conversation, flush with the
-/// prose, while a turn is in flight and no reply text is streaming.
+/// prose, while a turn is in flight and no reply text is streaming. It
+/// stays the last line even while a group of steps is still growing above
+/// it, and a band of light sweeps across its label to show work goes on.
 pub(super) fn working_indicator_line<'a>(app: &App, theme: &Theme) -> Option<Line<'a>> {
-    if app.has_live_activity() || app.ends_in_live_group() {
-        return None;
+    let label = format!("{}…", capitalized(&app.working_label()?));
+    let label_style = Style::default().add_modifier(Modifier::BOLD);
+    let mut spans = vec![Span::styled(
+        "⬢ ",
+        Style::default().fg(theme.colors.success),
+    )];
+    if theme.animate_spinners {
+        spans.extend(crate::animation::shimmer_spans(
+            &label,
+            app.animation_frame(),
+            label_style,
+            (theme.colors.muted, theme.colors.foreground),
+        ));
+    } else {
+        spans.push(Span::styled(label, label_style.fg(theme.colors.foreground)));
     }
-    let label = app.working_label()?;
-    let mut spans = vec![
-        Span::styled("⬢ ", Style::default().fg(theme.colors.success)),
-        Span::styled(
-            format!("{}…", capitalized(&label)),
-            Style::default()
-                .fg(theme.colors.foreground)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ];
     if let Some(elapsed) = app.processing_elapsed().filter(|e| e.as_secs() > 0) {
         spans.push(Span::styled(
             format!(" {}", format_elapsed(elapsed)),
@@ -758,6 +851,7 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
         info: None,
         close: None,
         expand: None,
+        scope: None,
         focused: is_focused,
         hosted,
     };
@@ -916,7 +1010,7 @@ fn build_archived_lines<'a>(
 /// shows how long ago it was last active on the right. A ring spins in the
 /// folder's column beside agents that are thinking; idle agents leave it
 /// blank. An agent with spawns shows ▾ there, ▸ when folded over them;
-/// beside the ring the marker moves to the column after it.
+/// a busy one shows the ring alone, which still folds it.
 /// Space folds an agent over its spawns, or the project of a leaf, which
 /// hides every agent under it. Every row is one
 /// line, and only the highlighted one has a background: the keyboard cursor
@@ -956,6 +1050,9 @@ fn build_swarm_lines<'a>(
     let agent_name = Style::default().fg(theme.colors.foreground);
     let subagent_name = Style::default().fg(theme.colors.muted);
     let menu_target = app.context_menu().map(|menu| &menu.target);
+    // While a project or agent is dragged its rows stay lit, and a rail
+    // in the accent color marks the rows under the pointer: where it goes.
+    let drag = app.project_drag_hit();
     let rows = app.project_rows();
     let listed = rows.len().saturating_sub(1);
     // A project's agents run up to the next project's root.
@@ -988,6 +1085,9 @@ fn build_swarm_lines<'a>(
         };
         let add_hovered =
             matches!(app.hover(), Some(HoverTarget::AddToProject(index)) if index == row_index);
+        let button_hovered = |button: AgentButton| app.hover() == Some(button.target(row_index));
+        let pointer_on_row = AgentButton::ALL.into_iter().any(button_hovered)
+            || matches!(app.hover(), Some(HoverTarget::ProjectRow(index)) if index == row_index);
         let menu_on = match (row, menu_target) {
             (ProjectListRow::Project { root, .. }, Some(MenuTarget::Project(key))) => {
                 app.agents()[root].project_key() == key
@@ -1001,8 +1101,16 @@ fn build_swarm_lines<'a>(
             _ => false,
         };
         let is_hovered = add_hovered
+            || pointer_on_row
             || menu_on
-            || matches!(app.hover(), Some(HoverTarget::ProjectRow(index)) if index == row_index);
+            || drag
+                .as_ref()
+                .is_some_and(|drag| drag.dragged.contains(&row_index));
+        let on_target = !pinned
+            && drag
+                .as_ref()
+                .and_then(|drag| drag.target.as_ref())
+                .is_some_and(|target| target.contains(&row_index));
         match row {
             ProjectListRow::Project { root, expanded } => {
                 let end = roots
@@ -1011,7 +1119,7 @@ fn build_swarm_lines<'a>(
                     .unwrap_or(app.agents().len());
                 let agents = &app.agents()[root..end];
                 let icon = if !expanded && agents.iter().any(is_thinking) {
-                    aura_icon(app)
+                    working_icon(app, theme)
                 } else {
                     let folder = if expanded { "🗁" } else { "🗀" };
                     StatusIcon::new(folder, theme.colors.muted)
@@ -1053,14 +1161,13 @@ fn build_swarm_lines<'a>(
                         "▾"
                     }
                 });
-                // A busy agent's ring fills the icon column; its marker
-                // takes the spare column after it, where `fold_marker_at`
-                // looks for it.
-                let icon = match (app.agent_row_busy(index), marker) {
-                    (true, Some(marker)) => aura_icon(app).with_marker(marker, theme.colors.muted),
-                    (true, None) => aura_icon(app),
-                    (false, Some(marker)) => StatusIcon::new(marker, theme.colors.muted),
-                    (false, None) => StatusIcon::new("", theme.colors.muted),
+                // A busy agent's spinner sits in the icon column and stands in
+                // for its fold marker, open or folded; clicking it still
+                // folds, as `fold_marker_at` says.
+                let icon = if app.agent_row_busy(index) {
+                    working_icon(app, theme)
+                } else {
+                    StatusIcon::new(marker.unwrap_or(""), theme.colors.muted)
                 };
                 let ago = agent.last_active_ms.map(|ms| format_ago(ms, now_ms));
                 let state = CellState::of(is_selected, is_hovered);
@@ -1069,13 +1176,26 @@ fn build_swarm_lines<'a>(
                 } else {
                     subagent_name
                 };
+                let cell = cell_style(theme, state, name);
+                // The buttons show only under the pointer, muted like the
+                // time, and the one that is hovered lights up.
+                let buttons = AgentButton::ALL.map(|button| {
+                    let color = if button_hovered(button) && !is_selected {
+                        theme.colors.foreground
+                    } else {
+                        cell.time
+                    };
+                    (button, color)
+                });
+                let buttons: &[_] = if pointer_on_row { &buttons } else { &[] };
                 lines.push(tree_row(
                     width,
                     (&spawn_guides(app.agents(), index), theme.colors.muted),
                     icon,
                     &agent.name,
-                    cell_style(theme, state, name),
+                    cell,
                     ago.as_deref(),
+                    buttons,
                 ));
             }
             ProjectListRow::NewProject => {
@@ -1089,16 +1209,35 @@ fn build_swarm_lines<'a>(
             }
             ProjectListRow::Gap => lines.push(Line::default()),
         }
+        if on_target {
+            if let Some(line) = lines.last_mut() {
+                mark_drop_target(line, theme.colors.success);
+            }
+        }
     }
     (lines, new_project, listed)
 }
+
+/// Draw a rail over the leading padding column of `line`, keeping the
+/// row's background: the mark of a drag's hit area.
+fn mark_drop_target(line: &mut Line<'_>, color: Color) {
+    let Some(first) = line.spans.first_mut() else {
+        return;
+    };
+    let style = first.style;
+    let rest: String = first.content.chars().skip(1).collect();
+    first.content = rest.into();
+    line.spans
+        .insert(0, Span::styled(DROP_RAIL, style.fg(color)));
+}
+
+/// Glyph of the rail beside a drag's hit area.
+pub(super) const DROP_RAIL: &str = "▎";
 
 /// What sits in the icon column of a projects-list row.
 pub(super) struct StatusIcon {
     glyph: String,
     color: Color,
-    /// A fold marker drawn in the spare column after a full-width glyph
-    marker: Option<(&'static str, Color)>,
 }
 
 impl StatusIcon {
@@ -1106,26 +1245,19 @@ impl StatusIcon {
         Self {
             glyph: glyph.to_string(),
             color,
-            marker: None,
-        }
-    }
-
-    /// This icon with fold `marker` in the column after it.
-    fn with_marker(self, marker: &'static str, color: Color) -> Self {
-        Self {
-            marker: Some((marker, color)),
-            ..self
         }
     }
 }
 
 pub(super) fn aura_icon(app: &App) -> StatusIcon {
     let (glyph, color) = app.aura_frame();
-    StatusIcon {
-        glyph,
-        color,
-        marker: None,
-    }
+    StatusIcon { glyph, color }
+}
+
+/// The braille spinner the chat shows beside work in flight, for a
+/// working agent or folded project in the projects list.
+fn working_icon(app: &App, theme: &Theme) -> StatusIcon {
+    StatusIcon::new(app.spinner_char(), theme.colors.muted)
 }
 
 /// ` icon name      time `, filled with the row's background (if it has
@@ -1158,12 +1290,14 @@ pub(super) fn list_row_with_detail<'a>(
         .bg
         .map_or_else(Style::default, |bg| Style::default().bg(bg));
     let indent = Span::styled(format!(" {}", "  ".repeat(depth)), fill);
-    indented_row(width, indent, icon, (name, detail), cell, time)
+    indented_row(width, indent, icon, (name, detail), cell, time, &[])
 }
 
 /// [`list_row`] for an agent in a project's tree: indented by `guides`,
 /// the lines from the agent that spawned it, drawn in their color. A
-/// spawn with no icon has its elbow run on through the icon column.
+/// spawn with no icon has its elbow run on through the icon column. The
+/// `buttons`, each with its color, are drawn left of the time, where
+/// `app::agent_button_offset` says they are.
 pub(super) fn tree_row<'a>(
     width: usize,
     (guides, color): (&str, Color),
@@ -1171,6 +1305,7 @@ pub(super) fn tree_row<'a>(
     name: &str,
     mut cell: CellStyle,
     time: Option<&str>,
+    buttons: &[(AgentButton, Color)],
 ) -> Line<'a> {
     let fill = cell
         .bg
@@ -1182,7 +1317,7 @@ pub(super) fn tree_row<'a>(
         icon
     };
     let indent = Span::styled(format!(" {guides}"), fill.fg(color));
-    indented_row(width, indent, icon, (name, None), cell, time)
+    indented_row(width, indent, icon, (name, None), cell, time, buttons)
 }
 
 /// `   │   ├`: the tree lines before the agent at `index` in `agents`.
@@ -1222,17 +1357,30 @@ fn indented_row<'a>(
     (name, detail): (&str, Option<&str>),
     cell: CellStyle,
     time: Option<&str>,
+    buttons: &[(AgentButton, Color)],
 ) -> Line<'a> {
     let fill = cell
         .bg
         .map_or_else(Style::default, |bg| Style::default().bg(bg));
-    let (marker, marker_color) = icon.marker.unwrap_or(("", icon.color));
-    let icon_width = display_width(&icon.glyph) + display_width(marker);
-    let icon_pad = (AURA_WIDTH.saturating_sub(display_width(&icon.glyph)) + 1)
-        .saturating_sub(display_width(marker));
-    let time = time.map(|time| format!(" {time} ")).unwrap_or_default();
+    let icon_width = display_width(&icon.glyph);
+    let icon_pad = AURA_WIDTH.saturating_sub(icon_width) + 1;
+    // Buttons sit just left of the time, laid out from the same pieces
+    // as `app::agent_button_offset`. Rows without buttons keep their
+    // spans as they were.
+    let time = if buttons.is_empty() {
+        time.map(|time| format!(" {time} ")).unwrap_or_default()
+    } else {
+        agent_time_cell(time)
+    };
+    let buttons: Vec<Span<'a>> = buttons
+        .iter()
+        .map(|&(button, color)| Span::styled(button.label(), fill.fg(color)))
+        .collect();
+    let button_width: usize = buttons.iter().map(Span::width).sum();
     let name_width = width
-        .saturating_sub(indent.width() + icon_width + icon_pad + display_width(&time))
+        .saturating_sub(
+            indent.width() + icon_width + icon_pad + button_width + display_width(&time),
+        )
         .max(1);
     let name = truncate_agent_name(name, name_width);
     let rest = name_width.saturating_sub(display_width(&name));
@@ -1242,24 +1390,17 @@ fn indented_row<'a>(
         .unwrap_or_default();
     let padding = rest.saturating_sub(display_width(&detail));
     let icon_color = cell.icon.unwrap_or(icon.color);
-    // The marker keeps the spare column after the icon column, however
-    // narrow the glyph before it.
-    let (gap, icon_pad) = if marker.is_empty() {
-        (0, icon_pad)
-    } else {
-        (AURA_WIDTH.saturating_sub(display_width(&icon.glyph)), 0)
-    };
-    Line::from(vec![
+    let mut spans = vec![
         indent,
         Span::styled(icon.glyph, fill.fg(icon_color)),
-        Span::styled(" ".repeat(gap), fill),
-        Span::styled(marker, fill.fg(cell.icon.unwrap_or(marker_color))),
         Span::styled(" ".repeat(icon_pad), fill),
         Span::styled(name, fill.patch(cell.text)),
         Span::styled(detail, fill.fg(cell.time)),
         Span::styled(" ".repeat(padding), fill),
-        Span::styled(time, fill.fg(cell.time)),
-    ])
+    ];
+    spans.extend(buttons);
+    spans.push(Span::styled(time, fill.fg(cell.time)));
+    Line::from(spans)
 }
 
 /// How a list cell is drawn, from strongest to weakest.
@@ -1319,7 +1460,7 @@ pub(super) fn cell_style(theme: &Theme, state: CellState, text: Style) -> CellSt
     }
 }
 
-pub(super) fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| {
@@ -1328,7 +1469,7 @@ pub(super) fn now_ms() -> u64 {
 }
 
 /// `now`, `5m`, `3h`, `2d`, `6w`: how long before `now_ms` `then_ms` was.
-pub(super) fn format_ago(then_ms: u64, now_ms: u64) -> String {
+pub(crate) fn format_ago(then_ms: u64, now_ms: u64) -> String {
     const MINUTE: u64 = 60;
     const HOUR: u64 = 60 * MINUTE;
     const DAY: u64 = 24 * HOUR;
@@ -1430,6 +1571,7 @@ pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, 
         )),
         close: None,
         expand: None,
+        scope: None,
         focused: is_focused,
         hosted,
     };

@@ -1,12 +1,13 @@
 //! The PLANS side tab: every plan in the active agent's workspace, newest
 //! first, each a foldable row with its todos underneath. The plan being
 //! worked on starts open, as does any plan with todos left; the rest start
-//! folded until the user opens them.
+//! folded until the user opens them. Scoped to an agent, it lists the
+//! plans that agent's tasks work on (see [`App::refresh_plan_scope`]).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::processes::SIDE_PAGE;
-use super::{contains, follow_selection, App, DetailView};
+use super::{contains, follow_selection, App, DetailView, SideScope};
 use crate::app::file_view::FileView;
 use crate::events::PlanView;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -26,35 +27,73 @@ fn checklist_text(line: &str) -> Option<&str> {
 }
 
 /// 0-based lines of the items in a plan's generated `## Todos`
-/// checklist, in todo order. Empty for files without a generated header,
-/// so a `## Todos` the author wrote in an old plan's body is not used.
+/// checklist, in todo order.
+///
+/// The checklist is the block just before the header's marker line:
+/// checklist items, their 2-space continuation lines and blank lines, back
+/// to the nearest `## Todos` heading. The first marker with such a block
+/// wins. Empty for files without a generated header, so a `## Todos` the
+/// author wrote in an old plan's body is not used. Callers check the
+/// length against the plan's todo count before trusting it.
 fn checklist_lines(lines: &[&str]) -> Vec<usize> {
-    let Some(start) = lines.iter().position(|line| *line == "## Todos") else {
-        return Vec::new();
-    };
-    let mut items = Vec::new();
-    for (index, line) in lines.iter().enumerate().skip(start + 1) {
-        if line.trim_end() == PLAN_HEADER_END {
-            return items;
-        }
-        if checklist_text(line).is_some() {
-            items.push(index);
-        }
-    }
-    Vec::new()
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.trim_end() == PLAN_HEADER_END)
+        .map(|(marker, _)| checklist_before(lines, marker))
+        .find(|items| !items.is_empty())
+        .unwrap_or_default()
 }
 
-/// 0-based line of `view` showing a todo's `content` (its first line):
-/// its checklist item when the plan has one, else the first line that
-/// mentions it, so opening a plan from a todo lands on it.
-fn todo_line(view: &FileView, content: &str) -> Option<usize> {
+/// Item lines of the checklist ending at the marker on line `marker`, or
+/// empty when the lines before it are not a `## Todos` checklist.
+fn checklist_before(lines: &[&str], marker: usize) -> Vec<usize> {
+    let Some(heading) = (0..marker).rev().find(|&index| {
+        let line = lines.get(index).copied().unwrap_or_default();
+        !is_checklist_block_line(line)
+    }) else {
+        return Vec::new();
+    };
+    if lines.get(heading).map(|line| line.trim_end()) != Some("## Todos") {
+        return Vec::new();
+    }
+    let mut items = Vec::new();
+    for (index, line) in lines.iter().enumerate().take(marker).skip(heading + 1) {
+        if checklist_text(line).is_some() {
+            items.push(index);
+        } else if items.is_empty() && !line.trim().is_empty() {
+            // A continuation line with no item to continue.
+            return Vec::new();
+        }
+    }
+    items
+}
+
+/// Whether `line` can sit inside a generated checklist: an item, a
+/// 2-space continuation line or a blank line.
+fn is_checklist_block_line(line: &str) -> bool {
+    line.trim().is_empty() || line.starts_with("  ") || checklist_text(line).is_some()
+}
+
+/// 0-based line of `view` showing todo number `index` of `todo_count`,
+/// whose content is `content`: its checklist item when the plan's
+/// checklist has one item per todo, else the checklist item or first line
+/// mentioning the content's first line, so opening a plan from a todo
+/// lands on it.
+fn todo_line(view: &FileView, index: usize, todo_count: usize, content: &str) -> Option<usize> {
+    let lines = view.body.lines();
+    let items = checklist_lines(&lines);
+    if items.len() == todo_count {
+        if let Some(&line) = items.get(index) {
+            return Some(line);
+        }
+    }
     let needle = content.lines().next()?.trim();
     if needle.is_empty() {
         return None;
     }
-    let lines = view.body.lines();
     let assigned = format!("{needle} (@");
-    checklist_lines(&lines)
+    items
         .into_iter()
         .find(|&index| {
             lines
@@ -65,14 +104,51 @@ fn todo_line(view: &FileView, content: &str) -> Option<usize> {
         .or_else(|| lines.iter().position(|line| line.contains(needle)))
 }
 
+/// Whether `line` is the frontmatter `id:` line of the todo with id `id`,
+/// plain or YAML-quoted.
+fn is_id_line(line: &str, id: &str) -> bool {
+    let Some(value) = line.trim_start_matches(['-', ' ']).strip_prefix("id: ") else {
+        return false;
+    };
+    value == id
+        || ['\'', '"'].iter().any(|&quote| {
+            value
+                .strip_prefix(quote)
+                .and_then(|rest| rest.strip_suffix(quote))
+                == Some(id)
+        })
+}
+
+/// Number of todos in the frontmatter: the top-level `- ` lines between
+/// the opening and closing `---`. `None` without a closed frontmatter.
+fn frontmatter_todo_count(lines: &[&str]) -> Option<usize> {
+    if lines.first().map(|line| line.trim_end()) != Some("---") {
+        return None;
+    }
+    let close = lines
+        .iter()
+        .skip(1)
+        .position(|line| line.trim_end() == "---")?;
+    Some(
+        lines
+            .iter()
+            .skip(1)
+            .take(close)
+            .filter(|line| line.starts_with("- "))
+            .count(),
+    )
+}
+
 /// 0-based line of `view` showing the todo with id `id`: its checklist
-/// item when the plan has one, else its `id:` line in the frontmatter.
+/// item when the plan's checklist has one item per todo, else its `id:`
+/// line in the frontmatter.
 fn todo_id_line(view: &FileView, id: &str) -> Option<usize> {
     let lines = view.body.lines();
-    let wanted = format!("id: {id}");
-    let id_line = lines
-        .iter()
-        .position(|line| line.trim_start_matches(['-', ' ']) == wanted)?;
+    let id_line = lines.iter().position(|line| is_id_line(line, id))?;
+    let items = checklist_lines(&lines);
+    if frontmatter_todo_count(&lines) != Some(items.len()) {
+        return Some(id_line);
+    }
     // Todos are the only top-level `- ` items in the frontmatter, so the
     // number before this one is its place in the checklist.
     let ordinal = lines
@@ -80,12 +156,7 @@ fn todo_id_line(view: &FileView, id: &str) -> Option<usize> {
         .take(id_line)
         .filter(|line| line.starts_with("- "))
         .count();
-    Some(
-        checklist_lines(&lines)
-            .get(ordinal)
-            .copied()
-            .unwrap_or(id_line),
-    )
+    Some(items.get(ordinal).copied().unwrap_or(id_line))
 }
 
 /// One row of the tab.
@@ -115,15 +186,46 @@ pub struct PlanList {
     folds: HashMap<String, bool>,
     /// Path of the plan being worked on
     current: Option<String>,
+    /// Paths of the plans listed besides the current one; `None` lists
+    /// every plan
+    filter: Option<HashSet<String>>,
     rows: Vec<PlanRow>,
     selected: usize,
 }
 
 impl PlanList {
-    /// The plans, newest first.
+    /// The plans, newest first, listed or not.
     #[must_use]
     pub fn plans(&self) -> &[PlanView] {
         &self.plans
+    }
+
+    /// Plans the filter leaves out.
+    #[must_use]
+    pub fn hidden(&self) -> usize {
+        self.plans
+            .iter()
+            .filter(|plan| !self.is_shown(plan))
+            .count()
+    }
+
+    /// List only the current plan and the plans at `paths`, or every
+    /// plan when `None`.
+    pub fn set_filter(&mut self, paths: Option<HashSet<String>>) {
+        if paths == self.filter {
+            return;
+        }
+        let keep = self.selected_key();
+        self.filter = paths;
+        self.rebuild(keep);
+    }
+
+    fn is_shown(&self, plan: &PlanView) -> bool {
+        self.is_current(plan)
+            || self
+                .filter
+                .as_ref()
+                .is_none_or(|paths| paths.contains(&plan.path))
     }
 
     /// Rows on screen, in order.
@@ -230,6 +332,9 @@ impl PlanList {
     fn rebuild(&mut self, keep: Option<(String, Option<usize>)>) {
         let mut rows = Vec::new();
         for (index, plan) in self.plans.iter().enumerate() {
+            if !self.is_shown(plan) {
+                continue;
+            }
             let open = self.is_open(plan);
             rows.push(PlanRow::Plan { plan: index, open });
             if open {
@@ -297,11 +402,13 @@ impl App {
             return;
         };
         let todo = match self.plan_list.rows.get(self.plan_list.selected) {
-            Some(PlanRow::Todo { todo, .. }) => plan.todos.get(*todo),
+            Some(PlanRow::Todo { todo, .. }) => plan.todos.get(*todo).map(|found| (*todo, found)),
             _ => None,
         };
         let mut view = FileView::load(&root.join(&plan.path), Some(root));
-        if let Some(line) = todo.and_then(|todo| todo_line(&view, &todo.content)) {
+        if let Some(line) =
+            todo.and_then(|(index, todo)| todo_line(&view, index, plan.todos.len(), &todo.content))
+        {
             view.jump_to(line);
         }
         self.open_detail(DetailView::File(Box::new(view)));
@@ -339,7 +446,21 @@ impl App {
             return;
         };
         self.show_side_tab(super::SidePanelTab::Tasks);
-        self.task_list.select_task(&task);
+        let hidden = !self.task_list.select_task(&task)
+            && self
+                .task_list
+                .tasks()
+                .iter()
+                .any(|listed| listed.id == task);
+        if hidden {
+            self.notification = Some((
+                format!(
+                    "Another agent is doing this todo; {} lists it",
+                    SideScope::BUTTON
+                ),
+                super::NotificationType::Warning,
+            ));
+        }
     }
 
     /// Clicking a plan's fold glyph folds or opens it; clicking anywhere
@@ -565,6 +686,129 @@ mod tests {
             };
             assert_eq!(view.vim.line(), line, "todo {id}");
         }
+    }
+
+    #[test]
+    fn the_header_marker_matches_the_one_plan_tools_writes() {
+        // Must equal `aura_exec_tools::plan_tools::HEADER_END`, which has
+        // the same literal assertion on its side.
+        assert_eq!(
+            PLAN_HEADER_END,
+            "<!-- end of generated header: edit below -->"
+        );
+    }
+
+    #[test]
+    fn checklist_lines_takes_the_block_just_before_the_marker() {
+        let cases: [(&str, &str, &[usize]); 6] = [
+            (
+                "plain",
+                "# a\n\n## Todos\n\n- [ ] one\n- [x] two\n\n{M}\n\nBody",
+                &[4, 5],
+            ),
+            (
+                "continuation lines",
+                "## Todos\n\n- [ ] one\n  more\n\n  after blank\n- [~] two\n\n{M}",
+                &[2, 6],
+            ),
+            (
+                "todos heading in the overview",
+                "# a\n\n## Todos\n\nOverview text.\n\n## Todos\n\n- [ ] one\n\n{M}",
+                &[8],
+            ),
+            (
+                "marker in the overview is skipped",
+                "# a\n\n{M}\n\n## Todos\n\n- [ ] one\n\n{M}\n\n- [ ] body",
+                &[6],
+            ),
+            (
+                "other text between checklist and marker",
+                "## Todos\n\n- [ ] one\n\nNot a todo.\n\n{M}",
+                &[],
+            ),
+            ("no marker", "## Todos\n\n- [ ] one\n", &[]),
+        ];
+        for (label, text, expected) in cases {
+            let text = text.replace("{M}", PLAN_HEADER_END);
+            let lines: Vec<&str> = text.lines().collect();
+            assert_eq!(checklist_lines(&lines), expected, "{label}");
+        }
+    }
+
+    #[test]
+    fn todo_id_lines_match_quoted_ids() {
+        for line in ["- id: 1", "  id: '1'", "- id: \"1\""] {
+            assert!(is_id_line(line, "1"), "{line}");
+        }
+        for line in ["- id: 12", "- id: '1", "- id: \"1'", "- content: 1"] {
+            assert!(!is_id_line(line, "1"), "{line}");
+        }
+    }
+
+    /// A plan file with a generated header in a temp sandbox, opened in
+    /// the PLANS tab.
+    fn app_with_plan(text: &str, todos: &[&str]) -> (App, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".aura/plans")).unwrap();
+        std::fs::write(dir.path().join(".aura/plans/a.plan.md"), text).unwrap();
+        let mut view = plan("a", &vec![P; todos.len()]);
+        for (todo, content) in view.todos.iter_mut().zip(todos) {
+            todo.content = (*content).to_string();
+        }
+        let mut app = App::new();
+        app.process_command(UiCommand::SetSandboxRoot(dir.path().to_path_buf()));
+        app.process_command(UiCommand::SetPlans(vec![view]));
+        app.focus = super::super::PanelFocus::Sandbox;
+        app.show_side_tab(super::super::SidePanelTab::Plans);
+        (app, dir)
+    }
+
+    fn cursor_line(app: &App) -> usize {
+        let Some(DetailView::File(view)) = app.detail_view() else {
+            panic!("the plan opens as a file");
+        };
+        view.vim.line()
+    }
+
+    #[test]
+    fn duplicate_todo_texts_open_at_their_own_checklist_item() {
+        let text = format!(
+            "---\nname: a\noverview: ''\ntodos:\n\
+             - id: '1'\n  content: same\n  status: pending\n\
+             - id: '2'\n  content: same\n  status: pending\n---\n\n\
+             # a\n\n## Todos\n\n- [ ] same\n- [ ] same\n\n\
+             {PLAN_HEADER_END}\n"
+        );
+        let (mut app, _dir) = app_with_plan(&text, &["same", "same"]);
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(cursor_line(&app), 17, "the second todo's item");
+
+        for (id, line) in [("1", 16), ("2", 17)] {
+            app.close_detail();
+            app.open_plan_at(".aura/plans/a.plan.md", Some(id));
+            assert_eq!(cursor_line(&app), line, "quoted id {id}");
+        }
+    }
+
+    #[test]
+    fn a_checklist_that_disagrees_with_the_todos_falls_back() {
+        // A hand-edited header with one item for two todos.
+        let text = format!(
+            "---\nname: a\ntodos:\n\
+             - id: x\n  content: first\n\
+             - id: y\n  content: second\n---\n\n\
+             ## Todos\n\n- [ ] second\n\n{PLAN_HEADER_END}\n"
+        );
+        let (mut app, _dir) = app_with_plan(&text, &["first", "second"]);
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(cursor_line(&app), 4, "first is only in the frontmatter");
+
+        app.close_detail();
+        app.open_plan_at(".aura/plans/a.plan.md", Some("x"));
+        assert_eq!(cursor_line(&app), 3, "the id line, not the lone item");
     }
 
     #[test]

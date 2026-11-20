@@ -1,0 +1,11 @@
+{
+  "id": "01a1fa9e2da90009",
+  "title": "When delegating to agent show @ in front [image 1]",
+  "state": "completed",
+  "agent_id": "47153889436c84445d3f10619ad6c0a421a6432877752ff6422fff082cccce5d",
+  "agent_name": "Agent 270",
+  "items": [],
+  "summary": "Small edit; doing it directly.The delegation line now puts `@` before the agent name: `Delegated to @rust-engineer: ...`.",
+  "updated_ms": 1795206054313,
+  "created_ms": 1795206032809
+}

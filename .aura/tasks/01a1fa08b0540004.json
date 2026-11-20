@@ -1,0 +1,14 @@
+{
+  "id": "01a1fa08b0540004",
+  "title": "Fact-check an article plan about the \"Gate\" model router against the actual code in /home/n3o/code/aura-harness. Read-o…",
+  "state": "completed",
+  "agent_id": "283d487c0f225749a0a2d238657c347a704e39c4b839d54ab9ffe2299effd2d9",
+  "agent_name": "explorer #13",
+  "assignee": "explorer",
+  "parent": "01a1fa07daf40002",
+  "items": [],
+  "summary": "Most of the plan's claims match the code. None are flatly wrong, but several are incomplete in ways an article should fix. Paths below are relative to `crates/agent/aura-agent-gate/src` (gate crate) or `crates/surface/aura-app/src` (app).",
+  "updated_ms": 1795196404957,
+  "created_ms": 1795196235860,
+  "tool_use_id": "toolu_01EbCBVDKbvWH2UKTcwXw5ei"
+}

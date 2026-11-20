@@ -127,6 +127,40 @@ fn recent_record_summaries_are_scoped_to_agent() {
     assert!(summaries.iter().all(|s| s.agent_id == alice.to_hex()));
 }
 
+#[test]
+fn recent_record_summaries_load_more_than_a_hundred_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RocksStore::open(dir.path(), false).unwrap();
+    let agent = AgentId::generate();
+    for seq in 1..=150 {
+        append(&store, seq, text_tx(agent, TransactionType::AgentMsg, "hi"));
+    }
+
+    let summaries = recent_record_summaries(&store, agent).unwrap();
+    let seqs: Vec<u64> = summaries.iter().map(|s| s.seq).collect();
+    assert_eq!(seqs, (1..=150).collect::<Vec<u64>>());
+}
+
+#[test]
+fn load_existing_records_sends_the_history_as_one_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RocksStore::open(dir.path(), false).unwrap();
+    let agent = AgentId::generate();
+    for seq in 1..=150 {
+        append(&store, seq, text_tx(agent, TransactionType::AgentMsg, "hi"));
+    }
+    // Smaller than the history, as the app's command channel can be.
+    let (commands, mut rx) = mpsc::channel(4);
+
+    load_existing_records(&store, agent, &commands);
+
+    match rx.try_recv() {
+        Ok(UiCommand::SetRecords(records)) => assert_eq!(records.len(), 150),
+        other => panic!("expected SetRecords, got {other:?}"),
+    }
+    assert!(rx.try_recv().is_err());
+}
+
 use serde_json::json;
 fn tx(tx_type: TransactionType, payload: impl Into<Vec<u8>>) -> Transaction {
     Transaction::new_chained(AgentId::generate(), tx_type, payload.into(), None)

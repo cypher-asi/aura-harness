@@ -1,0 +1,11 @@
+{
+  "id": "01a1faa3d8350010",
+  "title": "kernel stats top right panel caps at 100 records when it shouldn't",
+  "state": "completed",
+  "agent_id": "2cb89e892b4e2d2b37a43288fef31292042c412a926172301cda04b36e505b3c",
+  "agent_name": "Agent 276",
+  "items": [],
+  "summary": "The implementation looks essentially done. Let me review the key pieces and run the checks.Implementation is in place. Running the checks now.These errors (`SetQueued`, `mode_change_with`) come from other in-progress changes in the working tree, not from this fix. Waiting for the test run.Let me check whether the `aura-app` type error is related to this change.That's also from the separate work-q…",
+  "updated_ms": 1795207332902,
+  "created_ms": 1795206404149
+}

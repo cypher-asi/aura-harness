@@ -35,6 +35,7 @@ pub(crate) mod notices;
 pub(crate) mod os_processes;
 pub(crate) mod plan_mode;
 pub(crate) mod processes;
+mod queue;
 pub(crate) mod record_ui;
 mod rewind;
 pub(crate) mod run_command;
@@ -71,7 +72,7 @@ use aura_model::model_catalog::local_model_name;
 use aura_model::ToolDefinition;
 use aura_ui_terminal::events::{ImageAttachment, ProcessStatus};
 use aura_ui_terminal::{PermissionMode, UiCommand, UiEvent};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use steering::{SteerSource, Steering};
@@ -118,8 +119,8 @@ pub(super) struct LoopState<'a> {
     /// Sessions of the opened agents with no work in flight. An agent at
     /// work has its session on the task doing the work.
     pub(super) idle: HashMap<AgentId, AgentSession>,
-    /// Work waiting for a busy agent, oldest first
-    queued: HashMap<AgentId, VecDeque<Work>>,
+    /// Work waiting for busy agents, oldest first
+    queued: queue::WorkQueues,
     /// Where agent work reports that it ended
     work_done: mpsc::Sender<WorkDone>,
     /// Work started by the loop that hasn't ended yet
@@ -224,7 +225,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         models,
         active,
         idle: HashMap::from([(active, session)]),
-        queued: HashMap::new(),
+        queued: queue::WorkQueues::default(),
         work_done: done_tx,
         in_flight: 0,
         hub,
@@ -492,6 +493,49 @@ async fn handle_ui_event(
             let agent_id = state.agent_or_active(&agent_id);
             send_queued_now(state, agent_id).await;
         }
+        UiEvent::RemoveQueued { agent_id, id } => {
+            let agent_id = state.agent_or_active(&agent_id);
+            if !state.queued.remove(agent_id, id) {
+                debug!(%agent_id, id, "Queued entry to remove is gone");
+            }
+            hud::send_queued(state, agent_id).await;
+        }
+        UiEvent::EditQueued { agent_id, id, text } => {
+            let agent_id = state.agent_or_active(&agent_id);
+            let outcome = state.queued.edit(agent_id, id, text);
+            if outcome != queue::EditOutcome::Applied {
+                debug!(%agent_id, id, ?outcome, "Queued entry was not edited");
+            }
+            hud::send_queued(state, agent_id).await;
+            if let Some(warning) = outcome.warning() {
+                AgentUi::new(state.commands.clone(), agent_id)
+                    .send(UiCommand::ShowWarning(warning.to_string()))
+                    .await;
+            }
+        }
+        UiEvent::MoveQueued { agent_id, id, to } => {
+            let agent_id = state.agent_or_active(&agent_id);
+            if !state.queued.move_to(agent_id, id, to) {
+                debug!(%agent_id, id, "Queued entry to move is gone");
+            }
+            hud::send_queued(state, agent_id).await;
+        }
+        UiEvent::SendQueuedItemNow { agent_id, id } => {
+            let agent_id = state.agent_or_active(&agent_id);
+            if state.queued.move_to(agent_id, id, 0) {
+                hud::send_queued(state, agent_id).await;
+                send_queued_now(state, agent_id).await;
+            } else {
+                debug!(%agent_id, id, "Queued entry to send now is gone");
+                hud::send_queued(state, agent_id).await;
+                AgentUi::new(state.commands.clone(), agent_id)
+                    .send(UiCommand::ShowWarning(
+                        "That message already started or was removed; nothing was sent now"
+                            .to_string(),
+                    ))
+                    .await;
+            }
+        }
         UiEvent::StopCommand(agent_id) => {
             let agent_id = state.agent_or_active(&agent_id);
             let stopped = aura_exec_tools::stop_commands(&agent_id.to_hex());
@@ -618,7 +662,7 @@ async fn answer_approval(state: &LoopState<'_>, request_id: &str, answer: Answer
 async fn submit(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
     if state.hub.is_running(agent_id) {
         info!(%agent_id, "Agent is busy; queueing work");
-        state.queued.entry(agent_id).or_default().push_back(work);
+        state.queued.push_back(agent_id, work);
         hud::send_queued(state, agent_id).await;
         return;
     }
@@ -629,8 +673,7 @@ async fn submit(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
 /// is cancelled, and `handle_work_done` then starts the front of the queue.
 /// The queue itself is kept, so nothing the user queued is dropped.
 async fn send_queued_now(state: &mut LoopState<'_>, agent_id: AgentId) {
-    let has_queued = state.queued.get(&agent_id).is_some_and(|q| !q.is_empty());
-    if !has_queued {
+    if state.queued.len(agent_id) == 0 {
         return;
     }
     if !state.hub.is_running(agent_id) {
@@ -646,13 +689,10 @@ async fn send_queued_now(state: &mut LoopState<'_>, agent_id: AgentId) {
 
 /// Start the oldest work waiting for `agent_id`, if any.
 async fn start_next(state: &mut LoopState<'_>, agent_id: AgentId) {
-    let Some(queue) = state.queued.get_mut(&agent_id) else {
+    if state.queued.len(agent_id) == 0 {
         return;
-    };
-    let next = queue.pop_front();
-    if queue.is_empty() {
-        state.queued.remove(&agent_id);
     }
+    let next = state.queued.pop_front(agent_id);
     hud::send_queued(state, agent_id).await;
     if let Some(work) = next {
         start_work(state, agent_id, work).await;
@@ -887,10 +927,11 @@ async fn handle_work_done(state: &mut LoopState<'_>, done: WorkDone) {
         let _ = state.commands.send(state.models.ui_command()).await;
     }
     if !unseen.is_empty() {
-        let queue = state.queued.entry(agent_id).or_default();
         for (source, text) in unseen.into_iter().rev() {
             // A user message sent mid-turn is already in the chat.
-            queue.push_front(prompt_work(source, text, true));
+            state
+                .queued
+                .push_front(agent_id, prompt_work(source, text, true));
         }
     }
     state.in_flight = state.in_flight.saturating_sub(1);

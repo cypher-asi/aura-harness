@@ -1,0 +1,11 @@
+{
+  "id": "01a1fa805bad0001",
+  "title": "line up left and right of app borders so panels, top line and top app bar all align [image 1]",
+  "state": "completed",
+  "agent_id": "158ff50203a0cedd42fca80d591956c867bf4109a4ca62d8b26ed01fd740f656",
+  "agent_name": "Agent 261",
+  "items": [],
+  "summary": "I moved the top tab bar in so its outer edges now line up with the panel borders on both sides. The \"AURA CLI\" header line still sits half a character outside those borders on each side; I didn't change it. Tests and clippy pass for `aura-desktop`, but I haven't checked the result in the running app.",
+  "updated_ms": 1795204214941,
+  "created_ms": 1795204078509
+}
