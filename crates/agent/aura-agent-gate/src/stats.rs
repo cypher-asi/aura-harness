@@ -81,6 +81,18 @@ impl Row {
         f64::from(self.successes + lacking) >= target * f64::from(counted)
     }
 
+    /// These outcomes without `other`'s, which must be among them.
+    #[must_use]
+    pub fn without(&self, other: &Self) -> Self {
+        Self {
+            tries: self.tries.saturating_sub(other.tries),
+            successes: self.successes.saturating_sub(other.successes),
+            cost_usd: (self.cost_usd - other.cost_usd).max(0.0),
+            subtask_cost_usd: (self.subtask_cost_usd - other.subtask_cost_usd).max(0.0),
+            latency_ms: self.latency_ms.saturating_sub(other.latency_ms),
+        }
+    }
+
     fn add(&mut self, counted: &Counted) {
         let Some(success) = counted.success else {
             return;
@@ -362,6 +374,18 @@ impl GateStats {
             kind: None,
             led: Some(led),
         })
+    }
+
+    /// The row of `model` on turns asking for `category` that it did
+    /// itself: every turn but those it led, whose outcome says as much
+    /// about the subtasks as about the lead. `None` when there are none.
+    #[must_use]
+    pub fn unled_row(&self, category: PromptCategory, model: &str) -> Option<Row> {
+        let all = self.row(RouteLevel::Turn, category, model)?;
+        let row = self
+            .way_row(category, model, true)
+            .map_or(*all, |led| all.without(led));
+        (row.tries > 0).then_some(row)
     }
 
     /// Every finer row with tries, by level, category, model, kind and way.

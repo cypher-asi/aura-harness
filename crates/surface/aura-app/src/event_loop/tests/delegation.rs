@@ -136,8 +136,20 @@ async fn under_gate_the_lead_has_no_file_tools_and_a_limited_run_command() {
     );
 }
 
+/// Gate has seen leading succeed on `model` for changes across files,
+/// with nothing known of the model doing that work itself.
+fn prove_leading(fixture: &Fixture, model: &str) {
+    fixture.hub.gate.learn(
+        RouteLevel::Turn,
+        PromptCategory::MultiFileChange,
+        model,
+        Some(true),
+        (10, true),
+    );
+}
+
 #[tokio::test]
-async fn with_nothing_learned_only_multi_file_changes_and_planning_are_led() {
+async fn with_nothing_learned_no_turn_is_led_and_proven_leading_is() {
     let (fixture, _commands) = fixture();
     let mut b = borrowed(&fixture);
     let first = fixture.first;
@@ -149,15 +161,7 @@ async fn with_nothing_learned_only_multi_file_changes_and_planning_are_led() {
         .open(&lock_registry_agent(&fixture, first), Vec::new(), None)
         .unwrap();
 
-    for category in [
-        PromptCategory::Question,
-        PromptCategory::SmallChange,
-        PromptCategory::Debugging,
-        PromptCategory::Research,
-        PromptCategory::Writing,
-        PromptCategory::Other,
-        PromptCategory::Unclassified,
-    ] {
+    for category in PromptCategory::CLASSES {
         let (mut config, mut tools, lead) = fixture.hub.user_turn(&mut session);
         let before = (config.system_prompt.clone(), tools.len());
         let led = fixture.hub.gate.way(category, &config.model, false).led;
@@ -168,15 +172,12 @@ async fn with_nothing_learned_only_multi_file_changes_and_planning_are_led() {
         assert_eq!((config.system_prompt, tools.len()), before, "{category}");
         assert!(names(&tools).contains(&"write_file"), "{category}");
     }
-    for category in [PromptCategory::MultiFileChange, PromptCategory::Planning] {
-        let (mut config, mut tools, lead) = fixture.hub.user_turn(&mut session);
-        let led = fixture.hub.gate.way(category, &config.model, false).led;
-        assert!(
-            lead.unwrap().apply(led, &mut config, &mut tools),
-            "{category}"
-        );
-        assert!(!names(&tools).contains(&"write_file"), "{category}");
-    }
+    let (mut config, mut tools, lead) = fixture.hub.user_turn(&mut session);
+    prove_leading(&fixture, &config.model);
+    let category = PromptCategory::MultiFileChange;
+    let led = fixture.hub.gate.way(category, &config.model, false).led;
+    assert!(lead.unwrap().apply(led, &mut config, &mut tools));
+    assert!(!names(&tools).contains(&"write_file"));
 }
 
 #[tokio::test]
@@ -216,6 +217,7 @@ async fn the_lead_is_held_to_its_limits_when_it_tries_anyway() {
     let mut state = loop_state(&fixture, &mut b);
     select_gate(&fixture, &mut state);
     fixture.hub.set_permissions(first, yolo());
+    prove_leading(&fixture, SONNET);
     let big: String = (1..=300).map(|n| format!("line {n}\n")).collect();
     std::fs::write(fixture.workspace.join("big.txt"), big).unwrap();
 
@@ -638,8 +640,9 @@ async fn a_frontier_leads_subtasks_start_below_its_tier_and_may_escalate_to_it()
     let mut state = loop_state(&fixture, &mut b);
     select_gate(&fixture, &mut state);
     fixture.hub.set_permissions(first, yolo());
-    // Planning goes to the strongest model, so on its own this subtask
-    // would run on the lead's.
+    // Sonnet has failed at planning, so on its own this subtask would run
+    // on the strongest model, the lead's.
+    sonnet_failed_at_planning(&fixture);
     fixture.hub.gate.note_model(first, GPT);
 
     let check = format!("ls notes/{GPT}.txt");
@@ -683,6 +686,18 @@ async fn a_frontier_leads_subtasks_start_below_its_tier_and_may_escalate_to_it()
     let attempts = children(&fixture, first, "implement");
     let (prompts, _) = record(&fixture, attempts[2]);
     assert_eq!(prompts[0].route, Route::subtask(GPT, RouteReason::Default));
+}
+
+/// Gate has seen two planning subtasks fail on Sonnet, which rules it
+/// out of planning subtasks.
+fn sonnet_failed_at_planning(fixture: &Fixture) {
+    fixture.hub.gate.learn(
+        RouteLevel::Subtask,
+        PromptCategory::Planning,
+        SONNET,
+        None,
+        (2, false),
+    );
 }
 
 /// Run git with `args` in `dir` and return its output.
@@ -825,6 +840,7 @@ async fn nothing_is_retried_without_a_stronger_model() {
     let mut state = loop_state(&fixture, &mut b);
     select_gate(&fixture, &mut state);
     fixture.hub.set_permissions(first, yolo());
+    sonnet_failed_at_planning(&fixture);
 
     let result = dispatch(
         &fixture,
@@ -843,7 +859,7 @@ async fn nothing_is_retried_without_a_stronger_model() {
     assert_eq!(
         prompts[0].route,
         Route::subtask(GPT, RouteReason::Default),
-        "planning goes to the strongest model"
+        "with Sonnet ruled out, planning goes to the strongest model"
     );
     assert_eq!(outcomes[0].signal, OutcomeSignal::ChecksFailed);
     assert!(!result.final_message.contains("Retried"));

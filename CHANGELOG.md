@@ -7,6 +7,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Gate — cheaper defaults
+
+##### Changed
+
+- Turns are done by the model Gate routes them to unless leading has
+  proven cheaper for the category and model. In a 33-task benchmark,
+  every led turn cost more than the strongest model doing the work
+  itself: the lead's own reading, planning and checking cost about that
+  much before any subtask ran. A frontier model never leads to explore.
+- `planning` starts on the standard tier, like every category but
+  `small_change`; the frontier tier is reached by moving up.
+- A turn model is judged on the turns it did itself, so failed led turns
+  no longer move a whole category up a tier.
+
 ### Benchmarks — two arms on the same work
 
 ##### Added

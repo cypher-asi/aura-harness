@@ -11,23 +11,12 @@
 
 use aura_config::GateConfig;
 use aura_core_types::PromptCategory;
+use aura_model::model_catalog::{infer_tier, ModelTier};
 use serde_json::Value;
 
 use crate::checks::is_check_part;
 use crate::router::Random;
 use crate::stats::{GateStats, Row};
-
-/// Whether a turn asking for `category` is led by default: work to split
-/// up and plan. Anything smaller costs less done by the model it is
-/// routed to than handed on, since a subtask starts from nothing and
-/// reads the files again.
-#[must_use]
-pub const fn leads(category: PromptCategory) -> bool {
-    matches!(
-        category,
-        PromptCategory::MultiFileChange | PromptCategory::Planning
-    )
-}
 
 /// Whether a turn asking for `category` may be led at all: work that can
 /// be handed to subtasks. A question, a small change or prose is always
@@ -59,12 +48,16 @@ pub struct Way {
 ///
 /// 1. the cheaper of the ways proven: at least `min_tries` outcomes with
 ///    a success rate of at least `target`;
-/// 2. else the way [`leads`] says, unless its outcomes rule it out
-///    ([`Row::can_still_reach`]) and the other's do not;
+/// 2. else by the model itself, unless its outcomes rule that out
+///    ([`Row::can_still_reach`]) and leading's do not;
 /// 3. with probability `explore_rate`, the other way instead, unless its
 ///    outcomes rule it out.
 ///
-/// Never led when the category [`may_lead`] not.
+/// Leading is unproven by default because the lead's own reading,
+/// planning and checking cost about what the model doing the work itself
+/// does, before any subtask runs. On a frontier model it is taken only
+/// once proven cheaper, never to explore or as a fallback. Never led
+/// when the category [`may_lead`] not.
 pub fn choose_way(
     stats: &GateStats,
     category: PromptCategory,
@@ -85,14 +78,16 @@ pub fn choose_way(
             .filter(|(rate, _)| *rate >= settings.target)
             .map(|(_, cost)| cost)
     };
-    let open =
-        |led| row(led).is_none_or(|row| row.can_still_reach(settings.target, settings.min_tries));
-    let default = leads(category);
+    let frontier = infer_tier(model) == ModelTier::Frontier;
+    let open = |led: bool| {
+        !(led && frontier)
+            && row(led).is_none_or(|row| row.can_still_reach(settings.target, settings.min_tries))
+    };
     let led = match (proven(row(true)), proven(row(false))) {
         (Some(led), Some(direct)) if led != direct => led < direct,
         (Some(_), None) => true,
         (None, Some(_)) => false,
-        _ => default != (!open(default) && open(!default)),
+        _ => !open(false) && open(true),
     };
     let rate = settings.explore_rate.clamp(0.0, 1.0);
     if rate > 0.0 && open(!led) && rng.unit() < rate {
@@ -345,6 +340,7 @@ mod tests {
         use super::*;
 
         const SONNET: &str = "claude/claude-sonnet-4-6";
+        const OPUS: &str = "claude/claude-opus-4-7";
 
         /// `n` turns on Sonnet asking for `category`, led or not, that
         /// all passed or all failed, each costing `cost_usd` in the lead
@@ -402,16 +398,26 @@ mod tests {
         const EXPLORED: f64 = 0.0;
 
         #[test]
-        fn with_nothing_learned_the_category_decides() {
-            let led = |category| way(&[], category, KEPT).led;
-            assert!(led(PromptCategory::MultiFileChange));
-            assert!(led(PromptCategory::Planning));
-            assert!(!led(PromptCategory::Debugging));
-            assert!(!led(PromptCategory::Question));
-            let tried = way(&[], PromptCategory::Debugging, EXPLORED);
+        fn with_nothing_learned_the_model_does_the_work() {
+            for category in PromptCategory::CLASSES {
+                assert!(!way(&[], category, KEPT).led, "{category}");
+            }
+            let tried = way(&[], PromptCategory::MultiFileChange, EXPLORED);
             assert_eq!((tried.led, tried.explored), (true, true));
             let never = way(&[], PromptCategory::Question, EXPLORED);
             assert_eq!((never.led, never.explored), (false, false));
+        }
+
+        #[test]
+        fn a_frontier_model_leads_only_once_leading_is_proven_cheaper() {
+            let category = PromptCategory::Planning;
+            let on_opus = |stats: &GateStats, roll: f64| {
+                choose_way(stats, category, OPUS, &settings(0.05), &mut || roll)
+            };
+            let empty = GateStats::default();
+            let kept = on_opus(&empty, EXPLORED);
+            assert_eq!((kept.led, kept.explored), (false, false), "never explored");
+            assert!(!on_opus(&empty, KEPT).led);
         }
 
         #[test]
@@ -440,13 +446,15 @@ mod tests {
 
             let category = PromptCategory::MultiFileChange;
             let mut entries = Vec::new();
-            turns(&mut entries, 3, category, true, false, (0.1, 0.1));
-            let left = way(&entries, category, KEPT);
-            assert!(!left.led, "3 failures rule leading out");
             turns(&mut entries, 3, category, false, false, (0.1, 0.0));
             assert!(
                 way(&entries, category, KEPT).led,
-                "both ruled out: the default"
+                "3 failures rule working directly out"
+            );
+            turns(&mut entries, 3, category, true, false, (0.1, 0.1));
+            assert!(
+                !way(&entries, category, KEPT).led,
+                "both ruled out: the model does the work"
             );
         }
 

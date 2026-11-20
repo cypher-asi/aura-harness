@@ -516,6 +516,13 @@ async fn gate_is_compared_with_itself_without_enforced_delegation() {
     let mut state = loop_state(&fixture, &mut b);
     state.models = gate_on_zos(&fixture);
     state.sync_turn_base();
+    state.hub.gate.learn(
+        RouteLevel::Turn,
+        PromptCategory::MultiFileChange,
+        SONNET,
+        Some(true),
+        (10, true),
+    );
 
     compare(
         &mut state,
@@ -537,8 +544,8 @@ async fn gate_is_compared_with_itself_without_enforced_delegation() {
     assert_eq!(payload.against, "gate:nodelegate");
     let gate = payload.run("a-1").unwrap();
     let other = payload.run("b-1").unwrap();
-    // A change across several files is led, and starts on the cheapest
-    // standard model.
+    // A change across several files, where leading is proven, is led,
+    // and starts on the cheapest standard model.
     for run in [gate, other] {
         assert_eq!(run.error, None, "{}", run.name);
         assert_eq!(run.model, SONNET, "both arms are routed by Gate");

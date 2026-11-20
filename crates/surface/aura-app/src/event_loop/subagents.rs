@@ -535,7 +535,7 @@ impl AgentHub {
 
     /// Whether the agent `agent_id`, an instance of the permanent agent
     /// `definition` if any, leads under Gate the turns that call for a
-    /// lead ([`aura_agent_gate::lead::leads`]): `Some(true)` with
+    /// lead ([`aura_agent_gate::choose_way`]): `Some(true)` with
     /// delegation enforced, `Some(false)` with it only recommended
     /// (`AURA_GATE_DELEGATE=off`, or the `gate:nodelegate` arm of
     /// `/compare`), `None` when it never leads. Only the user's own

@@ -130,24 +130,26 @@ pub fn fixed_pick(candidates: &[Candidate]) -> Option<&Candidate> {
 }
 
 /// The tier work asking for `category` starts on before Gate has learned
-/// better; `None` for the strongest tier there is.
+/// better.
 ///
-/// Code work starts cheap, because a failing test or build shows when
-/// the model was not enough and the work then moves up a tier. A plan
-/// has no such check and everything after it builds on it, so planning
-/// starts on the strongest model.
+/// Small changes start on the fast tier and everything else, plans
+/// included, on the standard one: a failing test or build moves code
+/// work up a tier, and a category whose start model fails too often
+/// starts higher ([`pick`]). The frontier tier is reached that way, not
+/// by default: on the work it is asked for, it costs several times a
+/// standard model for results the checks rarely tell apart.
 #[must_use]
-pub const fn start_tier(category: PromptCategory) -> Option<ModelTier> {
+pub const fn start_tier(category: PromptCategory) -> ModelTier {
     match category {
-        PromptCategory::SmallChange => Some(ModelTier::Fast),
-        PromptCategory::Planning => None,
-        PromptCategory::MultiFileChange
+        PromptCategory::SmallChange => ModelTier::Fast,
+        PromptCategory::Planning
+        | PromptCategory::MultiFileChange
         | PromptCategory::Debugging
         | PromptCategory::Question
         | PromptCategory::Research
         | PromptCategory::Writing
         | PromptCategory::Other
-        | PromptCategory::Unclassified => Some(ModelTier::Standard),
+        | PromptCategory::Unclassified => ModelTier::Standard,
     }
 }
 
@@ -313,9 +315,9 @@ pub fn by_expected_cost<'a>(
 ///    out is tried again once nothing cheaper is more promising, and
 ///    comes back when those tries prove it.
 ///
-/// A subtask for the permanent agent `kind` is judged by [`judged`] rows.
-/// Models are ordered by [`by_expected_cost`]. `None` when there are no
-/// candidates.
+/// Models are judged by their [`judged`] rows, `kind` being the permanent
+/// agent a subtask goes to, and ordered by [`by_expected_cost`]. `None`
+/// when there are no candidates.
 pub fn pick(
     stats: &GateStats,
     level: RouteLevel,
@@ -419,22 +421,28 @@ pub fn below_lead(candidates: &[Candidate], lead: Option<&str>) -> Vec<Candidate
 }
 
 /// The outcomes [`pick`] judges `model` by for work at `level` asking for
-/// `category`: those of subtasks for the permanent agent `kind` once they
-/// number `min_tries`, as a model can suit one agent's work and not
-/// another's; else every outcome of the level on the category.
+/// `category`: for a subtask, those of subtasks for the permanent agent
+/// `kind` once they number `min_tries`, as a model can suit one agent's
+/// work and not another's, else every subtask on the category; for a
+/// turn, the turns it did itself ([`GateStats::unled_row`]), since a led
+/// turn that failed may have failed in its subtasks.
 #[must_use]
-pub fn judged<'s>(
-    stats: &'s GateStats,
+pub fn judged(
+    stats: &GateStats,
     level: RouteLevel,
     category: PromptCategory,
     kind: Option<&str>,
     model: &str,
     min_tries: u32,
-) -> Option<&'s Row> {
-    kind.filter(|_| level == RouteLevel::Subtask)
-        .and_then(|kind| stats.kind_row(category, kind, model))
-        .filter(|row| row.settled(min_tries))
-        .or_else(|| stats.row(level, category, model))
+) -> Option<Row> {
+    match level {
+        RouteLevel::Turn => stats.unled_row(category, model),
+        RouteLevel::Subtask => kind
+            .and_then(|kind| stats.kind_row(category, kind, model))
+            .filter(|row| row.settled(min_tries))
+            .or_else(|| stats.row(level, category, model))
+            .copied(),
+    }
 }
 
 /// Position in `order` of the model work asking for `category` starts
@@ -442,17 +450,15 @@ pub fn judged<'s>(
 /// lowest tier above it whose cheapest model its outcomes (`row`) have
 /// not ruled out. The cheapest model of the strongest tier when every
 /// tier is ruled out or none is at or above the start tier.
-fn start_index<'s>(
-    row: &impl Fn(&str) -> Option<&'s Row>,
+fn start_index(
+    row: &impl Fn(&str) -> Option<Row>,
     category: PromptCategory,
     order: &[&Candidate],
     settings: &GateConfig,
 ) -> Option<usize> {
     let top = order.iter().map(|c| c.tier).max()?;
     let strongest = order.iter().position(|c| c.tier == top);
-    let Some(start) = start_tier(category) else {
-        return strongest;
-    };
+    let start = start_tier(category);
     let mut tiers: Vec<ModelTier> = order
         .iter()
         .map(|c| c.tier)
@@ -825,16 +831,47 @@ mod tests {
         }
 
         #[test]
-        fn planning_starts_on_the_strongest_model() {
+        fn planning_starts_on_the_standard_tier() {
             let empty = GateStats::default();
             assert_eq!(
                 chosen(&empty, PromptCategory::Planning, &claude()),
-                (OPUS.to_string(), RouteReason::Default)
+                (SONNET.to_string(), RouteReason::Default)
             );
+            assert_eq!(chosen(&empty, PromptCategory::Planning, &all()).0, SONNET);
+        }
+
+        #[test]
+        fn failures_of_led_turns_do_not_rule_the_lead_model_out() {
+            let category = PromptCategory::MultiFileChange;
+            let mut log = Log::default();
+            for _ in 0..3 {
+                let agent = AgentId::generate();
+                let mut prompt = PromptPayload::new(format!("led {}", log.entries.len()));
+                prompt.category = category;
+                prompt.route = Route::turn(SONNET, RouteReason::Default);
+                prompt.led = Some(true);
+                let prompt_tx = log.push(Transaction::user_prompt_with(agent, &prompt));
+                let signal = OutcomeSignal::ChecksFailed;
+                log.push(Transaction::outcome(
+                    agent,
+                    &OutcomePayload {
+                        prompt_tx,
+                        category,
+                        model: SONNET.to_string(),
+                        success: signal.success(),
+                        signal,
+                        cost_usd: 0.1,
+                        subtask_cost_usd: 0.1,
+                        latency_ms: 10,
+                    },
+                ));
+            }
+            assert_eq!(chosen(&log.stats(), category, &claude()).0, SONNET);
+            log.turns(2, category, SONNET, false);
             assert_eq!(
-                chosen(&empty, PromptCategory::Planning, &all()).0,
-                "chatgpt/gpt-5.4",
-                "the cheaper of the frontier models"
+                chosen(&log.stats(), category, &claude()).0,
+                OPUS,
+                "two failures of its own do"
             );
         }
 
@@ -1100,7 +1137,7 @@ mod tests {
                 "the cheaper standard model stays the default"
             );
             assert_eq!(chosen(&stats, PromptCategory::Debugging, &plan).0, SONNET_5);
-            assert_eq!(chosen(&stats, PromptCategory::Planning, &plan).0, OPUS_5);
+            assert_eq!(chosen(&stats, PromptCategory::Planning, &plan).0, SONNET_5);
         }
 
         #[test]

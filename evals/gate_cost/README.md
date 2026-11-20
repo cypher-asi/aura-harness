@@ -14,7 +14,7 @@ Categories: `bugfix`, `feature`, `refactor`, `tests`, `docs`,
 
 Each arm is one model on the same tasks, except `--model gate`, which
 routes each task's prompts and subtasks with Gate's table, lets the
-agent lead and delegate on multi-file changes and planning, and records
+agent lead and delegate where Gate has learned that leading pays, and records
 the verify verdicts in that table
 (see [Gate](../../docs/cli.md#gate)). `--budget-usd` stops an arm once
 its runs have cost that much.

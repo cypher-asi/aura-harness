@@ -725,6 +725,13 @@ async fn a_headless_turn_changing_several_files_is_led() {
         permissions,
         gate,
     );
+    h.hub.gate.learn(
+        aura_core_types::RouteLevel::Turn,
+        aura_core_types::PromptCategory::MultiFileChange,
+        SONNET,
+        Some(true),
+        (10, true),
+    );
 
     let (report, _) = execute(
         &mut h,
