@@ -43,6 +43,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `/compare --learn` lets Gate arms explore as routed turns do, recording
   each pick's propensity, so a benchmark teaches Gate about models it
   would not pick yet.
+- `/gate` replays the recorded turns: how Gate's picks now and each
+  model on its own would have done on them, estimated by weighting each
+  turn by how unlikely its route was.
 
 ### Benchmarks — two arms on the same work
 

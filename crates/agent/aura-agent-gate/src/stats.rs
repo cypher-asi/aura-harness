@@ -26,6 +26,7 @@
 
 use std::collections::HashMap;
 
+use crate::replay::Logged;
 use aura_core_types::{
     AgentId, Difficulty, Hash, OutcomePayload, PromptCategory, RecordEntry, RouteLevel, RouteReason,
 };
@@ -141,12 +142,14 @@ pub struct DetailKey {
 }
 
 /// What a prompt says about how its work was done.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct Shape {
     level: RouteLevel,
     kind: Option<String>,
     led: Option<bool>,
     difficulty: Option<Difficulty>,
+    /// How likely the router was to pick its model
+    propensity: f64,
 }
 
 /// The outcome a prompt is counted with.
@@ -269,6 +272,7 @@ impl GateStats {
                     .led
                     .filter(|_| prompt.route.level == RouteLevel::Turn),
                 difficulty: prompt.difficulty,
+                propensity: prompt.route.propensity,
             };
             self.observe_prompt((agent, entry.tx.hash), shape);
         } else if let Some(outcome) = entry.tx.outcome_payload() {
@@ -464,6 +468,28 @@ impl GateStats {
         let mut rows: Vec<(&RowKey, &Row)> = self.rows.iter().collect();
         rows.sort_by(|a, b| a.0.cmp(b.0));
         rows
+    }
+
+    /// Every counted prompt, for [`crate::replay`].
+    #[must_use]
+    pub fn logged(&self) -> Vec<Logged> {
+        self.prompts
+            .values()
+            .filter_map(|state| {
+                let shape = state.shape.as_ref()?;
+                let counted = state.counted.as_ref()?;
+                Some(Logged {
+                    level: shape.level,
+                    category: counted.category,
+                    difficulty: shape.difficulty,
+                    kind: shape.kind.clone(),
+                    model: counted.model.clone(),
+                    propensity: shape.propensity,
+                    success: counted.success?,
+                    cost_usd: counted.cost_usd + counted.subtask_cost_usd,
+                })
+            })
+            .collect()
     }
 }
 
@@ -664,6 +690,41 @@ mod tests {
             assert_eq!(debugging(&stats, RouteLevel::Subtask, HAIKU), None);
             assert_eq!(stats.rows().len(), 1);
         }
+    }
+
+    #[test]
+    fn the_replay_log_holds_each_counted_prompt_with_its_propensity() {
+        let mut log = Log::new();
+        let mut explored = PromptPayload::new("fix the parser");
+        explored.category = PromptCategory::Debugging;
+        explored.route = Route {
+            explored: true,
+            propensity: 0.05,
+            ..Route::turn(HAIKU, RouteReason::Explore)
+        };
+        let explored = log.push(Transaction::user_prompt_with(log.agent, &explored));
+        log.outcome_costing(explored, HAIKU, OutcomeSignal::ChecksPassed, 0.5);
+        let unknown = log.prompt("fix the lexer", RouteLevel::Turn);
+        log.outcome(unknown, SONNET, OutcomeSignal::None);
+        let mut retry = PromptPayload::new("fix the parser, again");
+        retry.route = Route::turn(SONNET, RouteReason::Escalate);
+        let retry = log.push(Transaction::user_prompt_with(log.agent, &retry));
+        log.outcome(retry, SONNET, OutcomeSignal::ChecksPassed);
+
+        let logged = GateStats::from_entries(&log.entries).logged();
+        assert_eq!(
+            logged,
+            [Logged {
+                level: RouteLevel::Turn,
+                category: PromptCategory::Debugging,
+                difficulty: None,
+                kind: None,
+                model: HAIKU.to_string(),
+                propensity: 0.05,
+                success: true,
+                cost_usd: 0.75,
+            }]
+        );
     }
 
     #[test]

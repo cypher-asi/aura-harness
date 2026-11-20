@@ -1,5 +1,6 @@
 //! `/gate`: what Gate has learned per level, category and model, the
-//! model it picks for each category now, how much of the active agent's
+//! model it picks for each category now, how other ways of routing turns
+//! would have done on the recorded ones, how much of the active agent's
 //! work went to subtasks, and Gate's latest decisions.
 
 use super::gate_live::RecentRoute;
@@ -9,6 +10,7 @@ use super::LoopState;
 use crate::record_loader::{format_local_time, model_call};
 use aura_agent_gate::compare::list_price;
 use aura_agent_gate::delegation::{self, Call, Delegation, Share, Subtask};
+use aura_agent_gate::replay::{self, Estimate, Logged};
 use aura_agent_gate::router::by_expected_cost;
 use aura_agent_gate::stats::Row;
 use aura_agent_gate::{Candidate, GateStats};
@@ -182,9 +184,83 @@ impl GateView<'_> {
         for level in [RouteLevel::Turn, RouteLevel::Subtask] {
             self.render_level(&mut out, level);
         }
+        self.render_replay(&mut out);
         self.render_delegation(&mut out);
         self.render_recent(&mut out);
         out
+    }
+
+    /// How the recorded turns went, and how Gate's picks now and each
+    /// model on its own would have done on them.
+    fn render_replay(&self, out: &mut String) {
+        let logged: Vec<Logged> = self
+            .stats
+            .logged()
+            .into_iter()
+            .filter(|prompt| prompt.level == RouteLevel::Turn)
+            .collect();
+        if logged.is_empty() {
+            return;
+        }
+        let no_exploring = GateConfig {
+            explore_rate: 0.0,
+            ..*self.settings
+        };
+        let gate_now = replay::estimate(&logged, |prompt| {
+            aura_agent_gate::pick(
+                self.stats,
+                &prompt.work(),
+                self.candidates,
+                &no_exploring,
+                &mut || 1.0,
+            )
+            .is_some_and(|decision| decision.model.id == prompt.model)
+        });
+        let mut models: Vec<&str> = logged.iter().map(|p| p.model.as_str()).collect();
+        models.sort_unstable();
+        models.dedup();
+        let mut policies: Vec<(String, Option<Estimate>)> = vec![
+            ("as recorded".to_string(), replay::as_recorded(&logged)),
+            ("Gate's picks now".to_string(), gate_now),
+        ];
+        policies.extend(models.into_iter().map(|model| {
+            (
+                format!("all on {}", route_label(model)),
+                replay::estimate(&logged, |prompt| prompt.model == model),
+            )
+        }));
+        let width = policies
+            .iter()
+            .map(|(name, _)| name.chars().count())
+            .max()
+            .unwrap_or(0);
+        let _ = write!(
+            out,
+            "\n\nReplay of {} recorded turns, each weighted by how unlikely its route was; \
+             a policy is judged on the turns it would have routed the same way\n  \
+             {:<width$}  {:>7}  {:>7}  {:>9}",
+            logged.len(),
+            "policy",
+            "matched",
+            "success",
+            "avg cost"
+        );
+        for (name, estimate) in policies {
+            let (matched, success, cost) = estimate.map_or_else(
+                || ("0".to_string(), "-".to_string(), "-".to_string()),
+                |e| {
+                    (
+                        e.matched.to_string(),
+                        format!("{:.0}%", e.success_rate * 100.0),
+                        money(e.mean_cost_usd),
+                    )
+                },
+            );
+            let _ = write!(
+                out,
+                "\n  {name:<width$}  {matched:>7}  {success:>7}  {cost:>9}"
+            );
+        }
     }
 
     /// The share of the active agent's cost and model calls spent in
@@ -485,6 +561,21 @@ mod tests {
         );
         assert!(line("writing").ends_with("pick (default)"));
         assert!(!text.contains("Subtasks"), "no subtask outcomes yet");
+        assert!(text.contains("Replay of 17 recorded turns"), "{text}");
+        assert_eq!(line("as recorded"), "as recorded 17 76% $0.020");
+        assert_eq!(
+            line("Gate's picks now"),
+            "Gate's picks now 10 100% $0.020",
+            "Gate now sends questions to haiku and debugging to sonnet"
+        );
+        assert_eq!(
+            line("all on claude-haiku-4-5"),
+            "all on claude-haiku-4-5 (claude plan) 14 79% $0.020"
+        );
+        assert_eq!(
+            line("all on claude-sonnet-4-6"),
+            "all on claude-sonnet-4-6 (claude plan) 3 67% $0.020"
+        );
         assert!(text.contains("Last 1 decisions"), "{text}");
         assert!(line("turn     question").ends_with("claude-haiku-4-5 (claude plan) proven"));
     }
@@ -506,6 +597,7 @@ mod tests {
         );
         assert!(text.contains("Nothing to route to yet"), "{text}");
         assert!(text.contains("No routing decisions yet"), "{text}");
+        assert!(!text.contains("Replay"), "nothing recorded to replay");
     }
 
     #[test]

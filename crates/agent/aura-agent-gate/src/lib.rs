@@ -20,6 +20,8 @@
 //! - [`lead`]: what the lead agent under Gate may do itself while
 //!   delegation is enforced
 //! - [`delegation`]: how much of a lead's work went to subtasks
+//! - [`replay`]: how another way of routing would have done on the
+//!   recorded work
 //!
 //! Gate never calls a model itself: it chooses which model a turn runs
 //! on and builds the classifier's and judge's requests, and the calls go
@@ -32,6 +34,7 @@ pub mod delegation;
 pub mod judge;
 pub mod lead;
 pub mod outcome;
+pub mod replay;
 pub mod router;
 pub mod stats;
 pub mod turn_judge;
