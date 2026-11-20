@@ -494,7 +494,7 @@ async fn a_comparison_needs_a_prompt_and_waits_to_be_confirmed() {
     let estimate = system_texts(&drain(&mut commands));
     assert!(
         estimate.contains(
-            "A gate (likely aura-claude-sonnet-4-6 (cloud)) vs B aura-claude-sonnet-4-6 (cloud)"
+            "\n  A             gate (likely aura-claude-sonnet-4-6 (cloud))\n  B             aura-claude-sonnet-4-6 (cloud)\n"
         ),
         "{estimate}"
     );
@@ -520,7 +520,7 @@ async fn gate_is_compared_with_itself_without_enforced_delegation() {
     .await;
     let estimate = system_texts(&drain(&mut commands));
     assert!(
-        estimate.contains("vs B gate without enforced delegation (gate:nodelegate)"),
+        estimate.contains("\n  B             gate without enforced delegation (gate:nodelegate)"),
         "{estimate}"
     );
     compare(&mut state, &links, "go").await;
@@ -658,7 +658,9 @@ async fn two_models_replay_a_session_from_its_start_prompt_by_prompt() {
         "{estimate}"
     );
     assert!(
-        estimate.contains("A aura-claude-sonnet-4-6 (cloud) vs B aura-claude-opus-4-7 (cloud)"),
+        estimate.contains(
+            "\n  A             aura-claude-sonnet-4-6 (cloud)\n  B             aura-claude-opus-4-7 (cloud)\n"
+        ),
         "{estimate}"
     );
     assert!(estimate.contains("not undone"), "{estimate}");
@@ -835,7 +837,7 @@ async fn example_tasks_run_in_their_own_fixtures_with_their_own_checks() {
         .expect("the benchmark is set up");
     assert!(
         estimate.starts_with(&format!(
-            "Benchmark: 2 example coding tasks: {}, {}",
+            "Benchmark: 2 example coding tasks\n  Tasks         {}, {}\n",
             pack[0].id, pack[1].id
         )),
         "{estimate}"

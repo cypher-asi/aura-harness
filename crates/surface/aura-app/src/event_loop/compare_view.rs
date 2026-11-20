@@ -106,91 +106,110 @@ pub(super) struct EstimateView<'a> {
 }
 
 impl EstimateView<'_> {
+    /// A heading, then one labelled row per fact, as the BENCH form lays
+    /// out its own rows.
     pub(super) fn render(&self) -> String {
+        let plural = |n: usize| if n == 1 { "" } else { "s" };
         let mut out = match self.session {
             _ if !self.examples.is_empty() => format!(
-                "Benchmark: {} example coding task{}: {}",
+                "Benchmark: {} example coding task{}",
                 self.examples.len(),
-                if self.examples.len() == 1 { "" } else { "s" },
-                headline(
-                    &self
-                        .examples
-                        .iter()
-                        .map(|t| t.id.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    160
-                ),
+                plural(self.examples.len()),
             ),
             Some(title) => format!(
                 "Benchmark: replay the session \"{}\", {} prompt{} in order",
                 headline(title, 72),
                 self.prompts,
-                if self.prompts == 1 { "" } else { "s" },
+                plural(self.prompts),
             ),
             None => format!("Compare: \"{}\"", headline(self.task, 80)),
         };
-        if self.examples.is_empty() {
-            let _ = write!(
-                out,
-                "\n  A {} vs B {}, {} run{} each, up to {} at a time, each in its own copy of the workspace",
-                self.a,
-                self.b,
-                self.repeats,
-                if self.repeats == 1 { "" } else { "s" },
-                self.concurrency,
-            );
+        if !self.examples.is_empty() {
+            let ids: Vec<&str> = self.examples.iter().map(|t| t.id.as_str()).collect();
+            row(&mut out, "Tasks", &ids.join(", "));
+        }
+        row(&mut out, "A", &self.a);
+        row(&mut out, "B", &self.b);
+        let repeats = self.repeats as usize;
+        let runs = if self.examples.is_empty() {
+            format!(
+                "{repeats} per arm, up to {} at a time,\neach in its own copy of the workspace",
+                self.concurrency
+            )
         } else {
-            let runs = self.repeats as usize * self.examples.len();
-            let _ = write!(
-                out,
-                "\n  A {} vs B {}, {} run{} of each task per arm ({runs} per arm), up to {} at a time, \
+            format!(
+                "{repeats} of each task per arm ({} per arm), up to {} at a time,\n\
                  each in a fresh copy of its task's files",
-                self.a,
-                self.b,
-                self.repeats,
-                if self.repeats == 1 { "" } else { "s" },
-                self.concurrency,
-            );
-        }
-        match self.check {
-            _ if !self.examples.is_empty() => out.push_str(
-                "\n  Check after each run: its task's own command, with any hidden checks put in only then",
-            ),
-            Some(check) => {
-                let _ = write!(out, "\n  Check after each run: `{check}`");
+                repeats * self.examples.len(),
+                self.concurrency
+            )
+        };
+        row(&mut out, "Runs", &runs);
+        let check = match self.check {
+            _ if !self.examples.is_empty() => {
+                "each task's own command; hidden checks go in only after the run".to_string()
             }
-            None => out.push_str(
-                "\n  No check command: pass --check <cmd> (or set AURA_CHECK_COMMAND) to count passes",
-            ),
-        }
+            Some(check) => format!("`{check}` after each run"),
+            None => "none · --check <cmd> or AURA_CHECK_COMMAND counts passes".to_string(),
+        };
+        row(&mut out, "Check", &check);
         let part = |usd: Option<f64>| usd.map_or_else(|| "unknown".to_string(), money);
-        let _ = write!(
-            out,
-            "\n  Estimated at list prices: ~{} (A ~{}, B ~{}, judge ~{} on {}), for turns of about 150k input and 6k output tokens{}",
+        let mut estimate = format!(
+            "~{} at list prices\nA ~{} · B ~{}\njudge ~{} on {}\n\
+             for turns of about 150k input and 6k output tokens",
             money(self.estimate.known_usd()),
             part(self.estimate.a_usd),
             part(self.estimate.b_usd),
             part(self.estimate.judge_usd),
             route_label(self.judge),
-            if self.estimate.fully_priced() {
-                ""
-            } else {
-                "; some prices are unknown"
-            },
         );
+        if !self.estimate.fully_priced() {
+            estimate.push_str("\nsome prices are unknown");
+        }
+        row(&mut out, "Estimate", &estimate);
         if let Some(budget) = self.budget_usd {
-            let _ = write!(
-                out,
-                "\n  Budget {}: no new run starts once the finished ones cost that much",
+            let budget = format!(
+                "{}: no new run starts once the finished ones cost that much",
                 money(budget)
             );
+            row(&mut out, "Budget", &budget);
         }
         for note in self.notes {
-            let _ = write!(out, "\n  Note: {note}");
+            row(&mut out, "Note", note);
         }
         out
     }
+}
+
+/// Characters an estimate row's value wraps at.
+const VALUE_WIDTH: usize = 64;
+
+/// Append the row `label` reading `value` to `out`: each line of `value`
+/// wrapped at [`VALUE_WIDTH`], under the value column.
+fn row(out: &mut String, label: &str, value: &str) {
+    let mut label = label;
+    for line in value.lines().flat_map(|line| wrap(line, VALUE_WIDTH)) {
+        let _ = write!(out, "\n  {label:<14}{line}");
+        label = "";
+    }
+}
+
+/// `text` split at spaces into lines of at most `width` characters; a
+/// word longer than that keeps a line of its own.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines = vec![String::new()];
+    for word in text.split(' ') {
+        let line = lines.last_mut().expect("there is always a line");
+        if line.is_empty() {
+            line.push_str(word);
+        } else if line.chars().count() + 1 + word.chars().count() <= width {
+            line.push(' ');
+            line.push_str(word);
+        } else {
+            lines.push(word.to_string());
+        }
+    }
+    lines
 }
 
 /// One line per past comparison, oldest first, numbered for
@@ -826,15 +845,36 @@ mod tests {
             notes: &[],
         }
         .render();
-        assert!(text.starts_with("Compare: \"fix it\""), "{text}");
-        assert!(text.contains("A gate (likely aura-claude-sonnet-4-6 (cloud)) vs B aura-claude-opus-4-7 (cloud), 3 runs each"), "{text}");
+        assert!(text.starts_with("Compare: \"fix it\"\n"), "{text}");
+        for row in [
+            "\n  A             gate (likely aura-claude-sonnet-4-6 (cloud))\n",
+            "\n  B             aura-claude-opus-4-7 (cloud)\n",
+            "\n  Runs          3 per arm, up to 4 at a time,\n                each in its own copy of the workspace\n",
+            "\n  Check         none · --check <cmd> or AURA_CHECK_COMMAND counts passes\n",
+            "\n  Estimate      ~$5.50 at list prices\n                A ~$1.50 · B ~$4.00\n                judge ~unknown on ",
+            "\n                some prices are unknown\n",
+            "\n  Budget        $2.00: no new run starts",
+        ] {
+            assert!(text.contains(row), "{row:?} in\n{text}");
+        }
         assert!(
-            text.contains("~$5.50 (A ~$1.50, B ~$4.00, judge ~unknown"),
+            text.lines()
+                .all(|line| line.chars().count() <= 16 + VALUE_WIDTH),
             "{text}"
         );
-        assert!(text.contains("some prices are unknown"));
-        assert!(text.contains("No check command"));
-        assert!(text.contains("Budget $2.00"));
+    }
+
+    #[test]
+    fn long_values_wrap_at_spaces_under_the_value_column() {
+        let mut out = String::from("Heading");
+        let words = "word ".repeat(20);
+        row(&mut out, "Label", words.trim_end());
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 3, "{out}");
+        assert!(lines[1].starts_with("  Label         word word"));
+        assert!(lines[2].starts_with("                word"));
+        assert!(lines[1].chars().count() <= 16 + VALUE_WIDTH);
+        assert_eq!(wrap("one-long-word", 4), ["one-long-word"]);
     }
 
     #[test]
@@ -866,8 +906,19 @@ mod tests {
             ),
             "{text}"
         );
-        assert!(text.contains("A claude-sonnet-4-6 vs B claude-opus-4-7, 2 runs each"));
-        assert!(text.contains("Note: shell changes are not undone"));
+        assert!(
+            text.contains("\n  A             claude-sonnet-4-6\n"),
+            "{text}"
+        );
+        assert!(text.contains("\n  Runs          2 per arm"), "{text}");
+        assert!(
+            text.contains("\n  Check         `cargo test` after each run\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("\n  Note          shell changes are not undone"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -995,16 +1046,21 @@ mod tests {
         .render();
         assert!(
             estimate.starts_with(
-                "Benchmark: 2 example coding tasks: coding/write-file, gate_hard/retry-spec"
+                "Benchmark: 2 example coding tasks\n  Tasks         coding/write-file, gate_hard/retry-spec\n"
             ),
             "{estimate}"
         );
         assert!(
-            estimate.contains("2 runs of each task per arm (4 per arm)"),
+            estimate.contains(
+                "\n  Runs          2 of each task per arm (4 per arm), up to 4 at a time,\n"
+            ),
             "{estimate}"
         );
-        assert!(estimate.contains("its task's own command"), "{estimate}");
-        assert!(!estimate.contains("No check command"), "{estimate}");
+        assert!(
+            estimate.contains("\n  Check         each task's own command"),
+            "{estimate}"
+        );
+        assert!(!estimate.contains("--check <cmd>"), "{estimate}");
     }
 
     #[test]
