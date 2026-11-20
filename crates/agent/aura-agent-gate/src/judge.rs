@@ -41,7 +41,7 @@ the checks miss:
 - the final reply: accurate about what was done, no false claims, useful to the user.
 
 Explain your judgment in two to four sentences, naming the concrete differences that decided \
-it. Then end with one line that is exactly `WINNER: A`, `WINNER: B` or `WINNER: TIE` (TIE only \
+it. Always call them \"Attempt A\" and \"Attempt B\" in full, never a bare A or B. Then end with one line that is exactly `WINNER: A`, `WINNER: B` or `WINNER: TIE` (TIE only \
 when neither is meaningfully better).";
 
 /// What the judge sees of one run.
@@ -158,6 +158,56 @@ pub const fn winner(verdict: Verdict, a_first: bool) -> Option<CompareArm> {
         (Verdict::A, true) | (Verdict::B, false) => Some(CompareArm::A),
         (Verdict::A, false) | (Verdict::B, true) => Some(CompareArm::B),
     }
+}
+
+/// The judge's `reply` with the attempts it saw named as the runs they
+/// were, `names` being the arm A run's and the arm B run's: "Attempt A"
+/// (or "attempt A") is the arm A run when it was shown first, else the
+/// arm B run, and so on. The order is random, so its own labels say
+/// nothing about the arms.
+#[must_use]
+pub fn unblind(reply: &str, a_first: bool, names: (&str, &str)) -> String {
+    let (shown_a, shown_b) = if a_first { names } else { (names.1, names.0) };
+    let mut out = String::with_capacity(reply.len());
+    let mut rest = reply;
+    while let Some(at) = rest.find("ttempt ") {
+        let start = at.saturating_sub(1);
+        let word = if at > 0 && rest.is_char_boundary(start) {
+            &rest[start..]
+        } else {
+            ""
+        };
+        let label = word
+            .strip_prefix("Attempt ")
+            .or_else(|| word.strip_prefix("attempt "))
+            .and_then(|after| {
+                let mut chars = after.chars();
+                let label = chars.next()?;
+                let ends = chars.next().is_none_or(|c| !c.is_alphanumeric());
+                let before = rest[..start].chars().next_back();
+                let starts = before.is_none_or(|c| !c.is_alphanumeric());
+                (starts && ends).then_some(label)
+            });
+        let name = match label {
+            Some('A') => Some(shown_a),
+            Some('B') => Some(shown_b),
+            _ => None,
+        };
+        match name {
+            Some(name) => {
+                out.push_str(&rest[..start]);
+                out.push_str(name);
+                rest = &rest[start + "Attempt A".len()..];
+            }
+            _ => {
+                let end = at + "ttempt ".len();
+                out.push_str(&rest[..end]);
+                rest = &rest[end..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The value of the last line of `reply` labelled `label` (`LABEL: value`,
@@ -308,6 +358,26 @@ mod tests {
             assert!(b.contains(&shown_b.diff) && b.contains(&shown_b.reply));
             assert!(built.tools.is_empty());
         }
+    }
+
+    #[test]
+    fn the_reasoning_names_the_runs_not_the_order_they_were_shown_in() {
+        let reply = "Attempt A wins; attempt B's reply overstates it. Attempts differ.\n\
+                     Attempt AB is not a label, nor is reattempt A.\nWINNER: A";
+        assert_eq!(
+            unblind(reply, false, ("a-2", "b-2")),
+            "b-2 wins; a-2's reply overstates it. Attempts differ.\n\
+             Attempt AB is not a label, nor is reattempt A.\nWINNER: A"
+        );
+        assert!(unblind(reply, true, ("a-2", "b-2")).starts_with("a-2 wins; b-2's"));
+        assert_eq!(
+            unblind("é ttempt A — Attempt B", true, ("x", "y")),
+            "é ttempt A — y"
+        );
+        assert!(
+            SYSTEM_PROMPT.contains("\"Attempt A\" and \"Attempt B\" in full"),
+            "the judge is asked for the labels unblind finds"
+        );
     }
 
     #[test]

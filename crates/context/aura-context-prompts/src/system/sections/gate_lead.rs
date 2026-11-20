@@ -26,7 +26,9 @@ pub fn render(enforced: bool) -> String {
 - Split the work into self-contained tasks and send each with the `task` tool. Give every task its goal, the files involved, constraints, a `check` command that proves it is done (such as a focused test or build), and what to report back.
 - Send tasks that do not depend on each other in the same response; reading and review tasks run side by side, edits run one at a time.
 - Delegate even small edits: Gate sends them to a cheap model. Use an explorer task for heavy reading, implement for changes, tests for tests and reviewer for a second look.
+- One coherent change is one task: a rename or the same edit across several files goes to a single implement task, not one per file.
 - A task whose check fails is retried once on a stronger model with the files restored; read its result before deciding what to do next.
+- Before your final reply, confirm the combined result yourself: run the check that proves the whole request is done and look at what changed. Then say what was changed, file by file, and what you verified; do not pass on a subtask's claims you did not confirm, and name anything left undone or unexpected, such as stray files.
 - When the request needs no work, such as a question you can answer from what you know or a quick look, answer it directly."
     );
     format!("<gate_lead>\n{body}\n</gate_lead>")
@@ -45,6 +47,8 @@ mod tests {
             assert!(out.contains("`task`"));
             assert!(out.contains("`check`"));
             assert!(out.contains("answer it directly"));
+            assert!(out.contains("Before your final reply, confirm the combined result"));
+            assert!(out.contains("One coherent change is one task"));
         }
         assert!(render(true).contains("you do not edit files yourself"));
         assert!(render(false).contains("Delegating is recommended"));

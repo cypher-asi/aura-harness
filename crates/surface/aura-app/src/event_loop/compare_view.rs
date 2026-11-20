@@ -11,7 +11,7 @@ use aura_core_types::{
     ModelTokens, Plan, PlanShare,
 };
 use aura_model::model_catalog::route_label;
-use aura_ui_terminal::events::FileDiffData;
+use aura_ui_terminal::events::{cost_shares, FileDiffData};
 use std::fmt::Write;
 
 /// Why plan usage is not shown when no call reported it.
@@ -332,7 +332,7 @@ pub(super) fn render(name: &str, payload: &ComparePayload) -> String {
         },
     );
 
-    let width = a_label.chars().count().max(24);
+    let width = a_label.chars().count().max(32);
     let row = |out: &mut String, label: &str, a: String, b: String| {
         let _ = write!(out, "\n  {label:<14}{a:<width$}  {b}");
     };
@@ -341,14 +341,21 @@ pub(super) fn render(name: &str, payload: &ComparePayload) -> String {
     row(&mut out, "finished", runs(&a), runs(&b));
     let wall = |arm: &ArmSummary| arm.median_wall_ms.map_or_else(|| "-".to_string(), duration);
     row(&mut out, "median time", wall(&a), wall(&b));
+    let [a_share, b_share] = cost_shares(Some(a.total_cost_usd), Some(b.total_cost_usd));
     row(
         &mut out,
         "total cost",
-        money(a.total_cost_usd),
-        money(b.total_cost_usd),
+        money(a.total_cost_usd) + &a_share,
+        money(b.total_cost_usd) + &b_share,
     );
     let median = |arm: &ArmSummary| arm.median_cost_usd.map_or_else(|| "-".to_string(), money);
-    row(&mut out, "median cost", median(&a), median(&b));
+    let [a_share, b_share] = cost_shares(a.median_cost_usd, b.median_cost_usd);
+    row(
+        &mut out,
+        "median cost",
+        median(&a) + &a_share,
+        median(&b) + &b_share,
+    );
     let checks = |arm: &ArmSummary| {
         if arm.checks_run == 0 {
             "-".to_string()
@@ -417,12 +424,14 @@ pub(super) fn render(name: &str, payload: &ComparePayload) -> String {
         );
         for (i, task) in examples.iter().enumerate() {
             let cell = |cells: &[TaskCell]| cells.get(i).map_or_else(|| "-".to_string(), task_cell);
+            let cost = |cells: &[TaskCell]| cells.get(i).and_then(|c| c.mean_cost_usd);
+            let [a_share, b_share] = cost_shares(cost(&a_cells), cost(&b_cells));
             let _ = write!(
                 out,
                 "\n    {:<34}{:<width$}  {}",
                 headline(&task.id, 32),
-                cell(&a_cells),
-                cell(&b_cells),
+                cell(&a_cells) + &a_share,
+                cell(&b_cells) + &b_share,
             );
         }
     }
@@ -729,10 +738,13 @@ mod tests {
             "{text}"
         );
         assert_eq!(line(&text, "median time"), ["median time", "42s", "42s"]);
-        assert_eq!(line(&text, "total cost"), ["total cost", "$0.18", "$1.35"]);
+        assert_eq!(
+            line(&text, "total cost"),
+            ["total cost", "$0.18 · 87% less", "$1.35 · 100%"]
+        );
         assert_eq!(
             line(&text, "median cost"),
-            ["median cost", "$0.06", "$0.45"]
+            ["median cost", "$0.06 · 87% less", "$0.45 · 100%"]
         );
         assert_eq!(line(&text, "check"), ["check", "2/3 passed", "3/3 passed"]);
         assert_eq!(

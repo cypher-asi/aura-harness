@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tracing::warn;
 
@@ -85,16 +85,10 @@ pub(crate) fn summary_of(reply: &str) -> Option<String> {
     (!paragraph.is_empty()).then(|| cut(&paragraph, SUMMARY_CHARS))
 }
 
-fn task_path(workspace: &Path, id: &str) -> PathBuf {
-    workspace.join(TASKS_DIR).join(format!("{id}.json"))
-}
-
-/// Write `record` into `workspace`, whole or not at all.
-pub(crate) fn save(workspace: &Path, record: &TaskRecord) -> std::io::Result<()> {
-    let path = task_path(workspace, &record.view.id);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
+/// Write `record` into the folder `dir`, whole or not at all.
+fn save_in(dir: &Path, record: &TaskRecord) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join(format!("{}.json", record.view.id));
     let json = serde_json::to_vec_pretty(record).map_err(std::io::Error::other)?;
     let partial = path.with_extension("json.partial");
     std::fs::write(&partial, json)?;
@@ -103,7 +97,12 @@ pub(crate) fn save(workspace: &Path, record: &TaskRecord) -> std::io::Result<()>
 
 /// Every readable task in `workspace`, newest first.
 pub(crate) fn load_all(workspace: &Path) -> Vec<TaskRecord> {
-    let Ok(entries) = std::fs::read_dir(workspace.join(TASKS_DIR)) else {
+    load_from(&workspace.join(TASKS_DIR))
+}
+
+/// Every readable task in the folder `dir`, newest first.
+fn load_from(dir: &Path) -> Vec<TaskRecord> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut records: Vec<TaskRecord> = entries
@@ -164,6 +163,65 @@ struct Board {
     /// Workspaces whose tasks left running by an earlier run were marked
     /// open
     recovered: HashSet<PathBuf>,
+    /// Workspaces whose tasks are set aside ([`TaskBoard::set_aside`])
+    aside: HashMap<PathBuf, Aside>,
+}
+
+/// A workspace's tasks while they are set aside.
+struct Aside {
+    /// Where they are, and where tasks kept meanwhile go
+    dir: PathBuf,
+    /// How many [`TasksAside`] keep them there
+    holds: u32,
+}
+
+/// The folder `workspace`'s tasks are in, given the workspaces whose tasks
+/// are `aside`.
+fn tasks_dir(aside: &HashMap<PathBuf, Aside>, workspace: &Path) -> PathBuf {
+    aside
+        .get(workspace)
+        .map_or_else(|| workspace.join(TASKS_DIR), |aside| aside.dir.clone())
+}
+
+/// Keeps a workspace's tasks out of it until dropped; see
+/// [`TaskBoard::set_aside`].
+pub(crate) struct TasksAside {
+    board: Arc<TaskBoard>,
+    workspace: PathBuf,
+}
+
+impl Drop for TasksAside {
+    fn drop(&mut self) {
+        self.board.put_back(&self.workspace);
+    }
+}
+
+/// Where `workspace`'s tasks go while set aside: inside its `.git`, which
+/// searches leave out, or beside it. `None` when it has neither.
+fn aside_dir(workspace: &Path) -> Option<PathBuf> {
+    let git = workspace.join(".git");
+    if git.is_dir() {
+        return Some(git.join("aura-tasks-aside"));
+    }
+    let name = workspace.file_name()?.to_string_lossy();
+    Some(workspace.with_file_name(format!(".{name}.aura-tasks")))
+}
+
+/// Move every file of the folder `from` into the folder `to`, replacing
+/// what has the same name, and remove `from`.
+fn move_files(from: &Path, to: &Path) -> std::io::Result<()> {
+    if !from.is_dir() {
+        return Ok(());
+    }
+    if !to.exists() && std::fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        std::fs::rename(entry.path(), to.join(entry.file_name()))?;
+    }
+    std::fs::remove_dir(from)
 }
 
 /// Every agent's current task, kept on disk as it moves on and shown in
@@ -252,7 +310,7 @@ impl TaskBoard {
     /// Change `agent`'s task with `change`, then keep and show it.
     pub(crate) async fn change(&self, agent: AgentId, change: impl FnOnce(&mut TaskRecord)) {
         let shown = {
-            let mut board = lock(&self.board);
+            let board = &mut *lock(&self.board);
             let Some(current) = board.current.get_mut(&agent) else {
                 return;
             };
@@ -263,7 +321,10 @@ impl TaskBoard {
             }
             current.record.view.updated_ms = now_ms();
             current.saved = true;
-            keep(&current.workspace, &current.record);
+            keep(
+                &tasks_dir(&board.aside, &current.workspace),
+                &current.record,
+            );
             (current.workspace.clone(), current.record.view.clone())
         };
         self.show(shown).await;
@@ -313,7 +374,7 @@ impl TaskBoard {
                 created_ms: now,
                 tool_use_id: spawned.tool_use_id,
             };
-            keep(&workspace, &record);
+            keep(&tasks_dir(&board.aside, &workspace), &record);
             let shown = (workspace.clone(), record.view.clone());
             board.current.insert(
                 spawned.child,
@@ -381,7 +442,10 @@ impl TaskBoard {
                 close_open_items(&mut current.record.view.items);
             }
             current.record.view.updated_ms = now_ms();
-            keep(&current.workspace, &current.record);
+            keep(
+                &tasks_dir(&board.aside, &current.workspace),
+                &current.record,
+            );
             (current.workspace, current.record.view)
         };
         self.show(shown).await;
@@ -393,7 +457,8 @@ impl TaskBoard {
         let views = {
             let mut board = lock(&self.board);
             board.workspaces.insert(agent, workspace.to_path_buf());
-            let mut records = load_all(workspace);
+            let dir = tasks_dir(&board.aside, workspace);
+            let mut records = load_from(&dir);
             if board.recovered.insert(workspace.to_path_buf()) {
                 let live: HashSet<&str> = board
                     .current
@@ -405,7 +470,7 @@ impl TaskBoard {
                         && !live.contains(record.view.id.as_str())
                     {
                         record.view.state = TaskState::Open;
-                        keep(workspace, record);
+                        keep(&dir, record);
                     }
                 }
             }
@@ -418,6 +483,56 @@ impl TaskBoard {
                     command: Box::new(UiCommand::SetTasks(views)),
                 })
                 .await;
+        }
+    }
+
+    /// Move `workspace`'s tasks out of it until the returned guard drops,
+    /// keeping the tasks saved meanwhile with them: they quote the
+    /// prompts, so a check that searches the workspace would find them.
+    pub(crate) fn set_aside(self: &Arc<Self>, workspace: &Path) -> TasksAside {
+        let mut board = lock(&self.board);
+        if let Some(aside) = board.aside.get_mut(workspace) {
+            aside.holds += 1;
+        } else {
+            let records = workspace.join(TASKS_DIR);
+            let dir = aside_dir(workspace)
+                .and_then(|dir| match move_files(&records, &dir) {
+                    Ok(()) => Some(dir),
+                    Err(e) => {
+                        warn!(error = %e, from = %records.display(), "Could not set the tasks aside");
+                        None
+                    }
+                })
+                .unwrap_or(records);
+            board
+                .aside
+                .insert(workspace.to_path_buf(), Aside { dir, holds: 1 });
+        }
+        TasksAside {
+            board: Arc::clone(self),
+            workspace: workspace.to_path_buf(),
+        }
+    }
+
+    /// One [`TasksAside`] of `workspace` is done: the last one puts its
+    /// tasks back.
+    fn put_back(&self, workspace: &Path) {
+        let mut board = lock(&self.board);
+        let Some(aside) = board.aside.get_mut(workspace) else {
+            return;
+        };
+        aside.holds -= 1;
+        if aside.holds > 0 {
+            return;
+        }
+        let Some(aside) = board.aside.remove(workspace) else {
+            return;
+        };
+        let records = workspace.join(TASKS_DIR);
+        if aside.dir != records {
+            if let Err(e) = move_files(&aside.dir, &records) {
+                warn!(error = %e, from = %aside.dir.display(), "Could not put the tasks back");
+            }
         }
     }
 
@@ -452,8 +567,9 @@ fn close_open_items(items: &mut [TodoView]) {
     }
 }
 
-fn keep(workspace: &Path, record: &TaskRecord) {
-    if let Err(e) = save(workspace, record) {
+/// Save `record` into the folder `dir`.
+fn keep(dir: &Path, record: &TaskRecord) {
+    if let Err(e) = save_in(dir, record) {
         warn!(task = %record.view.id, error = %e, "Could not save the task");
     }
 }
@@ -623,7 +739,7 @@ mod tests {
             },
             ..TaskRecord::default()
         };
-        save(dir.path(), &stale).unwrap();
+        save_in(&dir.path().join(TASKS_DIR), &stale).unwrap();
         let (tasks, mut rx, _shown) = board();
         tasks.send_all(agent(1), dir.path()).await;
         assert_eq!(load_all(dir.path())[0].view.state, TaskState::Open);
@@ -632,6 +748,63 @@ mod tests {
         };
         assert!(
             matches!(*command, UiCommand::SetTasks(views) if views[0].state == TaskState::Open)
+        );
+    }
+
+    #[tokio::test]
+    async fn tasks_set_aside_leave_the_workspace_and_keep_what_is_saved_meanwhile() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("copy");
+        std::fs::create_dir(&workspace).unwrap();
+        let (tasks, _rx, _shown) = board();
+        let tasks = Arc::new(tasks);
+        let (lead, child) = (agent(1), agent(2));
+        tasks.begin_request(lead, workspace.clone(), "Lead", "Rename calc_total", None);
+        tasks.touch(lead).await;
+
+        let first = tasks.set_aside(&workspace);
+        let second = tasks.set_aside(&workspace);
+        assert!(!workspace.join(TASKS_DIR).exists());
+        let aside = root.path().join(".copy.aura-tasks");
+        assert_eq!(load_from(&aside).len(), 1);
+        tasks
+            .begin_spawn(Spawned {
+                parent: lead,
+                child,
+                workspace: workspace.clone(),
+                name: "coder #1",
+                assignee: "coder",
+                prompt: "Rename calc_total in a.rs",
+                tool_use_id: None,
+                todo_id: None,
+            })
+            .await;
+        assert!(!workspace.join(TASKS_DIR).exists(), "saved aside meanwhile");
+
+        drop(first);
+        assert!(
+            !workspace.join(TASKS_DIR).exists(),
+            "until the last is done"
+        );
+        drop(second);
+        assert_eq!(load_all(&workspace).len(), 2);
+        assert!(!aside.exists());
+    }
+
+    #[test]
+    fn tasks_go_aside_inside_git_when_the_workspace_has_it() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            aside_dir(dir.path()),
+            dir.path().parent().map(|p| p.join(format!(
+                ".{}.aura-tasks",
+                dir.path().file_name().unwrap().to_string_lossy()
+            )))
+        );
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        assert_eq!(
+            aside_dir(dir.path()),
+            Some(dir.path().join(".git/aura-tasks-aside"))
         );
     }
 }

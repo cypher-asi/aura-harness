@@ -837,7 +837,7 @@ async fn run_prompt(
         hub.model_limits().configure(&mut config, &model);
     }
     let model = config.model.clone();
-    let led = lead.map(|lead| {
+    let led = lead.is_some_and(|lead| {
         hub.gate.note_model(agent_id, &model);
         let led = hub.gate.way(category, &model, false).led;
         session.lead = lead.apply(led, &mut config, &mut tools);
@@ -847,7 +847,7 @@ async fn run_prompt(
         category,
         classifier: plan.classifier.clone(),
         route: Route::turn(model.clone(), RouteReason::Compare),
-        led,
+        led: Some(led),
         ..PromptPayload::new(text.to_string())
     };
 
@@ -1059,7 +1059,8 @@ async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<Co
                     (judgment.a_vs_reference, judgment.b_vs_reference) =
                         judge::reference_verdicts(&text, a_first);
                 }
-                judgment.reasoning = text.chars().take(MAX_REASONING).collect();
+                let named = judge::unblind(&text, a_first, (&a.run.name, &b.run.name));
+                judgment.reasoning = named.chars().take(MAX_REASONING).collect();
             }
             Err(problem) => {
                 warn!(%problem, "Judge gave no verdict");

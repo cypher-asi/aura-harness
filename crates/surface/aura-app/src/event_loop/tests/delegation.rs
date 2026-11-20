@@ -360,6 +360,32 @@ async fn a_check_decides_the_subtask_and_comes_back_in_a_compact_result() {
     assert!(shown.contains("Check `ls notes`: passed"), "{shown}");
 }
 
+#[tokio::test]
+async fn a_check_runs_without_the_task_records_that_quote_the_prompts() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let first = fixture.first;
+    let mut state = loop_state(&fixture, &mut b);
+    state.sync_turn_base();
+    fixture.hub.set_permissions(first, yolo());
+
+    let done = dispatch(
+        &fixture,
+        task(
+            first,
+            "implement",
+            "rename calc_total",
+            Some("test ! -e .aura/tasks"),
+        ),
+    )
+    .await;
+    let (_, outcomes) = record(&fixture, done.child_agent_id.unwrap());
+    assert_eq!(outcomes[0].signal, OutcomeSignal::ChecksPassed);
+    let kept = super::super::tasks::load_all(&fixture.workspace);
+    assert_eq!(kept.len(), 1, "the records are back after the check");
+    assert_eq!(kept[0].view.title, "rename calc_total");
+}
+
 /// Wait until `n` task rows of the Processes tab are running.
 async fn running_tasks(fixture: &Fixture, n: usize) {
     let running = || {

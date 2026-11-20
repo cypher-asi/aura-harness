@@ -54,6 +54,29 @@ pub const fn arm_letter(arm: usize) -> &'static str {
     }
 }
 
+/// How two costs compare, for after each: ` · 100%` for the larger and
+/// ` · 33% less` for the other, both ` · 100%` when they are about the
+/// same. Empty when either is unknown or the larger is nothing.
+#[must_use]
+pub fn cost_shares(a: Option<f64>, b: Option<f64>) -> [String; 2] {
+    let (Some(a), Some(b)) = (a, b) else {
+        return [String::new(), String::new()];
+    };
+    let larger = a.max(b);
+    if larger <= 0.0 {
+        return [String::new(), String::new()];
+    }
+    let share = |cost: f64| {
+        let less = ((1.0 - cost / larger) * 100.0).round();
+        if less < 1.0 {
+            " · 100%".to_string()
+        } else {
+            format!(" · {less:.0}% less")
+        }
+    };
+    [share(a), share(b)]
+}
+
 /// Tokens and cost one model used across an arm's runs.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct BenchTokens {
@@ -288,6 +311,21 @@ pub enum BenchRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_larger_cost_is_the_whole_and_the_other_says_how_much_less() {
+        assert_eq!(
+            cost_shares(Some(0.14), Some(0.21)),
+            [" · 33% less", " · 100%"]
+        );
+        assert_eq!(
+            cost_shares(Some(0.11), Some(0.04)),
+            [" · 100%", " · 64% less"]
+        );
+        assert_eq!(cost_shares(Some(1.0), Some(0.996)), [" · 100%", " · 100%"]);
+        assert_eq!(cost_shares(Some(0.0), Some(0.0)), ["", ""]);
+        assert_eq!(cost_shares(None, Some(0.2)), ["", ""]);
+    }
 
     #[test]
     fn statuses_read_naturally_and_know_their_copies() {

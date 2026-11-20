@@ -88,8 +88,11 @@ fn timed_out(text: &str) -> bool {
     text.contains("Command timed out")
 }
 
-/// Run `command` in `session`'s workspace through its kernel.
+/// Run `command` in `session`'s workspace through its kernel, with the
+/// workspace's tasks set aside: they quote the prompts, so a check that
+/// searches for what the task should have removed would find them.
 pub(super) async fn run_check(session: &AgentSession, command: &str) -> CheckRun {
+    let _aside = session.tasks.set_aside(&session.kernel.agent_workspace());
     run_script(session, command, CHECK_SOURCE).await
 }
 

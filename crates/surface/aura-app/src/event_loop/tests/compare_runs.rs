@@ -203,6 +203,11 @@ async fn both_arms_run_repeatedly_in_separate_copies_and_their_checks_feed_gate(
         assert_eq!(prompts.len(), 1);
         assert_eq!(prompts[0].text, "write the answer");
         assert_eq!(prompts[0].route, Route::turn(model, RouteReason::Compare));
+        assert_eq!(
+            prompts[0].led,
+            Some(false),
+            "a run that does not lead works direct"
+        );
         let checked = if run.arm == CompareArm::A {
             OutcomeSignal::ChecksFailed
         } else {

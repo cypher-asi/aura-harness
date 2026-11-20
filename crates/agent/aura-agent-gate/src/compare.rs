@@ -16,7 +16,7 @@ use aura_core_types::{
     RefVerdict,
 };
 use aura_model::model_catalog::{
-    backend_for, estimate_cost_usd, model_key, ModelBackend, ModelTier,
+    backend_for, billed_tokens, estimate_cost_usd, model_key, ModelBackend, ModelTier,
 };
 use aura_model::Usage;
 
@@ -620,11 +620,12 @@ pub fn tally(calls: impl IntoIterator<Item = (String, Usage)>) -> Vec<ModelToken
                 model: model.clone(),
                 ..ModelTokens::default()
             });
+        let billed = billed_tokens(&model, &usage);
         row.calls += 1;
-        row.input_tokens += usage.input_tokens;
+        row.input_tokens += billed.uncached_input + billed.cache_write + billed.cache_read;
         row.output_tokens += usage.output_tokens;
-        row.cache_read_tokens += usage.cache_read_input_tokens.unwrap_or(0);
-        row.cache_write_tokens += usage.cache_creation_input_tokens.unwrap_or(0);
+        row.cache_read_tokens += billed.cache_read;
+        row.cache_write_tokens += billed.cache_write;
         row.cost_usd += list_price(&model, &usage).unwrap_or(0.0);
     }
     sorted(by_model.into_values().collect())
@@ -1313,7 +1314,10 @@ mod tests {
             "most expensive first"
         );
         assert_eq!(rows[0].calls, 2);
-        assert_eq!(rows[0].input_tokens, 30_000);
+        assert_eq!(
+            rows[0].input_tokens, 32_000,
+            "cache reads are prompt tokens"
+        );
         assert_eq!(rows[0].output_tokens, 1_000);
         assert_eq!(rows[0].cache_read_tokens, 2_000);
         let expected = estimate_cost_usd("claude-opus-4-7", &usage(10_000, 500, 2_000)).unwrap()
@@ -1327,6 +1331,36 @@ mod tests {
         let merged = merge_tokens(rows.iter().chain(rows.iter()));
         assert_eq!(merged[0].calls, 4);
         assert!((merged[0].cost_usd - 2.0 * expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn tally_counts_the_whole_prompt_however_the_provider_reports_cache() {
+        let anthropic = Usage {
+            input_tokens: 10,
+            output_tokens: 390,
+            cache_creation_input_tokens: Some(9_391),
+            cache_read_input_tokens: Some(17_888),
+        };
+        let openai = Usage {
+            input_tokens: 1_000,
+            output_tokens: 50,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: Some(800),
+        };
+        let rows = tally([
+            ("claude-sonnet-5-5".to_string(), anthropic),
+            ("gpt-5.4".to_string(), openai),
+        ]);
+        let row = |model: &str| rows.iter().find(|r| r.model == model).unwrap();
+        let sonnet = row("claude-sonnet-5-5");
+        assert_eq!(sonnet.input_tokens, 10 + 9_391 + 17_888);
+        assert_eq!(
+            (sonnet.cache_read_tokens, sonnet.cache_write_tokens),
+            (17_888, 9_391)
+        );
+        let gpt = row("gpt-5.4");
+        assert_eq!(gpt.input_tokens, 1_000, "OpenAI counts cache reads inside");
+        assert_eq!(gpt.cache_read_tokens, 800);
     }
 
     #[test]

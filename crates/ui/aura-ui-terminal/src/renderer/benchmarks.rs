@@ -4,7 +4,7 @@
 use super::panels::body_block;
 use crate::app::benchmarks::{BenchMode, BenchState, FormField, WorkChoice};
 use crate::events::{
-    arm_letter, BenchArm, BenchRun, BenchStatus, BenchTaskCell, BenchTurn, BenchView,
+    arm_letter, cost_shares, BenchArm, BenchRun, BenchStatus, BenchTaskCell, BenchTurn, BenchView,
 };
 use crate::{App, Theme};
 use ratatui::{
@@ -344,7 +344,7 @@ fn detail_lines<'a>(
     let column = a_head
         .chars()
         .count()
-        .max(24)
+        .max(32)
         .min(width.saturating_sub(LABEL + 2) / 2);
     lines.push(Line::from(vec![
         Span::raw(" ".repeat(LABEL)),
@@ -363,11 +363,17 @@ fn detail_lines<'a>(
         "median time",
         pair(&|arm| arm.median_wall_ms.map_or_else(|| "-".to_string(), duration)),
     );
-    add("total cost", pair(&|arm| money(arm.total_cost_usd)));
+    let [a_share, b_share] = cost_shares(Some(a.total_cost_usd), Some(b.total_cost_usd));
     add(
-        "median cost",
-        pair(&|arm| arm.median_cost_usd.map_or_else(|| "-".to_string(), money)),
+        "total cost",
+        (
+            money(a.total_cost_usd) + &a_share,
+            money(b.total_cost_usd) + &b_share,
+        ),
     );
+    let median = |arm: &BenchArm| arm.median_cost_usd.map_or_else(|| "-".to_string(), money);
+    let [a_share, b_share] = cost_shares(a.median_cost_usd, b.median_cost_usd);
+    add("median cost", (median(a) + &a_share, median(b) + &b_share));
     if let Some(baseline) = view.baseline.as_ref().filter(|b| b.priced) {
         add("vs the session", pair(&|arm| ratio(arm, baseline.cost_usd)));
     }
@@ -439,9 +445,14 @@ fn detail_lines<'a>(
         )));
         for task in &view.tasks {
             let label = headline(&task.id, LABEL - 1);
+            let [a_share, b_share] =
+                cost_shares(task.arms[0].mean_cost_usd, task.arms[1].mean_cost_usd);
             lines.push(row(
                 &label,
-                (&task_cell(&task.arms[0]), &task_cell(&task.arms[1])),
+                (
+                    &(task_cell(&task.arms[0]) + &a_share),
+                    &(task_cell(&task.arms[1]) + &b_share),
+                ),
                 column,
                 theme,
             ));
@@ -817,7 +828,8 @@ mod tests {
         let shown = text(&detail_lines(&view(), Some(0), &theme, 120));
         assert!(shown.contains("A gate"), "{shown}");
         assert!(shown.contains("B claude-opus-4-7"), "{shown}");
-        assert!(shown.contains("$0.06"), "{shown}");
+        assert!(shown.contains("$0.06 · 85% less"), "{shown}");
+        assert!(shown.contains("$0.40 · 100%"), "{shown}");
         assert!(shown.contains("vs the session"), "{shown}");
         assert!(shown.contains("0.30×"), "{shown}");
         assert!(shown.contains("2.00×"), "{shown}");
@@ -887,8 +899,8 @@ mod tests {
         assert!(shown.contains("2 runs per task and arm"), "{shown}");
         assert!(shown.contains("each task's own check"), "{shown}");
         assert!(shown.contains("Per task"), "{shown}");
-        assert!(shown.contains("2/2 passed, $0.02"), "{shown}");
-        assert!(shown.contains("1/2 passed, $0.30"), "{shown}");
+        assert!(shown.contains("2/2 passed, $0.02 · 93% less"), "{shown}");
+        assert!(shown.contains("1/2 passed, $0.30 · 100%"), "{shown}");
         assert!(shown.contains("coding/write-file"), "{shown}");
         assert!(!shown.contains("y apply"), "{shown}");
         assert!(!shown.contains("Per prompt"), "{shown}");
