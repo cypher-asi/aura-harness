@@ -1,18 +1,17 @@
-//! Overlay rendering: approval modal, help, notification toasts, and the lines
-//! of a record's details.
+//! Overlay rendering: approval modal, help, and the lines of a record's
+//! details.
 
 use super::markdown::{parse_content_segments, render_markdown, ContentSegment};
 use super::text::{centered_rect, display_width, wrap_words};
 use crate::{
-    app::{folder_picker::FolderRow, AppState, NotificationType},
+    app::{folder_picker::FolderRow, AppState},
     components::{highlight_code_line, CodeBlock},
     App, Theme,
 };
 use ratatui::{
-    layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Frame,
 };
 use std::path::Path;
@@ -33,10 +32,6 @@ pub(super) fn render_overlays(frame: &mut Frame, app: &App, theme: &Theme) {
 
     if let Some(project) = app.project_info() {
         render_project_info(frame, project, theme);
-    }
-
-    if let Some((msg, notification_type)) = app.notification() {
-        render_notification(frame, msg, *notification_type, theme);
     }
 }
 
@@ -714,83 +709,5 @@ fn build_message_section(
                 content.extend(CodeBlock::new(language, code).render(theme, width));
             }
         }
-    }
-}
-
-/// Render a notification as a toast in the bottom-right corner, just above
-/// the footer row.
-fn render_notification(
-    frame: &mut Frame,
-    msg: &str,
-    notification_type: NotificationType,
-    theme: &Theme,
-) {
-    /// Widest a toast gets, borders included.
-    const MAX_WIDTH: u16 = 60;
-    /// Most lines of message shown.
-    const MAX_LINES: usize = 3;
-    /// Borders and the padding on each side of the text.
-    const FRAME_WIDTH: u16 = 4;
-
-    let area = frame.area();
-    let (icon, color) = notification_icon(notification_type, theme);
-    let lead = format!("{icon} ");
-    let lead_width = u16::try_from(display_width(&lead)).unwrap_or(u16::MAX);
-
-    let max_width = MAX_WIDTH.min(area.width.saturating_sub(2 * super::EDGE_INSET));
-    let text_room = max_width.saturating_sub(FRAME_WIDTH + lead_width);
-    let bottom = area.bottom().saturating_sub(super::hud::FOOTER_ROWS);
-    if text_room == 0 || bottom.saturating_sub(area.y) < 3 {
-        return;
-    }
-
-    let mut lines = wrap_words(msg, usize::from(text_room));
-    if lines.len() > MAX_LINES {
-        lines.truncate(MAX_LINES);
-        if let Some(last) = lines.last_mut() {
-            last.push('…');
-        }
-    }
-    let text_width = lines.iter().map(|l| display_width(l)).max().unwrap_or(0);
-    let width =
-        (u16::try_from(text_width).unwrap_or(u16::MAX) + lead_width + FRAME_WIDTH).min(max_width);
-    let rows = u16::try_from(lines.len()).unwrap_or(1);
-    let height = (rows + 2).min(bottom.saturating_sub(area.y));
-
-    let toast = Rect {
-        x: area.right().saturating_sub(super::EDGE_INSET + width),
-        y: bottom - height,
-        width,
-        height,
-    };
-
-    let indent = " ".repeat(display_width(&lead));
-    let text_style = Style::default().fg(theme.colors.foreground);
-    let content: Vec<Line<'_>> = lines
-        .into_iter()
-        .enumerate()
-        .map(|(i, line)| {
-            let lead = if i == 0 {
-                Span::styled(lead.clone(), Style::default().fg(color))
-            } else {
-                Span::raw(indent.clone())
-            };
-            Line::from(vec![lead, Span::styled(line, text_style)])
-        })
-        .collect();
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(color))
-        .padding(Padding::horizontal(1));
-
-    frame.render_widget(Clear, toast);
-    frame.render_widget(Paragraph::new(content).block(block), toast);
-}
-
-const fn notification_icon(kind: NotificationType, theme: &Theme) -> (&'static str, Color) {
-    match kind {
-        NotificationType::Success => ("✓", theme.colors.success),
-        NotificationType::Warning => ("!", theme.colors.warning),
-        NotificationType::Error => ("✗", theme.colors.error),
     }
 }

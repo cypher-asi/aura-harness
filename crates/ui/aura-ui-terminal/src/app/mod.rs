@@ -94,6 +94,10 @@ const NOTIFICATION_TTL: Duration = Duration::from_secs(4);
 /// How long an error stays in the corner.
 const ERROR_NOTIFICATION_TTL: Duration = Duration::from_secs(6);
 
+/// How long a notification too long for its row stays once it has
+/// scrolled to its end.
+const NOTIFICATION_TAIL: Duration = Duration::from_secs(2);
+
 /// Maximum number of records to keep in the list.
 const MAX_RECORDS: usize = 100;
 
@@ -210,6 +214,8 @@ pub struct App {
     pub(super) notification: Option<(String, NotificationType)>,
     /// The notification on screen and when it goes away.
     pub(super) notification_shown: Option<((String, NotificationType), Instant)>,
+    /// When the notification on screen first showed.
+    pub(super) notification_since: Option<Instant>,
     /// Which panel has focus
     pub(super) focus: PanelFocus,
     /// Whether the Record panel is visible
@@ -666,6 +672,7 @@ impl App {
             streaming_content: String::new(),
             notification: None,
             notification_shown: None,
+            notification_since: None,
             focus: PanelFocus::default(),
             record_panel_visible: true,
             swarm_panel_visible: true,
@@ -2709,6 +2716,7 @@ impl App {
     fn expire_notification(&mut self) {
         let Some(current) = &self.notification else {
             self.notification_shown = None;
+            self.notification_since = None;
             return;
         };
         let now = Instant::now();
@@ -2717,6 +2725,7 @@ impl App {
                 if now >= *until {
                     self.notification = None;
                     self.notification_shown = None;
+                    self.notification_since = None;
                 }
             }
             _ => {
@@ -2725,7 +2734,26 @@ impl App {
                     NotificationType::Success | NotificationType::Warning => NOTIFICATION_TTL,
                 };
                 self.notification_shown = Some((current.clone(), now + ttl));
+                self.notification_since = Some(now);
             }
+        }
+    }
+
+    /// How long the notification on screen has been showing; zero before
+    /// its timer starts.
+    #[must_use]
+    pub(crate) fn notification_age(&self) -> Duration {
+        self.notification_since
+            .map_or(Duration::ZERO, |since| since.elapsed())
+    }
+
+    /// Keep the notification on screen until it has scrolled for `read`,
+    /// and a moment after.
+    pub(crate) fn hold_notification_for(&mut self, read: Duration) {
+        if let (Some((_, until)), Some(since)) =
+            (&mut self.notification_shown, self.notification_since)
+        {
+            *until = (*until).max(since + read + NOTIFICATION_TAIL);
         }
     }
 

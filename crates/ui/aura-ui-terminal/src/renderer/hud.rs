@@ -1,5 +1,6 @@
 //! What the agent on screen has used and is working on: the footer under
-//! the input, and the full todo list that `/todos` opens.
+//! the input, the notice beside it, and the full todo list that `/todos`
+//! opens.
 //!
 //! ```text
 //! qwen3:4b · 23% context used · 2 calls                        ● Ready
@@ -9,6 +10,7 @@
 use super::text::display_width;
 use crate::app::format::{format_cost, format_tokens};
 use crate::app::hud::Hud;
+use crate::app::NotificationType;
 use crate::events::{TodoState, TodoView};
 use crate::mode_command::PermissionMode;
 use crate::{App, Theme};
@@ -19,6 +21,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
+use std::time::Duration;
 
 /// Most todo items listed at once.
 const MAX_TODO_ROWS: usize = 10;
@@ -165,10 +168,12 @@ fn fitting<'a>(parts: Vec<Vec<Span<'a>>>, room: usize, theme: &Theme) -> Vec<Spa
 }
 
 /// Render the footer into `area`: the model and what the agent has used on
-/// the left, with its status at the right.
-pub(super) fn render_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+/// the left, with its status at the right. Returns where a notice can go
+/// on the row: the gap between the two, or everything left of the status
+/// when that gap is too narrow to read.
+pub(super) fn render_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) -> Rect {
     if area.height == 0 || area.width == 0 {
-        return;
+        return Rect { height: 0, ..area };
     }
     let row = Rect { height: 1, ..area };
     let status = status_spans(app, theme);
@@ -184,11 +189,118 @@ pub(super) fn render_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Th
     }
     parts.push(super::model_indicator_spans(app, theme));
     parts.extend(stats.map(|(text, color)| vec![Span::styled(text, Style::default().fg(color))]));
-    frame.render_widget(Paragraph::new(Line::from(fitting(parts, room, theme))), row);
+    let stats = fitting(parts, room, theme);
+    let stats_width: usize = stats.iter().map(|s| display_width(&s.content)).sum();
+    frame.render_widget(Paragraph::new(Line::from(stats)), row);
     frame.render_widget(
         Paragraph::new(Line::from(status)).alignment(Alignment::Right),
         row,
     );
+
+    let left_of_status = Rect {
+        width: u16::try_from(room).unwrap_or(u16::MAX),
+        ..row
+    };
+    let used = u16::try_from(stats_width + STATUS_GAP).unwrap_or(u16::MAX);
+    let gap = Rect {
+        x: left_of_status.x.saturating_add(used),
+        width: left_of_status.width.saturating_sub(used),
+        ..left_of_status
+    };
+    if gap.width >= MIN_NOTICE_WIDTH {
+        gap
+    } else {
+        left_of_status
+    }
+}
+
+/// Narrowest gap in the footer a notice goes in beside the stats.
+const MIN_NOTICE_WIDTH: u16 = 24;
+
+/// How long a notice too long for its row waits before it scrolls.
+const NOTICE_LEAD: Duration = Duration::from_millis(1500);
+
+/// How fast a notice too long for its row scrolls, in columns a second.
+const NOTICE_SPEED: f32 = 16.0;
+
+/// Render the notification on one row of `area`, the bottom-right of the
+/// screen that no panel covers. Text that fits sits at the right; longer
+/// text waits, then scrolls left until its end shows. Returns how long
+/// the text takes to scroll to its end, zero when it fits.
+pub(super) fn render_notice(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    theme: &Theme,
+) -> Option<Duration> {
+    let (msg, kind) = app.notification()?;
+    if area.height == 0 || area.width == 0 {
+        return None;
+    }
+    let row = Rect {
+        y: area.bottom() - 1,
+        height: 1,
+        ..area
+    };
+    let (icon, color) = notice_icon(*kind, theme);
+    let lead = format!("{icon} ");
+    let room = usize::from(row.width).saturating_sub(display_width(&lead));
+    let text = msg.split_whitespace().collect::<Vec<_>>().join(" ");
+    let overflow = display_width(&text).saturating_sub(room);
+    #[allow(clippy::cast_precision_loss)]
+    let read = NOTICE_LEAD + Duration::from_secs_f32(overflow as f32 / NOTICE_SPEED);
+
+    let scrolled = app.notification_age().saturating_sub(NOTICE_LEAD);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let offset = ((scrolled.as_secs_f32() * NOTICE_SPEED) as usize).min(overflow);
+    let line = Line::from(vec![
+        Span::styled(lead, Style::default().fg(color)),
+        Span::styled(
+            columns(&text, offset, room),
+            Style::default().fg(theme.colors.foreground),
+        ),
+    ]);
+    frame.render_widget(Clear, row);
+    frame.render_widget(Paragraph::new(line).alignment(Alignment::Right), row);
+    Some(if overflow == 0 { Duration::ZERO } else { read })
+}
+
+const fn notice_icon(kind: NotificationType, theme: &Theme) -> (&'static str, Color) {
+    match kind {
+        NotificationType::Success => ("✓", theme.colors.success),
+        NotificationType::Warning => ("!", theme.colors.warning),
+        NotificationType::Error => ("✗", theme.colors.error),
+    }
+}
+
+/// The `width` columns of `text` after its first `skip`, with a space for
+/// half of a wide character cut at either end.
+fn columns(text: &str, skip: usize, width: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+    let mut out = String::new();
+    let (mut at, mut used) = (0, 0);
+    for c in text.chars() {
+        let w = c.width().unwrap_or(0);
+        let start = at;
+        at += w;
+        if at <= skip {
+            continue;
+        }
+        if start < skip {
+            out.push(' ');
+            used += 1;
+            continue;
+        }
+        if used + w > width {
+            if used < width {
+                out.push(' ');
+            }
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    out
 }
 
 /// The full todo list over the bottom of the Chat panel, while `/todos`
@@ -417,6 +529,14 @@ mod tests {
             .map(|s| &*s.content)
             .collect();
         assert_eq!(last.trim(), "2 more");
+    }
+
+    #[test]
+    fn columns_slice_by_width_and_pad_cut_wide_characters() {
+        assert_eq!(columns("hello world", 6, 5), "world");
+        assert_eq!(columns("hello world", 0, 5), "hello");
+        assert_eq!(columns("a漢字b", 2, 3), " 字");
+        assert_eq!(columns("a漢字b", 0, 2), "a ");
     }
 
     #[test]

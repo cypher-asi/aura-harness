@@ -89,6 +89,11 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
         height: side.height.saturating_sub(hud::FOOTER_ROWS),
         ..side
     };
+    let under_right = right.map(|side| Rect {
+        y: side.bottom().saturating_sub(hud::FOOTER_ROWS),
+        height: hud::FOOTER_ROWS.min(side.height),
+        ..side
+    });
     let (swarm, right) = (swarm.map(above_footer), right.map(above_footer));
 
     render_header(frame, inset_edges(rows[0]), app, theme);
@@ -104,7 +109,10 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     }
     app.set_input_area(chat_column[1]);
     input::render_input(frame, chat_column[1], app, theme);
-    hud::render_footer(frame, inset_edges(chat_column[2]), app, theme);
+    let footer_gap = hud::render_footer(frame, inset_edges(chat_column[2]), app, theme);
+    if let Some(read) = hud::render_notice(frame, under_right.unwrap_or(footer_gap), app, theme) {
+        app.hold_notification_for(read);
+    }
 
     hud::render_todo_panel(frame, chat, app, theme);
     slash_menu::render_slash_menu(frame, chat, app, theme);
