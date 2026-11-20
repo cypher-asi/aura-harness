@@ -18,6 +18,7 @@
 use crate::geom::{Point, Rectangle};
 use crate::scene::{Fill, Quad};
 use crate::text::{Atlas, Bitmap, Pixels, ShapeKey};
+use ratatui::symbols::pixel::OCTANTS;
 use std::f32::consts::PI;
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
@@ -34,6 +35,10 @@ pub fn draw(
 ) -> bool {
     if let Some(edges) = box_edges(c) {
         lines(out, cell, edges, color);
+        return true;
+    }
+    if let Some(bits) = octant_bits(c) {
+        octant(out, bits, cell, color);
         return true;
     }
     match c {
@@ -257,6 +262,39 @@ fn block(out: &mut Vec<Quad>, c: char, cell: Rectangle, color: [u8; 4]) {
                 }
             }
         }
+    }
+}
+
+/// The 2×4 pattern of octant character `c`, row-major from bit 0 at the
+/// top left, as pasted images are drawn in some terminals. Patterns that
+/// are ordinary block elements are left to [`block`].
+fn octant_bits(c: char) -> Option<u8> {
+    if !matches!(c, '\u{1CD00}'..='\u{1CEAF}' | '\u{1FB82}'..='\u{1FBE7}') {
+        return None;
+    }
+    OCTANTS
+        .iter()
+        .position(|&o| o == c)
+        .and_then(|bits| u8::try_from(bits).ok())
+}
+
+/// An octant character: each set bit of `bits` fills its eighth of the
+/// cell, two across and four down.
+fn octant(out: &mut Vec<Quad>, bits: u8, cell: Rectangle, color: [u8; 4]) {
+    let Rectangle {
+        x,
+        y,
+        width: w,
+        height: h,
+    } = cell;
+    let (l, r, mx) = (x - 0.5, x + w + 0.5, x + w / 2.0);
+    let quarter = |n: u32| y + (h * n as f32 / 4.0).round();
+    for i in 0..8u32 {
+        if bits & (1 << i) == 0 {
+            continue;
+        }
+        let (x0, x1) = if i % 2 == 0 { (l, mx) } else { (mx, r) };
+        rect(out, x0, quarter(i / 2), x1, quarter(i / 2 + 1), color);
     }
 }
 
@@ -1057,6 +1095,28 @@ mod tests {
         assert_eq!(coverage(&corner, text.atlas(), 4, 17), 255, "down arm");
         assert_eq!(coverage(&corner, text.atlas(), 0, 9), 0, "no left arm");
         assert_eq!(coverage(&corner, text.atlas(), 4, 0), 0, "no up arm");
+    }
+
+    #[test]
+    fn every_octant_is_drawn_as_its_pattern() {
+        for (bits, &c) in OCTANTS.iter().enumerate() {
+            let mut text = TextSystem::new();
+            let mut quads = Vec::new();
+            assert!(
+                c == ' ' || draw(&mut quads, text.atlas_mut(), c, cell(0.0, 0.0), WHITE),
+                "{c} falls back to the font"
+            );
+            // A pixel inside each eighth of the 8.4×18 cell.
+            for i in 0..8 {
+                let (x, y) = (if i % 2 == 0 { 2 } else { 6 }, 2 + 4 * (i / 2) + i / 4);
+                let on = bits & (1 << i) != 0;
+                assert_eq!(
+                    coverage(&quads, text.atlas(), x, y) > 0,
+                    on,
+                    "{c} ({bits:08b}) eighth {i}"
+                );
+            }
+        }
     }
 
     #[test]

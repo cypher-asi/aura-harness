@@ -231,6 +231,10 @@ impl App {
     ///
     /// Images whose `graphics_png` is `None` (decode failed) are excluded;
     /// the caller should skip them or they would produce a no-op.
+    ///
+    /// A thumbnail's rect covers its picture only: not the caption under
+    /// it, nor the extra width a long caption gives its tile, since the
+    /// terminal stretches the image over the whole rect.
     pub(crate) fn visible_image_placements(
         &self,
     ) -> Vec<(PlacementSlot, ratatui::layout::Rect, Arc<ImagePreview>)> {
@@ -241,55 +245,54 @@ impl App {
             let first = self.chat_first_line;
             let last = first + usize::from(area.height);
             for hit in &self.image_hits {
-                // Skip hits entirely outside the visible scroll window.
-                if hit.line + hit.rows <= first || hit.line >= last {
-                    continue;
-                }
-                let row = area.y.saturating_add(
-                    u16::try_from(hit.line.saturating_sub(first)).unwrap_or(u16::MAX),
-                );
-                let col = area.x.saturating_add(hit.x);
-                // Clip height to what's actually visible.
-                let visible_rows = u16::try_from(
-                    (hit.line + hit.rows)
-                        .min(last)
-                        .saturating_sub(hit.line.max(first)),
-                )
-                .unwrap_or(1);
-                let rect = ratatui::layout::Rect {
-                    x: col,
-                    y: row,
-                    width: hit.width,
-                    height: visible_rows,
-                };
-                let preview = self
+                let Some(preview) = self
                     .messages
                     .iter()
                     .find(|m| m.version().0 == hit.message)
                     .and_then(|m| m.images().get(hit.index))
-                    .map(Arc::clone);
-                if let Some(preview) = preview {
-                    if preview.graphics_png().is_some() {
-                        out.push((PlacementSlot::ChatThumbnail, rect, preview));
-                    }
+                    .filter(|p| p.graphics_png().is_some())
+                    .map(Arc::clone)
+                else {
+                    continue;
+                };
+                // Clip the picture's rows to the visible scroll window.
+                let top = hit.line.max(first);
+                let bottom = (hit.line + preview.thumbnail().len()).min(last);
+                if bottom <= top {
+                    continue;
                 }
+                let rect = ratatui::layout::Rect {
+                    x: area.x.saturating_add(hit.x),
+                    y: area
+                        .y
+                        .saturating_add(u16::try_from(top - first).unwrap_or(u16::MAX)),
+                    width: preview.thumbnail_width().min(hit.width),
+                    height: u16::try_from(bottom - top).unwrap_or(u16::MAX),
+                };
+                out.push((PlacementSlot::ChatThumbnail, rect, preview));
             }
         }
 
         // ── Pending-input thumbnails ───────────────────────────────────────
-        for &(rect, label) in &self.pending_image_areas {
-            if rect.is_empty() {
-                continue;
-            }
-            if let Some(preview) = self
+        for &(tile, label) in &self.pending_image_areas {
+            let Some(preview) = self
                 .images
                 .iter()
                 .find(|p| p.label == label)
                 .map(|p| Arc::clone(&p.preview))
-            {
-                if preview.graphics_png().is_some() {
-                    out.push((PlacementSlot::PendingThumbnail, rect, preview));
-                }
+                .filter(|p| p.graphics_png().is_some())
+            else {
+                continue;
+            };
+            let rect = ratatui::layout::Rect {
+                width: tile.width.min(preview.thumbnail_width()),
+                height: tile
+                    .height
+                    .min(u16::try_from(preview.thumbnail().len()).unwrap_or(u16::MAX)),
+                ..tile
+            };
+            if !rect.is_empty() {
+                out.push((PlacementSlot::PendingThumbnail, rect, preview));
             }
         }
 
@@ -557,5 +560,36 @@ mod tests {
         let text = dir.path().join("notes.txt");
         std::fs::write(&text, b"x").unwrap();
         assert_eq!(pasted_image_path(&text.display().to_string()), None);
+    }
+
+    #[test]
+    fn pending_placements_cover_the_picture_not_its_caption() {
+        let img = image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 10, 10, 255]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let mut app = App::new();
+        app.attach_image(png.get_ref()).unwrap();
+        let preview = Arc::clone(&app.images[0].preview);
+        let cols = preview.thumbnail_width();
+        let rows = u16::try_from(preview.thumbnail().len()).unwrap();
+        // The tile is wider than the picture for its caption, and a row
+        // taller for the caption itself.
+        let tile = ratatui::layout::Rect {
+            x: 3,
+            y: 5,
+            width: cols + 6,
+            height: rows + 1,
+        };
+        app.set_pending_image_areas(vec![(tile, 1)]);
+        let placements = app.visible_image_placements();
+        assert_eq!(placements.len(), 1);
+        assert_eq!(
+            placements[0].1,
+            ratatui::layout::Rect {
+                width: cols,
+                height: rows,
+                ..tile
+            }
+        );
     }
 }
