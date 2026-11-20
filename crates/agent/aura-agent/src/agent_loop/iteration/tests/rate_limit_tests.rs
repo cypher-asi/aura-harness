@@ -27,12 +27,12 @@ fn from_reasoner_error_marks_refused_credentials() {
 }
 
 #[test]
-fn from_reasoner_error_classifies_transient_5xx_as_fatal() {
+fn from_reasoner_error_classifies_transient_5xx_as_unavailable() {
     // After the provider exhausts its own retry/fallback chain a
     // `Transient` reaches the agent loop. The loop has nowhere left to
-    // retry to, so we still surface it as `Fatal` (`llm_error: ...`)
-    // rather than `RateLimited` — the latter would falsely signal
-    // "client should wait and retry" to SSE consumers.
+    // retry to, so it surfaces as `Unavailable` (`llm_error: ...`, like
+    // `Fatal`) rather than `RateLimited` — the latter would falsely
+    // signal "client should wait and retry" to SSE consumers.
     let err = aura_model::ReasonerError::Transient {
         status: 502,
         message: "bad gateway".to_string(),
@@ -40,7 +40,7 @@ fn from_reasoner_error_classifies_transient_5xx_as_fatal() {
     };
     assert!(matches!(
         LlmCallError::from_reasoner_error(&err),
-        LlmCallError::Fatal(_)
+        LlmCallError::Unavailable(_)
     ));
 }
 
@@ -69,6 +69,14 @@ fn from_reasoner_error_does_not_confuse_other_errors_with_rate_limited() {
     let err = aura_model::ReasonerError::Api {
         status: 500,
         message: "internal server error".to_string(),
+    };
+    assert!(matches!(
+        LlmCallError::from_reasoner_error(&err),
+        LlmCallError::Unavailable(_)
+    ));
+    let err = aura_model::ReasonerError::Api {
+        status: 400,
+        message: "invalid tool schema".to_string(),
     };
     assert!(matches!(
         LlmCallError::from_reasoner_error(&err),
