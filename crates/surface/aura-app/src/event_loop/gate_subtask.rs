@@ -25,9 +25,11 @@ use super::gate_record;
 use super::turns::record_prompt;
 use crate::model_selection::{ModelLimits, ModelSelection};
 use aura_agent::AgentLoopConfig;
-use aura_agent_gate::{Candidate, Decision};
+use aura_agent_gate::classify::Label;
+use aura_agent_gate::{Candidate, Decision, Work};
 use aura_core_types::{
-    Hash, PromptCategory, PromptPayload, Route, RouteLevel, RouteReason, SubagentDispatchRequest,
+    Difficulty, Hash, PromptCategory, PromptPayload, Route, RouteLevel, RouteReason,
+    SubagentDispatchRequest,
 };
 use aura_model::model_catalog::GATE_MODEL_ID;
 use std::sync::Arc;
@@ -103,6 +105,7 @@ impl SubtaskGate {
             auth_token: config.auth_token.clone(),
             route: Route::subtask(config.model.clone(), RouteReason::Pinned),
             category: None,
+            difficulty: None,
             shown: None,
         };
         if let Some((decision, category)) = &self.escalation {
@@ -122,13 +125,12 @@ impl SubtaskGate {
         let category = label.classify(session, cancel).await;
         label.category = Some(category);
         let among = aura_agent_gate::below_lead(candidates, self.lead_model.as_deref());
-        let kind = Some(self.kind.as_str());
+        let work =
+            Work::new(RouteLevel::Subtask, category, Some(self.kind.as_str())).of(label.difficulty);
         let decision = if self.explore {
-            self.live
-                .decide(RouteLevel::Subtask, category, kind, &among)
+            self.live.decide(&work, &among)
         } else {
-            self.live
-                .redecide(RouteLevel::Subtask, category, kind, &among)
+            self.live.redecide(&work, &among)
         };
         let Some(decision) = decision else {
             label.route.reason = RouteReason::Default;
@@ -169,26 +171,35 @@ pub(super) struct SubtaskLabel {
     route: Route,
     /// Known before the turn when Gate routed the subtask
     pub category: Option<PromptCategory>,
+    /// How hard the classifier judged the work, once it said
+    difficulty: Option<Difficulty>,
     /// Where Gate sent the subtask, for the child's chat
     pub shown: Option<String>,
 }
 
 impl SubtaskLabel {
-    /// The prompt's category, as the classifier says; unclassified when
-    /// nothing classifies prompts or the subtask is cancelled first.
-    async fn classify(&self, session: &AgentSession, cancel: &CancellationToken) -> PromptCategory {
+    /// The prompt's category, as the classifier says, its difficulty kept
+    /// on `self`; unclassified when nothing classifies prompts or the
+    /// subtask is cancelled first.
+    async fn classify(
+        &mut self,
+        session: &AgentSession,
+        cancel: &CancellationToken,
+    ) -> PromptCategory {
         if self.classifier.is_empty() {
             return PromptCategory::Unclassified;
         }
-        tokio::select! {
-            category = gate_record::classify_prompt(
+        let label = tokio::select! {
+            label = gate_record::classify_prompt(
                 &session.kernel,
                 &self.classifier,
                 &self.text,
                 self.auth_token.clone(),
-            ) => category,
-            () = cancel.cancelled() => PromptCategory::Unclassified,
-        }
+            ) => label,
+            () = cancel.cancelled() => Label::UNCLASSIFIED,
+        };
+        self.difficulty = label.difficulty;
+        label.category
     }
 
     /// Record the prompt on `session` as asking for `category`, returning
@@ -205,6 +216,7 @@ impl SubtaskLabel {
             route: self.route.clone(),
             kind: Some(self.kind.clone()),
             led: None,
+            difficulty: self.difficulty,
         };
         let (tx, _) = record_prompt(session, &payload).await?;
         Ok((tx.hash, category))
@@ -212,7 +224,7 @@ impl SubtaskLabel {
 
     /// Classify the prompt and record it on `session`.
     pub(super) async fn classify_and_record(
-        &self,
+        &mut self,
         session: &AgentSession,
         cancel: &CancellationToken,
     ) -> Result<(Hash, PromptCategory), String> {

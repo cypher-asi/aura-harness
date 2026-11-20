@@ -27,7 +27,7 @@
 use std::collections::HashMap;
 
 use aura_core_types::{
-    AgentId, Hash, OutcomePayload, PromptCategory, RecordEntry, RouteLevel, RouteReason,
+    AgentId, Difficulty, Hash, OutcomePayload, PromptCategory, RecordEntry, RouteLevel, RouteReason,
 };
 
 /// One row of the table: the counted outcomes of one model on one
@@ -146,6 +146,7 @@ struct Shape {
     level: RouteLevel,
     kind: Option<String>,
     led: Option<bool>,
+    difficulty: Option<Difficulty>,
 }
 
 /// The outcome a prompt is counted with.
@@ -229,6 +230,9 @@ pub struct GateStats {
     rows: HashMap<RowKey, Row>,
     /// The same outcomes, split by kind of subagent and way of working
     details: HashMap<DetailKey, Row>,
+    /// The outcomes of prompts whose difficulty is known, by level, model
+    /// and difficulty, over every category.
+    difficulties: HashMap<(RouteLevel, String, Difficulty), Row>,
     prompts: HashMap<(AgentId, Hash), PromptState>,
 }
 
@@ -264,6 +268,7 @@ impl GateStats {
                 led: prompt
                     .led
                     .filter(|_| prompt.route.level == RouteLevel::Turn),
+                difficulty: prompt.difficulty,
             };
             self.observe_prompt((agent, entry.tx.hash), shape);
         } else if let Some(outcome) = entry.tx.outcome_payload() {
@@ -293,6 +298,12 @@ impl GateStats {
             .entry(counted.detail_key(shape))
             .or_default()
             .add(counted);
+        if let Some(difficulty) = shape.difficulty {
+            self.difficulties
+                .entry((shape.level, counted.model.clone(), difficulty))
+                .or_default()
+                .add(counted);
+        }
     }
 
     fn remove(&mut self, counted: &Counted, shape: &Shape) {
@@ -308,6 +319,15 @@ impl GateStats {
             row.remove(counted);
             if row.tries == 0 {
                 self.details.remove(&key);
+            }
+        }
+        if let Some(difficulty) = shape.difficulty {
+            let key = (shape.level, counted.model.clone(), difficulty);
+            if let Some(row) = self.difficulties.get_mut(&key) {
+                row.remove(counted);
+                if row.tries == 0 {
+                    self.difficulties.remove(&key);
+                }
             }
         }
     }
@@ -394,6 +414,19 @@ impl GateStats {
         let mut rows: Vec<(&DetailKey, &Row)> = self.details.iter().collect();
         rows.sort_by(|a, b| a.0.cmp(b.0));
         rows
+    }
+
+    /// The outcomes of `model` at `level` on work the classifier judged of
+    /// `difficulty`, over every category, if it has tries.
+    #[must_use]
+    pub fn difficulty_row(
+        &self,
+        level: RouteLevel,
+        model: &str,
+        difficulty: Difficulty,
+    ) -> Option<&Row> {
+        self.difficulties
+            .get(&(level, model.to_string(), difficulty))
     }
 
     /// Every counted outcome of `model` at `level`, over every category.

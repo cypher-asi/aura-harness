@@ -23,11 +23,11 @@ use aura_agent::{AgentLoop, CompactHistoryError};
 use aura_agent_gate::checks::{last_check, last_check_seen};
 use aura_agent_gate::outcome::{calls_for_stronger, turn_signal};
 use aura_agent_gate::turn_judge::Failed;
-use aura_agent_gate::{Candidate, Decision};
+use aura_agent_gate::{Candidate, Decision, Work as GateWork};
 use aura_agent_trace::RunRecorder;
 use aura_core_types::{
-    AgentId, Hash, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, RecordEntry,
-    Route, RouteLevel, RouteReason, Transaction,
+    AgentId, Difficulty, Hash, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload,
+    RecordEntry, Route, RouteLevel, RouteReason, Transaction,
 };
 use aura_model::{ContentBlock, ImageSource, Message, Role, ToolDefinition};
 use aura_ui_terminal::events::ImageAttachment;
@@ -126,14 +126,18 @@ pub(super) struct GateTurn {
 }
 
 impl GateTurn {
-    /// Gate's choice for a turn asking for `category`, after the models
-    /// in `refused` turned the user's sign-in down; it explores only on
-    /// the first choice.
-    fn decide(&self, category: PromptCategory, refused: &[String]) -> Option<Decision> {
+    /// Gate's choice for a turn asking for `category`, of `difficulty`,
+    /// after the models in `refused` turned the user's sign-in down; it
+    /// explores only on the first choice.
+    fn decide(
+        &self,
+        category: PromptCategory,
+        difficulty: Option<Difficulty>,
+        refused: &[String],
+    ) -> Option<Decision> {
+        let work = GateWork::turn(category).of(difficulty);
         if refused.is_empty() {
-            return self
-                .live
-                .decide(RouteLevel::Turn, category, None, &self.candidates);
+            return self.live.decide(&work, &self.candidates);
         }
         let left: Vec<Candidate> = self
             .candidates
@@ -141,7 +145,7 @@ impl GateTurn {
             .filter(|c| !refused.contains(&c.id))
             .cloned()
             .collect();
-        self.live.redecide(RouteLevel::Turn, category, None, &left)
+        self.live.redecide(&work, &left)
     }
 
     /// Point `agent_loop`, running `agent`'s turn, at `decision`'s model.
@@ -385,6 +389,7 @@ async fn run_prompt(
         auth_token: turn.agent_loop.config().auth_token.clone(),
         route: Route::turn(model, turn.routing.reason),
         led: None,
+        difficulty: None,
     };
     let started_ms = super::processes::now_ms();
     let hub = turn.gate.as_ref().map(|gate| Arc::clone(&gate.hub));
@@ -447,6 +452,7 @@ async fn run_prompt(
             task: &label.text,
             prompt_tx: recorded.0,
             category,
+            difficulty: label.difficulty,
             turn_start,
             started,
             started_ms,
@@ -553,7 +559,7 @@ async fn route_turn(
     category: PromptCategory,
     ui: &AgentUi,
 ) -> bool {
-    let Some(decision) = gate.decide(category, &[]) else {
+    let Some(decision) = gate.decide(category, label.difficulty, &[]) else {
         return false;
     };
     info!(
@@ -578,24 +584,29 @@ struct Label {
     route: Route,
     /// Whether Gate had the turn led; `None` when it did not decide
     led: Option<bool>,
+    /// How hard the classifier judged the work, once it said
+    difficulty: Option<Difficulty>,
 }
 
 impl Label {
-    /// The prompt's category, as the classifier says.
-    async fn classify(&self, session: &AgentSession) -> PromptCategory {
-        gate_record::classify_prompt(
+    /// The prompt's category, as the classifier says; its difficulty is
+    /// kept on `self`.
+    async fn classify(&mut self, session: &AgentSession) -> PromptCategory {
+        let label = gate_record::classify_prompt(
             &session.kernel,
             &self.classifier,
             &self.text,
             self.auth_token.clone(),
         )
-        .await
+        .await;
+        self.difficulty = label.difficulty;
+        label.category
     }
 
     /// Classify the prompt and record it on `session`, returning its
     /// transaction hash and category.
     async fn classify_and_record(
-        &self,
+        &mut self,
         session: &AgentSession,
     ) -> Result<(Hash, PromptCategory), String> {
         let category = self.classify(session).await;
@@ -616,6 +627,7 @@ impl Label {
             route: self.route.clone(),
             kind: None,
             led: self.led,
+            difficulty: self.difficulty,
         };
         let (tx, _) = record_prompt(session, &payload).await?;
         if let Some(files) = &session.file_checkpoints {
@@ -711,6 +723,8 @@ struct Asked<'a> {
     /// Its recorded prompt
     prompt_tx: Hash,
     category: PromptCategory,
+    /// How hard the classifier judged it
+    difficulty: Option<Difficulty>,
     /// Where the turn's messages start in the session
     turn_start: usize,
     started: Instant,
@@ -774,7 +788,7 @@ async fn run_attempts(
         let model = turn.agent_loop.config().model.clone();
         if forwarded.credentials_rejected {
             attempts.refused.push(model.clone());
-            let Some(next) = gate.decide(category, &attempts.refused) else {
+            let Some(next) = gate.decide(category, asked.difficulty, &attempts.refused) else {
                 break (result, forwarded);
             };
             attempts.cost_usd += forwarded.usage.cost_usd;

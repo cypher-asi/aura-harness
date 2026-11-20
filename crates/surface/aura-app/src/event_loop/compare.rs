@@ -326,9 +326,7 @@ pub(super) async fn prepare(
     };
     let expected = aura_agent_gate::pick(
         &state.hub.gate.stats(),
-        RouteLevel::Turn,
-        category,
-        None,
+        &aura_agent_gate::Work::new(RouteLevel::Turn, category, None),
         &candidates,
         &no_exploring,
         &mut || 1.0,

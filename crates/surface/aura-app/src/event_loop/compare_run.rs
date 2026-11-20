@@ -44,14 +44,15 @@ use crate::isolation::{
     CopyIsolation, IsolatedWorkspace, Isolation, IsolationStrategy, WorktreeIsolation,
 };
 use aura_agent::AgentLoop;
+use aura_agent_gate::classify::Label;
 use aura_agent_gate::compare::{list_price, plan_shares, run_name, PlanReading, Schedule};
 use aura_agent_gate::outcome::calls_for_stronger;
-use aura_agent_gate::{judge, Candidate};
+use aura_agent_gate::{judge, Candidate, Work};
 use aura_agent_kernel::Kernel;
 use aura_core_types::{
     AgentId, ArmSpec, BenchSource, CompareArm, CompareCopy, CompareJudgment, ComparePayload,
-    CompareRun, CompareStatus, Hash, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload,
-    Route, RouteLevel, RouteReason, RunTurn, SystemKind, Transaction,
+    CompareRun, CompareStatus, Hash, OutcomePayload, OutcomeSignal, PromptPayload, Route,
+    RouteLevel, RouteReason, RunTurn, SystemKind, Transaction,
 };
 use aura_exec_tools::plan_tools::{is_plan_path, todo_items, PlanFile};
 use aura_model::Message;
@@ -816,8 +817,8 @@ async fn run_prompt(
     let (mut config, mut tools, lead) = hub.user_turn(session);
     config.observers.clear();
     config.initial_todos.clone_from(&session.todos);
-    let category = if plan.classifier.is_empty() {
-        PromptCategory::Unclassified
+    let label = if plan.classifier.is_empty() {
+        Label::UNCLASSIFIED
     } else {
         gate_record::classify_prompt(
             &session.kernel,
@@ -827,10 +828,11 @@ async fn run_prompt(
         )
         .await
     };
+    let category = label.category;
     let routed_to = match routing {
         ArmRouting::Gate { .. } => hub
             .gate
-            .redecide(RouteLevel::Turn, category, None, &plan.candidates)
+            .redecide(&Work::turn(category).of(label.difficulty), &plan.candidates)
             .map(|decision| decision.model.id),
         ArmRouting::Pinned(model) => Some(model.clone()),
     };
@@ -849,6 +851,7 @@ async fn run_prompt(
         classifier: plan.classifier.clone(),
         route: Route::turn(model.clone(), RouteReason::Compare),
         led: Some(led),
+        difficulty: label.difficulty,
         ..PromptPayload::new(text.to_string())
     };
 

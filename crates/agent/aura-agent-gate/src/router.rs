@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use aura_config::GateConfig;
 use aura_core_auth::ProviderKind;
-use aura_core_types::{PromptCategory, Route, RouteLevel, RouteReason};
+use aura_core_types::{Difficulty, PromptCategory, Route, RouteLevel, RouteReason};
 use aura_model::model_catalog::{
     estimate_cost_usd, infer_tier, model_key, route_label, ModelBackend, ModelOption, ModelTier,
 };
@@ -130,27 +130,63 @@ pub fn fixed_pick(candidates: &[Candidate]) -> Option<&Candidate> {
         .or_else(|| candidates.iter().rev().max_by_key(|c| c.tier))
 }
 
-/// The tier work asking for `category` starts on before Gate has learned
-/// better.
+/// The tier work asking for `category`, of `difficulty` when the
+/// classifier said, starts on before Gate has learned better.
 ///
-/// Small changes start on the fast tier and everything else, plans
-/// included, on the standard one: a failing test or build moves code
-/// work up a tier, and a category whose start model fails too often
-/// starts higher ([`pick`]). The frontier tier is reached that way, not
-/// by default: on the work it is asked for, it costs several times a
+/// Small changes and work the classifier found easy start on the fast
+/// tier, and everything else on the standard one: plans, whatever their
+/// difficulty, and small changes it found hard. A failing test or build
+/// moves code work up a tier, and a category whose start model fails too
+/// often starts higher ([`pick`]). The frontier tier is reached that way,
+/// not by default: on the work it is asked for, it costs several times a
 /// standard model for results the checks rarely tell apart.
 #[must_use]
-pub const fn start_tier(category: PromptCategory) -> ModelTier {
-    match category {
-        PromptCategory::SmallChange => ModelTier::Fast,
-        PromptCategory::Planning
-        | PromptCategory::MultiFileChange
-        | PromptCategory::Debugging
-        | PromptCategory::Question
-        | PromptCategory::Research
-        | PromptCategory::Writing
-        | PromptCategory::Other
-        | PromptCategory::Unclassified => ModelTier::Standard,
+pub const fn start_tier(category: PromptCategory, difficulty: Option<Difficulty>) -> ModelTier {
+    match (category, difficulty) {
+        (PromptCategory::Planning, _) | (PromptCategory::SmallChange, Some(Difficulty::Hard)) => {
+            ModelTier::Standard
+        }
+        (PromptCategory::SmallChange, _) | (_, Some(Difficulty::Easy)) => ModelTier::Fast,
+        _ => ModelTier::Standard,
+    }
+}
+
+/// A piece of work Gate routes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Work<'a> {
+    /// Turn or subtask.
+    pub level: RouteLevel,
+    /// What it asks for.
+    pub category: PromptCategory,
+    /// How hard the classifier judged it; `None` when it did not say.
+    pub difficulty: Option<Difficulty>,
+    /// The permanent agent a subtask goes to.
+    pub kind: Option<&'a str>,
+}
+
+impl<'a> Work<'a> {
+    /// Work at `level` asking for `category`, for the permanent agent
+    /// `kind` when it is a subtask, of unknown difficulty.
+    #[must_use]
+    pub const fn new(level: RouteLevel, category: PromptCategory, kind: Option<&'a str>) -> Self {
+        Self {
+            level,
+            category,
+            difficulty: None,
+            kind,
+        }
+    }
+
+    /// A turn asking for `category`, of unknown difficulty.
+    #[must_use]
+    pub const fn turn(category: PromptCategory) -> Self {
+        Self::new(RouteLevel::Turn, category, None)
+    }
+
+    /// The same work, of `difficulty`.
+    #[must_use]
+    pub const fn of(self, difficulty: Option<Difficulty>) -> Self {
+        Self { difficulty, ..self }
     }
 }
 
@@ -315,13 +351,13 @@ pub fn by_expected_cost<'a>(
         .collect()
 }
 
-/// Where work at `level` asking for `category` goes, among `candidates`
-/// (as [`candidates`] returns them), given what `stats` has learned:
+/// Where `work` goes, among `candidates` (as [`candidates`] returns
+/// them), given what `stats` has learned:
 ///
 /// 1. the cheapest model with at least `min_tries` counted outcomes on
 ///    the category and a success rate of at least `target`;
 /// 2. or, when it is cheaper than that (or nothing is proven), the model
-///    the category starts on: the cheapest model of its [`start_tier`],
+///    the work starts on: the cheapest model of its [`start_tier`],
 ///    or of the next tier up while the category's outcomes on that model
 ///    rule it out ([`crate::stats::Row::can_still_reach`]), ending at the strongest;
 /// 3. with probability `explore_rate`, a cheaper model than that
@@ -330,26 +366,29 @@ pub fn by_expected_cost<'a>(
 ///    out is tried again once nothing cheaper is more promising, and
 ///    comes back when those tries prove it.
 ///
-/// Models are judged by their [`judged`] rows, `kind` being the permanent
-/// agent a subtask goes to, and ordered by [`by_expected_cost`]. `None`
-/// when there are no candidates.
+/// Models are judged by their [`judged`] rows and ordered by
+/// [`by_expected_cost`]. `None` when there are no candidates.
 ///
 /// Work a check verifies ([`verifiable`]) goes by [`cascade`] instead
 /// while `settings.cascade` is on.
 pub fn pick(
     stats: &GateStats,
-    level: RouteLevel,
-    category: PromptCategory,
-    kind: Option<&str>,
+    work: &Work<'_>,
     candidates: &[Candidate],
     settings: &GateConfig,
     rng: &mut impl Random,
 ) -> Option<Decision> {
-    if settings.cascade && verifiable(category) {
-        if let Some(decision) = cascade(stats, level, category, kind, candidates, settings, rng) {
+    if settings.cascade && verifiable(work.category) {
+        if let Some(decision) = cascade(stats, work, candidates, settings, rng) {
             return Some(decision);
         }
     }
+    let Work {
+        level,
+        category,
+        kind,
+        ..
+    } = *work;
     let row = |model: &str| judged(stats, level, category, kind, model, settings.min_tries);
     let order = by_expected_cost(stats, level, candidates);
     let proven = order.iter().position(|c| {
@@ -360,7 +399,12 @@ pub fn pick(
                     .is_some_and(|rate| rate >= settings.target)
         })
     });
-    let start = start_index(&row, category, &order, settings)?;
+    let start = start_index(
+        &row,
+        start_tier(category, work.difficulty),
+        &order,
+        settings,
+    )?;
     let (index, reason) = match proven {
         Some(index) if index <= start => (index, RouteReason::Proven),
         _ => (start, RouteReason::Default),
@@ -468,20 +512,19 @@ pub fn judged(
     }
 }
 
-/// Position in `order` of the model work asking for `category` starts
-/// on: the cheapest model of the category's [`start_tier`], or of the
-/// lowest tier above it whose cheapest model its outcomes (`row`) have
-/// not ruled out. The cheapest model of the strongest tier when every
-/// tier is ruled out or none is at or above the start tier.
+/// Position in `order` of the model work starts on: the cheapest model of
+/// its `start` tier ([`start_tier`]), or of the lowest tier above it
+/// whose cheapest model the category's outcomes (`row`) have not ruled
+/// out. The cheapest model of the strongest tier when every tier is ruled
+/// out or none is at or above the start tier.
 fn start_index(
     row: &impl Fn(&str) -> Option<Row>,
-    category: PromptCategory,
+    start: ModelTier,
     order: &[&Candidate],
     settings: &GateConfig,
 ) -> Option<usize> {
     let top = order.iter().map(|c| c.tier).max()?;
     let strongest = order.iter().position(|c| c.tier == top);
-    let start = start_tier(category);
     let mut tiers: Vec<ModelTier> = order
         .iter()
         .map(|c| c.tier)
@@ -589,31 +632,62 @@ impl Belief {
     }
 }
 
-/// What Gate believes of how often `candidate` succeeds at work at `level`
-/// asking for `category`: the outcomes of its [`judged`] row, on a prior
-/// whose mean is its tier's expected success moved toward how it did on
-/// the other categories at `level`.
+/// How much more often than usual work of `difficulty` fails, before Gate
+/// has seen how a model does on it.
+const fn failure_scale(difficulty: Difficulty) -> f64 {
+    match difficulty {
+        Difficulty::Easy => 0.5,
+        Difficulty::Medium => 1.0,
+        Difficulty::Hard => 1.6,
+    }
+}
+
+/// What Gate believes of how often `candidate` succeeds at `work`: the
+/// outcomes of its [`judged`] row, on a prior whose mean is its tier's
+/// expected success moved toward how it did on the other categories at
+/// the work's level. When the work's difficulty is known, the chance of
+/// failing is then scaled by how much more or less often the model fails
+/// at that difficulty than overall ([`failure_scale`] until it has
+/// outcomes there), keeping the belief's weight.
 #[must_use]
-pub fn belief(
-    stats: &GateStats,
-    level: RouteLevel,
-    category: PromptCategory,
-    kind: Option<&str>,
-    candidate: &Candidate,
-    min_tries: u32,
-) -> Belief {
+pub fn belief(stats: &GateStats, work: &Work<'_>, candidate: &Candidate, min_tries: u32) -> Belief {
+    let Work {
+        level,
+        category,
+        kind,
+        difficulty,
+    } = *work;
     let own = judged(stats, level, category, kind, &candidate.id, min_tries);
-    let elsewhere = stats.level_row(level, &candidate.id).without(
+    let overall = stats.level_row(level, &candidate.id);
+    let elsewhere = overall.without(
         &stats
             .row(level, category, &candidate.id)
             .copied()
             .unwrap_or_default(),
     );
-    let mean = PRIOR_WEIGHT.mul_add(
-        prior_success(candidate.tier),
-        f64::from(elsewhere.successes),
-    ) / (PRIOR_WEIGHT + f64::from(elsewhere.tries));
-    Belief::new(mean, own)
+    let tier_success = prior_success(candidate.tier);
+    let mean = PRIOR_WEIGHT.mul_add(tier_success, f64::from(elsewhere.successes))
+        / (PRIOR_WEIGHT + f64::from(elsewhere.tries));
+    let belief = Belief::new(mean, own);
+    let Some(difficulty) = difficulty else {
+        return belief;
+    };
+    let failing = |row: Row, prior: f64| {
+        PRIOR_WEIGHT.mul_add(prior, f64::from(row.tries.saturating_sub(row.successes)))
+            / (PRIOR_WEIGHT + f64::from(row.tries))
+    };
+    let usual = failing(overall, 1.0 - tier_success);
+    let there = stats
+        .difficulty_row(level, &candidate.id, difficulty)
+        .copied()
+        .unwrap_or_default();
+    let scale = failing(there, (usual * failure_scale(difficulty)).min(1.0)) / usual;
+    let weight = belief.alpha + belief.beta;
+    let mean = 1.0 - ((1.0 - belief.mean()) * scale).clamp(0.001, 0.999);
+    Belief {
+        alpha: mean * weight,
+        beta: (1.0 - mean) * weight,
+    }
 }
 
 /// Where verifiable work goes: the model it is expected to cost least
@@ -634,13 +708,17 @@ pub fn belief(
 /// `None` when no candidate's price is known.
 fn cascade(
     stats: &GateStats,
-    level: RouteLevel,
-    category: PromptCategory,
-    kind: Option<&str>,
+    work: &Work<'_>,
     candidates: &[Candidate],
     settings: &GateConfig,
     rng: &mut impl Random,
 ) -> Option<Decision> {
+    let Work {
+        level,
+        category,
+        kind,
+        ..
+    } = *work;
     let priced: Vec<(&Candidate, f64)> = expected_costs(stats, level, candidates)
         .into_iter()
         .filter_map(|(c, cost)| Some((c, cost?)))
@@ -662,7 +740,11 @@ fn cascade(
     let next: Vec<Option<usize>> = priced
         .iter()
         .map(|(c, _)| {
-            let tier = priced.iter().map(|(o, _)| o.tier).filter(|t| *t > c.tier).min()?;
+            let tier = priced
+                .iter()
+                .map(|(o, _)| o.tier)
+                .filter(|t| *t > c.tier)
+                .min()?;
             (0..priced.len())
                 .filter(|&o| priced[o].0.tier == tier)
                 .min_by(|&a, &b| costs[a].total_cmp(&costs[b]))
@@ -670,7 +752,12 @@ fn cascade(
         .collect();
     let judge = compare::default_against(candidates)
         .filter(|_| settings.judge)
-        .and_then(|judge| Some((judge.id.as_str(), estimate_cost_usd(&judge.id, &JUDGE_CALL)?)));
+        .and_then(|judge| {
+            Some((
+                judge.id.as_str(),
+                estimate_cost_usd(&judge.id, &JUDGE_CALL)?,
+            ))
+        });
     let review = |i: usize| {
         judge
             .filter(|(id, _)| turn_judge::judges(id, &priced[i].0.id, candidates))
@@ -703,7 +790,7 @@ fn cascade(
     };
     let beliefs: Vec<Belief> = priced
         .iter()
-        .map(|(c, _)| belief(stats, level, category, kind, c, settings.min_tries))
+        .map(|(c, _)| belief(stats, work, c, settings.min_tries))
         .collect();
     let means: Vec<f64> = beliefs.iter().map(|b| b.mean()).collect();
     let kept = best(&means)?;
@@ -1000,6 +1087,38 @@ mod tests {
                 self.push(Transaction::outcome(agent, &outcome));
             }
 
+            /// A turn the classifier judged of `difficulty`.
+            fn rated_turn(
+                &mut self,
+                category: PromptCategory,
+                model: &str,
+                difficulty: Difficulty,
+                ok: bool,
+            ) {
+                let agent = AgentId::generate();
+                let mut prompt = PromptPayload::new(format!("turn {}", self.entries.len()));
+                prompt.category = category;
+                prompt.route = Route::turn(model, RouteReason::Default);
+                prompt.difficulty = Some(difficulty);
+                let prompt_tx = self.push(Transaction::user_prompt_with(agent, &prompt));
+                let signal = if ok {
+                    OutcomeSignal::ChecksPassed
+                } else {
+                    OutcomeSignal::ChecksFailed
+                };
+                let outcome = OutcomePayload {
+                    prompt_tx,
+                    category,
+                    model: model.to_string(),
+                    success: signal.success(),
+                    signal,
+                    cost_usd: 0.01,
+                    subtask_cost_usd: 0.0,
+                    latency_ms: 10,
+                };
+                self.push(Transaction::outcome(agent, &outcome));
+            }
+
             fn turns(&mut self, n: usize, category: PromptCategory, model: &str, ok: bool) {
                 let signal = if ok {
                     OutcomeSignal::ChecksPassed
@@ -1062,9 +1181,7 @@ mod tests {
             let chosen = |kind| {
                 let decision = pick(
                     &stats,
-                    RouteLevel::Subtask,
-                    category,
-                    kind,
+                    &Work::new(RouteLevel::Subtask, category, kind),
                     &claude(),
                     &no_exploring(),
                     &mut || 0.0,
@@ -1083,9 +1200,7 @@ mod tests {
 
             let turn = pick(
                 &stats,
-                RouteLevel::Turn,
-                category,
-                Some("rust-engineer"),
+                &Work::new(RouteLevel::Turn, category, Some("rust-engineer")),
                 &claude(),
                 &no_exploring(),
                 &mut || 0.0,
@@ -1105,9 +1220,7 @@ mod tests {
         ) -> (String, RouteReason) {
             let decision = pick(
                 stats,
-                RouteLevel::Turn,
-                category,
-                None,
+                &Work::new(RouteLevel::Turn, category, None),
                 candidates,
                 &no_exploring(),
                 &mut || 0.0,
@@ -1289,9 +1402,7 @@ mod tests {
             assert_eq!(chosen(&empty, PromptCategory::Planning, &local).0, LOCAL);
             assert!(pick(
                 &empty,
-                RouteLevel::Turn,
-                PromptCategory::Question,
-                None,
+                &Work::new(RouteLevel::Turn, PromptCategory::Question, None),
                 &[],
                 &no_exploring(),
                 &mut || 0.0
@@ -1502,9 +1613,7 @@ mod tests {
             let explored = |stats: &GateStats| {
                 let decision = pick(
                     stats,
-                    RouteLevel::Turn,
-                    PromptCategory::Debugging,
-                    None,
+                    &Work::new(RouteLevel::Turn, PromptCategory::Debugging, None),
                     &claude(),
                     &settings,
                     &mut || 0.0,
@@ -1551,9 +1660,7 @@ mod tests {
             let settings = GateConfig::defaults();
             let explored = pick(
                 &empty,
-                RouteLevel::Turn,
-                PromptCategory::Question,
-                None,
+                &Work::new(RouteLevel::Turn, PromptCategory::Question, None),
                 &claude(),
                 &settings,
                 &mut || 0.0,
@@ -1566,9 +1673,7 @@ mod tests {
 
             let kept = pick(
                 &empty,
-                RouteLevel::Turn,
-                PromptCategory::Question,
-                None,
+                &Work::new(RouteLevel::Turn, PromptCategory::Question, None),
                 &claude(),
                 &settings,
                 &mut || 0.99,
@@ -1602,9 +1707,7 @@ mod tests {
                 .filter(|_| {
                     pick(
                         &empty,
-                        RouteLevel::Turn,
-                        PromptCategory::Question,
-                        None,
+                        &Work::new(RouteLevel::Turn, PromptCategory::Question, None),
                         &claude(),
                         &settings,
                         &mut rng,
@@ -1627,9 +1730,7 @@ mod tests {
             };
             let decision = pick(
                 &log.stats(),
-                RouteLevel::Turn,
-                PromptCategory::Question,
-                None,
+                &Work::new(RouteLevel::Turn, PromptCategory::Question, None),
                 &claude(),
                 &settings,
                 &mut || 0.0,
@@ -1651,9 +1752,7 @@ mod tests {
         fn cascaded(stats: &GateStats, level: RouteLevel, category: PromptCategory) -> Decision {
             pick(
                 stats,
-                level,
-                category,
-                None,
+                &Work::new(level, category, None),
                 &claude(),
                 &cascading(),
                 &mut || 0.0,
@@ -1675,19 +1774,19 @@ mod tests {
                 assert_eq!(decision.propensity, 1.0);
             }
             assert_eq!(
-                cascaded(&empty, RouteLevel::Turn, PromptCategory::Question).model.id,
+                cascaded(&empty, RouteLevel::Turn, PromptCategory::Question)
+                    .model
+                    .id,
                 SONNET,
                 "no check verifies an answer"
             );
             assert_eq!(
                 pick(
                     &empty,
-                    RouteLevel::Turn,
-                    PromptCategory::Debugging,
-                    None,
+                    &Work::new(RouteLevel::Turn, PromptCategory::Debugging, None),
                     &claude(),
                     &no_exploring(),
-                    &mut || 0.0,
+                    &mut || 0.0
                 )
                 .unwrap()
                 .model
@@ -1711,11 +1810,15 @@ mod tests {
             log.turns(6, PromptCategory::SmallChange, HAIKU, true);
             let stats = log.stats();
             assert_eq!(
-                cascaded(&stats, RouteLevel::Turn, PromptCategory::Debugging).model.id,
+                cascaded(&stats, RouteLevel::Turn, PromptCategory::Debugging)
+                    .model
+                    .id,
                 SONNET
             );
             assert_eq!(
-                cascaded(&stats, RouteLevel::Turn, PromptCategory::SmallChange).model.id,
+                cascaded(&stats, RouteLevel::Turn, PromptCategory::SmallChange)
+                    .model
+                    .id,
                 HAIKU,
                 "its own outcomes outweigh the others"
             );
@@ -1741,15 +1844,15 @@ mod tests {
                 .unwrap();
             let unseen = belief(
                 &empty,
-                RouteLevel::Turn,
-                PromptCategory::Debugging,
-                None,
+                &Work::new(RouteLevel::Turn, PromptCategory::Debugging, None),
                 &local,
                 10,
             );
             assert!((unseen.mean() - 0.5).abs() < 1e-9);
             assert_ne!(
-                cascaded(&empty, RouteLevel::Turn, PromptCategory::Debugging).model.id,
+                cascaded(&empty, RouteLevel::Turn, PromptCategory::Debugging)
+                    .model
+                    .id,
                 local.id,
                 "too likely to fail to start on"
             );
@@ -1759,15 +1862,15 @@ mod tests {
             let stats = log.stats();
             let seen = belief(
                 &stats,
-                RouteLevel::Turn,
-                PromptCategory::Debugging,
-                None,
+                &Work::new(RouteLevel::Turn, PromptCategory::Debugging, None),
                 &local,
                 10,
             );
             assert!(seen.mean() > 0.9, "{seen:?}");
             assert_eq!(
-                cascaded(&stats, RouteLevel::Turn, PromptCategory::Debugging).model.id,
+                cascaded(&stats, RouteLevel::Turn, PromptCategory::Debugging)
+                    .model
+                    .id,
                 local.id
             );
         }
@@ -1784,9 +1887,7 @@ mod tests {
             for _ in 0..500 {
                 let decision = pick(
                     &empty,
-                    RouteLevel::Turn,
-                    PromptCategory::Debugging,
-                    None,
+                    &Work::new(RouteLevel::Turn, PromptCategory::Debugging, None),
                     &claude(),
                     &settings,
                     &mut rng,
@@ -1794,15 +1895,14 @@ mod tests {
                 .unwrap();
                 assert!(decision.propensity > 0.0 && decision.propensity <= 1.0);
                 assert_eq!(decision.explored, decision.model.id != HAIKU);
-                assert_eq!(
-                    decision.reason == RouteReason::Explore,
-                    decision.explored
-                );
+                assert_eq!(decision.reason == RouteReason::Explore, decision.explored);
                 *seen.entry(decision.model.id).or_default() += 1;
             }
             assert!(seen.len() >= 2, "{seen:?}");
             assert_eq!(
-                seen.iter().max_by_key(|(_, n)| **n).map(|(id, _)| id.as_str()),
+                seen.iter()
+                    .max_by_key(|(_, n)| **n)
+                    .map(|(id, _)| id.as_str()),
                 Some(HAIKU),
                 "the expected cheapest stays the most likely: {seen:?}"
             );
@@ -1810,15 +1910,98 @@ mod tests {
             for unit in [0.0, 0.5, 1.0 - f64::EPSILON] {
                 let decision = pick(
                     &empty,
-                    RouteLevel::Turn,
-                    PromptCategory::Debugging,
-                    None,
+                    &Work::new(RouteLevel::Turn, PromptCategory::Debugging, None),
                     &claude(),
                     &settings,
                     &mut || unit,
                 );
                 assert!(decision.is_some(), "a constant generator still decides");
             }
+        }
+
+        #[test]
+        fn difficulty_moves_where_work_starts() {
+            use Difficulty::{Easy, Hard, Medium};
+            assert_eq!(
+                start_tier(PromptCategory::Question, Some(Easy)),
+                ModelTier::Fast
+            );
+            assert_eq!(
+                start_tier(PromptCategory::Question, Some(Medium)),
+                ModelTier::Standard
+            );
+            assert_eq!(
+                start_tier(PromptCategory::SmallChange, Some(Hard)),
+                ModelTier::Standard
+            );
+            assert_eq!(
+                start_tier(PromptCategory::Planning, Some(Easy)),
+                ModelTier::Standard,
+                "a plan is never easy enough for the fast tier"
+            );
+
+            let empty = GateStats::default();
+            let start = |category, difficulty| {
+                pick(
+                    &empty,
+                    &Work::turn(category).of(difficulty),
+                    &claude(),
+                    &no_exploring(),
+                    &mut || 0.0,
+                )
+                .unwrap()
+                .model
+                .id
+            };
+            assert_eq!(start(PromptCategory::Question, Some(Easy)), HAIKU);
+            assert_eq!(start(PromptCategory::Question, None), SONNET);
+            assert_eq!(start(PromptCategory::SmallChange, Some(Hard)), SONNET);
+
+            let cascaded = |difficulty| {
+                pick(
+                    &empty,
+                    &Work::turn(PromptCategory::Debugging).of(difficulty),
+                    &claude(),
+                    &cascading(),
+                    &mut || 0.0,
+                )
+                .unwrap()
+                .model
+                .id
+            };
+            assert_eq!(cascaded(None), HAIKU);
+            assert_eq!(
+                cascaded(Some(Hard)),
+                SONNET,
+                "hard work fails too often on the fast tier to start there"
+            );
+        }
+
+        #[test]
+        fn a_models_record_at_a_difficulty_replaces_the_assumed_scale() {
+            let haiku = claude().into_iter().find(|c| c.id == HAIKU).unwrap();
+            let hard = Work::turn(PromptCategory::Debugging).of(Some(Difficulty::Hard));
+            let mean = |stats: &GateStats| belief(stats, &hard, &haiku, 10).mean();
+            let assumed = mean(&GateStats::default());
+            assert!((assumed - (1.0 - 0.3 * 1.6)).abs() < 1e-9, "{assumed}");
+
+            let mut log = Log::default();
+            for i in 0..12 {
+                log.rated_turn(PromptCategory::Writing, HAIKU, Difficulty::Hard, i % 6 != 0);
+            }
+            let learned = mean(&log.stats());
+            assert!(
+                learned > assumed,
+                "haiku did well on hard work elsewhere: {learned} > {assumed}"
+            );
+            let unrated = belief(
+                &log.stats(),
+                &Work::turn(PromptCategory::Debugging),
+                &haiku,
+                10,
+            )
+            .mean();
+            assert!(learned < unrated, "hard is still harder than usual");
         }
 
         #[test]

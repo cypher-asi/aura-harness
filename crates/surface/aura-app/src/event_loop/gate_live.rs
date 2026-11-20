@@ -11,7 +11,7 @@
 //! each agent's routed work is on, which decides what the subtasks it
 //! dispatches are routed among ([`aura_agent_gate::below_lead`]).
 
-use aura_agent_gate::{Candidate, Decision, GateStats, SplitMix64, Way};
+use aura_agent_gate::{Candidate, Decision, GateStats, SplitMix64, Way, Work};
 use aura_agent_kernel::RecordObserver;
 use aura_config::GateConfig;
 use aura_core_types::{AgentId, PromptCategory, RecordEntry, RouteLevel, RouteReason};
@@ -105,29 +105,16 @@ impl GateLive {
         lock(&self.stats).clone()
     }
 
-    /// Gate's decision for work at `level` asking for `category`, among
-    /// `candidates`, remembered for `/gate`; `kind` is the permanent agent
-    /// a subtask goes to. `None` when there are no candidates.
-    pub(crate) fn decide(
-        &self,
-        level: RouteLevel,
-        category: PromptCategory,
-        kind: Option<&str>,
-        candidates: &[Candidate],
-    ) -> Option<Decision> {
-        self.decide_with(level, category, kind, candidates, &self.settings)
+    /// Gate's decision for `work` among `candidates`, remembered for
+    /// `/gate`. `None` when there are no candidates.
+    pub(crate) fn decide(&self, work: &Work<'_>, candidates: &[Candidate]) -> Option<Decision> {
+        self.decide_with(work, candidates, &self.settings)
     }
 
     /// [`Self::decide`] with no exploring: where work goes again when the
     /// model first chosen can't take it.
-    pub(crate) fn redecide(
-        &self,
-        level: RouteLevel,
-        category: PromptCategory,
-        kind: Option<&str>,
-        candidates: &[Candidate],
-    ) -> Option<Decision> {
-        self.decide_with(level, category, kind, candidates, &self.no_exploring())
+    pub(crate) fn redecide(&self, work: &Work<'_>, candidates: &[Candidate]) -> Option<Decision> {
+        self.decide_with(work, candidates, &self.no_exploring())
     }
 
     fn no_exploring(&self) -> GateConfig {
@@ -139,23 +126,19 @@ impl GateLive {
 
     fn decide_with(
         &self,
-        level: RouteLevel,
-        category: PromptCategory,
-        kind: Option<&str>,
+        work: &Work<'_>,
         candidates: &[Candidate],
         settings: &GateConfig,
     ) -> Option<Decision> {
         let decision = {
             let stats = lock(&self.stats);
             let mut rng = lock(&self.rng);
-            aura_agent_gate::pick(
-                &stats, level, category, kind, candidates, settings, &mut *rng,
-            )?
+            aura_agent_gate::pick(&stats, work, candidates, settings, &mut *rng)?
         };
         self.remember(RecentRoute {
             ts_ms: super::processes::now_ms(),
-            level,
-            category,
+            level: work.level,
+            category: work.category,
             model: decision.model.route_label(),
             reason: decision.reason,
         });

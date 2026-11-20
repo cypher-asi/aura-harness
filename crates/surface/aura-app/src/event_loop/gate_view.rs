@@ -282,9 +282,7 @@ impl GateView<'_> {
         };
         let pick = aura_agent_gate::pick(
             self.stats,
-            level,
-            category,
-            None,
+            &aura_agent_gate::Work::new(level, category, None),
             self.candidates,
             &no_exploring,
             &mut || 1.0,

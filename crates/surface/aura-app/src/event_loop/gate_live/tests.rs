@@ -135,9 +135,7 @@ fn decisions_are_remembered_up_to_the_limit() {
     );
     for _ in 0..RECENT_DECISIONS + 5 {
         live.decide(
-            RouteLevel::Turn,
-            PromptCategory::Debugging,
-            None,
+            &aura_agent_gate::Work::turn(PromptCategory::Debugging),
             &candidates,
         )
         .unwrap();
@@ -148,7 +146,7 @@ fn decisions_are_remembered_up_to_the_limit() {
         .iter()
         .all(|r| r.category == PromptCategory::Debugging && r.level == RouteLevel::Turn));
     assert!(live
-        .decide(RouteLevel::Turn, PromptCategory::Debugging, None, &[])
+        .decide(&aura_agent_gate::Work::turn(PromptCategory::Debugging), &[])
         .is_none());
     assert_eq!(live.recent().len(), RECENT_DECISIONS);
 }

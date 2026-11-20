@@ -20,9 +20,10 @@ use crate::event_loop::turns::{drain_stale_inbox, ended_signal, failure_text, re
 use crate::event_loop::{AgentHub, AgentSession};
 use crate::session_checkpoint::SessionUsage;
 use aura_agent::{AgentLoop, AgentLoopConfig, AgentLoopResult};
+use aura_agent_gate::classify::Label;
 use aura_agent_gate::outcome::calls_for_stronger;
 use aura_agent_gate::turn_judge::Failed;
-use aura_agent_gate::Decision;
+use aura_agent_gate::{Decision, Work};
 use aura_agent_kernel::Kernel;
 use aura_agent_trace::RunRecorder;
 use aura_core_modes::AgentMode;
@@ -749,8 +750,8 @@ impl Headless {
             return (PromptPayload::new(text), false);
         };
         let classifier = self.hub.classifier();
-        let category = if classifier.is_empty() {
-            PromptCategory::Unclassified
+        let label = if classifier.is_empty() {
+            Label::UNCLASSIFIED
         } else {
             gate_record::classify_prompt(
                 &session.kernel,
@@ -760,10 +761,11 @@ impl Headless {
             )
             .await
         };
+        let category = label.category;
         let route = match self
             .hub
             .gate
-            .decide(RouteLevel::Turn, category, None, &candidates)
+            .decide(&Work::turn(category).of(label.difficulty), &candidates)
         {
             Some(decision) => {
                 info!(
@@ -781,6 +783,7 @@ impl Headless {
             category,
             classifier,
             route,
+            difficulty: label.difficulty,
             ..PromptPayload::new(text)
         };
         (payload, true)

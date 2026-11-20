@@ -55,8 +55,8 @@ pub use types::ToolDecision;
 pub use types::{
     installed_integrations_satisfy, integration_match, Action, ActionKind, ActionResultPayload,
     AgentStatus, ArmSpec, BenchSource, CacheControl, CompareArm, CompareCopy, CompareJudgment,
-    ComparePayload, CompareRun, CompareStatus, ContextHash, Decision, Effect, EffectKind,
-    EffectStatus, ExampleTaskInfo, Identity, InstalledIntegrationDefinition,
+    ComparePayload, CompareRun, CompareStatus, ContextHash, Decision, Difficulty, Effect,
+    EffectKind, EffectStatus, ExampleTaskInfo, Identity, InstalledIntegrationDefinition,
     InstalledToolCapability, InstalledToolDefinition, InstalledToolIntegrationRequirement,
     InstalledToolRuntimeAuth, InstalledToolRuntimeExecution, InstalledToolRuntimeIntegration,
     InstalledToolRuntimeProviderExecution, LineDiff, ModeChangePayload, ModelTokens,

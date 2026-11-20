@@ -611,11 +611,7 @@ async fn a_gate_run_that_fails_its_checks_carries_on_on_a_stronger_model() {
         OutcomeSignal::ChecksFailed,
         "the failed attempt is recorded on its own"
     );
-    assert_eq!(
-        routes("b-1").len(),
-        1,
-        "a run on one model stays on it"
-    );
+    assert_eq!(routes("b-1").len(), 1, "a run on one model stays on it");
 }
 
 #[tokio::test]

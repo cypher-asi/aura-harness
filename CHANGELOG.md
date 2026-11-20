@@ -29,6 +29,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   rate again.
 - A Gate run in `/compare` whose turn fails its test or build goes on in
   the same conversation on the next tier up, as routed turns do.
+- The classifier also says whether a prompt's work looks easy, medium or
+  hard, in the same call; it is recorded on the prompt. Easy work starts
+  on the fast tier (plans excepted) and hard small changes on the
+  standard one. For work a check verifies, the difficulty scales the
+  expected chance of failing, learned per model and difficulty.
 
 ### Benchmarks — two arms on the same work
 

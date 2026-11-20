@@ -80,6 +80,45 @@ impl std::fmt::Display for PromptCategory {
     }
 }
 
+/// How hard a prompt's work looks to Gate's classifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Difficulty {
+    /// Routine work a fast model does reliably.
+    Easy,
+    /// Ordinary work.
+    Medium,
+    /// Subtle or wide-reaching work that weaker models often get wrong.
+    Hard,
+}
+
+impl Difficulty {
+    /// Every difficulty, easiest first.
+    pub const ALL: [Self; 3] = [Self::Easy, Self::Medium, Self::Hard];
+
+    /// The difficulty's name as stored, e.g. `easy`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Easy => "easy",
+            Self::Medium => "medium",
+            Self::Hard => "hard",
+        }
+    }
+
+    /// The difficulty named `name` (as [`Self::as_str`] spells it).
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|d| d.as_str() == name)
+    }
+}
+
+impl std::fmt::Display for Difficulty {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// What a routing decision covers.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
@@ -218,6 +257,10 @@ pub struct PromptPayload {
     /// turn recorded before this was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub led: Option<bool>,
+    /// How hard the classifier judged the work; `None` when it did not
+    /// say, and for prompts recorded before it was asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub difficulty: Option<Difficulty>,
 }
 
 impl PromptPayload {
@@ -231,6 +274,7 @@ impl PromptPayload {
             route: Route::default(),
             kind: None,
             led: None,
+            difficulty: None,
         }
     }
 
@@ -430,6 +474,7 @@ mod tests {
             route: Route::turn("claude/claude-sonnet-4-6", RouteReason::Default),
             kind: None,
             led: Some(true),
+            difficulty: Some(Difficulty::Hard),
         };
         let bytes = payload.to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
@@ -439,9 +484,25 @@ mod tests {
         assert_eq!(json["route"]["propensity"], 1.0);
         assert!(json.get("kind").is_none(), "a turn names no kind");
         assert_eq!(json["led"], true);
+        assert_eq!(json["difficulty"], "hard");
         assert_eq!(PromptPayload::from_bytes(&bytes).unwrap(), payload);
         let older = br#"{"text":"fix it","category":"debugging","classifier":"","route":{"level":"turn","model":"m","reason":"default","explored":false,"propensity":1.0}}"#;
-        assert_eq!(PromptPayload::from_bytes(older).unwrap().led, None);
+        let older = PromptPayload::from_bytes(older).unwrap();
+        assert_eq!((older.led, older.difficulty), (None, None));
+        assert!(
+            !String::from_utf8(PromptPayload::new("hi").to_bytes())
+                .unwrap()
+                .contains("difficulty"),
+            "an unrated prompt is stored as before"
+        );
+    }
+
+    #[test]
+    fn difficulties_round_trip_by_name() {
+        for difficulty in Difficulty::ALL {
+            assert_eq!(Difficulty::from_name(difficulty.as_str()), Some(difficulty));
+        }
+        assert_eq!(Difficulty::from_name("tricky"), None);
     }
 
     #[test]

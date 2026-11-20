@@ -11,8 +11,7 @@ use aura_agent_gate::turn_judge::{self, Failed, Verdict};
 use aura_agent_gate::{classify, outcome::is_retry_stronger, Candidate};
 use aura_agent_kernel::Kernel;
 use aura_core_types::{
-    AgentId, Hash, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, Transaction,
-    TransactionType,
+    AgentId, Hash, OutcomePayload, OutcomeSignal, PromptPayload, Transaction, TransactionType,
 };
 use aura_store_db::ReadStore;
 use std::time::Duration;
@@ -145,34 +144,35 @@ pub(crate) async fn judge_failed(
     ))
 }
 
-/// Label `text` with its category by asking `model` through `kernel`, so
-/// the call is recorded. Any failure leaves it unclassified.
+/// Label `text` with its category and difficulty by asking `model`
+/// through `kernel`, so the call is recorded. Any failure leaves it
+/// unclassified.
 pub(crate) async fn classify_prompt(
     kernel: &Kernel,
     model: &str,
     text: &str,
     auth_token: Option<String>,
-) -> PromptCategory {
+) -> classify::Label {
     let request = match classify::request(model, text, auth_token) {
         Ok(request) => request,
         Err(e) => {
             warn!(%model, error = %e, "Could not build the classifier request");
-            return PromptCategory::Unclassified;
+            return classify::Label::UNCLASSIFIED;
         }
     };
     match tokio::time::timeout(CLASSIFY_TIMEOUT, kernel.reason(request)).await {
         Ok(Ok(result)) => {
-            let category = classify::category_of(&result.response);
-            info!(%model, %category, "Classified the prompt");
-            category
+            let label = classify::label_of(&result.response);
+            info!(%model, category = %label.category, difficulty = ?label.difficulty, "Classified the prompt");
+            label
         }
         Ok(Err(e)) => {
             warn!(%model, error = %e, "Classifier call failed");
-            PromptCategory::Unclassified
+            classify::Label::UNCLASSIFIED
         }
         Err(_) => {
             warn!(%model, "Classifier call timed out");
-            PromptCategory::Unclassified
+            classify::Label::UNCLASSIFIED
         }
     }
 }

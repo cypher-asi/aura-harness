@@ -2042,7 +2042,7 @@ async fn run_task_turn(
     agent_loop: &AgentLoop,
     tools: Vec<ToolDefinition>,
     prompt: &str,
-    label: SubtaskLabel,
+    mut label: SubtaskLabel,
     ui: &AgentUi,
     cancel: &CancellationToken,
     limits: LongRunSettings,

@@ -228,7 +228,8 @@ async fn answer(request: ModelRequest, last: Option<&str>) -> Result<ModelRespon
 /// The classifier's answer to `request`, asking about `prompt`: prompts
 /// that say "across files" are changes across several files, those that
 /// say "plan:" are planning, those that say "fix" are debugging,
-/// "classifier down" fails the call, and the rest are questions.
+/// "classifier down" fails the call, and the rest are questions. Prompts
+/// that say "(easy)" or "(hard)" get that difficulty; the rest none.
 async fn classify(request: &ModelRequest, prompt: &str) -> Result<ModelResponse, ReasonerError> {
     if prompt.contains("classifier down") {
         return Err(ReasonerError::Internal("classifier offline".to_string()));
@@ -242,7 +243,11 @@ async fn classify(request: &ModelRequest, prompt: &str) -> Result<ModelResponse,
     } else {
         "question"
     };
-    MockProvider::simple_response(label)
+    let difficulty = ["easy", "hard"]
+        .into_iter()
+        .find(|d| prompt.contains(&format!("({d})")))
+        .map_or(String::new(), |d| format!(" {d}"));
+    MockProvider::simple_response(format!("{label}{difficulty}"))
         .complete(request.clone())
         .await
 }
@@ -2216,6 +2221,63 @@ async fn gate_routes_each_category_and_records_why() {
     let recent = fixture.hub.gate.recent();
     assert_eq!(recent.len(), 2);
     assert_eq!(recent[1].reason, RouteReason::Default);
+}
+
+#[tokio::test]
+async fn the_classifiers_difficulty_moves_where_a_turn_starts_and_is_recorded() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+
+    turn(
+        &mut state,
+        &mut done,
+        &links,
+        first,
+        "what does gate do? (easy)",
+    )
+    .await;
+    turn(&mut state, &mut done, &links, first, "what does gate do?").await;
+    turn(
+        &mut state,
+        &mut done,
+        &links,
+        first,
+        "fix the parser (hard)",
+    )
+    .await;
+
+    use aura_core_types::Difficulty;
+    let prompts: Vec<(PromptCategory, Option<Difficulty>, String)> = prompts_of(&state, first)
+        .into_iter()
+        .map(|(_, _, p)| (p.category, p.difficulty, p.route.model))
+        .collect();
+    assert_eq!(
+        prompts,
+        [
+            (
+                PromptCategory::Question,
+                Some(Difficulty::Easy),
+                "aura-claude-haiku-4-5".to_string()
+            ),
+            (
+                PromptCategory::Question,
+                None,
+                "aura-claude-sonnet-4-6".to_string()
+            ),
+            (
+                PromptCategory::Debugging,
+                Some(Difficulty::Hard),
+                "aura-gpt-5-4".to_string()
+            ),
+        ],
+        "an easy question starts on the fast tier; hard debugging skips it \
+         for gpt-5.4, stronger than sonnet and cheaper"
+    );
 }
 
 /// Run `text` as a debugging turn under Gate, which starts it on Haiku,
