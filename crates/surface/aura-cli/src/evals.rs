@@ -49,7 +49,7 @@ use serde_json::json;
 use aura_app::headless::EvalTurn;
 pub use aura_app::headless::{copy_dir, GateUse};
 use aura_app::recorded_runs::{self, HeadlessRun};
-use aura_app::repo_source::{self, RepoSource};
+use aura_app::repo_source::{self, Source};
 
 /// Task definition file inside a task directory.
 pub const TASK_FILE: &str = "task.toml";
@@ -92,7 +92,7 @@ pub struct EvalTask {
     pub max_iterations: Option<usize>,
     /// Repository the workspace starts from, before `workspace/`.
     #[serde(default)]
-    pub source: Option<RepoSource>,
+    pub source: Option<Source>,
 }
 
 /// Load every task under `suite`, sorted by id.

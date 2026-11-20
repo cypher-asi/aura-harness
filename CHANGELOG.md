@@ -12,7 +12,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ##### Added
 
 - `/compare --suite <name>` and the BENCH form run the example tasks of
-  one suite (`coding`, `gate_cost`, `gate_hard` or `polyglot`) instead
+  one suite (`coding`, `gate_cost`, `gate_hard`, `polyglot`, `codebases`
+  or `swe_bench_pro_hard`) instead
   of every suite. With `--suite` and no `--examples`, all its tasks run.
 - `evals/polyglot`: 24 of the hardest exercises of Aider's polyglot
   benchmark (Exercism, MIT), eight each in Python, Rust and Go. Each
@@ -28,6 +29,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   download it once into `AURA_HOME/evals/sources`.
   `scripts/import_repo_tasks.py` mines merged pull requests for more and
   keeps a fix only when its check fails before it and passes after it.
+- `evals/swe_bench_pro_hard`: the 51 tasks of SWE-Bench Pro V2's HARD-51
+  subset (Scale AI, MIT), in Python, Go and TypeScript, as a suite of the
+  BENCH form and `/compare --suite`. A task names its container image as
+  `[source]`; aura copies the image's repository into the workspace, the
+  agent runs the project's commands in a fresh container of the image
+  through `sh .swe/run '<command>'`, and the check grades as SWE-Bench Pro
+  does: the changes applied in a fresh container, then the hidden tests.
+  Needs Docker. `scripts/import_swe_bench_pro.py` imports them.
+- The comparison view shows each arm's cost per fix: its whole cost,
+  failed runs included, divided by its check passes.
 
 ### Gate — cheaper defaults
 

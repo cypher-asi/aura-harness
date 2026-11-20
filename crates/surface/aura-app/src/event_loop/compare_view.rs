@@ -11,7 +11,7 @@ use aura_core_types::{
     ModelTokens, Plan, PlanShare, RunTurn,
 };
 use aura_model::model_catalog::route_label;
-use aura_ui_terminal::events::{cost_shares, FileDiffData};
+use aura_ui_terminal::events::{cost_per_fix, cost_shares, per_fix_cells, FileDiffData};
 use std::fmt::Write;
 
 /// Why plan usage is not shown when no call reported it.
@@ -364,6 +364,11 @@ pub(super) fn render(name: &str, payload: &ComparePayload) -> String {
         }
     };
     row(&mut out, "check", checks(&a), checks(&b));
+    if a.checks_run + b.checks_run > 0 {
+        let per_fix = |arm: &ArmSummary| cost_per_fix(arm.total_cost_usd, arm.checks_passed);
+        let [x, y] = per_fix_cells(per_fix(&a), per_fix(&b), money);
+        row(&mut out, "cost per fix", x, y);
+    }
     let judged = |arm: &ArmSummary| {
         format!(
             "{} won, {} lost, {} tied",
@@ -796,6 +801,10 @@ mod tests {
             ["median cost", "$0.06 · 87% less", "$0.45 · 100%"]
         );
         assert_eq!(line(&text, "check"), ["check", "2/3 passed", "3/3 passed"]);
+        assert_eq!(
+            line(&text, "cost per fix"),
+            ["cost per fix", "$0.09 · 80% less", "$0.45 · 100%"]
+        );
         assert_eq!(
             line(&text, "judge "),
             ["judge", "0 won, 1 lost, 0 tied", "1 won, 0 lost, 0 tied"]

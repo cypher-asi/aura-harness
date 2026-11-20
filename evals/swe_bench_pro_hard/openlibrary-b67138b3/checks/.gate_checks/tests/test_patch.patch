@@ -1,0 +1,667 @@
+diff --git a/openlibrary/catalog/marc/tests/test_data/bin_expect/880_Nihon_no_chasho.json b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_Nihon_no_chasho.json
+new file mode 100644
+index 000000000..436abc95c
+--- /dev/null
++++ b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_Nihon_no_chasho.json
+@@ -0,0 +1,61 @@
++{
++  "publish_date": "1971",
++  "copyright_date": "1972",
++  "publish_country": "ja",
++  "languages": [
++    "jpn"
++  ],
++  "oclc_numbers": [
++    "502869803"
++  ],
++  "series": [
++    "Tōyō bunko -- 201, 206"
++  ],
++  "notes": "Includes index in v.2.",
++  "authors": [
++    {
++      "alternate_names": [
++        "林屋 辰三郎"
++      ],
++      "birth_date": "1914",
++      "death_date": "1998",
++      "name": "Hayashiya, Tatsusaburō",
++      "entity_type": "person",
++      "personal_name": "Hayashiya, Tatsusaburō"
++    },
++    {
++      "alternate_names": [
++        "横井 清."
++      ],
++      "name": "Yokoi, Kiyoshi",
++      "entity_type": "person",
++      "personal_name": "Yokoi, Kiyoshi"
++    },
++    {
++      "alternate_names": [
++        "楢林 忠男"
++      ],
++      "birth_date": "1940",
++      "death_date": "1960",
++      "name": "Narabayashi, Tadao",
++      "entity_type": "person",
++      "personal_name": "Narabayashi, Tadao"
++    }
++  ],
++  "subjects": [
++    "Japanese tea ceremony",
++    "Book reviews"
++  ],
++  "other_titles": [
++    "Nihon no chasho"
++  ],
++  "title": "日本 の 茶書",
++  "by_statement": "Hayashiya Tatsusaburō, Yokoi Kiyoshi, Narabayashi Tadao henchū",
++  "publishers": [
++    "Heibonsha"
++  ],
++  "publish_places": [
++    "Tōkyō"
++  ],
++  "pagination": "2 volumes"
++}
+diff --git a/openlibrary/catalog/marc/tests/test_data/bin_expect/880_alternate_script.json b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_alternate_script.json
+new file mode 100644
+index 000000000..285ee9211
+--- /dev/null
++++ b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_alternate_script.json
+@@ -0,0 +1,56 @@
++{
++  "publish_date": "2010",
++  "publish_country": "cc",
++  "languages": [
++    "chi"
++  ],
++  "authors": [
++    {
++      "birth_date": "1960",
++      "name": "Lyons, Daniel",
++      "entity_type": "person",
++      "personal_name": "Lyons, Daniel"
++    }
++  ],
++  "oclc_numbers": [
++    "613515810"
++  ],
++  "work_titles": [
++    "Option$"
++  ],
++  "edition_name": "Di 1 ban.",
++  "translated_from": [
++    "eng"
++  ],
++  "contributions": [
++    "Liu, Ning"
++  ],
++  "subject_places": [
++    "Santa Clara Valley (Santa Clara County, Calif.)"
++  ],
++  "subjects": [
++    "Fiction",
++    "Executives",
++    "Inc Apple Computer"
++  ],
++  "subject_people": [
++    "Steve Jobs (1955-2011)"
++  ],
++  "title": "乔布斯的秘密日记",
++  "other_titles": ["Qiaobusi de mi mi ri ji"],
++  "by_statement": "Danni'er Lai'angsi zhu ; Liu Ning yi",
++  "publishers": [
++    "Zhong xin chu ban she"
++  ],
++  "publish_places": [
++    "Beijing Shi"
++  ],
++  "isbn_13": [
++    "9787508617725"
++  ],
++  "isbn_10": [
++    "750861772X"
++  ],
++  "pagination": "xi, 274 p.",
++  "number_of_pages": 274
++}
+diff --git a/openlibrary/catalog/marc/tests/test_data/bin_expect/880_arabic_french_many_linkages.json b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_arabic_french_many_linkages.json
+new file mode 100644
+index 000000000..a2bb089b1
+--- /dev/null
++++ b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_arabic_french_many_linkages.json
+@@ -0,0 +1,73 @@
++{
++  "publish_date": "2009",
++  "publish_country": "mr",
++  "languages": [
++    "ara",
++    "fre"
++  ],
++  "oclc_numbers": [
++    "672263227"
++  ],
++  "other_titles": [
++    "Intiqāl al-afkār wa-al-taqnīyāt fī al-Maghārib wa-al-ʻālam al-mutawassiṭī",
++    "Transmission des idées et des techniques au Maghreb et en Méditerranée"
++  ],
++  "edition_name": "al-Ṭabʻah 1.",
++  "series": [
++    "Silsilat nadawāt wa-munāẓarāt -- raqm 160",
++    "Manshūrāt Kullīyat al-Ādāb wa-al-ʻUlūm al-Insānīyah bi-al-Rabāṭ -- raqm 160"
++  ],
++  "notes": "Includes bibliographical references.\n\nArabic and French.",
++  "authors": [
++    {
++      "name": "El Moudden, Abderrahmane",
++      "entity_type": "person",
++      "personal_name": "El Moudden, Abderrahmane",
++      "alternate_names": [
++	"مودن، عبد الرحمن"
++      ]
++    }
++  ],
++  "contributions": [
++    "Bin-Ḥāddah, ʻAbd al-Raḥīm",
++    "Gharbi, Mohamed Lazhar",
++    "Jāmiʻat Muḥammad al-Khāmis. Kullīyat al-Ādāb wa-al-ʻUlūm al-Insānīyah"
++  ],
++  "subjects": [
++    "Political science",
++    "Congresses",
++    "History",
++    "Influence",
++    "Medicine",
++    "Islamic civilization",
++    "Intellectual life",
++    "Military History",
++    "Archives"
++  ],
++  "subject_places": [
++    "Mediterranean Region",
++    "Islamic Empire",
++    "Morocco",
++    "North Africa",
++    "Turkey"
++  ],
++  "subject_times": [
++    "18th century",
++    "20th century",
++    "1516-1830",
++    "Ottoman Empire, 1288-1918"
++  ],
++  "title": "انتقال الأفكار و التقنيات في المغارب و العالم المتوسطي",
++  "by_statement": "tansīq ʻAbd al-Raḥmān al-Mawdin, ʻAbd al-Raḥīm Binḥāddah, Muḥammad al-Azhar al-Gharbī",
++  "publishers": [
++    "Jāmiʻat Muḥammad al-Khāmis, Kullīyat al-Ādāb wa-al-ʻUlūm al-Insānīyah"
++  ],
++  "publish_places": [
++    "Al-Ribāṭ, al-Maghrib"
++  ],
++  "isbn_13": [
++    "9789981591572"
++  ],
++  "pagination": "247, 16 pages",
++  "number_of_pages": 247
++}
+diff --git a/openlibrary/catalog/marc/tests/test_data/bin_expect/880_publisher_unlinked.json b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_publisher_unlinked.json
+new file mode 100644
+index 000000000..fee0637f8
+--- /dev/null
++++ b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_publisher_unlinked.json
+@@ -0,0 +1,43 @@
++{
++  "publishers": [
++    "כנרת"
++  ],
++  "publish_places": [
++    "אור יהודה"
++  ],
++  "publish_date": "2011",
++  "publish_country": "is",
++  "languages": [
++    "heb"
++  ],
++  "authors": [
++    {
++      "name": "Hailman, Ben",
++      "entity_type": "person",
++      "personal_name": "Hailman, Ben"
++    }
++  ],
++  "oclc_numbers": [
++    "767498970"
++  ],
++  "work_titles": [
++    "What's the big idea, how big is it?"
++  ],
++  "contributions": [
++    "Śagi, Uri"
++  ],
++  "subjects": [
++    "Size perception",
++    "Juvenile literature"
++  ],
++  "other_titles": [
++    "Zeh gadol?"
++  ],
++  "title": "זה גדול!",
++  "subtitle": "ספר על הדברים הגדולים באמת",
++  "isbn_13": [
++    "9789655220613"
++  ],
++  "pagination": "47 p.",
++  "number_of_pages": 47
++}
+diff --git a/openlibrary/catalog/marc/tests/test_data/bin_expect/880_table_of_contents.json b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_table_of_contents.json
+new file mode 100644
+index 000000000..378f90d75
+--- /dev/null
++++ b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_table_of_contents.json
+@@ -0,0 +1,44 @@
++{
++  "publish_date": "2006",
++  "publish_country": "ru",
++  "languages": [
++    "rus"
++  ],
++  "authors": [
++    {
++      "name": "Petrushevskai︠a︡, Li︠u︡dmila",
++      "entity_type": "person",
++      "personal_name": "Petrushevskai︠a︡, Li︠u︡dmila"
++    }
++  ],
++  "other_titles": [
++    "Vremi︠a︡ nochʹ"
++  ],
++  "notes": "Short stories and a novel",
++  "table_of_contents": [
++    {
++      "title": "Rasskazy",
++      "type": "/type/toc_item"
++    },
++    {
++      "title": "Vremi︠a︡ nochʹ : roman",
++      "type": "/type/toc_item"
++    }
++  ],
++  "title": "Zhiznʹ ėto teatr",
++  "by_statement": "Li︠u︡dmila Petrushevskai︠a︡",
++  "publishers": [
++    "Amfora"
++  ],
++  "publish_places": [
++    "Sankt-Peterburg"
++  ],
++  "isbn_10": [
++    "536700279X"
++  ],
++  "isbn_13": [
++    "9785367002799"
++  ],
++  "pagination": "396 p.",
++  "number_of_pages": 396
++}
+diff --git a/openlibrary/catalog/marc/tests/test_data/bin_expect/bpl_0486266893.json b/openlibrary/catalog/marc/tests/test_data/bin_expect/bpl_0486266893.json
+index 516753f30..471b053f1 100644
+--- a/openlibrary/catalog/marc/tests/test_data/bin_expect/bpl_0486266893.json
++++ b/openlibrary/catalog/marc/tests/test_data/bin_expect/bpl_0486266893.json
+@@ -7,7 +7,6 @@
+     "90020571"
+   ],
+   "series": [
+-    "Dover thrift editions",
+     "Dover thrift editions"
+   ],
+   "notes": "Translation from French.",
+diff --git a/openlibrary/catalog/marc/tests/test_data/bin_expect/ithaca_two_856u.json b/openlibrary/catalog/marc/tests/test_data/bin_expect/ithaca_two_856u.json
+index 55280d9ea..1a7d09247 100644
+--- a/openlibrary/catalog/marc/tests/test_data/bin_expect/ithaca_two_856u.json
++++ b/openlibrary/catalog/marc/tests/test_data/bin_expect/ithaca_two_856u.json
+@@ -1,6 +1,6 @@
+ {
+   "publishers": [
+-    "[s.n."
++    "[s.n.]"
+   ],
+   "pagination": "v.",
+   "links": [
+diff --git a/openlibrary/catalog/marc/tests/test_data/bin_input/880_Nihon_no_chasho.mrc b/openlibrary/catalog/marc/tests/test_data/bin_input/880_Nihon_no_chasho.mrc
+new file mode 100644
+index 0000000000000000000000000000000000000000..927c205196ddc37e7fd7c8c296d67a2b75d33949
+GIT binary patch
+literal 1828
+zcmb7ETW=dh6#gZ6=b;Zo^4fFT+1c{eyfmdUh=zv>@i1O*@h0|8WUt-$5m8j3Ry-h}
+zNL&PnN)Z%9RYXG`${*;zAa=^X;5$3Yr4g#yQFd~C=3Kt>oioFQl{R-{=A`6Y>x4O`
+z6OJYDSrV|I5Ge^z;7`+;Ot^wxl59+nHJPMACLbXhnS6x`HUeoxqBxmC<iaFeEBq(D
+zO(+!SWS^xx&FGx$G>6C)oB&f2zzhnRXi4S<{wh(}0hP)SMj;)iLv5^5h$jhmrgaks
+zTOv^amc&_N2t}wXu_yow>A8`#0}c*TX@Va0TCmZaAdbzXrNrcwp#q|ew#;HdHWEyx
+zrjfy$5Gv?VgFuu<4-7&|9c*APlMqLfoGD8+p*o>dVu>H2iB8*6RwW{}El`3sNFzm(
+zXx-th%z`sngF}H&ZaL<1hSjGH{*1G&or(=wj79GCx7PjD^|b^P891u5N}pHf^y}B^
+zcdl;q)_T|1-_C4&DH9?%^m^-S$ABp8S^4t2QI2o0fe&_#gNwIZ9LFT*7eWl5kEKXa
+zqY5Cnm2A@(Ht&Flw&W%%x$N?+n_1RtaUKz^F&B~Rl|x^#%CmgvrbExV$mbRi%Y|c`
+zuAa`Ou0Najr?=Ydy5IICd$U}49Jg7|O<X_N!gAm|8x~bQoISnOA#5RqjNB%iw-?yh
+z#i)O|DEq#e4qZFSuMMHRiECqGowE0c^q5$GzbR9)xgX8O#gyF2(P%cUC$28x+-5s|
+zf*)l)Wp6~euq+=pDP3Lc)=|I4CMN@z`>HOgx`{Tc#>Jq7!652a&1v(yC60lr0JOo`
+zpH<r)q36UN1AR@1jVd3_2EbERgJKsu(Tlu1a#!4rtBPsC>cX+Sm=t4QEu#4)@3+~c
+zn3u)PY3DSRj@${y?Q<kY1Ca?08Zz67_^_^bE_S=+pfmD$=L0|Qx>-H+ld>+0X}5A<
+zr(0RUbt=*MlUkC<HN9#dH|rHb;aVzv8p>cqPWwz~(dagz)Ep=cf9cS;i^fRZk{IzT
+zctVJ{FeB-UsDIh`xbg@pbTi#}=rG;g3mEX#z5A<g9<YBt{Ea=k`{(NGeH!uAclVYL
+z@33c2em~s*<lm1zZL`(h&xZ$Ju+{#@knjHp1GfD8`=ievv!lm*t4Dibr137sxJXUh
+zZyz2WJfPWJ{`F{i`-h{So?xU`U;VoL?C$?eH1!5gXw22I_v(*3Z1v^s<-sq{O&S^E
+zMU1%)hUbx<9gwC?jd2o;Pl^cB)*P8|bhf7F`WO13kTHERv`)*4sPAvwXculb8sd$K
+W%F{=txh7gf7S~~??ub~nUi%Nf&=S}H
+
+literal 0
+HcmV?d00001
+
+diff --git a/openlibrary/catalog/marc/tests/test_data/bin_input/880_alternate_script.mrc b/openlibrary/catalog/marc/tests/test_data/bin_input/880_alternate_script.mrc
+new file mode 100644
+index 0000000000000000000000000000000000000000..235147da759c0af33ef7bd61f8b66005cf751575
+GIT binary patch
+literal 1363
+zcmZWpU2hvj6#XT5<{?sB$==S)?#|4%FSMIL46dEVfN0;w>m{DbSzECkCA`rhC=x=d
+zRFQ}`BoHs532$jZ@MEy!{0z<=Lx^Cs-o1P7IrnRJEM%<X!tHXWln{x?nvN%_z>>IP
+zGO*~W@go3EX~@omu#kW!Vh!nvCX5l9xZp_K5H-l9OoFWlPZAL$j-nh!h8PrDW=bUV
+zgh(L~UWE)iBalrf+*C{|Jds0bsVFa%uB=g1IMO3ureFp<wwkCS1)c~?od|L!Iwe@d
+z)I%n8XajhvtPWbTb*xi3G~%b$A_BCC0D^@~Sn`=T*i?u~lVGRd8)H{E_{f@(nm9I%
+zSABqEjma`#)UVB8QZ2AEDQlym(lSnEiX^p8K5FGPMe{e($_ykGi5k+UQcZvhj#U(N
+z|7W2-E_pHVykFy-xqRbo)+?(WR*=>2<gNT6>u<K-CvUMP11U4spgAp#Q7ON}itPvY
+zRTc>myjQM||L3|HO1$-N$r34%oDGmNh^xkI(kNU_z+q(^r3q6?1=m(LPPK|2C5eq$
+zucM7roSLdpkk;X-n$-Eat9&`Ev%bu<XrOiGI^(GyRcjF&<^x}qlaf%4sW*gV?xA<1
+z-fV*QOTO#r+VlL0=eJpbSe3s~?(vrMH(a#?(x-zNzsp;G#@oKy;fFq=%2vS?bL$?n
+z?78Y18Z&pl^iPQ0#gOl?-s8atF9*KD)Mv!zlR;T$1+@}{?!ec%G6^3?{4Q|Ci`^)+
+z^4_S29=p?W9|E+PrVXeh+keLw)MSLsXYSs3JS=%W+8xiP<zAgPt0KBa;h=0Bl*Mf7
+z_shwD99>sU9nXhu&+(7ka9AGlo7b^?G^?hEb)LJS|0KF~O^r=h%^|^N_*p$nD3q;n
+z;xOymYZ&+Z^~=Tivx{#}m*0K9{ONdc`o+c3kC(5`Xx{Vl*Nd~?7H2R2eD>?*H@{pQ
+zKLzjd#StdHcz(Qi_1Wd=i`8UtG8;mLfXkB;x%}$+-#GSM!~tJ?eKdb_vN(TABcGrD
+zJpbeS#g}iuT>kL;)v&2%9Jq!^R+^AywFg_x_M>K-_40OOGRQZYtY3uh?B0hsA9TVK
+vZSkjM<M3%d7Oc1RV4LhgyTdm-t@UR6-7asoIbh!4mUlkb+}OVI)ZY3FMSO7P
+
+literal 0
+HcmV?d00001
+
+diff --git a/openlibrary/catalog/marc/tests/test_data/bin_input/880_arabic_french_many_linkages.mrc b/openlibrary/catalog/marc/tests/test_data/bin_input/880_arabic_french_many_linkages.mrc
+new file mode 100644
+index 0000000000000000000000000000000000000000..7a6a4170ea52fd685b44f6d590c59b4251bacb2a
+GIT binary patch
+literal 3643
+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
+T!6@C-;twa@WOm{mb$<9CU;1u)
+
+literal 0
+HcmV?d00001
+
+diff --git a/openlibrary/catalog/marc/tests/test_data/bin_input/880_publisher_unlinked.mrc b/openlibrary/catalog/marc/tests/test_data/bin_input/880_publisher_unlinked.mrc
+new file mode 100644
+index 0000000000000000000000000000000000000000..8a300a8819f6b623aeee7c21910a27d01878cc34
+GIT binary patch
+literal 858
+zcmXw1+iuf95d9MD;R%pZGkf#e^q~R?sqF(iAgJI4ZJbqY$xSLJZ6&^<r72P&P(VDC
+z{s-T%zr)#0x=QSsb7sz&^)7Q|s;N67Cnd8ijdi3AV+s5Kr3FCPhykdWH8_?vM_M3f
+zaO%FMs!}XVaBNt|(x|0G>`L{*NEz|y16>&nrNUn_o_Ir3YE?#F$FXd3X8}zmlr<59
+zfRZ)bARS|)Vw^N}WvjXd0Rf}zrU)?_>(~I!l%{6r#r>E{XHY@H#%}3MvJgTFi76|s
+z3(k-VS<NF(Slv86?-#m=sr6%;WJI~EVP3*Yaw$~CKxWO<mR8qQZ8?=Z-kb0H=X(cF
+z&c;zwS<R|U%!bIDO^^xn@4Bu(a?=sL@Y5m_oV$b8EgsEj(Rvzphty5H8&NwuTW53X
+z7CS}W@A~oJ&r(N;kF&)hcOQI9hi)?KcaopBbX?H0eBAYYLECwwn3|&^BbdDDK6yI!
+zL*tJZ-E5kl?w_3cY1ez|yM-Uz;$-j;$AJI7y2EZnZ-)+@$oJ-h^L;*fJ<xmKo=jZ3
+z9s(zwh6rE6lEUY38Lq<WVYCmw!k=(U;dfY3Sc13+x8XW`kIANPonD0V@FU#O)4V~=
+zP2{h`3eXL06JF=xCmL1&?+D3Nl%en!*mXEh)0McITa5j!X#%lC-6ckfgM5R)ZMYld
+oO+1?QezY(j4K7P*()RA}N5&-%2M4dEEma|Oop^rt@>TZWKk_jI0{{R3
+
+literal 0
+HcmV?d00001
+
+diff --git a/openlibrary/catalog/marc/tests/test_data/bin_input/880_table_of_contents.mrc b/openlibrary/catalog/marc/tests/test_data/bin_input/880_table_of_contents.mrc
+new file mode 100644
+index 0000000000000000000000000000000000000000..fcdd2cae0b34a35e138c9928bc0a9cfe8b662070
+GIT binary patch
+literal 963
+zcmZ8g%W~5|5d0D}bKsbDW}niUQx1ko6{#|W3REZ#Ye}(1EGbBGApW6zS`P3L%&wF0
+z*pfWGJ>%}#^_a*zU4|A>DI#U{X+UF%m*j`3w3v{2<d`Uk4ChFBifI{(IhQc!sIX)>
+zXeK0SGM+d5N^N5x<rtf!kaSpAMZ<#Ym6S0}aj(4A43n<bEXpeq+A`*yVNYEYdGu0@
+zjkZ4a!8T-^@;>&-N#k=LYh%tD=~-Jk?%$ds>&rGTypR26Y@d@;oU%^38D+ec(vQqL
+z<TdQ#=hI?6l+2BNl_5f~+OfXM{in3`dGXBn#4IjO7ayTKgzCfMHB^`HmQbCYo}@g-
+z16aP%rm(X`t_-X$jm6kNCJ|gwkRS<RSx;=dsc*;Y@U!_9j_@sqUDY<*kV$$hR1hvV
+z&Az+GhkEL9s>3wk99Ex)F!C4ocSkt%ZRoz>F_eD<@PGB#-N9NzI1k<RB)Fs=R=Z&x
+z^-kKWeh5cUrat3cXz%c5hOd~CShneS=bL_*aGd&~sYeW5g#o+%w%%s+ByS+Re{2nf
+zz>A@7<LS7p+}z{*&}~NQu^S8F-;(4rTWPC!JRDyhIiZ}O97-}mYDTH#x?6AmPPR}5
+zs0Cc{rNWwjX4nukGS!Y<3~LDukCioX05$(f416WnMxh3}p)Tv@X2PjyYmA;&#92C)
+z$8s*++!$P*MVQZdW}cyahSD))mtMflOPUeEHvxlyQNTp7Be*5_PVj@^Zq^v%G!=$m
+Ke{kY6z4#4WEcMs`
+
+literal 0
+HcmV?d00001
+
+diff --git a/openlibrary/catalog/marc/tests/test_data/xml_expect/nybc200247.json b/openlibrary/catalog/marc/tests/test_data/xml_expect/nybc200247.json
+index e0769ac6a..54bd2caf2 100644
+--- a/openlibrary/catalog/marc/tests/test_data/xml_expect/nybc200247.json
++++ b/openlibrary/catalog/marc/tests/test_data/xml_expect/nybc200247.json
+@@ -1,10 +1,11 @@
+ {
+   "other_titles": [
++    "Tsum hundertsṭn geboyrnṭog fun Shimon Dubnoṿ",
+     "Tzum hundertstn geboirntog fun Shimen Dubnow",
+     "Centennial of the historian Shimen Dubnow"
+   ],
+   "publishers": [
+-    "I\u1e33uf"
++    "Iḳuf"
+   ],
+   "pagination": "92 p.",
+   "table_of_contents": [
+@@ -22,7 +23,7 @@
+     }
+   ],
+   "subtitle": "zamlung",
+-  "title": "Tsum hunderts\u1e6dn geboyrn\u1e6dog fun Shimon Dubno\u1e7f",
++  "title": "צום הונדערטסטן געבוירנטאג פון שמעון דובנאוו",
+   "series": [
+     "Steven Spielberg digital Yiddish library -- no. 00247"
+   ],
+@@ -44,7 +45,10 @@
+       "personal_name": "Dubnow, Simon",
+       "death_date": "1941",
+       "name": "Dubnow, Simon",
+-      "entity_type": "person"
++      "entity_type": "person",
++      "alternate_names": [
++        "דובנאוו, שמעון"
++      ]
+     }
+   ],
+   "subject_people": [
+diff --git a/openlibrary/catalog/marc/tests/test_data/xml_expect/soilsurveyrepor00statgoog.json b/openlibrary/catalog/marc/tests/test_data/xml_expect/soilsurveyrepor00statgoog.json
+index d81c5cfdb..118b516a8 100644
+--- a/openlibrary/catalog/marc/tests/test_data/xml_expect/soilsurveyrepor00statgoog.json
++++ b/openlibrary/catalog/marc/tests/test_data/xml_expect/soilsurveyrepor00statgoog.json
+@@ -17,7 +17,7 @@
+   "publish_country": "iau",
+   "authors": [
+     {
+-      "name": "Iowa. Agricultural and Home Economics Experiment Station, Ames. [from old catalog]",
++      "name": "Iowa. Agricultural and Home Economics Experiment Station, Ames",
+       "entity_type": "org"
+     }
+   ],
+diff --git a/openlibrary/catalog/marc/tests/test_data/xml_input/nybc200247_marc.xml b/openlibrary/catalog/marc/tests/test_data/xml_input/nybc200247_marc.xml
+index af859a686..3e7f43169 100644
+--- a/openlibrary/catalog/marc/tests/test_data/xml_input/nybc200247_marc.xml
++++ b/openlibrary/catalog/marc/tests/test_data/xml_input/nybc200247_marc.xml
+@@ -29,12 +29,12 @@
+       <subfield code="a">200247</subfield>
+     </datafield>
+     <datafield tag="100" ind1="1" ind2=" ">
+-      <subfield code="6"/>
++      <subfield code="6">880-01</subfield>
+       <subfield code="a">Dubnow, Simon,</subfield>
+       <subfield code="d">1860-1941.</subfield>
+     </datafield>
+     <datafield tag="245" ind1="1" ind2="0">
+-      <subfield code="6"/>
++      <subfield code="6">880-02</subfield>
+       <subfield code="a">Tsum hundertsṭn geboyrnṭog fun Shimon Dubnoṿ</subfield>
+       <subfield code="h"/>
+       <subfield code="b">zamlung /</subfield>
+diff --git a/openlibrary/catalog/marc/tests/test_marc_binary.py b/openlibrary/catalog/marc/tests/test_marc_binary.py
+index da87c9b22..82754945f 100644
+--- a/openlibrary/catalog/marc/tests/test_marc_binary.py
++++ b/openlibrary/catalog/marc/tests/test_marc_binary.py
+@@ -48,11 +48,11 @@ class Test_BinaryDataField:
+ 
+ 
+ class Test_MarcBinary:
+-    def test_all_fields(self):
+-        filename = '%s/onquietcomedyint00brid_meta.mrc' % test_data
++    def test_read_fields_returns_all(self):
++        filename = f'{test_data}/onquietcomedyint00brid_meta.mrc'
+         with open(filename, 'rb') as f:
+             rec = MarcBinary(f.read())
+-            fields = list(rec.all_fields())
++            fields = list(rec.read_fields())
+             assert len(fields) == 13
+             assert fields[0][0] == '001'
+             for f, v in fields:
+@@ -70,7 +70,6 @@ class Test_MarcBinary:
+         filename = '%s/onquietcomedyint00brid_meta.mrc' % test_data
+         with open(filename, 'rb') as f:
+             rec = MarcBinary(f.read())
+-            rec.build_fields(['100', '245', '010'])
+             author_field = rec.get_fields('100')
+             assert isinstance(author_field, list)
+             assert isinstance(author_field[0], BinaryDataField)
+diff --git a/openlibrary/catalog/marc/tests/test_parse.py b/openlibrary/catalog/marc/tests/test_parse.py
+index bc5da9b19..bd8e3a3fa 100644
+--- a/openlibrary/catalog/marc/tests/test_parse.py
++++ b/openlibrary/catalog/marc/tests/test_parse.py
+@@ -71,6 +71,11 @@ bin_samples = [
+     'henrywardbeecher00robauoft_meta.mrc',
+     'thewilliamsrecord_vol29b_meta.mrc',
+     '13dipolarcycload00burk_meta.mrc',
++    '880_alternate_script.mrc',
++    '880_table_of_contents.mrc',
++    '880_Nihon_no_chasho.mrc',
++    '880_publisher_unlinked.mrc',
++    '880_arabic_french_many_linkages.mrc',
+ ]
+ 
+ test_data = "%s/test_data" % os.path.dirname(__file__)
+@@ -90,19 +95,18 @@ class TestParseMARCXML:
+         assert edition_marc_xml
+         j = json.load(open(expect_filename))
+         assert j, 'Unable to open test data: %s' % expect_filename
+-        assert sorted(edition_marc_xml) == sorted(j), (
+-            'Processed MARCXML fields do not match expectations in %s' % expect_filename
+-        )
+         msg = (
+-            'Processed MARCXML values do not match expectations in %s' % expect_filename
++            f'Processed MARCXML values do not match expectations in {expect_filename}.'
+         )
++        assert sorted(edition_marc_xml) == sorted(j), msg
++        msg += ' Key: '
+         for key, value in edition_marc_xml.items():
+             if isinstance(value, Iterable):  # can not sort a list of dicts
+-                assert len(value) == len(j[key]), msg
++                assert len(value) == len(j[key]), msg + key
+                 for item in j[key]:
+-                    assert item in value, msg
++                    assert item in value, msg + key
+             else:
+-                assert value == j[key], msg
++                assert value == j[key], msg + key
+ 
+ 
+ class TestParseMARCBinary:
+@@ -115,39 +119,33 @@ class TestParseMARCBinary:
+         assert edition_marc_bin
+         if not os.path.exists(expect_filename):
+             # Missing test expectations file. Create a template from the input, but fail the current test.
+-            json.dump(edition_marc_bin, open(expect_filename, 'w'), indent=2)
+-            raise AssertionError(
+-                'Expectations file {} not found: template generated in {}. Please review and commit this file.'.format(
+-                    expect_filename, '/bin_expect'
+-                )
++            data = json.dumps(edition_marc_bin, indent=2)
++            pytest.fail(
++                f'Expectations file {expect_filename} not found: Please review and commit this JSON:\n{data}'
+             )
+         j = json.load(open(expect_filename))
+-        assert j, 'Unable to open test data: %s' % expect_filename
+-        assert sorted(edition_marc_bin) == sorted(j), (
+-            'Processed binary MARC fields do not match expectations in %s'
+-            % expect_filename
+-        )
+-        msg = (
+-            'Processed binary MARC values do not match expectations in %s'
+-            % expect_filename
+-        )
++        assert j, f'Unable to open test data: {expect_filename}'
++        assert sorted(edition_marc_bin) == sorted(
++            j
++        ), f'Processed binary MARC fields do not match expectations in {expect_filename}'
++        msg = f'Processed binary MARC values do not match expectations in {expect_filename}'
+         for key, value in edition_marc_bin.items():
+             if isinstance(value, Iterable):  # can not sort a list of dicts
+                 assert len(value) == len(j[key]), msg
+                 for item in j[key]:
+-                    assert item in value, msg
++                    assert item in value, f'{msg}. Key: {key}'
+             else:
+                 assert value == j[key], msg
+ 
+     def test_raises_see_also(self):
+-        filename = '%s/bin_input/talis_see_also.mrc' % test_data
++        filename = f'{test_data}/bin_input/talis_see_also.mrc'
+         with open(filename, 'rb') as f:
+             rec = MarcBinary(f.read())
+         with pytest.raises(SeeAlsoAsTitle):
+             read_edition(rec)
+ 
+     def test_raises_no_title(self):
+-        filename = '%s/bin_input/talis_no_title2.mrc' % test_data
++        filename = f'{test_data}/bin_input/talis_no_title2.mrc'
+         with open(filename, 'rb') as f:
+             rec = MarcBinary(f.read())
+         with pytest.raises(NoTitle):
+@@ -161,7 +159,7 @@ class TestParse:
+           <subfield code="a">Rein, Wilhelm,</subfield>
+           <subfield code="d">1809-1865</subfield>
+         </datafield>"""
+-        test_field = DataField(etree.fromstring(xml_author))
++        test_field = DataField(None, etree.fromstring(xml_author))
+         result = read_author_person(test_field)
+ 
+         # Name order remains unchanged from MARC order

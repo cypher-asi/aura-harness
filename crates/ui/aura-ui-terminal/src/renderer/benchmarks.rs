@@ -4,7 +4,8 @@
 use super::panels::body_block;
 use crate::app::benchmarks::{BenchMode, BenchState, FormField, WorkChoice};
 use crate::events::{
-    arm_letter, cost_shares, BenchArm, BenchRun, BenchStatus, BenchTaskCell, BenchTurn, BenchView,
+    arm_letter, cost_per_fix, cost_shares, per_fix_cells, BenchArm, BenchRun, BenchStatus,
+    BenchTaskCell, BenchTurn, BenchView,
 };
 use crate::{App, Theme};
 use ratatui::{
@@ -387,6 +388,11 @@ fn detail_lines<'a>(
             }
         }),
     );
+    if a.checks_run + b.checks_run > 0 {
+        let per_fix = |arm: &BenchArm| cost_per_fix(arm.total_cost_usd, arm.checks_passed);
+        let [x, y] = per_fix_cells(per_fix(a), per_fix(b), money);
+        add("cost per fix", (x, y));
+    }
     if view.judge.is_some() {
         add(
             "judge",
@@ -846,6 +852,14 @@ mod tests {
         assert!(shown.contains("B claude-opus-4-7"), "{shown}");
         assert!(shown.contains("$0.06 · 85% less"), "{shown}");
         assert!(shown.contains("$0.40 · 100%"), "{shown}");
+        let per_fix = shown
+            .lines()
+            .find(|l| l.trim_start().starts_with("cost per fix"))
+            .unwrap_or_else(|| panic!("{shown}"));
+        assert!(
+            per_fix.contains("$0.12 · 85% less") && per_fix.contains("$0.80 · 100%"),
+            "{per_fix}"
+        );
         assert!(shown.contains("vs the session"), "{shown}");
         assert!(shown.contains("0.30×"), "{shown}");
         assert!(shown.contains("2.00×"), "{shown}");

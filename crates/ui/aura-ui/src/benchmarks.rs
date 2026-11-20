@@ -77,6 +77,26 @@ pub fn cost_shares(a: Option<f64>, b: Option<f64>) -> [String; 2] {
     [share(a), share(b)]
 }
 
+/// What each verified fix cost: everything the arm spent, failed runs
+/// included, over the runs whose check passed. `None` before a check
+/// passes.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn cost_per_fix(total_usd: f64, fixes: usize) -> Option<f64> {
+    (fixes > 0).then(|| total_usd / fixes as f64)
+}
+
+/// The "cost per fix" cells of two arms: what each verified fix cost, with
+/// how the two compare, or `no fix` for an arm none of whose checks passed.
+#[must_use]
+pub fn per_fix_cells(a: Option<f64>, b: Option<f64>, money: fn(f64) -> String) -> [String; 2] {
+    let [a_share, b_share] = cost_shares(a, b);
+    let cell = |cost: Option<f64>, share: String| {
+        cost.map_or_else(|| "no fix".to_string(), |usd| money(usd) + &share)
+    };
+    [cell(a, a_share), cell(b, b_share)]
+}
+
 /// Tokens and cost one model used across an arm's runs.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct BenchTokens {

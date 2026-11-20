@@ -20,6 +20,7 @@ const GATE_SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/evals/gate_cost")
 const GATE_HARD_SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/evals/gate_hard");
 const POLYGLOT_SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/evals/polyglot");
 const CODEBASES_SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/evals/codebases");
+const SWE_BENCH_PRO_SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/evals/swe_bench_pro_hard");
 
 fn write_greeting() -> MockProvider {
     MockProvider::new().with_responses(vec![
@@ -267,6 +268,58 @@ fn codebase_tasks_name_their_repository_and_carry_hidden_tests() {
     }
 }
 
+/// SWE-Bench Pro HARD-51: each task names its image and carries Scale's
+/// verifier, the grader and the reference change.
+#[test]
+fn swe_bench_pro_tasks_carry_their_image_and_verifier() {
+    let tasks = evals::load_suite(Path::new(SWE_BENCH_PRO_SUITE)).unwrap();
+    assert_eq!(tasks.len(), 51);
+    for task in &tasks {
+        let Some(aura_app::repo_source::Source::Image(image)) = &task.source else {
+            panic!("{}: {:?}", task.id, task.source);
+        };
+        let hidden = task.dir.join("checks/.gate_checks");
+        for file in [
+            "grade.sh",
+            "apply.sh",
+            "tests/test.sh",
+            "tests/config.json",
+            "tests/test_patch.patch",
+        ] {
+            assert!(hidden.join(file).is_file(), "{}: {file}", task.id);
+        }
+        assert_eq!(
+            std::fs::read_to_string(hidden.join("image"))
+                .unwrap()
+                .trim(),
+            image.image
+        );
+        assert_eq!(
+            std::fs::read_to_string(task.dir.join("workspace/.swe/image"))
+                .unwrap()
+                .trim(),
+            image.image
+        );
+        assert!(task.dir.join("solution/gold_patch.diff").is_file());
+        assert!(!task.prompt.contains("`/app`"), "{}", task.id);
+    }
+}
+
+/// Same proof for SWE-Bench Pro tasks, which needs Docker and pulls each
+/// task's image (1-5 GB): `AURA_SWE_BENCH_PRO_TASKS` names the tasks to
+/// prove (`nodebb-8168c6c4,flipt-2ca5dfb3`), else every one is.
+#[test]
+#[ignore = "pulls every task's container image"]
+fn swe_bench_pro_tasks_fail_as_shipped_and_pass_when_solved() {
+    let mut tasks = evals::load_suite(Path::new(SWE_BENCH_PRO_SUITE)).unwrap();
+    if let Ok(names) = std::env::var("AURA_SWE_BENCH_PRO_TASKS") {
+        let names: Vec<&str> = names.split(',').map(str::trim).collect();
+        tasks.retain(|task| names.contains(&task.id.as_str()));
+    }
+    assert!(!tasks.is_empty());
+    assert_fail_as_shipped_and_pass_when_solved(&tasks);
+}
+
 fn assert_fail_as_shipped_and_pass_when_solved(tasks: &[evals::EvalTask]) {
     let cache = aura_app::repo_source::cache_dir();
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -283,7 +336,16 @@ fn assert_fail_as_shipped_and_pass_when_solved(tasks: &[evals::EvalTask]) {
             }
             for layer in layers {
                 let from = task.dir.join(layer);
-                if from.is_dir() {
+                let patch = from.join("gold_patch.diff");
+                if patch.is_file() {
+                    let applied = std::process::Command::new("patch")
+                        .args(["-p1", "--fuzz=5", "--silent", "-i"])
+                        .arg(&patch)
+                        .current_dir(dir.path())
+                        .status()
+                        .unwrap();
+                    assert!(applied.success(), "{}: applying its patch", task.id);
+                } else if from.is_dir() {
                     evals::copy_dir(&from, dir.path()).unwrap();
                 }
             }

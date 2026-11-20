@@ -1,13 +1,14 @@
 //! The example coding tasks the BENCH tab offers, built in: every task of
 //! `evals/coding`, then `evals/gate_cost`, `evals/gate_hard`,
-//! `evals/polyglot` and `evals/codebases`, each with its fixture, its
-//! prompts, its check command and the hidden checks that command reads. A
-//! task set in an existing codebase names the repository and commit its
-//! fixture starts from ([`RepoSource`]), downloaded when it first runs. A
+//! `evals/polyglot`, `evals/codebases` and `evals/swe_bench_pro_hard`, each
+//! with its fixture, its prompts, its check command and the hidden checks
+//! that command reads. A task set in an existing codebase names what its
+//! fixture starts from ([`Source`]): a repository at a commit, or the
+//! repository in a container image, fetched when it first runs. A
 //! benchmark of `n` of them takes the first `n`.
 
 use crate::headless::copy_dir;
-use crate::repo_source::RepoSource;
+use crate::repo_source::Source;
 use aura_core_types::ExampleTaskInfo;
 use serde::Deserialize;
 use std::path::{Component, Path, PathBuf};
@@ -38,7 +39,7 @@ struct TaskToml {
     follow_ups: Vec<String>,
     verify: String,
     #[serde(default)]
-    source: Option<RepoSource>,
+    source: Option<Source>,
 }
 
 /// One built-in example task.
@@ -54,7 +55,7 @@ pub struct ExampleTask {
     pub verify: String,
     /// The repository its fixture starts from, for a task set in an
     /// existing codebase
-    pub source: Option<RepoSource>,
+    pub source: Option<Source>,
     workspace: Files,
     checks: Files,
 }
@@ -238,18 +239,36 @@ mod tests {
         let first = |name: &str| order.iter().position(|s| s == name).unwrap();
         assert!(first("coding") < first("gate_cost") && first("gate_cost") < first("gate_hard"));
         assert!(first("gate_hard") < first("polyglot") && first("polyglot") < first("codebases"));
+        assert!(first("codebases") < first("swe_bench_pro_hard"));
         assert_eq!(
             suites(),
-            ["coding", "gate_cost", "gate_hard", "polyglot", "codebases"]
+            [
+                "coding",
+                "gate_cost",
+                "gate_hard",
+                "polyglot",
+                "codebases",
+                "swe_bench_pro_hard"
+            ]
         );
         for task in all {
-            assert_eq!(
-                task.source.is_some(),
-                task.suite() == "codebases",
-                "{}",
-                task.id
-            );
+            let expected = match task.suite() {
+                "codebases" => Some("repo"),
+                "swe_bench_pro_hard" => Some("image"),
+                _ => None,
+            };
+            let source = task.source.as_ref().map(|source| match source {
+                Source::Repo(_) => "repo",
+                Source::Image(_) => "image",
+            });
+            assert_eq!(source, expected, "{}", task.id);
         }
+        assert_eq!(
+            all.iter()
+                .filter(|t| t.suite() == "swe_bench_pro_hard")
+                .count(),
+            51
+        );
         assert_eq!(
             by_id("gate_hard/semver-precedence").unwrap().suite(),
             "gate_hard"
@@ -303,7 +322,7 @@ mod tests {
         let cache = tempfile::tempdir().unwrap();
         let task = tasks()
             .iter()
-            .find(|t| t.source.is_some())
+            .find(|t| t.suite() == "codebases")
             .expect("a codebase task");
         let repository = task.source.as_ref().unwrap().dir(cache.path()).unwrap();
         std::fs::create_dir_all(repository.join("pkg")).unwrap();
@@ -316,5 +335,35 @@ mod tests {
         );
         assert!(task.has_hidden_checks());
         assert!(!dir.path().join(".gate_checks").exists());
+    }
+
+    #[tokio::test]
+    async fn a_swe_bench_pro_task_adds_its_container_helper_to_the_repository() {
+        let cache = tempfile::tempdir().unwrap();
+        let task = by_id("swe_bench_pro_hard/nodebb-8168c6c4").unwrap();
+        let Some(Source::Image(image)) = &task.source else {
+            panic!("{:?}", task.source);
+        };
+        let repository = task.source.as_ref().unwrap().dir(cache.path()).unwrap();
+        std::fs::create_dir_all(&repository).unwrap();
+        std::fs::write(repository.join("app.js"), "// NodeBB").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        task.materialize(dir.path(), cache.path()).await.unwrap();
+        assert!(dir.path().join("app.js").is_file());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".swe/image"))
+                .unwrap()
+                .trim(),
+            image.image
+        );
+        assert!(dir.path().join(".swe/run").is_file());
+        assert!(task.prompts[0].contains("sh .swe/run"));
+        assert_eq!(task.verify, "sh .gate_checks/grade.sh");
+        let added = task.place_checks(dir.path()).unwrap();
+        assert!(dir
+            .path()
+            .join(".gate_checks/tests/test_patch.patch")
+            .is_file());
+        remove_checks(&added);
     }
 }
