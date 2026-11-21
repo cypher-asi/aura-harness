@@ -2,10 +2,11 @@
 //! benchmark's numbers side by side, or the form that sets one up.
 
 use super::panels::body_block;
+use super::text::display_width;
 use crate::app::benchmarks::{BenchMode, BenchState, FormField, WorkChoice};
 use crate::events::{
-    arm_letter, cost_per_fix, cost_shares, per_fix_cells, BenchArm, BenchRun, BenchStatus,
-    BenchTaskCell, BenchTurn, BenchView,
+    arm_letter, cost_per_fix, BenchArm, BenchStatus, BenchTaskCell, BenchTurn, BenchVerdict,
+    BenchView,
 };
 use crate::{App, Theme};
 use ratatui::{
@@ -15,9 +16,7 @@ use ratatui::{
     widgets::{Paragraph, Wrap},
     Frame,
 };
-
-/// Width of the row labels of a benchmark's table.
-const LABEL: usize = 16;
+use unicode_width::UnicodeWidthChar;
 
 /// `$0.004`, `$1.25`, or `free` for nothing.
 fn money(usd: f64) -> String {
@@ -30,7 +29,7 @@ fn money(usd: f64) -> String {
     }
 }
 
-/// `850ms`, `42s`, `3m 05s`.
+/// `850ms`, `42s`, `3m05s`.
 fn duration(ms: u64) -> String {
     if ms < 1_000 {
         return format!("{ms}ms");
@@ -39,7 +38,267 @@ fn duration(ms: u64) -> String {
     if secs < 60 {
         return format!("{secs}s");
     }
-    format!("{}m {:02}s", secs / 60, secs % 60)
+    format!("{}m{:02}s", secs / 60, secs % 60)
+}
+
+/// `950`, `471k`, `1.5M`.
+#[allow(clippy::cast_precision_loss)]
+fn tokens(n: u64) -> String {
+    if n < 1_000 {
+        n.to_string()
+    } else if n < 1_000_000 {
+        format!("{}k", n / 1_000)
+    } else {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    }
+}
+
+/// `opus-5-5` for `claude/claude-opus-5-5`: no provider, no `claude-`.
+fn short_model(model: &str) -> &str {
+    let name = model.rsplit('/').next().unwrap_or(model);
+    name.strip_prefix("claude-").unwrap_or(name)
+}
+
+/// `-74%` for the cheaper of two costs, nothing for the other or when
+/// they are about the same or either is unknown.
+fn saving(a: Option<f64>, b: Option<f64>) -> [String; 2] {
+    let (Some(a), Some(b)) = (a, b) else {
+        return [String::new(), String::new()];
+    };
+    let larger = a.max(b);
+    if larger <= 0.0 {
+        return [String::new(), String::new()];
+    }
+    let less = |cost: f64| {
+        let less = ((1.0 - cost / larger) * 100.0).round();
+        if less < 1.0 {
+            String::new()
+        } else {
+            format!("-{less:.0}%")
+        }
+    };
+    [less(a), less(b)]
+}
+
+/// `text` cut to `max` columns, ending in `…` when cut.
+fn fit(text: &str, max: usize) -> String {
+    if display_width(text) <= max {
+        return text.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for c in text.chars() {
+        let w = c.width().unwrap_or(0);
+        if used + w > max - 1 {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    out.push('…');
+    out
+}
+
+/// The directory every example task's id shares, as `swe_bench_pro_hard`.
+fn task_prefix(view: &BenchView) -> Option<String> {
+    let (prefix, _) = view.tasks.first()?.id.rsplit_once('/')?;
+    let all = view.tasks.iter().all(|t| {
+        t.id.strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
+    });
+    all.then(|| prefix.to_string())
+}
+
+/// A task id without the directory every task shares.
+fn task_name<'s>(id: &'s str, prefix: Option<&str>) -> &'s str {
+    prefix
+        .and_then(|p| id.strip_prefix(p))
+        .and_then(|rest| rest.strip_prefix('/'))
+        .unwrap_or(id)
+}
+
+/// How a column of a [`table`] lines up.
+#[derive(Debug, Clone, Copy)]
+struct Col {
+    right: bool,
+    /// Gives up width, cutting its cells, when the table is too wide
+    flex: bool,
+    /// Drawn after a ` │ ` rather than a plain gap
+    sep: bool,
+}
+
+impl Col {
+    const L: Self = Self {
+        right: false,
+        flex: false,
+        sep: false,
+    };
+    const R: Self = Self {
+        right: true,
+        ..Self::L
+    };
+
+    const fn flex(self) -> Self {
+        Self { flex: true, ..self }
+    }
+
+    const fn sep(self) -> Self {
+        Self { sep: true, ..self }
+    }
+}
+
+type Cell = (String, Style);
+
+enum Row {
+    Cells(Vec<Cell>),
+    /// Cells drawn in a selection style, gaps included
+    Picked(Vec<Cell>, Style),
+    /// A rule across the table, as between groups of rows
+    Rule,
+}
+
+/// `rows` in columns as wide as their widest cell, at most `width`
+/// together: flex columns give up width first. Columns empty in every row
+/// are left out. `header` gets a rule under it.
+fn table(
+    cols: &[Col],
+    header: Option<&[&str]>,
+    rows: &[Row],
+    width: usize,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let faint = Style::default().fg(theme.colors.faint);
+    let cell_width = |row: &Row, i: usize| match row {
+        Row::Cells(cells) | Row::Picked(cells, _) => {
+            cells.get(i).map_or(0, |(text, _)| display_width(text))
+        }
+        Row::Rule => 0,
+    };
+    let mut widths: Vec<usize> = (0..cols.len())
+        .map(|i| {
+            let head = header
+                .and_then(|h| h.get(i))
+                .map_or(0, |text| display_width(text));
+            rows.iter()
+                .map(|row| cell_width(row, i))
+                .max()
+                .unwrap_or(0)
+                .max(head)
+        })
+        .collect();
+    let shown: Vec<usize> = (0..cols.len()).filter(|&i| widths[i] > 0).collect();
+    let gap = |i: usize| if cols[i].sep { 3 } else { 2 };
+    let total: usize = shown
+        .iter()
+        .enumerate()
+        .map(|(n, &i)| widths[i] + if n == 0 { 0 } else { gap(i) })
+        .sum();
+    let mut over = total.saturating_sub(width);
+    while over > 0 {
+        let Some(&i) = shown
+            .iter()
+            .filter(|&&i| cols[i].flex && widths[i] > 1)
+            .max_by_key(|&&i| widths[i])
+        else {
+            break;
+        };
+        widths[i] -= 1;
+        over -= 1;
+    }
+    let line = |cells: &[Cell], picked: Option<Style>| {
+        let last = if picked.is_some() {
+            shown.last().copied()
+        } else {
+            shown
+                .iter()
+                .rev()
+                .find(|&&i| cells.get(i).is_some_and(|(text, _)| !text.is_empty()))
+                .copied()
+        };
+        let mut spans = Vec::new();
+        for (n, &i) in shown.iter().enumerate() {
+            if last.is_some_and(|last| i > last) {
+                break;
+            }
+            if n > 0 {
+                let (text, style) = if cols[i].sep {
+                    (" │ ", faint)
+                } else {
+                    ("  ", Style::default())
+                };
+                spans.push(Span::styled(text, picked.unwrap_or(style)));
+            }
+            let (text, style) = cells.get(i).cloned().unwrap_or_default();
+            let text = fit(&text, widths[i]);
+            let pad = " ".repeat(widths[i] - display_width(&text));
+            let text = if cols[i].right {
+                pad + &text
+            } else if Some(i) == last && picked.is_none() {
+                text
+            } else {
+                text + &pad
+            };
+            spans.push(Span::styled(text, picked.map_or(style, |p| style.patch(p))));
+        }
+        Line::from(spans)
+    };
+    let rule = || {
+        let text: String = shown
+            .iter()
+            .enumerate()
+            .map(|(n, &i)| {
+                let lead = match (n, cols[i].sep) {
+                    (0, _) => "",
+                    (_, true) => "─┼─",
+                    (_, false) => "──",
+                };
+                format!("{lead}{}", "─".repeat(widths[i]))
+            })
+            .collect();
+        Line::from(Span::styled(text, faint))
+    };
+    let mut lines = Vec::new();
+    if let Some(header) = header {
+        let muted = Style::default().fg(theme.colors.muted);
+        let cells: Vec<Cell> = header.iter().map(|h| ((*h).to_string(), muted)).collect();
+        lines.push(line(&cells, None));
+        lines.push(rule());
+    }
+    for row in rows {
+        lines.push(match row {
+            Row::Cells(cells) => line(cells, None),
+            Row::Picked(cells, style) => line(cells, Some(*style)),
+            Row::Rule => rule(),
+        });
+    }
+    lines
+}
+
+/// `── title ─────…` across `width`.
+fn section_rule(title: &str, width: usize, theme: &Theme) -> Line<'static> {
+    let faint = Style::default().fg(theme.colors.faint);
+    let title = fit(title, width.saturating_sub(4));
+    let rest = width.saturating_sub(display_width(&title) + 4);
+    Line::from(vec![
+        Span::styled("── ", faint),
+        Span::styled(
+            title,
+            Style::default()
+                .fg(theme.colors.text)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!(" {}", "─".repeat(rest)), faint),
+    ])
+}
+
+fn rule(width: usize, theme: &Theme) -> Line<'static> {
+    Line::from(Span::styled(
+        "─".repeat(width),
+        Style::default().fg(theme.colors.faint),
+    ))
 }
 
 /// The first line of `text`, cut to `max` characters.
@@ -82,6 +341,8 @@ pub(super) fn render_benchmarks(
     }
     let width = usize::from(padded.width);
     let state = app.bench();
+    // The detail's tables fit the width; wrapping would only break them.
+    let wrap = !matches!(state.mode, BenchMode::Detail(_));
     let (lines, scroll) = match &state.mode {
         BenchMode::List => {
             let lines = list_lines(state, theme, width);
@@ -103,12 +364,11 @@ pub(super) fn render_benchmarks(
     };
     app.clamp_bench_scroll(scroll);
     app.set_chat_rows(Some((inner, usize::from(scroll))));
-    frame.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .scroll((scroll, 0)),
-        padded,
-    );
+    let mut paragraph = Paragraph::new(lines).scroll((scroll, 0));
+    if wrap {
+        paragraph = paragraph.wrap(Wrap { trim: false });
+    }
+    frame.render_widget(paragraph, padded);
 }
 
 fn muted_line<'a>(text: impl Into<String>, theme: &Theme) -> Line<'a> {
@@ -118,15 +378,11 @@ fn muted_line<'a>(text: impl Into<String>, theme: &Theme) -> Line<'a> {
     ))
 }
 
-fn keys_line<'a>(text: &str, theme: &Theme) -> Line<'a> {
-    muted_line(text.to_string(), theme)
-}
-
 /// One benchmark arm in a list row: `gate $0.06 2/3 pass`.
 fn arm_brief(arm: &BenchArm) -> String {
     let mut text = format!(
         "{} {}",
-        headline(&arm.label, 28),
+        headline(short_model(&arm.label), 28),
         arm.median_cost_usd.map_or_else(|| "-".to_string(), money)
     );
     if arm.checks_run > 0 {
@@ -203,49 +459,38 @@ fn list_lines<'a>(state: &BenchState, theme: &Theme, width: usize) -> Vec<Line<'
     lines
 }
 
-/// A row of the side-by-side table: label, arm A, arm B.
-fn row<'a>(label: &str, (a, b): (&str, &str), column: usize, theme: &Theme) -> Line<'a> {
-    Line::from(vec![
-        Span::styled(
-            format!("{label:<LABEL$}"),
-            Style::default().fg(theme.colors.muted),
-        ),
-        Span::styled(
-            format!("{a:<column$}  "),
-            Style::default().fg(theme.colors.text),
-        ),
-        Span::styled(b.to_string(), Style::default().fg(theme.colors.text)),
-    ])
-}
-
-/// `2/3 passed, $0.40` for an arm's runs of one example task.
-fn task_cell(cell: &BenchTaskCell) -> String {
+/// What an arm's runs of one example task did and their mean cost:
+/// `✓` or `✗` for one checked run, `2/3` for more, `2×` for unchecked runs.
+fn task_cells(cell: &BenchTaskCell, theme: &Theme) -> [Cell; 2] {
+    let text = Style::default().fg(theme.colors.text);
     if cell.runs == 0 {
-        return "-".to_string();
+        return [(String::new(), text), ("-".to_string(), text)];
     }
     let cost = cell.mean_cost_usd.map_or_else(|| "-".to_string(), money);
-    if cell.checked == 0 {
-        return format!(
-            "{} run{}, {cost}",
-            cell.runs,
-            if cell.runs == 1 { "" } else { "s" }
-        );
-    }
-    format!("{}/{} passed, {cost}", cell.passed, cell.checked)
+    let check = match (cell.checked, cell.passed) {
+        (0, _) if cell.runs == 1 => (String::new(), text),
+        (0, _) => (format!("{}×", cell.runs), text),
+        (1, 1) => ("✓".to_string(), Style::default().fg(theme.colors.success)),
+        (1, _) => ("✗".to_string(), Style::default().fg(theme.colors.error)),
+        (checked, passed) => (format!("{passed}/{checked}"), text),
+    };
+    [check, (cost, text)]
 }
 
+/// `$0.03 2✓ 1✗ 1 err`: mean turn cost, then turns whose test or build
+/// command passed, failed, or that ended in an error.
 fn turn_cell(turn: Option<&BenchTurn>) -> String {
     let Some(turn) = turn.filter(|t| t.runs > 0) else {
         return "-".to_string();
     };
     let mut text = turn.mean_cost_usd.map_or_else(|| "-".to_string(), money);
     for (n, what) in [
-        (turn.passed, "pass"),
-        (turn.failed, "fail"),
-        (turn.errors, "error"),
+        (turn.passed, "✓"),
+        (turn.failed, "✗"),
+        (turn.errors, " err"),
     ] {
         if n > 0 {
-            text.push_str(&format!(", {n} {what}"));
+            text.push_str(&format!(" {n}{what}"));
         }
     }
     text
@@ -260,331 +505,448 @@ fn ratio(arm: &BenchArm, baseline: f64) -> String {
     )
 }
 
-fn run_line<'a>(run: &BenchRun, selected: bool, theme: &Theme) -> Line<'a> {
-    let check = match run.check_passed {
-        Some(true) => "check passed",
-        Some(false) => "check failed",
-        None => "",
-    };
-    let mut text = format!(
-        "{} {:<6} {:<30} {:>7} {:>8}  {check:<12} {} file{}",
-        if selected { "›" } else { " " },
-        run.name,
-        headline(&run.model, 30),
-        duration(run.wall_ms),
-        money(run.cost_usd),
-        run.files_changed,
-        if run.files_changed == 1 { "" } else { "s" },
-    );
-    if let Some(task) = &run.task {
-        text.push_str(&format!("  {task}"));
+/// `A` or `B` for the arm the judge found better, `=` for a tie, `?` when
+/// its verdict could not be read.
+fn verdict_mark(verdict: &BenchVerdict) -> &'static str {
+    match (verdict.parsed, verdict.winner) {
+        (false, _) => "?",
+        (true, Some(arm)) => arm_letter(arm),
+        (true, None) => "=",
     }
-    if let Some(error) = &run.error {
-        text.push_str(&format!("  ({})", headline(error, 60)));
+}
+
+/// `+`, `=` or `-` for a run rated better than, as good as, or worse than
+/// what the user kept.
+fn reference_mark(rating: Option<&str>) -> &'static str {
+    match rating {
+        Some("better") => "+",
+        Some("as good") => "=",
+        Some("worse") => "-",
+        _ => "?",
     }
-    let mut style = Style::default().fg(if run.error.is_some() {
-        theme.colors.warning
-    } else {
-        theme.colors.text
-    });
-    if selected {
-        style = style
-            .bg(theme.colors.selection)
-            .fg(theme.colors.on_selection);
-    }
-    Line::from(Span::styled(text, style))
 }
 
 #[allow(clippy::too_many_lines)]
-fn detail_lines<'a>(
+fn detail_lines(
     view: &BenchView,
     run: Option<usize>,
     theme: &Theme,
     width: usize,
-) -> Vec<Line<'a>> {
-    let bold = Style::default()
-        .fg(theme.colors.text)
-        .add_modifier(Modifier::BOLD);
+) -> Vec<Line<'static>> {
+    let text = Style::default().fg(theme.colors.text);
+    let muted = Style::default().fg(theme.colors.muted);
+    let good = Style::default().fg(theme.colors.success);
+    let warning = Style::default().fg(theme.colors.warning);
+    let bold = text.add_modifier(Modifier::BOLD);
+    let cell = |s: String| (s, text);
     let [a, b] = &view.arms;
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled(format!("{} ", view.name), bold),
-            Span::styled(
-                format!(
-                    "\"{}\" · {}",
-                    headline(&view.title, 60),
-                    view.status.label()
-                ),
-                Style::default().fg(theme.colors.text),
-            ),
-        ]),
-        muted_line(
-            format!(
-                "{} · {} run{} per {}arm · {}{}",
-                view.source,
-                view.repeats,
-                if view.repeats == 1 { "" } else { "s" },
-                if view.tasks.is_empty() {
-                    ""
-                } else {
-                    "task and "
-                },
-                match view.check.as_deref() {
-                    _ if !view.tasks.is_empty() => "each task's own check".to_string(),
-                    Some(c) => format!("check `{c}`"),
-                    None => "no check command".to_string(),
-                },
-                view.budget_usd
-                    .map_or_else(String::new, |usd| format!(" · budget {}", money(usd))),
-            ),
-            theme,
+    let prefix = task_prefix(view);
+    let prefix = prefix.as_deref();
+
+    let status = view.status.label();
+    let status_color = match view.status {
+        BenchStatus::Running => theme.colors.pending,
+        BenchStatus::Cancelled => theme.colors.warning,
+        _ => theme.colors.success,
+    };
+    let room = width.saturating_sub(display_width(&view.name) + display_width(&status) + 4);
+    let mut lines = vec![Line::from(vec![
+        Span::styled(view.name.clone(), bold),
+        Span::styled(
+            format!("  {}  ", fit(&headline(&view.title, usize::MAX), room)),
+            text,
         ),
-        Line::default(),
-    ];
-    let a_head = format!("A {}", a.label);
-    let column = a_head
-        .chars()
-        .count()
-        .max(32)
-        .min(width.saturating_sub(LABEL + 2) / 2);
-    lines.push(Line::from(vec![
-        Span::raw(" ".repeat(LABEL)),
-        Span::styled(format!("{:<column$}  ", headline(&a_head, column)), bold),
-        Span::styled(format!("B {}", b.label), bold),
-    ]));
-    let pair = |f: &dyn Fn(&BenchArm) -> String| (f(a), f(b));
-    let mut add = |label: &str, (x, y): (String, String)| {
-        lines.push(row(label, (&x, &y), column, theme));
+        Span::styled(status, Style::default().fg(status_color)),
+    ])];
+    let mut about = Vec::new();
+    if view.tasks.is_empty() {
+        about.push(view.source.clone());
+    } else if let Some(prefix) = prefix {
+        about.push(prefix.to_string());
+    }
+    about.push(format!(
+        "{} run{} per {}arm",
+        view.repeats,
+        if view.repeats == 1 { "" } else { "s" },
+        if view.tasks.is_empty() {
+            ""
+        } else {
+            "task and "
+        },
+    ));
+    about.push(match view.check.as_deref() {
+        _ if !view.tasks.is_empty() => "own checks".to_string(),
+        Some(c) => format!("check `{c}`"),
+        None => "no check".to_string(),
+    });
+    if let Some(usd) = view.budget_usd {
+        about.push(format!("budget {}", money(usd)));
+    }
+    lines.push(Line::from(Span::styled(
+        fit(&about.join(" · "), width),
+        muted,
+    )));
+    lines.push(Line::default());
+
+    let pair = |f: &dyn Fn(&BenchArm) -> String| [f(a), f(b)];
+    let none = || [String::new(), String::new()];
+    let mut summary = Vec::new();
+    let mut add = |label: &str, [x, y]: [String; 2], [dx, dy]: [String; 2]| {
+        summary.push(Row::Cells(vec![
+            (label.to_string(), muted),
+            cell(x),
+            (dx, good),
+            cell(y),
+            (dy, good),
+        ]));
     };
     add(
         "finished",
         pair(&|arm| format!("{}/{}", arm.finished, arm.runs)),
+        none(),
     );
     add(
-        "median time",
+        "time",
         pair(&|arm| arm.median_wall_ms.map_or_else(|| "-".to_string(), duration)),
+        none(),
     );
-    let [a_share, b_share] = cost_shares(Some(a.total_cost_usd), Some(b.total_cost_usd));
     add(
-        "total cost",
-        (
-            money(a.total_cost_usd) + &a_share,
-            money(b.total_cost_usd) + &b_share,
-        ),
+        "cost",
+        pair(&|arm| money(arm.total_cost_usd)),
+        saving(Some(a.total_cost_usd), Some(b.total_cost_usd)),
     );
-    let median = |arm: &BenchArm| arm.median_cost_usd.map_or_else(|| "-".to_string(), money);
-    let [a_share, b_share] = cost_shares(a.median_cost_usd, b.median_cost_usd);
-    add("median cost", (median(a) + &a_share, median(b) + &b_share));
+    add(
+        "cost/run",
+        pair(&|arm| arm.median_cost_usd.map_or_else(|| "-".to_string(), money)),
+        saving(a.median_cost_usd, b.median_cost_usd),
+    );
     if let Some(baseline) = view.baseline.as_ref().filter(|b| b.priced) {
-        add("vs the session", pair(&|arm| ratio(arm, baseline.cost_usd)));
+        add(
+            "vs session",
+            pair(&|arm| ratio(arm, baseline.cost_usd)),
+            none(),
+        );
     }
     add(
-        "check",
+        "checks",
         pair(&|arm| {
             if arm.checks_run == 0 {
                 "-".to_string()
             } else {
-                format!("{}/{} passed", arm.checks_passed, arm.checks_run)
+                format!("{}/{}", arm.checks_passed, arm.checks_run)
             }
         }),
+        none(),
     );
     if a.checks_run + b.checks_run > 0 {
         let per_fix = |arm: &BenchArm| cost_per_fix(arm.total_cost_usd, arm.checks_passed);
-        let [x, y] = per_fix_cells(per_fix(a), per_fix(b), money);
-        add("cost per fix", (x, y));
+        add(
+            "$/fix",
+            pair(&|arm| per_fix(arm).map_or_else(|| "no fix".to_string(), money)),
+            saving(per_fix(a), per_fix(b)),
+        );
     }
     if view.judge.is_some() {
         add(
-            "judge",
-            pair(&|arm| {
-                format!(
-                    "{} won, {} lost, {} tied",
-                    arm.judge_wins, arm.judge_losses, arm.judge_ties
-                )
-            }),
+            "judge W-L-T",
+            pair(&|arm| format!("{}-{}-{}", arm.judge_wins, arm.judge_losses, arm.judge_ties)),
+            none(),
         );
     }
     let rated = |arm: &BenchArm| arm.ref_better + arm.ref_as_good + arm.ref_worse;
     if rated(a) + rated(b) > 0 {
         add(
-            "vs yours",
-            pair(&|arm| {
-                format!(
-                    "{} better, {} as good, {} worse",
-                    arm.ref_better, arm.ref_as_good, arm.ref_worse
-                )
-            }),
+            "vs yours +/=/-",
+            pair(&|arm| format!("{}/{}/{}", arm.ref_better, arm.ref_as_good, arm.ref_worse)),
+            none(),
         );
     }
+    let a_head = format!("A {}", fit(short_model(&a.label), 24));
+    let b_head = format!("B {}", fit(short_model(&b.label), 24));
+    lines.extend(table(
+        &[Col::L, Col::L.sep(), Col::L, Col::L.sep(), Col::L],
+        Some(&["", &a_head, "", &b_head, ""]),
+        &summary,
+        width,
+        theme,
+    ));
     if let Some(baseline) = &view.baseline {
-        lines.push(muted_line(
-            format!(
-                "The session itself: {} call{}, {}{}",
-                baseline.calls,
-                if baseline.calls == 1 { "" } else { "s" },
-                if baseline.priced {
-                    money(baseline.cost_usd)
-                } else {
-                    "no price".to_string()
-                },
-                if baseline.models.is_empty() {
-                    String::new()
-                } else {
-                    format!(" on {}", baseline.models.join(", "))
-                },
-            ),
-            theme,
-        ));
+        let models: Vec<&str> = baseline.models.iter().map(|m| short_model(m)).collect();
+        let about = format!(
+            "session: {} call{}, {}{}",
+            baseline.calls,
+            if baseline.calls == 1 { "" } else { "s" },
+            if baseline.priced {
+                money(baseline.cost_usd)
+            } else {
+                "no price".to_string()
+            },
+            if models.is_empty() {
+                String::new()
+            } else {
+                format!(" on {}", models.join(", "))
+            },
+        );
+        lines.push(Line::from(Span::styled(fit(&about, width), muted)));
     }
     if view.has_reference && view.judge.is_some() {
-        lines.push(muted_line(
-            "\"vs yours\": the judge rated each run against the diff and reply the session ended with.",
-            theme,
-        ));
+        lines.push(Line::from(Span::styled(
+            fit(
+                "vs yours: the judge rated each run against the diff and reply the session ended with",
+                width,
+            ),
+            muted,
+        )));
     }
 
     if !view.tasks.is_empty() {
+        let task_of = |name: &str| {
+            view.runs
+                .iter()
+                .find(|r| r.name == name)
+                .and_then(|r| r.task.as_deref())
+        };
+        let judged = |id: &str| -> String {
+            view.judge
+                .iter()
+                .flat_map(|j| &j.verdicts)
+                .filter(|v| task_of(&v.a_run) == Some(id))
+                .map(verdict_mark)
+                .collect()
+        };
+        let rows: Vec<Row> = view
+            .tasks
+            .iter()
+            .map(|task| {
+                let [da, db] = saving(task.arms[0].mean_cost_usd, task.arms[1].mean_cost_usd);
+                let [check_a, cost_a] = task_cells(&task.arms[0], theme);
+                let [check_b, cost_b] = task_cells(&task.arms[1], theme);
+                Row::Cells(vec![
+                    cell(task_name(&task.id, prefix).to_string()),
+                    check_a,
+                    cost_a,
+                    (da, good),
+                    check_b,
+                    cost_b,
+                    (db, good),
+                    (judged(&task.id), bold),
+                ])
+            })
+            .collect();
         lines.push(Line::default());
-        lines.push(Line::from(Span::styled(
-            "Per task: checks passed, then mean run cost",
-            bold,
-        )));
-        for task in &view.tasks {
-            let label = headline(&task.id, LABEL - 1);
-            let [a_share, b_share] =
-                cost_shares(task.arms[0].mean_cost_usd, task.arms[1].mean_cost_usd);
-            lines.push(row(
-                &label,
-                (
-                    &(task_cell(&task.arms[0]) + &a_share),
-                    &(task_cell(&task.arms[1]) + &b_share),
-                ),
-                column,
-                theme,
-            ));
-        }
+        lines.push(section_rule("tasks", width, theme));
+        lines.extend(table(
+            &[
+                Col::L.flex(),
+                Col::L.sep(),
+                Col::R,
+                Col::L,
+                Col::L.sep(),
+                Col::R,
+                Col::L,
+                Col::L.sep(),
+            ],
+            Some(&["task", "A", "", "", "B", "", "", "judge"]),
+            &rows,
+            width,
+            theme,
+        ));
     }
 
     if view.prompts.len() > 1 {
+        let rows: Vec<Row> = view
+            .prompts
+            .iter()
+            .enumerate()
+            .map(|(i, prompt)| {
+                Row::Cells(vec![
+                    ((i + 1).to_string(), muted),
+                    cell(headline(prompt, usize::MAX)),
+                    cell(turn_cell(a.turns.get(i))),
+                    cell(turn_cell(b.turns.get(i))),
+                ])
+            })
+            .collect();
         lines.push(Line::default());
-        lines.push(Line::from(Span::styled(
-            "Per prompt: mean turn cost, then test or build commands that passed or failed",
-            bold,
-        )));
-        for (i, prompt) in view.prompts.iter().enumerate() {
-            let label = format!("{}. {}", i + 1, headline(prompt, LABEL - 4));
-            lines.push(row(
-                &label,
-                (&turn_cell(a.turns.get(i)), &turn_cell(b.turns.get(i))),
-                column,
-                theme,
-            ));
-        }
+        lines.push(section_rule(
+            "prompts · mean turn cost, test or build ✓ ✗",
+            width,
+            theme,
+        ));
+        lines.extend(table(
+            &[Col::R, Col::L.flex(), Col::L.sep(), Col::L.sep()],
+            Some(&["#", "prompt", "A", "B"]),
+            &rows,
+            width,
+            theme,
+        ));
     }
 
-    lines.push(Line::default());
-    lines.push(Line::from(Span::styled("Tokens per model", bold)));
+    let mut rows = Vec::new();
     for (i, arm) in view.arms.iter().enumerate() {
-        let text = if arm.tokens.is_empty() {
-            "no model calls".to_string()
-        } else {
-            arm.tokens
-                .iter()
-                .map(|t| {
-                    format!(
-                        "{} {} call{}, {}k in / {}k out, {}",
-                        t.model,
-                        t.calls,
-                        if t.calls == 1 { "" } else { "s" },
-                        t.input_tokens / 1_000,
-                        t.output_tokens / 1_000,
-                        money(t.cost_usd)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("; ")
-        };
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!("  {}: ", arm_letter(i)),
-                Style::default().fg(theme.colors.muted),
-            ),
-            Span::styled(text, Style::default().fg(theme.colors.text)),
-        ]));
+        if i > 0 {
+            rows.push(Row::Rule);
+        }
+        if arm.tokens.is_empty() {
+            rows.push(Row::Cells(vec![
+                cell(arm_letter(i).to_string()),
+                ("no model calls".to_string(), muted),
+            ]));
+        }
+        for (n, t) in arm.tokens.iter().enumerate() {
+            rows.push(Row::Cells(vec![
+                cell(if n == 0 { arm_letter(i) } else { "" }.to_string()),
+                cell(short_model(&t.model).to_string()),
+                cell(t.calls.to_string()),
+                cell(tokens(t.input_tokens)),
+                cell(tokens(t.output_tokens)),
+                cell(money(t.cost_usd)),
+            ]));
+        }
     }
+    lines.push(Line::default());
+    lines.push(section_rule("tokens", width, theme));
+    lines.extend(table(
+        &[Col::L, Col::L.flex(), Col::R.sep(), Col::R, Col::R, Col::R],
+        Some(&["", "model", "calls", "in", "out", "cost"]),
+        &rows,
+        width,
+        theme,
+    ));
 
     if let Some(judge) = &view.judge {
+        let rows: Vec<Row> = judge
+            .verdicts
+            .iter()
+            .map(|v| {
+                let reference = match (&v.a_vs_reference, &v.b_vs_reference) {
+                    (None, None) => String::new(),
+                    (x, y) => format!(
+                        "A{} B{}",
+                        reference_mark(x.as_deref()),
+                        reference_mark(y.as_deref())
+                    ),
+                };
+                Row::Cells(vec![
+                    cell(format!("{} {}", v.a_run, v.b_run)),
+                    (verdict_mark(v).to_string(), bold),
+                    cell(reference),
+                    (headline(&v.reasoning, usize::MAX), muted),
+                ])
+            })
+            .collect();
         lines.push(Line::default());
-        lines.push(Line::from(Span::styled(
-            format!(
-                "Judge: {} blind call{} on {}, {} (not in the arm totals)",
+        lines.push(section_rule(
+            &format!(
+                "judge {} · {} blind call{} · {}, not in arm costs",
+                short_model(&judge.model),
                 judge.verdicts.len(),
                 if judge.verdicts.len() == 1 { "" } else { "s" },
-                judge.model,
                 money(judge.cost_usd)
             ),
-            bold,
-        )));
-        for verdict in &judge.verdicts {
-            let outcome = if verdict.parsed {
-                verdict.winner.map_or_else(
-                    || "tie".to_string(),
-                    |arm| format!("{} better", arm_letter(arm)),
-                )
-            } else {
-                "no verdict".to_string()
-            };
-            let reference = match (&verdict.a_vs_reference, &verdict.b_vs_reference) {
-                (None, None) => String::new(),
-                (x, y) => format!(
-                    " · vs yours: A {}, B {}",
-                    x.as_deref().unwrap_or("?"),
-                    y.as_deref().unwrap_or("?")
-                ),
-            };
-            lines.push(Line::from(Span::styled(
-                format!(
-                    "  {} vs {}: {outcome}{reference}",
-                    verdict.a_run, verdict.b_run
-                ),
-                Style::default().fg(theme.colors.text),
-            )));
-            let why = verdict
-                .reasoning
-                .lines()
-                .find(|l| !l.trim().is_empty())
-                .unwrap_or_default();
-            if !why.is_empty() {
-                lines.push(muted_line(format!("    {}", headline(why, 140)), theme));
-            }
-        }
+            width,
+            theme,
+        ));
+        lines.extend(table(
+            &[Col::L, Col::L, Col::L, Col::L.flex()],
+            None,
+            &rows,
+            width,
+            theme,
+        ));
     }
 
-    lines.push(Line::default());
-    lines.push(Line::from(Span::styled("Runs", bold)));
+    let has_task = view.runs.iter().any(|r| r.task.is_some());
+    let header = [
+        "",
+        "run",
+        "model",
+        if has_task { "task" } else { "" },
+        "time",
+        "cost",
+        "check",
+        "files",
+        "",
+    ];
+    let mut rows = vec![Row::Cells(
+        header.iter().map(|h| ((*h).to_string(), muted)).collect(),
+    )];
+    let picked = Style::default()
+        .bg(theme.colors.selection)
+        .fg(theme.colors.on_selection);
     for (i, r) in view.runs.iter().enumerate() {
-        lines.push(run_line(r, run == Some(i), theme));
+        let selected = run == Some(i);
+        let base = if r.error.is_some() { warning } else { text };
+        let check = match r.check_passed {
+            Some(true) => ("✓", good),
+            Some(false) => ("✗", Style::default().fg(theme.colors.error)),
+            None => ("", base),
+        };
+        let cells = vec![
+            ((if selected { "›" } else { " " }).to_string(), base),
+            (r.name.clone(), base),
+            (short_model(&r.model).to_string(), base),
+            (
+                r.task
+                    .as_deref()
+                    .map_or("", |t| task_name(t, prefix))
+                    .to_string(),
+                base,
+            ),
+            (duration(r.wall_ms), base),
+            (money(r.cost_usd), base),
+            (check.0.to_string(), check.1),
+            (r.files_changed.to_string(), base),
+            (
+                r.error
+                    .as_deref()
+                    .map_or_else(String::new, |e| headline(e, usize::MAX)),
+                warning,
+            ),
+        ];
+        rows.push(if selected {
+            Row::Picked(cells, picked)
+        } else {
+            Row::Cells(cells)
+        });
     }
+    lines.push(Line::default());
+    lines.push(section_rule("runs", width, theme));
+    lines.extend(table(
+        &[
+            Col::L,
+            Col::L,
+            Col::L.flex(),
+            Col::L.flex(),
+            Col::R,
+            Col::R,
+            Col::L,
+            Col::R,
+            Col::L.flex(),
+        ],
+        None,
+        &rows,
+        width,
+        theme,
+    ));
     for note in &view.notes {
         lines.push(Line::from(Span::styled(
-            format!("Note: {note}"),
-            Style::default().fg(theme.colors.warning),
+            fit(&format!("note: {note}"), width),
+            warning,
         )));
     }
-    lines.push(Line::default());
+    lines.push(rule(width, theme));
     let running = view.status == BenchStatus::Running;
     let keys = if view.status.has_copies() && !running && !view.tasks.is_empty() {
-        "←/→ pick a run · d diff it (or both arms' first) · a/b A or B was better · \
-         x remove the copies · Esc back"
+        "←/→ run · d diff · a/b better arm · x remove copies · Esc back"
     } else if view.status.has_copies() && !running {
-        "←/→ pick a run · d diff it (or both arms' first) · y apply it · a/b A or B was better · \
-         x remove the copies · Esc back"
+        "←/→ run · d diff · y apply · a/b better arm · x remove copies · Esc back"
     } else if running {
-        "↑/↓ scroll · c stop it · Esc back"
+        "↑/↓ scroll · c stop · Esc back"
     } else {
         "↑/↓ scroll · Esc back"
     };
-    lines.push(keys_line(keys, theme));
+    lines.push(muted_line(fit(keys, width), theme));
     lines
 }
 
@@ -754,7 +1116,7 @@ fn form_lines<'a>(app: &App, theme: &Theme, width: usize) -> Vec<Line<'a>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{BenchBaseline, BenchJudge, BenchVerdict, UiCommand};
+    use crate::events::{BenchBaseline, BenchJudge, BenchRun, UiCommand};
     use ratatui::{backend::TestBackend, Terminal};
 
     fn arm(label: &str, cost: f64) -> BenchArm {
@@ -848,34 +1210,80 @@ mod tests {
     fn the_detail_shows_cost_quality_and_each_prompt() {
         let theme = Theme::default();
         let shown = text(&detail_lines(&view(), Some(0), &theme, 120));
-        assert!(shown.contains("A gate"), "{shown}");
-        assert!(shown.contains("B claude-opus-4-7"), "{shown}");
-        assert!(shown.contains("$0.06 · 85% less"), "{shown}");
-        assert!(shown.contains("$0.40 · 100%"), "{shown}");
-        let per_fix = shown
-            .lines()
-            .find(|l| l.trim_start().starts_with("cost per fix"))
-            .unwrap_or_else(|| panic!("{shown}"));
+        let row = |label: &str| {
+            shown
+                .lines()
+                .find(|l| l.starts_with(&format!("{label} ")))
+                .unwrap_or_else(|| panic!("no {label} row in\n{shown}"))
+                .to_string()
+        };
         assert!(
-            per_fix.contains("$0.12 · 85% less") && per_fix.contains("$0.80 · 100%"),
-            "{per_fix}"
+            row("").contains("A gate") && row("").contains("B opus-4-7"),
+            "{shown}"
         );
-        assert!(shown.contains("vs the session"), "{shown}");
-        assert!(shown.contains("0.30×"), "{shown}");
-        assert!(shown.contains("2.00×"), "{shown}");
-        assert!(shown.contains("vs yours"), "{shown}");
-        assert!(shown.contains("1 better, 1 as good, 0 worse"), "{shown}");
-        assert!(shown.contains("$0.03, 2 pass"), "{shown}");
-        assert!(shown.contains("$0.03, 1 fail"), "{shown}");
+        for (label, a, b) in [
+            ("cost", "$0.12", "$0.80"),
+            ("cost/run", "$0.06", "$0.40"),
+            ("$/fix", "$0.12", "$0.80"),
+        ] {
+            let line = row(label);
+            assert!(
+                line.contains(a) && line.contains("-85%") && line.trim_end().ends_with(b),
+                "{line}"
+            );
+        }
+        assert!(row("vs session").contains("0.30×"), "{shown}");
+        assert!(row("vs session").contains("2.00×"), "{shown}");
+        assert!(row("vs yours +/=/-").contains("1/1/0"), "{shown}");
+        assert!(shown.contains("$0.03 2✓"), "{shown}");
+        assert!(shown.contains("$0.03 1✗"), "{shown}");
         assert!(
-            shown.contains("a-1 vs b-1: B better · vs yours: A as good, B better"),
+            shown.contains("a-1 b-1  B  A= B+  B also fixed the docs"),
             "{shown}"
         );
         assert!(
-            shown.contains("The session itself: 12 calls, $0.20"),
+            shown.contains("session: 12 calls, $0.20 on opus-4-7"),
             "{shown}"
         );
-        assert!(shown.contains("› a-1"), "{shown}");
+        assert!(shown.contains("›  a-1  sonnet-4-6"), "{shown}");
+    }
+
+    #[test]
+    fn every_line_fits_the_width_and_separators_line_up() {
+        let theme = Theme::default();
+        let mut view = view();
+        view.arms[1].label = "anthropic/claude-opus-5-5-with-a-very-long-name".to_string();
+        view.prompts[0] = "a long prompt ".repeat(20);
+        view.runs[0].model = "claude/claude-sonnet-5-5".to_string();
+        view.runs[0].task = Some("swe_bench_pro_hard/ansible-40ade1f8-and-more".to_string());
+        view.runs[0].error = Some("the copy could not be made ".repeat(10));
+        view.notes = vec!["a note ".repeat(30)];
+        if let Some(judge) = view.judge.as_mut() {
+            judge.verdicts[0].reasoning = "b-1 is the better attempt ".repeat(20);
+        }
+        for width in [60, 80, 120] {
+            let lines = detail_lines(&view, Some(0), &theme, width);
+            let shown = text(&lines);
+            for line in shown.lines() {
+                assert!(display_width(line) <= width, "{width}: {line}");
+            }
+            let bars = |line: &str| -> Vec<usize> {
+                line.chars()
+                    .enumerate()
+                    .filter(|(_, c)| matches!(c, '│' | '┼'))
+                    .map(|(i, _)| i)
+                    .collect()
+            };
+            let summary: Vec<_> = shown
+                .lines()
+                .skip(2)
+                .take_while(|l| !l.starts_with("session:"))
+                .filter(|l| l.contains('│') || l.contains('┼'))
+                .map(bars)
+                .collect();
+            assert!(summary.len() > 3, "{shown}");
+            assert!(summary.windows(2).all(|w| w[0] == w[1]), "{shown}");
+        }
     }
 
     #[test]
@@ -930,14 +1338,25 @@ mod tests {
         ];
         view.runs[0].task = Some("coding/write-file".to_string());
         let shown = text(&detail_lines(&view, None, &theme, 120));
-        assert!(shown.contains("2 runs per task and arm"), "{shown}");
-        assert!(shown.contains("each task's own check"), "{shown}");
-        assert!(shown.contains("Per task"), "{shown}");
-        assert!(shown.contains("2/2 passed, $0.02 · 93% less"), "{shown}");
-        assert!(shown.contains("1/2 passed, $0.30 · 100%"), "{shown}");
-        assert!(shown.contains("coding/write-file"), "{shown}");
+        assert!(
+            shown.contains("coding · 2 runs per task and arm · own checks"),
+            "{shown}"
+        );
+        assert!(shown.contains("── tasks ─"), "{shown}");
+        let write = shown
+            .lines()
+            .find(|l| l.starts_with("write-file "))
+            .unwrap_or_else(|| panic!("{shown}"));
+        assert!(write.contains("2/2  $0.02  -93%"), "{write}");
+        assert!(write.contains("1/2  $0.30"), "{write}");
+        assert!(write.trim_end().ends_with('B'), "{write}");
+        assert!(
+            shown.lines().any(|l| l.starts_with("fix-shell-bug ")),
+            "{shown}"
+        );
+        assert!(!shown.contains("coding/"), "{shown}");
         assert!(!shown.contains("y apply"), "{shown}");
-        assert!(!shown.contains("Per prompt"), "{shown}");
+        assert!(!shown.contains("prompts"), "{shown}");
     }
 
     #[test]
