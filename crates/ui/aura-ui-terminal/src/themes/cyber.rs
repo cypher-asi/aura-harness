@@ -9,7 +9,7 @@
 //! | Purple      | #cb01f4  | (203, 1, 244)  | Code block keywords                     |
 //! | Red         | #e06c75  | (224, 108, 117)| Errors, danger                          |
 //! | White       | #ffffff  | (255, 255, 255)| Titles, the user's text, the current item |
-//! | Light gray  | #e6e6e6  | (230, 230, 230)| Body text of chat replies               |
+//! | Light gray  | #f2f2f2  | (242, 242, 242)| Body text of chat replies               |
 //! | Silver      | #b3b3b3  | (179, 179, 179)| Secondary text, the verb of a step      |
 //! | Gray        | #808080  | (128, 128, 128)| Muted text, focused borders             |
 //! | Dim gray    | #5a5a5a  | (90, 90, 90)   | Borders, markers, the footer            |
@@ -40,8 +40,8 @@ pub const RED: Color = Color::Rgb(224, 108, 117);
 /// White - Titles and emphasized text (#ffffff)
 pub const WHITE: Color = Color::White;
 
-/// Light gray - Body text of chat replies (#e6e6e6)
-pub const LIGHT_GRAY: Color = Color::Rgb(230, 230, 230);
+/// Light gray - Body text of chat replies (#f2f2f2)
+pub const LIGHT_GRAY: Color = Color::Rgb(242, 242, 242);
 
 /// Silver - Secondary text (#b3b3b3)
 pub const SILVER: Color = Color::Rgb(179, 179, 179);
@@ -84,7 +84,7 @@ pub fn cyber_theme() -> Theme {
             // Base colors
             background: BLACK, // #191919 - graphite
             foreground: WHITE, // #ffffff - white text
-            text: LIGHT_GRAY,  // #e6e6e6 - chat reply body
+            text: LIGHT_GRAY,  // #f2f2f2 - chat reply body
 
             // Neutral emphasis
             primary: WHITE,    // #ffffff - titles, the user's text

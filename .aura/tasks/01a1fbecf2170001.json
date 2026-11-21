@@ -1,0 +1,11 @@
+{
+  "id": "01a1fbecf2170001",
+  "title": "where it says ask anything, have a space so cursor blink isn't overlapping with it. [image 1]",
+  "state": "completed",
+  "agent_id": "25c6e781e56572401526db7068cf85e64e7d213e8927cd7285ff65c179f8ff4c",
+  "agent_name": "Agent 446",
+  "items": [],
+  "summary": "I'll draw the placeholder one column after the cursor cell, so the cursor sits on a blank cell instead of the \"A\".The placeholder now starts one column after the cursor, so the blinking cursor sits on a blank cell instead of covering the \"A\": `→ █Ask anything` becomes `→ █ Ask anything`. The `aura-ui-terminal` tests pass; I didn't run clippy or rustfmt.",
+  "updated_ms": 1795228085499,
+  "created_ms": 1795227972119
+}

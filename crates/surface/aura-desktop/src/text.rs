@@ -64,7 +64,7 @@ impl Face {
     fn attrs(self) -> Attrs<'static> {
         let (family, weight) = match (self.family, self.bold) {
             (Family::Mono, false) => (theme::mono_family(), Weight::NORMAL),
-            (Family::Sans, false) => (theme::sans_family(), Weight::MEDIUM),
+            (Family::Sans, false) => (theme::sans_family(), Weight::NORMAL),
             (Family::Mono, true) => (theme::mono_family(), Weight::BOLD),
             (Family::Sans, true) => (theme::sans_family(), Weight::BOLD),
         };

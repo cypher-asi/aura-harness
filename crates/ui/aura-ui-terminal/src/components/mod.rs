@@ -11,6 +11,7 @@ mod input;
 mod message;
 mod progress;
 mod status;
+pub(crate) mod syntax;
 mod tool_card;
 
 pub use crate::events::MessageRole;

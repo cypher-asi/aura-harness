@@ -1,9 +1,11 @@
 //! Read-only preview of a sandbox file, shown over the chat panel.
 
 use super::vim::{Outcome, Screen, Vim};
+use crate::components::syntax::{syntax_for_path, syntax_for_token, HighlightCache};
 use crossterm::event::KeyEvent;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use syntect::parsing::SyntaxReference;
 
 /// Largest file shown in full; bigger files show only a note.
 const MAX_PREVIEW_BYTES: u64 = 1024 * 1024;
@@ -36,6 +38,9 @@ pub struct FileView {
     pub first_line: usize,
     /// Highlighting to use instead of the one the path's extension picks.
     pub language: Option<String>,
+    /// Highlighted lines computed so far; resets itself when the body or
+    /// syntax it was built for changes.
+    pub(crate) highlight: HighlightCache,
 }
 
 impl FileView {
@@ -55,6 +60,7 @@ impl FileView {
             vim: Vim::default(),
             first_line: 1,
             language: None,
+            highlight: HighlightCache::default(),
         }
     }
 
@@ -69,6 +75,7 @@ impl FileView {
             vim: Vim::default(),
             first_line: first_line.max(1),
             language: Some(language.to_string()),
+            highlight: HighlightCache::default(),
         }
     }
 
@@ -94,6 +101,20 @@ impl FileView {
             .extension()
             .map(|ext| ext.to_string_lossy().to_lowercase())
             .unwrap_or_default()
+    }
+
+    /// The syntax the body is highlighted as: the explicit language when
+    /// it names one, else what the file name, extension or first line
+    /// suggests (plain text when nothing matches).
+    pub(crate) fn syntax(&self) -> &'static SyntaxReference {
+        if let Some(syntax) = self.language.as_deref().and_then(syntax_for_token) {
+            return syntax;
+        }
+        let first_line = match &self.body {
+            FileBody::Text(text) => text.lines().next().unwrap_or_default(),
+            FileBody::Note(_) => "",
+        };
+        syntax_for_path(&self.path, first_line)
     }
 }
 
@@ -148,6 +169,19 @@ mod tests {
         );
         assert_eq!(view.body, FileBody::Text("fn main() {}\n".to_string()));
         assert_eq!(view.extension(), "rs");
+        assert_eq!(view.syntax().name, "Rust");
+    }
+
+    #[test]
+    fn syntax_prefers_the_language_then_the_path() {
+        assert_eq!(
+            FileView::snapshot("x.txt", "{}", "json", 1).syntax().name,
+            "JSON"
+        );
+        let read = FileView::snapshot("docker/Dockerfile", "FROM x", "", 1);
+        assert_eq!(read.syntax().name, "Dockerfile");
+        let script = FileView::snapshot("run", "#!/usr/bin/env python3", "", 1);
+        assert_eq!(script.syntax().name, "Python");
     }
 
     #[test]

@@ -158,7 +158,7 @@ impl Default for Theme {
 /// | Blue        | #01a4f4  | Info, links                        |
 /// | Red         | #e06c75  | Errors, danger                     |
 /// | White       | #ffffff  | Titles, emphasized text            |
-/// | Light gray  | #e6e6e6  | Body text of chat replies          |
+/// | Light gray  | #f2f2f2  | Body text of chat replies          |
 /// | Silver      | #b3b3b3  | Secondary text                     |
 /// | Gray        | #808080  | Muted text, secondary info         |
 /// | Dim gray    | #5a5a5a  | Borders, markers, the footer       |
@@ -173,7 +173,7 @@ pub struct ThemeColors {
     /// Foreground/primary text color (#ffffff white)
     pub foreground: Color,
     /// Body text of chat replies, a step softer than `foreground` so bold
-    /// text and headings stand out (#e6e6e6 light gray)
+    /// text and headings stand out (#f2f2f2 light gray)
     pub text: Color,
     /// Titles, the user's text and other emphasis (#ffffff white)
     pub primary: Color,

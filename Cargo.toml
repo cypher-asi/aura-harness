@@ -191,6 +191,12 @@ landlock = "0.4"
 # Unicode display width
 unicode-width = "0.2"
 
+# Syntax highlighting for the terminal UI's file viewer and code blocks.
+# Pure-Rust `fancy-regex` engine only (no onig C dependency); two-face
+# ships bat's extended syntax set (TOML, TypeScript, Dockerfile, ...).
+syntect = { version = "5.3", default-features = false, features = ["parsing", "regex-fancy"] }
+two-face = { version = "0.5", default-features = false, features = ["syntect-fancy"] }
+
 # Filesystem traversal / matching
 walkdir = "2.5"
 ignore = "0.4"

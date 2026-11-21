@@ -1807,7 +1807,7 @@ fn test_header_shows_local_url_and_model_moves_to_the_footer() {
     );
 
     let input_row = &rows[n - INPUT_FROM_BOTTOM];
-    assert!(input_row.contains("│ → Ask anything"), "{input_row:?}");
+    assert!(input_row.contains("│ →  Ask anything"), "{input_row:?}");
     assert!(!input_row.contains("]$ "), "{input_row:?}");
     assert!(!input_row.contains("qwen3:4b"), "{input_row:?}");
 

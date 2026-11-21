@@ -14,7 +14,7 @@ for status.
 | Purple     | `#cb01f4` | `(203, 1, 244)`   | `PURPLE`      | Syntax highlighting only               |
 | Red        | `#e06c75` | `(224, 108, 117)` | `RED`         | Errors, danger                         |
 | White      | terminal  | `Color::White`    | `WHITE`       | Titles, what the user typed            |
-| Light gray | `#e6e6e6` | `(230, 230, 230)` | `LIGHT_GRAY`  | Reply text                             |
+| Light gray | `#f2f2f2` | `(242, 242, 242)` | `LIGHT_GRAY`  | Reply text                             |
 | Silver     | `#b3b3b3` | `(179, 179, 179)` | `SILVER`      | Hovered labels, to-do counts           |
 | Gray       | `#808080` | `(128, 128, 128)` | `GRAY`        | Secondary text, prompts                |
 | Dim gray   | `#5a5a5a` | `(90, 90, 90)`    | `DIM_GRAY`    | Borders at rest, markers, separators   |
@@ -120,7 +120,7 @@ under three columns.
 │  ⬢ Thinking… 12s                             │
 └──────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────┐
-│ → Add a follow-up                            │
+│ →  Add a follow-up                           │
 └──────────────────────────────────────────────┘
  qwen3:4b · 23% context used · 2 calls  ● Ready
 ```
@@ -128,7 +128,7 @@ under three columns.
 - The conversation is inset two columns, starts a row below the border
   and runs at most 110 columns wide.
 - **User messages**: a `muted` `→ ` prompt, then `foreground` text
-- **Replies**: `text`, list markers `muted`, inline code `text` on
+- **Replies**: `text`, list markers `muted`, inline code `secondary` on
   `surface`
 - **Steps**: markers `faint`, the whole line `muted`
 - **Live tail**: while a turn runs, the to-do checklist (`⬢` `faint`,
@@ -137,7 +137,8 @@ under three columns.
   `foreground`, the elapsed time `muted`
 - **Input box**: as wide as the Chat panel, bordered like it, with a
   `muted` `→ ` prompt and a `muted` placeholder (`Ask anything`, then
-  `Add a follow-up`). Shell and login prompts replace the arrow.
+  `Add a follow-up`) set one column past the cursor so the cursor never
+  covers its first letter. Shell and login prompts replace the arrow.
 - **Footer**: the mode outside agent mode, the approval level, the model
   and what the agent has used in `muted`, separated by `faint` dots,
   with the status at the right, on the screen's last row. Parts that

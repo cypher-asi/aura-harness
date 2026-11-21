@@ -5,7 +5,7 @@
 //! ```text
 //! │ ...                                  │
 //! ├──────────────────────────────────────┤
-//! │ → Add a follow-up                    │
+//! │ →  Add a follow-up                   │
 //! └──────────────────────────────────────┘
 //! ```
 
@@ -36,6 +36,9 @@ const MAX_INPUT_ROWS: u16 = 8;
 const FIRST_PLACEHOLDER: &str = "Ask anything";
 /// What the empty input says once the conversation has started.
 const FOLLOW_UP_PLACEHOLDER: &str = "Add a follow-up";
+/// Blank columns between the cursor and the placeholder, so the cursor
+/// does not sit on top of the placeholder's first letter.
+const PLACEHOLDER_GAP: u16 = 1;
 
 /// Where the input goes in a box spanning `area`'s columns.
 struct Plan<'a> {
@@ -251,15 +254,17 @@ pub(super) fn render_input(frame: &mut Frame, area: Rect, app: &App, theme: &The
 
     let typing_width = right.saturating_sub(plan.typing_x);
     if let Some(placeholder) = plan.placeholder {
+        // Start one column past the cursor so its blink lands on a blank
+        // cell instead of covering the placeholder's first letter.
         frame.render_widget(
             Paragraph::new(Span::styled(
                 placeholder,
                 Style::default().fg(theme.colors.muted),
             )),
             Rect {
-                x: plan.typing_x,
+                x: plan.typing_x.saturating_add(PLACEHOLDER_GAP),
                 y: inner.y,
-                width: typing_width,
+                width: typing_width.saturating_sub(PLACEHOLDER_GAP),
                 height: 1,
             },
         );

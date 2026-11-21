@@ -50,10 +50,8 @@ pub fn mono_family() -> &'static str {
     FAMILY.get_or_init(|| named("AURA_DESKTOP_MONO_FONT", "Geist Mono"))
 }
 
-/// The family of the proportional face the chat's prose is set in. Its
-/// regular weight is Medium: light text on a dark background renders
-/// thin without the stem darkening other platforms apply, and Medium
-/// matches how body text in chat apps reads.
+/// The family of the proportional face the chat's prose is set in, at its
+/// Regular weight. Medium read too heavy beside the monospace grid.
 pub fn sans_family() -> &'static str {
     static FAMILY: OnceLock<&'static str> = OnceLock::new();
     FAMILY.get_or_init(|| named("AURA_DESKTOP_SANS_FONT", "Inter"))

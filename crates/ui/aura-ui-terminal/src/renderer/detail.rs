@@ -14,6 +14,7 @@ use crate::app::image_preview::ImageView;
 use crate::app::vim::{Align, Vim};
 use crate::app::DetailView;
 use crate::components::highlight_code_line;
+use crate::components::syntax::{highlight_line, syntax_for_path};
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
@@ -205,7 +206,8 @@ fn draw_file(
     scroll: &mut usize,
     theme: &Theme,
 ) -> Drawn {
-    let source = file_source(&file.body, file.extension(), file.first_line, theme);
+    let syntax = file.syntax();
+    let mut source = file_source(&file.body, file.extension(), file.first_line, theme);
     let vim = &mut file.vim;
     let width = usize::from(rows.width).max(1);
     let visible = usize::from(rows.height);
@@ -219,6 +221,24 @@ fn draw_file(
         vim.keep_within(first, last, lines);
     }
     let vim = &*vim;
+    if let Source::Code {
+        language,
+        lines,
+        highlighted,
+        ..
+    } = &mut source
+    {
+        if !is_pseudo_language(language) {
+            // Each source line takes at least one row, so at most
+            // `visible` lines starting at `first` reach the screen.
+            let range = first..first.saturating_add(visible);
+            let spans = file.highlight.spans(syntax, lines, range, sanitize, theme);
+            *highlighted = Highlighted {
+                first,
+                lines: spans,
+            };
+        }
+    }
     let (lines, shown) = source.visible(first, width, visible, theme, Some(vim));
 
     let muted = Style::default().fg(theme.colors.muted);
@@ -357,7 +377,23 @@ enum Source<'a> {
         gutter: usize,
         /// Number of the first line in the gutter.
         first_line: usize,
+        /// Lines already highlighted in the context of the whole file;
+        /// others are highlighted on their own when drawn.
+        highlighted: Highlighted,
     },
+}
+
+/// Highlighted spans of consecutive source lines, from line `first`.
+#[derive(Default)]
+struct Highlighted {
+    first: usize,
+    lines: Vec<Vec<Span<'static>>>,
+}
+
+impl Highlighted {
+    fn get(&self, index: usize) -> Option<Vec<Span<'static>>> {
+        self.lines.get(index.checked_sub(self.first)?).cloned()
+    }
 }
 
 fn file_source<'a>(
@@ -379,6 +415,7 @@ fn file_source<'a>(
                 gutter: last.to_string().len(),
                 lines,
                 first_line: first_line.max(1),
+                highlighted: Highlighted::default(),
             }
         }
         FileBody::Note(note) => Source::Styled(vec![Line::from(Span::styled(
@@ -455,6 +492,7 @@ impl<'a> Source<'a> {
                     lines,
                     gutter,
                     first_line,
+                    highlighted,
                 } => {
                     let on_cursor = vim.is_some_and(|vim| vim.line() == index);
                     let number = if on_cursor {
@@ -468,7 +506,9 @@ impl<'a> Source<'a> {
                         format!("{:>gutter$} │ ", index + first_line),
                         number,
                     )];
-                    let code = highlight_view_line(language, &sanitize(lines[index]), theme);
+                    let code = highlighted.get(index).unwrap_or_else(|| {
+                        highlight_view_line(language, &sanitize(lines[index]), theme)
+                    });
                     match vim {
                         Some(vim) => spans.extend(mark(code, lines[index], vim, on_cursor, theme)),
                         None => spans.extend(code),
@@ -482,6 +522,12 @@ impl<'a> Source<'a> {
         out.truncate(visible);
         (out, shown)
     }
+}
+
+/// Whether `language` is one of the view-only formats below rather than
+/// a source language.
+fn is_pseudo_language(language: &str) -> bool {
+    matches!(language, "grep" | "log")
 }
 
 /// Highlight one line of a detail view. Besides source languages, `grep`
@@ -509,10 +555,7 @@ fn grep_line(line: &str, theme: &Theme) -> Vec<Span<'static>> {
         )];
     };
     let path = &line[..colon];
-    let language = path
-        .rsplit_once('.')
-        .map(|(_, ext)| ext.to_lowercase())
-        .unwrap_or_default();
+    let syntax = syntax_for_path(std::path::Path::new(path), "");
     let muted = Style::default().fg(theme.colors.muted);
     let mut spans = vec![
         Span::styled(
@@ -523,7 +566,7 @@ fn grep_line(line: &str, theme: &Theme) -> Vec<Span<'static>> {
         Span::styled(line[colon + 1..end].to_string(), muted),
         Span::styled(":".to_string(), muted),
     ];
-    spans.extend(highlight_code_line(&language, &line[end + 1..], theme));
+    spans.extend(highlight_line(syntax, &line[end + 1..], theme));
     spans
 }
 
@@ -988,6 +1031,7 @@ mod tests {
             lines: lines.iter().map(String::as_str).collect(),
             gutter: 3,
             first_line: 1,
+            highlighted: Highlighted::default(),
         };
         assert_eq!(fit(&source, Align::Cursor, 5, 0, 40, 10), 0);
         assert_eq!(fit(&source, Align::Cursor, 10, 0, 40, 10), 1);

@@ -31,6 +31,10 @@ tracing = { workspace = true }
 
 # Unicode display width
 unicode-width = { workspace = true }
+
+# Syntax highlighting (pure-Rust regex engine)
+syntect = { workspace = true }
+two-face = { workspace = true }
 similar = "2"
 base64 = { workspace = true }
 dirs = { workspace = true }

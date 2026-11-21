@@ -1,166 +1,16 @@
 //! Code block component with syntax highlighting.
 //!
-//! Renders fenced code blocks with language labels, borders, and basic syntax highlighting.
-//!
-//! Uses only the approved color palette from the style guide:
-//! - Cyan (#01f4cb): Strings, types
-//! - Blue (#01a4f4): Functions, numbers
-//! - Purple (#cb01f4): Keywords
-//! - Red (#e06c75): Operators
-//! - Gray (#888888): Comments
+//! Renders fenced code blocks with language labels, borders, and syntax
+//! highlighting. Highlighting and its palette live in
+//! [`super::syntax`]; a block is highlighted top to bottom so multi-line
+//! constructs (block comments, strings, embedded CSS) keep their colors.
 
-use crate::themes::{Theme, BLUE, CYAN, GRAY, PURPLE, RED};
+use super::syntax::{highlight_line, syntax_for_token, LineHighlighter};
+use crate::themes::Theme;
 use ratatui::{
-    style::{Color, Modifier, Style},
+    style::Style,
     text::{Line, Span},
 };
-
-/// Language-specific syntax highlighting configuration.
-///
-/// Uses the approved color palette:
-/// - Keywords: Purple (#cb01f4)
-/// - Strings: Cyan (#01f4cb)
-/// - Comments: Gray (#888888)
-/// - Numbers: Blue (#01a4f4)
-/// - Functions: Blue (#01a4f4)
-/// - Types: Cyan (#01f4cb)
-/// - Operators: Red (#e06c75)
-#[derive(Debug, Clone, Copy)]
-pub struct LanguageConfig {
-    /// Keywords
-    pub keyword: Color,
-    /// String literals
-    pub string: Color,
-    /// Comments
-    pub comment: Color,
-    /// Numbers
-    pub number: Color,
-    /// Functions/methods
-    pub function: Color,
-    /// Types
-    pub r#type: Color,
-    /// Operators
-    pub operator: Color,
-}
-
-impl Default for LanguageConfig {
-    fn default() -> Self {
-        Self {
-            keyword: PURPLE, // #cb01f4 - purple for keywords
-            string: CYAN,    // #01f4cb - cyan for strings
-            comment: GRAY,   // #888888 - gray for comments
-            number: BLUE,    // #01a4f4 - blue for numbers
-            function: BLUE,  // #01a4f4 - blue for functions
-            r#type: CYAN,    // #01f4cb - cyan for types
-            operator: RED,   // #e06c75 - red for operators
-        }
-    }
-}
-
-/// Keywords for various languages.
-const RUST_KEYWORDS: &[&str] = &[
-    "fn", "let", "mut", "const", "static", "if", "else", "match", "for", "while", "loop", "return",
-    "break", "continue", "struct", "enum", "impl", "trait", "type", "where", "pub", "mod", "use",
-    "crate", "super", "self", "Self", "async", "await", "move", "dyn", "ref", "in", "as", "unsafe",
-    "extern", "true", "false", "Some", "None", "Ok", "Err",
-];
-
-const PYTHON_KEYWORDS: &[&str] = &[
-    "def", "class", "if", "elif", "else", "for", "while", "return", "import", "from", "as", "try",
-    "except", "finally", "with", "lambda", "yield", "raise", "pass", "break", "continue", "and",
-    "or", "not", "in", "is", "True", "False", "None", "async", "await", "self", "cls",
-];
-
-const JS_KEYWORDS: &[&str] = &[
-    "function",
-    "const",
-    "let",
-    "var",
-    "if",
-    "else",
-    "for",
-    "while",
-    "do",
-    "switch",
-    "case",
-    "break",
-    "continue",
-    "return",
-    "try",
-    "catch",
-    "finally",
-    "throw",
-    "class",
-    "extends",
-    "new",
-    "this",
-    "super",
-    "import",
-    "export",
-    "default",
-    "from",
-    "async",
-    "await",
-    "yield",
-    "true",
-    "false",
-    "null",
-    "undefined",
-    "typeof",
-    "instanceof",
-];
-
-const GO_KEYWORDS: &[&str] = &[
-    "func",
-    "var",
-    "const",
-    "type",
-    "struct",
-    "interface",
-    "map",
-    "chan",
-    "if",
-    "else",
-    "for",
-    "range",
-    "switch",
-    "case",
-    "default",
-    "break",
-    "continue",
-    "return",
-    "go",
-    "defer",
-    "select",
-    "package",
-    "import",
-    "true",
-    "false",
-    "nil",
-    "make",
-    "new",
-];
-
-const SHELL_KEYWORDS: &[&str] = &[
-    "if", "then", "else", "elif", "fi", "for", "while", "do", "done", "case", "esac", "function",
-    "return", "exit", "echo", "export", "source", "alias", "cd", "pwd", "ls", "rm", "cp", "mv",
-    "mkdir", "chmod", "chown", "grep", "sed", "awk", "cat",
-];
-
-const JSON_KEYWORDS: &[&str] = &["true", "false", "null"];
-
-/// Get keywords for a language.
-fn get_keywords(lang: &str) -> &'static [&'static str] {
-    match lang.to_lowercase().as_str() {
-        "json" => JSON_KEYWORDS,
-        "rust" | "rs" => RUST_KEYWORDS,
-        "python" | "py" => PYTHON_KEYWORDS,
-        "javascript" | "js" | "typescript" | "ts" | "jsx" | "tsx" => JS_KEYWORDS,
-        "go" | "golang" => GO_KEYWORDS,
-        "bash" | "sh" | "shell" | "zsh" => SHELL_KEYWORDS,
-        _ => &[],
-    }
-}
 
 /// Get a human-readable label for a language.
 fn get_language_label(lang: &str) -> &'static str {
@@ -199,8 +49,8 @@ fn get_language_label(lang: &str) -> &'static str {
         "makefile" | "make" => "Makefile",
         "xml" => "XML",
         "graphql" | "gql" => "GraphQL",
-        // Unknown languages default to "Code"
-        _ => "Code",
+        // Other known syntaxes use their own name; unknown ones are "Code".
+        _ => syntax_for_token(lang).map_or("Code", |syntax| syntax.name.as_str()),
     }
 }
 
@@ -228,8 +78,7 @@ impl CodeBlock {
     /// Render the code block as styled lines.
     #[must_use]
     pub fn render(&self, theme: &Theme, max_width: usize) -> Vec<Line<'static>> {
-        let config = LanguageConfig::default();
-        let keywords = get_keywords(&self.language);
+        let mut highlighter = syntax_for_token(&self.language).map(LineHighlighter::new);
         let label = get_language_label(&self.language);
 
         // Calculate the box width (content width + padding)
@@ -256,7 +105,13 @@ impl CodeBlock {
 
         // Code lines with syntax highlighting
         for line in &self.lines {
-            let highlighted = highlight_line(line, keywords, &config, theme);
+            let highlighted = match &mut highlighter {
+                Some(highlighter) => highlighter.spans(line, theme),
+                None => vec![Span::styled(
+                    line.clone(),
+                    Style::default().fg(theme.colors.foreground),
+                )],
+            };
             let line_len = line.len();
             let padding = " ".repeat(box_width.saturating_sub(line_len + 4));
 
@@ -280,183 +135,25 @@ impl CodeBlock {
     }
 }
 
-/// Syntax-highlight one line of `language` source, without the code block
-/// frame. Languages without a keyword list come back in plain foreground.
+/// Syntax-highlight one line of `language` source (a name such as
+/// `rust` or an extension such as `rs`), without the code block frame or
+/// any earlier lines for context. Unknown languages come back in plain
+/// foreground.
 #[must_use]
 pub fn highlight_code_line(language: &str, line: &str, theme: &Theme) -> Vec<Span<'static>> {
-    let keywords = get_keywords(language);
-    if keywords.is_empty() {
-        return vec![Span::styled(
+    match syntax_for_token(language) {
+        Some(syntax) => highlight_line(syntax, line, theme),
+        None => vec![Span::styled(
             line.to_string(),
             Style::default().fg(theme.colors.foreground),
-        )];
+        )],
     }
-    highlight_line(line, keywords, &LanguageConfig::default(), theme)
-}
-
-/// Highlight a single line of code.
-fn highlight_line(
-    line: &str,
-    keywords: &[&str],
-    config: &LanguageConfig,
-    theme: &Theme,
-) -> Vec<Span<'static>> {
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let chars: Vec<char> = line.chars().collect();
-    let mut i = 0;
-
-    while i < chars.len() {
-        let c = chars[i];
-
-        if c == '"' || c == '\'' || c == '`' {
-            i = highlight_string(&chars, i, config, theme, &mut spans);
-        } else if (c == '/' && i + 1 < chars.len() && chars[i + 1] == '/') || c == '#' {
-            highlight_line_comment(&chars, i, config, &mut spans);
-            break;
-        } else if c.is_ascii_digit() {
-            i = highlight_number(&chars, i, config, &mut spans);
-        } else if c.is_alphabetic() || c == '_' {
-            i = highlight_identifier(&chars, i, keywords, config, theme, &mut spans);
-        } else if "+-*/%=<>!&|^~?:".contains(c) {
-            i = highlight_operator(&chars, i, config, &mut spans);
-        } else {
-            spans.push(Span::styled(
-                c.to_string(),
-                Style::default().fg(theme.colors.foreground),
-            ));
-            i += 1;
-        }
-    }
-
-    if spans.is_empty() {
-        spans.push(Span::styled(String::new(), Style::default()));
-    }
-    spans
-}
-
-/// A string literal in the string color, or in plain text when it is an
-/// object key (followed by `:`), so JSON reads as keys and values instead
-/// of a wall of string color.
-fn highlight_string(
-    chars: &[char],
-    start: usize,
-    config: &LanguageConfig,
-    theme: &Theme,
-    spans: &mut Vec<Span<'static>>,
-) -> usize {
-    let quote = chars[start];
-    let mut string_content = String::from(quote);
-    let mut i = start + 1;
-    while i < chars.len() {
-        let ch = chars[i];
-        string_content.push(ch);
-        i += 1;
-        if ch == quote
-            && (string_content.len() < 2
-                || string_content.chars().nth(string_content.len() - 2) != Some('\\'))
-        {
-            break;
-        }
-    }
-    let is_key = chars[i..]
-        .iter()
-        .find(|c| !c.is_whitespace())
-        .is_some_and(|c| *c == ':');
-    let color = if is_key {
-        theme.colors.foreground
-    } else {
-        config.string
-    };
-    spans.push(Span::styled(string_content, Style::default().fg(color)));
-    i
-}
-
-fn highlight_line_comment(
-    chars: &[char],
-    start: usize,
-    config: &LanguageConfig,
-    spans: &mut Vec<Span<'static>>,
-) {
-    let comment: String = chars[start..].iter().collect();
-    spans.push(Span::styled(comment, Style::default().fg(config.comment)));
-}
-
-fn highlight_number(
-    chars: &[char],
-    start: usize,
-    config: &LanguageConfig,
-    spans: &mut Vec<Span<'static>>,
-) -> usize {
-    let mut num = String::from(chars[start]);
-    let mut i = start + 1;
-    while i < chars.len()
-        && (chars[i].is_ascii_digit()
-            || chars[i] == '.'
-            || chars[i] == 'x'
-            || chars[i] == 'b'
-            || chars[i].is_ascii_hexdigit())
-    {
-        num.push(chars[i]);
-        i += 1;
-    }
-    spans.push(Span::styled(num, Style::default().fg(config.number)));
-    i
-}
-
-fn highlight_identifier(
-    chars: &[char],
-    start: usize,
-    keywords: &[&str],
-    config: &LanguageConfig,
-    theme: &Theme,
-    spans: &mut Vec<Span<'static>>,
-) -> usize {
-    let mut word = String::from(chars[start]);
-    let mut i = start + 1;
-    while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
-        word.push(chars[i]);
-        i += 1;
-    }
-
-    if keywords.contains(&word.as_str()) {
-        spans.push(Span::styled(
-            word,
-            Style::default()
-                .fg(config.keyword)
-                .add_modifier(Modifier::BOLD),
-        ));
-    } else if i < chars.len() && chars[i] == '(' {
-        spans.push(Span::styled(word, Style::default().fg(config.function)));
-    } else if word.chars().next().is_some_and(char::is_uppercase) {
-        spans.push(Span::styled(word, Style::default().fg(config.r#type)));
-    } else {
-        spans.push(Span::styled(
-            word,
-            Style::default().fg(theme.colors.foreground),
-        ));
-    }
-    i
-}
-
-fn highlight_operator(
-    chars: &[char],
-    start: usize,
-    config: &LanguageConfig,
-    spans: &mut Vec<Span<'static>>,
-) -> usize {
-    let mut op = String::from(chars[start]);
-    let mut i = start + 1;
-    while i < chars.len() && "+-*/%=<>!&|^~?:".contains(chars[i]) {
-        op.push(chars[i]);
-        i += 1;
-    }
-    spans.push(Span::styled(op, Style::default().fg(config.operator)));
-    i
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::themes::CYAN;
 
     #[test]
     fn test_code_block_creation() {
@@ -468,7 +165,11 @@ mod tests {
     #[test]
     fn json_keys_are_plain_and_values_are_strings() {
         let theme = Theme::cyber();
-        let spans = highlight_code_line("json", r#"  "tool": "run_command","#, &theme);
+        // Keys are only keys inside an object, so highlight with context.
+        let syntax = super::syntax_for_token("json").unwrap();
+        let mut highlighter = crate::components::syntax::LineHighlighter::new(syntax);
+        highlighter.spans("{", &theme);
+        let spans = highlighter.spans(r#"  "tool": "run_command","#, &theme);
         let color_of = |text: &str| {
             spans
                 .iter()
@@ -480,10 +181,24 @@ mod tests {
     }
 
     #[test]
+    fn code_block_carries_state_across_lines() {
+        let theme = Theme::cyber();
+        let block = CodeBlock::new("rust", "/* open\n   inside */\nfn x() {}");
+        let lines = block.render(&theme, 80);
+        let inside = lines[2]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("inside"))
+            .unwrap();
+        assert_eq!(inside.style.fg, Some(crate::themes::GRAY));
+    }
+
+    #[test]
     fn test_language_labels() {
         assert_eq!(get_language_label("rust"), "Rust");
         assert_eq!(get_language_label("py"), "Python");
         assert_eq!(get_language_label("js"), "JavaScript");
+        assert_eq!(get_language_label("vue"), "Vue Component");
         assert_eq!(get_language_label(""), "Code");
     }
 }

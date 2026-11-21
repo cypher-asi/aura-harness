@@ -689,12 +689,26 @@ fn build_message_section(
     )));
 
     if record.message.starts_with(['{', '[']) {
-        content.extend(
-            record
-                .message
-                .lines()
-                .map(|line| Line::from(highlight_code_line("json", line, theme))),
-        );
+        // Highlight the whole document in order so keys on later lines are
+        // recognized as keys (inside their object), not stray strings.
+        let syntax = crate::components::syntax::syntax_for_token("json");
+        match syntax {
+            Some(syntax) => {
+                let mut highlighter = crate::components::syntax::LineHighlighter::new(syntax);
+                content.extend(
+                    record
+                        .message
+                        .lines()
+                        .map(|line| Line::from(highlighter.spans(line, theme))),
+                );
+            }
+            None => content.extend(
+                record
+                    .message
+                    .lines()
+                    .map(|line| Line::from(highlight_code_line("json", line, theme))),
+            ),
+        }
         return;
     }
 
