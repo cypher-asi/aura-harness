@@ -24,7 +24,7 @@ use super::subagents::{AgentHub, LeadProfile};
 use super::task_check::takeover_prompt;
 use super::tasks::{request_state, summary_of};
 use crate::long_run::LongRunSettings;
-use crate::model_selection::ModelLimits;
+use crate::model_selection::{routed_effort, ModelLimits};
 use aura_agent::{AgentLoop, CompactHistoryError};
 use aura_agent_gate::attempt_log::Terms;
 use aura_agent_gate::checks::{last_check, last_check_seen};
@@ -156,14 +156,18 @@ impl GateTurn {
         self.live.redecide(&work, &left)
     }
 
-    /// Point `agent_loop`, running `agent`'s turn, at `decision`'s model.
+    /// Point `agent_loop`, running `agent`'s turn, at `decision`'s model
+    /// and effort.
     fn point(&self, agent: AgentId, agent_loop: &mut AgentLoop, decision: &Decision) {
         self.live.note_model(agent, &decision.model.id);
-        if agent_loop.config().model == decision.model.id {
+        let current = agent_loop.config();
+        if current.model == decision.model.id
+            && current.routed_thinking_effort == Some(decision.effort)
+        {
             return;
         }
-        let mut config = agent_loop.config().clone();
-        self.limits.configure(&mut config, &decision.model.id);
+        let mut config = current.clone();
+        self.limits.route(&mut config, decision);
         *agent_loop = AgentLoop::new(config);
     }
 
@@ -205,12 +209,13 @@ impl GateTurn {
     }
 }
 
-/// The chat line saying where Gate sent a turn asking for `category`,
-/// e.g. `gate → claude-sonnet-4-6 (claude plan) · question, default`.
+/// The chat line saying where Gate sent a turn asking for `category`, e.g.
+/// `gate → claude-sonnet-4-6 (claude plan) at medium effort · question,
+/// default`.
 fn route_line(decision: &Decision, category: PromptCategory) -> String {
     format!(
         "gate → {} · {category}, {}",
-        decision.model.route_label(),
+        decision.label(),
         decision.reason
     )
 }
@@ -877,7 +882,8 @@ async fn run_attempts(
         if let Ok(partial) = &result {
             if follow.0 != model {
                 let workspace = session.kernel.agent_workspace();
-                let fresh = FollowUp::new(&gate.live, &gate.candidates, &model, &workspace)
+                let ran = (model.as_str(), routed_effort(turn.agent_loop.config()));
+                let fresh = FollowUp::new(&gate.live, &gate.candidates, ran, &workspace)
                     .since(before.clone())
                     .after(&follow.1);
                 follow = (model.clone(), fresh);
@@ -1046,11 +1052,19 @@ async fn run_attempts(
             subtask_cost_usd: gate.hub.subtask_cost_usd(agent, asked.started_ms),
             latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         };
+        let effort = routed_effort(turn.agent_loop.config());
         let stronger = |live: &GateLive| {
             // Only a turn whose conversation survived can be carried on.
             result
                 .is_ok()
-                .then(|| live.escalate(RouteLevel::Turn, category, &model, &gate.candidates))
+                .then(|| {
+                    live.escalate(
+                        RouteLevel::Turn,
+                        category,
+                        (&model, effort),
+                        &gate.candidates,
+                    )
+                })
                 .flatten()
         };
         let judge = gate_record::judge_for(&gate.live, &gate.candidates, &failed);

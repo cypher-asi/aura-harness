@@ -172,6 +172,7 @@ fn harness(
         completions,
         notices,
         model: "mock-model".to_string(),
+        effort: None,
         mode: permissions.mode.agent_mode(),
         workspace_root: workspace,
         tool_filter: filter,
@@ -1259,7 +1260,7 @@ async fn a_failed_turn_the_judge_excuses_stays_put_and_counts_for_nothing() {
         run.routes,
         [(
             Some(PromptCategory::Debugging),
-            Route::turn(GATE_SONNET, RouteReason::Default)
+            Route::turn(GATE_SONNET, RouteReason::Default).at_effort("medium")
         )]
     );
     assert_eq!(

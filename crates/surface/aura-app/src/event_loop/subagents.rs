@@ -41,7 +41,7 @@ use super::modes::Permissions;
 use super::notices::{Notice, NoticeSender};
 use super::processes::{now_ms, task_id, ProcessTable};
 use super::record_ui::RecordPanelAgent;
-use super::steering::Steering;
+use super::steering::{SteerSource, Steering};
 use super::task_check;
 use super::tasks::{Spawned, TaskBoard};
 use super::trace::Traces;
@@ -51,7 +51,7 @@ use crate::agent_registry::AgentRegistry;
 use crate::file_checkpoints::AttemptFiles;
 use crate::isolation::changes;
 use crate::long_run::LongRunSettings;
-use crate::model_selection::ModelLimits;
+use crate::model_selection::{routed_effort, ModelLimits};
 use crate::project_instructions::ProjectInstructions;
 use crate::record_loader::agent_summaries;
 use async_trait::async_trait;
@@ -71,7 +71,7 @@ use aura_exec_tools::agents::task::TASK_TOOL_NAME;
 use aura_exec_tools::jobs::{JOB_KILL_TOOL_NAME, JOB_OUTPUT_TOOL_NAME};
 use aura_exec_tools::todo::{task_report_line, TODO_WRITE_TOOL_NAME};
 use aura_exec_tools::SubagentDispatchHook;
-use aura_model::{Message, ToolDefinition};
+use aura_model::{Message, ThinkingEffort, ToolDefinition};
 use aura_ui_terminal::events::{
     AgentDefinitionSummary, AgentSummary, ProcessKind, ProcessStatus, ProcessSummary,
 };
@@ -81,13 +81,21 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Notify};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 /// Record entries read per scan when adding up an agent's model calls.
 const SCAN_BATCH: usize = 500;
+
+/// How long before its caller gives up on the `task` call a subtask that
+/// is waited for stops, so it ends with its run closed and a reason.
+const STOP_BEFORE_CALLER: Duration = Duration::from_secs(30);
+
+/// How long before a subtask's time is up it is told to reply with what
+/// it has.
+const WRAP_UP_BEFORE: Duration = Duration::from_secs(3 * 60);
 
 /// An agent with work in flight.
 struct Running {
@@ -1178,6 +1186,14 @@ impl AgentHub {
         trace.spawned_by = self.traces.run_id_of(request.parent_agent_id);
         let mut gate = self.subtask_gate(request, definition, &mut config);
         gate.escalation = escalation;
+        if reads_only(definition)
+            && config.user_thinking_effort.is_none()
+            && self.in_bench(request.parent_agent_id)
+        {
+            config.user_thinking_effort = Some(ThinkingEffort::Medium);
+        }
+        let deadline = (request.spawn_mode != Some(SpawnMode::Detached))
+            .then(|| Instant::now() + config.per_tool_timeout.saturating_sub(STOP_BEFORE_CALLER));
         let mut summary = task_summary(
             request,
             &prompt,
@@ -1202,7 +1218,15 @@ impl AgentHub {
             check: request.check.clone(),
             trace,
             running,
+            deadline,
         })
+    }
+
+    /// Whether `agent` runs a benchmark's run.
+    fn in_bench(&self, agent: AgentId) -> bool {
+        self.traces
+            .recorder(agent)
+            .is_some_and(|rec| rec.meta().source == RunSource::Bench)
     }
 
     /// Run `subtask` to its end: wait for its workspace when it writes
@@ -1246,6 +1270,7 @@ impl AgentHub {
         } else {
             None
         };
+        let deadline = first.deadline;
         let first = self.finish_task(first).await;
         let failure = first
             .attempted()
@@ -1273,9 +1298,18 @@ impl AgentHub {
         let Some(category) = first.category else {
             return TaskReport { first, retry: None };
         };
-        let escalated =
-            self.gate
-                .escalate(RouteLevel::Subtask, category, &first.model, &candidates);
+        if deadline
+            .is_some_and(|at| at.saturating_duration_since(Instant::now()) < WRAP_UP_BEFORE * 2)
+        {
+            info!(child = %first.name, "Too little time left to retry the subtask");
+            return TaskReport { first, retry: None };
+        }
+        let escalated = self.gate.escalate(
+            RouteLevel::Subtask,
+            category,
+            (&first.model, first.effort),
+            &candidates,
+        );
         let Some(decision) = escalated else {
             info!(child = %first.name, "No stronger model to retry the subtask on");
             return TaskReport { first, retry: None };
@@ -1294,7 +1328,7 @@ impl AgentHub {
             .open_task(&request, &definition, prompt, Some((decision, category)))
             .await
         {
-            Ok(retry) => retry,
+            Ok(retry) => TaskRun { deadline, ..retry },
             Err(problem) => {
                 warn!(%problem, "Could not retry the subtask");
                 return TaskReport { first, retry: None };
@@ -1545,7 +1579,13 @@ impl AgentHub {
             check,
             mut trace,
             running,
+            deadline,
         } = run;
+        let mut limits = self.long_run;
+        if let Some(deadline) = deadline {
+            let left = deadline.saturating_duration_since(Instant::now());
+            limits.turn_timeout = Some(limits.turn_timeout.map_or(left, |limit| limit.min(left)));
+        }
         let child_id = session.agent_id();
         let ui = AgentUi::new(self.commands.clone(), child_id);
         let started = Instant::now();
@@ -1574,7 +1614,7 @@ impl AgentHub {
                     label,
                     &ui,
                     &cancel,
-                    self.long_run,
+                    limits,
                     recorder,
                 )
                 .await
@@ -1615,6 +1655,7 @@ impl AgentHub {
             },
         );
         let model = agent_loop.config().model.clone();
+        let effort = routed_effort(agent_loop.config());
         let category = end.prompt.map(|(_, category)| category);
         let mut ended = end.prompt.map(|(prompt_tx, category)| OutcomePayload {
             prompt_tx,
@@ -1726,6 +1767,7 @@ impl AgentHub {
             child: child_id,
             name,
             model,
+            effort,
             reply: end.reply,
             category,
             files: end.files,
@@ -1759,6 +1801,8 @@ struct TaskRun {
     trace: RunMeta,
     /// Ends its running if the attempt is dropped before `park`
     running: RunningGuard,
+    /// When it must stop because its caller stops waiting for it
+    deadline: Option<Instant>,
 }
 
 /// A `task` call being worked on.
@@ -1775,6 +1819,8 @@ struct TaskDone {
     name: String,
     /// Model it ran on
     model: String,
+    /// The effort Gate chose for it, while that was Gate's to choose
+    effort: Option<ThinkingEffort>,
     /// Its final reply, or why there is none
     reply: Result<String, String>,
     /// Its prompt's category, when the prompt was recorded
@@ -1937,6 +1983,15 @@ fn reads_only(definition: &AgentDefinition) -> bool {
             .iter()
             .all(|tool| aura_agent_gate::lead::keeps_tool(tool))
     })
+}
+
+/// What a subtask is told `left` before its time is up.
+fn wrap_up_notice(left: Duration) -> String {
+    format!(
+        "About {} minutes are left for this task. Start no new checks: reply now with \
+         what you found, and say what you did not get to.",
+        left.as_secs() / 60
+    )
 }
 
 /// What `parent` is told when its background agent `name` finishes.
@@ -2141,8 +2196,22 @@ async fn run_task_turn(
     if let Some(rec) = &recorder {
         rec.begin_turn(prompt);
     }
-    // Nothing sends to a spawn mid-task, so its steering stays empty.
+    // Only the harness sends to a spawn mid-task: that its time is
+    // nearly up.
     let steering = Steering::new(cancel);
+    let wrap_up = limits
+        .turn_timeout
+        .filter(|limit| *limit > WRAP_UP_BEFORE * 2)
+        .map(|limit| {
+            let steering = steering.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(limit - WRAP_UP_BEFORE).await;
+                let notice = wrap_up_notice(WRAP_UP_BEFORE);
+                steering
+                    .send(SteerSource::Harness, notice.clone(), notice)
+                    .await;
+            })
+        });
     let (result, forwarded) = run_agent_turn(
         session,
         agent_loop,
@@ -2154,6 +2223,9 @@ async fn run_task_turn(
         recorder.clone(),
     )
     .await;
+    if let Some(wrap_up) = wrap_up {
+        wrap_up.abort();
+    }
     steering.finish(&[]);
     if let Some(rec) = &recorder {
         super::trace::end_turn(rec, &result, cancel.is_cancelled());
@@ -2175,10 +2247,13 @@ async fn run_task_turn(
     let result = match result {
         Ok(result) => result,
         Err(e) => {
-            let reason = if cancelled {
-                "cancelled by the user".to_string()
-            } else {
-                e.to_string()
+            let reason = match (&e, limits.turn_timeout) {
+                _ if cancelled => "cancelled by the user".to_string(),
+                (aura_agent::AgentError::Timeout(_), Some(limit)) => format!(
+                    "ran out of time: it stopped after {} minutes without a reply",
+                    limit.as_secs() / 60
+                ),
+                _ => e.to_string(),
             };
             ui.send(UiCommand::ShowWarning(reason.clone())).await;
             ui.send(UiCommand::Complete).await;

@@ -377,16 +377,38 @@ pub fn effort_change_resets_prompt_cache(model: &str) -> bool {
     model_key(model).starts_with("claude-")
 }
 
-/// Whether an agent's turns on `model` reason at the highest effort the
-/// model has when nobody chose one: Claude Sonnet 5.5 and the Claude
-/// Opus 5 models. They get the work that is hard to get right, where an
-/// attempt that fails costs more than the extra reasoning does.
+/// Whether an agent's turns on `model` reason at high effort when nobody
+/// chose one: Claude Sonnet 5.5 and the Claude Opus 5 models. They get
+/// the work that is hard to get right, where an attempt that fails costs
+/// more than the extra reasoning does. Not max: at max one call on a long
+/// conversation thinks for minutes, and a stream cut off before it ends
+/// starts that thinking over.
 #[must_use]
-pub fn reasons_at_max(model: &str) -> bool {
+pub fn reasons_high(model: &str) -> bool {
     let key = model_key(model);
     is_snapshot_of(&key, "claude-sonnet-5-5")
         || is_snapshot_of(&key, "claude-opus-5")
         || is_snapshot_of(&key, "claude-opus-5-5")
+}
+
+/// Whether `model` reasons harder at max effort than at high: the Claude
+/// models whose effort ladder goes up to `max` (Sonnet and Opus 4.6 and
+/// later, Fable and Mythos 5). Others fold max into their highest effort.
+#[must_use]
+pub fn has_max_effort(model: &str) -> bool {
+    let key = model_key(model);
+    [
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-fable-5",
+        "claude-mythos-5",
+    ]
+    .iter()
+    .any(|family| key.starts_with(family))
 }
 
 /// Whether `name` is `key` or one of its dated snapshots
@@ -868,14 +890,14 @@ mod tests {
     }
 
     #[test]
-    fn sonnet_5_5_and_opus_5_reason_at_max() {
+    fn sonnet_5_5_and_opus_5_reason_high() {
         for model in [
             "claude/claude-sonnet-5-5",
             "claude-sonnet-5-5-20261001",
             "aura-claude-opus-5-5",
             "claude/claude-opus-5",
         ] {
-            assert!(reasons_at_max(model), "{model}");
+            assert!(reasons_high(model), "{model}");
         }
         for model in [
             "claude/claude-sonnet-5",
@@ -885,7 +907,28 @@ mod tests {
             "chatgpt/gpt-5.6-sol",
             "ollama/qwen3",
         ] {
-            assert!(!reasons_at_max(model), "{model}");
+            assert!(!reasons_high(model), "{model}");
+        }
+    }
+
+    #[test]
+    fn max_effort_is_its_own_step_only_on_claude_models_whose_ladder_reaches_it() {
+        for model in [
+            "claude/claude-opus-5-5",
+            "aura-claude-opus-4-8",
+            "claude-sonnet-4-6",
+            "claude/claude-sonnet-5-5",
+            "claude/claude-fable-5-2",
+        ] {
+            assert!(has_max_effort(model), "{model}");
+        }
+        for model in [
+            "claude/claude-haiku-4-5",
+            "claude/claude-opus-4-1",
+            "chatgpt/gpt-5.4",
+            "local/qwen3:4b",
+        ] {
+            assert!(!has_max_effort(model), "{model}");
         }
     }
 

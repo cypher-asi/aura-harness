@@ -384,9 +384,9 @@ impl LoopState {
     /// only set by `configure_loop_config` for dev-loop tasks, so chat
     /// and other callers retain the original tiered policy below.
     ///
-    /// A model that reasons at max
-    /// ([`aura_model::model_catalog::reasons_at_max`]: Claude Sonnet 5.5
-    /// and Opus 5) gets `Max` on every iteration of every run, dev-loop
+    /// A model that reasons high
+    /// ([`aura_model::model_catalog::reasons_high`]: Claude Sonnet 5.5
+    /// and Opus 5) gets `High` on every iteration of every run, dev-loop
     /// runs included. The effort never changes within a run, so its
     /// prompt cache is kept.
     ///
@@ -410,8 +410,8 @@ impl LoopState {
         config: &AgentLoopConfig,
         iteration: usize,
     ) -> ThinkingEffort {
-        if aura_model::model_catalog::reasons_at_max(&config.model) {
-            return ThinkingEffort::Max;
+        if aura_model::model_catalog::reasons_high(&config.model) {
+            return ThinkingEffort::High;
         }
         if config.disable_thinking_iteration_0 {
             return ThinkingEffort::Medium;
@@ -452,12 +452,14 @@ impl LoopState {
         // picker via `AgentLoopConfig::user_thinking_effort`) hard-pins
         // the effort across every iteration, overriding the internal
         // `compute_thinking_effort` taper so the operator's explicit
-        // choice always wins. When unset, fall back to the heuristic.
+        // choice always wins. Then the effort the router chose for the
+        // work; when neither is set, fall back to the heuristic. Either is
+        // lowered once replies ran out of room ([`Self::reason_less`]).
         let thinking_effort = Some(config.user_thinking_effort.unwrap_or_else(|| {
-            (0..self.effort_lowered).fold(
-                self.compute_thinking_effort(config, iteration),
-                |effort, _| one_lower(effort),
-            )
+            let policy = config
+                .routed_thinking_effort
+                .unwrap_or_else(|| self.compute_thinking_effort(config, iteration));
+            (0..self.effort_lowered).fold(policy, |effort, _| one_lower(effort))
         }));
 
         let room = super::context::room_left_for_reply(config, self, &effective_tools);
@@ -844,19 +846,37 @@ mod reply_size_tests {
         let mut state = LoopState::new(&config, vec![Message::user("write the module")]);
         let first = next_request(&mut state, &config);
         assert_eq!(first.max_tokens.get(), 128_000);
-        assert_eq!(first.thinking_effort, Some(ThinkingEffort::Max));
+        assert_eq!(first.thinking_effort, Some(ThinkingEffort::High));
 
         state.reason_less();
         let second = next_request(&mut state, &config);
         assert_eq!(second.max_tokens.get(), 128_000);
-        assert_eq!(second.thinking_effort, Some(ThinkingEffort::High));
+        assert_eq!(second.thinking_effort, Some(ThinkingEffort::Medium));
 
         state.reason_less();
         let later = next_request(&mut state, &config);
-        assert_eq!(later.thinking_effort, Some(ThinkingEffort::Medium));
+        assert_eq!(later.thinking_effort, Some(ThinkingEffort::Low));
         assert_eq!(
             next_request(&mut state, &config).thinking_effort,
-            Some(ThinkingEffort::Medium)
+            Some(ThinkingEffort::Low)
+        );
+    }
+
+    #[test]
+    fn a_routed_effort_is_lowered_after_a_cut_off_too() {
+        let config = AgentLoopConfig {
+            routed_thinking_effort: Some(ThinkingEffort::Max),
+            ..AgentLoopConfig::for_agent("claude/claude-opus-5-5")
+        };
+        let mut state = LoopState::new(&config, vec![Message::user("write the module")]);
+        assert_eq!(
+            next_request(&mut state, &config).thinking_effort,
+            Some(ThinkingEffort::Max)
+        );
+        state.reason_less();
+        assert_eq!(
+            next_request(&mut state, &config).thinking_effort,
+            Some(ThinkingEffort::High)
         );
     }
 

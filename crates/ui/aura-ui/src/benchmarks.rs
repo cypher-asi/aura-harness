@@ -264,6 +264,24 @@ pub struct BenchLiveRun {
     /// Hex id of the agent it runs as; `None` while it waits for its
     /// task's files
     pub agent_id: Option<String>,
+    /// What it is doing right now; `None` when that is not known
+    pub doing: Option<BenchDoing>,
+}
+
+/// What a run under way is doing right now.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BenchDoing {
+    /// `thinking`, `writing`, `waiting for the model`, `running
+    /// run_command`, ...
+    pub what: String,
+    /// How long it has been at it
+    pub for_ms: u64,
+    /// The model call it is on, counting from 1; 0 while tools run
+    pub call: u32,
+    /// Times this model call started its reply over
+    pub restarts: u32,
+    /// What its subtask is doing, while one runs
+    pub subtask: Option<Box<BenchDoing>>,
 }
 
 /// The judge's verdict on one pair of runs.

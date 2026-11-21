@@ -13,7 +13,9 @@
 //! operators tune both paths together and a single definition keeps
 //! the budget invariant from drifting.
 
-use aura_model::PartialToolUse;
+use std::time::Duration;
+
+use aura_model::{PartialToolUse, ThinkingEffort};
 
 /// Retry budget / backoff envelope shared with the legacy buffered
 /// streaming retry path and `aura_model::AnthropicConfig`. Both
@@ -57,5 +59,93 @@ pub(super) fn update_partial_retry_state(
         tool_use_id,
         tool_name,
         reason,
+    }
+}
+
+/// How long an attempt runs before its interruption counts as the call
+/// being too long to finish rather than a dropped connection.
+pub(super) const LONG_ATTEMPT: Duration = Duration::from_secs(60);
+
+/// The effort a retry asks for after an attempt was cut off `cut_after`
+/// into a call at `effort`: one step lower once the attempt ran
+/// [`LONG_ATTEMPT`], since the same reasoning started over is cut off at
+/// the same point. `None` keeps the effort.
+pub(super) fn effort_after_cut(
+    effort: Option<ThinkingEffort>,
+    cut_after: Duration,
+) -> Option<ThinkingEffort> {
+    if cut_after < LONG_ATTEMPT {
+        return None;
+    }
+    match effort? {
+        ThinkingEffort::Max | ThinkingEffort::XHigh => Some(ThinkingEffort::High),
+        ThinkingEffort::High => Some(ThinkingEffort::Medium),
+        ThinkingEffort::Medium => Some(ThinkingEffort::Low),
+        _ => None,
+    }
+}
+
+/// What a restart of the response says: how long the failed attempt ran,
+/// what ended it, and the effort it retries at when that was lowered.
+pub(super) fn reset_reason(
+    cut_after: Duration,
+    error: &str,
+    lowered: Option<ThinkingEffort>,
+) -> String {
+    let secs = cut_after.as_secs();
+    let ran = if secs < 60 {
+        format!("{secs}s")
+    } else {
+        format!("{}m {:02}s", secs / 60, secs % 60)
+    };
+    let mut reason = format!("Model stream interrupted after {ran}");
+    if !error.is_empty() {
+        reason.push_str(&format!(" ({error})"));
+    }
+    reason.push_str("; restarting the response");
+    if let Some(effort) = lowered.and_then(ThinkingEffort::reasoning_effort_wire) {
+        reason.push_str(&format!(" at {effort} effort"));
+    }
+    reason
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_long_cut_off_retries_one_effort_lower_and_a_quick_drop_does_not() {
+        let long = Duration::from_secs(121);
+        assert_eq!(
+            effort_after_cut(Some(ThinkingEffort::Max), long),
+            Some(ThinkingEffort::High)
+        );
+        assert_eq!(
+            effort_after_cut(Some(ThinkingEffort::High), long),
+            Some(ThinkingEffort::Medium)
+        );
+        assert_eq!(effort_after_cut(Some(ThinkingEffort::Low), long), None);
+        assert_eq!(effort_after_cut(None, long), None);
+        assert_eq!(
+            effort_after_cut(Some(ThinkingEffort::Max), Duration::from_secs(5)),
+            None
+        );
+    }
+
+    #[test]
+    fn the_reset_says_how_long_the_attempt_ran_and_what_ended_it() {
+        assert_eq!(
+            reset_reason(
+                Duration::from_millis(120_400),
+                "transport closed before stream completed: missing message_stop",
+                Some(ThinkingEffort::Medium),
+            ),
+            "Model stream interrupted after 2m 00s (transport closed before stream \
+             completed: missing message_stop); restarting the response at medium effort"
+        );
+        assert_eq!(
+            reset_reason(Duration::from_secs(3), "", None),
+            "Model stream interrupted after 3s; restarting the response"
+        );
     }
 }

@@ -52,6 +52,7 @@ use crate::isolation::changes::{self, BUILD_OUTPUT};
 use crate::isolation::{
     CopyIsolation, IsolatedWorkspace, Isolation, IsolationStrategy, WorktreeIsolation,
 };
+use crate::model_selection::routed_effort;
 use aura_agent::AgentLoop;
 use aura_agent_gate::attempt_log::Terms;
 use aura_agent_gate::compare::{list_price, plan_shares, run_name, PlanReading, Schedule};
@@ -60,7 +61,7 @@ use aura_agent_gate::outcome::calls_for_stronger;
 use aura_agent_gate::turn_judge::Failed;
 use aura_agent_gate::{judge, Candidate, Work};
 use aura_agent_kernel::Kernel;
-use aura_agent_trace::{RunMeta, RunRecorder, RunSource};
+use aura_agent_trace::{Activity, Doing, RunMeta, RunRecorder, RunSource};
 use aura_core_types::trace::{Reward, RewardKind, RewardTarget};
 use aura_core_types::{
     AgentId, ArmSpec, BenchSource, CompareArm, CompareCopy, CompareJudgment, ComparePayload,
@@ -69,7 +70,9 @@ use aura_core_types::{
 };
 use aura_exec_tools::plan_tools::{is_plan_path, todo_items, PlanFile};
 use aura_model::Message;
-use aura_ui_terminal::events::{run_order, BenchLiveRun, BenchTaskSetup, ProcessStatus};
+use aura_ui_terminal::events::{
+    run_order, BenchDoing, BenchLiveRun, BenchTaskSetup, ProcessStatus,
+};
 use aura_ui_terminal::{ApprovalLevel, PermissionMode, UiCommand};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -405,6 +408,7 @@ async fn show_live(ctx: &Context, payload: &ComparePayload) {
                 cost_usd: used.iter().map(|row| row.cost_usd).sum(),
                 tokens: super::bench::tokens(&used),
                 agent_id: working.map(|(agent, _)| agent.to_hex()),
+                doing: working.and_then(|(agent, _)| doing(&ctx.hub, agent, now_ms())),
             }
         })
         .collect();
@@ -414,6 +418,39 @@ async fn show_live(ctx: &Context, payload: &ComparePayload) {
         .commands
         .send(UiCommand::BenchUpsert(Box::new(view)))
         .await;
+}
+
+/// What the run of `agent` is doing at `now_ms`, with what its subtask is
+/// doing while one runs. `None` when it has no open run.
+fn doing(hub: &AgentHub, agent: AgentId, now_ms: u64) -> Option<BenchDoing> {
+    let (activity, _) = hub.traces.activity(agent)?;
+    let mut doing = bench_doing(&activity, now_ms);
+    if matches!(&activity.doing, Doing::Tools(tools) if tools.iter().any(|t| t == "task")) {
+        let below = lock(&hub.registry).descendants(agent);
+        doing.subtask = below
+            .into_iter()
+            .rev()
+            .filter_map(|agent| hub.traces.activity(agent))
+            .find(|(_, in_turn)| *in_turn)
+            .map(|(sub, _)| Box::new(bench_doing(&sub, now_ms)));
+    }
+    Some(doing)
+}
+
+fn bench_doing(activity: &Activity, now_ms: u64) -> BenchDoing {
+    let (what, call) = match &activity.doing {
+        Doing::Waiting => ("waiting for the model".to_string(), activity.calls + 1),
+        Doing::Thinking => ("thinking".to_string(), activity.calls + 1),
+        Doing::Writing => ("writing".to_string(), activity.calls + 1),
+        Doing::Tools(tools) => (format!("running {}", tools.join(", ")), 0),
+    };
+    BenchDoing {
+        what,
+        for_ms: now_ms.saturating_sub(activity.since_ms),
+        call,
+        restarts: activity.restarts,
+        subtask: None,
+    }
 }
 
 /// A run that ended, with what the judge needs from it.
@@ -1240,12 +1277,14 @@ async fn run_prompt(
         ArmRouting::Gate { .. } => hub.gate.redecide(&work, &plan.candidates),
         ArmRouting::Pinned(_) => None,
     };
-    let routed_to = match routing {
-        ArmRouting::Gate { .. } => decision.as_ref().map(|d| d.model.id.clone()),
-        ArmRouting::Pinned(model) => Some(model.clone()),
-    };
-    if let Some(model) = routed_to.filter(|model| *model != config.model) {
-        hub.model_limits().configure(&mut config, &model);
+    match (routing, &decision) {
+        (ArmRouting::Gate { .. }, Some(decision)) => {
+            hub.model_limits().route(&mut config, decision);
+        }
+        (ArmRouting::Pinned(model), _) if *model != config.model => {
+            hub.model_limits().configure(&mut config, model);
+        }
+        _ => {}
     }
     let model = config.model.clone();
     let led = lead.is_some_and(|lead| {
@@ -1260,6 +1299,9 @@ async fn run_prompt(
         route: Route {
             explored: decision.as_ref().is_some_and(|d| d.explored),
             propensity: decision.as_ref().map_or(1.0, |d| d.propensity),
+            effort: decision
+                .as_ref()
+                .and_then(|d| d.effort.reasoning_effort_wire().map(str::to_string)),
             ..Route::turn(model.clone(), RouteReason::Compare)
         },
         led: Some(led),
@@ -1384,7 +1426,8 @@ async fn run_prompt(
         let mut carry_on: Option<(String, String, bool)> = None;
         if let (true, false, Ok(partial)) = (gate_arm, stopped, &result) {
             if follow.0 != model {
-                let fresh = FollowUp::new(&hub.gate, &plan.candidates, &model, &workdir)
+                let ran = (model.as_str(), routed_effort(&config));
+                let fresh = FollowUp::new(&hub.gate, &plan.candidates, ran, &workdir)
                     .since(copy_before.clone())
                     .after(&follow.1);
                 follow = (model.clone(), fresh);
@@ -1591,10 +1634,12 @@ async fn run_prompt(
                 review = Some(judged.verdict.reasons);
             }
         }
-        let Some(next) = hub
-            .gate
-            .escalate(RouteLevel::Turn, category, &model, &plan.candidates)
-        else {
+        let Some(next) = hub.gate.escalate(
+            RouteLevel::Turn,
+            category,
+            (&model, routed_effort(&config)),
+            &plan.candidates,
+        ) else {
             break (signal, reply, error, ended, true);
         };
         let takeover = format!(
@@ -1623,11 +1668,11 @@ async fn run_prompt(
         ui.send(system_message(format!(
             "{} {name} · gate → {} · {category}, {}",
             ctx.host.name,
-            aura_model::model_catalog::route_label(&next.model.id),
+            next.label(),
             next.reason
         )))
         .await;
-        hub.model_limits().configure(&mut config, &next.model.id);
+        hub.model_limits().route(&mut config, &next);
         hub.gate.note_model(agent_id, &next.model.id);
         model.clone_from(&next.model.id);
         escalations += 1;

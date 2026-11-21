@@ -506,11 +506,14 @@ async fn a_failed_check_undoes_the_attempt_and_retries_once_on_a_stronger_model(
     let (prompts, outcomes) = record(&fixture, attempts[0]);
     assert_eq!(
         prompts[0].route,
-        Route::subtask(SONNET, RouteReason::Default)
+        Route::subtask(SONNET, RouteReason::Default).at_effort("medium")
     );
     assert_eq!(outcomes[0].signal, OutcomeSignal::ChecksFailed);
     let (prompts, outcomes) = record(&fixture, attempts[1]);
-    assert_eq!(prompts[0].route, Route::subtask(GPT, RouteReason::Escalate));
+    assert_eq!(
+        prompts[0].route,
+        Route::subtask(GPT, RouteReason::Escalate).at_effort("medium")
+    );
     assert_eq!(prompts[0].category, Some(PromptCategory::Question));
     assert!(prompts[0]
         .text
@@ -628,7 +631,10 @@ async fn a_failed_subtask_the_judge_blames_is_retried_with_what_the_judge_found(
         [OutcomeSignal::ChecksFailed, OutcomeSignal::JudgedFail]
     );
     let (prompts, _) = record(&fixture, attempts[1]);
-    assert_eq!(prompts[0].route, Route::subtask(GPT, RouteReason::Escalate));
+    assert_eq!(
+        prompts[0].route,
+        Route::subtask(GPT, RouteReason::Escalate).at_effort("medium")
+    );
     assert!(
         prompts[0]
             .text
@@ -671,14 +677,14 @@ async fn a_frontier_leads_subtasks_start_below_its_tier_and_may_escalate_to_it()
     assert_eq!(prompts[0].category, Some(PromptCategory::Planning));
     assert_eq!(
         prompts[0].route,
-        Route::subtask(SONNET, RouteReason::Default),
+        Route::subtask(SONNET, RouteReason::Default).at_effort("medium"),
         "the strongest model below the lead's tier"
     );
     assert_eq!(outcomes[0].signal, OutcomeSignal::ChecksFailed);
     let (prompts, _) = record(&fixture, attempts[1]);
     assert_eq!(
         prompts[0].route,
-        Route::subtask(GPT, RouteReason::Escalate),
+        Route::subtask(GPT, RouteReason::Escalate).at_effort("medium"),
         "the retry may go up to the lead's tier"
     );
     assert!(result
@@ -698,7 +704,10 @@ async fn a_frontier_leads_subtasks_start_below_its_tier_and_may_escalate_to_it()
     .await;
     let attempts = children(&fixture, first, "implement");
     let (prompts, _) = record(&fixture, attempts[2]);
-    assert_eq!(prompts[0].route, Route::subtask(GPT, RouteReason::Default));
+    assert_eq!(
+        prompts[0].route,
+        Route::subtask(GPT, RouteReason::Default).at_effort("medium")
+    );
 }
 
 /// Gate has seen two planning subtasks fail on Sonnet, which rules it
@@ -846,7 +855,7 @@ async fn outside_git_only_file_tool_changes_are_undone_before_the_retry() {
 }
 
 #[tokio::test]
-async fn nothing_is_retried_without_a_stronger_model() {
+async fn on_the_strongest_model_a_failure_is_retried_one_effort_higher() {
     let (fixture, _commands) = fixture();
     let mut b = borrowed(&fixture);
     let first = fixture.first;
@@ -867,15 +876,21 @@ async fn nothing_is_retried_without_a_stronger_model() {
     .await;
 
     let attempts = children(&fixture, first, "implement");
-    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts.len(), 2, "{}", result.final_message);
     let (prompts, outcomes) = record(&fixture, attempts[0]);
     assert_eq!(
         prompts[0].route,
-        Route::subtask(GPT, RouteReason::Default),
+        Route::subtask(GPT, RouteReason::Default).at_effort("medium"),
         "with Sonnet ruled out, planning goes to the strongest model"
     );
     assert_eq!(outcomes[0].signal, OutcomeSignal::ChecksFailed);
-    assert!(!result.final_message.contains("Retried"));
+    let (prompts, outcomes) = record(&fixture, attempts[1]);
+    assert_eq!(
+        prompts[0].route,
+        Route::subtask(GPT, RouteReason::Escalate).at_effort("high"),
+        "nothing is stronger, so the same model thinks harder"
+    );
+    assert_eq!(outcomes[0].signal, OutcomeSignal::ChecksFailed);
     assert!(
         fixture.workspace.join(format!("notes/{GPT}.txt")).exists(),
         "a final failure is left for the lead to see"

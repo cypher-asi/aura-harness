@@ -214,6 +214,10 @@ pub struct Route {
     /// Probability of this choice under Gate's policy, 1.0 when it was
     /// not a random choice.
     pub propensity: f64,
+    /// Reasoning effort Gate chose for the work (`low`, `high`, `max`,
+    /// ...); `None` when it chose none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 
 impl Route {
@@ -226,6 +230,16 @@ impl Route {
             reason,
             explored: false,
             propensity: 1.0,
+            effort: None,
+        }
+    }
+
+    /// The same route, at reasoning effort `effort`.
+    #[must_use]
+    pub fn at_effort(self, effort: impl Into<String>) -> Self {
+        Self {
+            effort: Some(effort.into()),
+            ..self
         }
     }
 

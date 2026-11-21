@@ -14,6 +14,12 @@
 //! moves up a tier once its start model has failed too often to reach
 //! the target. When an attempt fails, [`escalate`] picks the model the
 //! work goes on with.
+//!
+//! Gate picks the reasoning effort with the model: work starts at the
+//! effort its difficulty calls for ([`start_effort`]), and only work that
+//! failed on the strongest model is tried again at a higher one, up to
+//! max ([`escalate`]). At max one call can think for minutes, so it is
+//! kept for work nothing less got right.
 
 use std::collections::HashMap;
 
@@ -21,10 +27,10 @@ use aura_config::GateConfig;
 use aura_core_auth::ProviderKind;
 use aura_core_types::{Difficulty, PromptCategory, Route, RouteLevel, RouteReason};
 use aura_model::model_catalog::{
-    estimate_cost_usd, infer_tier, model_key, route_label, supersedes, ModelBackend, ModelOption,
-    ModelTier,
+    estimate_cost_usd, has_max_effort, infer_tier, model_key, route_label, supersedes,
+    ModelBackend, ModelOption, ModelTier,
 };
-use aura_model::Usage;
+use aura_model::{ThinkingEffort, Usage};
 
 use crate::stats::{GateStats, Row};
 
@@ -177,6 +183,37 @@ pub const fn start_tier(category: PromptCategory, difficulty: Option<Difficulty>
     }
 }
 
+/// The reasoning effort work of `difficulty` starts at, on whichever
+/// model it goes to: low for easy work, high for hard work, medium for
+/// the rest and when the classifier did not say. Never max: that is
+/// reached only by [`escalate`].
+#[must_use]
+pub const fn start_effort(difficulty: Option<Difficulty>) -> ThinkingEffort {
+    match difficulty {
+        Some(Difficulty::Easy) => ThinkingEffort::Low,
+        Some(Difficulty::Hard) => ThinkingEffort::High,
+        Some(Difficulty::Medium) | None => ThinkingEffort::Medium,
+    }
+}
+
+/// The effort after `effort` on `model`'s ladder (low, medium, high,
+/// max), when Gate may still raise it; `None` at the top. Max is a step
+/// only on a model that reasons harder there than at high
+/// ([`has_max_effort`]).
+#[must_use]
+pub fn raise_effort(effort: ThinkingEffort, model: &str) -> Option<ThinkingEffort> {
+    match effort {
+        ThinkingEffort::Off | ThinkingEffort::Minimal | ThinkingEffort::Low => {
+            Some(ThinkingEffort::Medium)
+        }
+        ThinkingEffort::Medium => Some(ThinkingEffort::High),
+        ThinkingEffort::High | ThinkingEffort::XHigh => {
+            has_max_effort(model).then_some(ThinkingEffort::Max)
+        }
+        ThinkingEffort::Max => None,
+    }
+}
+
 /// A piece of work Gate routes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Work<'a> {
@@ -221,6 +258,8 @@ impl<'a> Work<'a> {
 pub struct Decision {
     /// The model it runs on.
     pub model: Candidate,
+    /// How hard the model reasons on it.
+    pub effort: ThinkingEffort,
     /// Why: [`RouteReason::Proven`], [`RouteReason::Default`] or
     /// [`RouteReason::Explore`].
     pub reason: RouteReason,
@@ -231,6 +270,17 @@ pub struct Decision {
 }
 
 impl Decision {
+    /// The model, who serves it and its effort, e.g.
+    /// `claude-sonnet-4-6 (claude plan) at high effort`.
+    #[must_use]
+    pub fn label(&self) -> String {
+        format!(
+            "{} at {} effort",
+            self.model.route_label(),
+            self.effort.reasoning_effort_wire().unwrap_or("no")
+        )
+    }
+
     /// The decision as recorded on the prompt of work at `level`.
     #[must_use]
     pub fn route(&self, level: RouteLevel) -> Route {
@@ -240,6 +290,7 @@ impl Decision {
             reason: self.reason,
             explored: self.explored,
             propensity: self.propensity,
+            effort: self.effort.reasoning_effort_wire().map(str::to_string),
         }
     }
 }
@@ -407,7 +458,8 @@ pub fn by_expected_cost<'a>(
 /// [`by_expected_cost`]. `None` when there are no candidates. Hard work
 /// starts no lower than [`start_floor`], whether proven, by default or
 /// explored, and no work goes to a model a later version supersedes
-/// ([`current`]).
+/// ([`current`]). Whichever model it is, the work runs at the effort of
+/// its difficulty ([`start_effort`]).
 pub fn pick(
     stats: &GateStats,
     work: &Work<'_>,
@@ -449,6 +501,7 @@ pub fn pick(
     let decide = |index: usize, reason, explored, propensity| {
         Some(Decision {
             model: order[index].clone(),
+            effort: start_effort(work.difficulty),
             reason,
             explored,
             propensity,
@@ -468,34 +521,43 @@ pub fn pick(
     decide(index, reason, false, 1.0 - rate)
 }
 
-/// Where work at `level` that failed on `failed` goes next: the cheapest
-/// model (by [`by_expected_cost`]) of the lowest tier above `failed`'s,
-/// among those no later version supersedes ([`current`]). `None` when no
-/// candidate is stronger.
+/// Where work at `level` that failed on `failed` at `effort` goes next:
+/// the cheapest model (by [`by_expected_cost`]) of the lowest tier above
+/// `failed`'s, among those no later version supersedes ([`current`]), at
+/// the same effort. With no stronger model, the same model one effort
+/// higher ([`raise_effort`]), so max is the last step on the strongest
+/// model. `effort` is `None` when Gate does not choose the effort (the
+/// user pinned one): then only the model moves. `None` when nothing is
+/// left to try.
 #[must_use]
 pub fn escalate(
     stats: &GateStats,
     level: RouteLevel,
-    failed: &str,
+    (failed, effort): (&str, Option<ThinkingEffort>),
     candidates: &[Candidate],
 ) -> Option<Decision> {
-    let tier = candidates
-        .iter()
-        .find(|c| c.id == failed)
-        .map_or_else(|| infer_tier(failed), |c| c.tier);
+    let ran = candidates.iter().find(|c| c.id == failed);
+    let tier = ran.map_or_else(|| infer_tier(failed), |c| c.tier);
     let current = current(candidates);
     let stronger: Vec<&Candidate> = by_expected_cost(stats, level, &current)
         .into_iter()
         .filter(|c| c.tier > tier)
         .collect();
-    let next = stronger.iter().map(|c| c.tier).min()?;
+    let decide = |model: &Candidate, effort| {
+        Some(Decision {
+            model: model.clone(),
+            effort,
+            reason: RouteReason::Escalate,
+            explored: false,
+            propensity: 1.0,
+        })
+    };
+    let Some(next) = stronger.iter().map(|c| c.tier).min() else {
+        let effort = raise_effort(effort?, failed)?;
+        return decide(ran?, effort);
+    };
     let model = stronger.into_iter().find(|c| c.tier == next)?;
-    Some(Decision {
-        model: model.clone(),
-        reason: RouteReason::Escalate,
-        explored: false,
-        propensity: 1.0,
-    })
+    decide(model, effort.unwrap_or(ThinkingEffort::Medium))
 }
 
 /// What a subtask is first routed among when the agent dispatching it
@@ -981,7 +1043,7 @@ mod tests {
         fn a_failed_attempt_escalates_to_the_cheapest_model_one_tier_up() {
             let empty = GateStats::default();
             let up = |failed: &str, candidates: &[Candidate]| {
-                escalate(&empty, RouteLevel::Subtask, failed, candidates).map(|d| {
+                escalate(&empty, RouteLevel::Subtask, (failed, None), candidates).map(|d| {
                     assert_eq!(d.reason, RouteReason::Escalate);
                     assert!(!d.explored);
                     d.model.id
@@ -997,6 +1059,72 @@ mod tests {
             assert_eq!(up(LOCAL, &claude()).as_deref(), Some(HAIKU));
             assert_eq!(up(OPUS, &claude()), None, "nothing is stronger");
             assert_eq!(up(HAIKU, &[]), None);
+        }
+
+        #[test]
+        fn work_starts_at_its_difficultys_effort_and_only_the_strongest_model_climbs_to_max() {
+            let empty = GateStats::default();
+            let effort = |difficulty| {
+                pick(
+                    &empty,
+                    &Work::turn(PromptCategory::MultiFileChange).of(difficulty),
+                    &claude(),
+                    &no_exploring(),
+                    &mut || 0.0,
+                )
+                .unwrap()
+                .effort
+            };
+            assert_eq!(effort(Some(Difficulty::Easy)), ThinkingEffort::Low);
+            assert_eq!(effort(None), ThinkingEffort::Medium);
+            assert_eq!(effort(Some(Difficulty::Medium)), ThinkingEffort::Medium);
+            assert_eq!(effort(Some(Difficulty::Hard)), ThinkingEffort::High);
+
+            let up = |failed: &str, effort| {
+                escalate(&empty, RouteLevel::Turn, (failed, Some(effort)), &claude())
+                    .map(|d| (d.model.id, d.effort))
+            };
+            assert_eq!(
+                up(SONNET, ThinkingEffort::High),
+                Some((OPUS.to_string(), ThinkingEffort::High)),
+                "a stronger model first, at the same effort"
+            );
+            assert_eq!(
+                up(OPUS, ThinkingEffort::Medium),
+                Some((OPUS.to_string(), ThinkingEffort::High))
+            );
+            assert_eq!(
+                up(OPUS, ThinkingEffort::High),
+                Some((OPUS.to_string(), ThinkingEffort::Max)),
+                "max only once high failed on the strongest model"
+            );
+            assert_eq!(up(OPUS, ThinkingEffort::Max), None);
+            let route = escalate(
+                &empty,
+                RouteLevel::Turn,
+                (OPUS, Some(ThinkingEffort::High)),
+                &claude(),
+            )
+            .unwrap()
+            .route(RouteLevel::Turn);
+            assert_eq!(route.effort.as_deref(), Some("max"));
+
+            let gpt = candidates(
+                &catalog(LOCAL, &[]),
+                signed_in(&[ProviderKind::Chatgpt]),
+                |_| false,
+            );
+            let top = gpt.iter().max_by_key(|c| c.tier).unwrap().id.clone();
+            assert_eq!(
+                escalate(
+                    &empty,
+                    RouteLevel::Turn,
+                    (&top, Some(ThinkingEffort::High)),
+                    &gpt
+                ),
+                None,
+                "no max step on a model that folds max into high"
+            );
         }
 
         #[test]
@@ -1325,7 +1453,7 @@ mod tests {
                 "work for the strongest model goes to the strongest left"
             );
             assert_eq!(
-                escalate(&empty, RouteLevel::Subtask, SONNET, &claude).map(|d| d.model.id),
+                escalate(&empty, RouteLevel::Subtask, (SONNET, None), &claude).map(|d| d.model.id),
                 Some(OPUS.to_string()),
                 "a failed attempt may still go up to the lead's tier"
             );
@@ -1436,6 +1564,7 @@ mod tests {
                     reason: RouteReason::Default,
                     explored: false,
                     propensity: 1.0 - settings.explore_rate,
+                    effort: Some("medium".to_string()),
                 }
             );
         }
@@ -1669,7 +1798,7 @@ mod tests {
                 (OLD_SONNET, NEW_OPUS),
             ] {
                 assert_eq!(
-                    escalate(&stats, RouteLevel::Turn, failed, &all)
+                    escalate(&stats, RouteLevel::Turn, (failed, None), &all)
                         .unwrap()
                         .model
                         .id,

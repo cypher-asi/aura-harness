@@ -402,6 +402,7 @@ async fn build(
         completions,
         notices,
         model,
+        effort: None,
         mode,
         workspace_root,
         tool_filter,

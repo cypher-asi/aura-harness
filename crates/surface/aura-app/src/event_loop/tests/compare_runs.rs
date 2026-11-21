@@ -204,7 +204,13 @@ async fn both_arms_run_repeatedly_in_separate_copies_and_their_checks_feed_gate(
             .collect();
         assert_eq!(prompts.len(), 1);
         assert_eq!(prompts[0].text, "write the answer");
-        assert_eq!(prompts[0].route, Route::turn(model, RouteReason::Compare));
+        let route = Route::turn(model, RouteReason::Compare);
+        let route = if run.arm == CompareArm::A {
+            route.at_effort("medium")
+        } else {
+            route
+        };
+        assert_eq!(prompts[0].route, route, "Gate's arm records its effort");
         assert_eq!(
             prompts[0].led,
             Some(false),
@@ -611,7 +617,7 @@ async fn subtasks_of_a_run_follow_its_arm_not_the_users_selection() {
     let routed = dispatch(first).await;
     assert_eq!(
         route_of(routed),
-        Route::subtask(SONNET, RouteReason::Default),
+        Route::subtask(SONNET, RouteReason::Default).at_effort("medium"),
         "the Gate arm's subtasks are routed though the user pinned a model"
     );
     let nested = dispatch(routed).await;

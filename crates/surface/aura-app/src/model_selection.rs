@@ -70,7 +70,10 @@ impl ModelSelection {
     /// `auth` describes what the active identity can use.
     pub fn init(config: &mut AgentLoopConfig, auth: AuthSummary) -> Self {
         let prefs_path = prefs_path();
-        let prefs = prefs_path.as_deref().and_then(load_prefs).unwrap_or_default();
+        let prefs = prefs_path
+            .as_deref()
+            .and_then(load_prefs)
+            .unwrap_or_default();
         let persisted = prefs.model;
         let env_model = std::env::var("AURA_DEFAULT_MODEL")
             .or_else(|_| std::env::var("AURA_ANTHROPIC_MODEL"))
@@ -91,7 +94,10 @@ impl ModelSelection {
                 stream_timeout: config.stream_timeout,
                 stream_event_timeout: config.stream_event_timeout,
             },
-            thinking: prefs.thinking.as_deref().and_then(ThinkingEffort::from_wire),
+            thinking: prefs
+                .thinking
+                .as_deref()
+                .and_then(ThinkingEffort::from_wire),
             prefs_path,
         };
         selection.apply(config, &current);
@@ -321,7 +327,9 @@ impl ModelSelection {
                 .then(|| model_catalog::route_label(&self.turn_model())),
             user: self.auth.zos_user.clone(),
             plans: self.auth.plan_names.clone(),
-            thinking: self.thinking.map(|effort| thinking_name(effort).to_string()),
+            thinking: self
+                .thinking
+                .map(|effort| thinking_name(effort).to_string()),
         }
     }
 
@@ -456,7 +464,9 @@ impl ModelSelection {
         };
         let prefs = TuiPrefs {
             model: Some(self.current.clone()),
-            thinking: self.thinking.map(|effort| thinking_name(effort).to_string()),
+            thinking: self
+                .thinking
+                .map(|effort| thinking_name(effort).to_string()),
         };
         let result = path
             .parent()
@@ -477,11 +487,22 @@ impl ModelSelection {
 #[derive(Debug, Clone, Copy)]
 pub struct ModelLimits(RouterLimits);
 
+/// The effort Gate chose for the work `config` runs, while the effort is
+/// Gate's to choose: `None` when the user pinned one or Gate chose none.
+pub fn routed_effort(config: &AgentLoopConfig) -> Option<ThinkingEffort> {
+    config
+        .user_thinking_effort
+        .is_none()
+        .then_some(config.routed_thinking_effort)
+        .flatten()
+}
+
 impl ModelLimits {
     /// Configure `config` to run model `id`.
     pub fn configure(self, config: &mut AgentLoopConfig, id: &str) {
         let limits = self.0;
         config.model = id.to_string();
+        config.routed_thinking_effort = None;
         config.max_context_tokens = Some(aura_engine::model_context::context_window_for_model(id));
         match backend_for(id) {
             ModelBackend::Local => {
@@ -493,6 +514,15 @@ impl ModelLimits {
                 config.stream_event_timeout = limits.stream_event_timeout;
             }
         }
+    }
+
+    /// Point `config` at the model and reasoning effort Gate's `decision`
+    /// chose.
+    pub fn route(self, config: &mut AgentLoopConfig, decision: &aura_agent_gate::Decision) {
+        if config.model != decision.model.id {
+            self.configure(config, &decision.model.id);
+        }
+        config.routed_thinking_effort = Some(decision.effort);
     }
 
     /// Limits taken from `config` as the router settings.

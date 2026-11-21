@@ -96,7 +96,7 @@ mod tests;
 pub(in crate::agent_loop) use retry::stream_retry_params;
 
 use driver::drive_stream;
-use retry::{update_partial_retry_state, PartialRetryState};
+use retry::{effort_after_cut, reset_reason, update_partial_retry_state, PartialRetryState};
 
 /// Phase 8 context wrapper bundling the long-lived borrows that the
 /// streaming pump driver and its inner event-loop helpers all carry.
@@ -184,7 +184,7 @@ pub(super) enum StreamPumpOutcome {
 pub(super) async fn run_stream_pump(
     ctx: StreamPumpCtx<'_>,
     provider: &dyn ModelProvider,
-    request: ModelRequest,
+    mut request: ModelRequest,
     state: &mut super::LoopState,
 ) -> StreamPumpOutcome {
     let StreamPumpCtx {
@@ -197,6 +197,8 @@ pub(super) async fn run_stream_pump(
     let mut retry_state: Option<PartialRetryState> = None;
     let mut transport_error: Option<AgentError> = None;
     let mut reset_bytes = (0, 0);
+    // How long the last failed attempt ran, and what ended it.
+    let mut last_cut = (std::time::Duration::ZERO, String::new());
 
     for attempt in 0..=max_retries {
         if cancellation_token.is_some_and(CancellationToken::is_cancelled) {
@@ -266,12 +268,19 @@ pub(super) async fn run_stream_pump(
             } else {
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             }
+            let (cut_after, error) = std::mem::take(&mut last_cut);
+            let lowered = effort_after_cut(request.thinking_effort, cut_after);
+            if lowered.is_some() {
+                request.thinking_effort = lowered;
+            }
+            let reason = reset_reason(cut_after, &error, lowered);
+            warn!(attempt, %reason, "Restarting the model response");
             // Discard deltas from the failed attempt before displaying the
             // fresh response. Never splice two independent generations.
             emit_event(
                 event_tx,
                 AgentLoopEvent::StreamReset {
-                    reason: "Model stream interrupted; restarting the response".to_string(),
+                    reason,
                     text_bytes: reset_bytes.0,
                     thinking_bytes: reset_bytes.1,
                 },
@@ -296,6 +305,7 @@ pub(super) async fn run_stream_pump(
             }) => {
                 reset_bytes = (0, 0);
                 transport_error = None;
+                last_cut = (attempt_started.elapsed(), reason.clone());
                 retry_state = Some(update_partial_retry_state(
                     retry_state,
                     reason,
@@ -306,6 +316,7 @@ pub(super) async fn run_stream_pump(
             Err(err @ (ReasonerError::Request(_) | ReasonerError::Timeout)) => {
                 reset_bytes = (0, 0);
                 retry_state = None;
+                last_cut = (attempt_started.elapsed(), err.to_string());
                 transport_error = Some(AgentError::Reason(err));
                 continue;
             }
@@ -321,6 +332,7 @@ pub(super) async fn run_stream_pump(
             } => {
                 reset_bytes = (text_bytes, thinking_bytes);
                 transport_error = None;
+                last_cut = (attempt_started.elapsed(), reason.clone());
                 retry_state = Some(update_partial_retry_state(
                     retry_state,
                     reason,
@@ -334,6 +346,7 @@ pub(super) async fn run_stream_pump(
             } => {
                 reset_bytes = (text_bytes, thinking_bytes);
                 retry_state = None;
+                last_cut = (attempt_started.elapsed(), err.to_string());
                 transport_error = Some(err);
             }
             StreamPumpOutcome::Completed {

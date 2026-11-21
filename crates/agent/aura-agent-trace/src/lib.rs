@@ -19,6 +19,7 @@
 //! The recorder is a sidecar: it never appends to the kernel record
 //! log, it joins to it by tool-use id and file path.
 
+pub mod activity;
 pub mod bundle;
 pub mod dataset;
 pub mod db;
@@ -33,6 +34,7 @@ pub mod rewards;
 pub mod run_log;
 pub mod scorecard;
 
+pub use activity::{Activity, Doing};
 pub use bundle::{kernel_snapshot_store, list_runs, RunBundle, RunMeta, RunSource};
 pub use db::DbSink;
 pub use graph::{EdgeKind, GraphEdge, GraphNode, NodeKind, RunGraph};

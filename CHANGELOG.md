@@ -88,6 +88,49 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with a note saying why, and a task that fails shows as stopped at
   once.
 
+### Benchmark runs finish sooner and show what they are doing
+
+##### Changed
+
+- Sonnet 5.5 and Opus 5.5 reason at high effort when nobody picked one
+  (it was max). At max, one call late in a long task thought for two
+  minutes or more, and each call cut off before it ended started that
+  thinking over.
+- A model stream cut off after a minute or more is restarted one effort
+  lower (max and xhigh go to high, high to medium, medium to low), so
+  the same long call is not cut off again at the same point. A quick
+  drop is restarted as it was.
+- In a benchmark run, a read-only subtask such as `reviewer` reasons at
+  medium effort unless its model or effort was chosen.
+- Gate routes to a reasoning effort as well as a model. Work starts at
+  the effort of its difficulty: low for easy work, high for hard work,
+  medium for the rest. A failed attempt moves to a stronger model at the
+  same effort, and only work that failed on the strongest model goes on
+  there one effort higher, up to max. So max is used only once nothing
+  less got the work right. A thinking level picked in `/model` still
+  holds. The route line says the effort (`gate → claude-opus-4-7 (claude
+  plan) at high effort · debugging, escalate`), and the prompt's route
+  records it as `effort`.
+
+##### Fixed
+
+- A restart now says how long the attempt ran and what ended it, for
+  example "Model stream interrupted after 2m 00s (transport closed
+  before stream completed: missing message_stop); restarting the
+  response at medium effort". The reason is in the run's steps, as the
+  `stream_reset` decision.
+- A subtask its caller waits for stops 30 seconds before the caller's
+  `task` call gives up, so its run is closed with a reason rather than
+  left open with its work lost. Three minutes before then it is told to
+  reply with what it found and what it did not get to. A failed subtask
+  is not retried when too little of that time is left, and time spent
+  waiting for the workspace counts.
+- The BENCH view's runs under way show what each one is doing and for
+  how long: waiting for the model, thinking, writing or running tools,
+  with the call number, how many times the call restarted, and what a
+  `task` subtask is doing, for example "running task 8m12s › thinking
+  1m40s · call 4 · restarted 2×". They showed only "working".
+
 ### Gate classifies long task prompts
 
 ##### Fixed
