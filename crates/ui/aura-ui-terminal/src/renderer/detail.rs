@@ -6,11 +6,14 @@
 
 use super::header::HeaderInfo;
 use super::overlays::{record_detail_lines, record_status};
-use super::panels::{body_block, render_scrollbar, truncate_record_info, ScrollView};
+use super::panels::{
+    body_block, chat_scrollbar, render_scrollbar, truncate_record_info, ScrollView,
+};
 use super::processes::{process_detail_lines, status_glyph};
 use super::text::display_width;
 use crate::app::file_view::{FileBody, FileView};
 use crate::app::image_preview::ImageView;
+use crate::app::scrollbar::ScrollTarget;
 use crate::app::vim::{Align, Vim};
 use crate::app::DetailView;
 use crate::components::highlight_code_line;
@@ -84,6 +87,7 @@ pub(super) fn detail_header(app: &App, theme: &Theme) -> Option<(String, Option<
 pub(super) fn render_detail_view(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     if app.detail_view().is_some() {
         app.set_chat_rows(None);
+        app.set_chat_scrollbar(None, frame.buffer_mut());
     }
     if app.detail_view() == Some(&DetailView::Graph) {
         super::graph::render_graph(frame, area, app, theme);
@@ -110,6 +114,13 @@ pub(super) fn render_detail_view(frame: &mut Frame, area: Rect, app: &mut App, t
     if let Some(drawn) = bounds {
         app.set_detail_bounds(drawn.max_scroll, drawn.shown);
         app.set_chat_rows(Some((rows, drawn.top_row)));
+        let scrollbar = chat_scrollbar(
+            ScrollTarget::Detail,
+            (area, rows),
+            drawn.view,
+            drawn.max_scroll,
+        );
+        app.set_chat_scrollbar(scrollbar, frame.buffer_mut());
     }
 }
 
@@ -121,6 +132,8 @@ struct Drawn {
     shown: usize,
     /// Wrapped row on top of the view
     top_row: usize,
+    /// What its scrollbar shows
+    view: ScrollView,
 }
 
 /// Draw the highlighted record.
@@ -166,6 +179,7 @@ fn draw_record(
         max_scroll,
         shown,
         top_row: source.rows_before(first, width),
+        view,
     })
 }
 
@@ -289,6 +303,7 @@ fn draw_file(
         max_scroll,
         shown,
         top_row: source.rows_before(first, width),
+        view,
     }
 }
 

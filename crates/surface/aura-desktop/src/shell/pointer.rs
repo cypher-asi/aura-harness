@@ -773,6 +773,68 @@ mod tests {
         assert_eq!(after.x, before.x + 10, "{before:?} → {after:?}");
     }
 
+    #[test]
+    fn the_chats_scrollbar_scrolls_it_and_the_divider_still_moves_beside_it() {
+        use aura_ui::events::{MessageData, MessageRole};
+
+        let mut stage = stage();
+        stage.seed(false);
+        stage.shell.commands((0..80).map(|i| {
+            UiCommand::ShowMessage(MessageData::new(
+                MessageRole::Assistant,
+                format!("reply {i}"),
+            ))
+        }));
+        stage.draw();
+        let chat = stage.chat().area;
+        let (cell, area) = (stage.shell.metrics.cell, stage.shell.grid_area());
+        let origin = stage.shell.metrics.origin(area, stage.shell.cols);
+        let at = |col: u16, row: u16| {
+            Point::new(
+                origin.x + (f32::from(col) + 0.5) * cell.width,
+                origin.y + (f32::from(row) + 0.5) * cell.height,
+            )
+        };
+        let border = chat.right() - 1;
+        let middle = at(border, chat.y + chat.height / 2);
+        let bar = tab_bar::height(&stage.shell.metrics);
+        stage
+            .shell
+            .pointer_moved(Point::new(middle.x, middle.y + bar));
+        assert_eq!(stage.shell.chrome.hover(), None, "no divider on the border");
+        assert_eq!(stage.shell.cursor_icon(), CursorIcon::Default);
+
+        assert_eq!(stage.shell.tabs.front().tui.scroll_offset(), 0);
+        stage.drag(middle, at(border, chat.y));
+        let tui = &stage.shell.tabs.front().tui;
+        assert!(tui.scroll_offset() > 0, "the chat scrolled up");
+        assert!(tui.selection().is_none(), "nothing is selected");
+        assert_eq!(stage.chat().area, chat, "the divider stayed");
+        assert!(stage.shell.take_effects().is_empty(), "nothing copied");
+
+        // The blank columns left of the border take hold of it too, two
+        // of them, so it is wider to hit than the line it draws.
+        let beside = border - 2;
+        let from = at(beside, chat.y + chat.height / 2);
+        stage.shell.pointer_moved(Point::new(from.x, from.y + bar));
+        assert_eq!(stage.shell.chrome.hover(), None);
+        stage.drag(from, at(beside, chat.bottom() - 1));
+        let tui = &stage.shell.tabs.front().tui;
+        assert_eq!(tui.scroll_offset(), 0, "back at the bottom");
+        assert!(tui.selection().is_none(), "nothing is selected");
+        assert!(stage.shell.take_effects().is_empty(), "nothing copied");
+
+        let band = stage
+            .shell
+            .chrome
+            .band(Divider::Right)
+            .expect("beside the chat");
+        stage.drag(band, Point::new(band.x - 10.0 * cell.width, band.y));
+        let after = stage.chat().area;
+        assert_eq!(after.x, chat.x);
+        assert_eq!(after.right(), chat.right() - 10, "{chat:?} → {after:?}");
+    }
+
     /// A record shown over the chat.
     fn record_over_the_chat() -> Stage {
         use aura_ui::events::{RecordStatus, RecordSummary};

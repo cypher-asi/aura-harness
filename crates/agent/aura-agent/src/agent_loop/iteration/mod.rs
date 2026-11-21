@@ -257,7 +257,7 @@ pub(super) fn accumulate_response(
 
     for block in &sanitized_message.content {
         match block {
-            ContentBlock::Text { text } => state.result.total_text.push_str(text),
+            ContentBlock::Text { text } => append_paragraph(&mut state.result.total_text, text),
             ContentBlock::Thinking { thinking, .. } => {
                 state.result.total_thinking.push_str(thinking);
             }
@@ -286,4 +286,26 @@ pub(super) fn accumulate_response(
     state.result.estimated_context_tokens = estimated_context_tokens;
 
     scrubbed_markup
+}
+
+/// Append one complete assistant text block to the turn's accumulated text.
+///
+/// A turn that alternates text and tool calls produces several text blocks
+/// (one or more per model call). Gluing them directly runs sentences
+/// together ("...myself.All 3 errors..."), so consecutive blocks are joined
+/// with exactly one paragraph break. Whitespace-only blocks are skipped.
+///
+/// Must be called once per complete block, never per streaming delta, or a
+/// single block would be split into paragraphs.
+fn append_paragraph(out: &mut String, text: &str) {
+    if text.trim().is_empty() {
+        return;
+    }
+    if out.is_empty() {
+        out.push_str(text);
+        return;
+    }
+    out.truncate(out.trim_end().len());
+    out.push_str("\n\n");
+    out.push_str(text.trim_start());
 }

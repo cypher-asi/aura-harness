@@ -1,0 +1,13 @@
+{
+  "id": "01a1fcc127f0000a",
+  "title": "Review an uncommitted change in the Rust workspace at the repo root (aura-harness). READ-ONLY: do not edit any files. R…",
+  "state": "open",
+  "agent_id": "865b3e78d0001988c5e216f4b030e45eb45d5dbb0b5ae0db5c0e1b70f4208bc9",
+  "agent_name": "reviewer #6",
+  "assignee": "reviewer",
+  "parent": "01a1fcae177b0003",
+  "items": [],
+  "updated_ms": 1795241879536,
+  "created_ms": 1795241879536,
+  "tool_use_id": "toolu_013iFdPbNcNkJqhBN5nj62dT"
+}

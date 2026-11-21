@@ -86,6 +86,13 @@ use turns::{GateTurn, Prompt, Routing, Task, Work, WorkDone};
 /// How long quitting waits for cancelled turns to record how they ended.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
+/// How long `SessionTask::finish` waits for the loop to end once told to
+/// quit: the [`SHUTDOWN_GRACE`] its turns get to end and save their
+/// sessions, plus time to save the Processes tab and close the traces
+/// after them. It must stay longer than [`SHUTDOWN_GRACE`], or the turns
+/// still running at quit are dropped without saving.
+pub(crate) const FINISH_GRACE: Duration = SHUTDOWN_GRACE.saturating_add(Duration::from_secs(3));
+
 /// Bundled dependencies for the event loop, reducing parameter count.
 pub struct EventLoopContext<'a> {
     pub events: &'a mut mpsc::Receiver<UiEvent>,
@@ -107,6 +114,11 @@ pub struct EventLoopContext<'a> {
     pub approvals: Arc<TerminalApprovals>,
     /// Feed of the GRAPH tab, when the kernels report to one.
     pub flow: Option<Arc<FlowFeed>>,
+    /// Cancelled by `SessionTask::finish` once the UI is gone; the loop
+    /// then shuts down exactly as on [`UiEvent::Quit`]. The UI's end of
+    /// `events` may still be open then, so its closing can't be the
+    /// signal.
+    pub quit: CancellationToken,
 }
 
 /// Mutable state threaded through all event handlers.
@@ -212,6 +224,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         auth,
         approvals,
         flow,
+        quit,
     } = ctx;
     let processes = Arc::clone(&hub.processes);
     let publisher = processes::spawn_publisher(Arc::clone(&processes), commands.clone());
@@ -274,6 +287,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
             Some(outcome) = link_rx.recv() => {
                 auth::handle_link_outcome(&mut state, outcome).await;
             }
+            () = quit.cancelled() => break,
             event = state.events.recv() => {
                 let Some(event) = event else { break };
                 if handle_ui_event(&mut state, event, &link_tx).await {
@@ -373,10 +387,15 @@ fn prompt_work(source: SteerSource, text: String, shown: bool) -> Work {
 
 /// Cancel every agent's work and give it a moment to record how it ended.
 async fn shut_down(state: &mut LoopState<'_>, done_rx: &mut mpsc::Receiver<WorkDone>) {
+    info!(
+        in_flight = state.in_flight,
+        "Shutting down; cancelling agent work"
+    );
+    let started = tokio::time::Instant::now();
     state.queued.clear();
     state.approvals.cancel_all();
     state.hub.cancel_all();
-    let deadline = tokio::time::Instant::now() + SHUTDOWN_GRACE;
+    let deadline = started + SHUTDOWN_GRACE;
     while state.in_flight > 0 {
         match tokio::time::timeout_at(deadline, done_rx.recv()).await {
             Ok(Some(_)) => state.in_flight -= 1,
@@ -389,6 +408,11 @@ async fn shut_down(state: &mut LoopState<'_>, done_rx: &mut mpsc::Receiver<WorkD
             }
         }
     }
+    info!(
+        in_flight = state.in_flight,
+        elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        "Agent work shut down"
+    );
 }
 
 /// A background command ended: record it for the agent that started it,

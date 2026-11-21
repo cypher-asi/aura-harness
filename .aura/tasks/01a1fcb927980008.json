@@ -1,0 +1,42 @@
+{
+  "id": "01a1fcb927980008",
+  "title": "You are fixing a data-loss bug in the Rust workspace at /home/n3o/code/aura-harness (the \"aura\" agent harness: TUI + na…",
+  "state": "open",
+  "agent_id": "503691705f5316e03fd4006d7faa0307dc23d44d8073d5d80f42bc43d7d27cc2",
+  "agent_name": "rust-engineer #19",
+  "assignee": "rust-engineer",
+  "parent": "01a1fcade7860001",
+  "items": [
+    {
+      "content": "event_loop/mod.rs: quit token in EventLoopContext, select arm, FINISH_GRACE, shut_down info logs",
+      "state": "in_progress"
+    },
+    {
+      "content": "session.rs: store quit token, rewrite finish() (cancel, timeout wait, abort on timeout), docs",
+      "state": "pending"
+    },
+    {
+      "content": "session.rs tests (a) waits, (b) aborts after grace, (c) surfaces error; tokio test-util dev-dep",
+      "state": "pending"
+    },
+    {
+      "content": "event_loop/tests.rs: regression test that quitting with a running turn saves its checkpoint",
+      "state": "pending"
+    },
+    {
+      "content": "aura-cli runner.rs: drop app and terminal before awaiting finish()",
+      "state": "pending"
+    },
+    {
+      "content": "Confirm desktop path needs no change",
+      "state": "pending"
+    },
+    {
+      "content": "rustfmt touched files, cargo test -p aura-app --lib, clippy -p aura-app -p aura-cli",
+      "state": "pending"
+    }
+  ],
+  "updated_ms": 1795241798984,
+  "created_ms": 1795241355160,
+  "tool_use_id": "toolu_017tRvrkNDeXPzEz6xRqsUhW"
+}

@@ -416,7 +416,8 @@ impl Brush<'_> {
 
     /// A prose row's `columns` after its indent, laid out in flow: runs
     /// of text in the proportional face, as wide as they measure; inline
-    /// `code` a cell per column, in the monospace face.
+    /// `code` a cell per column, in the monospace face, on the text's
+    /// baseline and on a background that hugs it (see [`Self::chip`]).
     fn prose(
         &mut self,
         out: &mut Layers,
@@ -426,6 +427,12 @@ impl Brush<'_> {
     ) {
         let (cells, looks) = (row.cells, row.looks);
         let cell = self.metrics.cell;
+        let sans = Face {
+            family: Family::Sans,
+            bold: false,
+            italic: false,
+        };
+        let baseline = self.baseline("x", sans, theme::prose_size(self.metrics.font_size));
         let is_code =
             |i: usize| u16::try_from(i).is_ok_and(|i| code.iter().any(|r| r.contains(&i)));
         let mut x = self.x_at(columns.start);
@@ -455,9 +462,30 @@ impl Brush<'_> {
                 );
                 (face, size, self.text.run_width(&run, face, size))
             };
-            self.background(out, look.bg, x.round(), (x + width).round());
-            if !look.hidden {
-                self.run(out, &run, x, &look, (face, size, Shaping::Advanced));
+            let (x0, x1) = (x.round(), (x + width).round());
+            // Selected code is highlighted across the row like the text
+            // around it.
+            if code && !cells[col].modifier.contains(Modifier::REVERSED) {
+                self.chip(out, look.bg, (x0, x1), baseline);
+            } else {
+                self.background(out, look.bg, x0, x1);
+            }
+            let shown = run.trim_end();
+            if !look.hidden && !shown.is_empty() {
+                // Monospace glyphs sit higher in the row than the prose
+                // face's: lowered onto its baseline.
+                let y = if code {
+                    baseline - self.baseline(shown, face, size)
+                } else {
+                    0.0
+                };
+                self.run(
+                    out,
+                    shown,
+                    Point::new(x, y),
+                    &look,
+                    (face, size, Shaping::Advanced),
+                );
             }
             self.decorate(out, &look, x, x + width);
             x += width;
@@ -532,7 +560,7 @@ impl Brush<'_> {
                     self.metrics.font_size,
                     Shaping::Basic,
                 );
-                self.run(out, &run, x, &look, face);
+                self.run(out, &run, Point::new(x, 0.0), &look, face);
                 self.decorate(out, &look, x, self.x_at(end));
                 col = end;
                 continue;
@@ -565,7 +593,8 @@ impl Brush<'_> {
                     self.metrics.font_size,
                     Shaping::Advanced,
                 );
-                self.write(out, symbol, area.center_x(), look, face, Align::Center);
+                let at = Point::new(area.center_x(), 0.0);
+                self.write(out, symbol, at, look, face, Align::Center);
             }
         }
         self.decorate(out, look, area.x, area.x + area.width);
@@ -573,6 +602,30 @@ impl Brush<'_> {
 
     fn x_at(&self, col: usize) -> f32 {
         self.origin + col as f32 * self.metrics.cell.width
+    }
+
+    /// Where `text` in `face` at `size` has its baseline on a row, in
+    /// whole pixels down from the row's top, as [`Self::write`] puts it.
+    fn baseline(&mut self, text: &str, face: Face, size: f32) -> f32 {
+        let line_height = self.metrics.cell.height;
+        let run = self
+            .text
+            .shape(text, face, size, line_height, Shaping::Advanced);
+        run.baseline.round()
+    }
+
+    /// The background of inline code from `x0` to `x1` on a row whose
+    /// text sits on `baseline`: from a little above the code's tallest
+    /// glyphs to a little below its descenders, inside the row, so the
+    /// code of rows one under another stays apart and the row reads no
+    /// taller than the plain ones.
+    fn chip(&self, out: &mut Layers, bg: Color, (x0, x1): (f32, f32), baseline: f32) {
+        let (above, below) = theme::code_reach(self.metrics.font_size);
+        let top = (baseline - above).round().max(0.0);
+        let bottom = (baseline + below).round().min(self.metrics.cell.height);
+        if bg != self.palette.bg && x1 > x0 && bottom > top {
+            fill(&mut out.under, x0, top, x1 - x0, bottom - top, bg);
+        }
     }
 
     fn background(&self, out: &mut Layers, bg: Color, x0: f32, x1: f32) {
@@ -588,18 +641,18 @@ impl Brush<'_> {
         }
     }
 
-    /// A run of text from `x`, unless it is only spaces.
+    /// A run of text from `at`, unless it is only spaces.
     fn run(
         &mut self,
         out: &mut Layers,
         run: &str,
-        x: f32,
+        at: Point,
         look: &Look,
         face: (Face, f32, Shaping),
     ) {
         let text = run.trim_end();
         if !text.is_empty() {
-            self.write(out, text, x, look, face, Align::Left);
+            self.write(out, text, at, look, face, Align::Left);
         }
     }
 
@@ -607,7 +660,7 @@ impl Brush<'_> {
         &mut self,
         out: &mut Layers,
         content: &str,
-        x: f32,
+        at: Point,
         look: &Look,
         (face, size, shaping): (Face, f32, Shaping),
         align: Align,
@@ -623,7 +676,7 @@ impl Brush<'_> {
             color: rgba(look.fg),
             on_row: true,
         };
-        self.text.write(&mut out.over, &label, Point::new(x, 0.0));
+        self.text.write(&mut out.over, &label, at);
     }
 
     fn decorate(&self, out: &mut Layers, look: &Look, x0: f32, x1: f32) {
@@ -752,6 +805,82 @@ mod tests {
         assert!(h.x >= 17 && h.x < i.x && i.right() <= 34);
         assert!(h.y >= 56 && h.bottom() <= 74, "{h:?}");
         assert_eq!(h.color, rgba(stage.palette.fg));
+    }
+
+    /// `xx ` in the prose face, `xx` of inline code, ` xx` in the prose
+    /// face, laid out as a prose row; the code selected with `reversed`.
+    fn prose_with_code(text: &mut TextSystem, reversed: bool) -> Layers {
+        let stage = Stage::new();
+        let mut code = Style::default().bg(TermColor::Rgb(38, 38, 38));
+        if reversed {
+            code = code.add_modifier(Modifier::REVERSED);
+        }
+        let mut buffer = Buffer::empty(Rect::new(0, 0, COLS, 1));
+        buffer.set_string(0, 0, "xx ", Style::default());
+        buffer.set_string(3, 0, "xx", code);
+        buffer.set_string(5, 0, " xx", Style::default());
+        let mut brush = Brush {
+            text,
+            metrics: Metrics::new(14.0),
+            palette: stage.palette,
+            origin: 0.0,
+        };
+        let cells = &buffer.content;
+        let looks = brush.looks(cells);
+        let mut out = Layers::default();
+        brush.prose(
+            &mut out,
+            &Row {
+                cells,
+                looks: &looks,
+            },
+            0..8,
+            std::slice::from_ref(&(3..5)),
+        );
+        out
+    }
+
+    #[test]
+    fn inline_code_sits_on_the_texts_baseline_on_a_background_inside_the_row() {
+        let mut text = TextSystem::new();
+        let out = prose_with_code(&mut text, false);
+        let row = 18;
+        let [chip] = out.under[..] else {
+            panic!("only the code's background: {:?}", out.under);
+        };
+        assert!(chip.y > 0 && chip.bottom() <= row, "{chip:?}");
+        assert!(chip.h < 16, "shorter than the row: {chip:?}");
+
+        // Every x, monospace or not, ends on the same baseline.
+        assert_eq!(out.over.len(), 6, "{:?}", out.over);
+        let baseline = out.over[0].bottom();
+        assert!(
+            out.over.iter().all(|q| q.bottom() == baseline),
+            "{:?}",
+            out.over
+        );
+        let code: Vec<&Quad> = out
+            .over
+            .iter()
+            .filter(|q| chip.x <= q.x && q.right() <= chip.right())
+            .collect();
+        assert_eq!(code.len(), 2, "the code's glyphs are on it");
+        for glyph in code {
+            assert!(
+                chip.y < glyph.y && glyph.bottom() < chip.bottom(),
+                "{glyph:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn selected_inline_code_is_highlighted_across_the_row() {
+        let mut text = TextSystem::new();
+        let out = prose_with_code(&mut text, true);
+        let [highlight] = out.under[..] else {
+            panic!("only the selection: {:?}", out.under);
+        };
+        assert_eq!((highlight.y, highlight.h), (0, 18));
     }
 
     #[test]

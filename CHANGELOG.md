@@ -7,6 +7,58 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Quitting keeps what running turns did
+
+##### Fixed
+
+- Closing the desktop window, or quitting the terminal, while agents were
+  working lost their running turns. The session aborted its event loop
+  instead of letting it shut down, so a turn cancelled at quit never saved
+  its session: the agent came back with only the prompts and replies the
+  record holds, without its tool calls, and an agent still on its first
+  turn came back with nothing of that turn's work. Quitting now cancels
+  the running turns and waits for them to end and save, for a few seconds
+  at most, before the process exits; the terminal gives the screen back
+  first.
+
+### Dragging the chat's scrollbar scrolls it
+
+##### Fixed
+
+- In the desktop window the scrollbar on the chat panel's right border
+  belonged to the divider beside it: the pointer showed the resize arrows
+  over it, and dragging it resized the panels. A divider now takes the gap
+  between two panels and the border right of it, and leaves the border
+  left of it, where the agents and chat panels draw their scrollbars, to
+  the panel.
+
+##### Added
+
+- Dragging the chat panel's scrollbar with the left button scrolls the
+  conversation or terminal, or the record, process or file shown over the
+  chat, in the terminal and in the desktop window. Taken by the thumb the
+  view stays put until the pointer moves; pressed on the track the thumb
+  jumps to the pointer. At either end of the track the thumb shows that
+  end, however long the chat is, so a chat dragged to the bottom follows
+  new output again. A press on the scrollbar starts no text selection, and
+  the rows a list over the bottom of the chat covers (attached images,
+  `/todos`, the slash and `@` menus) stay that list's. The scrollbar also
+  takes presses on up to two blank columns left of the line it draws, so
+  it is wider to hit: three columns beside the conversation, two beside
+  the terminal or a record, process or file, whose text comes closer.
+
+### The footer under a reply says `gate:` only when Gate chose the model
+
+##### Fixed
+
+- Every prompt is classified, so Gate learns how each model does on each
+  kind of work, including turns on a model the user chose. The footer
+  under those replies marked the classifier's call `gate:`, as if Gate
+  had picked the model: `[claude-opus-5-5 · gate: claude-haiku-5-5 ·
+  73.4k tok · $0.034]`. On a turn whose prompt records a `pinned` route
+  the call is now marked `classify:`. `gate:` stays for turns Gate
+  routes and for its judges, and a reloaded chat shows the same footer.
+
 ### Gate reviews work before it stands
 
 ##### Added
@@ -85,16 +137,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   work it finds done stands. On the recorded benchmark runs, 4 of the 8
   routed attempts that ended this way had failed the task's own check,
   against 6 of all 57 routed attempts whose check passed.
-
-### Sonnet 5.5 and Opus 5 reason at max effort
-
-##### Changed
-
-- Turns and subtasks on Claude Sonnet 5.5, Opus 5 and Opus 5.5 ask for
-  `max` reasoning effort on every model call, where they asked for
-  `medium`. An effort chosen for the run still wins. Other models keep
-  `medium`. The classifier, the judge and titles still run with thinking
-  off.
 
 ### Sonnet 5.5 and Opus 5 reason at max effort
 

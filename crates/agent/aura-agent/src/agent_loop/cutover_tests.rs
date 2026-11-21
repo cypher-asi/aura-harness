@@ -97,6 +97,41 @@ async fn agentloop_tool_use_then_text() {
     assert!(result.total_text.contains("I listed the files."));
 }
 
+/// Text blocks from separate model calls in one turn (text, tool call,
+/// text) are joined with a paragraph break instead of being glued together.
+#[tokio::test]
+async fn agentloop_text_segments_across_tool_calls_are_separated() {
+    let provider = MockProvider::new()
+        .with_response(MockResponse::text_and_tool(
+            "I'll update the prompt text myself.",
+            "tool_1",
+            "read_file",
+            serde_json::json!({"path": "."}),
+        ))
+        .with_response(MockResponse::text("All 3 clippy errors are fixed."));
+
+    let executor = MockExecutor {
+        results: vec![ToolCallResult::success("placeholder", "ok")],
+    };
+    let agent = AgentLoop::new(default_config());
+
+    let result = agent
+        .run(
+            &provider,
+            &executor,
+            vec![Message::user("Fix clippy")],
+            vec![read_file_tool()],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.iterations, 2);
+    assert_eq!(
+        result.total_text,
+        "I'll update the prompt text myself.\n\nAll 3 clippy errors are fixed."
+    );
+}
+
 /// Equivalent of `test_max_steps_limit`.
 ///
 /// AgentLoop's budget check reserves the last iteration slot for a final

@@ -90,8 +90,10 @@ concretely enough to help whoever takes the work over. Then end with one line th
 /// characters: it has to see the whole change to say what is missing.
 pub const MAX_REVIEW_DIFF: usize = 60_000;
 
-/// Room for the reviewer's findings and the verdict line.
-const MAX_REVIEW_TOKENS: u32 = 1_500;
+/// Room for the reviewer's findings and the verdict line. On real
+/// multi-file changes 1,500 tokens cut two replies in three off before
+/// the verdict.
+const MAX_REVIEW_TOKENS: u32 = 4_000;
 
 /// Room for the reviewer's reasoning, findings and verdict when it
 /// thinks first.
@@ -125,9 +127,11 @@ tests, style, and things the request did not ask for are no reason to answer MOD
 way, or the request cannot be carried out as asked.
 
 A finding has to name what the request asks for and what the diff does instead; when you have \
-none, answer OK. List the findings as short numbered points, each concrete enough to act on \
-without rereading the request: the file, the function, what is asked, what is there. Then end \
-with one line that is exactly `VERDICT: MODEL`, `VERDICT: OK` or `VERDICT: OTHER`.";
+none, answer OK. List the findings, at most the five that matter most, as numbered points of a \
+few lines each, concrete enough to act on without rereading the request: the file, the \
+function, what is asked, what is there. Do not write up the requirements that are met or how \
+you checked them. Then end with one line that is exactly `VERDICT: MODEL`, `VERDICT: OK` or \
+`VERDICT: OTHER`.";
 
 /// What the judge sees of a failed turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

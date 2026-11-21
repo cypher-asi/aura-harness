@@ -388,6 +388,12 @@ async fn run_terminal(
 
     let mut terminal = Terminal::new(theme)?;
     let ran = terminal.run(&mut app);
+    // Shutting down can take a few seconds while running turns end and
+    // save their sessions: give the screen back first, and close the
+    // commands channel so the session's last updates don't wait on a full
+    // channel nobody reads any more.
+    drop(terminal);
+    drop(app);
     let finished = session.task.finish().await;
     ran?;
     finished

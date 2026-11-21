@@ -22,6 +22,7 @@ mod glide;
 mod keys;
 mod pointer;
 mod screen;
+mod signals;
 #[cfg(test)]
 mod snapshot;
 mod stats;

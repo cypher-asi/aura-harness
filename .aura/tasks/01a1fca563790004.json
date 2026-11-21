@@ -1,0 +1,13 @@
+{
+  "id": "01a1fca563790004",
+  "title": "Bug: in the desktop app (crate `crates/surface/aura-desktop`), the scrollbar on the main middle (Chat) panel can't be d…",
+  "state": "open",
+  "agent_id": "8a11aa8d9a34645c646ebc6f5d933a1f2a5059366b7f20b9642c468451850823",
+  "agent_name": "rust-engineer #17",
+  "assignee": "rust-engineer",
+  "parent": "01a1fca470fe0002",
+  "items": [],
+  "updated_ms": 1795240059769,
+  "created_ms": 1795240059769,
+  "tool_use_id": "toolu_01VYTeHUuXS1yLcuhR3oikNd"
+}

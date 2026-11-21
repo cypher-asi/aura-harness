@@ -130,18 +130,74 @@ fn inline_link_with_url_as_label_shows_url_once() {
 #[test]
 fn headings_drop_hashes_and_are_bold() {
     let lines = render("# Title\n### Sub ###\n#hashtag", 40);
-    assert_eq!(texts(&lines), ["Title", "", "Sub", "#hashtag"]);
+    assert_eq!(texts(&lines), ["Title", "", "Sub", "", "#hashtag"]);
     assert!(has(lines[0].spans[0].style, Modifier::BOLD));
     assert!(has(lines[0].spans[0].style, Modifier::UNDERLINED));
     assert!(has(lines[2].spans[0].style, Modifier::BOLD));
     assert_eq!(lines[2].spans[0].style.fg, Some(theme().colors.foreground));
-    assert!(!has(lines[3].spans[0].style, Modifier::BOLD));
+    assert!(!has(lines[4].spans[0].style, Modifier::BOLD));
 }
 
 #[test]
-fn headings_after_text_get_one_blank_line_above() {
+fn headings_get_one_blank_line_above_and_below() {
     let lines = render("intro\n## Next\nbody\n\n## Last", 40);
-    assert_eq!(texts(&lines), ["intro", "", "Next", "body", "", "Last"]);
+    assert_eq!(texts(&lines), ["intro", "", "Next", "", "body", "", "Last"]);
+}
+
+#[test]
+fn a_list_is_parted_from_the_paragraphs_around_it() {
+    let lines = render("Here is what changed:\n- one\n- two\nThat is all.", 40);
+    assert_eq!(
+        texts(&lines),
+        [
+            "Here is what changed:",
+            "",
+            "• one",
+            "• two",
+            "",
+            "That is all."
+        ]
+    );
+}
+
+#[test]
+fn blocks_already_parted_by_the_text_get_no_second_blank_line() {
+    let lines = render("intro\n\n- one\n\n## Next\n\nbody", 40);
+    assert_eq!(
+        texts(&lines),
+        ["intro", "", "• one", "", "Next", "", "body"]
+    );
+}
+
+#[test]
+fn indented_lines_after_a_list_item_continue_it() {
+    let lines = render("- one\n  more of one\n- two", 40);
+    assert_eq!(texts(&lines), ["• one", "  more of one", "• two"]);
+}
+
+#[test]
+fn quotes_and_tables_are_parted_from_text() {
+    let lines = render("said:\n> quoted\nthen\n| a |\n|---|\n| 1 |", 40);
+    let texts = texts(&lines);
+    assert_eq!(texts[..5], ["said:", "", "│ quoted", "", "then"]);
+    assert_eq!(texts[5], "");
+    assert!(texts[6].starts_with('┌'), "{texts:?}");
+}
+
+#[test]
+fn rules_part_blocks_without_blank_lines() {
+    let lines = render("above\n---\n- below", 10);
+    assert_eq!(texts(&lines), ["above", "──────────", "• below"]);
+    let lines = render("---\n# Next", 10);
+    assert_eq!(texts(&lines), ["──────────", "", "Next"], "a heading still");
+}
+
+#[test]
+fn blank_lines_between_blocks_are_prose() {
+    let (lines, flow) =
+        super::render_markdown_flow("text\n- item", 40, base(), &theme(), Measure::GRID);
+    assert_eq!(texts(&lines), ["text", "", "• item"]);
+    assert_eq!(flow, [Some(0), Some(0), Some(2)]);
 }
 
 #[test]
@@ -292,7 +348,12 @@ fn table_needs_a_separator_row() {
 fn table_ends_at_first_non_row_line() {
     let lines = render("| a |\n|---|\n| 1 |\nafter", 40);
     assert_eq!(texts(&lines).last().map(String::as_str), Some("after"));
-    assert_eq!(lines.len(), 6);
+    assert_eq!(
+        texts(&lines)[5],
+        "",
+        "a blank line parts the table from the text"
+    );
+    assert_eq!(lines.len(), 7);
 }
 
 // ============================================================================

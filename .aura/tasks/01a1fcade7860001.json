@@ -1,0 +1,29 @@
+{
+  "id": "01a1fcade7860001",
+  "title": "cancelled a turn, closed app, and lost a lot of the data that was in there",
+  "state": "open",
+  "agent_id": "9c9e251563718f64058b284da5300504ceb72cb39143de306597d567700d0594",
+  "agent_name": "Agent 550",
+  "items": [
+    {
+      "content": "Find out why cancel + close lost agent data (code path + on-disk evidence in aura_data)",
+      "state": "completed"
+    },
+    {
+      "content": "Make quitting graceful: SessionTask::finish signals the event loop to shut down and waits (bounded) so cancelled turns save checkpoints, instead of aborting it; TUI runner drops the UI before waiting; regression tests",
+      "state": "pending",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Independent review of the graceful-quit change (cancellation safety, bounded wait, tests)",
+      "state": "pending"
+    },
+    {
+      "content": "Report root cause, fix, what was lost and follow-ups (mid-turn checkpoints, spawn sessions, turn-timeout loss)",
+      "state": "pending"
+    }
+  ],
+  "summary": "I'll start by getting oriented in the repo so I can trace what happens to session data when a turn is cancelled and the app shuts down.",
+  "updated_ms": 1795243097015,
+  "created_ms": 1795240617862
+}

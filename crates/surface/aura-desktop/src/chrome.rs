@@ -10,8 +10,10 @@
 //! whole project's items rather than the active agent's ends in an ALL
 //! box, filled like a shown tab while it is on.
 //!
-//! The dividers between panels live here too: bands along the borders
-//! two panels share, which drag to move the border.
+//! The dividers between panels live here too: bands over the gap between
+//! two panels and the border right of it, which drag to move the border.
+//! The border left of the gap stays the panel's: the agents and chat
+//! panels draw their scrollbars on it.
 
 // Cell coordinates become pixel positions.
 #![allow(clippy::cast_precision_loss)]
@@ -149,8 +151,9 @@ struct BarLayout {
 struct Band {
     divider: Divider,
     rect: Rectangle,
-    /// Blank cells between the borders on either side
-    gap: u16,
+    /// Cells from the edge of the dragged panel to the band's middle,
+    /// rightward
+    lead: f32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -199,20 +202,26 @@ impl Layout {
                 model.origin.y + f32::from(row) * cell.height,
             )
         };
-        // From the border on one side of the gap to the border on the
-        // other, beside the chat's rows.
+        // The gap and the border on its right, beside the chat's rows.
+        // The border on its left is left alone: the panel there draws its
+        // scrollbar on it.
         let upright = |divider, left: Rect, right: Rect, rows: Rect| {
             let gap = right.x.saturating_sub(left.right());
+            let middle = f32::from(left.right()) + f32::from(gap + 1) / 2.0;
+            let edge = match divider {
+                Divider::Agents => left.right(),
+                Divider::Right | Divider::Records => right.x,
+            };
             Band {
                 divider,
                 rect: Rectangle::new(
-                    at(left.right().saturating_sub(1), rows.y),
+                    at(left.right(), rows.y),
                     Size::new(
-                        f32::from(gap + 2) * cell.width,
+                        f32::from(gap + 1) * cell.width,
                         f32::from(rows.height) * cell.height,
                     ),
                 ),
-                gap,
+                lead: middle - f32::from(edge),
             }
         };
         let mut bands = Vec::new();
@@ -231,7 +240,7 @@ impl Layout {
                             at(side.x, side.y - 1),
                             Size::new(f32::from(side.width) * cell.width, 2.0 * cell.height),
                         ),
-                        gap: 0,
+                        lead: 0.0,
                     });
                 }
             }
@@ -410,16 +419,17 @@ impl Chrome {
             })
         };
         let wide = right.saturating_sub(left);
-        // The middle of the gap stands for the edge of the dragged panel.
-        let half_gap = self
+        // The middle of the band stands for the edge of the dragged panel.
+        let lead = self
             .layout
             .bands
             .iter()
             .find(|band| band.divider == divider)
-            .map_or(0.0, |band| f32::from(band.gap) / 2.0);
+            .map_or(0.0, |band| band.lead);
+        let edge = col - lead;
         match divider {
-            Divider::Agents => splits.agents = share(col - half_gap - f32::from(left), wide),
-            Divider::Right => splits.right = share(f32::from(right) - col - half_gap, wide),
+            Divider::Agents => splits.agents = share(edge - f32::from(left), wide),
+            Divider::Right => splits.right = share(f32::from(right) - edge, wide),
             Divider::Records => {
                 splits.records = share(row - f32::from(top), bottom.saturating_sub(top));
             }
@@ -589,6 +599,23 @@ mod tests {
             let at = chrome.band(divider).expect("between two panels");
             assert_eq!(chrome.layout.hit(at), Some(Hit::Divider(divider)));
         }
+        // The borders the agents and chat panels draw their scrollbars on
+        // are theirs, not the dividers'.
+        let cell = chrome.model.as_ref().expect("shown").metrics.cell;
+        let on_cell =
+            |col: f32, row: f32| Point::new(6.0 + col * cell.width, 6.0 + row * cell.height);
+        assert_eq!(
+            chrome.layout.hit(on_cell(99.5, 10.5)),
+            None,
+            "chat's border"
+        );
+        assert_eq!(
+            chrome.layout.hit(on_cell(29.5, 10.5)),
+            None,
+            "agents' border"
+        );
+        let right = chrome.layout.hit(on_cell(100.5, 10.5));
+        assert_eq!(right, Some(Hit::Divider(Divider::Right)));
         chrome.point(Some(at));
         assert_eq!(chrome.hover(), Some(Hit::Tab(terminal)));
     }
@@ -669,11 +696,13 @@ mod tests {
         let splits = PaneSplits::default();
 
         let to = |col: f32, row: f32| Point::new(x + col * cell.width, y + row * cell.height);
-        let moved = chrome.drag(Divider::Agents, to(14.0, 5.0), splits);
+        // The bands' middles are on the borders beside the chat, half a
+        // cell past the edges they move.
+        let moved = chrome.drag(Divider::Agents, to(14.5, 5.0), splits);
         assert!((moved.agents.expect("set") - 0.1).abs() < 1e-4, "{moved:?}");
         assert_eq!(moved.right, None);
 
-        let moved = chrome.drag(Divider::Right, to(126.0, 5.0), splits);
+        let moved = chrome.drag(Divider::Right, to(126.5, 5.0), splits);
         assert!((moved.right.expect("set") - 0.1).abs() < 1e-4, "{moved:?}");
 
         let moved = chrome.drag(Divider::Records, to(110.0, 10.0), splits);

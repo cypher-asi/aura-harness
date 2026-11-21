@@ -1,0 +1,14 @@
+{
+  "id": "01a1feff1b140007",
+  "title": "## Where to work",
+  "state": "failed",
+  "agent_id": "d91abab8bf0ae0ac7e25855b932e568b92b02886d652996596f4500447ef31a8",
+  "agent_name": "rust-engineer #23",
+  "assignee": "rust-engineer",
+  "parent": "01a1fef9da120001",
+  "items": [],
+  "summary": "API error (status 401): Claude credentials are missing; run `aura login claude`",
+  "updated_ms": 1795280487607,
+  "created_ms": 1795279493908,
+  "tool_use_id": "toolu_01SJNwmtYdkGk5HhqxTZC9R6"
+}

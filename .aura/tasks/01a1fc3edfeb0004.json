@@ -1,0 +1,11 @@
+{
+  "id": "01a1fc3edfeb0004",
+  "title": "there is a bug where the table expands and contracts randomly when should stay open [image 1]",
+  "state": "completed",
+  "agent_id": "e600775f0d8655df8525a579b73a9bc18d7ffb4b31d1056093f18ff20ad9ece3",
+  "agent_name": "Agent 479",
+  "items": [],
+  "summary": "Now split `save` so `run_all` records without sending a live-less view, and drop the kept slot after the run is among the finished ones.Good, names match. Now the UI side: a `BenchList` refresh should keep live rows it already knows about.That clippy error is in an unrelated crate (`aura-core-types`) and was there before. I'll check and test the affected crates directly.I fixed it. Rows in the ru…",
+  "updated_ms": 1795233504871,
+  "created_ms": 1795233341419
+}

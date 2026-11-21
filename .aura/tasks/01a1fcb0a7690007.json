@@ -1,0 +1,14 @@
+{
+  "id": "01a1fcb0a7690007",
+  "title": "You are exploring the Rust workspace at the repo root (aura-harness). Read-only. Goal: we want interrupted agent turns …",
+  "state": "completed",
+  "agent_id": "fa2259c4f11c6d360c5a76a941448fc262f1bc212f805c1d4be815803cd24674",
+  "agent_name": "explorer #22",
+  "assignee": "explorer",
+  "parent": "01a1fcaeb2ef0004",
+  "items": [],
+  "summary": "I'll start by mapping the relevant crates and files.",
+  "updated_ms": 1795241701744,
+  "created_ms": 1795240798057,
+  "tool_use_id": "toolu_01LqM7mE99VX8NXrT7JMCY7n"
+}

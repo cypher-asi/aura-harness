@@ -740,6 +740,43 @@ async fn send_queued_now_with_nothing_queued_leaves_the_turn_alone() {
     fixture.gate.add_permits(1);
 }
 
+/// Quitting cancels a running turn and waits for it to end, so it saves
+/// the session as every turn does. A turn dropped at quit loses all it
+/// did since the last checkpoint, and an agent still on its first turn
+/// comes back with no session at all.
+#[tokio::test]
+async fn shutting_down_mid_turn_saves_the_running_turns_session() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let checkpoints = fixture.hub.factory.checkpoints.clone().unwrap();
+    let mut state = loop_state(&fixture, &mut b);
+
+    handle_ui_event(&mut state, message(first, "slow job", true), &links).await;
+    assert!(state.hub.is_running(first));
+    assert!(
+        checkpoints.load_current(first).is_none(),
+        "nothing is saved before the first turn ends"
+    );
+
+    // The slow turn is never released: only the shutdown's cancel ends it.
+    shut_down(&mut state, &mut done).await;
+
+    assert_eq!(state.in_flight, 0, "the turn ended within the grace");
+    let saved = checkpoints
+        .load_current(first)
+        .expect("the cancelled turn saved its session");
+    let prompts: Vec<String> = saved
+        .messages
+        .iter()
+        .filter(|m| m.role == aura_model::Role::User)
+        .map(aura_model::Message::text_content)
+        .collect();
+    assert_eq!(prompts, ["slow job"]);
+}
+
 #[tokio::test]
 async fn mentioned_files_reach_the_model_but_the_chat_keeps_the_typed_text() {
     let (fixture, mut commands) = fixture();

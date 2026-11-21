@@ -1,0 +1,11 @@
+{
+  "id": "01a1fcab7f06000b",
+  "title": "why when I don't have gate selected it seems I'm getting gate respondes in chat [image 1]",
+  "state": "completed",
+  "agent_id": "00aa78351ad2b3517f6f3c5ad2d4167c5b47ddb69e561713f725a432b445afc9",
+  "agent_name": "Agent 549",
+  "items": [],
+  "summary": "Now let's see where the classifier is called in the turn path, and whether it's conditional on gate being selected.That footer doesn't mean Gate answered you. The reply came from `claude-opus-5-5`. The `gate: claude-haiku-5-5` part is a small extra call that classifies your prompt, and it runs on every turn whether Gate is selected or not.",
+  "updated_ms": 1795240492475,
+  "created_ms": 1795240460038
+}

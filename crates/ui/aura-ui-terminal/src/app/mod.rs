@@ -31,6 +31,7 @@ mod prose;
 pub(crate) mod queue_panel;
 pub mod tasks;
 pub use aura_ui::sandbox;
+pub(crate) mod scrollbar;
 mod selection;
 pub(crate) mod shell_input;
 mod shell_prompt;
@@ -354,6 +355,11 @@ pub struct App {
     /// Where the pointer is while the left button is still held for
     /// `selection`
     pub(super) selecting: Option<Position>,
+    /// The chat panel's scrollbar while the left button holds it
+    pub(super) scrollbar_grab: Option<scrollbar::ScrollbarGrab>,
+    /// The cells of the chat panel's scrollbar track as it was drawn this
+    /// frame, to tell what was drawn over it after
+    pub(super) scrollbar_cells: Vec<ratatui::buffer::Cell>,
     /// Whether `selection` is in the chat panel's body, whose rows scroll
     pub(super) selection_scrolls: bool,
     /// When the chat last scrolled for a selection dragged past its edge
@@ -497,6 +503,9 @@ pub struct PanelAreas {
     pub task_rows: Option<Rect>,
     /// Tasks row shown at the top of `task_rows`
     pub tasks_scroll: usize,
+    /// Scrollbar on the chat panel's right border, when its list
+    /// overflows
+    pub(crate) scrollbar: Option<scrollbar::ScrollbarArea>,
 }
 
 /// What is shown over the chat panel.
@@ -861,6 +870,8 @@ impl App {
             detail_image_rect: None,
             selection: None,
             selecting: None,
+            scrollbar_grab: None,
+            scrollbar_cells: Vec::new(),
             selection_scrolls: false,
             selection_scrolled: None,
             copy_requested: false,
@@ -1695,7 +1706,9 @@ impl App {
     /// drag started in and copies it when the button is released; in the
     /// chat panel, unless it shows the graph or an image, holding the
     /// pointer past its top or bottom scrolls it (see [`Self::tick`]), and
-    /// the wheel scrolls it under the selection.
+    /// the wheel scrolls it under the selection. A press on the chat
+    /// panel's scrollbar takes hold of it instead, and dragging then
+    /// scrolls what the panel shows.
     /// Moving over a clickable item highlights it until the pointer leaves.
     ///
     /// Returns whether the screen may look different: false for a move or
@@ -1712,6 +1725,7 @@ impl App {
                 app.project_moves,
                 app.project_drag_hit(),
                 app.queue_pointer_state(),
+                (app.scrollbar_held(), app.scroll_offset, app.detail_scroll),
             )
         };
         let before = state(self);
@@ -1724,6 +1738,7 @@ impl App {
             self.hover = None;
             self.context_menu = None;
             self.project_press = None;
+            self.scrollbar_grab = None;
             self.drop_queue_press();
             return;
         }
@@ -1752,6 +1767,10 @@ impl App {
             self.clear_selection();
             self.hover = None;
             self.request_paste();
+            return;
+        }
+        if self.scrollbar_mouse(mouse.kind, mouse.column, mouse.row) {
+            self.hover = self.hover_target(mouse.column, mouse.row);
             return;
         }
         let at = Position::new(mouse.column, mouse.row);

@@ -1,0 +1,11 @@
+{
+  "id": "01a1fca328e80000",
+  "title": "formattng / layout of a response like this can be improved [image 1]",
+  "state": "completed",
+  "agent_id": "5a7b93eeb42b4d267f92aaefa8f439aebed86bba647e09584b4d169f3be88612",
+  "agent_name": "Agent 262",
+  "items": [],
+  "summary": "The fix belongs in the renderer: a short update written before a tool call gets glued onto the next text block with no space. Finding where that happens.I fixed it: when a reply has text before and after tool calls, the pieces are now saved with a blank line between them instead of being joined into one paragraph. The agent tests (486) and app tests (419) pass, and new tests cover this case.",
+  "updated_ms": 1795240198961,
+  "created_ms": 1795239913704
+}

@@ -46,11 +46,23 @@ pub(crate) fn render_markdown_flow(
         .collect();
     let lines: Vec<&str> = expanded.iter().map(String::as_str).collect();
 
-    let mut out = Vec::new();
+    let mut out: Vec<Line<'static>> = Vec::new();
     let mut flow = Vec::new();
+    let mut previous = None;
     let mut i = 0;
     while i < lines.len() {
-        if table::starts_at(&lines, i) {
+        let table = table::starts_at(&lines, i);
+        let block = if table {
+            Some(Block::Table)
+        } else {
+            Block::of(lines[i], previous)
+        };
+        if Block::parts(previous, block) && out.last().is_some_and(|last| last.width() > 0) {
+            out.push(Line::default());
+            flow.push(Some(0));
+        }
+        previous = block;
+        if table {
             let end = table::end(&lines, i);
             out.extend(table::render(&lines[i..end], width, base, theme));
             flow.resize(out.len(), None);
@@ -64,6 +76,52 @@ pub(crate) fn render_markdown_flow(
         }
     }
     (out, flow)
+}
+
+/// The kind of block a line of markdown belongs to. A blank row goes
+/// between two blocks of different kinds that the text did not already
+/// part with an empty line, and before every heading, so a heading, the
+/// paragraph under it and a list after that read as separate blocks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Block {
+    Paragraph,
+    List,
+    Heading,
+    Quote,
+    Table,
+}
+
+impl Block {
+    /// The block `line` is part of, given the block of the line before
+    /// it. `None` for an empty line or a rule, which part blocks already.
+    /// An indented line after a list item continues the item.
+    fn of(line: &str, previous: Option<Self>) -> Option<Self> {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || is_rule(trimmed) {
+            None
+        } else if heading(trimmed).is_some() {
+            Some(Self::Heading)
+        } else if trimmed.starts_with('>') {
+            Some(Self::Quote)
+        } else if list_item(trimmed).is_some()
+            || (previous == Some(Self::List) && trimmed.len() < line.len())
+        {
+            Some(Self::List)
+        } else {
+            Some(Self::Paragraph)
+        }
+    }
+
+    /// Whether a blank row goes between a line of block `previous` and
+    /// the next line, of block `next`, when the line before has text: a
+    /// heading gets one after a rule too.
+    fn parts(previous: Option<Self>, next: Option<Self>) -> bool {
+        match (previous, next) {
+            (_, Some(Self::Heading)) => true,
+            (Some(previous), Some(next)) => previous != next,
+            _ => false,
+        }
+    }
 }
 
 /// Whether a span is inline code, which stays monospace in flowing text.
@@ -87,9 +145,6 @@ fn render_block_line(
         out.push(Line::default());
         0
     } else if let Some((level, title)) = heading(trimmed) {
-        if out.last().is_some_and(|last| last.width() > 0) {
-            out.push(Line::default());
-        }
         let spans = parse_inline(title, heading_style(level, base, theme), theme);
         out.extend(wrap_spans(&spans, width, (&[], &[]), measure));
         0

@@ -7,9 +7,11 @@ use super::text::{display_width, wrap_words, Measure};
 use crate::{
     animation::AURA_WIDTH,
     app::{
-        agent_time_cell, tab_bar::TabLayout, AgentButton, AgentsTab, AppState, ChatScroll, ChatTab,
-        HoverTarget, ImageHit, MenuTarget, Pane, PanelFocus, ProjectListRow, ProseRow, ToggleRow,
-        ToggleTarget,
+        agent_time_cell,
+        scrollbar::{ScrollTarget, ScrollbarArea},
+        tab_bar::TabLayout,
+        AgentButton, AgentsTab, AppState, ChatScroll, ChatTab, HoverTarget, ImageHit, MenuTarget,
+        Pane, PanelFocus, ProjectListRow, ProseRow, ToggleRow, ToggleTarget,
     },
     App, Theme,
 };
@@ -112,18 +114,15 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     }
 
     let rows = render_chat_lines(frame, (body, padded), app, theme, &tail);
-    render_scrollbar(
-        frame,
-        area,
-        padded,
-        ScrollView {
-            total: rows.total,
-            visible: padded.height as usize,
-            first: rows.first,
-        },
-        is_focused,
-        theme,
-    );
+    let view = ScrollView {
+        total: rows.total,
+        visible: padded.height as usize,
+        first: rows.first,
+    };
+    render_scrollbar(frame, area, padded, view, is_focused, theme);
+    let last = view.total.saturating_sub(view.visible);
+    let scrollbar = chat_scrollbar(ScrollTarget::Chat, (area, padded), view, last);
+    app.set_chat_scrollbar(scrollbar, frame.buffer_mut());
     let below = app.scroll_offset().saturating_sub(rows.padding);
     render_lines_below_hint(frame, area, below, theme);
 }
@@ -192,20 +191,14 @@ pub(super) fn render_scrollbar(
     is_focused: bool,
     theme: &Theme,
 ) {
-    if view.total <= view.visible || panel.width == 0 || rows.height == 0 {
+    let Some(column) = scrollbar_track(panel, rows, view) else {
         return;
-    }
+    };
     let border = border_color(is_focused, theme);
     let thumb = if is_focused {
         theme.colors.foreground
     } else {
         theme.colors.muted
-    };
-    let column = Rect {
-        x: panel.x + panel.width - 1,
-        y: rows.y,
-        width: 1,
-        height: rows.height,
     };
     // Positions run from 0 to the last first row, so the thumb reaches the
     // bottom of the track when the list's last row is on screen.
@@ -220,6 +213,37 @@ pub(super) fn render_scrollbar(
         .thumb_symbol("┃")
         .thumb_style(Style::default().fg(thumb));
     frame.render_stateful_widget(scrollbar, column, &mut state);
+}
+
+/// The column [`render_scrollbar`] draws on, when it draws one.
+fn scrollbar_track(panel: Rect, rows: Rect, view: ScrollView) -> Option<Rect> {
+    (view.total > view.visible && panel.width > 0 && rows.height > 0).then(|| Rect {
+        x: panel.x + panel.width - 1,
+        y: rows.y,
+        width: 1,
+        height: rows.height,
+    })
+}
+
+/// The scrollbar [`render_scrollbar`] draws on the chat panel `panel`
+/// beside the text in `rows` for `view`, as the pointer drags it to
+/// scroll `target` as far as its first row `last`.
+pub(super) fn chat_scrollbar(
+    target: ScrollTarget,
+    (panel, rows): (Rect, Rect),
+    view: ScrollView,
+    last: usize,
+) -> Option<ScrollbarArea> {
+    scrollbar_track(panel, rows, view).map(|track| ScrollbarArea {
+        target,
+        track,
+        total: view.total,
+        visible: view.visible,
+        first: view.first,
+        last,
+        open: track.height,
+        margin: track.x.saturating_sub(rows.right()),
+    })
 }
 
 /// Draw the rows of the conversation that fall in `padded` at the current

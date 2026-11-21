@@ -12,6 +12,7 @@
 
 use super::keys::Press;
 use super::screen::Screen;
+use super::signals::quit_on_signal;
 use super::{Effect, Shell};
 use super::{Handles, Options, WINDOW};
 use crate::geom::{Point, Size};
@@ -47,6 +48,8 @@ pub enum Wake {
     Commands,
     /// The session closed its end of the command channel.
     SessionEnded,
+    /// Ctrl+C reached the process, or the system asked it to stop.
+    Quit,
     /// The editor a tab (by id) opened on a file exited.
     EditorClosed {
         tab: u64,
@@ -148,6 +151,8 @@ pub fn run(handles: Handles, options: &Options, launched: Instant) -> anyhow::Re
     runtime.spawn(pump(handles.commands, Arc::clone(&inbox), move |wake| {
         waker.send_event(wake).is_ok()
     }));
+    let waker = proxy.clone();
+    runtime.spawn(quit_on_signal(move |wake| waker.send_event(wake).is_ok()));
     let mut handler = Handler {
         shell: Shell::new(handles.events, options, launched),
         inbox,
@@ -324,13 +329,14 @@ impl ApplicationHandler<Wake> for Handler {
         }
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, wake: Wake) {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, wake: Wake) {
         match wake {
             Wake::Commands => {
                 let batch = self.inbox.take();
                 self.shell.commands(batch);
             }
             Wake::SessionEnded => self.shell.session_ended(),
+            Wake::Quit => event_loop.exit(),
             Wake::EditorClosed { tab, path, result } => {
                 self.shell.editor_closed(tab, path, result);
             }
@@ -402,6 +408,13 @@ impl ApplicationHandler<Wake> for Handler {
             }
         }
         event_loop.set_control_flow(ControlFlow::WaitUntil(self.shell.deadline(now)));
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        // While the display connection is still open: the GPU's EGL
+        // display is torn down through it, and crashes once it is gone.
+        self.screen = None;
+        self.window = None;
     }
 }
 

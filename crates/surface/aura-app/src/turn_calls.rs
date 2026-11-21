@@ -11,10 +11,17 @@
 //! are recorded without a route before its reply. Calls Gate makes
 //! (classifying, judging) and the chat's title are told apart from the
 //! turn's own by the purpose their entry records.
+//!
+//! Every prompt is classified, so Gate learns how each model does on
+//! each kind of work, but the classifier's call routes the turn only when
+//! Gate picked its model. On a model the user or an agent definition
+//! chose, the prompt's route is `pinned` and the call is marked
+//! `classify:` instead of `gate:`, so the footer doesn't read as if Gate
+//! had chosen the model.
 
 use crate::event_loop::agent_events::call_usage;
 use crate::record_loader::{json_payload, model_call};
-use aura_core_types::{RouteReason, Transaction, TransactionType};
+use aura_core_types::{Route, RouteReason, Transaction, TransactionType};
 use aura_model::model_catalog::upstream_model_name;
 use aura_model::ModelCallPurpose;
 use aura_ui_terminal::events::CallUsage;
@@ -38,15 +45,26 @@ pub(crate) struct TurnCalls {
     next: Tally,
     /// Whether the current turn's reply is recorded
     replied: bool,
+    /// Whether Gate picked the current turn's model, so its classifier's
+    /// call routed the turn
+    routed: bool,
 }
 
 impl TurnCalls {
     /// Take in the record entry `tx`.
     pub(crate) fn see(&mut self, tx: &Transaction) -> Seen {
         match tx.tx_type {
-            TransactionType::UserPrompt if self.starts_turn(tx) => {
+            TransactionType::UserPrompt => {
+                let route = tx
+                    .prompt_payload()
+                    .map(|prompt| prompt.route)
+                    .filter(|route| !route.model.is_empty());
+                if !self.starts_turn(route.as_ref()) {
+                    return Seen::Other;
+                }
                 self.current = std::mem::take(&mut self.next);
                 self.replied = false;
+                self.routed = route.is_some_and(|route| route.reason != RouteReason::Pinned);
                 Seen::NewTurn
             }
             TransactionType::AgentMsg => {
@@ -75,18 +93,17 @@ impl TurnCalls {
     /// The footer of the current turn: its models, then the tokens and
     /// cost of all its calls. `None` before its first call.
     pub(crate) fn footer(&self) -> Option<(String, Option<CallUsage>)> {
-        self.current.footer()
+        self.current.footer(self.routed)
     }
 
-    /// Whether the prompt `tx` starts a turn: it records where its work
-    /// runs and is not a stronger model taking a turn over, or it records
-    /// no route and the current turn has replied or made no call yet.
-    fn starts_turn(&self, tx: &Transaction) -> bool {
-        match tx.prompt_payload() {
-            Some(prompt) if !prompt.route.model.is_empty() => {
-                prompt.route.reason != RouteReason::Escalate
-            }
-            _ => self.replied || self.current.models.is_empty(),
+    /// Whether a prompt recording `route` starts a turn: it records where
+    /// its work runs and is not a stronger model taking a turn over, or it
+    /// records no route and the current turn has replied or made no call
+    /// yet.
+    fn starts_turn(&self, route: Option<&Route>) -> bool {
+        match route {
+            Some(route) => route.reason != RouteReason::Escalate,
+            None => self.replied || self.current.models.is_empty(),
         }
     }
 }
@@ -121,13 +138,17 @@ impl Tally {
         }
     }
 
-    fn footer(&self) -> Option<(String, Option<CallUsage>)> {
+    /// The tally's footer. `routed` says whether Gate picked the turn's
+    /// model: only then is the classifier's call Gate's, otherwise it
+    /// just labelled the prompt for Gate to learn from.
+    fn footer(&self, routed: bool) -> Option<(String, Option<CallUsage>)> {
         if self.models.is_empty() {
             return None;
         }
+        let classified = if routed { "gate: " } else { "classify: " };
         let groups = [
             (None, ""),
-            (Some(ModelCallPurpose::Classify), "gate: "),
+            (Some(ModelCallPurpose::Classify), classified),
             (Some(ModelCallPurpose::Judge), "gate: "),
             (Some(ModelCallPurpose::Title), "title: "),
         ];
@@ -151,7 +172,7 @@ impl Tally {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core_types::{AgentId, PromptPayload, Route};
+    use aura_core_types::{AgentId, PromptPayload};
     use serde_json::json;
 
     fn call(agent: AgentId, model: &str, purpose: Option<&str>, output: u64) -> Transaction {
@@ -264,5 +285,41 @@ mod tests {
         let (models, usage) = calls.footer().unwrap();
         assert_eq!(models, "qwen3");
         assert_eq!(usage.unwrap().cost_usd, None, "local calls are not priced");
+    }
+
+    #[test]
+    fn a_turn_on_a_chosen_model_marks_its_classifier_as_classifying() {
+        let agent = AgentId::generate();
+        let opus = "claude/claude-opus-5-5";
+        let haiku = "claude/claude-haiku-5-5";
+        let mut calls = TurnCalls::default();
+        for tx in [
+            call(agent, haiku, Some("classify"), 1),
+            prompt(agent, Route::turn(opus, RouteReason::Pinned)),
+            call(agent, opus, None, 100),
+            Transaction::user_prompt_with(agent, &PromptPayload::new("also add a test")),
+            call(agent, opus, None, 100),
+        ] {
+            calls.see(&tx);
+        }
+        assert_eq!(
+            calls.footer().unwrap().0,
+            "claude-opus-5-5 ×2 · classify: claude-haiku-5-5",
+            "Gate didn't pick the model, so its classifier didn't route the turn"
+        );
+
+        for tx in [
+            Transaction::new_chained(agent, TransactionType::AgentMsg, b"Done".to_vec(), None),
+            call(agent, haiku, Some("classify"), 1),
+            prompt(agent, Route::turn(opus, RouteReason::Proven)),
+            call(agent, opus, None, 100),
+        ] {
+            calls.see(&tx);
+        }
+        assert_eq!(
+            calls.footer().unwrap().0,
+            "claude-opus-5-5 · gate: claude-haiku-5-5",
+            "the next turn is routed by Gate"
+        );
     }
 }

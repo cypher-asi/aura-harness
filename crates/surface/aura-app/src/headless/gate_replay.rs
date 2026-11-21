@@ -32,7 +32,7 @@ use aura_agent_gate::followup::Why;
 use aura_agent_gate::turn_judge::{self, Answer, ReviewVariant, Standing};
 use aura_core_types::{AgentId, Difficulty};
 use aura_model::model_catalog::{estimate_cost_usd, infer_tier, route_label, ModelTier};
-use aura_model::{Message, ModelProvider, Usage};
+use aura_model::{Message, ModelProvider, StopReason, Usage};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
@@ -319,6 +319,8 @@ struct Asked {
     /// The answer, what was found and what it cost; the problem when the
     /// reviewer gave none
     answer: Result<(Answer, String, f64), String>,
+    /// What a reply without a verdict cost
+    wasted_usd: f64,
 }
 
 /// Ask `judge` through `provider` about `prepared` as `variant`, and
@@ -333,6 +335,7 @@ async fn ask(
 ) -> Asked {
     let why = prepared.why_told();
     let request = turn_judge::review_request(&judge, &prepared.standing(&why), variant, auth_token);
+    let mut wasted_usd = 0.0;
     let answer = match request {
         Err(e) => Err(format!("could not build the request: {e}")),
         Ok(request) => match tokio::time::timeout(REVIEW_TIMEOUT, provider.complete(request)).await
@@ -341,9 +344,23 @@ async fn ask(
             Ok(Err(e)) => Err(format!("the reviewer's call failed: {e}")),
             Ok(Ok(response)) => {
                 let cost_usd = estimate_cost_usd(&judge, &response.usage).unwrap_or(0.0);
-                turn_judge::parse_answer(&response.message.text_content())
+                let parsed = turn_judge::parse_answer(&response.message.text_content());
+                if parsed.is_none() {
+                    wasted_usd = cost_usd;
+                }
+                parsed
                     .map(|(answer, findings)| (answer, findings, cost_usd))
-                    .ok_or_else(|| NO_VERDICT.to_string())
+                    .ok_or_else(|| {
+                        let cut = if response.stop_reason == StopReason::MaxTokens {
+                            "its reply was cut off at the token limit"
+                        } else {
+                            "its reply ended without one"
+                        };
+                        format!(
+                            "{NO_VERDICT}: {cut} after {} tokens, ${cost_usd:.3}",
+                            response.usage.output_tokens
+                        )
+                    })
             }
         },
     };
@@ -371,6 +388,7 @@ async fn ask(
     }
     Asked {
         answer,
+        wasted_usd,
         ..asked(&prepared)
     }
 }
@@ -382,6 +400,7 @@ fn asked(prepared: &Prepared) -> Asked {
         model: route_label(&prepared.attempt.model),
         right: prepared.right,
         answer: Err(String::new()),
+        wasted_usd: 0.0,
     }
 }
 
@@ -431,7 +450,8 @@ fn tally(asked: &[Asked]) -> String {
             })
             .count()
     };
-    let cost: f64 = answered.iter().map(|(_, _, cost_usd)| cost_usd).sum();
+    let cost: f64 = answered.iter().map(|(_, _, cost_usd)| cost_usd).sum::<f64>()
+        + asked.iter().map(|asked| asked.wasted_usd).sum::<f64>();
     format!(
         "{} reviews answered, {} not, ${cost:.2} at list price\n\
          wrong work: {} of {} found unfinished\n\
@@ -560,7 +580,7 @@ pub async fn gate_replay(options: ReplayOptions) -> anyhow::Result<()> {
         .await;
         println!("{}", row(&asked));
         if let Err(problem) = &asked.answer {
-            if problem != NO_VERDICT {
+            if !problem.starts_with(NO_VERDICT) {
                 anyhow::bail!(
                     "{} could not be asked ({problem}); no other attempt was asked about",
                     route_label(&judge)

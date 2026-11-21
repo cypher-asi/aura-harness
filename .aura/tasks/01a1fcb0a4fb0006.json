@@ -1,0 +1,14 @@
+{
+  "id": "01a1fcb0a4fb0006",
+  "title": "You are exploring the Rust workspace at the repo root (aura-harness). Read-only. Goal: we want to add a feature so that…",
+  "state": "completed",
+  "agent_id": "f9430da2428e88c4212891f6b376f6bf8ca7a876b684c415b2097e4f9e7bc592",
+  "agent_name": "explorer #21",
+  "assignee": "explorer",
+  "parent": "01a1fcaeb2ef0004",
+  "items": [],
+  "summary": "I'll start by mapping the layout of the key crates.",
+  "updated_ms": 1795241617127,
+  "created_ms": 1795240797435,
+  "tool_use_id": "toolu_01PT48Z35zJdF7RymFk5Tm4Z"
+}

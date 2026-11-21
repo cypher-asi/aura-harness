@@ -1,0 +1,24 @@
+{
+  "id": "01a1fcad93d60000",
+  "title": "keep going",
+  "state": "completed",
+  "agent_id": "25eed10e6682a401a209ba76dbfc10b7350ee2b1356479bcec26fbe59c7a3f43",
+  "agent_name": "explorer #19",
+  "items": [
+    {
+      "content": "Block-change gaps in markdown.rs render_markdown_flow + tests",
+      "state": "completed"
+    },
+    {
+      "content": "Desktop: inset inline-code chip and align code baseline with prose",
+      "state": "completed"
+    },
+    {
+      "content": "fmt, clippy -D warnings, tests for both crates",
+      "state": "completed"
+    }
+  ],
+  "summary": "Before-state measured from the `prose` snapshot (14px font, 18px rows): chip covers rows 0..17 (full row), code baseline 14, prose baseline 15, so code sits 1px high. Now the change:",
+  "updated_ms": 1795241447855,
+  "created_ms": 1795240596438
+}

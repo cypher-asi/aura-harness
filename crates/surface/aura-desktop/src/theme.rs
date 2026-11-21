@@ -25,6 +25,12 @@ const LINE_EM: f32 = 1.3;
 /// a step larger than the code beside it, like body text in a chat app,
 /// while still fitting the grid's rows.
 const PROSE_EM: f32 = 1.1;
+/// How far the background of inline code in the prose reaches above and
+/// below the baseline, in ems of the grid's font: a little past Geist
+/// Mono's brackets (0.75 em up) and descenders (0.16 em down), so it hugs
+/// the code rather than filling the row.
+const CODE_ABOVE_EM: f32 = 0.85;
+const CODE_BELOW_EM: f32 = 0.26;
 
 const BUNDLED: [&[u8]; 7] = [
     include_bytes!("../assets/fonts/GeistMono-Regular.ttf"),
@@ -91,4 +97,10 @@ pub fn cell_size(font_size: f32) -> Size {
 /// Size the chat's prose is set at when the grid is at `font_size`.
 pub fn prose_size(font_size: f32) -> f32 {
     font_size * PROSE_EM
+}
+
+/// How far the background of inline code reaches above and below the
+/// baseline when the grid is at `font_size`.
+pub fn code_reach(font_size: f32) -> (f32, f32) {
+    (font_size * CODE_ABOVE_EM, font_size * CODE_BELOW_EM)
 }
