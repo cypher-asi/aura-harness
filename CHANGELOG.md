@@ -7,13 +7,50 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Gate prices work by what it has cost
+
+##### Fixed
+
+- Whether a turn is led is decided on turns of the same difficulty when
+  the classifier gave one. Opus 5.5 led hard SWE-bench Pro tasks because
+  leading had proven cheaper on small practice tasks, then spent on its
+  own about what doing the work would have cost, and its Sonnet 5
+  subtasks as much again: $0.48 against $0.18 for Opus working directly.
+- Verifiable work is priced on what work like it, of the same category
+  and difficulty, has cost each model in full, subtasks included, and
+  every turn counts in that cost, also one nothing checked. A model with
+  no turns there costs what the model with the most turns there does,
+  times what its work costs against that model's on the kinds of work
+  both have done, starting from the ratio of their list prices. Before,
+  a model was priced from its list price alone: Gate sent hard SWE-bench
+  Pro tasks to Sonnet 5, which lists at half of Opus 5.5's price, and it
+  cost $3.23 where Opus cost $1.65.
+- An older version of a model you can use gets no routed work when the
+  later version costs no more per token. Sonnet 5 got hard work because
+  Sonnet 5.5's outcomes had ruled Sonnet 5.5 out and nothing was known
+  against Sonnet 5.
+- A model's record on other checked work weighs in what Gate expects
+  of it on work a check verifies: the prior of its success rate weighs 4
+  outcomes plus a quarter of each outcome on the other such categories
+  (small changes, multi-file changes, debugging), up to 12. Two failed
+  turns on an easy rename had ruled Sonnet 5.5 out of hard multi-file
+  work, against 42 debugging turns that all passed, so that work went
+  to Opus 5.5 and Gate cost what Opus costs. It now starts on Sonnet
+  5.5, which did the recorded tasks for about a third of Opus's cost,
+  and moves up when an attempt fails.
+- An outcome on work of the difficulty being routed counts once in the
+  model's success rate. It was scaled by the difficulty as well, so a
+  failure on hard work counted as 1.6 failures.
+
 ### BENCH runs show how Gate classified them
 
 ##### Changed
 
 - The runs table in BENCH now has a `classified` column with the task type
   and difficulty the classifier gave the run's first prompt, and a
-  `moved up` column naming the model Gate moved up to, or `no`.
+  `moved up` column naming the model Gate moved up to, or `no`, and a
+  `led` column saying whether its model led a turn and what the subtasks
+  it handed the work to cost.
 
 ### Gate starts hard work on the standard tier or above
 

@@ -228,10 +228,13 @@ struct Live {
 }
 
 /// A run's place in [`Context::live`], given up when it ends however it
-/// ends.
+/// ends, unless kept: a run that ends with a result stays listed until
+/// [`run_all`] has put it among the finished runs, so the BENCH tab never
+/// shows it in neither.
 struct LiveSlot<'a> {
     ctx: &'a Context,
     name: String,
+    kept: bool,
 }
 
 impl<'a> LiveSlot<'a> {
@@ -245,6 +248,7 @@ impl<'a> LiveSlot<'a> {
         Self {
             ctx,
             name: name.to_string(),
+            kept: false,
         }
     }
 
@@ -262,7 +266,9 @@ impl<'a> LiveSlot<'a> {
 
 impl Drop for LiveSlot<'_> {
     fn drop(&mut self) {
-        lock(&self.ctx.live).retain(|l| l.name != self.name);
+        if !self.kept {
+            lock(&self.ctx.live).retain(|l| l.name != self.name);
+        }
     }
 }
 
@@ -424,7 +430,17 @@ pub(super) async fn save(
     (agent_id, name): (AgentId, &str),
     payload: &ComparePayload,
 ) -> bool {
-    let recorded = match kernel
+    let recorded = record(kernel, agent_id, payload).await;
+    let root = lock(&hub.registry).root(agent_id);
+    let view = super::bench::view(agent_id, root, name, payload);
+    let _ = commands.send(UiCommand::BenchUpsert(Box::new(view))).await;
+    recorded
+}
+
+/// Write `payload` to the record of the comparison's agent `agent_id`.
+/// A failure is logged.
+async fn record(kernel: &Kernel, agent_id: AgentId, payload: &ComparePayload) -> bool {
+    match kernel
         .process_direct(Transaction::compare(agent_id, payload))
         .await
     {
@@ -433,11 +449,7 @@ pub(super) async fn save(
             warn!(%agent_id, error = %e, "Failed to record the comparison");
             false
         }
-    };
-    let root = lock(&hub.registry).root(agent_id);
-    let view = super::bench::view(agent_id, root, name, payload);
-    let _ = commands.send(UiCommand::BenchUpsert(Box::new(view))).await;
-    recorded
+    }
 }
 
 /// Run the comparison `plan` on the agent `host`, until it ends or
@@ -679,14 +691,10 @@ async fn run_all(
             .send(system_message(progress(&ctx.host.name, &done.run)))
             .await;
         payload.runs.push(done.run.clone());
-        save(
-            &ctx.hub,
-            &session.kernel,
-            &ctx.commands,
-            (ctx.host.agent_id(), &ctx.host.name),
-            payload,
-        )
-        .await;
+        // Among the finished runs now, it leaves the live ones; the view
+        // sent shows both, so no run drops out of the table between them.
+        lock(&ctx.live).retain(|l| l.name != done.run.name);
+        record(&session.kernel, ctx.host.agent_id(), payload).await;
         show_live(ctx, payload).await;
         ran.push(done);
     }
@@ -820,13 +828,22 @@ fn prepare_copy(
 /// in place, and hand its agent back. `None` when the user stopped the
 /// comparison before it started.
 async fn run_one(ctx: Arc<Context>, arm: CompareArm, n: u32) -> Option<Ran> {
+    let mut slot = LiveSlot::take(&ctx, &run_name(arm, n), arm, ctx.plan.example(n));
+    let ran = run_in(&ctx, &slot, arm, n).await;
+    // [`run_all`] drops it from the live runs once it is among the
+    // finished ones.
+    slot.kept = ran.is_some();
+    ran
+}
+
+/// [`run_one`]'s work, as the run holding `slot`.
+async fn run_in(ctx: &Context, slot: &LiveSlot<'_>, arm: CompareArm, n: u32) -> Option<Ran> {
     let name = run_name(arm, n);
     let example = ctx.plan.example(n);
-    let slot = LiveSlot::take(&ctx, &name, arm, example);
     if let Some(task) = example {
-        match files_of(&ctx, task).await {
+        match files_of(ctx, task).await {
             Ok(()) => {}
-            Err(Some(problem)) => return Some(not_run(&ctx, arm, n, problem)),
+            Err(Some(problem)) => return Some(not_run(ctx, arm, n, problem)),
             Err(None) => return None,
         }
     }
@@ -866,7 +883,7 @@ async fn run_one(ctx: Arc<Context>, arm: CompareArm, n: u32) -> Option<Ran> {
     .and_then(|prepared| prepared);
     let (copy, note) = match prepared {
         Ok(prepared) => prepared,
-        Err(problem) => return Some(not_run(&ctx, arm, n, problem)),
+        Err(problem) => return Some(not_run(ctx, arm, n, problem)),
     };
     let folder = copy.workdir.clone();
     let registered = match agent {
@@ -882,14 +899,14 @@ async fn run_one(ctx: Arc<Context>, arm: CompareArm, n: u32) -> Option<Ran> {
     };
     let agent = match registered {
         Ok(agent) => agent,
-        Err(e) => return Some(not_run(&ctx, arm, n, format!("registering the run: {e:#}"))),
+        Err(e) => return Some(not_run(ctx, arm, n, format!("registering the run: {e:#}"))),
     };
     slot.working(agent.agent_id());
     let session = match hub.factory.open(&agent, Vec::new(), Some(folder)) {
         Ok(session) => session,
-        Err(e) => return Some(not_run(&ctx, arm, n, format!("opening the run: {e:#}"))),
+        Err(e) => return Some(not_run(ctx, arm, n, format!("opening the run: {e:#}"))),
     };
-    let mut ran = run_turn(&ctx, session, (arm, &name, example), copy).await;
+    let mut ran = run_turn(ctx, session, (arm, &name, example), copy).await;
     ran.order = (n, arm);
     ran.note = note;
     Some(ran)
@@ -1141,7 +1158,10 @@ async fn run_prompt(
     let model = config.model.clone();
     let led = lead.is_some_and(|lead| {
         hub.gate.note_model(agent_id, &model);
-        let led = hub.gate.way(category, &model, false).led;
+        let led = hub
+            .gate
+            .way((category, label.difficulty), &model, false)
+            .led;
         session.lead = lead.apply(led, &mut config, &mut tools);
         led
     });

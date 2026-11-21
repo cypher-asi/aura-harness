@@ -323,6 +323,8 @@ pub(super) fn view(
                     difficulty: first
                         .and_then(|turn| turn.difficulty)
                         .map(|difficulty| difficulty.as_str().to_string()),
+                    led: run.turns.iter().any(|turn| turn.led == Some(true)),
+                    subtask_cost_usd: run.turns.iter().map(|turn| turn.subtask_cost_usd).sum(),
                     wall_ms: run.wall_ms,
                     cost_usd: run.cost_usd,
                     check_passed: run.check_passed,

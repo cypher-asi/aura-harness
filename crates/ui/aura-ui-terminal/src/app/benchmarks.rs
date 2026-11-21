@@ -253,6 +253,15 @@ impl BenchState {
             self.scroll = 0;
         }
         benches.reverse();
+        // The list is built from records, which know nothing of the runs
+        // under way: keep those last heard until the next report.
+        for view in &mut benches {
+            if view.status == BenchStatus::Running && view.live.is_empty() {
+                if let Some(known) = self.benches.iter_mut().find(|b| b.id == view.id) {
+                    view.live = std::mem::take(&mut known.live);
+                }
+            }
+        }
         self.root = Some(root);
         self.benches = benches;
         self.loaded = true;

@@ -165,13 +165,14 @@ impl GateTurn {
     }
 
     /// Have Gate decide whether the turn on `agent_loop` with `tools`,
-    /// asking for `category`, is led ([`GateLive::way`]), and make it a
-    /// lead's if so (see [`LeadProfile::apply`]). Returns whether it is
-    /// led (`None` when the agent never leads) and whether its calls must
-    /// stay within the lead's limits.
+    /// asking for `category` of a difficulty, is led
+    /// ([`GateLive::way`]), and make it a lead's if so (see
+    /// [`LeadProfile::apply`]). Returns whether it is led (`None` when
+    /// the agent never leads) and whether its calls must stay within the
+    /// lead's limits.
     fn lead(
         &self,
-        category: PromptCategory,
+        (category, difficulty): (PromptCategory, Option<Difficulty>),
         agent_loop: &mut AgentLoop,
         tools: &mut Vec<ToolDefinition>,
     ) -> (Option<bool>, bool) {
@@ -179,7 +180,7 @@ impl GateTurn {
             return (None, false);
         };
         let mut config = agent_loop.config().clone();
-        let way = self.live.way(category, &config.model, true);
+        let way = self.live.way((category, difficulty), &config.model, true);
         if way.explored {
             info!(led = way.led, %category, "Gate explores the other way of working");
         }
@@ -401,81 +402,84 @@ async fn run_prompt(
     let mut turn_start = session.messages.len();
     let mut started = started;
 
-    let (process_result, forwarded, attempts, recorded) = if turn.routing.reason
-        == RouteReason::Pinned
-    {
-        begin_files(session, &prompt.text);
-        session.messages.push(model_message(session, prompt).await);
-        // The prompt is recorded once classified, which is normally
-        // before the turn's first model call ends; a classifier slower
-        // than that call records it after the call's entry.
-        let (recorded, (result, forwarded)) = tokio::join!(
-            label.classify_and_record(session),
-            run_agent_turn(
-                session,
-                &turn.agent_loop,
-                turn.tools.clone(),
-                ui,
-                cancel,
-                turn.steering,
-                turn.limits,
-                turn.recorder.clone(),
-            )
-        );
-        let recorded = match recorded {
-            Ok(recorded) => Some(recorded),
-            Err(problem) => {
-                ui.send(UiCommand::ShowError(problem)).await;
-                None
+    let (process_result, forwarded, attempts, recorded) =
+        if turn.routing.reason == RouteReason::Pinned {
+            begin_files(session, &prompt.text);
+            session.messages.push(model_message(session, prompt).await);
+            // The prompt is recorded once classified, which is normally
+            // before the turn's first model call ends; a classifier slower
+            // than that call records it after the call's entry.
+            let (recorded, (result, forwarded)) = tokio::join!(
+                label.classify_and_record(session),
+                run_agent_turn(
+                    session,
+                    &turn.agent_loop,
+                    turn.tools.clone(),
+                    ui,
+                    cancel,
+                    turn.steering,
+                    turn.limits,
+                    turn.recorder.clone(),
+                )
+            );
+            let recorded = match recorded {
+                Ok(recorded) => Some(recorded),
+                Err(problem) => {
+                    ui.send(UiCommand::ShowError(problem)).await;
+                    None
+                }
+            };
+            (result, forwarded, Attempts::default(), recorded)
+        } else {
+            let category = label.classify(session).await;
+            if let Some(gate) = turn.gate.as_deref() {
+                let agent = session.agent_id();
+                if route_turn(gate, agent, &mut turn.agent_loop, &mut label, category, ui).await {
+                    let (led, enforced) = gate.lead(
+                        (category, label.difficulty),
+                        &mut turn.agent_loop,
+                        &mut turn.tools,
+                    );
+                    label.led = led;
+                    session.lead = enforced;
+                }
             }
-        };
-        (result, forwarded, Attempts::default(), recorded)
-    } else {
-        let category = label.classify(session).await;
-        if let Some(gate) = turn.gate.as_deref() {
-            let agent = session.agent_id();
-            if route_turn(gate, agent, &mut turn.agent_loop, &mut label, category, ui).await {
-                let (led, enforced) = gate.lead(category, &mut turn.agent_loop, &mut turn.tools);
-                label.led = led;
-                session.lead = enforced;
+            let recorded = match label.record(session, category).await {
+                Ok(recorded) => recorded,
+                Err(problem) => {
+                    ui.send(UiCommand::ShowError(problem)).await;
+                    ui.send(UiCommand::Complete).await;
+                    return Outcome::default();
+                }
+            };
+            begin_files(session, &prompt.text);
+            if let Some(files) = &session.file_checkpoints {
+                files.note_prompt_tx(session.agent_id(), recorded.0);
             }
-        }
-        let recorded = match label.record(session, category).await {
-            Ok(recorded) => recorded,
-            Err(problem) => {
-                ui.send(UiCommand::ShowError(problem)).await;
-                ui.send(UiCommand::Complete).await;
-                return Outcome::default();
+            session.messages.push(model_message(session, prompt).await);
+            let asked = Asked {
+                task: &label.text,
+                prompt_tx: recorded.0,
+                category,
+                difficulty: label.difficulty,
+                turn_start,
+                started,
+                started_ms,
+            };
+            let (result, forwarded, attempts) =
+                run_attempts(session, &mut turn, asked, ui, cancel).await;
+            // The outcome below is the last attempt's.
+            let mut recorded = Some(recorded);
+            if let Some((prompt_tx, start, at)) = attempts.moved {
+                recorded = Some((prompt_tx, category));
+                turn_start = start;
+                started = at;
             }
+            if attempts.settled {
+                recorded = None;
+            }
+            (result, forwarded, attempts, recorded)
         };
-        begin_files(session, &prompt.text);
-        if let Some(files) = &session.file_checkpoints {
-            files.note_prompt_tx(session.agent_id(), recorded.0);
-        }
-        session.messages.push(model_message(session, prompt).await);
-        let asked = Asked {
-            task: &label.text,
-            prompt_tx: recorded.0,
-            category,
-            difficulty: label.difficulty,
-            turn_start,
-            started,
-            started_ms,
-        };
-        let (result, forwarded, attempts) =
-            run_attempts(session, &mut turn, asked, ui, cancel).await;
-        // The outcome below is the last attempt's.
-        let mut recorded = Some(recorded);
-        if let Some((prompt_tx, start, at)) = attempts.moved {
-            recorded = Some((prompt_tx, category));
-            turn_start = start;
-            started = at;
-        }
-        if attempts.settled {
-            recorded = None;
-        }
-        (result, forwarded, attempts, recorded)
-    };
     if let Some(files) = &session.file_checkpoints {
         files.end_turn(session.agent_id());
     }

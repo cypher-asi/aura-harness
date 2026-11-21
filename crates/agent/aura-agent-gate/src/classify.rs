@@ -80,7 +80,10 @@ pub fn request(
 ) -> Result<ModelRequest, ReasonerError> {
     let prompt: String = prompt.chars().take(MAX_PROMPT_CHARS).collect();
     ModelRequest::builder(model, SYSTEM_PROMPT)
-        .message(Message::user(format!("Request:\n{prompt}\n\n{}", answer_cue())))
+        .message(Message::user(format!(
+            "Request:\n{prompt}\n\n{}",
+            answer_cue()
+        )))
         .tool_choice(ToolChoice::None)
         .max_tokens(MAX_REPLY_TOKENS)
         .thinking_effort(Some(ThinkingEffort::Off))

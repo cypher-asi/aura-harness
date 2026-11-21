@@ -10,7 +10,7 @@
 //! restricted this way.
 
 use aura_config::GateConfig;
-use aura_core_types::PromptCategory;
+use aura_core_types::{Difficulty, PromptCategory};
 use aura_model::model_catalog::{infer_tier, ModelTier};
 use serde_json::Value;
 
@@ -42,9 +42,12 @@ pub struct Way {
 }
 
 /// How a turn asking for `category` on `model` is done, given what
-/// `stats` has learned of both ways on the category and model
-/// ([`GateStats::way_row`]), judged on success and on the cost of the
-/// whole work, the subtasks' included:
+/// `stats` has learned of both ways on the category and model, judged on
+/// success and on the cost of the whole work, the subtasks' included. A
+/// turn of known `difficulty` goes by the turns of that difficulty alone
+/// ([`GateStats::way_row_of`]), as leading cheap work costs little and
+/// says nothing of what leading hard work costs; one of unknown
+/// difficulty goes by every turn ([`GateStats::way_row`]):
 ///
 /// 1. the cheaper of the two ways once both are proven: at least
 ///    `min_tries` outcomes with a success rate of at least `target`;
@@ -62,7 +65,7 @@ pub struct Way {
 /// when the category [`may_lead`] not.
 pub fn choose_way(
     stats: &GateStats,
-    category: PromptCategory,
+    (category, difficulty): (PromptCategory, Option<Difficulty>),
     model: &str,
     settings: &GateConfig,
     rng: &mut impl Random,
@@ -73,7 +76,10 @@ pub fn choose_way(
             explored: false,
         };
     }
-    let row = |led| stats.way_row(category, model, led);
+    let row = |led| match difficulty {
+        Some(difficulty) => stats.way_row_of(category, difficulty, model, led),
+        None => stats.way_row(category, model, led),
+    };
     let proven = |row: Option<&Row>| {
         row.filter(|row| row.settled(settings.min_tries))
             .and_then(|row| Some((row.success_rate()?, row.mean_total_cost_usd()?)))
@@ -353,6 +359,18 @@ mod tests {
             category: PromptCategory,
             led: bool,
             ok: bool,
+            costs: (f64, f64),
+        ) {
+            turns_of(entries, n, (category, None), led, ok, costs);
+        }
+
+        /// [`turns`] the classifier judged of `difficulty`.
+        fn turns_of(
+            entries: &mut Vec<RecordEntry>,
+            n: usize,
+            (category, difficulty): (PromptCategory, Option<Difficulty>),
+            led: bool,
+            ok: bool,
             (cost_usd, subtask_cost_usd): (f64, f64),
         ) {
             let signal = if ok {
@@ -366,6 +384,7 @@ mod tests {
                 prompt.category = category;
                 prompt.route = Route::turn(SONNET, RouteReason::Default);
                 prompt.led = Some(led);
+                prompt.difficulty = difficulty;
                 let prompt = Transaction::user_prompt_with(agent, &prompt);
                 let outcome = OutcomePayload {
                     prompt_tx: prompt.hash,
@@ -393,7 +412,13 @@ mod tests {
 
         fn way(entries: &[RecordEntry], category: PromptCategory, roll: f64) -> Way {
             let stats = GateStats::from_entries(entries);
-            choose_way(&stats, category, SONNET, &settings(0.05), &mut || roll)
+            choose_way(
+                &stats,
+                (category, None),
+                SONNET,
+                &settings(0.05),
+                &mut || roll,
+            )
         }
 
         const KEPT: f64 = 0.99;
@@ -414,7 +439,7 @@ mod tests {
         fn a_frontier_model_leads_only_once_leading_is_proven_cheaper() {
             let category = PromptCategory::Planning;
             let on_opus = |stats: &GateStats, roll: f64| {
-                choose_way(stats, category, OPUS, &settings(0.05), &mut || roll)
+                choose_way(stats, (category, None), OPUS, &settings(0.05), &mut || roll)
             };
             let empty = GateStats::default();
             let kept = on_opus(&empty, EXPLORED);
@@ -469,6 +494,42 @@ mod tests {
             assert!(
                 !way(&entries, category, KEPT).led,
                 "both ruled out: the model does the work"
+            );
+        }
+
+        #[test]
+        fn leading_proven_cheaper_on_easy_work_says_nothing_of_hard_work() {
+            let category = PromptCategory::MultiFileChange;
+            let (easy, hard) = (Some(Difficulty::Easy), Some(Difficulty::Hard));
+            let mut entries = Vec::new();
+            turns_of(&mut entries, 10, (category, easy), true, true, (0.06, 0.03));
+            turns_of(&mut entries, 10, (category, hard), false, true, (0.50, 0.0));
+            let stats = GateStats::from_entries(&entries);
+            let way = |difficulty| {
+                choose_way(
+                    &stats,
+                    (category, difficulty),
+                    SONNET,
+                    &settings(0.0),
+                    &mut || KEPT,
+                )
+                .led
+            };
+            assert!(!way(hard), "nothing proves leading hard work cheaper");
+            assert!(way(None), "over every turn, leading looks cheaper");
+
+            turns_of(&mut entries, 10, (category, hard), true, true, (0.30, 0.40));
+            let stats = GateStats::from_entries(&entries);
+            assert!(
+                !choose_way(
+                    &stats,
+                    (category, hard),
+                    SONNET,
+                    &settings(0.0),
+                    &mut || KEPT
+                )
+                .led,
+                "led hard work costs 0.70 in all, done directly 0.50"
             );
         }
 

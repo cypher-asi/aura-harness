@@ -703,7 +703,11 @@ impl Headless {
             .map_or(payload.category, |ended| ended.category);
         if let Some(lead) = lead.filter(|_| routed) {
             let explore = payload.route.reason != RouteReason::Escalate && nudged.is_none();
-            let led = self.hub.gate.way(category, &config.model, explore).led;
+            let led = self
+                .hub
+                .gate
+                .way((category, payload.difficulty), &config.model, explore)
+                .led;
             session.lead = lead.apply(led, &mut config, &mut tools);
             payload.led = Some(led);
         }

@@ -21,7 +21,8 @@ use aura_config::GateConfig;
 use aura_core_auth::ProviderKind;
 use aura_core_types::{Difficulty, PromptCategory, Route, RouteLevel, RouteReason};
 use aura_model::model_catalog::{
-    estimate_cost_usd, infer_tier, model_key, route_label, ModelBackend, ModelOption, ModelTier,
+    estimate_cost_usd, infer_tier, model_key, route_label, supersedes, ModelBackend, ModelOption,
+    ModelTier,
 };
 use aura_model::Usage;
 
@@ -118,16 +119,42 @@ pub fn candidates(
     out
 }
 
+/// Whether none of `candidates` supersedes `candidate`: none is a later
+/// version of the same model on the same route that costs no more
+/// ([`supersedes`]).
+fn is_current(candidate: &Candidate, candidates: &[Candidate]) -> bool {
+    !candidates
+        .iter()
+        .any(|other| other.backend == candidate.backend && supersedes(&other.id, &candidate.id))
+}
+
+/// The `candidates` Gate sends work to: every one but those a later
+/// version supersedes ([`supersedes`]). An older version is priced like
+/// the newer one or above it and belongs to the same tier, so to Gate it
+/// looks like a model nothing is known against, and it would get the
+/// work whenever the newer one's outcomes ruled that one out. It stays
+/// a candidate for what names a model outright, such as an arm of
+/// `/compare`.
+#[must_use]
+pub fn current(candidates: &[Candidate]) -> Vec<Candidate> {
+    candidates
+        .iter()
+        .filter(|c| is_current(c, candidates))
+        .cloned()
+        .collect()
+}
+
 /// The model every turn goes to until Gate learns per category: the
 /// cheapest standard-tier candidate, else the strongest one (the cheapest
-/// of that tier). `candidates` must be ordered as [`candidates`] returns
+/// of that tier), leaving out those a later version supersedes
+/// ([`current`]). `candidates` must be ordered as [`candidates`] returns
 /// them.
 #[must_use]
 pub fn fixed_pick(candidates: &[Candidate]) -> Option<&Candidate> {
-    candidates
-        .iter()
+    let current = || candidates.iter().filter(|c| is_current(c, candidates));
+    current()
         .find(|c| c.tier == ModelTier::Standard)
-        .or_else(|| candidates.iter().rev().max_by_key(|c| c.tier))
+        .or_else(|| current().rev().max_by_key(|c| c.tier))
 }
 
 /// The tier work asking for `category`, of `difficulty` when the
@@ -283,6 +310,33 @@ const fn tiers_apart(a: ModelTier, b: ModelTier) -> u8 {
     rank(a).abs_diff(rank(b))
 }
 
+/// Tier, observed cost and list price of each priced, non-local model of
+/// `candidates` that `observed` has a cost for.
+fn observed_prices<'a>(
+    candidates: impl IntoIterator<Item = &'a Candidate>,
+    observed: impl Fn(&Candidate) -> Option<f64>,
+) -> Vec<(ModelTier, f64, f64)> {
+    candidates
+        .into_iter()
+        .filter(|c| c.backend != ModelBackend::Local)
+        .filter_map(|c| Some((c.tier, observed(c)?, c.cost_usd.filter(|&p| p > 0.0)?)))
+        .collect()
+}
+
+/// How observed costs compare with list prices among the `tried` models
+/// ([`observed_prices`]) of `tier`, or of the nearest tiers when none of
+/// its own was tried. `None` when nothing was.
+fn price_scale(tried: &[(ModelTier, f64, f64)], tier: ModelTier) -> Option<f64> {
+    let nearest = tried.iter().map(|(t, ..)| tiers_apart(*t, tier)).min();
+    let (seen, listed) = tried
+        .iter()
+        .filter(|(t, ..)| Some(tiers_apart(*t, tier)) == nearest)
+        .fold((0.0, 0.0), |(seen, listed), (_, o, l)| {
+            (seen + o, listed + l)
+        });
+    (seen > 0.0 && listed > 0.0).then(|| seen / listed)
+}
+
 /// `candidates` ordered by what work at `level` is expected to cost on
 /// each: local models first (they cost nothing), then by the mean cost
 /// observed at `level`, or for a model not tried there yet, its list
@@ -299,31 +353,15 @@ pub fn expected_costs<'a>(
     candidates: &'a [Candidate],
 ) -> Vec<(&'a Candidate, Option<f64>)> {
     let observed = |c: &Candidate| stats.mean_cost_usd(level, &c.id);
-    // Tier, observed cost and list price of every tried model.
-    let tried: Vec<(ModelTier, f64, f64)> = candidates
-        .iter()
-        .filter(|c| c.backend != ModelBackend::Local)
-        .filter_map(|c| Some((c.tier, observed(c)?, c.cost_usd.filter(|&p| p > 0.0)?)))
-        .collect();
-    let scale = |tier: ModelTier| {
-        let nearest = tried.iter().map(|(t, ..)| tiers_apart(*t, tier)).min();
-        let (seen, listed) = tried
-            .iter()
-            .filter(|(t, ..)| Some(tiers_apart(*t, tier)) == nearest)
-            .fold((0.0, 0.0), |(seen, listed), (_, o, l)| {
-                (seen + o, listed + l)
-            });
-        if seen > 0.0 && listed > 0.0 {
-            seen / listed
-        } else {
-            1.0
-        }
-    };
+    let tried = observed_prices(candidates, observed);
     let expected = |c: &Candidate| {
         if c.backend == ModelBackend::Local {
             Some(0.0)
         } else {
-            observed(c).or_else(|| c.cost_usd.map(|p| p * scale(c.tier)))
+            observed(c).or_else(|| {
+                c.cost_usd
+                    .map(|p| p * price_scale(&tried, c.tier).unwrap_or(1.0))
+            })
         }
     };
     let mut order: Vec<(&Candidate, Option<f64>)> =
@@ -371,7 +409,8 @@ pub fn by_expected_cost<'a>(
 ///
 /// Work a check verifies ([`verifiable`]) goes by [`cascade`] instead
 /// while `settings.cascade` is on. Either way, hard work starts no lower
-/// than [`start_floor`], whether proven, by default or explored.
+/// than [`start_floor`], whether proven, by default or explored, and no
+/// work goes to a model a later version supersedes ([`current`]).
 pub fn pick(
     stats: &GateStats,
     work: &Work<'_>,
@@ -379,6 +418,7 @@ pub fn pick(
     settings: &GateConfig,
     rng: &mut impl Random,
 ) -> Option<Decision> {
+    let candidates = &current(candidates);
     if settings.cascade && verifiable(work.category) {
         if let Some(decision) = cascade(stats, work, candidates, settings, rng) {
             return Some(decision);
@@ -395,12 +435,13 @@ pub fn pick(
     let floor = start_floor(work.difficulty, order.iter().map(|c| c.tier));
     let may_start = |c: &Candidate| floor.is_none_or(|floor| c.tier >= floor);
     let proven = order.iter().position(|c| {
-        may_start(c) && row(&c.id).is_some_and(|row| {
-            row.tries >= settings.min_tries
-                && row
-                    .success_rate()
-                    .is_some_and(|rate| rate >= settings.target)
-        })
+        may_start(c)
+            && row(&c.id).is_some_and(|row| {
+                row.tries >= settings.min_tries
+                    && row
+                        .success_rate()
+                        .is_some_and(|rate| rate >= settings.target)
+            })
     });
     let start = start_index(
         &row,
@@ -436,8 +477,9 @@ pub fn pick(
 }
 
 /// Where work at `level` that failed on `failed` goes next: the cheapest
-/// model (by [`by_expected_cost`]) of the lowest tier above `failed`'s.
-/// `None` when no candidate is stronger.
+/// model (by [`by_expected_cost`]) of the lowest tier above `failed`'s,
+/// among those no later version supersedes ([`current`]). `None` when no
+/// candidate is stronger.
 #[must_use]
 pub fn escalate(
     stats: &GateStats,
@@ -449,7 +491,8 @@ pub fn escalate(
         .iter()
         .find(|c| c.id == failed)
         .map_or_else(|| infer_tier(failed), |c| c.tier);
-    let stronger: Vec<&Candidate> = by_expected_cost(stats, level, candidates)
+    let current = current(candidates);
+    let stronger: Vec<&Candidate> = by_expected_cost(stats, level, &current)
         .into_iter()
         .filter(|c| c.tier > tier)
         .collect();
@@ -559,6 +602,13 @@ fn start_index(
         .or(strongest)
 }
 
+/// The categories of work a check verifies ([`verifiable`]).
+const VERIFIABLE: [PromptCategory; 3] = [
+    PromptCategory::SmallChange,
+    PromptCategory::MultiFileChange,
+    PromptCategory::Debugging,
+];
+
 /// Whether a check verifies work asking for `category`: code changes and
 /// debugging end in a test or build that passes or fails, and a failed
 /// attempt goes on with a stronger model ([`escalate`]). So such work can
@@ -582,8 +632,21 @@ const fn prior_success(tier: ModelTier) -> f64 {
     }
 }
 
-/// How many outcomes the prior of a [`Belief`] weighs as.
+/// How many outcomes the prior of a [`Belief`] weighs as before the
+/// model has done any other work.
 const PRIOR_WEIGHT: f64 = 4.0;
+
+/// How much of an outcome each outcome on other work a check verifies
+/// adds to the weight of the prior: how a model's code changes and
+/// debugging went elsewhere says less of this work than an outcome on
+/// it, but not nothing. Other work adds none: a question answered says
+/// little of whether a change passes its check.
+const ELSEWHERE_WEIGHT: f64 = 0.25;
+
+/// The most outcomes a model's record on other work adds to the weight
+/// of the prior, so that a model that keeps failing one kind of work is
+/// still ruled out of it, however much it did well elsewhere.
+const ELSEWHERE_CAP: f64 = 8.0;
 
 /// Success [`cascade`] expects of a model before starting work on it,
 /// unless it is of the strongest tier: below that, the work most likely
@@ -600,8 +663,9 @@ const JUDGE_CALL: Usage = Usage {
     cache_read_input_tokens: None,
 };
 
-/// Outcomes a model needs on a category before their mean cost stands
-/// for what the category costs on it.
+/// Turns a model needs on some work before their mean cost stands for
+/// what that work costs on it, and how many turns its list price weighs
+/// as against what its work was seen to cost ([`cost_ratio`]).
 const COST_TRIES: u32 = 3;
 
 /// Draws that estimate how often exploring picks a model.
@@ -618,13 +682,13 @@ pub struct Belief {
 }
 
 impl Belief {
-    /// A prior of mean `mean` weighing [`PRIOR_WEIGHT`] outcomes, updated
-    /// with the outcomes of `row`.
-    fn new(mean: f64, row: Option<Row>) -> Self {
+    /// A prior of mean `mean` weighing `weight` outcomes, updated with
+    /// the outcomes of `row`.
+    fn new((mean, weight): (f64, f64), row: Option<Row>) -> Self {
         let row = row.unwrap_or_default();
         Self {
-            alpha: PRIOR_WEIGHT.mul_add(mean, f64::from(row.successes)),
-            beta: PRIOR_WEIGHT.mul_add(
+            alpha: weight.mul_add(mean, f64::from(row.successes)),
+            beta: weight.mul_add(
                 1.0 - mean,
                 f64::from(row.tries.saturating_sub(row.successes)),
             ),
@@ -662,10 +726,20 @@ const fn failure_scale(difficulty: Difficulty) -> f64 {
 /// What Gate believes of how often `candidate` succeeds at `work`: the
 /// outcomes of its [`judged`] row, on a prior whose mean is its tier's
 /// expected success moved toward how it did on the other categories at
-/// the work's level. When the work's difficulty is known, the chance of
-/// failing is then scaled by how much more or less often the model fails
-/// at that difficulty than overall ([`failure_scale`] until it has
-/// outcomes there), keeping the belief's weight.
+/// the work's level. The prior weighs [`PRIOR_WEIGHT`] outcomes, and
+/// [`ELSEWHERE_WEIGHT`] more for each outcome on the other categories a
+/// check verifies, up to [`ELSEWHERE_CAP`]: a couple of failures say
+/// little against a long record of other checked work done well, and a
+/// run of them still rules the model out.
+///
+/// When the work's difficulty is known, each outcome still counts once.
+/// The judged outcomes on work of that difficulty count as they are:
+/// they are what the belief is about. The others say how the model does
+/// on the category, and the chance of failing they give is scaled by how
+/// much more or less often the model fails at that difficulty than
+/// overall ([`failure_scale`] until it has outcomes there), keeping its
+/// weight. Scaling the outcomes of the difficulty itself would count a
+/// failure on hard work as more than one.
 #[must_use]
 pub fn belief(stats: &GateStats, work: &Work<'_>, candidate: &Candidate, min_tries: u32) -> Belief {
     let Work {
@@ -674,37 +748,172 @@ pub fn belief(stats: &GateStats, work: &Work<'_>, candidate: &Candidate, min_tri
         kind,
         difficulty,
     } = *work;
-    let own = judged(stats, level, category, kind, &candidate.id, min_tries);
-    let overall = stats.level_row(level, &candidate.id);
+    let model = candidate.id.as_str();
+    let own = judged(stats, level, category, kind, model, min_tries);
+    let overall = stats.level_row(level, model);
     let elsewhere = overall.without(
         &stats
-            .row(level, category, &candidate.id)
+            .row(level, category, model)
             .copied()
             .unwrap_or_default(),
     );
     let tier_success = prior_success(candidate.tier);
-    let mean = PRIOR_WEIGHT.mul_add(tier_success, f64::from(elsewhere.successes))
-        / (PRIOR_WEIGHT + f64::from(elsewhere.tries));
-    let belief = Belief::new(mean, own);
+    let checked: u32 = VERIFIABLE
+        .into_iter()
+        .filter(|other| *other != category)
+        .filter_map(|other| stats.row(level, other, model))
+        .map(|row| row.tries)
+        .sum();
+    let prior = (
+        PRIOR_WEIGHT.mul_add(tier_success, f64::from(elsewhere.successes))
+            / (PRIOR_WEIGHT + f64::from(elsewhere.tries)),
+        PRIOR_WEIGHT + (ELSEWHERE_WEIGHT * f64::from(checked)).min(ELSEWHERE_CAP),
+    );
     let Some(difficulty) = difficulty else {
-        return belief;
+        return Belief::new(prior, own);
     };
+    // The judged outcomes on work of this difficulty. A permanent agent's
+    // subtasks are not kept by difficulty, so none of them are set apart.
+    let by_kind = level == RouteLevel::Subtask
+        && kind
+            .and_then(|kind| stats.kind_row(category, kind, model))
+            .is_some_and(|row| row.settled(min_tries));
+    let there = match level {
+        _ if by_kind => None,
+        RouteLevel::Turn => stats.unled_work_row(category, difficulty, model),
+        RouteLevel::Subtask => stats.work_row(level, category, difficulty, model),
+    }
+    .unwrap_or_default();
+    let belief = Belief::new(prior, own.map(|own| own.without(&there)));
     let failing = |row: Row, prior: f64| {
         PRIOR_WEIGHT.mul_add(prior, f64::from(row.tries.saturating_sub(row.successes)))
             / (PRIOR_WEIGHT + f64::from(row.tries))
     };
-    let usual = failing(overall, 1.0 - tier_success);
-    let there = stats
-        .difficulty_row(level, &candidate.id, difficulty)
-        .copied()
+    let usual = failing(overall.without(&there), 1.0 - tier_success);
+    let alike = stats
+        .difficulty_row(level, model, difficulty)
+        .map(|row| row.without(&there))
         .unwrap_or_default();
-    let scale = failing(there, (usual * failure_scale(difficulty)).min(1.0)) / usual;
+    let scale = failing(alike, (usual * failure_scale(difficulty)).min(1.0)) / usual;
     let weight = belief.alpha + belief.beta;
     let mean = 1.0 - ((1.0 - belief.mean()) * scale).clamp(0.001, 0.999);
     Belief {
-        alpha: mean * weight,
-        beta: (1.0 - mean) * weight,
+        alpha: mean.mul_add(weight, f64::from(there.successes)),
+        beta: (1.0 - mean).mul_add(
+            weight,
+            f64::from(there.tries.saturating_sub(there.successes)),
+        ),
     }
+}
+
+/// What work at `level` costs on `model` for each dollar it costs on
+/// `anchor`, or `None` when nothing says.
+///
+/// Before the two have done the same kind of work, the ratio of their
+/// list prices for a typical turn. That is only a first guess: a model
+/// that is cheaper per token may need several times the tokens for the
+/// same work, and then costs more. So the guess gives way to what was
+/// seen: what `model` spent on the kinds of work both have done (same
+/// category and difficulty), over what `anchor` would have spent on that
+/// much of each. The list prices weigh as [`COST_TRIES`] turns in it.
+/// Comparing like with like matters: stronger models get the harder
+/// work, so their costs over everything make them look dearer than they
+/// are.
+fn cost_ratio(
+    stats: &GateStats,
+    level: RouteLevel,
+    model: &Candidate,
+    anchor: &Candidate,
+) -> Option<f64> {
+    let listed = match (model.cost_usd, anchor.cost_usd) {
+        (Some(model), Some(anchor)) if anchor > 0.0 => Some(model / anchor),
+        _ => None,
+    };
+    let theirs = stats.work_rows(level, &anchor.id);
+    let (turns, spent, would) = stats
+        .work_rows(level, &model.id)
+        .into_iter()
+        .filter_map(|(work, row)| {
+            let there = theirs.get(&work)?.mean_total_cost_usd()?;
+            Some((row, there))
+        })
+        .fold((0.0, 0.0, 0.0), |(turns, spent, would), (row, there)| {
+            let n = f64::from(row.turns);
+            (
+                turns + n,
+                spent + row.cost_usd + row.subtask_cost_usd,
+                n.mul_add(there, would),
+            )
+        });
+    let seen = (would > 0.0).then(|| spent / would);
+    match (listed, seen) {
+        (Some(listed), Some(seen)) => {
+            let prior = f64::from(COST_TRIES);
+            Some(prior.mul_add(listed, turns * seen) / (prior + turns))
+        }
+        (listed, seen) => seen.or(listed),
+    }
+}
+
+/// What `work` is expected to cost on each of `priced` (each with its
+/// [`expected_costs`]), its subtasks' included, judged on the closest
+/// work like it that some candidate has [`COST_TRIES`] turns on: work
+/// asking for the same category of the same difficulty, else of the same
+/// category. A candidate with that many there costs their mean, every
+/// turn counted however it was done and however it ended. One without
+/// costs what the candidate with the most turns there does, times what
+/// its work costs against that one's ([`cost_ratio`]). With no turns on
+/// like work, each costs its expected cost.
+fn like_work_costs(
+    stats: &GateStats,
+    work: &Work<'_>,
+    priced: &[(&Candidate, f64)],
+    min_tries: u32,
+) -> Vec<f64> {
+    let Work {
+        level,
+        category,
+        kind,
+        difficulty,
+    } = *work;
+    let costed = |row: Option<Row>| row.filter(|row| row.costed(COST_TRIES));
+    let of_difficulty = |c: &Candidate| costed(stats.work_row(level, category, difficulty?, &c.id));
+    let of_category = |c: &Candidate| {
+        costed(match level {
+            RouteLevel::Turn => stats.row(level, category, &c.id).copied(),
+            RouteLevel::Subtask => judged(stats, level, category, kind, &c.id, min_tries),
+        })
+    };
+    let on = |own: &dyn Fn(&Candidate) -> Option<Row>| {
+        let seen: Vec<Option<(u32, f64)>> = priced
+            .iter()
+            .map(|(c, _)| {
+                let row = own(c)?;
+                Some((row.turns, row.mean_total_cost_usd()?))
+            })
+            .collect();
+        let (anchor, there) = priced
+            .iter()
+            .zip(&seen)
+            .filter(|((c, _), _)| c.backend != ModelBackend::Local)
+            .filter_map(|((c, _), seen)| Some((*c, (*seen)?)))
+            .max_by_key(|(_, (turns, _))| *turns)
+            .map(|(c, (_, cost))| (c, cost))?;
+        let costs = priced.iter().zip(&seen).map(|((c, expected), seen)| {
+            seen.map(|(_, cost)| cost)
+                .or_else(|| {
+                    (c.backend != ModelBackend::Local)
+                        .then(|| cost_ratio(stats, level, c, anchor))
+                        .flatten()
+                        .map(|ratio| ratio * there)
+                })
+                .unwrap_or(*expected)
+        });
+        Some(costs.collect::<Vec<f64>>())
+    };
+    on(&of_difficulty)
+        .or_else(|| on(&of_category))
+        .unwrap_or_else(|| priced.iter().map(|(_, cost)| *cost).collect())
 }
 
 /// Where verifiable work goes: the model it is expected to cost least
@@ -717,9 +926,8 @@ pub fn belief(stats: &GateStats, work: &Work<'_>, candidate: &Candidate, min_tri
 /// mean, and a model must be expected to succeed at least
 /// [`MIN_START_SUCCESS`] of the time to start the work unless it is of
 /// the strongest tier, and hard work starts no lower than [`start_floor`].
-/// `c` is a model's mean cost on the category, its subtasks' included,
-/// once it has [`COST_TRIES`] outcomes there, else its
-/// [`expected_costs`].
+/// `c` is what the work is expected to cost on the model, its subtasks'
+/// included, judged on work like it ([`like_work_costs`]).
 ///
 /// With probability `explore_rate`, the success rates are drawn from the
 /// beliefs instead of taken at their means (Thompson sampling): a model
@@ -732,30 +940,13 @@ fn cascade(
     settings: &GateConfig,
     rng: &mut impl Random,
 ) -> Option<Decision> {
-    let Work {
-        level,
-        category,
-        kind,
-        ..
-    } = *work;
+    let level = work.level;
     let priced: Vec<(&Candidate, f64)> = expected_costs(stats, level, candidates)
         .into_iter()
         .filter_map(|(c, cost)| Some((c, cost?)))
         .collect();
     let top = priced.iter().map(|(c, _)| c.tier).max()?;
-    let rows: Vec<Option<Row>> = priced
-        .iter()
-        .map(|(c, _)| judged(stats, level, category, kind, &c.id, settings.min_tries))
-        .collect();
-    let costs: Vec<f64> = priced
-        .iter()
-        .zip(&rows)
-        .map(|((_, cost), row)| {
-            row.filter(|row| row.settled(COST_TRIES))
-                .and_then(|row| row.mean_total_cost_usd())
-                .unwrap_or(*cost)
-        })
-        .collect();
+    let costs = like_work_costs(stats, work, &priced, settings.min_tries);
     let next: Vec<Option<usize>> = priced
         .iter()
         .map(|(c, _)| {
@@ -841,7 +1032,16 @@ fn cascade(
     let explored = chosen != kept;
     let reason = if explored {
         RouteReason::Explore
-    } else if rows[chosen].is_some_and(|row| row.settled(settings.min_tries)) {
+    } else if judged(
+        stats,
+        level,
+        work.category,
+        work.kind,
+        &priced[chosen].0.id,
+        settings.min_tries,
+    )
+    .is_some_and(|row| row.settled(settings.min_tries))
+    {
         RouteReason::Proven
     } else {
         RouteReason::Default
@@ -1116,11 +1316,23 @@ mod tests {
                 difficulty: Difficulty,
                 ok: bool,
             ) {
+                self.priced_turn((category, Some(difficulty)), model, ok, 0.01);
+            }
+
+            /// A turn asking for `category` of `difficulty` that cost
+            /// `cost_usd`.
+            fn priced_turn(
+                &mut self,
+                (category, difficulty): (PromptCategory, Option<Difficulty>),
+                model: &str,
+                ok: bool,
+                cost_usd: f64,
+            ) {
                 let agent = AgentId::generate();
                 let mut prompt = PromptPayload::new(format!("turn {}", self.entries.len()));
                 prompt.category = category;
                 prompt.route = Route::turn(model, RouteReason::Default);
-                prompt.difficulty = Some(difficulty);
+                prompt.difficulty = difficulty;
                 let prompt_tx = self.push(Transaction::user_prompt_with(agent, &prompt));
                 let signal = if ok {
                     OutcomeSignal::ChecksPassed
@@ -1133,7 +1345,7 @@ mod tests {
                     model: model.to_string(),
                     success: signal.success(),
                     signal,
-                    cost_usd: 0.01,
+                    cost_usd,
                     subtask_cost_usd: 0.0,
                     latency_ms: 10,
                 };
@@ -1992,6 +2204,11 @@ mod tests {
             };
             assert_eq!(cascaded(None), HAIKU);
             assert_eq!(
+                cascaded(Some(Medium)),
+                HAIKU,
+                "work that is not hard starts where it is expected to cost least"
+            );
+            assert_eq!(
                 cascaded(Some(Hard)),
                 SONNET,
                 "hard work fails too often on the fast tier to start there"
@@ -2026,10 +2243,66 @@ mod tests {
         }
 
         #[test]
+        fn verifiable_work_is_priced_on_work_like_it() {
+            use Difficulty::{Easy, Hard};
+            let category = PromptCategory::MultiFileChange;
+            let mut log = Log::default();
+            for _ in 0..20 {
+                log.priced_turn((category, Some(Easy)), OPUS, true, 0.05);
+            }
+            for _ in 0..5 {
+                log.priced_turn((category, Some(Hard)), OPUS, true, 0.50);
+            }
+            for _ in 0..3 {
+                log.priced_turn((PromptCategory::Writing, Some(Hard)), SONNET, true, 1.50);
+            }
+            let stats = log.stats();
+            let start = |difficulty| {
+                let work = Work::turn(category).of(difficulty);
+                pick(&stats, &work, &claude(), &cascading(), &mut || 0.0)
+                    .unwrap()
+                    .model
+                    .id
+            };
+            assert_eq!(
+                start(Some(Hard)),
+                SONNET,
+                "opus costs 0.50 on hard work; sonnet passed hard work of another \
+                 kind, and with no work in common its list price says it costs less"
+            );
+            let costs = |difficulty| {
+                let work = Work::turn(category).of(difficulty);
+                let candidates = claude();
+                let priced: Vec<(&Candidate, f64)> =
+                    expected_costs(&stats, RouteLevel::Turn, &candidates)
+                        .into_iter()
+                        .filter_map(|(c, cost)| Some((c, cost?)))
+                        .collect();
+                let costs = like_work_costs(&stats, &work, &priced, 10);
+                let of = |id: &str| costs[priced.iter().position(|(c, _)| c.id == id).unwrap()];
+                (of(SONNET), of(OPUS))
+            };
+            let (sonnet, opus) = costs(Some(Hard));
+            assert!((opus - 0.50).abs() < 1e-9, "{opus}");
+            assert!(sonnet < opus, "not its 1.50 on other work: {sonnet}");
+            let (sonnet, opus) = costs(None);
+            assert!(
+                (opus - 0.14).abs() < 1e-9,
+                "every turn on the category: {opus}"
+            );
+            assert!(sonnet < 0.14, "{sonnet}");
+        }
+
+        #[test]
         fn hard_work_never_starts_below_the_standard_tier() {
             let mut log = Log::default();
             for _ in 0..12 {
-                log.rated_turn(PromptCategory::MultiFileChange, HAIKU, Difficulty::Hard, true);
+                log.rated_turn(
+                    PromptCategory::MultiFileChange,
+                    HAIKU,
+                    Difficulty::Hard,
+                    true,
+                );
             }
             let stats = log.stats();
             let hard = Work::turn(PromptCategory::MultiFileChange).of(Some(Difficulty::Hard));
@@ -2080,6 +2353,278 @@ mod tests {
                     );
                 }
             }
+        }
+
+        /// Claude plan models by name, as [`candidates`] orders them.
+        fn plan(names: &[&str]) -> Vec<Candidate> {
+            let options: Vec<ModelOption> = names
+                .iter()
+                .map(|name| ModelOption {
+                    id: format!("claude/{name}"),
+                    label: (*name).to_string(),
+                    backend: ModelBackend::Claude,
+                    installed: false,
+                    tier: infer_tier(name),
+                })
+                .collect();
+            candidates(&options, signed_in(&[ProviderKind::Claude]), |_| false)
+        }
+
+        #[test]
+        fn an_older_version_of_a_model_gets_no_work() {
+            const NEW_SONNET: &str = "claude/claude-sonnet-5-5";
+            const OLD_SONNET: &str = "claude/claude-sonnet-5";
+            const NEW_OPUS: &str = "claude/claude-opus-5-5";
+            let all = plan(&[
+                "claude-fable-5-2",
+                "claude-haiku-5-5",
+                "claude-sonnet-5-5",
+                "claude-opus-5-5",
+                "claude-fable-5-1",
+                "claude-opus-5",
+                "claude-sonnet-5",
+                "claude-fable-5",
+                "claude-opus-4-8",
+                "claude-sonnet-4-6",
+                "claude-haiku-4-5",
+            ]);
+            assert_eq!(all.len(), 11, "each is still a candidate, to name outright");
+            let mut kept = ids(&current(&all))
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            kept.sort();
+            assert_eq!(
+                kept,
+                [
+                    "claude/claude-fable-5-1",
+                    "claude/claude-fable-5-2",
+                    "claude/claude-haiku-5-5",
+                    NEW_OPUS,
+                    NEW_SONNET,
+                ],
+                "fable 5.2 has no known price, so nothing is known against 5.1"
+            );
+            assert_eq!(fixed_pick(&all).map(|c| c.id.as_str()), Some(NEW_SONNET));
+
+            // The newer sonnet keeps failing: the work does not fall to the
+            // older one, which nothing is known against and which lists
+            // at the same price.
+            let category = PromptCategory::MultiFileChange;
+            let mut log = Log::default();
+            for _ in 0..3 {
+                log.rated_turn(category, NEW_SONNET, Difficulty::Medium, false);
+            }
+            let stats = log.stats();
+            let sonnets_and_opus: Vec<Candidate> = all
+                .iter()
+                .filter(|c| c.tier >= ModelTier::Standard)
+                .cloned()
+                .collect();
+            let work = Work::turn(category).of(Some(Difficulty::Medium));
+            let picked = pick(&stats, &work, &sonnets_and_opus, &cascading(), &mut || 0.0)
+                .unwrap()
+                .model
+                .id;
+            assert_eq!(picked, NEW_OPUS, "up a tier, not back a version");
+
+            for (failed, next) in [
+                ("claude/claude-haiku-5-5", NEW_SONNET),
+                (NEW_SONNET, NEW_OPUS),
+                (OLD_SONNET, NEW_OPUS),
+            ] {
+                assert_eq!(
+                    escalate(&stats, RouteLevel::Turn, failed, &all)
+                        .unwrap()
+                        .model
+                        .id,
+                    next,
+                    "after {failed}"
+                );
+            }
+            let mut rng = SplitMix64::seeded(11);
+            let exploring = GateConfig {
+                explore_rate: 1.0,
+                ..GateConfig::defaults()
+            };
+            for difficulty in [None, Some(Difficulty::Easy), Some(Difficulty::Hard)] {
+                for category in [PromptCategory::MultiFileChange, PromptCategory::Research] {
+                    let work = Work::turn(category).of(difficulty);
+                    for _ in 0..50 {
+                        let model = pick(&stats, &work, &all, &exploring, &mut rng)
+                            .unwrap()
+                            .model;
+                        assert!(is_current(&model, &all), "{} was explored", model.id);
+                    }
+                }
+            }
+        }
+
+        /// What `work` is expected to cost on each of `ids`.
+        fn like_costs(stats: &GateStats, work: &Work<'_>, ids: &[&str]) -> Vec<f64> {
+            let candidates = claude();
+            let priced: Vec<(&Candidate, f64)> = expected_costs(stats, work.level, &candidates)
+                .into_iter()
+                .filter_map(|(c, cost)| Some((c, cost?)))
+                .collect();
+            let costs = like_work_costs(stats, work, &priced, 10);
+            ids.iter()
+                .map(|id| costs[priced.iter().position(|(c, _)| c.id == *id).unwrap()])
+                .collect()
+        }
+
+        #[test]
+        fn a_model_is_priced_by_what_its_work_cost_not_by_its_list_price() {
+            use Difficulty::Hard;
+            let category = PromptCategory::MultiFileChange;
+            let hard = Work::turn(category).of(Some(Hard));
+            let mut log = Log::default();
+            for _ in 0..5 {
+                log.priced_turn((category, Some(Hard)), OPUS, true, 0.50);
+            }
+            let costs = like_costs(&log.stats(), &hard, &[SONNET, OPUS]);
+            assert!((costs[1] - 0.50).abs() < 1e-9, "{costs:?}");
+            assert!(
+                (costs[0] - 0.30).abs() < 1e-9,
+                "with no work in common, by list price (0.09 to 0.15): {costs:?}"
+            );
+
+            // Both did the same other work: sonnet, cheaper per token, used
+            // so many more tokens that it spent twice what opus did.
+            let other = (PromptCategory::Unclassified, None);
+            for _ in 0..6 {
+                log.priced_turn(other, OPUS, true, 0.50);
+            }
+            for ok in [true, true, false] {
+                log.priced_turn(other, SONNET, ok, 1.00);
+            }
+            let stats = log.stats();
+            let costs = like_costs(&stats, &hard, &[SONNET, OPUS]);
+            // 3 turns at twice opus's cost, and the list price (0.6 of
+            // opus's) weighing as 3 more: 1.3 times opus's 0.50.
+            assert!((costs[0] - 0.65).abs() < 1e-9, "{costs:?}");
+            assert!(costs[0] > costs[1], "dearer than opus on this work too");
+            assert_eq!(
+                pick(&stats, &hard, &claude(), &cascading(), &mut || 0.0)
+                    .unwrap()
+                    .model
+                    .id,
+                OPUS
+            );
+
+            // Work only one of them did says nothing of the other: opus's
+            // costly plans do not make sonnet look cheap.
+            for _ in 0..10 {
+                log.priced_turn((PromptCategory::Planning, None), OPUS, true, 5.00);
+            }
+            let costs = like_costs(&log.stats(), &hard, &[SONNET, OPUS]);
+            assert!((costs[0] - 0.65).abs() < 1e-9, "{costs:?}");
+
+            // Its own turns on the work are what it costs, once it has 3.
+            for _ in 0..3 {
+                log.priced_turn((category, Some(Hard)), SONNET, true, 0.20);
+            }
+            let costs = like_costs(&log.stats(), &hard, &[SONNET, OPUS]);
+            assert!((costs[0] - 0.20).abs() < 1e-9, "{costs:?}");
+        }
+
+        #[test]
+        fn turns_nothing_checked_count_in_what_work_costs() {
+            let category = PromptCategory::MultiFileChange;
+            let mut log = Log::default();
+            for _ in 0..3 {
+                log.turn(category, SONNET, OutcomeSignal::ChecksPassed, 0.10);
+            }
+            for _ in 0..3 {
+                log.turn(category, SONNET, OutcomeSignal::None, 0.90);
+            }
+            let stats = log.stats();
+            let costs = like_costs(&stats, &Work::turn(category), &[SONNET]);
+            assert!((costs[0] - 0.50).abs() < 1e-9, "{costs:?}");
+            let row = judged(&stats, RouteLevel::Turn, category, None, SONNET, 10).unwrap();
+            assert_eq!((row.tries, row.successes), (3, 3), "success is unchanged");
+        }
+
+        #[test]
+        fn a_failure_on_hard_work_counts_once() {
+            let category = PromptCategory::MultiFileChange;
+            let hard = Work::turn(category).of(Some(Difficulty::Hard));
+            let sonnet = claude().into_iter().find(|c| c.id == SONNET).unwrap();
+            let assumed = belief(&GateStats::default(), &hard, &sonnet, 10).mean();
+            assert!((assumed - (1.0 - 0.15 * 1.6)).abs() < 1e-9, "{assumed}");
+
+            let mut log = Log::default();
+            for _ in 0..2 {
+                log.rated_turn(category, SONNET, Difficulty::Hard, false);
+            }
+            let after = belief(&log.stats(), &hard, &sonnet, 10);
+            // What was assumed of hard work, weighing 4 outcomes, and the
+            // 2 failures as they are. Scaling them up as hard work too
+            // would leave 0.2.
+            assert!(
+                (after.mean() - 4.0 * assumed / 6.0).abs() < 1e-9,
+                "{after:?}"
+            );
+            assert!((after.alpha + after.beta - 6.0).abs() < 1e-9, "{after:?}");
+
+            // The same failures on easier work do say hard work fails more.
+            let mut log = Log::default();
+            for _ in 0..2 {
+                log.rated_turn(category, SONNET, Difficulty::Medium, false);
+            }
+            let scaled = belief(&log.stats(), &hard, &sonnet, 10).mean();
+            assert!(scaled < after.mean(), "{scaled} < {}", after.mean());
+        }
+
+        #[test]
+        fn a_record_of_other_work_outweighs_a_couple_of_failures() {
+            let category = PromptCategory::MultiFileChange;
+            let hard = Work::turn(category).of(Some(Difficulty::Hard));
+            let start = |log: &Log| {
+                pick(&log.stats(), &hard, &claude(), &cascading(), &mut || 0.0)
+                    .unwrap()
+                    .model
+                    .id
+            };
+            let sonnet = claude().into_iter().find(|c| c.id == SONNET).unwrap();
+            let expected = |log: &Log| belief(&log.stats(), &hard, &sonnet, 10).mean();
+            // Turns at a price where the judge's review of a failed one
+            // is small change.
+            let turns = |log: &mut Log, n: usize, category, ok| {
+                for _ in 0..n {
+                    log.priced_turn((category, None), SONNET, ok, 0.3);
+                }
+            };
+
+            // Two failed turns are all Gate knows of the model: it is
+            // ruled out of hard work on the category.
+            let mut unknown = Log::default();
+            turns(&mut unknown, 2, category, false);
+            assert!(expected(&unknown) < MIN_START_SUCCESS);
+            assert_eq!(start(&unknown), OPUS);
+
+            // The same two after forty turns of other work that passed
+            // say much less, and hard work still starts on it.
+            let mut known = Log::default();
+            turns(&mut known, 40, PromptCategory::Debugging, true);
+            turns(&mut known, 2, category, false);
+            assert!(expected(&known) > MIN_START_SUCCESS, "{}", expected(&known));
+            assert_eq!(start(&known), SONNET);
+
+            // Forty questions answered do not: they say little of whether
+            // a change passes its check.
+            let mut answered = Log::default();
+            turns(&mut answered, 40, PromptCategory::Question, true);
+            turns(&mut answered, 2, category, false);
+            assert!(expected(&answered) < MIN_START_SUCCESS);
+            assert_eq!(start(&answered), OPUS);
+
+            // A run of failures rules it out all the same, however long
+            // the record.
+            turns(&mut known, 400, PromptCategory::Debugging, true);
+            turns(&mut known, 3, category, false);
+            assert!(expected(&known) < MIN_START_SUCCESS, "{}", expected(&known));
+            assert_eq!(start(&known), OPUS);
         }
 
         #[test]

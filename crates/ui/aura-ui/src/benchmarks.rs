@@ -170,6 +170,11 @@ pub struct BenchRun {
     pub category: Option<String>,
     /// How hard the classifier said its first prompt's work is (`hard`)
     pub difficulty: Option<String>,
+    /// Whether Gate had its model lead a turn, handing the work to
+    /// subtasks
+    pub led: bool,
+    /// The part of `cost_usd` its subtasks spent
+    pub subtask_cost_usd: f64,
     pub wall_ms: u64,
     pub cost_usd: f64,
     pub check_passed: Option<bool>,

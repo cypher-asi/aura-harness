@@ -14,7 +14,7 @@
 use aura_agent_gate::{Candidate, Decision, GateStats, SplitMix64, Way, Work};
 use aura_agent_kernel::RecordObserver;
 use aura_config::GateConfig;
-use aura_core_types::{AgentId, PromptCategory, RecordEntry, RouteLevel, RouteReason};
+use aura_core_types::{AgentId, Difficulty, PromptCategory, RecordEntry, RouteLevel, RouteReason};
 use aura_store_db::ReadStore;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -170,10 +170,15 @@ impl GateLive {
         Some(decision)
     }
 
-    /// Whether a turn asking for `category` on `model` is led (see
-    /// [`aura_agent_gate::choose_way`]); it explores the other way only
-    /// when `explore`.
-    pub(crate) fn way(&self, category: PromptCategory, model: &str, explore: bool) -> Way {
+    /// Whether a turn asking for `category` of `difficulty` on `model` is
+    /// led (see [`aura_agent_gate::choose_way`]); it explores the other
+    /// way only when `explore`.
+    pub(crate) fn way(
+        &self,
+        work: (PromptCategory, Option<Difficulty>),
+        model: &str,
+        explore: bool,
+    ) -> Way {
         let settings = if explore {
             self.settings
         } else {
@@ -181,7 +186,7 @@ impl GateLive {
         };
         let stats = lock(&self.stats);
         let mut rng = lock(&self.rng);
-        aura_agent_gate::choose_way(&stats, category, model, &settings, &mut *rng)
+        aura_agent_gate::choose_way(&stats, work, model, &settings, &mut *rng)
     }
 
     fn remember(&self, route: RecentRoute) {

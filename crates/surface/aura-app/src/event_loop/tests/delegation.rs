@@ -167,7 +167,11 @@ async fn with_nothing_learned_no_turn_is_led_and_proven_leading_is() {
     for category in PromptCategory::CLASSES {
         let (mut config, mut tools, lead) = fixture.hub.user_turn(&mut session);
         let before = (config.system_prompt.clone(), tools.len());
-        let led = fixture.hub.gate.way(category, &config.model, false).led;
+        let led = fixture
+            .hub
+            .gate
+            .way((category, None), &config.model, false)
+            .led;
         assert!(
             !lead.unwrap().apply(led, &mut config, &mut tools),
             "{category}"
@@ -178,7 +182,11 @@ async fn with_nothing_learned_no_turn_is_led_and_proven_leading_is() {
     let (mut config, mut tools, lead) = fixture.hub.user_turn(&mut session);
     prove_leading(&fixture, &config.model);
     let category = PromptCategory::MultiFileChange;
-    let led = fixture.hub.gate.way(category, &config.model, false).led;
+    let led = fixture
+        .hub
+        .gate
+        .way((category, None), &config.model, false)
+        .led;
     assert!(lead.unwrap().apply(led, &mut config, &mut tools));
     assert!(!names(&tools).contains(&"write_file"));
 }

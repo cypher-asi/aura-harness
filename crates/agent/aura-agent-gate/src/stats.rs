@@ -1,5 +1,6 @@
-//! What Gate has learned: per level, category and model, how many
-//! counted outcomes there were, how many succeeded, and what they cost.
+//! What Gate has learned: per level, category and model, how much work
+//! ended and what it cost, how much of it has a known result, and how
+//! much of that succeeded.
 //!
 //! [`GateStats`] is built by feeding it record entries
 //! ([`GateStats::observe`]): the log at startup, then every entry the
@@ -10,7 +11,9 @@
 //! table instead of adding to it, and one that takes the earlier ones
 //! back (the judge found the failure was not the model's doing, see
 //! [`aura_core_types::OutcomeSignal::voids`]) leaves the prompt out of
-//! the table.
+//! the table. Work that ended with nothing that says how it went still
+//! counts for what it cost: a model's cost is what all of its work cost,
+//! not only the work a check happened to verify.
 //!
 //! Entries may arrive in any order and more than once (a startup scan
 //! can overlap the live feed): which outcome counts depends only on the
@@ -31,15 +34,18 @@ use aura_core_types::{
     AgentId, Difficulty, Hash, OutcomePayload, PromptCategory, RecordEntry, RouteLevel, RouteReason,
 };
 
-/// One row of the table: the counted outcomes of one model on one
-/// category at one level.
+/// One row of the table: the work of one model on one category at one
+/// level. Every piece of work that ended counts for what it cost
+/// (`turns`); those whose result is known count as tries too.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Row {
-    /// Counted outcomes.
+    /// Pieces of work that ended, whether or not their result is known.
+    pub turns: u32,
+    /// Those whose result is known.
     pub tries: u32,
     /// Those that succeeded.
     pub successes: u32,
-    /// Their list-price cost, in USD.
+    /// The list-price cost of the `turns`, in USD.
     pub cost_usd: f64,
     /// The list-price cost of the subtasks they dispatched, in USD.
     pub subtask_cost_usd: f64,
@@ -54,16 +60,23 @@ impl Row {
         (self.tries > 0).then(|| f64::from(self.successes) / f64::from(self.tries))
     }
 
-    /// Mean cost per try; `None` before the first try.
+    /// Mean cost per turn; `None` before the first turn.
     #[must_use]
     pub fn mean_cost_usd(&self) -> Option<f64> {
-        (self.tries > 0).then(|| self.cost_usd / f64::from(self.tries))
+        (self.turns > 0).then(|| self.cost_usd / f64::from(self.turns))
     }
 
-    /// Mean cost per try with its subtasks'; `None` before the first try.
+    /// Mean cost per turn with its subtasks'; `None` before the first turn.
     #[must_use]
     pub fn mean_total_cost_usd(&self) -> Option<f64> {
-        (self.tries > 0).then(|| (self.cost_usd + self.subtask_cost_usd) / f64::from(self.tries))
+        (self.turns > 0).then(|| (self.cost_usd + self.subtask_cost_usd) / f64::from(self.turns))
+    }
+
+    /// Whether the row's mean cost stands for what the work costs: it
+    /// has at least `min_turns` turns.
+    #[must_use]
+    pub const fn costed(&self, min_turns: u32) -> bool {
+        self.turns >= min_turns
     }
 
     /// Whether this row decides on its own: it has at least `min_tries`.
@@ -86,6 +99,7 @@ impl Row {
     #[must_use]
     pub fn without(&self, other: &Self) -> Self {
         Self {
+            turns: self.turns.saturating_sub(other.turns),
             tries: self.tries.saturating_sub(other.tries),
             successes: self.successes.saturating_sub(other.successes),
             cost_usd: (self.cost_usd - other.cost_usd).max(0.0),
@@ -94,26 +108,45 @@ impl Row {
         }
     }
 
+    /// These outcomes and `other`'s together.
+    #[must_use]
+    pub fn with(&self, other: &Self) -> Self {
+        Self {
+            turns: self.turns + other.turns,
+            tries: self.tries + other.tries,
+            successes: self.successes + other.successes,
+            cost_usd: self.cost_usd + other.cost_usd,
+            subtask_cost_usd: self.subtask_cost_usd + other.subtask_cost_usd,
+            latency_ms: self.latency_ms.saturating_add(other.latency_ms),
+        }
+    }
+
     fn add(&mut self, counted: &Counted) {
-        let Some(success) = counted.success else {
+        if counted.void {
             return;
-        };
-        self.tries += 1;
-        self.successes += u32::from(success);
+        }
+        self.turns += 1;
         self.cost_usd += counted.cost_usd;
         self.subtask_cost_usd += counted.subtask_cost_usd;
         self.latency_ms = self.latency_ms.saturating_add(counted.latency_ms);
+        if let Some(success) = counted.success {
+            self.tries += 1;
+            self.successes += u32::from(success);
+        }
     }
 
     fn remove(&mut self, counted: &Counted) {
-        let Some(success) = counted.success else {
+        if counted.void {
             return;
-        };
-        self.tries = self.tries.saturating_sub(1);
-        self.successes = self.successes.saturating_sub(u32::from(success));
+        }
+        self.turns = self.turns.saturating_sub(1);
         self.cost_usd = (self.cost_usd - counted.cost_usd).max(0.0);
         self.subtask_cost_usd = (self.subtask_cost_usd - counted.subtask_cost_usd).max(0.0);
         self.latency_ms = self.latency_ms.saturating_sub(counted.latency_ms);
+        if let Some(success) = counted.success {
+            self.tries = self.tries.saturating_sub(1);
+            self.successes = self.successes.saturating_sub(u32::from(success));
+        }
     }
 }
 
@@ -141,6 +174,17 @@ pub struct DetailKey {
     pub led: Option<bool>,
 }
 
+/// A row of work whose difficulty is known: one model on one category of
+/// one difficulty at one level, done one way.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct WorkKey {
+    level: RouteLevel,
+    category: PromptCategory,
+    difficulty: Difficulty,
+    model: String,
+    led: Option<bool>,
+}
+
 /// What a prompt says about how its work was done.
 #[derive(Debug, Clone, PartialEq)]
 struct Shape {
@@ -162,8 +206,11 @@ struct Counted {
     rating: bool,
     category: PromptCategory,
     model: String,
-    /// `None` when the outcome takes back what was said before: the
-    /// prompt then counts in no row.
+    /// The outcome takes back what was said before: the prompt then
+    /// counts in no row.
+    void: bool,
+    /// Whether the work succeeded; `None` when it ended with nothing
+    /// that says, so that it counts for its cost only.
     success: Option<bool>,
     cost_usd: f64,
     subtask_cost_usd: f64,
@@ -171,27 +218,34 @@ struct Counted {
 }
 
 impl Counted {
-    fn from_outcome(seq: u64, outcome: OutcomePayload) -> Option<Self> {
-        if outcome.success.is_none() && !outcome.signal.voids() {
-            return None;
-        }
-        Some(Self {
+    fn from_outcome(seq: u64, outcome: OutcomePayload) -> Self {
+        let void = outcome.signal.voids();
+        Self {
             seq,
             rating: outcome.signal.is_rating(),
             category: outcome.category,
-            success: outcome.success,
+            void,
+            success: outcome.success.filter(|_| !void),
             model: outcome.model,
             cost_usd: outcome.cost_usd,
             subtask_cost_usd: outcome.subtask_cost_usd,
             latency_ms: outcome.latency_ms,
-        })
+        }
     }
 
-    /// Whether `self` counts instead of `other` for the same prompt.
+    /// Whether the outcome says how the work went, or takes that back.
+    const fn decides(&self) -> bool {
+        self.void || self.success.is_some()
+    }
+
+    /// Whether `self` counts instead of `other` for the same prompt: the
+    /// user's rating over automatic outcomes, then one that says how the
+    /// work went over one that does not, else the later one.
     fn supersedes(&self, other: &Self) -> bool {
         match (self.rating, other.rating) {
             (true, false) => true,
             (false, true) => false,
+            _ if self.decides() != other.decides() => self.decides(),
             _ => self.seq > other.seq,
         }
     }
@@ -213,6 +267,16 @@ impl Counted {
             led: shape.led,
         }
     }
+
+    fn work_key(&self, shape: &Shape) -> Option<WorkKey> {
+        Some(WorkKey {
+            level: shape.level,
+            category: self.category,
+            difficulty: shape.difficulty?,
+            model: self.model.clone(),
+            led: shape.led,
+        })
+    }
 }
 
 /// What is known about one prompt.
@@ -222,8 +286,7 @@ struct PromptState {
     shape: Option<Shape>,
     /// The prompt is an escalated retry, which is never counted.
     ignored: bool,
-    /// The outcome it counts with, once one with a known result has
-    /// been seen.
+    /// The outcome it counts with, once the work has ended.
     counted: Option<Counted>,
 }
 
@@ -236,6 +299,8 @@ pub struct GateStats {
     /// The outcomes of prompts whose difficulty is known, by level, model
     /// and difficulty, over every category.
     difficulties: HashMap<(RouteLevel, String, Difficulty), Row>,
+    /// The same outcomes by category too, and way of working
+    works: HashMap<WorkKey, Row>,
     prompts: HashMap<(AgentId, Hash), PromptState>,
 }
 
@@ -285,7 +350,7 @@ impl GateStats {
         if state.shape.is_some() {
             return;
         }
-        if let Some(counted) = state.counted.clone().filter(|c| c.success.is_some()) {
+        if let Some(counted) = state.counted.clone() {
             self.add(&counted, &shape);
         }
         if let Some(state) = self.prompts.get_mut(&prompt) {
@@ -294,6 +359,9 @@ impl GateStats {
     }
 
     fn add(&mut self, counted: &Counted, shape: &Shape) {
+        if counted.void {
+            return;
+        }
         self.rows
             .entry(counted.key(shape.level))
             .or_default()
@@ -308,20 +376,23 @@ impl GateStats {
                 .or_default()
                 .add(counted);
         }
+        if let Some(key) = counted.work_key(shape) {
+            self.works.entry(key).or_default().add(counted);
+        }
     }
 
     fn remove(&mut self, counted: &Counted, shape: &Shape) {
         let key = counted.key(shape.level);
         if let Some(row) = self.rows.get_mut(&key) {
             row.remove(counted);
-            if row.tries == 0 {
+            if row.turns == 0 {
                 self.rows.remove(&key);
             }
         }
         let key = counted.detail_key(shape);
         if let Some(row) = self.details.get_mut(&key) {
             row.remove(counted);
-            if row.tries == 0 {
+            if row.turns == 0 {
                 self.details.remove(&key);
             }
         }
@@ -329,8 +400,16 @@ impl GateStats {
             let key = (shape.level, counted.model.clone(), difficulty);
             if let Some(row) = self.difficulties.get_mut(&key) {
                 row.remove(counted);
-                if row.tries == 0 {
+                if row.turns == 0 {
                     self.difficulties.remove(&key);
+                }
+            }
+        }
+        if let Some(key) = counted.work_key(shape) {
+            if let Some(row) = self.works.get_mut(&key) {
+                row.remove(counted);
+                if row.turns == 0 {
+                    self.works.remove(&key);
                 }
             }
         }
@@ -338,9 +417,7 @@ impl GateStats {
 
     fn observe_outcome(&mut self, agent: AgentId, seq: u64, outcome: OutcomePayload) {
         let prompt_tx = outcome.prompt_tx;
-        let Some(new) = Counted::from_outcome(seq, outcome) else {
-            return;
-        };
+        let new = Counted::from_outcome(seq, outcome);
         let state = self.prompts.entry((agent, prompt_tx)).or_default();
         if state.ignored {
             return;
@@ -354,16 +431,14 @@ impl GateStats {
         }
         let (shape, old) = (state.shape.clone(), state.counted.replace(new.clone()));
         if let Some(shape) = shape {
-            if let Some(old) = old.filter(|old| old.success.is_some()) {
+            if let Some(old) = old {
                 self.remove(&old, &shape);
             }
-            if new.success.is_some() {
-                self.add(&new, &shape);
-            }
+            self.add(&new, &shape);
         }
     }
 
-    /// The row of `model` on `category` at `level`, if it has tries.
+    /// The row of `model` on `category` at `level`, if it has turns.
     #[must_use]
     pub fn row(&self, level: RouteLevel, category: PromptCategory, model: &str) -> Option<&Row> {
         self.rows.get(&RowKey {
@@ -374,7 +449,7 @@ impl GateStats {
     }
 
     /// The row of `model` on `category` for subtasks that went to the
-    /// permanent agent `kind`, if it has tries.
+    /// permanent agent `kind`, if it has turns.
     #[must_use]
     pub fn kind_row(&self, category: PromptCategory, kind: &str, model: &str) -> Option<&Row> {
         self.details.get(&DetailKey {
@@ -387,7 +462,7 @@ impl GateStats {
     }
 
     /// The row of `model` on turns asking for `category` that were led
-    /// (`led`) or done by the model itself, if it has tries. Turns whose
+    /// (`led`) or done by the model itself, if it has turns. Turns whose
     /// prompt does not say are in neither.
     #[must_use]
     pub fn way_row(&self, category: PromptCategory, model: &str, led: bool) -> Option<&Row> {
@@ -400,6 +475,105 @@ impl GateStats {
         })
     }
 
+    /// [`Self::way_row`] over the turns the classifier judged of
+    /// `difficulty` only.
+    #[must_use]
+    pub fn way_row_of(
+        &self,
+        category: PromptCategory,
+        difficulty: Difficulty,
+        model: &str,
+        led: bool,
+    ) -> Option<&Row> {
+        self.works.get(&WorkKey {
+            level: RouteLevel::Turn,
+            category,
+            difficulty,
+            model: model.to_string(),
+            led: Some(led),
+        })
+    }
+
+    /// Every outcome of `model` at `level` on work asking for `category`
+    /// that the classifier judged of `difficulty`, whichever way it was
+    /// done, if it has turns.
+    #[must_use]
+    pub fn work_row(
+        &self,
+        level: RouteLevel,
+        category: PromptCategory,
+        difficulty: Difficulty,
+        model: &str,
+    ) -> Option<Row> {
+        let row = [None, Some(false), Some(true)]
+            .into_iter()
+            .filter_map(|led| {
+                self.works.get(&WorkKey {
+                    level,
+                    category,
+                    difficulty,
+                    model: model.to_string(),
+                    led,
+                })
+            })
+            .fold(Row::default(), |sum, row| sum.with(row));
+        (row.turns > 0).then_some(row)
+    }
+
+    /// [`Self::unled_row`] over the turns the classifier judged of
+    /// `difficulty` only. `None` when there are none.
+    #[must_use]
+    pub fn unled_work_row(
+        &self,
+        category: PromptCategory,
+        difficulty: Difficulty,
+        model: &str,
+    ) -> Option<Row> {
+        let row = [None, Some(false)]
+            .into_iter()
+            .filter_map(|led| {
+                self.works.get(&WorkKey {
+                    level: RouteLevel::Turn,
+                    category,
+                    difficulty,
+                    model: model.to_string(),
+                    led,
+                })
+            })
+            .fold(Row::default(), |sum, row| sum.with(row));
+        (row.turns > 0).then_some(row)
+    }
+
+    /// All the work of `model` at `level`, by what it asked for and how
+    /// hard the classifier judged it (`None` where it did not say),
+    /// whichever way it was done.
+    #[must_use]
+    pub fn work_rows(
+        &self,
+        level: RouteLevel,
+        model: &str,
+    ) -> HashMap<(PromptCategory, Option<Difficulty>), Row> {
+        let mut out: HashMap<(PromptCategory, Option<Difficulty>), Row> = HashMap::new();
+        let mut judged: HashMap<PromptCategory, Row> = HashMap::new();
+        for (key, row) in &self.works {
+            if key.level == level && key.model == model {
+                let sum = out.entry((key.category, Some(key.difficulty))).or_default();
+                *sum = sum.with(row);
+                let sum = judged.entry(key.category).or_default();
+                *sum = sum.with(row);
+            }
+        }
+        for (key, row) in &self.rows {
+            if key.level == level && key.model == model {
+                let rest = judged.get(&key.category).map_or(*row, |j| row.without(j));
+                if rest.turns > 0 {
+                    out.insert((key.category, None), rest);
+                }
+            }
+        }
+        out
+    }
+
     /// The row of `model` on turns asking for `category` that it did
     /// itself: every turn but those it led, whose outcome says as much
     /// about the subtasks as about the lead. `None` when there are none.
@@ -409,10 +583,10 @@ impl GateStats {
         let row = self
             .way_row(category, model, true)
             .map_or(*all, |led| all.without(led));
-        (row.tries > 0).then_some(row)
+        (row.turns > 0).then_some(row)
     }
 
-    /// Every finer row with tries, by level, category, model, kind and way.
+    /// Every finer row with turns, by level, category, model, kind and way.
     #[must_use]
     pub fn details(&self) -> Vec<(&DetailKey, &Row)> {
         let mut rows: Vec<(&DetailKey, &Row)> = self.details.iter().collect();
@@ -421,7 +595,7 @@ impl GateStats {
     }
 
     /// The outcomes of `model` at `level` on work the classifier judged of
-    /// `difficulty`, over every category, if it has tries.
+    /// `difficulty`, over every category, if it has turns.
     #[must_use]
     pub fn difficulty_row(
         &self,
@@ -433,39 +607,23 @@ impl GateStats {
             .get(&(level, model.to_string(), difficulty))
     }
 
-    /// Every counted outcome of `model` at `level`, over every category.
+    /// All the work of `model` at `level`, over every category.
     #[must_use]
     pub fn level_row(&self, level: RouteLevel, model: &str) -> Row {
         self.rows
             .iter()
             .filter(|(key, _)| key.level == level && key.model == model)
-            .fold(Row::default(), |sum, (_, row)| Row {
-                tries: sum.tries + row.tries,
-                successes: sum.successes + row.successes,
-                cost_usd: sum.cost_usd + row.cost_usd,
-                subtask_cost_usd: sum.subtask_cost_usd + row.subtask_cost_usd,
-                latency_ms: sum.latency_ms.saturating_add(row.latency_ms),
-            })
+            .fold(Row::default(), |sum, (_, row)| sum.with(row))
     }
 
-    /// Mean cost per try of `model` at `level`, its subtasks' included,
-    /// over every category; `None` before its first try there.
+    /// Mean cost per turn of `model` at `level`, its subtasks' included,
+    /// over every category; `None` before its first turn there.
     #[must_use]
     pub fn mean_cost_usd(&self, level: RouteLevel, model: &str) -> Option<f64> {
-        let (tries, cost) = self
-            .rows
-            .iter()
-            .filter(|(key, _)| key.level == level && key.model == model)
-            .fold((0_u32, 0.0), |(tries, cost), (_, row)| {
-                (
-                    tries + row.tries,
-                    cost + row.cost_usd + row.subtask_cost_usd,
-                )
-            });
-        (tries > 0).then(|| cost / f64::from(tries))
+        self.level_row(level, model).mean_total_cost_usd()
     }
 
-    /// Every row with tries, by level, category and model.
+    /// Every row with turns, by level, category and model.
     #[must_use]
     pub fn rows(&self) -> Vec<(&RowKey, &Row)> {
         let mut rows: Vec<(&RowKey, &Row)> = self.rows.iter().collect();
@@ -596,7 +754,65 @@ mod tests {
             .unwrap();
         assert_eq!(row.success_rate(), Some(0.5));
         assert_eq!(row.mean_cost_usd(), Some(0.25));
-        assert_eq!(row.latency_ms, 2_000);
+        assert_eq!(
+            (row.turns, row.latency_ms),
+            (3, 3_000),
+            "the turn nothing checked still took its time"
+        );
+    }
+
+    #[test]
+    fn a_turn_nothing_checked_counts_for_its_cost_only() {
+        let mut log = Log::new();
+        let checked = log.prompt("fix the parser", RouteLevel::Turn);
+        log.outcome(checked, SONNET, OutcomeSignal::ChecksPassed);
+        let unchecked = log.prompt("fix the lexer", RouteLevel::Turn);
+        log.outcome_costing(unchecked, SONNET, OutcomeSignal::None, 0.75);
+        for stats in [
+            GateStats::from_entries(&log.entries),
+            GateStats::from_entries(log.entries.iter().rev()),
+        ] {
+            let row = *stats
+                .row(RouteLevel::Turn, PromptCategory::Debugging, SONNET)
+                .unwrap();
+            assert_eq!((row.turns, row.tries, row.successes), (2, 1, 1));
+            assert_eq!(row.success_rate(), Some(1.0), "it says nothing of success");
+            assert_eq!(
+                row.mean_total_cost_usd(),
+                Some(0.625),
+                "(0.25 + 0.25 + 0.75) over both turns"
+            );
+            assert!(row.costed(2) && !row.settled(2));
+            assert_eq!(
+                stats.mean_cost_usd(RouteLevel::Turn, SONNET),
+                Some(0.625),
+                "and in what the model costs overall"
+            );
+        }
+
+        // A verdict for the same turn takes its place, in whichever order
+        // the two are seen: the turn is not counted twice, and an
+        // outcome that says nothing never replaces one that does.
+        log.outcome(unchecked, SONNET, OutcomeSignal::ChecksFailed);
+        log.outcome(checked, SONNET, OutcomeSignal::None);
+        for stats in [
+            GateStats::from_entries(&log.entries),
+            GateStats::from_entries(log.entries.iter().rev()),
+        ] {
+            let row = *stats
+                .row(RouteLevel::Turn, PromptCategory::Debugging, SONNET)
+                .unwrap();
+            assert_eq!((row.turns, row.tries, row.successes), (2, 2, 1));
+            assert_eq!(row.mean_total_cost_usd(), Some(0.25));
+        }
+
+        // Alone on a model, it leaves a row with a cost and no tries.
+        let mut log = Log::new();
+        let only = log.prompt("fix the build", RouteLevel::Turn);
+        log.outcome(only, SONNET, OutcomeSignal::None);
+        let stats = GateStats::from_entries(&log.entries);
+        assert_eq!(debugging(&stats, RouteLevel::Turn, SONNET), Some((0, 0)));
+        assert!(stats.logged().is_empty(), "replay keeps to known results");
     }
 
     #[test]
@@ -766,7 +982,7 @@ mod tests {
         log.outcome(only, SONNET, OutcomeSignal::JudgedExcused);
         let stats = GateStats::from_entries(&log.entries);
         assert_eq!(debugging(&stats, RouteLevel::Turn, SONNET), None);
-        assert!(stats.rows().is_empty(), "no row is left with zero tries");
+        assert!(stats.rows().is_empty(), "no row is left with nothing in it");
     }
 
     #[test]

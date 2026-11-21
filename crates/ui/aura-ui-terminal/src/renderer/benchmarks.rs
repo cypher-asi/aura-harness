@@ -82,6 +82,16 @@ fn moved_up(run: &BenchRun) -> String {
         .map_or_else(|| "no".to_string(), |to| format!("to {}", short_model(to)))
 }
 
+/// `yes, $0.26 in subtasks` for a run whose model led a turn, handing
+/// the work to subtasks, else `no`.
+fn led(run: &BenchRun) -> String {
+    if run.led {
+        format!("yes, {} in subtasks", money(run.subtask_cost_usd))
+    } else {
+        "no".to_string()
+    }
+}
+
 /// `-74%` for the cheaper of two costs, nothing for the other or when
 /// they are about the same or either is unknown.
 fn saving(a: Option<f64>, b: Option<f64>) -> [String; 2] {
@@ -1006,6 +1016,7 @@ fn detail_lines(
         "model",
         "classified",
         "moved up",
+        "led",
         if has_task { "task" } else { "" },
         "time",
         "cost",
@@ -1033,6 +1044,7 @@ fn detail_lines(
             (short_model(&r.model).to_string(), base),
             (classified(r), base),
             (moved_up(r), base),
+            (led(r), base),
             (
                 r.task
                     .as_deref()
@@ -1064,6 +1076,7 @@ fn detail_lines(
             (" ".to_string(), text),
             (live.name.clone(), text),
             (short_model(&arm.label).to_string(), text),
+            (String::new(), text),
             (String::new(), text),
             (String::new(), text),
             (
@@ -1098,6 +1111,7 @@ fn detail_lines(
         &[
             Col::L,
             Col::L,
+            Col::L.flex(),
             Col::L.flex(),
             Col::L.flex(),
             Col::L.flex(),
@@ -1443,6 +1457,8 @@ mod tests {
         view.runs[0].escalated_to = Some("claude-opus-4-7".to_string());
         view.runs[0].category = Some("multi_file_change".to_string());
         view.runs[0].difficulty = Some("hard".to_string());
+        view.runs[0].led = true;
+        view.runs[0].subtask_cost_usd = 0.26;
         view.runs.push(BenchRun {
             name: "b-1".to_string(),
             arm: 1,
@@ -1465,9 +1481,14 @@ mod tests {
         assert!(moved.contains("sonnet-4-6"), "{shown}");
         assert!(moved.contains("multi-file hard"), "{shown}");
         assert!(moved.contains("to opus-4-7"), "{shown}");
+        assert!(moved.contains("yes, $0.26 in subtasks"), "{shown}");
         let stayed = run("b-1");
         assert!(stayed.contains("small change"), "{shown}");
-        assert!(stayed.contains(" no "), "{shown}");
+        assert_eq!(
+            stayed.split_whitespace().filter(|w| *w == "no").count(),
+            2,
+            "neither moved up nor led: {shown}"
+        );
         assert!(shown.contains("classified"), "{shown}");
         let row = |label: &str| {
             shown

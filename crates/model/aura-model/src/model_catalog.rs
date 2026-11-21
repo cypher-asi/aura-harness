@@ -347,6 +347,49 @@ fn list_price(model: &str) -> Option<Price> {
         .map(|(_, price)| *price)
 }
 
+/// The family `key` (a [`model_key`]) belongs to and its version there:
+/// the words of its name, and the numbers among them
+/// (`claude-sonnet-5-5` -> `claude-sonnet` 5.5, `gpt-5-4-mini` ->
+/// `gpt-mini` 5.4). A dated snapshot's date is left out. `None` when the
+/// name has no version.
+fn family_version(key: &str) -> Option<(String, Vec<u32>)> {
+    let mut words = Vec::new();
+    let mut version = Vec::new();
+    for part in key.split('-') {
+        if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
+            words.push(part);
+        } else if part.len() >= 4 {
+            break;
+        } else {
+            version.push(part.parse().ok()?);
+        }
+    }
+    (!version.is_empty()).then(|| (words.join("-"), version))
+}
+
+/// Whether `newer` leaves no reason to send work to `older`: it is a
+/// later version of the same model family, and no kind of token costs
+/// more on it. A model whose name has no version or whose price is not
+/// known supersedes nothing, and nothing supersedes it.
+#[must_use]
+pub fn supersedes(newer: &str, older: &str) -> bool {
+    let (Some(new), Some(old)) = (list_price(newer), list_price(older)) else {
+        return false;
+    };
+    let (Some((new_family, new_version)), Some((old_family, old_version))) = (
+        family_version(&model_key(newer)),
+        family_version(&model_key(older)),
+    ) else {
+        return false;
+    };
+    new_family == old_family
+        && new_version > old_version
+        && new.input <= old.input
+        && new.output <= old.output
+        && new.cache_write <= old.cache_write
+        && new.cache_read <= old.cache_read
+}
+
 /// A call's prompt and output tokens, split the way they are billed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BilledTokens {
@@ -738,6 +781,33 @@ mod tests {
         assert_cost("claude-opus-4-20250514", &usage, 15.0);
         assert_cost("gpt-5.4-2026-03-05", &usage, 2.5);
         assert_cost("claude-opus-5-5", &usage, 4.0);
+    }
+
+    #[test]
+    fn a_later_version_that_costs_no_more_supersedes_the_earlier() {
+        // Same family, later version, no token dearer: on any route.
+        assert!(supersedes("claude-sonnet-5-5", "claude-sonnet-5"));
+        assert!(supersedes(
+            "claude/claude-sonnet-5-5",
+            "claude/claude-sonnet-4-6"
+        ));
+        assert!(supersedes("claude-opus-5-5", "claude-opus-4-8"));
+        assert!(supersedes("claude-opus-4-8", "claude-opus-4-7"));
+        assert!(supersedes("claude-haiku-5-5", "claude-3-5-haiku"));
+        assert!(supersedes("gpt-6-sol", "gpt-5.6-sol"));
+        // Not the other way, nor a model itself or its dated snapshot.
+        assert!(!supersedes("claude-sonnet-5", "claude-sonnet-5-5"));
+        assert!(!supersedes("claude-sonnet-5-5", "claude-sonnet-5-5"));
+        assert!(!supersedes("claude-haiku-4-5-20251001", "claude-haiku-4-5"));
+        // A later version that costs more is a different trade.
+        assert!(!supersedes("gpt-5.5", "gpt-5.4"));
+        assert!(!supersedes("claude-haiku-4-5", "claude-3-5-haiku"));
+        // Another family, whatever it costs.
+        assert!(!supersedes("claude-haiku-5-5", "claude-sonnet-5"));
+        assert!(!supersedes("gpt-5.4-mini", "gpt-5.2"));
+        // Nothing is known of an unpriced or local model.
+        assert!(!supersedes("claude-fable-5-2", "claude-fable-5-1"));
+        assert!(!supersedes("local/qwen3:8b", "local/qwen3:4b"));
     }
 
     #[test]
