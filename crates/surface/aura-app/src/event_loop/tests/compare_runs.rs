@@ -409,6 +409,36 @@ async fn the_budget_stops_new_runs_once_spent() {
         payload.notes
     );
     assert!(payload.judgments.is_empty(), "nothing to pair it with");
+    let registry = subagents::lock(&state.hub.registry);
+    let runs: Vec<&str> = registry
+        .agents()
+        .iter()
+        .filter(|a| registry.under_compare(a.agent_id()))
+        .map(|a| a.name.as_str())
+        .collect();
+    assert_eq!(runs, ["a-1"], "the runs that did not start are dropped");
+}
+
+#[tokio::test]
+async fn a_comparison_asked_from_another_goes_beside_it() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+    state.sync_turn_base();
+    state.compare = compare::CompareState::new(fixture._dirs[0].path().join("compare"), 1);
+
+    let args = "--budget 0.001 write the answer";
+    run_comparison(&mut state, &links, &mut commands, args).await;
+    let first = subagents::lock(&state.hub.registry).compares()[0].clone();
+    state.active = first.agent_id();
+    run_comparison(&mut state, &links, &mut commands, args).await;
+
+    let registry = subagents::lock(&state.hub.registry);
+    let compares = registry.compares();
+    assert_eq!(compares.len(), 2);
+    assert_eq!(compares[1].parent, first.parent);
 }
 
 #[tokio::test]
@@ -1122,6 +1152,14 @@ async fn example_tasks_run_in_their_own_fixtures_with_their_own_checks() {
             _ => None,
         })
         .expect("the BENCH tab follows the benchmark");
+    assert!(
+        shown.iter().any(|(_, c)| matches!(
+            c,
+            UiCommand::BenchUpsert(view) if view.live.iter().any(|r| r.wall_ms.is_some())
+        )),
+        "the BENCH tab shows the runs under way"
+    );
+    assert!(last.live.is_empty());
     assert_eq!(last.source, "2 example tasks");
     assert_eq!(last.tasks.len(), 2);
     assert!(last

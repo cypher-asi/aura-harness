@@ -60,6 +60,22 @@ impl Source {
             Self::Image(image) => image.fetch(cache).await,
         }
     }
+
+    /// Whether fetching it pulls a container image: its files are not
+    /// under `cache` and Docker does not have its image. Runs Docker.
+    #[must_use]
+    pub fn pulls(&self, cache: &Path) -> bool {
+        let Self::Image(image) = self else {
+            return false;
+        };
+        image.dir(cache).is_ok_and(|dir| !dir.is_dir())
+            && !Command::new("docker")
+                .args(["image", "inspect", "--format", "{{.Id}}", &image.image])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+    }
 }
 
 impl RepoSource {
@@ -267,8 +283,8 @@ fn unpack(archive: impl Read, dir: &Path, strip: usize) -> io::Result<()> {
         std::fs::remove_dir_all(&partial)?;
     }
     std::fs::create_dir_all(&partial)?;
-    let mut entries = tar::Archive::new(archive);
-    for entry in entries.entries()? {
+    let mut archive = tar::Archive::new(archive);
+    for entry in archive.entries()? {
         let mut entry = entry?;
         let kind = entry.header().entry_type();
         if !(kind.is_file() || kind.is_dir()) {
@@ -292,6 +308,9 @@ fn unpack(archive: impl Read, dir: &Path, strip: usize) -> io::Result<()> {
         }
         entry.unpack(&target)?;
     }
+    // The archive's end marker can come before the end of the stream (tar
+    // pads to whole records); a writer cut off there fails with a broken pipe.
+    io::copy(&mut archive.into_inner(), &mut io::sink())?;
     match std::fs::rename(&partial, dir) {
         Err(_) if dir.is_dir() => std::fs::remove_dir_all(&partial),
         moved => moved,
@@ -393,5 +412,15 @@ mod tests {
         let flat = cache.path().join("flat");
         unpack(&archive(&[("app.js", b"1")])[..], &flat, 0).unwrap();
         assert!(flat.join("app.js").is_file());
+    }
+
+    #[test]
+    fn the_padding_after_the_end_marker_is_read_too() {
+        let cache = tempfile::tempdir().unwrap();
+        let mut bytes = archive(&[("app.js", b"1")]);
+        bytes.extend_from_slice(&[0; 9 * 512]);
+        let mut stream = &bytes[..];
+        unpack(&mut stream, &cache.path().join("padded"), 0).unwrap();
+        assert!(stream.is_empty(), "{} bytes left unread", stream.len());
     }
 }

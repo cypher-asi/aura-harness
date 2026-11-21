@@ -5,13 +5,13 @@ use super::panels::body_block;
 use super::text::display_width;
 use crate::app::benchmarks::{BenchMode, BenchState, FormField, WorkChoice};
 use crate::events::{
-    arm_letter, cost_per_fix, BenchArm, BenchStatus, BenchTaskCell, BenchTurn, BenchVerdict,
-    BenchView,
+    arm_letter, cost_per_fix, BenchArm, BenchStatus, BenchTaskCell, BenchTaskSetup, BenchTurn,
+    BenchVerdict, BenchView,
 };
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
     Frame,
@@ -19,7 +19,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthChar;
 
 /// `$0.004`, `$1.25`, or `free` for nothing.
-fn money(usd: f64) -> String {
+pub(super) fn money(usd: f64) -> String {
     if usd <= 0.0 {
         "free".to_string()
     } else if usd < 0.01 {
@@ -54,7 +54,7 @@ fn tokens(n: u64) -> String {
 }
 
 /// `opus-5-5` for `claude/claude-opus-5-5`: no provider, no `claude-`.
-fn short_model(model: &str) -> &str {
+pub(super) fn short_model(model: &str) -> &str {
     let name = model.rsplit('/').next().unwrap_or(model);
     name.strip_prefix("claude-").unwrap_or(name)
 }
@@ -80,8 +80,23 @@ fn saving(a: Option<f64>, b: Option<f64>) -> [String; 2] {
     [less(a), less(b)]
 }
 
+/// `text` in `style` for something under way: on frame `frame` a band of
+/// light from `base` to `light` sweeps across it; without a frame, as
+/// when animations are off, it is plain.
+pub(super) fn under_way(
+    text: &str,
+    style: Style,
+    frame: Option<usize>,
+    colors: (Color, Color),
+) -> Vec<Span<'static>> {
+    match frame {
+        Some(frame) => crate::animation::shimmer_spans(text, frame, style, colors),
+        None => vec![Span::styled(text.to_string(), style)],
+    }
+}
+
 /// `text` cut to `max` columns, ending in `…` when cut.
-fn fit(text: &str, max: usize) -> String {
+pub(super) fn fit(text: &str, max: usize) -> String {
     if display_width(text) <= max {
         return text.to_string();
     }
@@ -103,7 +118,7 @@ fn fit(text: &str, max: usize) -> String {
 }
 
 /// The directory every example task's id shares, as `swe_bench_pro_hard`.
-fn task_prefix(view: &BenchView) -> Option<String> {
+pub(super) fn task_prefix(view: &BenchView) -> Option<String> {
     let (prefix, _) = view.tasks.first()?.id.rsplit_once('/')?;
     let all = view.tasks.iter().all(|t| {
         t.id.strip_prefix(prefix)
@@ -156,6 +171,9 @@ enum Row {
     Cells(Vec<Cell>),
     /// Cells drawn in a selection style, gaps included
     Picked(Vec<Cell>, Style),
+    /// Cells of something under way, whose last cell a band of light
+    /// sweeps across on this frame
+    Lit(Vec<Cell>, usize),
     /// A rule across the table, as between groups of rows
     Rule,
 }
@@ -172,7 +190,7 @@ fn table(
 ) -> Vec<Line<'static>> {
     let faint = Style::default().fg(theme.colors.faint);
     let cell_width = |row: &Row, i: usize| match row {
-        Row::Cells(cells) | Row::Picked(cells, _) => {
+        Row::Cells(cells) | Row::Picked(cells, _) | Row::Lit(cells, _) => {
             cells.get(i).map_or(0, |(text, _)| display_width(text))
         }
         Row::Rule => 0,
@@ -208,7 +226,8 @@ fn table(
         widths[i] -= 1;
         over -= 1;
     }
-    let line = |cells: &[Cell], picked: Option<Style>| {
+    let shine = (theme.colors.muted, theme.colors.foreground);
+    let line = |cells: &[Cell], picked: Option<Style>, lit: Option<usize>| {
         let last = if picked.is_some() {
             shown.last().copied()
         } else {
@@ -241,7 +260,11 @@ fn table(
             } else {
                 text + &pad
             };
-            spans.push(Span::styled(text, picked.map_or(style, |p| style.patch(p))));
+            let style = picked.map_or(style, |p| style.patch(p));
+            match lit.filter(|_| Some(i) == last) {
+                Some(frame) => spans.extend(under_way(&text, style, Some(frame), shine)),
+                None => spans.push(Span::styled(text, style)),
+            }
         }
         Line::from(spans)
     };
@@ -264,13 +287,14 @@ fn table(
     if let Some(header) = header {
         let muted = Style::default().fg(theme.colors.muted);
         let cells: Vec<Cell> = header.iter().map(|h| ((*h).to_string(), muted)).collect();
-        lines.push(line(&cells, None));
+        lines.push(line(&cells, None, None));
         lines.push(rule());
     }
     for row in rows {
         lines.push(match row {
-            Row::Cells(cells) => line(cells, None),
-            Row::Picked(cells, style) => line(cells, Some(*style)),
+            Row::Cells(cells) => line(cells, None, None),
+            Row::Picked(cells, style) => line(cells, Some(*style), None),
+            Row::Lit(cells, frame) => line(cells, None, Some(*frame)),
             Row::Rule => rule(),
         });
     }
@@ -340,12 +364,13 @@ pub(super) fn render_benchmarks(
         return;
     }
     let width = usize::from(padded.width);
+    let frame_no = theme.animate_spinners.then(|| app.animation_frame());
     let state = app.bench();
     // The detail's tables fit the width; wrapping would only break them.
     let wrap = !matches!(state.mode, BenchMode::Detail(_));
     let (lines, scroll) = match &state.mode {
         BenchMode::List => {
-            let lines = list_lines(state, theme, width);
+            let lines = list_lines(state, theme, width, frame_no);
             // Keep the selected row (two lines below the header) on screen.
             let row = state.selected + 2;
             let height = usize::from(padded.height);
@@ -354,7 +379,7 @@ pub(super) fn render_benchmarks(
         }
         BenchMode::Detail(_) => match state.shown() {
             Some(view) => {
-                let lines = detail_lines(view, state.run, theme, width);
+                let lines = detail_lines(view, state.run, theme, width, frame_no);
                 let last = u16::try_from(lines.len().saturating_sub(1)).unwrap_or(u16::MAX);
                 (lines, state.scroll.min(last))
             }
@@ -391,7 +416,13 @@ fn arm_brief(arm: &BenchArm) -> String {
     text
 }
 
-fn list_lines<'a>(state: &BenchState, theme: &Theme, width: usize) -> Vec<Line<'a>> {
+/// The list of benchmarks; `frame` lights the status of those running.
+fn list_lines<'a>(
+    state: &BenchState,
+    theme: &Theme,
+    width: usize,
+    frame: Option<usize>,
+) -> Vec<Line<'a>> {
     let mut lines = vec![
         Line::from(vec![
             Span::styled(
@@ -439,22 +470,31 @@ fn list_lines<'a>(state: &BenchState, theme: &Theme, width: usize) -> Vec<Line<'
                 .fg(theme.colors.on_selection);
         }
         let room = width.saturating_sub(view.name.chars().count() + 16);
-        lines.push(Line::from(vec![
+        let status = view.status.label();
+        let (status_style, light) = if selected {
+            (style, theme.colors.on_selection)
+        } else {
+            (Style::default().fg(status_color), theme.colors.foreground)
+        };
+        let mut spans = vec![
             Span::styled(marker, style),
             Span::styled(
                 format!("{} ", view.name),
                 style.add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                format!("{:<10}", view.status.label()),
-                if selected {
-                    style
-                } else {
-                    Style::default().fg(status_color)
-                },
-            ),
-            Span::styled(headline(&text, room.max(10)), style),
-        ]));
+        ];
+        spans.extend(under_way(
+            &status,
+            status_style,
+            frame.filter(|_| view.status == BenchStatus::Running),
+            (theme.colors.muted, light),
+        ));
+        spans.push(Span::styled(
+            " ".repeat(10usize.saturating_sub(display_width(&status))),
+            status_style,
+        ));
+        spans.push(Span::styled(headline(&text, room.max(10)), style));
+        lines.push(Line::from(spans));
     }
     lines
 }
@@ -475,6 +515,39 @@ fn task_cells(cell: &BenchTaskCell, theme: &Theme) -> [Cell; 2] {
         (checked, passed) => (format!("{passed}/{checked}"), text),
     };
     [check, (cost, text)]
+}
+
+/// `setting up: 14/20 tasks ready · 3 fetching · ...` while a running
+/// benchmark still fetches some example task's files.
+fn setup_line(view: &BenchView) -> Option<String> {
+    setup_counts(view).map(|counts| format!("setting up: {counts}"))
+}
+
+/// `14/20 tasks ready · 3 fetching · ...` while a running benchmark still
+/// fetches some example task's files.
+pub(super) fn setup_counts(view: &BenchView) -> Option<String> {
+    let count = |f: fn(&BenchTaskSetup) -> bool| view.tasks.iter().filter(|t| f(&t.setup)).count();
+    let fetching = count(|s| matches!(s, BenchTaskSetup::Fetching { .. }));
+    let queued = count(|s| *s == BenchTaskSetup::Queued);
+    if view.status != BenchStatus::Running || fetching + queued == 0 {
+        return None;
+    }
+    let ready = count(|s| *s == BenchTaskSetup::Ready);
+    let failed = count(|s| matches!(s, BenchTaskSetup::Failed(_)));
+    let mut parts = vec![format!("{ready}/{} tasks ready", view.tasks.len())];
+    if fetching > 0 {
+        parts.push(format!("{fetching} fetching"));
+    }
+    if queued > 0 {
+        parts.push(format!("{queued} queued"));
+    }
+    if failed > 0 {
+        parts.push(format!("{failed} failed"));
+    }
+    if count(|s| *s == BenchTaskSetup::Fetching { pull: true }) > 0 {
+        parts.push("pulling an image can take minutes".to_string());
+    }
+    Some(parts.join(" · "))
 }
 
 /// `$0.03 2✓ 1✗ 1 err`: mean turn cost, then turns whose test or build
@@ -526,13 +599,17 @@ fn reference_mark(rating: Option<&str>) -> &'static str {
     }
 }
 
+/// One benchmark's numbers; `frame` lights what is under way while it
+/// runs.
 #[allow(clippy::too_many_lines)]
 fn detail_lines(
     view: &BenchView,
     run: Option<usize>,
     theme: &Theme,
     width: usize,
+    frame: Option<usize>,
 ) -> Vec<Line<'static>> {
+    let frame = frame.filter(|_| view.status == BenchStatus::Running);
     let text = Style::default().fg(theme.colors.text);
     let muted = Style::default().fg(theme.colors.muted);
     let good = Style::default().fg(theme.colors.success);
@@ -550,14 +627,20 @@ fn detail_lines(
         _ => theme.colors.success,
     };
     let room = width.saturating_sub(display_width(&view.name) + display_width(&status) + 4);
-    let mut lines = vec![Line::from(vec![
+    let mut head = vec![
         Span::styled(view.name.clone(), bold),
         Span::styled(
             format!("  {}  ", fit(&headline(&view.title, usize::MAX), room)),
             text,
         ),
-        Span::styled(status, Style::default().fg(status_color)),
-    ])];
+    ];
+    head.extend(under_way(
+        &status,
+        Style::default().fg(status_color),
+        frame,
+        (theme.colors.muted, theme.colors.foreground),
+    ));
+    let mut lines = vec![Line::from(head)];
     let mut about = Vec::new();
     if view.tasks.is_empty() {
         about.push(view.source.clone());
@@ -586,6 +669,12 @@ fn detail_lines(
         fit(&about.join(" · "), width),
         muted,
     )));
+    if let Some(setup) = setup_line(view) {
+        lines.push(Line::from(Span::styled(
+            fit(&setup, width),
+            Style::default().fg(theme.colors.pending),
+        )));
+    }
     lines.push(Line::default());
 
     let pair = |f: &dyn Fn(&BenchArm) -> String| [f(a), f(b)];
@@ -721,6 +810,13 @@ fn detail_lines(
                 let [da, db] = saving(task.arms[0].mean_cost_usd, task.arms[1].mean_cost_usd);
                 let [check_a, cost_a] = task_cells(&task.arms[0], theme);
                 let [check_b, cost_b] = task_cells(&task.arms[1], theme);
+                let last = match &task.setup {
+                    BenchTaskSetup::Ready => (judged(&task.id), bold),
+                    BenchTaskSetup::Failed(_) => {
+                        (task.setup.label(), Style::default().fg(theme.colors.error))
+                    }
+                    setup => (setup.label(), Style::default().fg(theme.colors.pending)),
+                };
                 Row::Cells(vec![
                     cell(task_name(&task.id, prefix).to_string()),
                     check_a,
@@ -729,7 +825,7 @@ fn detail_lines(
                     check_b,
                     cost_b,
                     (db, good),
-                    (judged(&task.id), bold),
+                    last,
                 ])
             })
             .collect();
@@ -746,7 +842,16 @@ fn detail_lines(
                 Col::L,
                 Col::L.sep(),
             ],
-            Some(&["task", "A", "", "", "B", "", "", "judge"]),
+            Some(&[
+                "task",
+                "A",
+                "",
+                "",
+                "B",
+                "",
+                "",
+                if view.judge.is_some() { "judge" } else { "" },
+            ]),
             &rows,
             width,
             theme,
@@ -856,7 +961,8 @@ fn detail_lines(
         ));
     }
 
-    let has_task = view.runs.iter().any(|r| r.task.is_some());
+    let has_task =
+        view.runs.iter().any(|r| r.task.is_some()) || view.live.iter().any(|r| r.task.is_some());
     let header = [
         "",
         "run",
@@ -908,6 +1014,39 @@ fn detail_lines(
             Row::Picked(cells, picked)
         } else {
             Row::Cells(cells)
+        });
+    }
+    let pending = Style::default().fg(theme.colors.pending);
+    for live in &view.live {
+        let arm = &view.arms[live.arm.min(1)];
+        let cells = vec![
+            (" ".to_string(), text),
+            (live.name.clone(), text),
+            (short_model(&arm.label).to_string(), text),
+            (
+                live.task
+                    .as_deref()
+                    .map_or("", |t| task_name(t, prefix))
+                    .to_string(),
+                text,
+            ),
+            (live.wall_ms.map_or_else(String::new, duration), text),
+            (money(live.cost_usd), text),
+            (String::new(), text),
+            (String::new(), text),
+            (
+                if live.wall_ms.is_some() {
+                    "working"
+                } else {
+                    "waiting for its task's files"
+                }
+                .to_string(),
+                pending,
+            ),
+        ];
+        rows.push(match frame.filter(|_| live.wall_ms.is_some()) {
+            Some(frame) => Row::Lit(cells, frame),
+            None => Row::Cells(cells),
         });
     }
     lines.push(Line::default());
@@ -1209,7 +1348,7 @@ mod tests {
     #[test]
     fn the_detail_shows_cost_quality_and_each_prompt() {
         let theme = Theme::default();
-        let shown = text(&detail_lines(&view(), Some(0), &theme, 120));
+        let shown = text(&detail_lines(&view(), Some(0), &theme, 120, None));
         let row = |label: &str| {
             shown
                 .lines()
@@ -1262,7 +1401,7 @@ mod tests {
             judge.verdicts[0].reasoning = "b-1 is the better attempt ".repeat(20);
         }
         for width in [60, 80, 120] {
-            let lines = detail_lines(&view, Some(0), &theme, width);
+            let lines = detail_lines(&view, Some(0), &theme, width, None);
             let shown = text(&lines);
             for line in shown.lines() {
                 assert!(display_width(line) <= width, "{width}: {line}");
@@ -1330,6 +1469,7 @@ mod tests {
                         mean_cost_usd: Some(0.30),
                     },
                 ],
+                ..BenchTaskRow::default()
             },
             BenchTaskRow {
                 id: "coding/fix-shell-bug".to_string(),
@@ -1337,11 +1477,12 @@ mod tests {
             },
         ];
         view.runs[0].task = Some("coding/write-file".to_string());
-        let shown = text(&detail_lines(&view, None, &theme, 120));
+        let shown = text(&detail_lines(&view, None, &theme, 120, None));
         assert!(
             shown.contains("coding · 2 runs per task and arm · own checks"),
             "{shown}"
         );
+        assert!(!shown.contains("setting up"), "{shown}");
         assert!(shown.contains("── tasks ─"), "{shown}");
         let write = shown
             .lines()
@@ -1357,6 +1498,134 @@ mod tests {
         assert!(!shown.contains("coding/"), "{shown}");
         assert!(!shown.contains("y apply"), "{shown}");
         assert!(!shown.contains("prompts"), "{shown}");
+    }
+
+    #[test]
+    fn a_running_benchmark_shows_its_setup_and_the_runs_under_way() {
+        use crate::events::{BenchLiveRun, BenchTaskRow};
+        let theme = Theme::default();
+        let mut view = view();
+        view.status = BenchStatus::Running;
+        view.judge = None;
+        let task = |id: &str, setup| BenchTaskRow {
+            id: format!("swe/{id}"),
+            setup,
+            ..BenchTaskRow::default()
+        };
+        view.tasks = vec![
+            task("ansible-1", BenchTaskSetup::Ready),
+            task("flipt-2", BenchTaskSetup::Fetching { pull: true }),
+            task("flipt-3", BenchTaskSetup::Queued),
+            task(
+                "navidrome-4",
+                BenchTaskSetup::Failed("no image".to_string()),
+            ),
+        ];
+        view.live = vec![
+            BenchLiveRun {
+                name: "a-1".to_string(),
+                task: Some("swe/ansible-1".to_string()),
+                wall_ms: Some(72_000),
+                cost_usd: 0.04,
+                ..BenchLiveRun::default()
+            },
+            BenchLiveRun {
+                name: "b-2".to_string(),
+                arm: 1,
+                task: Some("swe/flipt-2".to_string()),
+                ..BenchLiveRun::default()
+            },
+        ];
+        let shown = text(&detail_lines(&view, None, &theme, 140, Some(3)));
+        assert!(
+            shown.contains(
+                "setting up: 1/4 tasks ready · 1 fetching · 1 queued · 1 failed · pulling an image can take minutes"
+            ),
+            "{shown}"
+        );
+        let row = |start: &str| {
+            shown
+                .lines()
+                .find(|l| l.starts_with(start))
+                .unwrap_or_else(|| panic!("{start}: {shown}"))
+                .trim_end()
+                .to_string()
+        };
+        assert!(row("flipt-2 ").ends_with("pulling image"), "{shown}");
+        assert!(row("flipt-3 ").ends_with("queued"), "{shown}");
+        assert!(row("navidrome-4 ").ends_with("failed: no image"), "{shown}");
+        let live = |end: &str| {
+            shown
+                .lines()
+                .find(|l| l.trim_end().ends_with(end))
+                .unwrap_or_else(|| panic!("{end}: {shown}"))
+                .to_string()
+        };
+        let working = live("working");
+        assert!(working.contains(" a-1 "), "{working}");
+        assert!(working.contains("ansible-1"), "{working}");
+        assert!(working.contains("1m12s"), "{working}");
+        assert!(working.contains("$0.04"), "{working}");
+        assert!(
+            live("waiting for its task's files").contains(" b-2 "),
+            "{shown}"
+        );
+    }
+
+    #[test]
+    fn running_and_working_shimmer_while_it_runs() {
+        use crate::events::BenchLiveRun;
+        let theme = Theme::default();
+        let mut view = view();
+        view.status = BenchStatus::Running;
+        view.live = vec![
+            BenchLiveRun {
+                name: "a-2".to_string(),
+                wall_ms: Some(5_000),
+                ..BenchLiveRun::default()
+            },
+            BenchLiveRun {
+                name: "b-2".to_string(),
+                arm: 1,
+                ..BenchLiveRun::default()
+            },
+        ];
+        // Lit when the word's letters are in more than one color.
+        let lit = |line: &Line<'_>, word: &str| {
+            let mut colors: Vec<_> = line
+                .spans
+                .iter()
+                .filter(|s| !s.content.trim().is_empty() && word.contains(s.content.trim()))
+                .map(|s| format!("{:?}", s.style.fg))
+                .collect();
+            colors.dedup();
+            colors.len() > 1
+        };
+        let find = |lines: &[Line<'static>], end: &str| {
+            lines
+                .iter()
+                .find(|l| text(std::slice::from_ref(*l)).trim_end().ends_with(end))
+                .cloned()
+                .unwrap_or_else(|| panic!("{end}: {}", text(lines)))
+        };
+
+        // On frame 3 the band's center is on the label's first letter.
+        let lines = detail_lines(&view, None, &theme, 140, Some(3));
+        assert!(lit(&lines[0], "running"), "{:?}", lines[0]);
+        assert!(lit(&find(&lines, "working"), "working"));
+        let waiting = find(&lines, "waiting for its task's files");
+        assert!(
+            !lit(&waiting, "waiting for its task's files"),
+            "{waiting:?}"
+        );
+
+        let still = detail_lines(&view, None, &theme, 140, None);
+        assert!(!lit(&still[0], "running"), "{:?}", still[0]);
+        assert!(!lit(&find(&still, "working"), "working"));
+
+        view.status = BenchStatus::Done;
+        let done = detail_lines(&view, None, &theme, 140, Some(3));
+        assert!(!lit(&done[0], "done"), "{:?}", done[0]);
     }
 
     #[test]

@@ -721,6 +721,41 @@ impl AgentRegistry {
         })
     }
 
+    /// Have `agent_id` work in `folder`.
+    ///
+    /// # Errors
+    /// Returns an error if the agent is unknown or the registry cannot be
+    /// written.
+    pub fn set_folder(&mut self, agent_id: AgentId, folder: PathBuf) -> anyhow::Result<()> {
+        let Some(index) = self.position(agent_id) else {
+            anyhow::bail!("no such agent");
+        };
+        self.file.agents[index].folder = Some(folder);
+        self.save()
+    }
+
+    /// Drop `agent_id`, registered for work that never started, from the
+    /// registry altogether. An agent something spawned stays.
+    ///
+    /// # Errors
+    /// Returns an error if the registry cannot be written.
+    pub fn forget(&mut self, agent_id: AgentId) -> anyhow::Result<()> {
+        let Some(index) = self.position(agent_id) else {
+            return Ok(());
+        };
+        let zns_id = &self.file.agents[index].zns_id;
+        if self
+            .file
+            .agents
+            .iter()
+            .any(|a| a.parent.as_ref() == Some(zns_id))
+        {
+            return Ok(());
+        }
+        self.file.agents.remove(index);
+        self.save()
+    }
+
     /// The agents holding comparisons, oldest first.
     #[must_use]
     pub fn compares(&self) -> Vec<&RegisteredAgent> {

@@ -369,7 +369,8 @@ impl Shell {
     /// Whether an agent of any tab is working, so spinners turn, or the
     /// chat in front scrolls under a selection held past its edge.
     fn busy(&self) -> bool {
-        self.tabs.iter().any(Tab::busy) || self.tabs.front().tui.selection_scrolling()
+        let front = &self.tabs.front().tui;
+        self.tabs.iter().any(Tab::busy) || front.selection_scrolling() || front.bench_animating()
     }
 
     /// Whether the cursor is on screen and blinking.

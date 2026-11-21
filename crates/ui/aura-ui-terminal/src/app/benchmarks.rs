@@ -378,13 +378,32 @@ impl App {
         choices
     }
 
+    /// Whether a running benchmark is on screen, in the BENCH tab or the
+    /// progress panel, whose status and working runs shimmer frame by
+    /// frame.
+    #[must_use]
+    pub fn bench_animating(&self) -> bool {
+        let running = |view: &BenchView| view.status == BenchStatus::Running;
+        let tab = self.bench.is_open()
+            && match self.bench.mode {
+                BenchMode::List => self.bench.benches.iter().any(running),
+                BenchMode::Detail(_) => self.bench.shown().is_some_and(running),
+                BenchMode::Form => false,
+            };
+        tab || self.bench_panel_shown().is_some_and(running)
+    }
+
     pub(super) fn cmd_bench_list(&mut self, agent_id: &str, root: String, benches: Vec<BenchView>) {
         if agent_id == self.active_agent_id {
+            for view in &benches {
+                self.bench_panel.heard(view);
+            }
             self.bench.list(root, benches);
         }
     }
 
     pub(super) fn cmd_bench_upsert(&mut self, view: BenchView) {
+        self.bench_panel.heard(&view);
         self.bench.upsert(view);
     }
 

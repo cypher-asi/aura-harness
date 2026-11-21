@@ -13,8 +13,8 @@ use aura_core_types::{
 };
 use aura_ui_terminal::events::{
     BenchArm, BenchBaseline, BenchExample, BenchJudge, BenchRequest, BenchRun, BenchSpec,
-    BenchStatus, BenchTaskCell, BenchTaskRow, BenchTokens, BenchTurn, BenchVerdict, BenchView,
-    BenchWork,
+    BenchStatus, BenchTaskCell, BenchTaskRow, BenchTaskSetup, BenchTokens, BenchTurn, BenchVerdict,
+    BenchView, BenchWork,
 };
 use aura_ui_terminal::UiCommand;
 
@@ -241,6 +241,7 @@ pub(super) fn view(
                     })
                     .unwrap_or_default()
             }),
+            setup: BenchTaskSetup::Ready,
         })
         .collect();
     let judge = payload.judgments.first().map(|first| BenchJudge {
@@ -298,5 +299,6 @@ pub(super) fn view(
         }),
         has_reference: payload.source.reference().is_some(),
         notes: payload.notes.clone(),
+        live: Vec::new(),
     }
 }

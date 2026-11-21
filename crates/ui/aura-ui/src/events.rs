@@ -6,8 +6,9 @@
 
 pub use crate::benchmarks::{
     arm_letter, cost_per_fix, cost_shares, per_fix_cells, BenchArm, BenchBaseline, BenchExample,
-    BenchJudge, BenchRequest, BenchRun, BenchSession, BenchSpec, BenchStatus, BenchTaskCell,
-    BenchTaskRow, BenchTokens, BenchTurn, BenchVerdict, BenchView, BenchWork,
+    BenchJudge, BenchLiveRun, BenchPhase, BenchProgress, BenchRequest, BenchRun, BenchSession,
+    BenchSpec, BenchStatus, BenchTaskCell, BenchTaskRow, BenchTaskSetup, BenchTokens, BenchTurn,
+    BenchVerdict, BenchView, BenchWork,
 };
 pub use crate::flow::{FlowBench, FlowKind, FlowLane, FlowNode, FlowUsage};
 use crate::mode_command::{ApprovalLevel, PermissionMode};

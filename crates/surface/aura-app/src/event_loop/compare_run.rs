@@ -56,13 +56,13 @@ use aura_core_types::{
 };
 use aura_exec_tools::plan_tools::{is_plan_path, todo_items, PlanFile};
 use aura_model::Message;
-use aura_ui_terminal::events::ProcessStatus;
+use aura_ui_terminal::events::{BenchLiveRun, BenchTaskSetup, ProcessStatus};
 use aura_ui_terminal::{ApprovalLevel, PermissionMode, UiCommand};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch, Semaphore};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -199,6 +199,194 @@ struct Context {
     /// Root of the user's git repository, when the workspace is in one
     repo: Option<PathBuf>,
     cancel: CancellationToken,
+    /// Where each example task's files stand, in `plan.examples` order
+    setup: watch::Receiver<Vec<BenchTaskSetup>>,
+    /// The runs' agents, registered before setting up so the Agents panel
+    /// lists them waiting, by run name
+    agents: HashMap<String, RegisteredAgent>,
+    /// Runs under way, in the order they started
+    live: std::sync::Mutex<Vec<Live>>,
+}
+
+/// A run under way.
+struct Live {
+    name: String,
+    arm: CompareArm,
+    task: Option<String>,
+    /// Its agent, and when it started working; `None` while it waits for
+    /// its task's files
+    working: Option<(AgentId, Instant)>,
+}
+
+/// A run's place in [`Context::live`], given up when it ends however it
+/// ends.
+struct LiveSlot<'a> {
+    ctx: &'a Context,
+    name: String,
+}
+
+impl<'a> LiveSlot<'a> {
+    fn take(ctx: &'a Context, name: &str, arm: CompareArm, task: Option<&ExampleTask>) -> Self {
+        lock(&ctx.live).push(Live {
+            name: name.to_string(),
+            arm,
+            task: task.map(|task| task.id.clone()),
+            working: None,
+        });
+        Self {
+            ctx,
+            name: name.to_string(),
+        }
+    }
+
+    /// The run works as `agent`, since it first started to.
+    fn working(&self, agent: AgentId) {
+        if let Some(live) = lock(&self.ctx.live)
+            .iter_mut()
+            .find(|l| l.name == self.name)
+        {
+            let since = live.working.map_or_else(Instant::now, |(_, since)| since);
+            live.working = Some((agent, since));
+        }
+    }
+}
+
+impl Drop for LiveSlot<'_> {
+    fn drop(&mut self) {
+        lock(&self.ctx.live).retain(|l| l.name != self.name);
+    }
+}
+
+/// Example tasks whose files are fetched at once.
+const FETCHES: usize = 3;
+
+/// How often the BENCH tab hears how the runs under way are doing.
+const LIVE_EVERY: Duration = Duration::from_secs(2);
+
+/// Put each of `examples`' files in its fixture under `dir`, `FETCHES` at
+/// a time in order, telling `states` where each stands, until `cancel`
+/// stops it. Tasks with the same source take turns, as they would write
+/// the same cache.
+async fn set_up(
+    examples: Vec<&'static ExampleTask>,
+    dir: PathBuf,
+    states: watch::Sender<Vec<BenchTaskSetup>>,
+    cancel: CancellationToken,
+) {
+    let cache = crate::repo_source::cache_dir();
+    let states = Arc::new(states);
+    let permits = Arc::new(Semaphore::new(FETCHES));
+    let mut sources: HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>> = HashMap::new();
+    let mut fetching = JoinSet::new();
+    for (i, task) in examples.into_iter().enumerate() {
+        let permit = tokio::select! {
+            biased;
+            () = cancel.cancelled() => break,
+            permit = Arc::clone(&permits).acquire_owned() => permit,
+        };
+        let Ok(permit) = permit else { break };
+        let same = task
+            .source
+            .as_ref()
+            .and_then(|source| source.dir(&cache).ok())
+            .map(|dir| Arc::clone(sources.entry(dir).or_default()));
+        let (states, cache, target, cancel) = (
+            Arc::clone(&states),
+            cache.clone(),
+            fixture(&dir, task),
+            cancel.clone(),
+        );
+        fetching.spawn(async move {
+            let _permit = permit;
+            let _turn = match same {
+                Some(same) => Some(same.lock_owned().await),
+                None => None,
+            };
+            let pull = match &task.source {
+                Some(source) => {
+                    let cache = cache.clone();
+                    tokio::task::spawn_blocking(move || source.pulls(&cache))
+                        .await
+                        .unwrap_or(false)
+                }
+                None => false,
+            };
+            states.send_modify(|s| s[i] = BenchTaskSetup::Fetching { pull });
+            let written = tokio::select! {
+                written = task.materialize(&target, &cache) => written,
+                () = cancel.cancelled() => return,
+            };
+            states.send_modify(|s| {
+                s[i] = match written {
+                    Ok(()) => BenchTaskSetup::Ready,
+                    Err(e) => {
+                        warn!(task = %task.id, error = %e, "Could not write an example task's files");
+                        BenchTaskSetup::Failed(e.to_string())
+                    }
+                }
+            });
+        });
+    }
+    while fetching.join_next().await.is_some() {}
+}
+
+/// Wait until `task`'s files are in place. Errors with why its runs can't
+/// run, or `None` when the user stopped the comparison first.
+async fn files_of(ctx: &Context, task: &ExampleTask) -> Result<(), Option<String>> {
+    let Some(i) = ctx.plan.examples.iter().position(|t| t.id == task.id) else {
+        return Ok(());
+    };
+    let mut setup = ctx.setup.clone();
+    let settled = |s: &Vec<BenchTaskSetup>| {
+        !matches!(
+            s.get(i),
+            Some(BenchTaskSetup::Queued | BenchTaskSetup::Fetching { .. })
+        )
+    };
+    let state = tokio::select! {
+        state = setup.wait_for(settled) => state.ok().and_then(|s| s.get(i).cloned()),
+        () = ctx.cancel.cancelled() => return Err(None),
+    };
+    match state {
+        Some(BenchTaskSetup::Failed(why)) => {
+            Err(Some(format!("writing the files of {}: {why}", task.id)))
+        }
+        Some(_) => Ok(()),
+        None => Err(None),
+    }
+}
+
+/// Show `payload` in the BENCH tab with where the example tasks' files
+/// stand and the runs under way.
+async fn show_live(ctx: &Context, payload: &ComparePayload) {
+    let host = ctx.host.agent_id();
+    let root = lock(&ctx.hub.registry).root(host);
+    let mut view = super::bench::view(host, root, &ctx.host.name, payload);
+    let setup = ctx.setup.borrow().clone();
+    for row in &mut view.tasks {
+        if let Some(i) = ctx.plan.examples.iter().position(|t| t.id == row.id) {
+            row.setup = setup.get(i).cloned().unwrap_or_default();
+        }
+    }
+    let live: Vec<_> = lock(&ctx.live)
+        .iter()
+        .map(|l| (l.name.clone(), l.arm, l.task.clone(), l.working))
+        .collect();
+    view.live = live
+        .into_iter()
+        .map(|(name, arm, task, working)| BenchLiveRun {
+            name,
+            arm: arm.index(),
+            task,
+            wall_ms: working
+                .map(|(_, since)| u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX)),
+            cost_usd: working.map_or(0.0, |(agent, _)| spent(&ctx.hub, agent)),
+        })
+        .collect();
+    let _ = ctx
+        .commands
+        .send(UiCommand::BenchUpsert(Box::new(view)))
+        .await;
 }
 
 /// A run that ended, with what the judge needs from it.
@@ -301,19 +489,6 @@ pub(super) async fn run(
         finish(&hub, &commands, &user_ui, &host, session, &payload).await;
         return;
     }
-    let cache = crate::repo_source::cache_dir();
-    let unfetched = plan
-        .examples
-        .iter()
-        .filter_map(|task| task.source.as_ref())
-        .filter(|source| source.dir(&cache).is_ok_and(|dir| !dir.is_dir()))
-        .count();
-    if unfetched > 0 {
-        payload.notes.push(format!(
-            "{unfetched} task{} fetched before the runs start; pulling a task's container image can take minutes",
-            if unfetched == 1 { "'s repository is" } else { "s' repositories are" }
-        ));
-    }
     save(
         &hub,
         &session.kernel,
@@ -322,21 +497,6 @@ pub(super) async fn run(
         &payload,
     )
     .await;
-    if !plan.examples.is_empty() {
-        let mut written = Ok(());
-        for task in &plan.examples {
-            if let Err(e) = task.materialize(&fixture(&dir, task), &cache).await {
-                written = Err(format!("writing the files of {}: {e}", task.id));
-                break;
-            }
-        }
-        if let Err(problem) = written {
-            payload.notes.push(problem);
-            payload.status = CompareStatus::Cancelled;
-            finish(&hub, &commands, &user_ui, &host, session, &payload).await;
-            return;
-        }
-    }
 
     let arms = CompareArm::BOTH.map(|arm| {
         let name = arm_name(arm, &plan.arms[arm.index()]);
@@ -348,6 +508,27 @@ pub(super) async fn run(
             }
         }
     });
+    let mut agents = HashMap::new();
+    for n in 1..=plan.runs_per_arm() {
+        for arm in CompareArm::BOTH {
+            let name = run_name(arm, n);
+            match lock(&hub.registry).create_child(&name, &arms[arm.index()], None) {
+                Ok(agent) => {
+                    agents.insert(name, agent);
+                }
+                Err(e) => warn!(run = %name, error = %e, "Could not register a run up front"),
+            }
+        }
+    }
+    hub.send_agent_list().await;
+
+    let (states, setup) = watch::channel(vec![BenchTaskSetup::Queued; plan.examples.len()]);
+    tokio::spawn(set_up(
+        plan.examples.clone(),
+        dir.clone(),
+        states,
+        cancel.clone(),
+    ));
     let ctx = Arc::new(Context {
         hub: Arc::clone(&hub),
         commands,
@@ -357,8 +538,27 @@ pub(super) async fn run(
         dir,
         repo,
         cancel,
+        setup,
+        agents,
+        live: std::sync::Mutex::new(Vec::new()),
     });
     let mut ran = run_all(&ctx, &session, &user_ui, &mut payload).await;
+    let used: Vec<AgentId> = ran.iter().map(|r| r.run.agent_id).collect();
+    for agent in ctx.agents.values() {
+        if !used.contains(&agent.agent_id()) {
+            if let Err(e) = lock(&hub.registry).forget(agent.agent_id()) {
+                warn!(run = %agent.name, error = %e, "Could not drop a run that did not start");
+            }
+        }
+    }
+    let failed = ctx.setup.borrow().clone();
+    for (task, state) in ctx.plan.examples.iter().zip(failed) {
+        if let BenchTaskSetup::Failed(why) = state {
+            payload
+                .notes
+                .push(format!("writing the files of {}: {why}", task.id));
+        }
+    }
     ran.sort_by_key(|r| r.order);
     let readings: Vec<&[PlanReading]> = ran.iter().map(|r| r.readings.as_slice()).collect();
     let shares = plan_shares(&readings);
@@ -419,19 +619,42 @@ async fn run_all(
     let mut schedule = Schedule::new(plan.runs_per_arm(), plan.concurrency, plan.budget_usd);
     let mut tasks = JoinSet::new();
     let mut ran = Vec::new();
+    let mut tick = tokio::time::interval(LIVE_EVERY);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut setup = ctx.setup.clone();
+    let mut setting_up = !plan.examples.is_empty();
     loop {
         if !ctx.cancel.is_cancelled() {
             while let Some((arm, n)) = schedule.start_next() {
                 tasks.spawn(run_one(Arc::clone(ctx), arm, n));
             }
         }
-        let Some(joined) = tasks.join_next().await else {
+        let joined = tokio::select! {
+            joined = tasks.join_next() => joined,
+            _ = tick.tick() => {
+                show_live(ctx, payload).await;
+                continue;
+            }
+            changed = setup.changed(), if setting_up => {
+                setting_up = changed.is_ok();
+                show_live(ctx, payload).await;
+                continue;
+            }
+        };
+        let Some(joined) = joined else {
             break;
         };
-        let Ok(done) = joined else {
-            warn!("A compare run panicked");
-            schedule.finished(0.0);
-            continue;
+        let done = match joined {
+            Ok(Some(done)) => done,
+            Ok(None) => {
+                schedule.finished(0.0);
+                continue;
+            }
+            Err(_) => {
+                warn!("A compare run panicked");
+                schedule.finished(0.0);
+                continue;
+            }
         };
         schedule.finished(done.run.cost_usd);
         user_ui
@@ -446,6 +669,7 @@ async fn run_all(
             payload,
         )
         .await;
+        show_live(ctx, payload).await;
         ran.push(done);
     }
     let skipped = schedule.drop_pending().len();
@@ -573,10 +797,28 @@ fn prepare_copy(
     Ok((CompareCopy { baseline, ..copy }, note))
 }
 
-/// Run `n` of `arm` from its copy to its check, and hand its agent back.
-async fn run_one(ctx: Arc<Context>, arm: CompareArm, n: u32) -> Ran {
+/// Run `n` of `arm` from its copy to its check, once its task's files are
+/// in place, and hand its agent back. `None` when the user stopped the
+/// comparison before it started.
+async fn run_one(ctx: Arc<Context>, arm: CompareArm, n: u32) -> Option<Ran> {
     let name = run_name(arm, n);
     let example = ctx.plan.example(n);
+    let slot = LiveSlot::take(&ctx, &name, arm, example);
+    if let Some(task) = example {
+        match files_of(&ctx, task).await {
+            Ok(()) => {}
+            Err(Some(problem)) => return Some(not_run(&ctx, arm, n, problem)),
+            Err(None) => return None,
+        }
+    }
+    if ctx.cancel.is_cancelled() {
+        return None;
+    }
+    let hub = &ctx.hub;
+    let agent = ctx.agents.get(&name).cloned();
+    if let Some(agent) = &agent {
+        slot.working(agent.agent_id());
+    }
     let (dir, workspace, repo) = match example {
         Some(task) => (ctx.dir.clone(), fixture(&ctx.dir, task), None),
         None => (
@@ -605,26 +847,33 @@ async fn run_one(ctx: Arc<Context>, arm: CompareArm, n: u32) -> Ran {
     .and_then(|prepared| prepared);
     let (copy, note) = match prepared {
         Ok(prepared) => prepared,
-        Err(problem) => return not_run(&ctx, arm, n, problem),
+        Err(problem) => return Some(not_run(&ctx, arm, n, problem)),
     };
-    let hub = &ctx.hub;
-    let registered =
-        lock(&hub.registry).create_child(&name, &ctx.arms[arm.index()], Some(copy.workdir.clone()));
+    let folder = copy.workdir.clone();
+    let registered = match agent {
+        Some(mut agent) => lock(&hub.registry)
+            .set_folder(agent.agent_id(), folder.clone())
+            .map(|()| {
+                agent.folder = Some(folder.clone());
+                agent
+            }),
+        None => {
+            lock(&hub.registry).create_child(&name, &ctx.arms[arm.index()], Some(folder.clone()))
+        }
+    };
     let agent = match registered {
         Ok(agent) => agent,
-        Err(e) => return not_run(&ctx, arm, n, format!("registering the run: {e:#}")),
+        Err(e) => return Some(not_run(&ctx, arm, n, format!("registering the run: {e:#}"))),
     };
-    let session = match hub
-        .factory
-        .open(&agent, Vec::new(), Some(copy.workdir.clone()))
-    {
+    slot.working(agent.agent_id());
+    let session = match hub.factory.open(&agent, Vec::new(), Some(folder)) {
         Ok(session) => session,
-        Err(e) => return not_run(&ctx, arm, n, format!("opening the run: {e:#}")),
+        Err(e) => return Some(not_run(&ctx, arm, n, format!("opening the run: {e:#}"))),
     };
     let mut ran = run_turn(&ctx, session, (arm, &name, example), copy).await;
     ran.order = (n, arm);
     ran.note = note;
-    ran
+    Some(ran)
 }
 
 /// One turn of a run: what its prompt got.
@@ -1282,5 +1531,55 @@ mod tests {
         let none = tempfile::tempdir().unwrap();
         RecordsAside::take(none.path(), none.path(), "b-1").put_back();
         assert!(!none.path().join(TASKS_DIR).exists());
+    }
+
+    #[tokio::test]
+    async fn a_task_whose_files_cannot_be_had_fails_alone() {
+        let mut plain = bench_pack::tasks().iter().filter(|t| t.source.is_none());
+        let (first, last) = (plain.next().unwrap(), plain.next().unwrap());
+        let mut broken = first.clone();
+        broken.id = "swe/broken".to_string();
+        broken.source = Some(crate::repo_source::Source::Image(
+            crate::repo_source::ImageSource {
+                image: "not a reference".to_string(),
+            },
+        ));
+        let broken: &'static ExampleTask = Box::leak(Box::new(broken));
+        let dir = tempfile::tempdir().unwrap();
+        let examples = vec![first, broken, last];
+        let (states, mut seen) = watch::channel(vec![BenchTaskSetup::Queued; 3]);
+        set_up(
+            examples.clone(),
+            dir.path().to_path_buf(),
+            states,
+            CancellationToken::new(),
+        )
+        .await;
+
+        let states = seen.borrow_and_update().clone();
+        assert_eq!(states[0], BenchTaskSetup::Ready);
+        assert!(
+            matches!(&states[1], BenchTaskSetup::Failed(why) if why.contains("not a plain image reference")),
+            "{states:?}"
+        );
+        assert_eq!(states[2], BenchTaskSetup::Ready);
+        assert!(fixture(dir.path(), first).is_dir());
+        assert!(fixture(dir.path(), last).is_dir());
+    }
+
+    #[tokio::test]
+    async fn setting_up_stops_with_the_comparison() {
+        let dir = tempfile::tempdir().unwrap();
+        let examples: Vec<_> = bench_pack::tasks()
+            .iter()
+            .filter(|t| t.source.is_none())
+            .take(2)
+            .collect();
+        let (states, seen) = watch::channel(vec![BenchTaskSetup::Queued; 2]);
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        set_up(examples, dir.path().to_path_buf(), states, cancel).await;
+        assert!(seen.borrow().iter().all(|s| *s == BenchTaskSetup::Queued));
+        assert!(!dir.path().join(FIXTURES).exists());
     }
 }

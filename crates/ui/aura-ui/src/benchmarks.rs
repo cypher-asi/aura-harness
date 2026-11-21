@@ -180,6 +180,35 @@ pub struct BenchTaskCell {
     pub mean_cost_usd: Option<f64>,
 }
 
+/// Where an example task's files stand while its benchmark sets up.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum BenchTaskSetup {
+    /// Its files are in place, for its runs to copy
+    #[default]
+    Ready,
+    /// Waiting for a turn to fetch its files
+    Queued,
+    /// Its files are being fetched; `pull` when that pulls a container
+    /// image, which can take minutes
+    Fetching { pull: bool },
+    /// Its files could not be had, so its runs do not run
+    Failed(String),
+}
+
+impl BenchTaskSetup {
+    /// `queued`, `pulling image`, ...; empty when it is ready.
+    #[must_use]
+    pub fn label(&self) -> String {
+        match self {
+            Self::Ready => String::new(),
+            Self::Queued => "queued".to_string(),
+            Self::Fetching { pull: true } => "pulling image".to_string(),
+            Self::Fetching { pull: false } => "fetching files".to_string(),
+            Self::Failed(why) => format!("failed: {why}"),
+        }
+    }
+}
+
 /// One example task of a benchmark of them.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct BenchTaskRow {
@@ -188,6 +217,22 @@ pub struct BenchTaskRow {
     pub title: String,
     /// Arm A, then arm B
     pub arms: [BenchTaskCell; 2],
+    pub setup: BenchTaskSetup,
+}
+
+/// A run that has started and not ended.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BenchLiveRun {
+    /// `a-1`, ...
+    pub name: String,
+    /// 0 for A, 1 for B
+    pub arm: usize,
+    /// The example task it works on
+    pub task: Option<String>,
+    /// How long it has worked; `None` while it waits for its task's files
+    pub wall_ms: Option<u64>,
+    /// What its model calls have cost so far
+    pub cost_usd: f64,
 }
 
 /// The judge's verdict on one pair of runs.
@@ -249,13 +294,98 @@ pub struct BenchView {
     pub prompts: Vec<String>,
     /// Arm A, then arm B
     pub arms: [BenchArm; 2],
+    /// Runs that ended, in the order they ended
     pub runs: Vec<BenchRun>,
+    /// Runs under way, in the order they started; only while it runs
+    pub live: Vec<BenchLiveRun>,
     pub judge: Option<BenchJudge>,
     /// What a replayed session cost when it ran
     pub baseline: Option<BenchBaseline>,
     /// Whether the judge had what the user kept to measure against
     pub has_reference: bool,
     pub notes: Vec<String>,
+}
+
+/// What a benchmark is doing, as its progress shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BenchPhase {
+    /// Fetching example tasks' files before any run works
+    SettingUp,
+    Running,
+    /// Every run ended; the judge compares them
+    Judging,
+    Done,
+    /// The user stopped it
+    Stopped,
+}
+
+impl BenchPhase {
+    /// `Setting up`, `Running`, ...
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::SettingUp => "Setting up",
+            Self::Running => "Running",
+            Self::Judging => "Judging",
+            Self::Done => "Done",
+            Self::Stopped => "Stopped",
+        }
+    }
+
+    /// Whether it is still going.
+    #[must_use]
+    pub const fn under_way(self) -> bool {
+        matches!(self, Self::SettingUp | Self::Running | Self::Judging)
+    }
+}
+
+/// How far a benchmark's runs have got.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BenchProgress {
+    /// Runs it makes: per arm, `repeats` of each example task, or
+    /// `repeats` of its work
+    pub total: usize,
+    /// Runs that ended
+    pub done: usize,
+    /// Runs that ended in an error
+    pub failed: usize,
+    /// Runs working now, not waiting for their task's files
+    pub working: usize,
+    pub phase: BenchPhase,
+}
+
+impl BenchView {
+    /// How far its runs have got and what it is doing.
+    #[must_use]
+    pub fn progress(&self) -> BenchProgress {
+        let repeats = usize::try_from(self.repeats.max(1)).unwrap_or(usize::MAX);
+        let done = self.runs.len();
+        let total = repeats
+            .saturating_mul(self.tasks.len().max(1))
+            .saturating_mul(2)
+            .max(done + self.live.len());
+        let working = self.live.iter().filter(|r| r.wall_ms.is_some()).count();
+        let fetching = self.tasks.iter().any(|t| {
+            matches!(
+                t.setup,
+                BenchTaskSetup::Queued | BenchTaskSetup::Fetching { .. }
+            )
+        });
+        let phase = match self.status {
+            BenchStatus::Running if done == 0 && working == 0 && fetching => BenchPhase::SettingUp,
+            BenchStatus::Running if done >= total && self.live.is_empty() => BenchPhase::Judging,
+            BenchStatus::Running => BenchPhase::Running,
+            BenchStatus::Cancelled => BenchPhase::Stopped,
+            _ => BenchPhase::Done,
+        };
+        BenchProgress {
+            total,
+            done,
+            failed: self.runs.iter().filter(|r| r.error.is_some()).count(),
+            working,
+            phase,
+        }
+    }
 }
 
 /// A built-in example task, as the BENCH tab lists it.
@@ -358,6 +488,51 @@ mod tests {
         assert_eq!(cost_shares(Some(1.0), Some(0.996)), [" · 100%", " · 100%"]);
         assert_eq!(cost_shares(Some(0.0), Some(0.0)), ["", ""]);
         assert_eq!(cost_shares(None, Some(0.2)), ["", ""]);
+    }
+
+    #[test]
+    fn progress_counts_runs_and_follows_the_phases() {
+        let task = |setup| BenchTaskRow {
+            setup,
+            ..BenchTaskRow::default()
+        };
+        let mut view = BenchView {
+            repeats: 2,
+            tasks: vec![
+                task(BenchTaskSetup::Fetching { pull: true }),
+                task(BenchTaskSetup::Queued),
+            ],
+            live: vec![BenchLiveRun::default()],
+            ..BenchView::default()
+        };
+        let progress = view.progress();
+        assert_eq!((progress.total, progress.done), (8, 0));
+        assert_eq!(progress.phase, BenchPhase::SettingUp);
+
+        view.tasks[0].setup = BenchTaskSetup::Ready;
+        view.live[0].wall_ms = Some(1_000);
+        view.runs = vec![
+            BenchRun::default(),
+            BenchRun {
+                error: Some("timed out".into()),
+                ..BenchRun::default()
+            },
+        ];
+        let progress = view.progress();
+        assert_eq!(progress.phase, BenchPhase::Running);
+        assert_eq!(
+            (progress.done, progress.failed, progress.working),
+            (2, 1, 1)
+        );
+
+        view.live.clear();
+        view.runs = vec![BenchRun::default(); 8];
+        assert_eq!(view.progress().phase, BenchPhase::Judging);
+        view.status = BenchStatus::Picked(0);
+        assert_eq!(view.progress().phase, BenchPhase::Done);
+        assert!(!BenchPhase::Done.under_way());
+        view.status = BenchStatus::Cancelled;
+        assert_eq!(view.progress().phase, BenchPhase::Stopped);
     }
 
     #[test]

@@ -457,8 +457,17 @@ pub(super) async fn start(state: &mut LoopState<'_>) -> Result<String, String> {
         .ok_or("Nothing to start: /compare [prompt] prepares a comparison first")?;
     let host = {
         let mut registry = lock(&state.hub.registry);
+        // Asked from a comparison, or from a run of one, it goes beside
+        // that comparison rather than inside it.
         let parent = registry
-            .find(plan.user)
+            .ancestry(plan.user)
+            .into_iter()
+            .filter_map(|id| registry.find(id))
+            .find(|agent| {
+                !agent.is_compare()
+                    && !agent.is_compare_arm()
+                    && !registry.under_compare(agent.agent_id())
+            })
             .map(|agent| agent.zns_id.clone())
             .ok_or("The agent that asked for the comparison is gone")?;
         registry

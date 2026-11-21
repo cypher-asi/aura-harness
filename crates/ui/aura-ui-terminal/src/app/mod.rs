@@ -5,6 +5,7 @@
 
 mod agent_views;
 mod archive;
+pub(crate) mod bench_progress;
 pub mod benchmarks;
 mod chat_tabs;
 mod commands;
@@ -389,6 +390,8 @@ pub struct App {
     pub(super) hud: Hud,
     /// The queued-messages panel above the input
     pub(super) queue_panel: queue_panel::QueuePanel,
+    /// The benchmark progress panel above the input
+    pub(super) bench_panel: bench_progress::BenchPanel,
     /// Whether the full todo list is shown above the input
     pub(super) todos_open: bool,
     /// When to get the user's attention
@@ -876,6 +879,7 @@ impl App {
             context_menu: None,
             hud: Hud::default(),
             queue_panel: queue_panel::QueuePanel::default(),
+            bench_panel: bench_progress::BenchPanel::default(),
             todos_open: false,
             alert_settings: AlertSettings::default(),
             alerts: Vec::new(),
@@ -1727,7 +1731,9 @@ impl App {
             self.hover = None;
             return;
         }
-        if self.queue_mouse(mouse.kind, mouse.column, mouse.row) {
+        if self.queue_mouse(mouse.kind, mouse.column, mouse.row)
+            || self.bench_panel_mouse(mouse.kind, mouse.column, mouse.row)
+        {
             self.hover = None;
             return;
         }

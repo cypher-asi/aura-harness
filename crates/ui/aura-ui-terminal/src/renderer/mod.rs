@@ -1,6 +1,7 @@
 //! Simple IRC-style renderer for the terminal UI.
 
 mod activity;
+mod bench_panel;
 mod benchmarks;
 mod chat_lines;
 mod command;
@@ -75,22 +76,28 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     // The input grows upward as it wraps inside the Chat column, so its
     // height comes from where the columns fall.
     let (swarm, column, right) = columns(content, app);
-    // The queue panel gives up rows before the chat does: the chat keeps
-    // three and the input one.
+    // The queue and benchmark panels give up rows before the chat does:
+    // the chat keeps three and the input one. The queue goes first.
     let queue_rows = queue_panel::height(app).min(
         content
             .height
             .saturating_sub(hud::FOOTER_ROWS + input::BOX_ROWS + 1 + 3),
     );
+    let bench_rows = bench_panel::height(app).min(
+        content
+            .height
+            .saturating_sub(hud::FOOTER_ROWS + input::BOX_ROWS + 1 + 3 + queue_rows),
+    );
     let max_input_rows = content
         .height
-        .saturating_sub(hud::FOOTER_ROWS + input::BOX_ROWS + 3 + queue_rows)
+        .saturating_sub(hud::FOOTER_ROWS + input::BOX_ROWS + 3 + queue_rows + bench_rows)
         .max(1);
     let input_rows = input::input_rows(column, app, theme, max_input_rows);
     let chat_column = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),
+            Constraint::Length(bench_rows),
             Constraint::Length(queue_rows),
             Constraint::Length(input_rows + input::BOX_ROWS),
             Constraint::Length(hud::FOOTER_ROWS),
@@ -126,10 +133,11 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     if let Some(selection) = app.selection() {
         selection.highlight(frame.buffer_mut());
     }
-    queue_panel::render(frame, chat_column[1], app, theme);
-    app.set_input_area(chat_column[2]);
-    input::render_input(frame, chat_column[2], app, theme);
-    let footer_gap = hud::render_footer(frame, inset_edges(chat_column[3]), app, theme);
+    bench_panel::render(frame, chat_column[1], app, theme);
+    queue_panel::render(frame, chat_column[2], app, theme);
+    app.set_input_area(chat_column[3]);
+    input::render_input(frame, chat_column[3], app, theme);
+    let footer_gap = hud::render_footer(frame, inset_edges(chat_column[4]), app, theme);
     if let Some(read) = hud::render_notice(frame, under_right.unwrap_or(footer_gap), app, theme) {
         app.hold_notification_for(read);
     }
