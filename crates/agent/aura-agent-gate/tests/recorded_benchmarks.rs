@@ -306,7 +306,8 @@ fn replay(log: &mut Log, settings: &GateConfig) -> (Vec<Vec<String>>, f64, usize
                 passes += 1;
                 None
             } else {
-                escalate(&log.stats(), RouteLevel::Turn, &model, &candidates)
+                // The recordings say how each model did, not at which effort.
+                escalate(&log.stats(), RouteLevel::Turn, (&model, None), &candidates)
             };
             tried.push(model);
         }

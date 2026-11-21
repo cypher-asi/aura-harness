@@ -114,10 +114,8 @@ impl SubtaskGate {
             shown: None,
         };
         if let Some((decision, category)) = &self.escalation {
-            info!(kind = %self.kind, model = %decision.model.id, %category, "Gate retries the subtask on a stronger model");
-            if config.model != decision.model.id {
-                self.limits.configure(config, &decision.model.id);
-            }
+            info!(kind = %self.kind, model = %decision.model.id, effort = ?decision.effort, %category, "Gate retries the subtask on a stronger model");
+            self.limits.route(config, decision);
             self.live.note_model(session.agent_id(), &decision.model.id);
             label.category = Some(*category);
             label.shown = Some(route_line(decision, *category));
@@ -148,9 +146,7 @@ impl SubtaskGate {
             reason = %decision.reason,
             "Gate routed the subtask"
         );
-        if config.model != decision.model.id {
-            self.limits.configure(config, &decision.model.id);
-        }
+        self.limits.route(config, &decision);
         self.live.note_model(session.agent_id(), &decision.model.id);
         label.shown = Some(route_line(&decision, category));
         label.route = decision.route(RouteLevel::Subtask);
@@ -162,7 +158,7 @@ impl SubtaskGate {
 fn route_line(decision: &Decision, category: PromptCategory) -> String {
     format!(
         "gate → {} · subtask, {category}, {}",
-        decision.model.route_label(),
+        decision.label(),
         decision.reason
     )
 }

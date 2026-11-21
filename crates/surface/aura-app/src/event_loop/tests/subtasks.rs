@@ -126,7 +126,7 @@ async fn a_task_under_gate_runs_on_the_model_gate_picks_for_it() {
     assert_eq!(row.model.as_deref(), Some(HAIKU));
     assert_eq!(
         route_lines(&mut commands),
-        ["gate → aura-claude-haiku-4-5 (cloud) · subtask, debugging, default"]
+        ["gate → aura-claude-haiku-4-5 (cloud) at medium effort · subtask, debugging, default"]
     );
 }
 

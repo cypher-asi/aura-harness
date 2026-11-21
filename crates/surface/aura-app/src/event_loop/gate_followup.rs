@@ -42,7 +42,7 @@ use aura_config::ReviewMode;
 use aura_core_types::{
     CompareCopy, Difficulty, OutcomePayload, OutcomeSignal, PromptCategory, RouteLevel,
 };
-use aura_model::{ContentBlock, Message, Role};
+use aura_model::{ContentBlock, Message, Role, ThinkingEffort};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -321,19 +321,20 @@ pub(crate) struct Reviewing<'a> {
 }
 
 impl FollowUp {
-    /// The steps for an attempt on `model`, routed among `candidates`,
+    /// The steps for an attempt that `ran` on a model (at the effort Gate
+    /// chose, when it chose one), routed among `candidates`,
     /// working in `workspace`: the judge's verdict on unchecked work
     /// always, and when a candidate is stronger, so the work has
     /// somewhere to go, the others Gate's settings allow.
     pub(crate) fn new(
         live: &GateLive,
         candidates: &[Candidate],
-        model: &str,
+        ran: (&str, Option<ThinkingEffort>),
         workspace: &Path,
     ) -> Self {
         let judge = gate_record::verdict_judge_for(candidates);
         let stronger =
-            aura_agent_gate::escalate(&live.stats(), RouteLevel::Turn, model, candidates).is_some();
+            aura_agent_gate::escalate(&live.stats(), RouteLevel::Turn, ran, candidates).is_some();
         if !stronger {
             return Self {
                 allowed: Allowed {
@@ -350,7 +351,7 @@ impl FollowUp {
             .harness_check
             .then(|| check_command(workspace))
             .flatten();
-        let reviewer = gate_record::reviewer_for(live, candidates, model);
+        let reviewer = gate_record::reviewer_for(live, candidates, ran.0);
         Self {
             allowed: Allowed {
                 nudge: settings.nudge,

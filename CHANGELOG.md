@@ -21,6 +21,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   drop is restarted as it was.
 - In a benchmark run, a read-only subtask such as `reviewer` reasons at
   medium effort unless its model or effort was chosen.
+- Gate routes to a reasoning effort as well as a model. Work starts at
+  the effort of its difficulty: low for easy work, high for hard work,
+  medium for the rest. A failed attempt moves to a stronger model at the
+  same effort, and only work that failed on the strongest model goes on
+  there one effort higher, up to max. So max is used only once nothing
+  less got the work right. A thinking level picked in `/model` still
+  holds. The route line says the effort (`gate → claude-opus-4-7 (claude
+  plan) at high effort · debugging, escalate`), and the prompt's route
+  records it as `effort`.
 
 ##### Fixed
 

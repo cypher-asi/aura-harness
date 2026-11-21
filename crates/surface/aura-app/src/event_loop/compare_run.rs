@@ -52,6 +52,7 @@ use crate::isolation::changes::{self, BUILD_OUTPUT};
 use crate::isolation::{
     CopyIsolation, IsolatedWorkspace, Isolation, IsolationStrategy, WorktreeIsolation,
 };
+use crate::model_selection::routed_effort;
 use aura_agent::AgentLoop;
 use aura_agent_gate::attempt_log::Terms;
 use aura_agent_gate::compare::{list_price, plan_shares, run_name, PlanReading, Schedule};
@@ -1272,12 +1273,14 @@ async fn run_prompt(
         ArmRouting::Gate { .. } => hub.gate.redecide(&work, &plan.candidates),
         ArmRouting::Pinned(_) => None,
     };
-    let routed_to = match routing {
-        ArmRouting::Gate { .. } => decision.as_ref().map(|d| d.model.id.clone()),
-        ArmRouting::Pinned(model) => Some(model.clone()),
-    };
-    if let Some(model) = routed_to.filter(|model| *model != config.model) {
-        hub.model_limits().configure(&mut config, &model);
+    match (routing, &decision) {
+        (ArmRouting::Gate { .. }, Some(decision)) => {
+            hub.model_limits().route(&mut config, decision);
+        }
+        (ArmRouting::Pinned(model), _) if *model != config.model => {
+            hub.model_limits().configure(&mut config, model);
+        }
+        _ => {}
     }
     let model = config.model.clone();
     let led = lead.is_some_and(|lead| {
@@ -1292,6 +1295,9 @@ async fn run_prompt(
         route: Route {
             explored: decision.as_ref().is_some_and(|d| d.explored),
             propensity: decision.as_ref().map_or(1.0, |d| d.propensity),
+            effort: decision
+                .as_ref()
+                .and_then(|d| d.effort.reasoning_effort_wire().map(str::to_string)),
             ..Route::turn(model.clone(), RouteReason::Compare)
         },
         led: Some(led),
@@ -1416,7 +1422,8 @@ async fn run_prompt(
         let mut carry_on: Option<(String, String, bool)> = None;
         if let (true, false, Ok(partial)) = (gate_arm, stopped, &result) {
             if follow.0 != model {
-                let fresh = FollowUp::new(&hub.gate, &plan.candidates, &model, &workdir)
+                let ran = (model.as_str(), routed_effort(&config));
+                let fresh = FollowUp::new(&hub.gate, &plan.candidates, ran, &workdir)
                     .since(copy_before.clone())
                     .after(&follow.1);
                 follow = (model.clone(), fresh);
@@ -1626,10 +1633,12 @@ async fn run_prompt(
                 review = Some(judged.verdict.reasons);
             }
         }
-        let Some(next) = hub
-            .gate
-            .escalate(RouteLevel::Turn, category, &model, &plan.candidates)
-        else {
+        let Some(next) = hub.gate.escalate(
+            RouteLevel::Turn,
+            category,
+            (&model, routed_effort(&config)),
+            &plan.candidates,
+        ) else {
             break (signal, reply, error, ended, true);
         };
         let takeover = format!(
@@ -1658,11 +1667,11 @@ async fn run_prompt(
         ui.send(system_message(format!(
             "{} {name} · gate → {} · {category}, {}",
             ctx.host.name,
-            aura_model::model_catalog::route_label(&next.model.id),
+            next.label(),
             next.reason
         )))
         .await;
-        hub.model_limits().configure(&mut config, &next.model.id);
+        hub.model_limits().route(&mut config, &next);
         hub.gate.note_model(agent_id, &next.model.id);
         model.clone_from(&next.model.id);
         escalations += 1;

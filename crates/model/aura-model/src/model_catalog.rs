@@ -338,6 +338,26 @@ pub fn reasons_high(model: &str) -> bool {
         || is_snapshot_of(&key, "claude-opus-5-5")
 }
 
+/// Whether `model` reasons harder at max effort than at high: the Claude
+/// models whose effort ladder goes up to `max` (Sonnet and Opus 4.6 and
+/// later, Fable and Mythos 5). Others fold max into their highest effort.
+#[must_use]
+pub fn has_max_effort(model: &str) -> bool {
+    let key = model_key(model);
+    [
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-fable-5",
+        "claude-mythos-5",
+    ]
+    .iter()
+    .any(|family| key.starts_with(family))
+}
+
 /// Whether `name` is `key` or one of its dated snapshots
 /// (`claude-haiku-4-5-20251001`, `gpt-5-4-2026-03-05`).
 fn is_snapshot_of(name: &str, key: &str) -> bool {
@@ -816,6 +836,27 @@ mod tests {
             "ollama/qwen3",
         ] {
             assert!(!reasons_high(model), "{model}");
+        }
+    }
+
+    #[test]
+    fn max_effort_is_its_own_step_only_on_claude_models_whose_ladder_reaches_it() {
+        for model in [
+            "claude/claude-opus-5-5",
+            "aura-claude-opus-4-8",
+            "claude-sonnet-4-6",
+            "claude/claude-sonnet-5-5",
+            "claude/claude-fable-5-2",
+        ] {
+            assert!(has_max_effort(model), "{model}");
+        }
+        for model in [
+            "claude/claude-haiku-4-5",
+            "claude/claude-opus-4-1",
+            "chatgpt/gpt-5.4",
+            "local/qwen3:4b",
+        ] {
+            assert!(!has_max_effort(model), "{model}");
         }
     }
 

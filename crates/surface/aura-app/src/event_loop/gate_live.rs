@@ -22,6 +22,7 @@ use aura_agent_gate::{Candidate, Decision, GateStats, SplitMix64, Way, Work};
 use aura_agent_kernel::RecordObserver;
 use aura_config::GateConfig;
 use aura_core_types::{AgentId, Difficulty, PromptCategory, RecordEntry, RouteLevel, RouteReason};
+use aura_model::ThinkingEffort;
 use aura_store_db::ReadStore;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -166,14 +167,14 @@ impl GateLive {
     }
 
     /// Where work at `level` asking for `category`, whose attempt on
-    /// `failed` failed, goes next among `candidates` (see
-    /// [`aura_agent_gate::escalate`]), remembered for `/gate`. `None`
-    /// when no candidate is stronger.
+    /// `failed` (a model and the effort Gate chose for it) failed, goes
+    /// next among `candidates` (see [`aura_agent_gate::escalate`]),
+    /// remembered for `/gate`. `None` when nothing is left to try.
     pub(crate) fn escalate(
         &self,
         level: RouteLevel,
         category: PromptCategory,
-        failed: &str,
+        failed: (&str, Option<ThinkingEffort>),
         candidates: &[Candidate],
     ) -> Option<Decision> {
         let decision = {

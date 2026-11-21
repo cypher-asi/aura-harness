@@ -51,7 +51,7 @@ use crate::agent_registry::AgentRegistry;
 use crate::file_checkpoints::AttemptFiles;
 use crate::isolation::changes;
 use crate::long_run::LongRunSettings;
-use crate::model_selection::ModelLimits;
+use crate::model_selection::{routed_effort, ModelLimits};
 use crate::project_instructions::ProjectInstructions;
 use crate::record_loader::agent_summaries;
 use async_trait::async_trait;
@@ -1304,9 +1304,12 @@ impl AgentHub {
             info!(child = %first.name, "Too little time left to retry the subtask");
             return TaskReport { first, retry: None };
         }
-        let escalated =
-            self.gate
-                .escalate(RouteLevel::Subtask, category, &first.model, &candidates);
+        let escalated = self.gate.escalate(
+            RouteLevel::Subtask,
+            category,
+            (&first.model, first.effort),
+            &candidates,
+        );
         let Some(decision) = escalated else {
             info!(child = %first.name, "No stronger model to retry the subtask on");
             return TaskReport { first, retry: None };
@@ -1652,6 +1655,7 @@ impl AgentHub {
             },
         );
         let model = agent_loop.config().model.clone();
+        let effort = routed_effort(agent_loop.config());
         let category = end.prompt.map(|(_, category)| category);
         let mut ended = end.prompt.map(|(prompt_tx, category)| OutcomePayload {
             prompt_tx,
@@ -1762,6 +1766,7 @@ impl AgentHub {
             child: child_id,
             name,
             model,
+            effort,
             reply: end.reply,
             category,
             files: end.files,
@@ -1813,6 +1818,8 @@ struct TaskDone {
     name: String,
     /// Model it ran on
     model: String,
+    /// The effort Gate chose for it, while that was Gate's to choose
+    effort: Option<ThinkingEffort>,
     /// Its final reply, or why there is none
     reply: Result<String, String>,
     /// Its prompt's category, when the prompt was recorded

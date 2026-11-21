@@ -195,6 +195,10 @@ pub struct AgentLoopConfig {
     /// taper so the user's explicit choice always wins. `None` (chat
     /// with no selection, dev-loop, subagents) keeps the heuristic.
     pub user_thinking_effort: Option<aura_model::ThinkingEffort>,
+    /// Reasoning effort a router (Gate) chose for the work, held on every
+    /// iteration like [`Self::user_thinking_effort`], which wins over it.
+    /// `None` keeps the heuristic.
+    pub routed_thinking_effort: Option<aura_model::ThinkingEffort>,
     /// Layer E.1: hard cap on the number of *turns* one task may run.
     /// A turn is the unit of work between "model starts talking" and
     /// "model goes quiet without follow-up signal"; codex's
@@ -360,6 +364,7 @@ impl AgentLoopConfig {
             phase_reset_signal: None,
             disable_thinking_iteration_0: false,
             user_thinking_effort: None,
+            routed_thinking_effort: None,
             max_turns_per_task: aura_core_types::MAX_TURNS,
             max_iterations_per_task: aura_core_types::MAX_TURNS,
             stream_event_timeout: Duration::from_secs(90),

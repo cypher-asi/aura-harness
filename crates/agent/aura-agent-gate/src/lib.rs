@@ -51,7 +51,7 @@ pub mod turn_judge;
 
 pub use lead::{choose_way, Way};
 pub use router::{
-    below_lead, candidates, escalate, fixed_pick, judged, pick, Candidate, Decision, Random,
-    SplitMix64, Work,
+    below_lead, candidates, escalate, fixed_pick, judged, pick, raise_effort, start_effort,
+    Candidate, Decision, Random, SplitMix64, Work,
 };
 pub use stats::GateStats;

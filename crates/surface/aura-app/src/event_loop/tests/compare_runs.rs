@@ -203,7 +203,13 @@ async fn both_arms_run_repeatedly_in_separate_copies_and_their_checks_feed_gate(
             .collect();
         assert_eq!(prompts.len(), 1);
         assert_eq!(prompts[0].text, "write the answer");
-        assert_eq!(prompts[0].route, Route::turn(model, RouteReason::Compare));
+        let route = Route::turn(model, RouteReason::Compare);
+        let route = if run.arm == CompareArm::A {
+            route.at_effort("medium")
+        } else {
+            route
+        };
+        assert_eq!(prompts[0].route, route, "Gate's arm records its effort");
         assert_eq!(
             prompts[0].led,
             Some(false),
@@ -246,7 +252,11 @@ async fn both_arms_run_repeatedly_in_separate_copies_and_their_checks_feed_gate(
             .traces
             .run_log(run.agent_id)
             .expect("the run is traced");
-        assert!(path.ends_with("log.json") && path.is_file(), "{}", path.display());
+        assert!(
+            path.ends_with("log.json") && path.is_file(),
+            "{}",
+            path.display()
+        );
         assert_eq!(trace.run.source, "bench", "{}", run.name);
         let arm = match run.arm {
             CompareArm::A => "A · ",
@@ -257,11 +267,18 @@ async fn both_arms_run_repeatedly_in_separate_copies_and_their_checks_feed_gate(
             "{:?}",
             trace.run.arm
         );
-        assert!(trace.run.title.ends_with(&format!("{}: write the answer", run.name)));
+        assert!(trace
+            .run
+            .title
+            .ends_with(&format!("{}: write the answer", run.name)));
         assert_eq!(trace.scorecard.turns, 1, "one prompt, one turn");
         assert_eq!(
             trace.scorecard.outcome,
-            Some(if run.check_passed == Some(true) { 1.0 } else { 0.0 }),
+            Some(if run.check_passed == Some(true) {
+                1.0
+            } else {
+                0.0
+            }),
             "its check is its outcome"
         );
     }
@@ -506,7 +523,7 @@ async fn subtasks_of_a_run_follow_its_arm_not_the_users_selection() {
     let routed = dispatch(first).await;
     assert_eq!(
         route_of(routed),
-        Route::subtask(SONNET, RouteReason::Default),
+        Route::subtask(SONNET, RouteReason::Default).at_effort("medium"),
         "the Gate arm's subtasks are routed though the user pinned a model"
     );
     let nested = dispatch(routed).await;

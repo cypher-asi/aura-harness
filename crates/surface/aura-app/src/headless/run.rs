@@ -24,6 +24,7 @@ use crate::event_loop::subagents::lock;
 use crate::event_loop::task_check::takeover_prompt;
 use crate::event_loop::turns::{drain_stale_inbox, ended_signal, failure_text, record_prompt};
 use crate::event_loop::{AgentHub, AgentSession};
+use crate::model_selection::routed_effort;
 use crate::session_checkpoint::SessionUsage;
 use aura_agent::{AgentLoop, AgentLoopConfig, AgentLoopResult};
 use aura_agent_gate::attempt_log::Terms;
@@ -39,7 +40,7 @@ use aura_core_types::{
     RouteReason, Transaction,
 };
 use aura_exec_tools::BackgroundProcessHook;
-use aura_model::{Message, Role};
+use aura_model::{Message, Role, ThinkingEffort};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -90,6 +91,8 @@ pub struct Headless {
     pub(crate) notices: mpsc::UnboundedReceiver<Notice>,
     /// Model the turns run on, for the report
     pub(crate) model: String,
+    /// The effort Gate chose for the turn, while that is Gate's to choose
+    pub(crate) effort: Option<ThinkingEffort>,
     pub(crate) mode: AgentMode,
     pub(crate) workspace_root: PathBuf,
     pub(crate) tool_filter: ToolFilter,
@@ -564,7 +567,8 @@ impl Headless {
         };
         let workspace = session.kernel.agent_workspace();
         if follow.0 != ended.model {
-            let fresh = FollowUp::new(&self.hub.gate, &candidates, &ended.model, &workspace)
+            let ran = (ended.model.as_str(), self.effort);
+            let fresh = FollowUp::new(&self.hub.gate, &candidates, ran, &workspace)
                 .since(before.cloned())
                 .after(&follow.1);
             *follow = (ended.model.clone(), fresh);
@@ -727,10 +731,12 @@ impl Headless {
     ) -> Option<(Decision, &'a OutcomePayload)> {
         let ended = ended.filter(|ended| calls_for_stronger(ended.signal))?;
         let candidates = self.hub.gate_candidates(session.definition.as_deref())?;
-        let decision =
-            self.hub
-                .gate
-                .escalate(RouteLevel::Turn, ended.category, &ended.model, &candidates)?;
+        let decision = self.hub.gate.escalate(
+            RouteLevel::Turn,
+            ended.category,
+            (&ended.model, self.effort),
+            &candidates,
+        )?;
         info!(
             from = %ended.model,
             to = %decision.model.id,
@@ -1150,14 +1156,12 @@ impl Headless {
         Ok((payload, Some(category)))
     }
 
-    /// Point `config`, of a turn of `session`, at `decision`'s model.
+    /// Point `config`, of a turn of `session`, at `decision`'s model and
+    /// effort.
     fn point(&mut self, session: &AgentSession, config: &mut AgentLoopConfig, decision: &Decision) {
-        if config.model != decision.model.id {
-            self.hub
-                .model_limits()
-                .configure(config, &decision.model.id);
-        }
+        self.hub.model_limits().route(config, decision);
         self.model.clone_from(&decision.model.id);
+        self.effort = routed_effort(config);
         self.hub
             .gate
             .note_model(session.agent_id(), &decision.model.id);

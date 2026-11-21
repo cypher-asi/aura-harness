@@ -734,6 +734,30 @@ fn effort_high_on_sonnet_5_5_and_opus_5() {
     }
 }
 
+/// The effort a router chose holds on every iteration in place of the
+/// heuristic, and a choice of the user's wins over it.
+#[test]
+fn a_routed_effort_replaces_the_heuristic_and_the_users_wins() {
+    use aura_model::ThinkingEffort;
+
+    let routed = AgentLoopConfig {
+        routed_thinking_effort: Some(ThinkingEffort::Max),
+        ..AgentLoopConfig::for_agent("claude/claude-opus-5-5")
+    };
+    let mut state = super::LoopState::new(&routed, vec![]);
+    state.had_any_file_write = true;
+    for iteration in [0, 3] {
+        let request = state.build_request(&routed, &[], iteration).unwrap();
+        assert_eq!(request.thinking_effort, Some(ThinkingEffort::Max));
+    }
+    let pinned = AgentLoopConfig {
+        user_thinking_effort: Some(ThinkingEffort::Low),
+        ..routed
+    };
+    let request = state.build_request(&pinned, &[], 3).unwrap();
+    assert_eq!(request.thinking_effort, Some(ThinkingEffort::Low));
+}
+
 /// A change of effort makes Claude write the conversation to its prompt
 /// cache again, so a Claude model keeps `Medium` after a write or a plan.
 #[test]

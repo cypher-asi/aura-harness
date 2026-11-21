@@ -464,10 +464,12 @@ impl LoopState {
         // picker via `AgentLoopConfig::user_thinking_effort`) hard-pins
         // the effort across every iteration, overriding the internal
         // `compute_thinking_effort` taper so the operator's explicit
-        // choice always wins. When unset, fall back to the heuristic.
+        // choice always wins. Then the effort the router chose for the
+        // work; when neither is set, fall back to the heuristic.
         let thinking_effort = Some(
             config
                 .user_thinking_effort
+                .or(config.routed_thinking_effort)
                 .unwrap_or_else(|| self.compute_thinking_effort(config, iteration)),
         );
 

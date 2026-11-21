@@ -2351,13 +2351,13 @@ async fn gate_routes_each_category_and_records_why() {
     let prompts = prompts_of(&state, first);
     assert_eq!(
         prompts[0].2.route,
-        Route::turn("aura-claude-haiku-4-5", RouteReason::Proven),
+        Route::turn("aura-claude-haiku-4-5", RouteReason::Proven).at_effort("medium"),
         "ten passing questions prove haiku on questions"
     );
     assert_eq!(prompts[1].2.category, Some(PromptCategory::Debugging));
     assert_eq!(
         prompts[1].2.route,
-        Route::turn("aura-gpt-5-4", RouteReason::Default),
+        Route::turn("aura-gpt-5-4", RouteReason::Default).at_effort("medium"),
         "debugging starts where it is expected to cost least: on gpt-5.4, \
          stronger than sonnet and cheaper"
     );
@@ -2370,8 +2370,8 @@ async fn gate_routes_each_category_and_records_why() {
     assert_eq!(
         shown,
         [
-            "gate → aura-claude-haiku-4-5 (cloud) · question, proven",
-            "gate → aura-gpt-5-4 (cloud) · debugging, default",
+            "gate → aura-claude-haiku-4-5 (cloud) at medium effort · question, proven",
+            "gate → aura-gpt-5-4 (cloud) at medium effort · debugging, default",
         ]
     );
     let recent = fixture.hub.gate.recent();
@@ -2580,7 +2580,9 @@ async fn a_failed_turn_the_judge_blames_on_the_model_carries_on_on_a_stronger_on
         "{shown}"
     );
     assert!(
-        shown.contains("gate → aura-claude-sonnet-4-6 (cloud) · debugging, escalate"),
+        shown.contains(
+            "gate → aura-claude-sonnet-4-6 (cloud) at medium effort · debugging, escalate"
+        ),
         "{shown}"
     );
     assert_eq!(
@@ -2864,7 +2866,7 @@ async fn gate_explores_the_next_cheaper_model_and_records_its_propensity() {
         Route {
             explored: true,
             propensity: 1.0,
-            ..Route::turn("aura-gpt-5-4", RouteReason::Explore)
+            ..Route::turn("aura-gpt-5-4", RouteReason::Explore).at_effort("medium")
         },
         "the default for questions is sonnet; the next cheaper is gpt-5.4"
     );
@@ -2872,7 +2874,7 @@ async fn gate_explores_the_next_cheaper_model_and_records_its_propensity() {
     assert_eq!(outcome.model, "aura-gpt-5-4");
     assert_eq!(
         route_lines(&mut commands),
-        ["gate → aura-gpt-5-4 (cloud) · question, explore"]
+        ["gate → aura-gpt-5-4 (cloud) at medium effort · question, explore"]
     );
 }
 
