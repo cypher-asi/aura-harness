@@ -33,6 +33,7 @@ impl App {
             return;
         };
         self.selected_record = index;
+        self.records_tab = super::RecordsTab::Kernel;
         self.focus = PanelFocus::Records;
     }
 }

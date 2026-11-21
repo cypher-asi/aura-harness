@@ -179,6 +179,8 @@ pub struct BenchRun {
     pub error: Option<String>,
     /// Id of the example task it worked on, in a benchmark of them
     pub task: Option<String>,
+    /// Hex id of the agent it ran as, whose LOG tab shows its trace
+    pub agent_id: String,
 }
 
 /// How an arm's runs did on one example task.
@@ -248,6 +250,9 @@ pub struct BenchLiveRun {
     pub cost_usd: f64,
     /// Tokens per model its calls have used so far
     pub tokens: Vec<BenchTokens>,
+    /// Hex id of the agent it runs as; `None` while it waits for its
+    /// task's files
+    pub agent_id: Option<String>,
 }
 
 /// The judge's verdict on one pair of runs.

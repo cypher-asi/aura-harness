@@ -210,6 +210,7 @@ impl Demo {
             route: None,
             user: Some("demo@aura.dev".into()),
             plans: Vec::new(),
+            thinking: None,
         }
     }
 

@@ -18,7 +18,8 @@ use aura_agent::{AgentError, AgentLoopEvent, AgentLoopResult};
 use aura_agent_trace::bundle::{child_runs, list_run_dirs, list_runs, RunBundle};
 use aura_agent_trace::graph::{GraphNode, NodeStatus};
 use aura_agent_trace::{
-    db, report, DbSink, RecordRouter, RunGraph, RunMeta, RunRecorder, RunSource, RunTrace,
+    db, report, run_log, DbSink, RecordRouter, RunGraph, RunLog, RunMeta, RunRecorder, RunSource,
+    RunTrace,
 };
 use aura_core_types::trace::{Reward, RewardKind, RewardTarget, StepAction};
 use aura_core_types::{AgentId, SubagentExit};
@@ -283,6 +284,46 @@ impl Traces {
             .as_deref()
             .ok_or_else(|| "AURA_HOME is not resolvable".to_string())?;
         RunBundle::find(home, run_id).map_err(|e| e.to_string())
+    }
+
+    /// Directory of run `run_id`'s bundle under `home`, where it is or
+    /// where it goes.
+    fn dir_of(&self, home: &Path, run_id: &str) -> PathBuf {
+        self.find_bundle(run_id).map_or_else(
+            |_| aura_agent_trace::bundle::runs_dir(home).join(run_id),
+            |bundle| bundle.dir().to_path_buf(),
+        )
+    }
+
+    /// The log of `agent`'s open run, else of its latest stored one, with
+    /// the runs of every agent below it, written to the run's `log.json`.
+    /// Returns the log and where it was written.
+    pub(crate) fn run_log(&self, agent: AgentId) -> Result<(RunLog, PathBuf), String> {
+        let Some(home) = self.home.as_deref() else {
+            return Err("Run logs are off: AURA_HOME could not be found".to_string());
+        };
+        let trace = match self.recorder(agent) {
+            Some(rec) => {
+                rec.flush();
+                RunTrace::load(rec.bundle()).map_err(|e| e.to_string())?
+            }
+            None => match self.latest(agent) {
+                Some(trace) => trace,
+                None if aura_config::trace().level == aura_config::TraceLevel::Off => {
+                    return Err("Run logs are off: AURA_TRACE is off".to_string());
+                }
+                None => return Err("This agent has no run log yet; send it a prompt".to_string()),
+            },
+        };
+        let dir = self.dir_of(home, &trace.meta.run_id);
+        let load = |run_id: &str| {
+            let trace = self.load(run_id).ok()?;
+            Some((trace, self.dir_of(home, run_id)))
+        };
+        let log = run_log::build(Some(home), &trace, &dir, &load);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = run_log::write(&dir, &log).map_err(|e| e.to_string())?;
+        Ok((log, path))
     }
 }
 

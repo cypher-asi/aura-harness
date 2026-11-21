@@ -31,6 +31,7 @@ pub(crate) mod handlers;
 pub(crate) mod host;
 pub(crate) mod hud;
 pub(crate) mod lead;
+mod log_view;
 pub(crate) mod modes;
 pub(crate) use modes::Permissions;
 pub(crate) mod notices;
@@ -631,6 +632,9 @@ async fn handle_ui_event(
         UiEvent::LinkCode(code) => auth::handle_link_code(state, &code).await,
         UiEvent::Unlink(provider) => auth::handle_unlink(state, &provider).await,
         UiEvent::SelectModel(id) => handlers::handle_select_model(state, &id).await,
+        UiEvent::SetThinking(level) => {
+            handlers::handle_set_thinking(state, level.as_deref()).await;
+        }
         UiEvent::Resume { agent_id, index } => {
             let agent_id = state.agent_or_active(&agent_id);
             handlers::handle_resume(state, agent_id, index).await;
@@ -662,6 +666,10 @@ async fn handle_ui_event(
         UiEvent::Bench { agent_id, request } => {
             let agent_id = state.agent_or_active(&agent_id);
             bench::handle(state, agent_id, request).await;
+        }
+        UiEvent::Log { agent_id, request } => {
+            let agent_id = state.agent_or_active(&agent_id);
+            log_view::handle(state, agent_id, request).await;
         }
         UiEvent::KillProcess(id) => handlers::handle_kill_process(state, &id).await,
         UiEvent::BuildPlan { agent_id, path } => {

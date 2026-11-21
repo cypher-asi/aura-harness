@@ -97,7 +97,7 @@ pub(super) fn render_processes(
 }
 
 /// Spinning ring while running; a glyph for every other state.
-fn status_icon(app: &App, status: ProcessStatus, theme: &Theme) -> StatusIcon {
+pub(super) fn status_icon(app: &App, status: ProcessStatus, theme: &Theme) -> StatusIcon {
     let (glyph, color) = status_glyph(status, theme);
     if status == ProcessStatus::Running {
         aura_icon(app)

@@ -360,6 +360,12 @@ impl RunGraph {
                 meta.insert("latency_ms".into(), json!(step.duration_ms));
                 meta.insert("stop_reason".into(), json!(action.stop_reason));
                 meta.insert("thinking_chars".into(), json!(action.thinking_chars));
+                if !action.thinking_text.is_empty() {
+                    meta.insert(
+                        "thinking".into(),
+                        json!(excerpt(&action.thinking_text, 4000)),
+                    );
+                }
                 meta.insert("text".into(), json!(excerpt(&action.text, 2000)));
                 meta.insert("intents".into(), json!(intents));
                 if let aura_core_types::trace::Observation::Model(obs) = &step.observation {

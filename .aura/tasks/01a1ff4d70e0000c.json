@@ -1,7 +1,7 @@
 {
   "id": "01a1ff4d70e0000c",
   "title": "You are improving how chat messages written in markdown are displayed in the AURA terminal UI (Rust, ratatui). The desk…",
-  "state": "running",
+  "state": "open",
   "agent_id": "760cbb6eb2db5a8656ad5415dd068ae150d00d3ba667c7797332793bb9f85095",
   "agent_name": "rust-engineer #24",
   "assignee": "rust-engineer",

@@ -802,11 +802,21 @@ impl RunRecorder {
         }
     }
 
-    /// Flush, stamp the end time and write the scorecard.
+    /// Flush, stamp the end time, and write the scorecard and the log.
     pub fn finish(&self) -> Option<RunScorecard> {
         self.flush();
         self.update_meta(|m| m.ended_at_ms = Some(now_ms()));
-        let card = RunTrace::load(&self.bundle).ok().map(|t| t.scorecard());
+        let trace = RunTrace::load(&self.bundle).ok();
+        let card = trace.as_ref().map(RunTrace::scorecard);
+        if let Some(trace) = &trace {
+            let dir = self.bundle.dir();
+            let home = crate::run_log::home_of(dir);
+            let load = |run_id: &str| home.and_then(|home| crate::run_log::bundle_loader(home)(run_id));
+            let log = crate::run_log::build(home, trace, dir, &load);
+            if let Err(e) = crate::run_log::write(dir, &log) {
+                tracing::debug!(error = %e, "trace log write failed");
+            }
+        }
         if let Some(card) = &card {
             if let Err(e) = self.bundle.write_summary(card) {
                 tracing::debug!(error = %e, "trace summary write failed");

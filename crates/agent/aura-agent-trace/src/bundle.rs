@@ -49,6 +49,8 @@ pub enum RunSource {
     Eval,
     /// Counterfactual branch of another run.
     Branch,
+    /// A run of a benchmark (`/compare`, the BENCH tab), on one of its arms.
+    Bench,
     /// Test fixture.
     Test,
 }
@@ -63,6 +65,7 @@ impl RunSource {
             Self::Automaton => "automaton",
             Self::Eval => "eval",
             Self::Branch => "branch",
+            Self::Bench => "bench",
             Self::Test => "test",
         }
     }

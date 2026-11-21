@@ -24,7 +24,7 @@ use aura_ui::events::{
     MessageData, MessageRole, ModelOptionView, ProcessKind, ProcessStatus, ProcessSummary,
     TodoState, TodoView, ToolData, TraceNodeStatus, UiCommand,
 };
-use aura_ui_terminal::{AgentsTab, ChatTab, Pane, PaneTab};
+use aura_ui_terminal::{AgentsTab, ChatTab, Pane, PaneTab, RecordsTab};
 use winit::event::MouseButton;
 use winit::keyboard::{ModifiersState, NamedKey};
 
@@ -135,6 +135,7 @@ pub fn seed(h: &mut Stage) {
             route: None,
             user: Some("demo@aura.dev".into()),
             plans: vec![],
+            thinking: None,
         },
         UiCommand::SetAgents(vec![
             agent("a1", "Agent01", 0, Some("aura-harness")),
@@ -476,6 +477,36 @@ fn an_empty_archive_says_how_agents_get_there() {
     let screen = h.screen();
     assert!(screen.contains("  No archived agents."), "{screen}");
     snapshot("archive", &mut h);
+}
+
+#[test]
+fn the_kernel_bar_opens_the_members_of_the_run() {
+    let mut h = stage();
+    session(&mut h);
+    let now = u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or_default();
+    h.apply([UiCommand::SetProcesses(vec![ProcessSummary {
+        id: "task:a2".into(),
+        kind: ProcessKind::Task,
+        label: "Reviewer (reviewer)".into(),
+        detail: "Review the README change".into(),
+        status: ProcessStatus::Running,
+        owner_agent_id: "a1".into(),
+        owner_name: "Agent01".into(),
+        started_ms: now - 12_000,
+        jump_agent_id: "a2".into(),
+        killable: true,
+        ..ProcessSummary::default()
+    }])]);
+    let members = PaneTab::Records(RecordsTab::Members);
+    let tab = h.shell.chrome.spot(members).expect("the tab is drawn");
+    h.drag(tab, tab);
+    assert_eq!(h.shell.tabs.front().tui.records_tab(), RecordsTab::Members);
+    let screen = h.screen();
+    assert!(
+        screen.contains("Agent01") && screen.contains("Reviewer"),
+        "{screen}"
+    );
+    snapshot("members", &mut h);
 }
 
 #[test]

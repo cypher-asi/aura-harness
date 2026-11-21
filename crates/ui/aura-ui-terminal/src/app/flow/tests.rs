@@ -1355,7 +1355,7 @@ fn graph_and_time_are_tabs_of_the_same_flow() {
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.chat_tab(), ChatTab::Chat, "not opened from TIME");
 
-    let tabs: Vec<ChatTab> = (0..5)
+    let tabs: Vec<ChatTab> = (0..6)
         .map(|_| {
             shift(&mut app, KeyCode::Right);
             app.chat_tab()
@@ -1368,6 +1368,7 @@ fn graph_and_time_are_tabs_of_the_same_flow() {
             ChatTab::Graph,
             ChatTab::Time,
             ChatTab::Bench,
+            ChatTab::Log,
             ChatTab::Chat
         ]
     );

@@ -2529,6 +2529,7 @@ fn app_with_models(user: Option<&str>) -> (App, mpsc::Receiver<UiEvent>) {
         route: None,
         user: user.map(str::to_string),
         plans: Vec::new(),
+        thinking: None,
     });
     (app, rx)
 }
@@ -2559,6 +2560,7 @@ fn test_unlinked_plan_pick_starts_link_then_selects() {
         route: None,
         user: Some("alice".to_string()),
         plans: Vec::new(),
+        thinking: None,
     });
     assert!(matches!(
         rx.try_recv(),
@@ -2584,6 +2586,7 @@ fn test_failed_link_drops_pending_model() {
         route: None,
         user: Some("alice".to_string()),
         plans: Vec::new(),
+        thinking: None,
     });
     assert!(rx.try_recv().is_err());
 }
@@ -2645,6 +2648,7 @@ fn test_guest_cloud_pick_starts_login_then_selects() {
         route: None,
         user: Some("alice".to_string()),
         plans: Vec::new(),
+        thinking: None,
     });
     assert!(matches!(
         rx.try_recv(),
@@ -2665,6 +2669,7 @@ fn test_cancelled_login_drops_pending_model() {
         route: None,
         user: Some("alice".to_string()),
         plans: Vec::new(),
+        thinking: None,
     });
     assert!(rx.try_recv().is_err());
 }
@@ -2857,7 +2862,7 @@ fn test_slash_opens_menu_with_all_commands() {
 fn test_slash_menu_filters_as_you_type() {
     let mut app = App::new();
     type_chars(&mut app, "/lo");
-    assert_eq!(slash_names(&app), ["login", "logout"]);
+    assert_eq!(slash_names(&app), ["log", "login", "logout"]);
     type_chars(&mut app, "go");
     assert_eq!(slash_names(&app), ["logout"]);
     type_chars(&mut app, "x");
@@ -2889,9 +2894,11 @@ fn test_slash_menu_arrows_move_and_wrap() {
     app.handle_key(key(KeyCode::Down));
     assert_eq!(app.slash_cursor(), 1);
     app.handle_key(key(KeyCode::Down));
+    assert_eq!(app.slash_cursor(), 2);
+    app.handle_key(key(KeyCode::Down));
     assert_eq!(app.slash_cursor(), 0);
     app.handle_key(key(KeyCode::Up));
-    assert_eq!(app.slash_cursor(), 1);
+    assert_eq!(app.slash_cursor(), 2);
     assert_eq!(app.input(), "/lo");
 }
 
@@ -3254,6 +3261,48 @@ fn shift_tab_and_mode_command_ask_the_event_loop() {
     app.handle_command("/mode unrestricted");
     assert!(rx.try_recv().is_err());
     assert!(app.notification().unwrap().0.contains("/approval"));
+}
+
+#[test]
+fn thinking_command_and_alt_t_ask_the_event_loop() {
+    let (tx, mut rx) = mpsc::channel(10);
+    let mut app = App::new().with_event_sender(tx);
+    let thinking_is = |app: &mut App, level: Option<&str>| {
+        app.process_command(UiCommand::SetModels {
+            options: Vec::new(),
+            current: "local/qwen3:4b".to_string(),
+            route: None,
+            user: None,
+            plans: Vec::new(),
+            thinking: level.map(str::to_string),
+        });
+    };
+
+    app.handle_command("/thinking HIGH");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SetThinking(Some(l))) if l == "high"));
+
+    thinking_is(&mut app, Some("high"));
+    assert_eq!(app.thinking(), Some("high"));
+    app.handle_command("/thinking high");
+    assert!(rx.try_recv().is_err());
+    assert!(app.notification().unwrap().0.contains("already high"));
+
+    app.handle_command("/thinking auto");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SetThinking(None))));
+
+    app.handle_command("/thinking lots");
+    assert!(rx.try_recv().is_err());
+    assert!(app.notification().unwrap().0.contains("Unknown thinking level"));
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::ALT));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SetThinking(Some(l))) if l == "xhigh"));
+    thinking_is(&mut app, Some("max"));
+    app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::ALT));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SetThinking(None))));
+    thinking_is(&mut app, None);
+    app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::ALT));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SetThinking(Some(l))) if l == "off"));
+    assert!(app.input().is_empty(), "Alt+T types nothing");
 }
 
 #[test]

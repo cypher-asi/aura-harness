@@ -51,6 +51,7 @@ impl App {
                     self.focus = PanelFocus::Chat;
                 }
             }
+            "members" | "team" => self.show_members(),
             "agents" | "swarm" | "sw" => {
                 self.swarm_panel_visible = !self.swarm_panel_visible;
                 if !self.swarm_panel_visible && self.focus == PanelFocus::Swarm {
@@ -99,6 +100,7 @@ impl App {
                     self.choose_model(&id);
                 }
             }
+            "thinking" | "think" | "effort" => self.handle_thinking_command(arg),
             "logout" => {
                 let event = match plan_provider(arg) {
                     Some(provider) => UiEvent::Unlink(provider.to_string()),
@@ -165,6 +167,7 @@ impl App {
                     });
                 }
             }
+            "log" | "logs" => self.show_chat_tab(super::ChatTab::Log),
             "bench" | "benchmarks" => {
                 self.show_chat_tab(super::ChatTab::Bench);
                 if arg.trim() == "new" {
@@ -185,6 +188,9 @@ impl App {
                     ..Default::default()
                 };
                 self.todos_open = false;
+                // The new conversation is a new run, which no agent has
+                // joined yet.
+                self.start_members_run();
                 if let Some(tx) = &self.event_tx {
                     let _ = tx.try_send(UiEvent::NewSession);
                 }
@@ -294,6 +300,59 @@ impl App {
         }
     }
 
+    /// `/thinking`: show the thinking level and the others;
+    /// `/thinking <level>`: pin it for every turn, or `auto` to let each
+    /// model pick its own.
+    fn handle_thinking_command(&mut self, arg: &str) {
+        if arg.is_empty() {
+            let current = self.thinking.as_deref().unwrap_or("auto");
+            let mut report = format!("Thinking: {current}");
+            for (level, description) in THINKING_LEVELS {
+                report.push_str(&format!("\n  {level:<10}{description}"));
+            }
+            report.push_str("\nAlt+T cycles through them.");
+            self.add_message(Message::new(MessageRole::System, &report));
+            return;
+        }
+        let Some((level, _)) = THINKING_LEVELS
+            .iter()
+            .find(|(level, _)| level.eq_ignore_ascii_case(arg))
+        else {
+            let names: Vec<&str> = THINKING_LEVELS.iter().map(|(level, _)| *level).collect();
+            self.notification = Some((
+                format!("Unknown thinking level: {arg}. Use {}.", names.join(", ")),
+                NotificationType::Warning,
+            ));
+            return;
+        };
+        let level = (*level != "auto").then(|| (*level).to_string());
+        if level == self.thinking {
+            self.notification = Some((
+                format!("Thinking is already {}", level.as_deref().unwrap_or("auto")),
+                NotificationType::Warning,
+            ));
+            return;
+        }
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::SetThinking(level));
+        }
+    }
+
+    /// Ask for the thinking level after the current one (Alt+T).
+    pub(super) fn cycle_thinking(&mut self) {
+        let current = self.thinking.as_deref().unwrap_or("auto");
+        let at = THINKING_LEVELS
+            .iter()
+            .position(|(level, _)| *level == current)
+            .unwrap_or(0);
+        let (next, _) = THINKING_LEVELS[(at + 1) % THINKING_LEVELS.len()];
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::SetThinking(
+                (next != "auto").then(|| next.to_string()),
+            ));
+        }
+    }
+
     fn cmd_set_models(
         &mut self,
         options: Vec<crate::events::ModelOptionView>,
@@ -301,10 +360,12 @@ impl App {
         route: Option<String>,
         user: Option<String>,
         plans: Vec<String>,
+        thinking: Option<String>,
     ) {
         self.models = options;
         self.current_model = current;
         self.model_route = route;
+        self.thinking = thinking;
         self.user = user;
         self.plans = plans;
         if self.model_cursor >= self.models.len() {
@@ -773,6 +834,9 @@ impl App {
             UiCommand::Complete => {
                 self.cmd_complete();
                 self.refresh_sandbox();
+                if self.log.is_open() {
+                    self.request_log();
+                }
             }
             UiCommand::TurnStarted { prompt } => self.cmd_turn_started(prompt),
             UiCommand::UserSteered(text) => self.cmd_user_steered(&text),
@@ -823,6 +887,7 @@ impl App {
             UiCommand::GraphUpsert { run_id, nodes } => {
                 self.trace_feed.push(&self.active_agent_id, &run_id, &nodes);
                 self.upsert_graph(&run_id, nodes);
+                self.log.mark_stale();
             }
             UiCommand::FlowLoad {
                 agent_id,
@@ -851,6 +916,8 @@ impl App {
                 self.cmd_bench_estimate(&agent_id, estimate);
             }
             UiCommand::BenchNotice(notice) => self.cmd_bench_notice(notice),
+            UiCommand::LogView(view) => self.cmd_log_view(*view),
+            UiCommand::LogNotice { agent_id, notice } => self.cmd_log_notice(&agent_id, notice),
             UiCommand::SetApiStatus { url, active } => {
                 self.api_url = url;
                 self.api_active = active;
@@ -861,7 +928,8 @@ impl App {
                 route,
                 user,
                 plans,
-            } => self.cmd_set_models(options, current, route, user, plans),
+                thinking,
+            } => self.cmd_set_models(options, current, route, user, plans, thinking),
             UiCommand::PromptLinkCode { provider } => self.cmd_prompt_link_code(&provider),
             UiCommand::EndLink => self.cmd_end_link(),
             UiCommand::SetPlan(plan) => {
@@ -1223,9 +1291,14 @@ impl App {
             .agents
             .iter()
             .any(|agent| agent.id == agent_id && agent.bench_run);
-        if switched && bench_run && self.bench.is_open() {
+        if self.log_wanted_for(agent_id) {
+            self.show_chat_tab(super::ChatTab::Log);
+        } else if switched && bench_run && self.bench.is_open() {
             // A benchmark's run is picked to watch it work.
             self.show_chat_tab(super::ChatTab::Chat);
+        } else if switched && self.log.is_open() {
+            // The LOG tab shows the agent on screen and the agents below it.
+            self.request_log();
         }
         if self.flow.is_open() {
             // The GRAPH tab follows the agent on screen.
@@ -1250,6 +1323,19 @@ impl App {
         self.select_visible_active();
     }
 }
+
+/// What `/thinking` takes, in the order Alt+T cycles through them. The
+/// names past `auto` are the wire names of `aura_model::ThinkingEffort`.
+const THINKING_LEVELS: [(&str, &str); 8] = [
+    ("auto", "Each model picks its own (the default)"),
+    ("off", "No extended thinking"),
+    ("minimal", "The least the model does"),
+    ("low", "Quick, for simple edits"),
+    ("medium", "Balanced"),
+    ("high", "More for harder problems"),
+    ("xhigh", "Even more, on models that have it"),
+    ("max", "The most the model does"),
+];
 
 /// Canonical plan id for `/login` and `/logout` arguments.
 fn plan_provider(arg: &str) -> Option<&'static str> {

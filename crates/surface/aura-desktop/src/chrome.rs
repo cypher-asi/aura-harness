@@ -485,7 +485,7 @@ impl Chrome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_ui_terminal::{ChatTab, SidePanelTab};
+    use aura_ui_terminal::{ChatTab, RecordsTab, SidePanelTab};
     use ratatui::style::Color as TermColor;
 
     fn pane(which: Pane, area: Rect, tabs: Vec<PaneTab>) -> PaneChrome {
@@ -568,6 +568,31 @@ mod tests {
         let info = records.info.as_ref().expect("room for the info");
         assert_eq!(info.text, "12 records");
         assert!(info.end.x <= records.rect.x + records.rect.width);
+    }
+
+    #[test]
+    fn the_kernel_bar_has_its_tabs_and_keeps_its_count() {
+        let tabs = vec![
+            PaneTab::Records(RecordsTab::Kernel),
+            PaneTab::Records(RecordsTab::Members),
+        ];
+        let mut records = pane(Pane::Records, Rect::new(100, 0, 40, 20), tabs);
+        records.active = Some(PaneTab::Records(RecordsTab::Members));
+        records.info = Some("3 AGENTS".into());
+        let layout = Layout::of(&model(vec![records]));
+        let bar = &layout.bars[0];
+        let kinds: Vec<Kind> = bar.boxes.iter().map(|boxed| boxed.kind.clone()).collect();
+        assert_eq!(
+            kinds,
+            [
+                Kind::Tab(PaneTab::Records(RecordsTab::Kernel)),
+                Kind::Tab(PaneTab::Records(RecordsTab::Members)),
+            ]
+        );
+        assert_eq!(bar.boxes[1].text, "MEMBERS");
+        let info = bar.info.as_ref().expect("room for the count");
+        assert_eq!(info.text, "3 AGENTS");
+        assert!(info.end.x > bar.boxes[1].rect.x + bar.boxes[1].rect.width);
     }
 
     #[test]

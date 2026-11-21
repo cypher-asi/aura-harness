@@ -63,6 +63,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Benchmark two models, or Gate and a model, on the same work",
         needs_args: false,
     },
+    command("log", "Show this agent's run log and where log.json is stored"),
     command("project", "Show the current project's folder and agents"),
     command("archive", "Move the current agent to the Archive"),
     command("remove-project", "Remove the current project from the list"),
@@ -91,6 +92,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     command("agents", "Toggle Agents panel"),
     command("kernel", "Toggle Kernel panel"),
+    command("members", "Show the agents this run brought in"),
     command("files", "Toggle Sandbox panel"),
     command(
         "expand",
@@ -100,6 +102,12 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         name: "model",
         args: "[id]",
         description: "Choose model (local or cloud)",
+        needs_args: false,
+    },
+    SlashCommand {
+        name: "thinking",
+        args: "[auto|off|minimal|low|medium|high|xhigh|max]",
+        description: "Show or set how much the model thinks",
         needs_args: false,
     },
     command("plan", "Enter plan mode, or leave it"),

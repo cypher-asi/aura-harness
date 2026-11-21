@@ -1,0 +1,14 @@
+{
+  "id": "01a1ff99c5850006",
+  "title": "Review a just-finished feature in the Rust workspace at the workspace root. READ-ONLY: do not edit any file. Other agen…",
+  "state": "failed",
+  "agent_id": "038e979470e29a90b7f54f29d5f6b111434daaa14d895b566b478d49ade1372c",
+  "agent_name": "reviewer #10",
+  "assignee": "reviewer",
+  "parent": "01a1ff8883890000",
+  "items": [],
+  "summary": "cancelled by the user",
+  "updated_ms": 1795289870906,
+  "created_ms": 1795289630085,
+  "tool_use_id": "toolu_01BrxH6tijjbPJVwur1MNrLC"
+}

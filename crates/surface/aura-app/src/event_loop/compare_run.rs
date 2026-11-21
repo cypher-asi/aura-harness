@@ -60,6 +60,8 @@ use aura_agent_gate::outcome::calls_for_stronger;
 use aura_agent_gate::turn_judge::Failed;
 use aura_agent_gate::{judge, Candidate, Work};
 use aura_agent_kernel::Kernel;
+use aura_agent_trace::{RunMeta, RunRecorder, RunSource};
+use aura_core_types::trace::{Reward, RewardKind, RewardTarget};
 use aura_core_types::{
     AgentId, ArmSpec, BenchSource, CompareArm, CompareCopy, CompareJudgment, ComparePayload,
     CompareRun, CompareStatus, Hash, OutcomePayload, OutcomeSignal, PromptPayload, Route,
@@ -402,6 +404,7 @@ async fn show_live(ctx: &Context, payload: &ComparePayload) {
                 }),
                 cost_usd: used.iter().map(|row| row.cost_usd).sum(),
                 tokens: super::bench::tokens(&used),
+                agent_id: working.map(|(agent, _)| agent.to_hex()),
             }
         })
         .collect();
@@ -957,6 +960,42 @@ fn spent(hub: &AgentHub, agent: AgentId) -> f64 {
         .sum()
 }
 
+/// The trace of the run `name` on `session`, recorded as a conversation's
+/// is, so its LOG tab shows it as it runs and its bundle keeps a
+/// `log.json`. `None` when tracing is off.
+fn run_recorder(
+    ctx: &Context,
+    session: &AgentSession,
+    (arm, name, example): (CompareArm, &str, Option<&ExampleTask>),
+    task: &str,
+) -> Option<Arc<RunRecorder>> {
+    let spec = &ctx.plan.arms[arm.index()];
+    let mut meta = RunMeta::new(spec.label(), RunSource::Bench);
+    meta.workspace = session.kernel.agent_workspace().display().to_string();
+    meta.mode = PermissionMode::Agent.name().to_string();
+    meta.title = format!("{} {name}: {task}", ctx.host.name);
+    meta.arm = Some(arm_name(arm, spec));
+    meta.task_id = example.map(|task| task.id.clone());
+    ctx.hub.traces.start(session.agent_id(), meta)
+}
+
+/// What the run's check found, as the outcome of its trace.
+fn check_reward(run: &task_check::CheckRun) -> Reward {
+    Reward {
+        target: RewardTarget::Run,
+        kind: RewardKind::Outcome,
+        name: "verify".into(),
+        value: if run.passed == Some(true) { 1.0 } else { 0.0 },
+        source: "bench".into(),
+        at_ms: now_ms(),
+        evidence: serde_json::json!({
+            "cmd": run.command,
+            "exit_code": run.exit_code,
+            "output_tail": run.tail,
+        }),
+    }
+}
+
 /// Run the prompts of the run `name` (those of `example`, when it works
 /// on one) on `session` one after the other, then its check, and measure
 /// it.
@@ -983,6 +1022,8 @@ async fn run_turn(
         ArmSpec::Model { model } => ArmRouting::Pinned(model.clone()),
     };
     hub.begin_compare_run(agent_id, routing.clone());
+    let task = example.map_or(plan.task.as_str(), |task| task.title.as_str());
+    let recorder = run_recorder(ctx, &session, (arm, name, example), task);
     let workdir = session.kernel.agent_workspace();
     if let Some(path) = plan.plan.as_deref().filter(|path| is_plan_path(path)) {
         if let Ok(plan_file) = PlanFile::load(&workdir.join(path)) {
@@ -994,7 +1035,6 @@ async fn run_turn(
 
     let cancel = ctx.cancel.child_token();
     let ui = AgentUi::new(ctx.commands.clone(), agent_id);
-    let task = example.map_or(plan.task.as_str(), |task| task.title.as_str());
     let mut row = turn_summary(agent_id, task, spec.label());
     row.label = format!("{} {name}: {}", ctx.host.name, row.label);
     hub.processes.start(row, Some(cancel.clone()));
@@ -1024,8 +1064,7 @@ async fn run_turn(
             (arm, name),
             (&routing, copy_before),
             (i, prompts.len(), prompt),
-            &cancel,
-            &ui,
+            (&cancel, &ui, recorder.as_ref()),
         )
         .await;
         turns.push(RunTurn {
@@ -1063,6 +1102,9 @@ async fn run_turn(
                     records.put_back();
                     bench_pack::remove_checks(&hidden);
                     ui.send(system_message(run.describe())).await;
+                    if let Some(rec) = &recorder {
+                        rec.add_rewards(&[check_reward(&run)]);
+                    }
                     // A run its provider cut short did not finish the work
                     // the check looks at.
                     if let (Some(signal), Some(ended)) = (run.signal(), &last) {
@@ -1108,6 +1150,9 @@ async fn run_turn(
         },
     );
     hub.end_compare_run(agent_id);
+    if recorder.is_some() {
+        hub.traces.close(agent_id);
+    }
     hub.park(session);
     hub.send_agent_list().await;
 
@@ -1146,8 +1191,7 @@ async fn run_prompt(
     (arm, name): (CompareArm, &str),
     (routing, copy_before): (&ArmRouting, Option<Before>),
     (i, of, text): (usize, usize, &str),
-    cancel: &CancellationToken,
-    ui: &AgentUi,
+    (cancel, ui, recorder): (&CancellationToken, &AgentUi, Option<&Arc<RunRecorder>>),
 ) -> Turned {
     let hub = &ctx.hub;
     let plan = &ctx.plan;
@@ -1258,6 +1302,9 @@ async fn run_prompt(
     let (mut escalations, mut nudges, mut sent_back) = (0, 0, 0);
     let mut turn_start = session.messages.len();
     session.messages.push(Message::user(text.to_string()));
+    if let Some(rec) = recorder {
+        rec.begin_turn(text);
+    }
     // A Gate run's turn is followed up and judged as a routed turn is:
     // an attempt that checked nothing gets Gate's follow-up, work about
     // to stand is reviewed when it is hard or shows a sign of failure,
@@ -1298,10 +1345,15 @@ async fn run_prompt(
             cancel,
             &steering,
             hub.long_run,
-            None,
+            recorder.cloned(),
         )
         .await;
         steering.finish(&[]);
+        // Each attempt ends in the log, so a nudge, a send-back or a
+        // stronger model's takeover shows where the one before it stopped.
+        if let Some(rec) = recorder {
+            super::trace::end_turn(rec, &result, cancel.is_cancelled());
+        }
         let stopped = cancel.is_cancelled() || forwarded.credentials_rejected;
         let mut signal = if stopped {
             Some(OutcomeSignal::Cancelled)

@@ -142,6 +142,7 @@ impl App {
     pub(super) fn set_processes(&mut self, processes: Vec<ProcessSummary>) {
         self.all_processes = processes;
         self.reshow_processes();
+        self.absorb_members();
         if let Some(DetailView::Process(open)) = self.detail.as_mut() {
             if let Some(fresh) = self.all_processes.iter().find(|p| p.id == open.id) {
                 **open = fresh.clone();

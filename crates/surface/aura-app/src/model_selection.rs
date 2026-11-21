@@ -18,6 +18,7 @@ use aura_model::model_catalog::{
     self, backend_for, infer_tier, local_model_name, LocalServerStatus, ModelBackend, ModelOption,
     GATE_MODEL_ID,
 };
+use aura_model::ThinkingEffort;
 use aura_ui_terminal::events::ModelOptionView;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -30,6 +31,9 @@ const LOCAL_STREAM_TIMEOUT: Duration = Duration::from_secs(600);
 struct TuiPrefs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model: Option<String>,
+    /// Wire name of the pinned [`ThinkingEffort`]; absent for `auto`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thinking: Option<String>,
 }
 
 /// Router-side agent-loop limits, captured before any local model is applied.
@@ -54,19 +58,21 @@ pub struct ModelSelection {
     /// user's sign-in or plan, until the sign-ins change.
     dropped: BTreeSet<String>,
     router_limits: RouterLimits,
+    /// Thinking level pinned for every turn; `None` lets the agent loop
+    /// pick one per model and step.
+    thinking: Option<ThinkingEffort>,
     prefs_path: Option<PathBuf>,
 }
 
 impl ModelSelection {
-    /// Resolve the startup model and apply it to `config`.
+    /// Resolve the startup model and thinking level and apply them to
+    /// `config`.
     ///
     /// `auth` describes what the active identity can use.
     pub fn init(config: &mut AgentLoopConfig, auth: AuthSummary) -> Self {
         let prefs_path = prefs_path();
-        let persisted = prefs_path
-            .as_deref()
-            .and_then(load_prefs)
-            .and_then(|p| p.model);
+        let prefs = prefs_path.as_deref().and_then(load_prefs).unwrap_or_default();
+        let persisted = prefs.model;
         let env_model = std::env::var("AURA_DEFAULT_MODEL")
             .or_else(|_| std::env::var("AURA_ANTHROPIC_MODEL"))
             .ok();
@@ -87,9 +93,11 @@ impl ModelSelection {
                 stream_timeout: config.stream_timeout,
                 stream_event_timeout: config.stream_event_timeout,
             },
+            thinking: prefs.thinking.as_deref().and_then(ThinkingEffort::from_wire),
             prefs_path,
         };
         selection.apply(config, &current);
+        config.user_thinking_effort = selection.thinking;
         selection
     }
 
@@ -115,6 +123,7 @@ impl ModelSelection {
                 stream_timeout: config.stream_timeout,
                 stream_event_timeout: config.stream_event_timeout,
             },
+            thinking: None,
             prefs_path: None,
         }
     }
@@ -315,7 +324,34 @@ impl ModelSelection {
                 .then(|| model_catalog::route_label(&self.turn_model())),
             user: self.auth.zos_user.clone(),
             plans: self.auth.plan_names.clone(),
+            thinking: self.thinking.map(|effort| thinking_name(effort).to_string()),
         }
+    }
+
+    /// Pin the thinking level of every turn to the one named `level`
+    /// (`high`, `off`, ...), or let each model pick its own for `None`.
+    /// Returns a user-facing problem for a name that is not a level.
+    pub fn set_thinking(
+        &mut self,
+        config: &mut AgentLoopConfig,
+        level: Option<&str>,
+    ) -> Result<(), String> {
+        let effort = match level {
+            None => None,
+            Some(name) => Some(
+                ThinkingEffort::from_wire(name)
+                    .ok_or_else(|| format!("Unknown thinking level: {name}"))?,
+            ),
+        };
+        self.thinking = effort;
+        config.user_thinking_effort = effort;
+        self.persist();
+        Ok(())
+    }
+
+    /// The pinned thinking level, `auto` when each model picks its own.
+    pub fn thinking_display(&self) -> &'static str {
+        self.thinking.map_or("auto", thinking_name)
     }
 
     fn local_installed(&self, id: &str) -> bool {
@@ -423,6 +459,7 @@ impl ModelSelection {
         };
         let prefs = TuiPrefs {
             model: Some(self.current.clone()),
+            thinking: self.thinking.map(|effort| thinking_name(effort).to_string()),
         };
         let result = path
             .parent()
@@ -503,6 +540,14 @@ fn usable(auth: &AuthSummary, id: &str) -> bool {
 
 /// Name of the `gate` entry in `/model` and the status line.
 const GATE_LABEL: &str = "Gate";
+
+/// The name `/thinking` and the status line use for `effort`.
+const fn thinking_name(effort: ThinkingEffort) -> &'static str {
+    match effort.reasoning_effort_wire() {
+        Some(name) => name,
+        None => "off",
+    }
+}
 
 fn unusable_reason(id: &str) -> String {
     match backend_for(id).required_provider() {
@@ -656,6 +701,7 @@ mod tests {
                 stream_timeout: config.stream_timeout,
                 stream_event_timeout: config.stream_event_timeout,
             },
+            thinking: None,
             prefs_path: None,
         };
         selection.apply(&mut config, model);
@@ -703,6 +749,45 @@ mod tests {
         assert!(note.contains("saved when it last loaded"), "{note}");
         assert_eq!(ids(&later), live.map(|m| m.id), "not the built-in list");
         assert_eq!(later.classifier_model(), "claude/claude-haiku-5-5");
+    }
+
+    #[test]
+    fn a_thinking_level_pins_every_turn_and_survives_a_model_switch() {
+        let (mut selection, mut config) = selection(Some("alice"));
+        assert_eq!(config.user_thinking_effort, None);
+        assert_eq!(selection.thinking_display(), "auto");
+
+        selection
+            .set_thinking(&mut config, Some("high"))
+            .expect("a level");
+        assert_eq!(config.user_thinking_effort, Some(ThinkingEffort::High));
+        selection
+            .select(&mut config, "aura-claude-sonnet-4-6")
+            .expect("signed-in cloud model");
+        assert_eq!(config.user_thinking_effort, Some(ThinkingEffort::High));
+        let aura_ui_terminal::UiCommand::SetModels { thinking, .. } = selection.ui_command() else {
+            panic!("expected SetModels");
+        };
+        assert_eq!(thinking.as_deref(), Some("high"));
+
+        selection.set_thinking(&mut config, Some("off")).unwrap();
+        assert_eq!(selection.thinking_display(), "off");
+        assert!(selection.set_thinking(&mut config, Some("lots")).is_err());
+        assert_eq!(config.user_thinking_effort, Some(ThinkingEffort::Off));
+
+        selection.set_thinking(&mut config, None).unwrap();
+        assert_eq!(config.user_thinking_effort, None);
+    }
+
+    #[test]
+    fn the_thinking_level_is_saved_with_the_model() {
+        let home = tempfile::tempdir().unwrap();
+        let (mut selection, mut config) = selection(None);
+        selection.prefs_path = Some(home.path().join("tui.json"));
+        selection.set_thinking(&mut config, Some("max")).unwrap();
+        let prefs = load_prefs(&home.path().join("tui.json")).expect("saved");
+        assert_eq!(prefs.thinking.as_deref(), Some("max"));
+        assert_eq!(prefs.model.as_deref(), Some(LOCAL));
     }
 
     #[test]

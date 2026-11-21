@@ -17,6 +17,7 @@ pub mod flow;
 pub mod format;
 pub mod history;
 pub mod mode_command;
+pub mod run_log;
 pub mod sandbox;
 
 pub use events::{UiCommand, UiEvent};

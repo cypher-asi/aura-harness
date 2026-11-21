@@ -155,7 +155,27 @@ The chat panel's BENCH tab lists every comparison, newest first, with each arm's
 
 - **List.** ↑/↓ moves, Enter opens a benchmark, `n` sets up a new one, `r` reloads, `c` stops the one running, Esc goes back to CHAT.
 - **Form.** ↑/↓ moves between rows and ←/→ changes the work, either arm and the runs per arm. The work is your last prompt, a prompt you type, one of this chat's sessions (up to 20, with their prompt count and cost), the example tasks of every suite, or those of one suite; for example tasks, a row sets how many. The arms offer `gate`, `gate:nodelegate` and every model you can use; arm B also offers its default. The prompt, check and budget rows take what you type in the input line when you press Enter. Enter on the last row shows the estimate, and pressing it again starts the benchmark. Esc drops it.
-- **Benchmark.** The arms side by side, as in `/compare show`, with each run's cost next to the replayed session's (`0.40×`), a row per prompt, the judge's verdict on each pair with the first line of its reasoning, and the runs. ←/→ picks a run, `d` shows its diff (or the first run of each arm), `y` applies it, `a` or `b` rates that arm better (as `/compare pick`), `x` removes the copies, and ↑/↓ and the wheel scroll.
+- **Benchmark.** The arms side by side, as in `/compare show`, with each run's cost next to the replayed session's (`0.40×`), a row per prompt, the judge's verdict on each pair with the first line of its reasoning, and the runs. ←/→ picks a run, `L` shows its log in the LOG tab (live while it runs; see [The LOG tab](#the-log-tab)), `d` shows its diff (or the first run of each arm), `y` applies it, `a` or `b` rates that arm better (as `/compare pick`), `x` removes the copies, and ↑/↓ and the wheel scroll.
+
+## The LOG tab
+
+The chat panel's LOG tab shows the run log of the agent on screen: its latest recorded run, with every subagent it spawned nested under the step that spawned it. On a subagent it shows that subagent's run and the runs under it only. `/log` opens it. The header shows where the log is stored (`Stored at …/runs/<run_id>/log.json`) and a `⧉ Copy log` button that copies the whole log as JSON, ready to paste to a model reviewing the run. While the agent or one of its subagents works, the log reloads about once a second and the header says `● live`. Panels you opened stay open, and with the cursor on the last panel it follows each new step. `log.json` is rewritten after every turn and whenever the tab loads it. A benchmark's runs are recorded too: `L` in a benchmark shows the log of the run picked with ←/→, or of the first run under way, as it works.
+
+The panels fold open and closed: the run (model, mode, trace level, totals, problems), its details and files, each turn, and each step in it. A model call shows its thinking, reply and tool calls; a tool result its output and the files it touched; a harness decision its action, trigger and features. With nothing typed in the input line:
+
+| Key | What it does |
+|-----|--------------|
+| ↑/↓, `j`/`k`, the wheel | Move between panels |
+| Enter / Space, click | Fold or unfold the panel |
+| →/`l`, ←/`h` | Unfold, or step into it; fold, or step out |
+| `e` / `E` | Unfold or fold every panel |
+| `J` | Show a step as raw JSON |
+| `c`, `⧉ Copy log` | Copy the whole log |
+| `y` | Copy the panel under the cursor as JSON |
+| `p` | Copy the log's path |
+| `o` | Open `log.json` |
+| `r` | Reload |
+| Esc | Back to CHAT |
 
 ## Long tasks in the terminal
 
@@ -241,7 +261,7 @@ Set `AURA_PROJECT_INSTRUCTIONS=off` to stop loading these files.
 
 ## The GRAPH tab
 
-The chat panel has five tabs: CHAT, TERMINAL, GRAPH, TIME (see [The TIME tab](#the-time-tab)) and BENCH (see [The BENCH tab](#the-bench-tab)). Shift+←/→ moves between them while the panel has the focus, and so does clicking one. The `⤢` at the right end of the panel's header bar, Ctrl+X or `/expand` expands the panel to fill the window, whichever tab or view it shows, hiding the other panels until `⤡` (or Ctrl+X, or `/expand`) restores them. GRAPH shows what the agent on screen and every agent below it did, as their kernels recorded it, as turns of cards wired together on a canvas. Each agent's turns go down a column, one under the next, until the view has no room for another; they go on at the top of the next column to the right.
+The chat panel has six tabs: CHAT, TERMINAL, GRAPH, TIME (see [The TIME tab](#the-time-tab)), BENCH (see [The BENCH tab](#the-bench-tab)) and LOG (see [The LOG tab](#the-log-tab)). Shift+←/→ moves between them while the panel has the focus, and so does clicking one. The `⤢` at the right end of the panel's header bar, Ctrl+X or `/expand` expands the panel to fill the window, whichever tab or view it shows, hiding the other panels until `⤡` (or Ctrl+X, or `/expand`) restores them. GRAPH shows what the agent on screen and every agent below it did, as their kernels recorded it, as turns of cards wired together on a canvas. Each agent's turns go down a column, one under the next, until the view has no room for another; they go on at the top of the next column to the right.
 
 - **Turns.** A turn is a main card, `turn`, with the prompt that started it and the replies it gave as rows (`↳`), and under it, joined to it by a line down its left side, a subcard for each model call it made: the model, a line with the tokens it read and wrote (`↑48.2k ↓516`), its cost at list prices and how long it took, and the tool calls it made as rows. The turn's own line has the same for all its calls together, with the time from its prompt to its last step. Calls the harness makes around the agent's work are subcards too, in a muted colour and named for what they did: `gate` when Gate asked a small model what the prompt is, to pick the model that takes it (the turn's first step), `judge` when Gate's judge reviewed failed work, and `title` when the chat was named after its first turn. A `message` from another agent is a small subcard of its own. What a `task` came back with is shown on the `task` row; a result with no row is a subcard. A card lists up to ten rows; past that its last line says how many more it has. The mark before the kind is the step's state: `●` running or waiting, `✓` done, `!` held up, `✗` failed or denied. A turn takes the state it ended in.
 - **Agents.** When a `task` or `spawn` hands work to another agent, that agent's turn is a main card of its own, right of the row that started it, with its own model calls under it. Each agent's columns are in a band. The agent on screen is the top band, without a name; every other agent's name is above its columns, kept on screen while any of its cards is. Agents that work one after another share a band, and agents that work at the same time get one each. When the bands are taller than the view together, their columns get shorter so that all of them fit. A turn is never left of another agent's card it has a wire from.

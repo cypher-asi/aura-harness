@@ -1,7 +1,7 @@
 {
   "id": "01a1ff6997050013",
   "title": "Review a small UI change in the Rust repo at /home/n3o/code/aura-harness (read-only review; do NOT edit files, do NOT r…",
-  "state": "running",
+  "state": "open",
   "agent_id": "ff71757e023dd4ac9e104fbb0e57c3ad0f5f5ea4687d6b1fd29f3bc5a63c6345",
   "agent_name": "reviewer #9",
   "assignee": "reviewer",

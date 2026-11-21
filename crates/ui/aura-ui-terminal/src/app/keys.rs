@@ -3,7 +3,7 @@
 use super::processes::SIDE_PAGE;
 use super::{
     line_edit::LineEdit, AgentsTab, App, AppState, ChatTab, NotificationType, PanelFocus,
-    SidePanelTab,
+    RecordsTab, SidePanelTab,
 };
 use crate::{events::UiEvent, input::InputHistory, terminal::KeyResult};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -355,6 +355,10 @@ impl App {
                     self.switch_agent_by(1);
                     return KeyResult::continue_running();
                 }
+                KeyCode::Char('t') => {
+                    self.cycle_thinking();
+                    return KeyResult::continue_running();
+                }
                 _ => {}
             }
         }
@@ -426,10 +430,25 @@ impl App {
                 return KeyResult::continue_running();
             }
         }
+        if self.focus == PanelFocus::Chat
+            && self.chat_tab() == ChatTab::Log
+            && self.detail.is_none()
+            && self.input.is_empty()
+            && self.handle_log_key(key)
+        {
+            return KeyResult::continue_running();
+        }
         if self.focus == PanelFocus::Sandbox
             && self.input.is_empty()
             && !word_motion
             && (self.handle_side_tab_key(key) || self.handle_side_list_shortcut(key))
+        {
+            return KeyResult::continue_running();
+        }
+        if self.focus == PanelFocus::Records
+            && self.input.is_empty()
+            && !word_motion
+            && self.handle_records_shortcut(key)
         {
             return KeyResult::continue_running();
         }
@@ -454,7 +473,13 @@ impl App {
 
         match self.focus {
             PanelFocus::Chat => self.handle_chat_key(key),
-            PanelFocus::Records => self.handle_records_key(key),
+            PanelFocus::Records => match self.records_tab {
+                RecordsTab::Kernel => self.handle_records_key(key),
+                RecordsTab::Members => {
+                    self.handle_members_key(key);
+                    KeyResult::continue_running()
+                }
+            },
             PanelFocus::Swarm => match self.agents_tab {
                 AgentsTab::Projects => self.handle_swarm_key(key),
                 AgentsTab::Roster => {

@@ -323,6 +323,7 @@ pub(super) fn view(
                     files_changed: run.files_changed,
                     error: run.error.clone(),
                     task: run.task.clone(),
+                    agent_id: run.agent_id.to_hex(),
                 }
             })
             .collect(),

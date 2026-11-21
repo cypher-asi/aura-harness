@@ -3,7 +3,7 @@
 //! opens.
 //!
 //! ```text
-//! qwen3:4b · 23% context used · 2 calls                        ● Ready
+//! qwen3:4b · auto thinking · 23% context used · 2 calls        ● Ready
 //! / for commands · @ for files · $ for a terminal · Ctrl+O steps
 //! ```
 
@@ -168,6 +168,34 @@ fn fitting<'a>(parts: Vec<Vec<Span<'a>>>, room: usize, theme: &Theme) -> Vec<Spa
     spans
 }
 
+fn spans_width(spans: &[Span<'_>]) -> usize {
+    spans.iter().map(|s| display_width(&s.content)).sum()
+}
+
+/// `parts` fitted to `room`, with the thinking level at `at`, beside the
+/// model, only when it leaves room for every part that fits without it.
+fn with_thinking<'a>(
+    mut parts: Vec<Vec<Span<'a>>>,
+    at: usize,
+    room: usize,
+    app: &App,
+    theme: &Theme,
+) -> Vec<Span<'a>> {
+    let thinking = super::thinking_indicator_spans(app, theme);
+    let thinking_width = spans_width(&thinking);
+    let without = fitting(parts.clone(), room, theme);
+    if thinking_width == 0 {
+        return without;
+    }
+    parts.insert(at, thinking);
+    let with = fitting(parts, room, theme);
+    if spans_width(&with) == spans_width(&without) + display_width(SEPARATOR) + thinking_width {
+        with
+    } else {
+        without
+    }
+}
+
 /// Render the footer into `area`: the model and what the agent has used on
 /// the left, with its status at the right. Returns where a notice can go
 /// on the row: the gap between the two, or everything left of the status
@@ -189,9 +217,10 @@ pub(super) fn render_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Th
         }
     }
     parts.push(super::model_indicator_spans(app, theme));
+    let thinking_at = parts.len();
     parts.extend(stats.map(|(text, color)| vec![Span::styled(text, Style::default().fg(color))]));
-    let stats = fitting(parts, room, theme);
-    let stats_width: usize = stats.iter().map(|s| display_width(&s.content)).sum();
+    let stats = with_thinking(parts, thinking_at, room, app, theme);
+    let stats_width = spans_width(&stats);
     frame.render_widget(Paragraph::new(Line::from(stats)), row);
     frame.render_widget(
         Paragraph::new(Line::from(status)).alignment(Alignment::Right),
@@ -225,12 +254,14 @@ const NOTICE_LEAD: Duration = Duration::from_millis(1500);
 const NOTICE_SPEED: f32 = 16.0;
 
 /// Render the notification on one row of `area`, the bottom-right of the
-/// screen that no panel covers. Text that fits sits at the right; longer
-/// text waits, then scrolls left until its end shows. Returns how long
-/// the text takes to scroll to its end, zero when it fits.
+/// screen that no panel covers. Text that fits sits at the right. Longer
+/// text wraps over the bottom third of `panel`, the lowest panel of the
+/// right column, when there is one; otherwise it waits, then scrolls left
+/// until its end shows. Returns how long the text takes to scroll to its
+/// end, zero when it fits.
 pub(super) fn render_notice(
     frame: &mut Frame,
-    area: Rect,
+    (area, panel): (Rect, Option<Rect>),
     app: &App,
     theme: &Theme,
 ) -> Option<Duration> {
@@ -248,6 +279,15 @@ pub(super) fn render_notice(
     let room = usize::from(row.width).saturating_sub(display_width(&lead));
     let text = msg.split_whitespace().collect::<Vec<_>>().join(" ");
     let overflow = display_width(&text).saturating_sub(room);
+    if overflow > 0 {
+        let lead = Span::styled(lead.clone(), Style::default().fg(color));
+        let raised = panel.and_then(|panel| {
+            render_raised_notice(frame, panel, (lead, &text), app.notification_age(), theme)
+        });
+        if raised.is_some() {
+            return raised;
+        }
+    }
     #[allow(clippy::cast_precision_loss)]
     let read = NOTICE_LEAD + Duration::from_secs_f32(overflow as f32 / NOTICE_SPEED);
 
@@ -263,6 +303,81 @@ pub(super) fn render_notice(
     ]);
     frame.render_widget(Clear, row);
     frame.render_widget(Paragraph::new(line).alignment(Alignment::Right), row);
+    Some(if overflow == 0 { Duration::ZERO } else { read })
+}
+
+/// Narrowest a notice is wrapped to over a panel.
+const MIN_RAISED_WIDTH: usize = 16;
+
+/// Render `text` wrapped over the bottom third of `panel`, inside its
+/// borders under a rule across it, with `lead` before the top row shown.
+/// Text with more rows than the third holds waits, then scrolls up a row
+/// at a time, as fast as a row reads at [`NOTICE_SPEED`]. Returns how long
+/// it takes to scroll to its end, or `None` when the third has no room.
+fn render_raised_notice(
+    frame: &mut Frame,
+    panel: Rect,
+    (lead, text): (Span<'_>, &str),
+    age: Duration,
+    theme: &Theme,
+) -> Option<Duration> {
+    let lead_width = display_width(&lead.content);
+    let rows = usize::from(panel.height / 3).saturating_sub(1);
+    // A column clear of each border.
+    let width = usize::from(panel.width).saturating_sub(4 + lead_width);
+    if rows == 0 || width < MIN_RAISED_WIDTH {
+        return None;
+    }
+    let lines = super::text::wrap_words(text, width);
+    let shown = lines.len().min(rows);
+    let overflow = lines.len() - shown;
+    #[allow(clippy::cast_precision_loss)]
+    let row_read = width as f32 / NOTICE_SPEED;
+    let scrolled = age.saturating_sub(NOTICE_LEAD).as_secs_f32();
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let first = ((scrolled / row_read) as usize).min(overflow);
+
+    let shown_rows = u16::try_from(shown).unwrap_or(u16::MAX);
+    let body = Rect {
+        x: panel.x + 1,
+        y: panel.bottom() - 1 - shown_rows,
+        width: panel.width - 2,
+        height: shown_rows,
+    };
+    let rule = Rect {
+        x: panel.x,
+        y: body.y - 1,
+        width: panel.width,
+        height: 1,
+    };
+    // The rule takes the color of the panel's border, focused or not.
+    let border = frame.buffer_mut()[(panel.x, rule.y)].style();
+    let rule_line = format!(
+        "├{}┤",
+        "─".repeat(usize::from(panel.width.saturating_sub(2)))
+    );
+    frame.render_widget(Paragraph::new(Span::styled(rule_line, border)), rule);
+
+    let indent = " ".repeat(lead_width);
+    let text_style = Style::default().fg(theme.colors.foreground);
+    let body_lines: Vec<Line<'_>> = lines
+        .into_iter()
+        .skip(first)
+        .take(shown)
+        .enumerate()
+        .map(|(i, line)| {
+            let lead = if i == 0 {
+                lead.clone()
+            } else {
+                Span::raw(indent.clone())
+            };
+            Line::from(vec![Span::raw(" "), lead, Span::styled(line, text_style)])
+        })
+        .collect();
+    frame.render_widget(Clear, body);
+    frame.render_widget(Paragraph::new(body_lines), body);
+    #[allow(clippy::cast_precision_loss)]
+    let read = NOTICE_LEAD + Duration::from_secs_f32(overflow as f32 * row_read);
     Some(if overflow == 0 { Duration::ZERO } else { read })
 }
 

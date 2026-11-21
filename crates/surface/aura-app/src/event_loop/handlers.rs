@@ -504,6 +504,24 @@ pub(super) async fn handle_select_model(state: &mut LoopState<'_>, id: &str) {
     let _ = state.commands.send(state.models.ui_command()).await;
 }
 
+/// Pin the thinking level of the next turns to `level`, or hand it back
+/// to each model for `None`.
+pub(super) async fn handle_set_thinking(state: &mut LoopState<'_>, level: Option<&str>) {
+    let command = match state
+        .models
+        .set_thinking(state.agent_loop.config_mut(), level)
+    {
+        Ok(()) => {
+            let shown = state.models.thinking_display();
+            info!(thinking = shown, "Thinking level set");
+            UiCommand::ShowSuccess(format!("Thinking: {shown}"))
+        }
+        Err(problem) => UiCommand::ShowWarning(problem),
+    };
+    let _ = state.commands.send(command).await;
+    let _ = state.commands.send(state.models.ui_command()).await;
+}
+
 /// Processes tab row for a turn of `agent_id` on `model`, answering
 /// `prompt` (or doing `prompt`, for work that isn't a model reply).
 pub(super) fn turn_summary(agent_id: AgentId, prompt: &str, model: &str) -> ProcessSummary {

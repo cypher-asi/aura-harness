@@ -1,0 +1,13 @@
+{
+  "id": "01a1ff7bf5500017",
+  "title": "You are working in the Rust workspace at /home/n3o/code/aura-harness, crate `crates/ui/aura-ui-terminal` (package `aura…",
+  "state": "open",
+  "agent_id": "67e0f57a872d810702e0535ed7f76fb77a5615209dc455d940826dc7d929205b",
+  "agent_name": "rust-engineer #25",
+  "assignee": "rust-engineer",
+  "parent": "01a1ff6069d4000f",
+  "items": [],
+  "updated_ms": 1795287676240,
+  "created_ms": 1795287676240,
+  "tool_use_id": "toolu_01GdN7SXwhxwkZnNPXH3NdQs"
+}

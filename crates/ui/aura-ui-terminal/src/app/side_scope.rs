@@ -112,7 +112,8 @@ impl App {
     }
 
     /// Filter every side-panel list for the scope, the active agent and
-    /// the agents listed now.
+    /// the agents listed now, and list the members of the active agent's
+    /// run again.
     pub(super) fn refresh_side_scope(&mut self) {
         let agents = self.scope_agents();
         self.trace_feed.set_filter(agents.clone());
@@ -120,6 +121,7 @@ impl App {
         self.process_filter = agents;
         self.reshow_processes();
         self.refresh_plan_scope();
+        self.refresh_members();
     }
 
     /// Filter the PLANS tab to the plans the tasks shown work on, or

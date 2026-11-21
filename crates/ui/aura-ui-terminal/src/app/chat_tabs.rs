@@ -1,7 +1,8 @@
 //! The chat panel's tabs: the conversation, the terminal that runs the
 //! session's shell commands, the graph of what the agent and the agents
-//! it spawned did, the same work over time, or the benchmarks that
-//! compare two arms on the same work.
+//! it spawned did, the same work over time, the benchmarks that compare
+//! two arms on the same work, or the run log of the agent and the agents
+//! below it.
 
 use super::flow::FlowMode;
 use super::{tab_at, tab_bar::TabLayout, App, HoverTarget};
@@ -23,15 +24,19 @@ pub enum ChatTab {
     /// Benchmarks: the same work on two arms (Gate or a model), their
     /// cost and how well they did.
     Bench,
+    /// The run log of the agent on screen and of every agent below it,
+    /// and where it is stored.
+    Log,
 }
 
 impl ChatTab {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Chat,
         Self::Terminal,
         Self::Graph,
         Self::Time,
         Self::Bench,
+        Self::Log,
     ];
 
     #[must_use]
@@ -42,6 +47,7 @@ impl ChatTab {
             Self::Graph => "GRAPH",
             Self::Time => "TIME",
             Self::Bench => "BENCH",
+            Self::Log => "LOG",
         }
     }
 
@@ -54,6 +60,7 @@ impl ChatTab {
             Self::Graph => "GRP",
             Self::Time => "TIM",
             Self::Bench => "BEN",
+            Self::Log => "LOG",
         }
     }
 
@@ -63,17 +70,19 @@ impl ChatTab {
             Self::Terminal => Self::Graph,
             Self::Graph => Self::Time,
             Self::Time => Self::Bench,
-            Self::Bench => Self::Chat,
+            Self::Bench => Self::Log,
+            Self::Log => Self::Chat,
         }
     }
 
     const fn prev(self) -> Self {
         match self {
-            Self::Chat => Self::Bench,
+            Self::Chat => Self::Log,
             Self::Terminal => Self::Chat,
             Self::Graph => Self::Terminal,
             Self::Time => Self::Graph,
             Self::Bench => Self::Time,
+            Self::Log => Self::Bench,
         }
     }
 
@@ -96,6 +105,8 @@ impl App {
             }
         } else if self.bench.is_open() {
             ChatTab::Bench
+        } else if self.log.is_open() {
+            ChatTab::Log
         } else if self.terminal_mode {
             ChatTab::Terminal
         } else {
@@ -110,14 +121,15 @@ impl App {
 
     /// Show `tab`. The conversation and the terminal open at their bottom
     /// with their own input history; the graph and the timeline ask for
-    /// the flow of the agent on screen, unless the other has it, and the
-    /// benchmarks for the latest of them.
+    /// the flow of the agent on screen, unless the other has it, the
+    /// benchmarks for the latest of them, and the log for the agent's.
     pub(super) fn show_chat_tab(&mut self, tab: ChatTab) {
         let flow_was_open = self.flow.is_open();
         self.terminal_mode = tab == ChatTab::Terminal;
         self.flow
             .set_open(matches!(tab, ChatTab::Graph | ChatTab::Time));
         self.bench.set_open(tab == ChatTab::Bench);
+        self.log.set_open(tab == ChatTab::Log);
         self.history().reset();
         self.clear_selection();
         self.scroll_chat_to_bottom();
@@ -133,6 +145,7 @@ impl App {
                 }
             }
             ChatTab::Bench => self.request_benchmarks(),
+            ChatTab::Log => self.request_log(),
             ChatTab::Chat | ChatTab::Terminal => {}
         }
     }

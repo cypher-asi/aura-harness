@@ -240,6 +240,30 @@ async fn both_arms_run_repeatedly_in_separate_copies_and_their_checks_feed_gate(
             .rposition(|e| e.tx.outcome_payload().is_some())
             .unwrap();
         assert!(check_at < verdict_at, "the check runs before its verdict");
+
+        let (trace, path) = state
+            .hub
+            .traces
+            .run_log(run.agent_id)
+            .expect("the run is traced");
+        assert!(path.ends_with("log.json") && path.is_file(), "{}", path.display());
+        assert_eq!(trace.run.source, "bench", "{}", run.name);
+        let arm = match run.arm {
+            CompareArm::A => "A · ",
+            CompareArm::B => "B · ",
+        };
+        assert!(
+            trace.run.arm.as_deref().is_some_and(|a| a.starts_with(arm)),
+            "{:?}",
+            trace.run.arm
+        );
+        assert!(trace.run.title.ends_with(&format!("{}: write the answer", run.name)));
+        assert_eq!(trace.scorecard.turns, 1, "one prompt, one turn");
+        assert_eq!(
+            trace.scorecard.outcome,
+            Some(if run.check_passed == Some(true) { 1.0 } else { 0.0 }),
+            "its check is its outcome"
+        );
     }
     workdirs.dedup();
     assert_eq!(workdirs.len(), 4);

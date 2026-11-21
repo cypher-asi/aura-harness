@@ -11,7 +11,7 @@ use crate::{
         scrollbar::{ScrollTarget, ScrollbarArea},
         tab_bar::TabLayout,
         AgentButton, AgentsTab, AppState, ChatScroll, ChatTab, HoverTarget, ImageHit, MenuTarget,
-        Pane, PanelFocus, ProjectListRow, ProseRow, ToggleRow, ToggleTarget,
+        Pane, PanelFocus, ProjectListRow, ProseRow, RecordsTab, ToggleRow, ToggleTarget,
     },
     App, Theme,
 };
@@ -89,6 +89,10 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     }
     if app.chat_tab() == ChatTab::Bench {
         super::benchmarks::render_benchmarks(frame, area, app, theme, is_focused);
+        return;
+    }
+    if app.chat_tab() == ChatTab::Log {
+        super::run_log::render_run_log(frame, area, app, theme, is_focused);
         return;
     }
 
@@ -1598,23 +1602,36 @@ fn truncate_agent_name(name: &str, max_width: usize) -> String {
     format!("{truncated}…")
 }
 
-/// Render the Kernel panel, which lists the kernel's records under a
-/// header bar with no tabs.
+/// Render the Kernel panel: a KERNEL | MEMBERS header bar, with the open
+/// tab's count after the tabs, over the kernel's records or the agents of
+/// the run.
 pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Records;
     let hosted = app.host_chrome();
     let panel = area;
     let (bar, area) = header::split(area, hosted);
+    if !hosted {
+        app.set_record_tabs_area(bar);
+    }
+    let tab = app.records_tab();
+    let hovered = match app.hover() {
+        Some(HoverTarget::RecordTab(tab)) => Some(tab),
+        _ => None,
+    };
+    let info = match tab {
+        RecordsTab::Kernel => HeaderInfo::count(app.records().len(), "RECORDS", theme.colors.muted),
+        RecordsTab::Members => {
+            let count = app.members().len();
+            let unit = if count == 1 { "AGENT" } else { "AGENTS" };
+            HeaderInfo::count(count, unit, theme.colors.muted)
+        }
+    };
     let header = PanelHeader {
-        layout: TabLayout::untabbed(bar.width),
-        active: None,
-        hovered: None,
-        title: Some("KERNEL"),
-        info: Some(HeaderInfo::count(
-            app.records().len(),
-            "RECORDS",
-            theme.colors.muted,
-        )),
+        layout: RecordsTab::layout(bar.width),
+        active: Some(tab),
+        hovered,
+        title: None,
+        info: Some(info),
         close: None,
         expand: None,
         scope: None,
@@ -1626,6 +1643,10 @@ pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, 
     let Some(inner) = render_body_block(frame, area, (is_focused, hosted), theme) else {
         return;
     };
+    if tab == RecordsTab::Members {
+        super::members::render_members(frame, area, inner, app, theme);
+        return;
+    }
 
     let records = app.records();
     if records.is_empty() {

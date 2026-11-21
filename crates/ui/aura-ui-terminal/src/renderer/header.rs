@@ -10,7 +10,9 @@
 use super::panels::truncate_record_info;
 use super::text::display_width;
 use crate::app::tab_bar::TabLayout;
-use crate::app::{AgentsTab, ChatTab, Pane, PaneChrome, PaneTab, SidePanelTab, SideScope};
+use crate::app::{
+    AgentsTab, ChatTab, Pane, PaneChrome, PaneTab, RecordsTab, SidePanelTab, SideScope,
+};
 use crate::{App, Theme};
 use ratatui::{
     buffer::Buffer,
@@ -225,6 +227,12 @@ impl HostTab for ChatTab {
     }
 }
 
+impl HostTab for RecordsTab {
+    fn pane_tab(self) -> Option<PaneTab> {
+        Some(PaneTab::Records(self))
+    }
+}
+
 impl HostTab for SidePanelTab {
     fn pane_tab(self) -> Option<PaneTab> {
         Some(PaneTab::Side(self))
@@ -416,18 +424,28 @@ fn draw_centered(buf: &mut Buffer, area: Rect, text: &str, style: Style) {
 }
 
 /// The info cell: the title on the left and the info on the right when
-/// there is a title, otherwise the info centered. The info shortens, then
-/// drops, before the title is cut.
+/// there is a title, otherwise the info centered, or on the right beside
+/// tabs. The info shortens, then drops, before the title is cut.
 fn draw_info<T>(buf: &mut Buffer, area: Rect, header: &PanelHeader<'_, T>, theme: &Theme) {
     let colors = &theme.colors;
     let room = usize::from(area.width);
     let Some(title) = header.title else {
         if let Some(info) = &header.info {
-            let text = [&info.text, &info.short]
+            let style = Style::default().fg(info.color);
+            if header.layout.cells.is_empty() {
+                let text = [&info.text, &info.short]
+                    .into_iter()
+                    .find(|text| display_width(text) + 2 <= room)
+                    .unwrap_or(&info.short);
+                draw_centered(buf, area, text, style);
+            } else if let Some(text) = [&info.text, &info.short]
                 .into_iter()
                 .find(|text| display_width(text) + 2 <= room)
-                .unwrap_or(&info.short);
-            draw_centered(buf, area, text, Style::default().fg(info.color));
+            {
+                // Where an untabbed bar has it, a space in from the border.
+                let width = u16::try_from(display_width(text) + 1).unwrap_or(u16::MAX);
+                buf.set_string(area.x + area.width - width, area.y, text, style);
+            }
         }
         return;
     };
@@ -578,7 +596,8 @@ mod tests {
                 PaneTab::Chat(ChatTab::Terminal),
                 PaneTab::Chat(ChatTab::Graph),
                 PaneTab::Chat(ChatTab::Time),
-                PaneTab::Chat(ChatTab::Bench)
+                PaneTab::Chat(ChatTab::Bench),
+                PaneTab::Chat(ChatTab::Log)
             ]
         );
         assert_eq!(chrome.active, Some(PaneTab::Chat(ChatTab::Terminal)));
@@ -636,6 +655,35 @@ mod tests {
         assert_eq!(row(&narrow, 1), "│ KERNEL   128 │");
         let tiny = draw(10, 10, &header(10));
         assert_eq!(row(&tiny, 1), "│ KERNEL │");
+    }
+
+    #[test]
+    fn tabs_with_an_info_cell_keep_the_count_on_the_right() {
+        const LABELS: [&str; 2] = ["KERNEL", "MEMBERS"];
+        let header = |width| PanelHeader {
+            layout: TabLayout::with_info([0, 1], |i| LABELS[i], |i| &LABELS[i][..3], width),
+            active: Some(0),
+            hovered: None,
+            title: None,
+            info: Some(HeaderInfo::count(128, "RECORDS", Color::Gray)),
+            close: None,
+            expand: None,
+            scope: None,
+            focused: false,
+            hosted: false,
+        };
+        let wide = draw(40, 10, &header(40));
+        assert_eq!(row(&wide, 0), "┌─────────┬─────────┬──────────────────┐");
+        assert_eq!(row(&wide, 1), "│ KERNEL  │ MEMBERS │      128 RECORDS │");
+        assert_eq!(row(&wide, 2), "└─────────┴─────────┴──────────────────┘");
+        let narrow = draw(28, 10, &header(28));
+        assert_eq!(row(&narrow, 1), "│ KERNEL  │ MEMBERS │  128 │");
+        let tight = draw(23, 10, &header(23));
+        assert_eq!(
+            row(&tight, 1),
+            "│  KERNEL  │ MEMBERS  │",
+            "no room left for it"
+        );
     }
 
     #[test]

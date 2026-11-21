@@ -503,6 +503,7 @@ impl App {
             }
             (Some(_), Some(index)) => {
                 self.selected_record = index;
+                self.records_tab = super::RecordsTab::Kernel;
                 self.focus = PanelFocus::Records;
                 self.open_detail(DetailView::Record);
             }

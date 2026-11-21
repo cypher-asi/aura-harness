@@ -153,6 +153,8 @@ impl App {
         if let UiCommand::GraphUpsert { run_id, nodes } = command {
             self.trace_feed.push(agent_id, &run_id, &nodes);
             self.upsert_graph(&run_id, nodes);
+            // Any agent's step may be in the log on screen, as a subagent's.
+            self.log.mark_stale();
             return;
         }
         if agent_id == self.active_agent_id || self.active_agent_id.is_empty() {

@@ -10,6 +10,8 @@
 //!   metrics for one run
 //! - [`RunGraph`]: the linked run → turn → iteration → tool-call graph
 //!   rendered by the terminal UI
+//! - [`RunLog`]: `log.json`, the run and the runs it spawned as one
+//!   document to read or hand to a model
 //! - [`dataset`]: SFT, preference, RL and harness-bandit exports
 //! - [`replay`]: re-running a recorded prefix against a different model
 //!   or harness parameters
@@ -28,6 +30,7 @@ pub mod records;
 pub mod replay;
 pub mod report;
 pub mod rewards;
+pub mod run_log;
 pub mod scorecard;
 
 pub use bundle::{kernel_snapshot_store, list_runs, RunBundle, RunMeta, RunSource};
@@ -38,6 +41,7 @@ pub use normalize::RunTrace;
 pub use recorder::{RunRecorder, StepBuilder, TraceSink};
 pub use records::{RecordRouter, RecordRow};
 pub use replay::ReplayProvider;
+pub use run_log::RunLog;
 pub use scorecard::RunScorecard;
 
 /// Errors reading or writing run bundles.

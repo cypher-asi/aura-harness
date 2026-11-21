@@ -22,10 +22,12 @@ pub mod images;
 mod input_editor;
 mod keys;
 mod line_edit;
+mod members;
 pub mod mentions;
 mod panes;
 pub mod plans;
 mod processes;
+pub mod run_log;
 mod project_drag;
 mod prose;
 pub(crate) mod queue_panel;
@@ -69,6 +71,7 @@ pub use definitions::AgentsTab;
 use file_view::FileView;
 use folder_picker::FolderPicker;
 use hud::Hud;
+pub use members::{MemberRow, RecordsTab};
 pub use panes::{Pane, PaneChrome, PaneSplits, PaneTab};
 pub use processes::SidePanelTab;
 pub use prose::{ProseMeasure, ProseRow};
@@ -246,6 +249,10 @@ pub struct App {
     pub(super) selected_record: usize,
     /// Scroll offset for records list
     pub(super) records_scroll: usize,
+    /// Which list the Kernel panel shows
+    pub(super) records_tab: RecordsTab,
+    /// The agents of the run of the agent on screen, for the MEMBERS tab
+    pub(super) members: members::Members,
     /// Record or file shown over the chat panel
     pub(super) detail: Option<DetailView>,
     /// First line of the detail view shown
@@ -281,6 +288,8 @@ pub struct App {
     pub(super) current_model: String,
     /// The model and route Gate sends the next turn to
     pub(super) model_route: Option<String>,
+    /// Thinking level pinned for every turn; `None` when each model picks
+    pub(super) thinking: Option<String>,
     /// Logged-in user's display name (`None` = guest)
     pub(super) user: Option<String>,
     /// Labels of the usable linked plans
@@ -434,6 +443,12 @@ pub struct App {
     pub(super) flow: flow::FlowState,
     /// Benchmarks shown by the chat panel's BENCH tab
     pub(super) bench: benchmarks::BenchState,
+    /// Run log shown by the chat panel's LOG tab
+    pub(super) log: run_log::LogState,
+    /// Text to copy after the next frame instead of the selection
+    pub(super) copy_pending_text: Option<String>,
+    /// What that text is, for the notice once it is copied
+    pub(super) copy_label: Option<String>,
 }
 
 /// Screen areas of the content panels from the last rendered frame.
@@ -473,8 +488,14 @@ pub struct PanelAreas {
     pub input: Option<Rect>,
     /// Record panel (including border)
     pub records: Option<Rect>,
+    /// Header bar of the record panel
+    pub record_tabs: Option<Rect>,
     /// Rows of the record list inside the panel
     pub record_rows: Option<Rect>,
+    /// Rows of the MEMBERS tab inside the record panel
+    pub member_rows: Option<Rect>,
+    /// Member row shown at the top of `member_rows`
+    pub members_scroll: usize,
     /// Sandbox panel (including border)
     pub sandbox: Option<Rect>,
     /// Rows of the sandbox tree inside the panel
@@ -552,6 +573,10 @@ pub(crate) enum HoverTarget {
     SandboxRow(usize),
     /// A row in the Record panel.
     RecordRow(usize),
+    /// A label in the Record panel's tab bar.
+    RecordTab(RecordsTab),
+    /// A row in the Record panel's MEMBERS tab.
+    MemberRow(usize),
     /// A label in the side panel's tab bar.
     SideTab(SidePanelTab),
     /// The ALL button at the right end of the side panel's tab bar.
@@ -820,6 +845,8 @@ impl App {
             records: VecDeque::new(),
             selected_record: 0,
             records_scroll: 0,
+            records_tab: RecordsTab::default(),
+            members: members::Members::default(),
             detail: None,
             detail_scroll: 0,
             detail_shown: 1,
@@ -837,6 +864,7 @@ impl App {
             models: Vec::new(),
             current_model: String::new(),
             model_route: None,
+            thinking: None,
             user: None,
             plans: Vec::new(),
             active_plan: None,
@@ -909,6 +937,9 @@ impl App {
             pending_graph_node: None,
             flow: flow::FlowState::default(),
             bench: benchmarks::BenchState::default(),
+            log: run_log::LogState::default(),
+            copy_pending_text: None,
+            copy_label: None,
         }
     }
 
@@ -1246,8 +1277,15 @@ impl App {
                 self.bench
                     .scroll_by(-isize::try_from(lines).unwrap_or(isize::MAX));
             }
+            PanelFocus::Chat if self.log.is_open() && self.detail.is_none() => {
+                self.log
+                    .scroll_by(-isize::try_from(lines).unwrap_or(isize::MAX));
+            }
             PanelFocus::Chat => {
                 self.scroll_offset = self.scroll_offset.saturating_add(lines);
+            }
+            PanelFocus::Records if self.records_tab == RecordsTab::Members => {
+                self.scroll_members(-isize::try_from(lines).unwrap_or(isize::MAX));
             }
             PanelFocus::Records => {
                 self.selected_record = self.selected_record.saturating_sub(lines);
@@ -1286,8 +1324,15 @@ impl App {
                 self.bench
                     .scroll_by(isize::try_from(lines).unwrap_or(isize::MAX));
             }
+            PanelFocus::Chat if self.log.is_open() && self.detail.is_none() => {
+                self.log
+                    .scroll_by(isize::try_from(lines).unwrap_or(isize::MAX));
+            }
             PanelFocus::Chat => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(lines);
+            }
+            PanelFocus::Records if self.records_tab == RecordsTab::Members => {
+                self.scroll_members(isize::try_from(lines).unwrap_or(isize::MAX));
             }
             PanelFocus::Records => {
                 if !self.records.is_empty() {
@@ -1873,7 +1918,7 @@ impl App {
                         }
                     }
                     PanelFocus::Sandbox => self.click_side_panel(mouse.column, mouse.row),
-                    PanelFocus::Records => self.click_record_row(mouse.column, mouse.row),
+                    PanelFocus::Records => self.click_records_panel(mouse.column, mouse.row),
                     PanelFocus::Chat => {
                         if self.detail_close_at(mouse.column, mouse.row) {
                             self.close_detail();
@@ -1886,8 +1931,9 @@ impl App {
                         } else if self.detail == Some(DetailView::Graph) {
                             self.click_graph(mouse.column, mouse.row);
                         } else if self.detail.is_none()
-                            && self.flow.is_open()
-                            && self.click_flow(mouse.column, mouse.row)
+                            && ((self.log.is_open() && self.click_log(mouse.column, mouse.row))
+                                || (self.flow.is_open()
+                                    && self.click_flow(mouse.column, mouse.row)))
                         {
                             self.clear_selection();
                         }
@@ -1935,8 +1981,15 @@ impl App {
                 return Some(HoverTarget::ArchivedRow(index));
             }
         }
+        if contains(self.areas.record_tabs, column, row) {
+            return tab_at(self.areas.record_tabs, column, row, RecordsTab::layout)
+                .map(HoverTarget::RecordTab);
+        }
         if let Some(index) = self.record_row_at(column, row) {
             return Some(HoverTarget::RecordRow(index));
+        }
+        if let Some(index) = self.member_row_at(column, row) {
+            return Some(HoverTarget::MemberRow(index));
         }
         if let Some(target) = self.hovered_side_panel(column, row) {
             return Some(target);
@@ -2166,6 +2219,9 @@ impl App {
         if !std::mem::take(&mut self.copy_requested) {
             return None;
         }
+        if let Some(text) = self.copy_pending_text.take() {
+            return Some(text);
+        }
         let text = self.selection.as_ref()?.text(buffer);
         (!text.is_empty()).then_some(text)
     }
@@ -2173,12 +2229,16 @@ impl App {
     /// Report the outcome of copying `chars` characters to the clipboard.
     ///
     pub fn notify_copied(&mut self, chars: usize, result: &std::io::Result<()>) {
+        let what = self.copy_label.take();
         self.notification = Some(match result {
             Ok(()) => (
-                format!(
-                    "Copied {chars} character{}",
-                    if chars == 1 { "" } else { "s" }
-                ),
+                match what {
+                    Some(what) => format!("Copied {what} ({chars} characters)"),
+                    None => format!(
+                        "Copied {chars} character{}",
+                        if chars == 1 { "" } else { "s" }
+                    ),
+                },
                 NotificationType::Success,
             ),
             Err(e) => (format!("Copy failed: {e}"), NotificationType::Error),
@@ -2646,6 +2706,13 @@ impl App {
         self.model_route.as_deref()
     }
 
+    /// Thinking level pinned for every turn (`high`, `off`, ...), `None`
+    /// when each model picks its own.
+    #[must_use]
+    pub fn thinking(&self) -> Option<&str> {
+        self.thinking.as_deref()
+    }
+
     /// Selector entry for the current model, if listed.
     #[must_use]
     pub fn current_model_option(&self) -> Option<&ModelOptionView> {
@@ -3016,6 +3083,7 @@ impl App {
         if std::mem::take(&mut self.sandbox_stale) && self.sandbox_panel_visible {
             self.sandbox.refresh();
         }
+        self.refresh_live_log();
 
         if matches!(
             self.state,

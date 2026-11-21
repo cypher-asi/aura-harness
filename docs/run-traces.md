@@ -14,10 +14,10 @@ One recording feeds the scorecards, the CLI and TUI views, eval comparisons and 
 | Value | What is kept |
 |-------|--------------|
 | `off` (also `0`, `false`, `none`) | Nothing. |
-| `decisions` (default; also `on`, `1`, `true`) | Steps, decisions, token usage and rewards. |
-| `full` (also `blobs`) | Everything in `decisions`, plus the exact model requests, responses, thinking text and full tool outputs as content-addressed blobs. |
+| `decisions` (default; also `on`, `1`, `true`) | Steps, decisions, token usage, rewards, and the model's thinking text. |
+| `full` (also `blobs`) | Everything in `decisions`, plus the exact model requests, responses and full tool outputs as content-addressed blobs. |
 
-The terminal UI records every conversation at `decisions` unless `AURA_TRACE=off`. The gateway (`aura-node`) and automaton tasks record only when `AURA_TRACE` is set, so servers and tests don't write to `AURA_HOME` unasked. `aura eval run` and `aura runs branch` always record, at `decisions` or higher.
+The terminal UI records every conversation at `decisions` unless `AURA_TRACE=off`, and so every benchmark run (source `bench`, its `arm` naming the arm and what it runs, its `task_id` the example task). A benchmark run's check is stored as its `verify` outcome. The gateway (`aura-node`) and automaton tasks record only when `AURA_TRACE` is set, so servers and tests don't write to `AURA_HOME` unasked. `aura eval run` and `aura runs branch` always record, at `decisions` or higher.
 
 ## Bundle layout
 
@@ -28,13 +28,14 @@ AURA_HOME/
     steps.jsonl     one Step per line, in seq order
     rewards.jsonl   stored rewards (outcome, human labels, interrupts)
     summary.json    the RunScorecard, rewritten when the run ends or is relabeled
+    log.json        the run log (below), rewritten after every turn
     record.jsonl    kernel record rows seen during the run (seq, tx type, time, tool_use_id,
                     and for policy decisions the verdict, approver, rule and reason)
     record/         RocksDB kernel record log (headless runs: eval, branch)
   blobs/            shared zstd-compressed blobs, addressed by the blake3 of the raw bytes
 ```
 
-`meta.json` holds `schema_version`, `run_id`, start and end times, `harness_version`, `model`, `mode`, `source` (`tui`, `gateway`, `automaton`, `eval`, `branch`, `test`), `task_id`, `title`, `workspace`, `trace_level`, the full `HarnessParams` snapshot, `consent`, and for branches and eval arms `parent_run`, `branch_step`, `arm` and `arm_propensity`.
+`meta.json` holds `schema_version`, `run_id`, start and end times, `harness_version`, `model`, `mode`, `source` (`tui`, `gateway`, `automaton`, `eval`, `branch`, `bench`, `test`), `task_id`, `title`, `workspace`, `trace_level`, the full `HarnessParams` snapshot, `consent`, and for branches and eval arms `parent_run`, `branch_step`, `arm` and `arm_propensity`.
 
 Blobs are shared across runs, so identical requests and outputs are stored once. The kernel uses the same directory for the full payloads behind summarised `AuditedLite` effects, which lets kernel replay resolve them.
 
@@ -81,6 +82,12 @@ Derived rewards are recomputed from the steps every time a run is loaded, so imp
 
 `RunScorecard` (in `summary.json`, `aura runs show` and `/status`) reports turns, model and tool calls, tool errors, input, output and cache tokens, wall and model time, time and tokens to first edit, reads and writes, redundant reads, failed edits, blocked calls, cache hits, retries, decisions and compactions by kind, per-decision effect rates, stop reasons, files changed, reward totals and the outcome. Its `approval` line counts approval prompts and denials, the total and longest wait, and tool calls that never finished.
 
+## Run log
+
+`log.json` (schema `aura.run_log/v1`) is one JSON document meant to be handed to a model reviewing the run. It holds the run's metadata, where its files are, totals, the scorecard and health checks, then each turn and each step in order: the prompt; each model call with its thinking, reply, tool calls, stop reason, usage and cost; each tool result with its output and files; each harness decision with its trigger, alternatives and features; and the turn's end. Each run spawned by a `task` call is nested in `subagents`, in the same shape, and that call names it in `child_run`. Totals count the run's own steps, plus `cost_usd_with_subagents`. Secrets are redacted as in dataset exports. A subagent's own `log.json` holds it and the runs under it only. The terminal's LOG tab shows this file (see [The LOG tab](cli.md#the-log-tab)).
+
+Thinking text is kept inline in `steps.jsonl` at every capture level. Runs recorded before that, and models that show no thinking, have only its length.
+
 ## CLI
 
 ```sh
@@ -125,7 +132,7 @@ aura dataset build --format sft|preference|rl|harness-bandit [--filter EXPR] [--
 | `rl` | Step | Observation, action, reward, discounted return, done flag, policy and propensity. |
 | `harness-bandit` | Harness decision | Features, action, params, propensity and measured effect. |
 
-`--filter` takes comma-separated terms: `outcome>=0.5`, `model=<id>`, `source=tui`, `eval=include` (eval runs are excluded by default) and `eval_fraction=0.1`. Every export redacts secrets, skips runs without consent, splits train and eval by task so a task never appears on both sides, and drops duplicate records. With `AURA_TRACE=full`, `sft` and `preference` chats include full tool outputs from the blob store.
+`--filter` takes comma-separated terms: `outcome>=0.5`, `model=<id>`, `source=tui`, `eval=include` (eval and benchmark runs are excluded by default) and `eval_fraction=0.1`. Every export redacts secrets, skips runs without consent, splits train and eval by task so a task never appears on both sides, and drops duplicate records. With `AURA_TRACE=full`, `sft` and `preference` chats include full tool outputs from the blob store.
 
 ## Evals
 

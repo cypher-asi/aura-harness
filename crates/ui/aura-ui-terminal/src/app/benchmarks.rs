@@ -535,6 +535,11 @@ impl App {
             .run
             .and_then(|i| view.runs.get(i))
             .map(|r| r.name.clone());
+        // The picked run, else the first one under way.
+        let log_of = match self.bench.run.and_then(|i| view.runs.get(i)) {
+            Some(picked) => Some(picked.agent_id.clone()).filter(|id| !id.is_empty()),
+            None => view.live.iter().find_map(|live| live.agent_id.clone()),
+        };
         let id = id.to_string();
         match key.code {
             KeyCode::Esc | KeyCode::Backspace => {
@@ -572,6 +577,15 @@ impl App {
             },
             KeyCode::Char('x') if has_copies => self.send_bench(BenchRequest::Dismiss { id }),
             KeyCode::Char('c') => self.send_bench(BenchRequest::Cancel),
+            KeyCode::Char('L') => match log_of {
+                Some(agent) => self.open_log_of(agent),
+                None => {
+                    self.notification = Some((
+                        "This run has no log; pick a run with ←/→ first".to_string(),
+                        NotificationType::Warning,
+                    ));
+                }
+            },
             _ => return false,
         }
         true

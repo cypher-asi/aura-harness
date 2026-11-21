@@ -48,7 +48,7 @@ pub(super) fn duration(ms: u64) -> String {
 
 /// `950`, `12k`, `1.4M` tokens.
 #[allow(clippy::cast_precision_loss)]
-fn tokens(n: u64) -> String {
+pub(super) fn tokens(n: u64) -> String {
     if n < 1_000 {
         n.to_string()
     } else if n < 1_000_000 {

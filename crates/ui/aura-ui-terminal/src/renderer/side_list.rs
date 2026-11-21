@@ -27,6 +27,8 @@ pub(super) const TRACE_HINT: &str = "⏎ open  g graph  ⇧←→ tabs";
 pub(super) const PLANS_HINT: &str = "⏎ open  t task  ←→ fold  ⇧←→ tabs";
 /// Hint of the TASKS tab.
 pub(super) const TASKS_HINT: &str = "⏎ open  p plan  ←→ fold  ⇧←→ tabs";
+/// Hint of the Kernel panel's MEMBERS tab.
+pub(super) const MEMBERS_HINT: &str = "⏎ open  o chat  ⇧←→ tabs";
 
 /// Whether a side-panel row is still in play. This alone decides white
 /// versus gray text in every tab, so the tabs read the same way:
@@ -138,6 +140,7 @@ mod tests {
             TRACE_HINT,
             PLANS_HINT,
             TASKS_HINT,
+            MEMBERS_HINT,
         ] {
             assert!(hint.starts_with("⏎ open  "), "{hint}");
             assert!(hint.ends_with("  ⇧←→ tabs"), "{hint}");

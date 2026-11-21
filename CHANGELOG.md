@@ -29,6 +29,58 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A reply without a label is asked for once more before the prompt
   fails, and the error shows the whole reply, tool calls included.
 
+### A MEMBERS tab next to KERNEL
+
+##### Added
+
+- The Kernel panel at the top right has two tabs, KERNEL and MEMBERS.
+  MEMBERS lists every agent the run of the agent on screen brought in:
+  that agent first, as the run's lead, then each agent it started with
+  `task` or `spawn_agent`, nested under the agent that started it, down
+  every level. Each row shows the agent's name and the permanent agent
+  or role it is an instance of, its state (working, idle, done, failed,
+  stopped), and how it joined (`task` or `agent`) with how long it has
+  worked. Agents stay listed after the Processes tab drops their rows,
+  until `/new` starts another run. Enter or a click opens a member's
+  process (its prompt, model, start and end), `o` opens its chat when it
+  has one of its own, Shift+←/→ switches the tab, and `/members` opens
+  it. The desktop window's Kernel bar draws both tabs.
+
+##### Changed
+
+- The Kernel panel's header is a tab bar. The record count, or the
+  member count while MEMBERS is open, sits in an info cell after the
+  tabs. Jumping to a record (a turn's records link, the run graph, the
+  GRAPH tab) opens the KERNEL tab.
+
+### A LOG tab with a run log to hand to a model
+
+##### Added
+
+- The chat panel has a LOG tab, next to BENCH, and `/log` opens it. It
+  shows the agent's latest run as folding panels: the run's metadata,
+  totals and problems, its files, each turn, and each step in it, with
+  the model's thinking, replies, tool calls and outputs and the
+  harness's decisions. Subagents are nested under the step that spawned
+  them; on a subagent the tab shows that subagent and the runs under it
+  only. The header shows where the log is stored, and `⧉ Copy log` (or
+  `c`) copies the whole log as JSON. While the agent or a subagent
+  works, the log reloads about once a second (`● live`), keeping open
+  panels open and following the newest step when the cursor is on it.
+- Benchmark runs are recorded like conversations, as runs of source
+  `bench` with their arm, example task and check outcome, so each has a
+  `log.json`. `L` in a benchmark opens the picked run's log, or the
+  first run under way, live while it works.
+- Every run bundle has a `log.json` (schema `aura.run_log/v1`),
+  rewritten after each turn: one redacted JSON document of the run and
+  its subagents, meant to be pasted to a model reviewing where the run
+  went wrong.
+
+##### Changed
+
+- The model's thinking text is kept in `steps.jsonl` at every trace
+  level, not only in `full` blobs.
+
 ### The chat leaves room below its last line
 
 ##### Changed

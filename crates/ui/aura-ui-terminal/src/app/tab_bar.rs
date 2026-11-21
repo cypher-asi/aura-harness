@@ -1,12 +1,18 @@
 //! Where the cells of a panel's header bar fall: equal-width tab cells
 //! between shared dividers, filling the bar. A bar with no tabs is one info
-//! cell.
+//! cell; [`TabLayout::with_info`] keeps one after the tabs.
 //!
 //! ```text
 //! ┌───────────┬───────────┬───────────┐
 //! │   CHAT    │ TERMINAL  │  PLANNER  │
 //! └───────────┴───────────┴───────────┘
+//! ┌────────┬─────────┬────────────────┐
+//! │ KERNEL │ MEMBERS │    128 RECORDS │
+//! └────────┴─────────┴────────────────┘
 //! ```
+
+/// Narrowest info cell kept beside tabs; a narrower one widens the tabs.
+const MIN_INFO_WIDTH: u16 = 3;
 
 /// How a bar's tab cells fit, roomiest first. Every tab in a bar uses the
 /// same fit, so the cells stay the same width.
@@ -36,7 +42,8 @@ pub struct TabCell<T> {
 pub struct TabLayout<T> {
     pub fit: TabFit,
     pub cells: Vec<TabCell<T>>,
-    /// First column and width of the info cell, for bars without tabs
+    /// First column and width of the info cell: the whole of a bar
+    /// without tabs, or what [`Self::with_info`] leaves after them
     pub info: Option<(u16, u16)>,
 }
 
@@ -52,6 +59,28 @@ impl<T: Copy + PartialEq> TabLayout<T> {
         label: impl Fn(T) -> &'static str,
         short: impl Fn(T) -> &'static str,
         width: u16,
+    ) -> Self {
+        Self::lay_out(tabs, label, short, width, false)
+    }
+
+    /// Lay out `tabs` as [`Self::new`] does, but at their own width, with
+    /// an info cell filling the rest of the bar. When that cell would be
+    /// under [`MIN_INFO_WIDTH`] columns the tabs take its room instead.
+    pub fn with_info<const N: usize>(
+        tabs: [T; N],
+        label: impl Fn(T) -> &'static str,
+        short: impl Fn(T) -> &'static str,
+        width: u16,
+    ) -> Self {
+        Self::lay_out(tabs, label, short, width, true)
+    }
+
+    fn lay_out<const N: usize>(
+        tabs: [T; N],
+        label: impl Fn(T) -> &'static str,
+        short: impl Fn(T) -> &'static str,
+        width: u16,
+        keep_info: bool,
     ) -> Self {
         let count = u16::try_from(N).unwrap_or(u16::MAX);
         let widest = |text: Labels<'_, T>| {
@@ -77,8 +106,9 @@ impl<T: Copy + PartialEq> TabLayout<T> {
         let used = 1 + count * (cell + 1);
         let spare = width.saturating_sub(used);
         // The info cell also needs the frame's right border after it.
-        let info = (N == 0).then_some((used, spare.saturating_sub(1)));
-        let extra = if N == 0 { 0 } else { spare };
+        let room = spare.saturating_sub(1);
+        let info = (N == 0 || (keep_info && room >= MIN_INFO_WIDTH)).then_some((used, room));
+        let extra = if info.is_some() { 0 } else { spare };
 
         let mut start = 1;
         let cells = tabs
@@ -185,5 +215,25 @@ mod tests {
         let bar = TabLayout::untabbed(30);
         assert!(bar.cells.is_empty());
         assert_eq!(bar.info, Some((1, 28)));
+    }
+
+    #[test]
+    fn tabs_with_info_keep_their_width_and_leave_the_rest_to_it() {
+        let bar = TabLayout::with_info([0, 1], |i| LABELS[i], |i| SHORT[i], 40);
+        assert_eq!(bar.fit, TabFit::Padded);
+        assert_eq!(widths(&bar), [11, 11]);
+        // The frame, two cells and their dividers, then the info cell up
+        // to the right border.
+        assert_eq!(bar.info, Some((25, 14)));
+        assert_eq!(bar.tab_at(13), Some(1));
+        assert_eq!(bar.tab_at(25), None);
+    }
+
+    #[test]
+    fn an_info_cell_too_narrow_to_use_widens_the_tabs() {
+        let bar = TabLayout::with_info([0, 1], |i| LABELS[i], |i| SHORT[i], 27);
+        assert_eq!(bar.info, None);
+        let last = bar.cells[1];
+        assert_eq!(last.start + last.width, 26);
     }
 }

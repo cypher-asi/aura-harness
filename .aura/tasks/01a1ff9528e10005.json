@@ -1,0 +1,14 @@
+{
+  "id": "01a1ff9528e10005",
+  "title": "Read-only exploration of the Rust workspace in the current directory (aura-harness). Keep it short and fast: aim to fin…",
+  "state": "completed",
+  "agent_id": "7d6888d7620defee67ab8bf7fe1dfa4e0ef39bbb4b09f9ba1ddfbe27a845ce21",
+  "agent_name": "explorer #31",
+  "assignee": "explorer",
+  "parent": "01a1ff892ec60001",
+  "items": [],
+  "summary": "I answered all three from the code and changed nothing. In short: the store is RocksDB, and the \"last active\" lookup decodes the whole latest entry. The desktop window applies commands as soon as they arrive; the terminal UI applies them within about 5 ms but only draws every 50 ms. Perf tests are plain `#[ignore = \"benchmark\"]` tests that print timings, with no criterion.",
+  "updated_ms": 1795289540028,
+  "created_ms": 1795289327841,
+  "tool_use_id": "toolu_01VHs7PGpRS6E4NJAFL8QsyY"
+}

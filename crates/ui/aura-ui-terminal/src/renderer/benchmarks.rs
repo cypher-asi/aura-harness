@@ -1174,13 +1174,13 @@ fn detail_lines(
     lines.push(rule(width, theme));
     let running = view.status == BenchStatus::Running;
     let keys = if view.status.has_copies() && !running && !view.tasks.is_empty() {
-        "←/→ run · d diff · x remove copies · Esc back"
+        "←/→ run · L log · d diff · x remove copies · Esc back"
     } else if view.status.has_copies() && !running {
-        "←/→ run · d diff · y apply · x remove copies · Esc back"
+        "←/→ run · L log · d diff · y apply · x remove copies · Esc back"
     } else if running {
-        "↑/↓ scroll · c stop · Esc back"
+        "↑/↓ scroll · L log · c stop · Esc back"
     } else {
-        "↑/↓ scroll · Esc back"
+        "↑/↓ scroll · L log · Esc back"
     };
     lines.push(muted_line(fit(keys, width), theme));
     lines

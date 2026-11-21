@@ -795,7 +795,10 @@ mod tests {
             .enumerate()
             .find_map(|(y, row)| {
                 let text = row.concat();
-                if !text.contains(" TERMINAL ") {
+                if ![" TERMINAL ", "│TERMINAL│", " TRM "]
+                    .iter()
+                    .any(|tab| text.contains(tab))
+                {
                     return None;
                 }
                 let chat =

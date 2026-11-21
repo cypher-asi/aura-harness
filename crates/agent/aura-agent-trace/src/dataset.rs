@@ -80,8 +80,8 @@ pub struct ExportFilter {
     pub model: Option<String>,
     /// Only runs from this source.
     pub source: Option<RunSource>,
-    /// Include eval-suite runs (excluded by default so the suite stays
-    /// held out).
+    /// Include eval-suite and benchmark runs (excluded by default so the
+    /// suites stay held out).
     pub include_eval: bool,
     /// Share of tasks assigned to the eval split, in `[0, 1]`.
     pub eval_fraction: f64,
@@ -126,7 +126,8 @@ impl ExportFilter {
 
     fn admits(&self, trace: &RunTrace) -> bool {
         let meta = &trace.meta;
-        if !meta.consent || (meta.source == RunSource::Eval && !self.include_eval) {
+        let evaluated = matches!(meta.source, RunSource::Eval | RunSource::Bench);
+        if !meta.consent || (evaluated && !self.include_eval) {
             return false;
         }
         if self.model.as_ref().is_some_and(|m| &meta.model != m) {
@@ -208,7 +209,7 @@ pub fn redact(text: &str) -> (String, usize) {
     (out, count)
 }
 
-fn redact_value(value: &mut Value, count: &mut usize) {
+pub(crate) fn redact_value(value: &mut Value, count: &mut usize) {
     match value {
         Value::String(s) => {
             let (r, n) = redact(s);

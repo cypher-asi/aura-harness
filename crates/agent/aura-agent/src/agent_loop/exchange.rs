@@ -5,7 +5,8 @@
 //! tool schemas, every message) and the response's message and
 //! thinking text are written as content-addressed blobs so the call
 //! can be replayed or turned into a training example later. Without a
-//! store only the action summary and usage are recorded.
+//! store only the action summary (thinking text included) and usage are
+//! recorded.
 
 use std::sync::Arc;
 
@@ -93,6 +94,7 @@ pub(super) fn action(
             .filter(|_| !thinking.is_empty())
             .map(|s| put(s, thinking.clone().into_bytes())),
         thinking_chars: thinking.chars().count(),
+        thinking_text: thinking,
         text,
         tool_calls,
         stop_reason: serde_json::to_value(response.stop_reason)

@@ -1490,6 +1490,7 @@ fn app_with_auth(user: Option<&str>, plans: &[&str]) -> crate::App {
         route: None,
         user: user.map(str::to_string),
         plans: plans.iter().map(|p| (*p).to_string()).collect(),
+        thinking: None,
     });
     app.process_command(UiCommand::SetApiStatus {
         url: Some("http://127.0.0.1:8080".to_string()),
@@ -1518,6 +1519,44 @@ fn test_folder_picker_overlay_lists_the_launch_directory() {
     let screen = render_rows(&mut app, 120).join("\n");
     assert!(screen.contains("New folder: demo"));
     assert!(screen.contains("Enter create  Esc stop"));
+}
+
+#[test]
+fn test_thinking_level_sits_after_the_model() {
+    use crate::events::UiCommand;
+
+    let mut app = app_with_model(None);
+    let footer = |app: &mut crate::App| {
+        render_rows(app, 120)
+            .into_iter()
+            .find(|row| row.contains("qwen3:4b"))
+            .unwrap()
+    };
+    assert!(footer(&mut app).contains("qwen3:4b · auto thinking"));
+
+    app.process_command(UiCommand::SetModels {
+        options: app.models().to_vec(),
+        current: "local/qwen3:4b".to_string(),
+        route: None,
+        user: None,
+        plans: Vec::new(),
+        thinking: Some("high".to_string()),
+    });
+    assert!(footer(&mut app).contains("qwen3:4b · high thinking"));
+}
+
+#[test]
+fn test_thinking_level_gives_way_before_the_model() {
+    use crate::events::UiCommand;
+
+    let mut app = app_with_model(None);
+    app.process_command(UiCommand::SetApproval(crate::ApprovalLevel::Strict));
+    app.process_command(UiCommand::SetMode(crate::PermissionMode::Plan));
+    let footer = render_rows(&mut app, 120)
+        .into_iter()
+        .find(|row| row.contains("qwen3:4b"))
+        .expect("the model stays when the footer is too narrow for both");
+    assert!(!footer.contains("thinking"), "{footer:?}");
 }
 
 #[test]
@@ -1623,11 +1662,11 @@ fn render_rows(app: &mut crate::App, width: u16) -> Vec<String> {
 }
 
 /// The chat panel's header tab row and its left and right border columns,
-/// found from its CHAT | TERMINAL header bar.
+/// found from its CHAT | TERMINAL header bar (TRM when the bar is narrow).
 fn chat_panel(rows: &[String]) -> (usize, usize, usize) {
     let tabs = rows
         .iter()
-        .position(|r| r.contains("CHAT") && r.contains("TERMINAL"))
+        .position(|r| r.contains("CHAT") && (r.contains("TERMINAL") || r.contains(" TRM ")))
         .unwrap_or_else(|| panic!("no chat header bar in:\n{}", rows.join("\n")));
     let row: Vec<char> = rows[tabs].chars().collect();
     let chat = rows[tabs][..rows[tabs].find("CHAT").unwrap()]
@@ -1659,11 +1698,12 @@ fn test_slash_menu_spans_chat_width_above_input() {
     assert_eq!(chars[chat_right], '┘', "{menu_bottom:?}");
     assert!(menu_bottom.contains("Esc close"), "{menu_bottom:?}");
 
-    assert!(rows[n - 6].contains("› /login"), "{:?}", rows[n - 6]);
+    assert!(rows[n - 7].contains("› /log "), "{:?}", rows[n - 7]);
+    assert!(rows[n - 6].contains("  /login"), "{:?}", rows[n - 6]);
     assert!(rows[n - 6].contains("Login for cloud models"));
     assert!(rows[n - 5].contains("  /logout"), "{:?}", rows[n - 5]);
-    assert!(rows[n - 7].contains(" COMMANDS "), "{:?}", rows[n - 7]);
-    let menu_top: Vec<char> = rows[n - 7].chars().collect();
+    assert!(rows[n - 8].contains(" COMMANDS "), "{:?}", rows[n - 8]);
+    let menu_top: Vec<char> = rows[n - 8].chars().collect();
     assert_eq!(menu_top[chat_left], '┌');
     assert_eq!(menu_top[chat_right], '┐');
 
@@ -2327,12 +2367,71 @@ fn test_notification_sits_under_the_right_column_leaving_the_panels_alone() {
     );
 }
 
-#[test]
-fn test_long_notification_scrolls_to_its_end_and_stays_until_read() {
-    let mut app = app_with_model(None);
+fn long_warning(app: &mut crate::App) {
     let words: Vec<String> = (0..40).map(|i| format!("w{i}")).collect();
     app.notification = Some((words.join(" "), crate::app::NotificationType::Warning));
     app.tick();
+}
+
+#[test]
+fn test_long_notification_wraps_over_the_bottom_third_of_the_lowest_right_panel() {
+    let mut app = app_with_model(None);
+    let before = render_rows(&mut app, 120);
+    long_warning(&mut app);
+    let rows = render_rows(&mut app, 120);
+
+    let n = rows.len();
+    let (_, _, chat_right) = chat_panel(&rows);
+    let right = |row: &str| row.chars().skip(chat_right + 1).collect::<String>();
+    let top = rows.iter().position(|row| row.contains("SBX")).unwrap() - 1;
+    let bottom = n - 2;
+    let third = (bottom + 1 - top) / 3;
+    let changed: Vec<usize> = (0..n).filter(|&y| rows[y] != before[y]).collect();
+    assert_eq!(changed.len(), third, "{changed:?}");
+    assert!(
+        changed.iter().all(|&y| y >= bottom - third && y < bottom),
+        "only the bottom third of the panel, inside its border: {changed:?}"
+    );
+
+    let rule = right(&rows[changed[0]]);
+    assert!(rule.trim().starts_with('├'), "{rule:?}");
+    assert!(rule.trim().ends_with('┤'), "{rule:?}");
+    assert!(right(&rows[changed[1]]).contains("! w0 w1 w2"), "{rows:?}");
+    assert!(right(&rows[changed[2]]).contains("w7"), "wraps: {rows:?}");
+    assert_eq!(rows[n - 1], before[n - 1], "the footer row stays clear");
+}
+
+#[test]
+fn test_wrapped_notification_scrolls_up_to_its_end_and_stays_until_read() {
+    let mut app = app_with_model(None);
+    long_warning(&mut app);
+    let notice = |rows: &[String]| rows[rows.len() - 5..rows.len() - 2].join("\n");
+    let rows = render_rows(&mut app, 120);
+    assert!(notice(&rows).contains("! w0 "), "{rows:?}");
+    assert!(!notice(&rows).contains("w39"), "{rows:?}");
+
+    let (_, until) = app.notification_shown.as_ref().unwrap();
+    let since = app.notification_since.unwrap();
+    assert!(
+        *until > since + std::time::Duration::from_secs(5),
+        "held for the scroll"
+    );
+
+    let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(60);
+    app.notification_since = Some(long_ago);
+    let rows = render_rows(&mut app, 120);
+    let shown = notice(&rows);
+    assert!(shown.contains("w39"), "ends at the end: {shown}");
+    assert!(shown.contains("! "), "the icon stays: {shown}");
+    assert!(!shown.contains("w0 "), "{shown}");
+}
+
+#[test]
+fn test_long_notification_scrolls_along_the_footer_without_a_right_column() {
+    let mut app = app_with_model(None);
+    app.record_panel_visible = false;
+    app.sandbox_panel_visible = false;
+    long_warning(&mut app);
     let rows = render_rows(&mut app, 120);
     let last = rows.last().unwrap();
     assert!(last.contains("! w0 w1 w2"), "starts at the start: {last:?}");
@@ -2349,10 +2448,7 @@ fn test_long_notification_scrolls_to_its_end_and_stays_until_read() {
     app.notification_since = Some(long_ago);
     let rows = render_rows(&mut app, 120);
     let last = rows.last().unwrap();
-    assert!(
-        last.trim_end().ends_with("w38 w39"),
-        "ends at the end: {last:?}"
-    );
+    assert!(last.contains("w38 w39  ● Ready"), "ends at the end: {last:?}");
     assert!(last.contains("! "), "the icon stays: {last:?}");
     assert!(!last.contains("w0 "), "{last:?}");
 }
@@ -2428,6 +2524,7 @@ fn test_input_shows_gate_instead_of_its_pick() {
         route: Some("claude-sonnet-4-6 (claude plan)".to_string()),
         user: None,
         plans: Vec::new(),
+        thinking: None,
     });
     let rows = render_rows(&mut app, 120);
     let status = &rows[rows.len() - 1];
@@ -2456,6 +2553,7 @@ fn test_status_line_under_gate_counts_models_instead_of_context() {
         route: None,
         user: None,
         plans: Vec::new(),
+        thinking: None,
     });
     for model in ["aura-claude-haiku-4-5", "aura-claude-sonnet-4-6"] {
         app.process_command(UiCommand::CallStats(CallStats {
@@ -2498,6 +2596,7 @@ fn test_status_line_on_one_model_measures_context_against_its_window() {
         route: None,
         user: None,
         plans: Vec::new(),
+        thinking: None,
     });
     let rows = render_rows(&mut app, 160);
     let status = &rows[rows.len() - 1];
@@ -3312,6 +3411,7 @@ fn test_a_selection_dragged_past_a_benchmark_scrolls_it() {
             ..BenchView::default()
         }],
     });
+    app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
     app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
     assert_eq!(app.chat_tab(), crate::app::ChatTab::Bench);
     app.handle_key(KeyEvent::from(KeyCode::Enter));

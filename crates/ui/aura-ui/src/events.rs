@@ -11,6 +11,9 @@ pub use crate::benchmarks::{
     BenchVerdict, BenchView, BenchWork,
 };
 pub use crate::flow::{FlowBench, FlowKind, FlowLane, FlowNode, FlowUsage};
+pub use crate::run_log::{
+    LogField, LogRequest, LogRunView, LogSection, LogStatus, LogStepView, LogTurnView, LogView,
+};
 use crate::mode_command::{ApprovalLevel, PermissionMode};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -245,6 +248,10 @@ pub enum UiEvent {
     /// User selected a model by id
     SelectModel(String),
 
+    /// User pinned the thinking level of every turn (`high`, `off`, ...);
+    /// `None` lets each model pick its own
+    SetThinking(Option<String>),
+
     /// User confirmed killing the process with this [`ProcessSummary::id`]
     KillProcess(String),
 
@@ -332,6 +339,13 @@ pub enum UiEvent {
         /// Agent the chat showed (hex id)
         agent_id: String,
         request: BenchRequest,
+    },
+
+    /// The LOG tab asked for something
+    Log {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        request: LogRequest,
     },
 }
 
@@ -694,6 +708,14 @@ pub enum UiCommand {
     /// could not
     BenchNotice(Result<String, String>),
 
+    /// The LOG tab's content for `view.agent_id`. Ignored by a UI showing
+    /// another agent.
+    LogView(Box<LogView>),
+
+    /// Why the LOG tab of `agent_id` has nothing to show (no run yet,
+    /// tracing off, ...)
+    LogNotice { agent_id: String, notice: String },
+
     /// Set the API status (URL and whether it's active)
     SetApiStatus {
         /// API URL
@@ -715,6 +737,9 @@ pub enum UiCommand {
         user: Option<String>,
         /// Labels of the linked plans that can serve requests (e.g. "Claude")
         plans: Vec<String>,
+        /// Thinking level pinned for every turn (`high`, `off`, ...);
+        /// `None` when each model picks its own
+        thinking: Option<String>,
     },
 
     /// Ask the user to paste the code shown by `provider`'s sign-in page

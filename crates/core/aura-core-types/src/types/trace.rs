@@ -383,6 +383,10 @@ pub struct ModelAction {
     /// Length of the thinking text in characters.
     #[serde(default)]
     pub thinking_chars: usize,
+    /// Thinking text, kept at every capture level. Empty for runs
+    /// recorded before it was kept, and for models that show none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub thinking_text: String,
     /// Visible assistant text.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,

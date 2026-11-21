@@ -6,7 +6,7 @@
 //! the info over it, and maps clicks on them back here instead of passing
 //! them to [`App::handle_mouse`].
 
-use super::{AgentsTab, App, ChatTab, PanelFocus, SidePanelTab};
+use super::{AgentsTab, App, ChatTab, PanelFocus, RecordsTab, SidePanelTab};
 use ratatui::{layout::Rect, style::Color};
 
 /// The panels a front end can draw title bars for.
@@ -34,6 +34,7 @@ impl Pane {
 pub enum PaneTab {
     Agents(AgentsTab),
     Chat(ChatTab),
+    Records(RecordsTab),
     Side(SidePanelTab),
 }
 
@@ -43,6 +44,7 @@ impl PaneTab {
         match self {
             Self::Agents(tab) => tab.label(),
             Self::Chat(tab) => tab.label(),
+            Self::Records(tab) => tab.label(),
             Self::Side(tab) => tab.label(),
         }
     }
@@ -53,6 +55,7 @@ impl PaneTab {
         match self {
             Self::Agents(tab) => tab.short_label(),
             Self::Chat(tab) => tab.short_label(),
+            Self::Records(tab) => tab.short_label(),
             Self::Side(tab) => tab.short_label(),
         }
     }
@@ -61,6 +64,7 @@ impl PaneTab {
         match self {
             Self::Agents(_) => Pane::Agents,
             Self::Chat(_) => Pane::Chat,
+            Self::Records(_) => Pane::Records,
             Self::Side(_) => Pane::Side,
         }
     }
@@ -156,6 +160,7 @@ impl App {
                     self.show_chat_tab(tab);
                 }
             }
+            PaneTab::Records(tab) => self.show_records_tab(tab),
             PaneTab::Side(tab) => self.show_side_tab(tab),
         }
     }
@@ -213,8 +218,18 @@ mod tests {
         assert_eq!(app.agents_tab(), AgentsTab::Roster);
         assert_eq!(app.focus(), PanelFocus::Swarm);
 
+        app.select_pane_tab(PaneTab::Records(RecordsTab::Members));
+        assert_eq!(app.records_tab(), RecordsTab::Members);
+        assert_eq!(app.focus(), PanelFocus::Records);
+
+        app.focus_pane(Pane::Chat);
         app.focus_pane(Pane::Records);
         assert_eq!(app.focus(), PanelFocus::Records);
+        assert_eq!(
+            app.records_tab(),
+            RecordsTab::Members,
+            "focus keeps the tab"
+        );
     }
 
     #[test]

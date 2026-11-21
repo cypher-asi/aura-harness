@@ -17,12 +17,14 @@ mod hud;
 mod images;
 mod input;
 mod markdown;
+mod members;
 mod mention_menu;
 mod overlays;
 mod panels;
 mod plans;
 mod processes;
 mod queue_panel;
+mod run_log;
 mod sandbox;
 mod segments;
 mod side_list;
@@ -138,7 +140,9 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     app.set_input_area(chat_column[3]);
     input::render_input(frame, chat_column[3], app, theme);
     let footer_gap = hud::render_footer(frame, inset_edges(chat_column[4]), app, theme);
-    if let Some(read) = hud::render_notice(frame, under_right.unwrap_or(footer_gap), app, theme) {
+    let (records, sandbox) = split_right_column(right, app);
+    let notice_area = under_right.unwrap_or(footer_gap);
+    if let Some(read) = hud::render_notice(frame, (notice_area, sandbox.or(records)), app, theme) {
         app.hold_notification_for(read);
     }
 
@@ -361,6 +365,24 @@ fn header_status_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
         ));
     }
     spans
+}
+
+/// `high thinking`: the thinking level pinned for every turn, brighter
+/// than `auto thinking`, when each model picks its own. Empty until the
+/// kernel reports the model.
+pub(super) fn thinking_indicator_spans<'a>(app: &App, theme: &Theme) -> Vec<Span<'a>> {
+    if app.current_model().is_empty() {
+        return Vec::new();
+    }
+    let (level, color) = app
+        .thinking()
+        .map_or(("auto", theme.colors.muted), |level| {
+            (level, theme.colors.foreground)
+        });
+    vec![Span::styled(
+        format!("{level} thinking"),
+        Style::default().fg(color),
+    )]
 }
 
 /// `ASK · qwen3:4b`: the approval level, then the model, or `GATE` when
