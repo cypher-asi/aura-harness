@@ -7,6 +7,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### BENCH runs table shows difficulty and wastes less room
+
+##### Changed
+
+- The runs table of a benchmark shows the classifier's difficulty in
+  its own column after `classified`. It used to share that column with
+  the category and was usually cut off (`small chan…`).
+- A run under way shows what it is doing across the columns it has no
+  values for yet (classified through led), instead of in a column at
+  the end of the row. The long activity text no longer cuts the task
+  and classification of every other run.
+- `moved up` and `led` are left out when no run moved up or led.
+
 ### Each agent keeps its chat panel tab
 
 ##### Changed
