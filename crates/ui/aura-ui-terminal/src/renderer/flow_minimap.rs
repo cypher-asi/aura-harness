@@ -1,4 +1,4 @@
-//! The map of the whole GRAPH canvas, in its top right corner when the
+//! The map of the whole GRAPH canvas, in its bottom left corner when the
 //! canvas is twice the view or more: each card a block, muted when it went
 //! well, in the colour of its state when it did not, the selected one in
 //! the accent colour; the part of the canvas on screen is lit. A click or
@@ -84,8 +84,8 @@ pub(super) fn render_minimap(frame: &mut Frame, inner: Rect, app: &mut App, them
         ((layout.height as f32 / scale).ceil() as u16).clamp(1, room.1),
     );
     let area = Rect {
-        x: inner.right() - size.0 - 2,
-        y: inner.y,
+        x: inner.x,
+        y: inner.bottom() - size.1 - 2,
         width: size.0 + 2,
         height: size.1 + 2,
     };

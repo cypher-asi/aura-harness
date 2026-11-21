@@ -25,7 +25,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   but the selected one and the one that spawned it, and `x` opens them
   all. A flow of more than four agents, or of a benchmark, opens with
   every agent but the one on screen folded.
-- A map of the whole GRAPH canvas in its top right corner when the
+- A map of the whole GRAPH canvas in its bottom left corner when the
   canvas is twice the view or more: cards as blocks coloured by how
   they went, the part on screen lit. A click or drag on it moves the
   view; `m` hides it.
