@@ -5,8 +5,8 @@ use super::panels::body_block;
 use super::text::display_width;
 use crate::app::benchmarks::{BenchMode, BenchState, FormField, WorkChoice};
 use crate::events::{
-    arm_letter, cost_per_fix, BenchArm, BenchStatus, BenchTaskCell, BenchTaskSetup, BenchTurn,
-    BenchVerdict, BenchView,
+    arm_letter, cost_per_fix, BenchArm, BenchRun, BenchStatus, BenchTaskCell, BenchTaskSetup,
+    BenchTurn, BenchVerdict, BenchView,
 };
 use crate::{App, Theme};
 use ratatui::{
@@ -57,6 +57,15 @@ fn tokens(n: u64) -> String {
 pub(super) fn short_model(model: &str) -> &str {
     let name = model.rsplit('/').next().unwrap_or(model);
     name.strip_prefix("claude-").unwrap_or(name)
+}
+
+/// `sonnet-4-6 › opus-4-7` for a run a failed attempt moved up, else the
+/// model its first turn was sent to.
+fn run_models(run: &BenchRun) -> String {
+    match &run.escalated_to {
+        Some(to) => format!("{} › {}", short_model(&run.model), short_model(to)),
+        None => short_model(&run.model).to_string(),
+    }
 }
 
 /// `-74%` for the cheaper of two costs, nothing for the other or when
@@ -735,6 +744,20 @@ fn detail_lines(
             saving(per_fix(a), per_fix(b)),
         );
     }
+    if a.escalated + b.escalated > 0 {
+        add(
+            "moved up",
+            pair(&|arm| format!("{}/{}", arm.escalated, arm.runs)),
+            none(),
+        );
+    }
+    if a.nudged + b.nudged > 0 {
+        add(
+            "nudged",
+            pair(&|arm| format!("{}/{}", arm.nudged, arm.runs)),
+            none(),
+        );
+    }
     if view.judge.is_some() {
         add(
             "judge W-L-T",
@@ -991,7 +1014,7 @@ fn detail_lines(
         let cells = vec![
             ((if selected { "›" } else { " " }).to_string(), base),
             (r.name.clone(), base),
-            (short_model(&r.model).to_string(), base),
+            (run_models(r), base),
             (
                 r.task
                     .as_deref()
@@ -1385,6 +1408,27 @@ mod tests {
             "{shown}"
         );
         assert!(shown.contains("›  a-1  sonnet-4-6"), "{shown}");
+        assert!(!shown.contains("moved up"), "{shown}");
+    }
+
+    #[test]
+    fn a_run_moved_up_shows_both_models_and_how_many_moved() {
+        let theme = Theme::default();
+        let mut view = view();
+        view.runs[0].escalated_to = Some("claude-opus-4-7".to_string());
+        view.arms[0].escalated = 1;
+        view.arms[0].nudged = 1;
+        let shown = text(&detail_lines(&view, None, &theme, 120, None));
+        assert!(shown.contains("a-1  sonnet-4-6 › opus-4-7"), "{shown}");
+        let row = |label: &str| {
+            shown
+                .lines()
+                .find(|l| l.starts_with(label))
+                .unwrap_or_else(|| panic!("no {label} row in\n{shown}"))
+                .to_string()
+        };
+        assert!(row("moved up").contains("1/"), "{shown}");
+        assert!(row("nudged").contains("1/"), "{shown}");
     }
 
     #[test]

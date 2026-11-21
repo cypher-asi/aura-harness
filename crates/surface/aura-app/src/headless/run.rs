@@ -7,6 +7,10 @@
 use super::output::{ExitReason, Output, RunReport, StreamEvent, UsageReport};
 use super::sink::{CallLimits, HeadlessSink, TurnTally};
 use super::tools::ToolFilter;
+use crate::event_loop::gate_followup::{
+    check_review, check_signal, harness_check, joined, judge_unchecked, nudge_prompt, FollowUp,
+    Unchecked,
+};
 use crate::event_loop::gate_record::{self, Judged};
 use crate::event_loop::handlers::{
     drive_turn, mark_session_start, record_response, resume_checkpoint,
@@ -21,6 +25,7 @@ use crate::event_loop::{AgentHub, AgentSession};
 use crate::session_checkpoint::SessionUsage;
 use aura_agent::{AgentLoop, AgentLoopConfig, AgentLoopResult};
 use aura_agent_gate::classify::Label;
+use aura_agent_gate::followup::Step;
 use aura_agent_gate::outcome::calls_for_stronger;
 use aura_agent_gate::turn_judge::Failed;
 use aura_agent_gate::{Decision, Work};
@@ -137,6 +142,29 @@ struct TurnOutcome {
     /// Whether `stop` is a model error the turn's conversation survived,
     /// so a stronger model can still take the turn over
     can_go_on: bool,
+    /// Where the turn's own messages start in `result`
+    turn_start: usize,
+}
+
+/// What a turn carries on from the one before it.
+enum Carry {
+    /// Work a weaker model failed at, on this model, with the work's
+    /// category.
+    Escalate(Decision, PromptCategory),
+    /// The same model, asked to check the change of the turn that ended
+    /// as this; the new turn's `Outcome` takes its place.
+    Nudge(OutcomePayload),
+}
+
+/// What Gate's follow-up made of a turn that checked nothing.
+#[derive(Default)]
+struct FollowedUp {
+    /// The same model is asked to check its change.
+    nudge: bool,
+    /// What the harness's check printed when it failed
+    harness: Option<String>,
+    /// What the judge found wrong with the unchecked work
+    unchecked: Option<String>,
 }
 
 /// Whether the agent ended `result` on its own: a final reply with no
@@ -215,8 +243,10 @@ impl Headless {
     /// Run `prompt` on `session`, then the notices of the agent's
     /// background work, until it has nothing left to do or a limit stops
     /// it; `started` is when the run began. When Gate routes `prompt`'s
-    /// turn and it ends in a model error or with its last check failing,
-    /// Gate's judge says whether the model was at fault
+    /// turn and it ran no check of its own, Gate follows it up first
+    /// ([`Self::follow_up`]). When it ends in a model error, with its last
+    /// check or the harness's failing, or with its unchecked work judged
+    /// unfinished, Gate's judge says whether the model was at fault
     /// ([`Self::judge`]). If it was, or nothing judged the turn, it goes
     /// on in the same conversation on the next stronger model, tier by
     /// tier. Also returns the `Outcome` recorded for the last of those
@@ -246,9 +276,14 @@ impl Headless {
         // Whether the turns so far answer `prompt` itself (its first turn
         // and the stronger models it went on to) rather than a notice.
         let mut answering = true;
-        let mut escalation = None;
+        let mut carry = None;
+        // The follow-up steps of the model `follow.0`'s attempt, and where
+        // that attempt's messages start.
+        let mut follow = (String::new(), FollowUp::default());
+        let mut attempt_start = 0;
         loop {
             totals.agent_turns += 1;
+            let nudged = matches!(carry, Some(Carry::Nudge(_)));
             let mut outcome = self
                 .run_turn(
                     session,
@@ -256,16 +291,35 @@ impl Headless {
                     limits,
                     deadline,
                     totals.usage.clone(),
-                    escalation.take(),
+                    carry.take(),
                     output,
                     interrupt,
                 )
                 .await;
-            // What the turn's own signal said, and what the judge found
-            // wrong with it.
+            if !nudged {
+                attempt_start = outcome.turn_start;
+            }
+            let mut found = FollowedUp::default();
+            if answering && outcome.stop.is_none() {
+                found = self
+                    .follow_up(
+                        session,
+                        &task,
+                        &mut outcome,
+                        &mut follow,
+                        attempt_start,
+                        output,
+                    )
+                    .await;
+                if found.harness.is_some() {
+                    outcome.failure.clone_from(&found.harness);
+                }
+            }
+            // What the turn's signal said, and what the judge found wrong
+            // with it.
             let raw = outcome.ended.as_ref().map(|ended| ended.signal);
-            let mut review = None;
-            if answering {
+            let mut review = found.unchecked.take();
+            if answering && !found.nudge && review.is_none() {
                 if let Some((judged_as, judged)) = self.judge(session, &task, &outcome).await {
                     output.event(&StreamEvent::Judged {
                         model: &judged.model,
@@ -278,6 +332,8 @@ impl Headless {
                     review = Some(judged.verdict.reasons.clone());
                     self.judged.push(judged);
                 }
+            }
+            if answering {
                 first_ended.clone_from(&outcome.ended);
             }
             totals.usage.add(&outcome.usage);
@@ -292,8 +348,24 @@ impl Headless {
                     totals.reply.clone_from(&result.total_text);
                 }
             }
+            if let Some(ended) = outcome.ended.take_if(|_| found.nudge) {
+                let text = format!(
+                    "gate: {} changed files without running a test or build; asking it to check its change",
+                    aura_model::model_catalog::route_label(&ended.model)
+                );
+                output.event(&StreamEvent::Notice { text: &text });
+                let mut next = nudge_prompt();
+                for unseen in &outcome.unseen {
+                    next.push_str("\n\n");
+                    next.push_str(unseen);
+                }
+                prompt = next;
+                carry = Some(Carry::Nudge(ended));
+                continue;
+            }
             if answering && (outcome.stop.is_none() || outcome.can_go_on) {
                 if let Some((decision, ended)) = self.stronger(session, outcome.ended.as_ref()) {
+                    let review = joined(found.harness.take(), review);
                     let mut next = takeover_prompt(
                         &aura_model::model_catalog::route_label(&ended.model),
                         raw.unwrap_or(ended.signal),
@@ -305,7 +377,7 @@ impl Headless {
                     }
                     output.event(&StreamEvent::Notice { text: &next });
                     prompt = format!("{}{next}", SteerSource::Harness.prefix());
-                    escalation = Some((decision, ended.category));
+                    carry = Some(Carry::Escalate(decision, ended.category));
                     continue;
                 }
             }
@@ -393,6 +465,103 @@ impl Headless {
             failure: turn.failure.as_deref().unwrap_or_default(),
         };
         gate_record::judge_failed(&session.kernel, &judge, ended, &failed, config.auth_token).await
+    }
+
+    /// Follow up `turn`, a turn of `session` answering `task` that Gate
+    /// routed and that ran no check of its own, as Gate's settings allow
+    /// (see [`gate_followup`](crate::event_loop::gate_followup)): it is
+    /// asked once to check its change, else the harness runs the
+    /// project's tests, else the judge looks at work that seems
+    /// unfinished. What the harness's check or the judge finds is recorded
+    /// as a later `Outcome` of the turn's prompt and becomes `turn`'s.
+    /// `follow` holds the steps the attempt on `follow.0` has taken, and
+    /// `since` is where that attempt's messages start.
+    async fn follow_up(
+        &mut self,
+        session: &AgentSession,
+        task: &str,
+        turn: &mut TurnOutcome,
+        follow: &mut (String, FollowUp),
+        since: usize,
+        output: &Output,
+    ) -> FollowedUp {
+        let mut found = FollowedUp::default();
+        let (Some(ended), Some(result)) = (turn.ended.as_mut(), turn.result.as_ref()) else {
+            return found;
+        };
+        let Some(candidates) = self.hub.gate_candidates(session.definition.as_deref()) else {
+            return found;
+        };
+        let workspace = session.kernel.agent_workspace();
+        if follow.0 != ended.model {
+            let fresh = FollowUp::new(&self.hub.gate, &candidates, &ended.model, &workspace);
+            *follow = (ended.model.clone(), fresh);
+        }
+        loop {
+            match follow.1.next(result, ended.category, ended.signal) {
+                Step::Stop => break,
+                Step::Nudge => {
+                    found.nudge = true;
+                    break;
+                }
+                Step::HarnessCheck => {
+                    let Some(command) = follow.1.check().map(str::to_string) else {
+                        continue;
+                    };
+                    let check = harness_check(session, &command).await;
+                    let signal = check_signal(&check);
+                    output.event(&StreamEvent::Checked {
+                        model: &ended.model,
+                        command: &command,
+                        passed: signal.and_then(|signal| signal.success()),
+                        summary: &check.describe(),
+                    });
+                    if let Some(signal) = signal {
+                        *ended = ended.with_signal(signal);
+                        gate_record::record(&session.kernel, session.agent_id(), ended).await;
+                        found.harness =
+                            (signal == OutcomeSignal::ChecksFailed).then(|| check_review(&check));
+                    }
+                }
+                Step::JudgeUnverified(suspicions) => {
+                    let Some(judge) = follow.1.judge().map(str::to_string) else {
+                        continue;
+                    };
+                    let diff = session
+                        .file_checkpoints
+                        .as_ref()
+                        .map(|files| files.attempt(session.agent_id()).diff(Some(&workspace)))
+                        .unwrap_or_default();
+                    let shown = Unchecked {
+                        task,
+                        diff: &diff,
+                        result,
+                        turn_start: since,
+                        suspicions: &suspicions,
+                    };
+                    let (config, _) = self.hub.turn(session.definition.as_deref(), &workspace);
+                    let Some(judged) =
+                        judge_unchecked(session, &judge, ended, &shown, config.auth_token).await
+                    else {
+                        continue;
+                    };
+                    output.event(&StreamEvent::Judged {
+                        model: &judged.model,
+                        judge: &judged.judge,
+                        at_fault: judged.verdict.at_fault,
+                        reasons: &judged.verdict.reasons,
+                        cost_usd: judged.cost_usd,
+                    });
+                    if judged.verdict.at_fault {
+                        *ended = ended.with_signal(OutcomeSignal::JudgedFail);
+                        gate_record::record(&session.kernel, session.agent_id(), ended).await;
+                        found.unchecked = Some(judged.verdict.reasons.clone());
+                    }
+                    self.judged.push(judged);
+                }
+            }
+        }
+        found
     }
 
     /// Where a turn of `session` that Gate routed and that `ended` badly
@@ -490,8 +659,9 @@ impl Headless {
     /// Record `text` as the prompt and run one agent turn on `session`,
     /// with `before` the usage of the run's earlier turns. When Gate
     /// routes the turn, it ends with an `Outcome` saying how it went.
-    /// `escalation` is set for a turn that goes on with work a weaker
-    /// model failed at: the model it runs on and the work's category.
+    /// `carry` is set for a turn that goes on from the one before: with
+    /// work a weaker model failed at, or on the same model asked to check
+    /// its change, which the `Outcome` then speaks for, its cost included.
     #[allow(clippy::too_many_arguments)]
     async fn run_turn(
         &mut self,
@@ -500,7 +670,7 @@ impl Headless {
         limits: RunLimits,
         deadline: Option<Instant>,
         before: SessionUsage,
-        escalation: Option<(Decision, PromptCategory)>,
+        carry: Option<Carry>,
         output: &Output,
         interrupt: &CancellationToken,
     ) -> TurnOutcome {
@@ -511,16 +681,29 @@ impl Headless {
         if let Some(max) = limits.max_iterations {
             config.max_iterations = max;
         }
-        let (mut payload, routed) = self
-            .route_turn(session, &mut config, &text, escalation)
-            .await;
+        let (escalation, nudged) = match carry {
+            Some(Carry::Escalate(decision, category)) => (Some((decision, category)), None),
+            Some(Carry::Nudge(ended)) => (None, Some(ended)),
+            None => (None, None),
+        };
+        let (mut payload, routed) = match &nudged {
+            Some(ended) => {
+                if config.model != ended.model {
+                    self.hub.model_limits().configure(&mut config, &ended.model);
+                }
+                (PromptPayload::new(text.clone()), true)
+            }
+            None => {
+                self.route_turn(session, &mut config, &text, escalation)
+                    .await
+            }
+        };
+        let category = nudged
+            .as_ref()
+            .map_or(payload.category, |ended| ended.category);
         if let Some(lead) = lead.filter(|_| routed) {
-            let explore = payload.route.reason != RouteReason::Escalate;
-            let led = self
-                .hub
-                .gate
-                .way(payload.category, &config.model, explore)
-                .led;
+            let explore = payload.route.reason != RouteReason::Escalate && nudged.is_none();
+            let led = self.hub.gate.way(category, &config.model, explore).led;
             session.lead = lead.apply(led, &mut config, &mut tools);
             payload.led = Some(led);
         }
@@ -536,6 +719,7 @@ impl Headless {
                     unseen: Vec::new(),
                     failure: None,
                     can_go_on: false,
+                    turn_start: session.messages.len(),
                 };
             }
         };
@@ -669,9 +853,9 @@ impl Headless {
                 }
                 _ => OutcomeSignal::None,
             };
-            let outcome = OutcomePayload {
+            let mut outcome = OutcomePayload {
                 prompt_tx,
-                category: payload.category,
+                category,
                 model: agent_loop.config().model.clone(),
                 success: signal.success(),
                 signal,
@@ -679,6 +863,12 @@ impl Headless {
                 subtask_cost_usd: self.hub.subtask_cost_usd(session.agent_id(), started_ms),
                 latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
             };
+            if let Some(before) = &nudged {
+                outcome.prompt_tx = before.prompt_tx;
+                outcome.cost_usd += before.cost_usd;
+                outcome.subtask_cost_usd += before.subtask_cost_usd;
+                outcome.latency_ms = outcome.latency_ms.saturating_add(before.latency_ms);
+            }
             gate_record::record(&session.kernel, session.agent_id(), &outcome).await;
             Some(outcome)
         } else {
@@ -693,6 +883,7 @@ impl Headless {
             unseen,
             failure,
             can_go_on: false,
+            turn_start,
         };
         match result {
             Some(Ok(result)) => {

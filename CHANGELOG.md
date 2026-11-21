@@ -7,6 +7,38 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Gate follows up work that checked nothing
+
+##### Added
+
+- A routed turn that ran no test or build of its own no longer ends
+  unjudged while a stronger model is there to move up to. It is asked
+  once, on the same model, to check the change it made
+  (`AURA_GATE_NUDGE`); if it still checked nothing, the harness runs the
+  project's tests (`AURA_GATE_CHECK`: `AURA_DOD_TEST_COMMAND`, else the
+  command the manifest implies, up to five minutes; a command that
+  could not run says nothing); and work that looks unfinished (no
+  files changed on verifiable work, a reply that gives up, a turn
+  stopped by its budget or a stall) goes to the judge
+  (`AURA_GATE_SUSPECT`), which says whether it is done. A failing
+  harness check or unfinished work counts against the model and moves
+  the turn up a tier, told what was found. In the terminal, `aura -p`
+  (a `checked` stream-json event for the harness's check), evals and
+  `/compare`.
+- `/compare` runs show the models a run moved through
+  (`sonnet-4-6 › opus-4-7`), and the arms' summary counts the runs that
+  moved up and the runs asked to check.
+
+##### Changed
+
+- Checks run through a shell wrapper (`sh .swe/run 'pytest …'`,
+  `bash -c 'cargo test'`) count as the turn's checks. The lead's
+  command allow-list still refuses them.
+- A `/compare` Gate arm's turns are followed up and judged as routed
+  turns are, so a run costs what the same work would outside a
+  benchmark. The runs' hidden checks are recorded in Gate's table only
+  once every run has ended, so no run is routed by another's check.
+
 ### TIME tab, and a GRAPH that stays readable on big flows
 
 ##### Added

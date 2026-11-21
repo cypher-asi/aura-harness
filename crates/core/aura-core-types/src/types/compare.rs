@@ -175,6 +175,13 @@ pub struct RunTurn {
     /// Times a failed attempt moved it to a stronger model.
     #[serde(default)]
     pub escalations: u32,
+    /// The model it was first sent to, when a failed attempt moved it on
+    /// from there to `model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_model: Option<String>,
+    /// Times Gate asked the model to check a change it had not checked.
+    #[serde(default)]
+    pub nudges: u32,
     /// The part of `cost_usd` its subtasks spent.
     #[serde(default)]
     pub subtask_cost_usd: f64,
@@ -199,6 +206,8 @@ impl RunTurn {
             difficulty: None,
             led: None,
             escalations: 0,
+            first_model: None,
+            nudges: 0,
             subtask_cost_usd: 0.0,
         }
     }
@@ -603,6 +612,8 @@ mod tests {
                     difficulty: Some(Difficulty::Hard),
                     led: Some(false),
                     escalations: 1,
+                    first_model: Some("claude/claude-haiku-4-5".to_string()),
+                    nudges: 1,
                     ..RunTurn::new(
                         "claude/claude-sonnet-4-6",
                         0.12,
@@ -653,6 +664,11 @@ mod tests {
         assert_eq!(json["runs"][0]["turns"][0]["signal"], "checks_passed");
         assert_eq!(json["runs"][0]["turns"][0]["category"], "debugging");
         assert_eq!(json["runs"][0]["turns"][0]["escalations"], 1);
+        assert_eq!(
+            json["runs"][0]["turns"][0]["first_model"],
+            "claude/claude-haiku-4-5"
+        );
+        assert_eq!(json["runs"][0]["turns"][0]["nudges"], 1);
         assert!(json["runs"][0].get("error").is_none());
         assert!(json["judgments"][0].get("a_vs_reference").is_none());
         assert_eq!(json["runs"][0]["plan_usage"][0]["plan"], "claude");
@@ -667,6 +683,8 @@ mod tests {
             "difficulty",
             "led",
             "escalations",
+            "first_model",
+            "nudges",
             "subtask_cost_usd",
         ] {
             turn.remove(field);

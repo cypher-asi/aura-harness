@@ -1,7 +1,8 @@
 //! How Gate decides a model has proven itself, how often it tries a
 //! cheaper one, whether the lead agent must delegate its work, whether a
-//! judge model reviews routed turns that failed, and whether work a check
-//! verifies starts where it is expected to cost least.
+//! judge model reviews routed turns that failed, whether work a check
+//! verifies starts where it is expected to cost least, and what Gate
+//! does about a routed turn that ran no check.
 //!
 //! ## Owned env vars
 //!
@@ -13,6 +14,9 @@
 //! | `AURA_GATE_DELEGATE` | `on` / `off` | `on` | [`GateConfig::delegate`] |
 //! | `AURA_GATE_JUDGE` | `on` / `off` | `on` | [`GateConfig::judge`] |
 //! | `AURA_GATE_CASCADE` | `on` / `off` | `on` | [`GateConfig::cascade`] |
+//! | `AURA_GATE_NUDGE` | `on` / `off` | `on` | [`GateConfig::nudge`] |
+//! | `AURA_GATE_CHECK` | `on` / `off` | `on` | [`GateConfig::harness_check`] |
+//! | `AURA_GATE_SUSPECT` | `on` / `off` | `on` | [`GateConfig::suspect_judge`] |
 //!
 //! A value outside what a variable accepts keeps that setting's default
 //! and logs a warning naming the variable and its accepted values; the
@@ -23,8 +27,9 @@ use std::fmt::Display;
 use serde::{Deserialize, Serialize};
 
 use crate::env::{
-    lookup_string, AURA_GATE_CASCADE, AURA_GATE_DELEGATE, AURA_GATE_EXPLORE, AURA_GATE_JUDGE,
-    AURA_GATE_MIN_TRIES, AURA_GATE_TARGET, FALSY_LITERALS, TRUTHY_LITERALS,
+    lookup_string, AURA_GATE_CASCADE, AURA_GATE_CHECK, AURA_GATE_DELEGATE, AURA_GATE_EXPLORE,
+    AURA_GATE_JUDGE, AURA_GATE_MIN_TRIES, AURA_GATE_NUDGE, AURA_GATE_SUSPECT, AURA_GATE_TARGET,
+    FALSY_LITERALS, TRUTHY_LITERALS,
 };
 use crate::ConfigError;
 
@@ -75,6 +80,26 @@ pub struct GateConfig {
     ///
     /// env: `AURA_GATE_CASCADE` (default: `on`)
     pub cascade: bool,
+    /// Whether a routed turn below the strongest tier that changed files
+    /// but ran no test or build is asked once, on the same model, to run
+    /// the tests that cover its change.
+    ///
+    /// env: `AURA_GATE_NUDGE` (default: `on`)
+    pub nudge: bool,
+    /// Whether the harness runs the project's tests (`AURA_DOD_TEST_COMMAND`,
+    /// else the command its manifest implies) on a routed turn below the
+    /// strongest tier that changed files and still ran none. A failure
+    /// moves the turn up as a failed check of its own does.
+    ///
+    /// env: `AURA_GATE_CHECK` (default: `on`)
+    pub harness_check: bool,
+    /// Whether the judge reviews a routed turn below the strongest tier
+    /// that ran no check but looks wrong: code work that changed no file,
+    /// a reply that gives up, or a turn stopped on a limit. Needs
+    /// [`Self::judge`] on as well.
+    ///
+    /// env: `AURA_GATE_SUSPECT` (default: `on`)
+    pub suspect_judge: bool,
 }
 
 impl GateConfig {
@@ -88,6 +113,9 @@ impl GateConfig {
             delegate: true,
             judge: true,
             cascade: true,
+            nudge: true,
+            harness_check: true,
+            suspect_judge: true,
         }
     }
 
@@ -161,6 +189,15 @@ impl GateConfig {
         ) {
             cfg.cascade = v;
         }
+        for (name, setting) in [
+            (AURA_GATE_NUDGE, &mut cfg.nudge),
+            (AURA_GATE_CHECK, &mut cfg.harness_check),
+            (AURA_GATE_SUSPECT, &mut cfg.suspect_judge),
+        ] {
+            if let Some(v) = read(name, SWITCH_ACCEPTS, "on", parse_switch, &mut rejected) {
+                *setting = v;
+            }
+        }
         (cfg, rejected)
     }
 }
@@ -224,6 +261,9 @@ mod tests {
         std::env::remove_var(AURA_GATE_DELEGATE);
         std::env::remove_var(AURA_GATE_JUDGE);
         std::env::remove_var(AURA_GATE_CASCADE);
+        std::env::remove_var(AURA_GATE_NUDGE);
+        std::env::remove_var(AURA_GATE_CHECK);
+        std::env::remove_var(AURA_GATE_SUSPECT);
     }
 
     #[test]
@@ -235,6 +275,9 @@ mod tests {
         assert!(cfg.delegate);
         assert!(cfg.judge);
         assert!(cfg.cascade);
+        assert!(cfg.nudge);
+        assert!(cfg.harness_check);
+        assert!(cfg.suspect_judge);
     }
 
     #[test]
@@ -256,6 +299,9 @@ mod tests {
         std::env::set_var(AURA_GATE_DELEGATE, "off");
         std::env::set_var(AURA_GATE_JUDGE, "no");
         std::env::set_var(AURA_GATE_CASCADE, "off");
+        std::env::set_var(AURA_GATE_NUDGE, "off");
+        std::env::set_var(AURA_GATE_CHECK, "0");
+        std::env::set_var(AURA_GATE_SUSPECT, "false");
         let cfg = GateConfig::from_env();
         clear_gate_env();
         assert_eq!(
@@ -267,6 +313,9 @@ mod tests {
                 delegate: false,
                 judge: false,
                 cascade: false,
+                nudge: false,
+                harness_check: false,
+                suspect_judge: false,
             }
         );
     }
@@ -303,6 +352,9 @@ mod tests {
             (AURA_GATE_DELEGATE, "maybe", SWITCH_ACCEPTS),
             (AURA_GATE_JUDGE, "sometimes", SWITCH_ACCEPTS),
             (AURA_GATE_CASCADE, "sometimes", SWITCH_ACCEPTS),
+            (AURA_GATE_NUDGE, "sometimes", SWITCH_ACCEPTS),
+            (AURA_GATE_CHECK, "sometimes", SWITCH_ACCEPTS),
+            (AURA_GATE_SUSPECT, "sometimes", SWITCH_ACCEPTS),
         ] {
             clear_gate_env();
             std::env::set_var(name, raw);
@@ -335,8 +387,7 @@ mod tests {
                 min_tries: DEFAULT_MIN_TRIES,
                 explore_rate: DEFAULT_EXPLORE_RATE,
                 delegate: false,
-                judge: true,
-                cascade: true,
+                ..GateConfig::defaults()
             }
         );
         let names: Vec<&str> = rejected

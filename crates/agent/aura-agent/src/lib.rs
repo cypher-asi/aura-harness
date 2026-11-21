@@ -98,6 +98,7 @@ pub use types::{
     AgentLoopResult, AgentToolExecutor, AutoBuildResult, BuildBaseline, FileChange, FileChangeKind,
     ToolCallInfo, ToolCallResult, TurnObserver, TurnObservers,
 };
+pub use verify::infer_default_test_command;
 
 /// Errors arising from the agent orchestration loop (model calls, tool execution, timeouts).
 ///

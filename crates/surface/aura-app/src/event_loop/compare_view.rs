@@ -558,8 +558,9 @@ fn run_line(run: &CompareRun) -> String {
 
 /// How a run's turns went: what they asked for and how hard, whether
 /// they were led (and then what the lead and its subtasks cost), and how
-/// often a failed attempt moved up a tier, e.g. `debugging/hard, direct,
-/// moved up 1×`. `None` when its turns do not say.
+/// often Gate asked the model to check its change and a failed attempt
+/// moved up a tier, e.g. `debugging/hard, direct, moved up 1×`. `None`
+/// when its turns do not say.
 fn routing(run: &CompareRun) -> Option<String> {
     let routed: Vec<&RunTurn> = run.turns.iter().filter(|t| t.category.is_some()).collect();
     let mut asked: Vec<String> = Vec::new();
@@ -594,6 +595,10 @@ fn routing(run: &CompareRun) -> Option<String> {
             money((total - subtasks).max(0.0)),
             money(subtasks)
         );
+    }
+    let nudged: u32 = routed.iter().map(|t| t.nudges).sum();
+    if nudged > 0 {
+        let _ = write!(text, ", asked to check {nudged}×");
     }
     let moved: u32 = routed.iter().map(|t| t.escalations).sum();
     if moved > 0 {
@@ -844,6 +849,7 @@ mod tests {
             difficulty: Some(Difficulty::Hard),
             led: Some(false),
             escalations: 1,
+            nudges: 1,
             ..RunTurn::new("m", 0.05, 1, OutcomeSignal::ChecksPassed)
         }];
         payload.runs[2].turns = vec![
@@ -861,7 +867,8 @@ mod tests {
         ];
         let text = render("Compare #1", &payload);
         assert!(
-            line(&text, "a-1").contains(&"· debugging/hard, direct, moved up 1×"),
+            line(&text, "a-1")
+                .contains(&"· debugging/hard, direct, asked to check 1×, moved up 1×"),
             "{text}"
         );
         assert!(

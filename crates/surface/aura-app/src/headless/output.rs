@@ -207,6 +207,15 @@ pub(crate) enum StreamEvent<'a> {
         /// What the judge's call cost
         cost_usd: f64,
     },
+    /// Gate ran the project's tests on a turn that checked nothing.
+    Checked {
+        model: &'a str,
+        command: &'a str,
+        /// `None` when the command could not say: it did not run, ran
+        /// out of time, or lacked its tools
+        passed: Option<bool>,
+        summary: &'a str,
+    },
 }
 
 /// Where a run's output goes, shared by the event sink and the runner.

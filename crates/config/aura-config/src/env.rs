@@ -81,6 +81,17 @@ pub const AURA_GATE_JUDGE: &str = "AURA_GATE_JUDGE";
 /// success rate, instead of by the expected cost of starting cheap and
 /// moving up on a failure. Consumed by [`crate::GateConfig::cascade`].
 pub const AURA_GATE_CASCADE: &str = "AURA_GATE_CASCADE";
+/// `off` stops Gate asking a routed turn that changed files without
+/// running a test or build to verify its change. Consumed by
+/// [`crate::GateConfig::nudge`].
+pub const AURA_GATE_NUDGE: &str = "AURA_GATE_NUDGE";
+/// `off` stops the harness running the project's tests on a routed
+/// turn that changed files and ran none. Consumed by
+/// [`crate::GateConfig::harness_check`].
+pub const AURA_GATE_CHECK: &str = "AURA_GATE_CHECK";
+/// `off` stops Gate's judge reviewing routed turns that ran no check but
+/// look wrong. Consumed by [`crate::GateConfig::suspect_judge`].
+pub const AURA_GATE_SUSPECT: &str = "AURA_GATE_SUSPECT";
 
 /// The full list of env-var names this crate owns. Boundary tests use
 /// this to enforce that no other crate calls `std::env::var(...)` on
@@ -118,6 +129,9 @@ pub const ENV_VAR_NAMES: &[&str] = &[
     AURA_GATE_DELEGATE,
     AURA_GATE_JUDGE,
     AURA_GATE_CASCADE,
+    AURA_GATE_NUDGE,
+    AURA_GATE_CHECK,
+    AURA_GATE_SUSPECT,
 ];
 
 // ---------------------------------------------------------------------------

@@ -122,18 +122,32 @@ pub fn command_line(input: &Value) -> String {
 }
 
 /// Whether `command` runs tests, a build or a type check in any of its
-/// `&&`/`;`/`|` parts.
+/// `&&`/`;`/`|` parts, counting a shell that runs the check for it:
+/// `bash -c '<check>'`, or a script handed the check, as in `sh .swe/run
+/// '<check>'` (which runs it in the task's container).
 #[must_use]
 pub fn is_check_command(command: &str) -> bool {
-    command
-        .split(['&', ';', '|', '\n'])
-        .any(|part| is_check_part(part.split_whitespace().collect()))
+    command.split(['&', ';', '|', '\n']).any(|part| {
+        let words: Vec<&str> = part
+            .split_whitespace()
+            .map(|word| word.trim_matches(['\'', '"']))
+            .filter(|word| !word.is_empty())
+            .collect();
+        is_check_words(words, true)
+    })
 }
 
 /// Whether one simple command (its words) is a check. Leading variable
 /// assignments and wrappers (`env`, `time`, `timeout 600`, `npx`, ...)
-/// are skipped.
-pub(crate) fn is_check_part(mut words: Vec<&str>) -> bool {
+/// are skipped. A shell handed a check is not one: the script it runs
+/// may do anything.
+pub(crate) fn is_check_part(words: Vec<&str>) -> bool {
+    is_check_words(words, false)
+}
+
+/// [`is_check_part`], looking through a shell that runs a check when
+/// `through_shells`.
+fn is_check_words(mut words: Vec<&str>, through_shells: bool) -> bool {
     loop {
         match words.first().copied() {
             Some(word) if word.contains('=') && !word.starts_with('-') => {
@@ -158,6 +172,9 @@ pub(crate) fn is_check_part(mut words: Vec<&str>) -> bool {
         return false;
     };
     let program = program.rsplit('/').next().unwrap_or(program);
+    if through_shells && matches!(program, "sh" | "bash" | "zsh" | "dash") {
+        return is_check_words(shell_command(&words[1..]), true);
+    }
     let sub = words.get(1).copied().unwrap_or_default();
     let script = if sub == "run" {
         words.get(2).copied().unwrap_or_default()
@@ -179,6 +196,24 @@ pub(crate) fn is_check_part(mut words: Vec<&str>) -> bool {
         | "mypy" | "pyright" | "ctest" | "ninja" | "rspec" | "phpunit" => true,
         _ => false,
     }
+}
+
+/// The command a shell given `args` runs: what follows `-c` (or a flag
+/// cluster holding `c`, as in `-lc`), else what follows the script it
+/// runs, which a wrapper script runs in turn. Empty for a bare script.
+fn shell_command<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    let is_flag = |word: &str| word.starts_with('-') && !word.starts_with("--");
+    if let Some(at) = args
+        .iter()
+        .position(|word| is_flag(word) && word.contains('c'))
+    {
+        return args[at + 1..].to_vec();
+    }
+    args.iter()
+        .skip_while(|word| word.starts_with('-'))
+        .skip(1)
+        .copied()
+        .collect()
 }
 
 /// Whether a package script or build target named `name` runs checks.
@@ -243,6 +278,47 @@ mod tests {
         ] {
             assert!(!is_check_command(command), "{command}");
         }
+    }
+
+    #[test]
+    fn a_shell_running_a_check_is_a_check() {
+        for command in [
+            "sh .swe/run 'python -m pytest -q test/units/config'",
+            "sh .swe/run \"go test ./lib/...\"",
+            "sh .swe/run 'cd /app && npx jest src/foo.test.ts'",
+            "bash -c 'cargo test -p parser'",
+            "bash -lc \"npm test\"",
+            "/bin/sh -c 'make check'",
+        ] {
+            assert!(is_check_command(command), "{command}");
+        }
+        for command in [
+            "sh .swe/run 'ls -la'",
+            "bash -c 'echo cargo test'",
+            "bash deploy.sh",
+            "sh",
+        ] {
+            assert!(!is_check_command(command), "{command}");
+        }
+    }
+
+    #[test]
+    fn a_check_handed_to_a_script_is_not_one_for_the_lead() {
+        assert!(is_check_part(vec!["cargo", "test"]));
+        assert!(!is_check_part(vec!["sh", "anything.sh", "cargo", "test"]));
+        assert!(!is_check_part(vec!["bash", "-c", "cargo", "test"]));
+    }
+
+    #[test]
+    fn a_check_run_through_the_task_container_decides() {
+        let messages = [
+            call(
+                "1",
+                json!({"shell_script": "sh .swe/run 'python -m pytest -q test/units'"}),
+            ),
+            result("1", r#"{"exit_code":1,"stdout":"1 failed"}"#, true),
+        ];
+        assert_eq!(last_check(&messages), Some(false));
     }
 
     fn call(id: &str, input: Value) -> Message {

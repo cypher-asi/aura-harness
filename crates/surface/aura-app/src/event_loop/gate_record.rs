@@ -7,7 +7,7 @@
 
 use super::agents::AgentSession;
 use super::gate_live::GateLive;
-use aura_agent_gate::turn_judge::{self, Failed, Verdict};
+use aura_agent_gate::turn_judge::{self, Failed, Unverified, Verdict};
 use aura_agent_gate::{classify, outcome::is_retry_stronger, Candidate};
 use aura_agent_kernel::Kernel;
 use aura_core_types::{
@@ -40,6 +40,9 @@ pub struct Judged {
     /// unknown. Not part of the work's own cost: it is what Gate pays to
     /// learn from the failure.
     pub cost_usd: f64,
+    /// Whether the work ran no check and was judged for looking wrong
+    /// rather than for failing.
+    pub unverified: bool,
 }
 
 impl Judged {
@@ -47,10 +50,11 @@ impl Judged {
     #[must_use]
     pub fn describe(&self) -> String {
         let label = |id: &str| aura_model::model_catalog::route_label(id);
-        let found = if self.verdict.at_fault {
-            format!("the failure is {}'s", label(&self.model))
-        } else {
-            format!("the failure is not {}'s doing", label(&self.model))
+        let found = match (self.unverified, self.verdict.at_fault) {
+            (false, true) => format!("the failure is {}'s", label(&self.model)),
+            (false, false) => format!("the failure is not {}'s doing", label(&self.model)),
+            (true, true) => format!("{}'s unchecked work is not done", label(&self.model)),
+            (true, false) => format!("{}'s unchecked work stands", label(&self.model)),
         };
         let reasons = self.verdict.reasons.trim();
         format!(
@@ -101,7 +105,65 @@ pub(crate) async fn judge_failed(
     failed: &Failed<'_>,
     auth_token: Option<String>,
 ) -> Option<(OutcomePayload, Judged)> {
-    let request = match turn_judge::request(judge, failed, auth_token) {
+    let request = turn_judge::request(judge, failed, auth_token);
+    let judged = ask_judge(kernel, judge, ended, request, false).await?;
+    let signal = if judged.verdict.at_fault {
+        OutcomeSignal::JudgedFail
+    } else {
+        OutcomeSignal::JudgedExcused
+    };
+    info!(%judge, model = %ended.model, %signal, cost_usd = judged.cost_usd, "The judge reviewed failed work");
+    let outcome = ended.with_signal(signal);
+    record(kernel, kernel.agent_id, &outcome).await;
+    Some((outcome, judged))
+}
+
+/// The judge of unverified work for `ended`, the outcome of work Gate
+/// routed among `candidates` that ran no check: the same model as
+/// [`judge_for`]'s. `None` when the judge or this review of it is
+/// switched off, or the work ran on a model as strong as the judge.
+pub(crate) fn unverified_judge_for(
+    live: &GateLive,
+    candidates: &[Candidate],
+    model: &str,
+) -> Option<String> {
+    let settings = live.settings();
+    if !settings.judge || !settings.suspect_judge {
+        return None;
+    }
+    let judge = aura_agent_gate::compare::default_against(candidates)?;
+    turn_judge::judges(&judge.id, model, candidates).then(|| judge.id.clone())
+}
+
+/// Ask `judge` through `kernel` whether the work of `ended`, which ran no
+/// check and looks wrong as `unverified` says, is done. Nothing is
+/// recorded: work found unfinished fails with `judged_fail` where the
+/// caller records the attempt's outcome, and work found done records
+/// nothing, as no check proved it. `None` when the judge gave no verdict.
+pub(crate) async fn judge_unverified(
+    kernel: &Kernel,
+    judge: &str,
+    ended: &OutcomePayload,
+    unverified: &Unverified<'_>,
+    auth_token: Option<String>,
+) -> Option<Judged> {
+    let request = turn_judge::unverified_request(judge, unverified, auth_token);
+    let judged = ask_judge(kernel, judge, ended, request, true).await?;
+    info!(%judge, model = %ended.model, at_fault = judged.verdict.at_fault, cost_usd = judged.cost_usd, "The judge reviewed unchecked work");
+    Some(judged)
+}
+
+/// Send `request` to `judge` through `kernel` and read its verdict on
+/// the work of `ended`. `None` when the request could not be built, the
+/// call failed or timed out, or the reply held no verdict.
+async fn ask_judge(
+    kernel: &Kernel,
+    judge: &str,
+    ended: &OutcomePayload,
+    request: Result<aura_model::ModelRequest, aura_model::ReasonerError>,
+    unverified: bool,
+) -> Option<Judged> {
+    let request = match request {
         Ok(request) => request,
         Err(e) => {
             warn!(%judge, error = %e, "Could not build the judge's request");
@@ -125,23 +187,13 @@ pub(crate) async fn judge_failed(
     };
     let cost_usd =
         aura_model::model_catalog::estimate_cost_usd(judge, &response.usage).unwrap_or(0.0);
-    let signal = if verdict.at_fault {
-        OutcomeSignal::JudgedFail
-    } else {
-        OutcomeSignal::JudgedExcused
-    };
-    info!(%judge, model = %ended.model, %signal, cost_usd, "The judge reviewed failed work");
-    let outcome = ended.with_signal(signal);
-    record(kernel, kernel.agent_id, &outcome).await;
-    Some((
-        outcome,
-        Judged {
-            model: ended.model.clone(),
-            judge: judge.to_string(),
-            verdict,
-            cost_usd,
-        },
-    ))
+    Some(Judged {
+        model: ended.model.clone(),
+        judge: judge.to_string(),
+        verdict,
+        cost_usd,
+        unverified,
+    })
 }
 
 /// Label `text` with its category and difficulty by asking `model`

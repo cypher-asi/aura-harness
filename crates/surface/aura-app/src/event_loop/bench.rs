@@ -9,7 +9,8 @@ use aura_agent_gate::compare::{
     judge_cost_usd, summarize, task_cells, turn_cells, CompareRequest, SessionPick,
 };
 use aura_core_types::{
-    AgentId, BenchSource, CompareArm, ComparePayload, CompareStatus, ModelTokens, RefVerdict,
+    AgentId, BenchSource, CompareArm, ComparePayload, CompareRun, CompareStatus, ModelTokens,
+    RefVerdict, RunTurn,
 };
 use aura_ui_terminal::events::{
     BenchArm, BenchBaseline, BenchExample, BenchJudge, BenchRequest, BenchRun, BenchSpec,
@@ -161,6 +162,13 @@ fn tokens(rows: &[ModelTokens]) -> Vec<BenchTokens> {
 
 fn arm(payload: &ComparePayload, arm: CompareArm) -> BenchArm {
     let summary = summarize(payload, arm);
+    let runs_where = |moved: fn(&RunTurn) -> bool| {
+        payload
+            .runs
+            .iter()
+            .filter(|run| run.arm == arm && run.turns.iter().any(moved))
+            .count()
+    };
     BenchArm {
         label: payload.spec(arm).label().to_string(),
         runs: summary.runs,
@@ -187,7 +195,30 @@ fn arm(payload: &ComparePayload, arm: CompareArm) -> BenchArm {
                 errors: cell.errors,
             })
             .collect(),
+        escalated: runs_where(|t| t.escalations > 0),
+        nudged: runs_where(|t| t.nudges > 0),
     }
+}
+
+/// The model `run`'s first turn was sent to, and the one a failed
+/// attempt last moved its work to.
+fn models(run: &CompareRun) -> (String, Option<String>) {
+    let first = run.turns.first().map_or_else(
+        || run.model.clone(),
+        |turn| {
+            turn.first_model
+                .clone()
+                .unwrap_or_else(|| turn.model.clone())
+        },
+    );
+    let moved = run
+        .turns
+        .iter()
+        .rev()
+        .find(|turn| turn.escalations > 0)
+        .map(|turn| turn.model.clone())
+        .filter(|model| *model != first);
+    (first, moved)
 }
 
 fn verdict(verdict: Option<RefVerdict>) -> Option<String> {
@@ -278,16 +309,20 @@ pub(super) fn view(
         runs: payload
             .runs
             .iter()
-            .map(|run| BenchRun {
-                name: run.name.clone(),
-                arm: run.arm.index(),
-                model: run.model.clone(),
-                wall_ms: run.wall_ms,
-                cost_usd: run.cost_usd,
-                check_passed: run.check_passed,
-                files_changed: run.files_changed,
-                error: run.error.clone(),
-                task: run.task.clone(),
+            .map(|run| {
+                let (model, escalated_to) = models(run);
+                BenchRun {
+                    name: run.name.clone(),
+                    arm: run.arm.index(),
+                    model,
+                    escalated_to,
+                    wall_ms: run.wall_ms,
+                    cost_usd: run.cost_usd,
+                    check_passed: run.check_passed,
+                    files_changed: run.files_changed,
+                    error: run.error.clone(),
+                    task: run.task.clone(),
+                }
             })
             .collect(),
         judge,

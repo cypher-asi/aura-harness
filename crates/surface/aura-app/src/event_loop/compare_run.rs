@@ -15,10 +15,13 @@
 //! A run sends its prompts one after the other on the same conversation,
 //! as a replayed session did. Each prompt is recorded with route reason
 //! `compare` and its turn ends with its `Outcome`; what each turn cost is
-//! kept per prompt. After the last turn the check command runs in the copy as a
-//! `run_command` call through the run's kernel, so it is in the run's log,
-//! and its verdict is recorded as a later `Outcome`, so it counts in the
-//! table.
+//! kept per prompt. A Gate arm's turns are followed up, judged and moved
+//! to stronger models as the terminal's routed turns are, so a run costs
+//! what the same work would outside a benchmark. After the last turn the
+//! check command runs in the copy as a `run_command` call through the
+//! run's kernel, so it is in the run's log, and its verdict is recorded as
+//! a later `Outcome` once every run has ended, so it counts in the table
+//! without steering the comparison's other runs.
 //! Cost and tokens per model come from the records of the run and its
 //! subtasks: every model call there, classifier calls included. So do
 //! the plan readings those calls recorded; once every run has ended they
@@ -28,6 +31,10 @@ use super::agent_events::AgentUi;
 use super::agents::AgentSession;
 use super::bench_source::{self, StartFile};
 use super::compare_view::{duration, money, render};
+use super::gate_followup::{
+    check_review, check_signal, harness_check, joined, judge_unchecked, nudge_prompt, FollowUp,
+    Unchecked,
+};
 use super::gate_record;
 use super::handlers::{handle_agent_success, run_agent_turn, system_message, turn_summary};
 use super::modes::Permissions;
@@ -36,7 +43,7 @@ use super::steering::{SteerSource, Steering};
 use super::subagents::{lock, AgentHub, ArmRouting};
 use super::task_check::{self, takeover_prompt};
 use super::tasks::TASKS_DIR;
-use super::turns::{ended_signal, record_prompt};
+use super::turns::{ended_signal, failure_text, record_prompt};
 use crate::agent_registry::RegisteredAgent;
 use crate::bench_pack::{self, ExampleTask};
 use crate::isolation::changes::{self, BUILD_OUTPUT};
@@ -46,7 +53,9 @@ use crate::isolation::{
 use aura_agent::AgentLoop;
 use aura_agent_gate::classify::Label;
 use aura_agent_gate::compare::{list_price, plan_shares, run_name, PlanReading, Schedule};
+use aura_agent_gate::followup::Step;
 use aura_agent_gate::outcome::calls_for_stronger;
+use aura_agent_gate::turn_judge::Failed;
 use aura_agent_gate::{judge, Candidate, Work};
 use aura_agent_kernel::Kernel;
 use aura_core_types::{
@@ -399,6 +408,10 @@ struct Ran {
     note: Option<String>,
     /// Plan usage its model calls reported
     readings: Vec<PlanReading>,
+    /// Its last turn's `Outcome` as its check judged it, recorded on its
+    /// kernel once every run has ended, so no run is routed by another's
+    /// hidden checks
+    checked: Option<(Arc<Kernel>, OutcomePayload)>,
 }
 
 /// Write `payload` to the record of the comparison's agent `agent_id`
@@ -543,6 +556,11 @@ pub(super) async fn run(
         live: std::sync::Mutex::new(Vec::new()),
     });
     let mut ran = run_all(&ctx, &session, &user_ui, &mut payload).await;
+    for r in &mut ran {
+        if let Some((kernel, ended)) = r.checked.take() {
+            gate_record::record(&kernel, r.run.agent_id, &ended).await;
+        }
+    }
     let used: Vec<AgentId> = ran.iter().map(|r| r.run.agent_id).collect();
     for agent in ctx.agents.values() {
         if !used.contains(&agent.agent_id()) {
@@ -732,6 +750,7 @@ fn not_run(ctx: &Context, arm: CompareArm, n: u32, error: String) -> Ran {
         patch: String::new(),
         note: None,
         readings: Vec::new(),
+        checked: None,
     }
 }
 
@@ -982,6 +1001,7 @@ async fn run_turn(
     let (prompt_tx, model) = first.unwrap_or_default();
 
     let check = example.map_or(plan.check.as_deref(), |task| Some(task.verify.as_str()));
+    let mut checked = None;
     let check_passed = match check {
         Some(check) if !cancel.is_cancelled() && !turns.is_empty() => {
             let hidden = match example {
@@ -1003,8 +1023,7 @@ async fn run_turn(
                         .as_ref()
                         .filter(|ended| ended.signal != OutcomeSignal::Unavailable);
                     if let (Some(signal), Some(ended)) = (run.signal(), finished) {
-                        gate_record::record(&session.kernel, agent_id, &ended.with_signal(signal))
-                            .await;
+                        checked = Some((Arc::clone(&session.kernel), ended.with_signal(signal)));
                     }
                     run.passed
                 }
@@ -1072,6 +1091,7 @@ async fn run_turn(
         patch,
         note: None,
         readings,
+        checked,
     }
 }
 
@@ -1139,7 +1159,7 @@ async fn run_prompt(
     };
 
     if i == 0 {
-        hub.register_root(agent_id, name, workdir, &config);
+        hub.register_root(agent_id, name, workdir.clone(), &config);
         hub.send_agent_list().await;
     }
     ui.send(UiCommand::TurnStarted {
@@ -1169,15 +1189,33 @@ async fn run_prompt(
         }
     };
     let first_tx = prompt_tx;
+    let first_model = model.clone();
     let (mut model, mut prompt_tx) = (model, prompt_tx);
     let (mut attempt_started, mut attempt_ms) = (started, started_ms);
-    let mut escalations = 0;
+    let (mut escalations, mut nudges) = (0, 0);
     let mut turn_start = session.messages.len();
     session.messages.push(Message::user(text.to_string()));
-    // A Gate run's failed attempt goes on in the same conversation on the
-    // next stronger model, as a routed turn does; the run's check judges
-    // the result, so no judge is asked first.
-    let (signal, reply, mut error, ended) = loop {
+    // A Gate run's turn is followed up and judged as a routed turn is:
+    // an attempt that checked nothing gets Gate's follow-up, and one that
+    // failed goes to the judge, then on in the same conversation to the
+    // next stronger model. The run's own check is not consulted, as no
+    // turn outside a benchmark has one.
+    let gate_arm = matches!(routing, ArmRouting::Gate { .. });
+    let files = session.file_checkpoints.clone().filter(|_| gate_arm);
+    if let Some(files) = &files {
+        files.begin_attempt(agent_id);
+    }
+    // The follow-up steps of the attempt on `follow.0`, and what its runs
+    // before a nudge cost.
+    let mut follow = (String::new(), FollowUp::default());
+    let mut nudged_cost_usd = 0.0;
+    let diff = || {
+        files
+            .as_ref()
+            .map(|files| files.attempt(agent_id).diff(Some(&workdir)))
+            .unwrap_or_default()
+    };
+    let (signal, reply, mut error, ended, recorded) = loop {
         let agent_loop = AgentLoop::new(config.clone());
         let steering = Steering::new(cancel);
         let (result, forwarded) = run_agent_turn(
@@ -1192,18 +1230,96 @@ async fn run_prompt(
         )
         .await;
         steering.finish(&[]);
-        let cancelled = cancel.is_cancelled();
-        let signal = if cancelled || forwarded.credentials_rejected {
+        let stopped = cancel.is_cancelled() || forwarded.credentials_rejected;
+        let mut signal = if stopped {
             OutcomeSignal::None
         } else {
             ended_signal(&result, turn_start)
         };
-        let next = match routing {
-            ArmRouting::Gate { .. } if result.is_ok() && calls_for_stronger(signal) => hub
-                .gate
-                .escalate(RouteLevel::Turn, category, &model, &plan.candidates),
-            _ => None,
+        let outcome = |signal: OutcomeSignal, model: &str| {
+            prompt_tx.map(|prompt_tx| OutcomePayload {
+                prompt_tx,
+                category,
+                model: model.to_string(),
+                success: signal.success(),
+                signal,
+                cost_usd: nudged_cost_usd + forwarded.usage.cost_usd,
+                subtask_cost_usd: hub.subtask_cost_usd(agent_id, attempt_ms),
+                latency_ms: u64::try_from(attempt_started.elapsed().as_millis())
+                    .unwrap_or(u64::MAX),
+            })
         };
+        // What the harness's check printed when it failed, what the judge
+        // found wrong with unchecked work, and whether the model is asked
+        // to check its change.
+        let (mut harness, mut unchecked, mut nudge) = (None, None, false);
+        if let (true, false, Ok(partial)) = (gate_arm, stopped, &result) {
+            if follow.0 != model {
+                let fresh = FollowUp::new(&hub.gate, &plan.candidates, &model, &workdir);
+                follow = (model.clone(), fresh);
+            }
+            loop {
+                match follow.1.next(partial, category, signal) {
+                    Step::Stop => break,
+                    Step::Nudge => {
+                        nudge = true;
+                        break;
+                    }
+                    Step::HarnessCheck => {
+                        let Some(command) = follow.1.check().map(str::to_string) else {
+                            continue;
+                        };
+                        ui.send(system_message(format!(
+                            "gate: running `{command}` to check the change"
+                        )))
+                        .await;
+                        let check = harness_check(session, &command).await;
+                        ui.send(system_message(check.describe())).await;
+                        if let Some(checked) = check_signal(&check) {
+                            signal = checked;
+                            harness = (checked == OutcomeSignal::ChecksFailed)
+                                .then(|| check_review(&check));
+                        }
+                    }
+                    Step::JudgeUnverified(suspicions) => {
+                        let (Some(judge), Some(ended)) = (
+                            follow.1.judge().map(str::to_string),
+                            outcome(signal, &model),
+                        ) else {
+                            continue;
+                        };
+                        let diff = diff();
+                        let shown = Unchecked {
+                            task: text,
+                            diff: &diff,
+                            result: partial,
+                            turn_start,
+                            suspicions: &suspicions,
+                        };
+                        let judged = judge_unchecked(
+                            session,
+                            &judge,
+                            &ended,
+                            &shown,
+                            config.auth_token.clone(),
+                        )
+                        .await;
+                        if let Some(judged) = judged {
+                            ui.send(system_message(judged.describe())).await;
+                            if judged.verdict.at_fault {
+                                signal = OutcomeSignal::JudgedFail;
+                                unchecked = Some(judged.verdict.reasons);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let failure = harness
+            .clone()
+            .or_else(|| failure_text(&result, turn_start))
+            .unwrap_or_default();
+        let survived = result.is_ok();
         let (reply, error) = match result {
             Ok(result) => {
                 let text = result.total_text.clone();
@@ -1217,29 +1333,70 @@ async fn run_prompt(
                 (String::new(), Some(e.to_string()))
             }
         };
-        let ended = prompt_tx.map(|prompt_tx| OutcomePayload {
-            prompt_tx,
-            category,
-            model: model.clone(),
-            success: signal.success(),
-            signal,
-            cost_usd: forwarded.usage.cost_usd,
-            subtask_cost_usd: hub.subtask_cost_usd(agent_id, attempt_ms),
-            latency_ms: u64::try_from(attempt_started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        });
-        let Some(next) = next else {
-            break (signal, reply, error, ended);
-        };
-        if let Some(ended) = &ended {
-            gate_record::record(&session.kernel, agent_id, ended).await;
+        if nudge {
+            let nudge = nudge_prompt();
+            if let Err(problem) = record_prompt(session, &PromptPayload::new(nudge.clone())).await {
+                warn!(%agent_id, %problem, "Failed to record Gate's request to check the change");
+            }
+            ui.send(system_message(format!(
+                "gate: {} changed files without running a test or build; asking it to check its change",
+                aura_model::model_catalog::route_label(&model)
+            )))
+            .await;
+            nudged_cost_usd += forwarded.usage.cost_usd;
+            nudges += 1;
+            config.initial_todos.clone_from(&session.todos);
+            session.messages.push(Message::user(nudge));
+            continue;
         }
+        let ended = outcome(signal, &model);
+        if !(gate_arm && survived && calls_for_stronger(signal)) {
+            break (signal, reply, error, ended, false);
+        }
+        if let Some(failed) = &ended {
+            gate_record::record(&session.kernel, agent_id, failed).await;
+        }
+        let mut review = unchecked;
+        let judge = ended
+            .as_ref()
+            .and_then(|failed| gate_record::judge_for(&hub.gate, &plan.candidates, failed));
+        if let (Some(judge), Some(failed)) = (judge, &ended) {
+            let diff = diff();
+            let shown = Failed {
+                task: text,
+                diff: &diff,
+                reply: &reply,
+                failure: &failure,
+            };
+            let judged = gate_record::judge_failed(
+                &session.kernel,
+                &judge,
+                failed,
+                &shown,
+                config.auth_token.clone(),
+            )
+            .await;
+            if let Some((judged_as, judged)) = judged {
+                ui.send(system_message(judged.describe())).await;
+                if !judged.verdict.at_fault {
+                    break (judged_as.signal, reply, error, Some(judged_as), true);
+                }
+                review = Some(judged.verdict.reasons);
+            }
+        }
+        let Some(next) = hub
+            .gate
+            .escalate(RouteLevel::Turn, category, &model, &plan.candidates)
+        else {
+            break (signal, reply, error, ended, true);
+        };
         let takeover = format!(
             "{}{}",
             SteerSource::Harness.prefix(),
             takeover_prompt(
                 &aura_model::model_catalog::route_label(&model),
                 signal,
-                None
+                joined(harness, review).as_deref()
             )
         );
         let escalated = PromptPayload {
@@ -1267,14 +1424,19 @@ async fn run_prompt(
         hub.gate.note_model(agent_id, &next.model.id);
         model.clone_from(&next.model.id);
         escalations += 1;
+        nudged_cost_usd = 0.0;
         (attempt_started, attempt_ms) = (Instant::now(), super::processes::now_ms());
         turn_start = session.messages.len();
+        config.initial_todos.clone_from(&session.todos);
         session.messages.push(Message::user(takeover));
     };
+    if let Some(files) = &files {
+        let _ = files.take_attempt(agent_id);
+    }
     if cancel.is_cancelled() {
         error = Some("stopped by the user".to_string());
     }
-    if let Some(ended) = &ended {
+    if let (false, Some(ended)) = (recorded, &ended) {
         gate_record::record(&session.kernel, agent_id, ended).await;
     }
     let routed = RunTurn {
@@ -1282,6 +1444,8 @@ async fn run_prompt(
         difficulty: label.difficulty,
         led: Some(led),
         escalations,
+        first_model: (model != first_model).then_some(first_model),
+        nudges,
         subtask_cost_usd: hub.subtask_cost_usd(agent_id, started_ms),
         ..RunTurn::new(model.clone(), 0.0, 0, signal)
     };

@@ -648,6 +648,11 @@ async fn a_gate_run_that_fails_its_checks_carries_on_on_a_stronger_model() {
         "the run records how its turn was routed"
     );
     assert_eq!(
+        gate.turns[0].first_model.as_deref(),
+        Some(HAIKU),
+        "and the model it started on"
+    );
+    assert_eq!(
         signals_of(&state, gate.agent_id)[0],
         OutcomeSignal::ChecksFailed,
         "the failed attempt is recorded on its own"

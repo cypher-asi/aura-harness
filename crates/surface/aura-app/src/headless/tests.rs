@@ -1286,3 +1286,179 @@ async fn a_failed_turn_the_judge_says_nothing_clear_about_still_moves_up() {
     );
     assert_eq!(run.rows, [Some((1, 0)), None]);
 }
+
+/// Run "fix the parser" under [`sonnet_and_opus`] on `provider`, which
+/// answers the classifier first. Returns the report, the model of each
+/// call, the requests, and the model and signal of each `Outcome`.
+async fn run_routed(
+    provider: MockProvider,
+) -> (
+    super::RunReport,
+    Vec<String>,
+    Arc<Mutex<Vec<ModelRequest>>>,
+    Vec<aura_core_types::OutcomePayload>,
+) {
+    let dirs = dirs();
+    let permissions = super::permissions(aura_core_modes::AgentMode::Agent, None);
+    let (mut h, requests) = harness(
+        &dirs,
+        provider,
+        ToolFilter::default(),
+        permissions,
+        sonnet_and_opus(),
+    );
+    let (report, _) = execute(
+        &mut h,
+        request("fix the parser", SessionChoice::New),
+        OutputFormat::StreamJson,
+    )
+    .await;
+    let models = requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| r.model.to_string())
+        .collect();
+    let (agent, _) = parse_session_id(&report.session_id, AgentId::generate()).unwrap();
+    let outcomes = h
+        .hub
+        .factory
+        .store
+        .scan_record(agent, 1, 1_000)
+        .unwrap()
+        .iter()
+        .filter_map(|e| e.tx.outcome_payload())
+        .collect();
+    (report, models, requests, outcomes)
+}
+
+#[tokio::test]
+async fn a_change_made_without_a_check_is_checked_before_the_turn_ends() {
+    use aura_core_types::OutcomeSignal;
+    let provider = MockProvider::new()
+        .with_response(MockResponse::text("debugging"))
+        .with_response(MockResponse::tool_use(
+            "c0",
+            "write_file",
+            json!({"path": "parser.txt", "content": "skip the last token\n"}),
+        ))
+        .with_response(MockResponse::text("Fixed the parser."))
+        .with_response(MockResponse::tool_use(
+            "c1",
+            "run_command",
+            json!({"program": "cargo", "args": ["test"]}),
+        ))
+        .with_response(MockResponse::text("The tests fail."))
+        .with_response(MockResponse::text(
+            "The parser still drops the last token.\nVERDICT: MODEL",
+        ))
+        .with_response(MockResponse::text("Fixed it."));
+    let (report, models, requests, outcomes) = run_routed(provider).await;
+
+    assert_eq!(
+        report.exit_reason,
+        ExitReason::Success,
+        "{:?}",
+        report.error
+    );
+    assert_eq!(
+        (report.model.as_str(), report.result.as_str()),
+        (GATE_OPUS, "Fixed it.")
+    );
+    assert_eq!(
+        report.agent_turns, 3,
+        "the turn, its check, the stronger model"
+    );
+    assert_eq!(
+        models,
+        [
+            GATE_HAIKU,
+            GATE_SONNET,
+            GATE_SONNET,
+            GATE_SONNET,
+            GATE_SONNET,
+            GATE_OPUS,
+            GATE_OPUS
+        ],
+        "Sonnet is asked to check its change, its check fails, the judge blames it, Opus takes over"
+    );
+    let nudge = requests.lock().unwrap()[3]
+        .messages
+        .last()
+        .unwrap()
+        .text_content();
+    assert!(
+        nudge.contains(aura_agent_gate::followup::NUDGE_PROMPT),
+        "{nudge}"
+    );
+    let signals: Vec<(&str, OutcomeSignal)> = outcomes
+        .iter()
+        .map(|o| (o.model.as_str(), o.signal))
+        .collect();
+    assert_eq!(
+        signals,
+        [
+            (GATE_SONNET, OutcomeSignal::None),
+            (GATE_SONNET, OutcomeSignal::ChecksFailed),
+            (GATE_SONNET, OutcomeSignal::JudgedFail),
+            (GATE_OPUS, OutcomeSignal::None),
+        ]
+    );
+    assert_eq!(
+        outcomes[1].prompt_tx, outcomes[0].prompt_tx,
+        "the check speaks for the turn that made the change"
+    );
+    assert!(
+        outcomes[1].cost_usd >= outcomes[0].cost_usd,
+        "and its cost includes the turn's"
+    );
+}
+
+#[tokio::test]
+async fn unchecked_work_that_looks_unfinished_goes_to_the_judge_then_moves_up() {
+    use aura_core_types::OutcomeSignal;
+    let provider = MockProvider::new()
+        .with_response(MockResponse::text("debugging"))
+        .with_response(MockResponse::text(
+            "I could not find where the parser drops the token.",
+        ))
+        .with_response(MockResponse::text(
+            "It never opened the parser.\nVERDICT: MODEL",
+        ))
+        .with_response(MockResponse::text("Fixed it."));
+    let (report, models, requests, outcomes) = run_routed(provider).await;
+
+    assert_eq!(
+        (report.model.as_str(), report.result.as_str()),
+        (GATE_OPUS, "Fixed it.")
+    );
+    assert_eq!(models, [GATE_HAIKU, GATE_SONNET, GATE_OPUS, GATE_OPUS]);
+    {
+        let requests = requests.lock().unwrap();
+        let judge = &requests[2];
+        assert_eq!(
+            judge.system.as_str(),
+            aura_agent_gate::turn_judge::UNVERIFIED_SYSTEM_PROMPT
+        );
+        let shown = judge.messages[0].text_content();
+        assert!(shown.contains("fix the parser"), "{shown}");
+        assert!(shown.contains("I could not find"), "{shown}");
+    }
+    let takeover = last_prompts(&requests).pop().unwrap();
+    assert!(
+        takeover.contains("It never opened the parser."),
+        "the stronger model is told what the judge found: {takeover}"
+    );
+    let signals: Vec<(&str, OutcomeSignal)> = outcomes
+        .iter()
+        .map(|o| (o.model.as_str(), o.signal))
+        .collect();
+    assert_eq!(
+        signals,
+        [
+            (GATE_SONNET, OutcomeSignal::None),
+            (GATE_SONNET, OutcomeSignal::JudgedFail),
+            (GATE_OPUS, OutcomeSignal::None),
+        ]
+    );
+}

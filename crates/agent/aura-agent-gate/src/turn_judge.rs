@@ -9,6 +9,10 @@
 //! down to something else (the environment, a check that was failing
 //! anyway) counts for nothing and the work stays where it is.
 //!
+//! The same judge reviews work that ran no check but looks wrong (see
+//! [`crate::followup`]), through [`unverified_request`]: there it may
+//! also find the work done (`OK`).
+//!
 //! This module builds the request and reads the verdict; the caller
 //! sends the request through the agent's kernel, so the call is recorded
 //! like any other model call.
@@ -19,6 +23,7 @@ use aura_model::{
     ToolChoice,
 };
 
+use crate::followup::Suspicion;
 use crate::judge::{cut, MAX_DIFF, MAX_REPLY};
 use crate::router::Candidate;
 
@@ -50,6 +55,28 @@ itself is right, or the request cannot be carried out as asked.
 When you cannot tell, answer MODEL. Say in one to three sentences what went wrong, concretely \
 enough to help whoever takes the work over. Then end with one line that is exactly \
 `VERDICT: MODEL` or `VERDICT: OTHER`.";
+
+/// System prompt of every request to the judge of unverified turns:
+/// attempts that ran no check and look wrong (see
+/// [`crate::followup::suspicions`]).
+pub const UNVERIFIED_SYSTEM_PROMPT: &str = "\
+You are reviewing an attempt at a task a user gave a coding agent. The attempt ran no test or \
+build that checks its work, and something about it looks wrong. You see the user's request, the \
+changes the attempt made to files as a unified diff (changes made through shell commands are \
+not shown, but the commands it ran are listed), its final reply, and what looks wrong. Decide \
+whether the work is done:
+
+- MODEL: the attempt's own work is wrong, incomplete or missing. It misunderstood the request, \
+made a wrong or partial change, changed nothing when a change was needed, or gave up. A more \
+capable model would likely have done better.
+- OK: the work looks complete and correct for what was asked, or no change was needed and the \
+reply shows why.
+- OTHER: the work could not be done for reasons outside the attempt: the environment got in the \
+way, or the request cannot be carried out as asked.
+
+Judge the work itself, not how it was described. Say in one to three sentences what you found, \
+concretely enough to help whoever takes the work over. Then end with one line that is exactly \
+`VERDICT: MODEL`, `VERDICT: OK` or `VERDICT: OTHER`.";
 
 /// What the judge sees of a failed turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,9 +168,89 @@ pub fn request(
         .try_build()
 }
 
+/// What the judge sees of a turn that ran no check and looks wrong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unverified<'a> {
+    /// What the user asked.
+    pub task: &'a str,
+    /// The turn's file changes as a unified diff; empty when it changed
+    /// none.
+    pub diff: &'a str,
+    /// The turn's final reply.
+    pub reply: &'a str,
+    /// The commands it ran, one per line, latest last.
+    pub commands: &'a str,
+    /// What looks wrong.
+    pub suspicions: &'a [Suspicion],
+}
+
+/// The judge's message about `unverified`. Nothing in it names the model
+/// that did the work.
+#[must_use]
+pub fn unverified_prompt(unverified: &Unverified<'_>) -> String {
+    let or = |text: &str, empty: &str, shown: String| {
+        if text.trim().is_empty() {
+            empty.to_string()
+        } else {
+            shown
+        }
+    };
+    let wrong: Vec<String> = unverified
+        .suspicions
+        .iter()
+        .map(|s| format!("- {}", s.describe()))
+        .collect();
+    format!(
+        "## The user's request\n\n{}\n\n\
+         ## Changes\n```diff\n{}\n```\n\n\
+         ## Commands it ran\n{}\n\n\
+         ## Final reply\n{}\n\n\
+         ## What looks wrong\n{}",
+        cut(unverified.task, MAX_TASK, "request"),
+        or(
+            unverified.diff,
+            "(no file changes recorded)",
+            cut(unverified.diff, MAX_DIFF, "diff")
+        ),
+        or(
+            unverified.commands,
+            "(none)",
+            tail(unverified.commands, MAX_FAILURE)
+        ),
+        or(
+            unverified.reply,
+            "(no reply)",
+            cut(unverified.reply, MAX_REPLY, "reply")
+        ),
+        wrong.join("\n"),
+    )
+}
+
+/// The request that asks `model` to judge `unverified`, sent with the
+/// user's `auth_token` when the route needs one.
+///
+/// # Errors
+/// Returns the builder's error when `model` is empty.
+pub fn unverified_request(
+    model: &str,
+    unverified: &Unverified<'_>,
+    auth_token: Option<String>,
+) -> Result<ModelRequest, ReasonerError> {
+    ModelRequest::builder(model, UNVERIFIED_SYSTEM_PROMPT)
+        .message(Message::user(unverified_prompt(unverified)))
+        .tool_choice(ToolChoice::None)
+        .max_tokens(MAX_REPLY_TOKENS)
+        .thinking_effort(Some(ThinkingEffort::Off))
+        .auth_token(auth_token)
+        .request_kind(ModelRequestKind::Auxiliary)
+        .purpose(ModelCallPurpose::Judge)
+        .try_build()
+}
+
 /// The verdict in the judge's `reply`: its last `VERDICT:` line, with the
-/// text before it as the reasons. `None` when the reply has no such line
-/// or the line names neither answer.
+/// text before it as the reasons. `MODEL` puts the fault on the model;
+/// `OTHER`, and `OK` from the judge of unverified turns, do not. `None`
+/// when the reply has no such line or the line names no answer.
 #[must_use]
 pub fn parse(reply: &str) -> Option<Verdict> {
     let reply = reply
@@ -159,7 +266,7 @@ pub fn parse(reply: &str) -> Option<Verdict> {
     let answer = answer.trim_matches(|c: char| !c.is_ascii_alphabetic());
     let at_fault = match answer {
         "MODEL" => true,
-        "OTHER" => false,
+        "OTHER" | "OK" => false,
         _ => return None,
     };
     let reasons = reply
@@ -228,6 +335,41 @@ mod tests {
             "the last line decides"
         );
     }
+
+    #[test]
+    fn work_found_done_is_not_at_fault() {
+        assert_eq!(
+            parse("The change is complete.\nVERDICT: OK").map(|v| v.at_fault),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn the_unverified_request_shows_the_commands_and_what_looks_wrong() {
+        let unverified = Unverified {
+            task: "make ensure_type keep tags",
+            diff: "",
+            reply: "The code already does this.",
+            commands: "rg ensure_type\ncat lib/config.py",
+            suspicions: &[Suspicion::NoChanges],
+        };
+        let built = unverified_request(OPUS, &unverified, None).unwrap();
+        assert_eq!(built.system, UNVERIFIED_SYSTEM_PROMPT);
+        assert!(built.tools.is_empty());
+        let sent = built.messages[0].text_content();
+        for part in [
+            "make ensure_type keep tags",
+            "(no file changes recorded)",
+            "cat lib/config.py",
+            "The code already does this.",
+            Suspicion::NoChanges.describe(),
+        ] {
+            assert!(sent.contains(part), "{part}: {sent}");
+        }
+        assert!(unverified_request("", &unverified, None).is_err());
+    }
+
+    const OPUS: &str = "claude/claude-opus-4-7";
 
     #[test]
     fn a_reply_without_a_verdict_decides_nothing() {

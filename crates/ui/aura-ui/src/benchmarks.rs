@@ -148,6 +148,10 @@ pub struct BenchArm {
     pub tokens: Vec<BenchTokens>,
     /// One per prompt
     pub turns: Vec<BenchTurn>,
+    /// Runs a failed attempt moved to a stronger model
+    pub escalated: usize,
+    /// Runs Gate asked to check a change they had not checked
+    pub nudged: usize,
 }
 
 /// One run of a benchmark.
@@ -157,8 +161,10 @@ pub struct BenchRun {
     pub name: String,
     /// 0 for arm A, 1 for arm B
     pub arm: usize,
-    /// Model that ran its first turn
+    /// Model its first turn was sent to
     pub model: String,
+    /// The stronger model a failed attempt last moved its work to
+    pub escalated_to: Option<String>,
     pub wall_ms: u64,
     pub cost_usd: f64,
     pub check_passed: Option<bool>,

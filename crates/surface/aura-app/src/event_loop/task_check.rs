@@ -99,6 +99,17 @@ pub(super) async fn run_check(session: &AgentSession, command: &str) -> CheckRun
 /// Run the check `command` in `session`'s workspace through its kernel,
 /// proposed with `source`. A check that runs out of time failed.
 pub(crate) async fn run_script(session: &AgentSession, command: &str, source: &str) -> CheckRun {
+    run_script_within(session, command, source, CHECK_TIMEOUT_SECS).await
+}
+
+/// [`run_script`] stopped after `timeout_secs`. A check that ran out of
+/// time failed with no exit code.
+pub(crate) async fn run_script_within(
+    session: &AgentSession,
+    command: &str,
+    source: &str,
+    timeout_secs: u64,
+) -> CheckRun {
     drain_stale_inbox(session).await;
     let proposal = ToolProposal::new(
         format!("check_{}", uuid::Uuid::new_v4().simple()),
@@ -106,7 +117,7 @@ pub(crate) async fn run_script(session: &AgentSession, command: &str, source: &s
         serde_json::json!({
             "shell_script": command,
             "allow_shell": true,
-            "timeout_secs": CHECK_TIMEOUT_SECS,
+            "timeout_secs": timeout_secs,
         }),
     )
     .with_source(source);
@@ -216,6 +227,7 @@ pub(super) fn retry_prompt(prompt: &str, model: &str, why: &str) -> String {
 pub(crate) fn takeover_prompt(model: &str, signal: OutcomeSignal, review: Option<&str>) -> String {
     let how = match signal {
         OutcomeSignal::ChecksFailed => "with its last test or build command failing",
+        OutcomeSignal::JudgedFail => "without checking its work, which looked unfinished",
         _ => "in an error",
     };
     let review = review

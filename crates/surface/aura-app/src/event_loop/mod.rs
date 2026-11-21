@@ -21,6 +21,7 @@ mod compare_run;
 mod compare_view;
 pub(crate) mod flow;
 mod flow_builder;
+pub(crate) mod gate_followup;
 pub(crate) mod gate_live;
 pub(crate) mod gate_record;
 pub(crate) mod gate_subtask;

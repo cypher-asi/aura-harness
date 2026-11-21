@@ -9,6 +9,8 @@
 //! - [`classify`]: the request that labels a prompt with its category,
 //!   and reading the reply
 //! - [`checks`]: whether the tests or build a turn ran last passed
+//! - [`followup`]: what Gate does about a routed turn that ran no check:
+//!   ask it to verify, run the tests itself, or have the judge review it
 //! - [`outcome`]: the signals that say how a prompt's work went, and
 //!   which one counts
 //! - [`compare`]: `/compare`'s arguments, schedule, estimate and the
@@ -31,6 +33,7 @@ pub mod checks;
 pub mod classify;
 pub mod compare;
 pub mod delegation;
+pub mod followup;
 pub mod judge;
 pub mod lead;
 pub mod outcome;
