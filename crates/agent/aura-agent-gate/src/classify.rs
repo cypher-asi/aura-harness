@@ -28,11 +28,11 @@ const MAX_REPLY_TOKENS: u32 = 32;
 /// agent's own calls.
 pub const SYSTEM_PROMPT: &str = "\
 You label requests sent to a coding agent. Reply with exactly one label from this list, a space, \
-and one difficulty, and nothing else (for example `debugging hard`).
+and one difficulty, and nothing else (for example `debugging hard`). Use only the words listed.
 Labels:
 question: a quick question or explanation
-small_change: a small code change in one place
-multi_file_change: a change across several files
+small_change: a small code change in one place, whether a fix, a tweak or a small feature
+multi_file_change: a change across several files, such as a new feature, an extension or a refactor
 debugging: fixing a failure (an error, a failing test, a bug)
 research: investigating a codebase or topic
 planning: designing or planning work
@@ -80,7 +80,7 @@ pub fn request(
 ) -> Result<ModelRequest, ReasonerError> {
     let prompt: String = prompt.chars().take(MAX_PROMPT_CHARS).collect();
     ModelRequest::builder(model, SYSTEM_PROMPT)
-        .message(Message::user(format!("Request:\n{prompt}\n\nLabel:")))
+        .message(Message::user(format!("Request:\n{prompt}\n\n{}", answer_cue())))
         .tool_choice(ToolChoice::None)
         .max_tokens(MAX_REPLY_TOKENS)
         .thinking_effort(Some(ThinkingEffort::Off))
@@ -88,6 +88,27 @@ pub fn request(
         .request_kind(ModelRequestKind::Auxiliary)
         .purpose(ModelCallPurpose::Classify)
         .try_build()
+}
+
+/// What the request ends with: the labels and difficulties again. After a
+/// long prompt a cheap model loses track of the list and makes labels up
+/// (`feature`, `implementation`).
+fn answer_cue() -> String {
+    let labels = PromptCategory::CLASSES.map(PromptCategory::as_str);
+    let difficulties = Difficulty::ALL.map(Difficulty::as_str);
+    format!(
+        "Label ({}) and difficulty ({}):",
+        either(&labels),
+        either(&difficulties)
+    )
+}
+
+/// `words` as a list ending in `or`: `a, b or c`.
+fn either(words: &[&str]) -> String {
+    match words.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} or {last}", rest.join(", ")),
+        _ => words.concat(),
+    }
 }
 
 /// What the classifier's `response` says.
@@ -200,7 +221,14 @@ mod tests {
         assert_eq!(built.max_tokens.get(), MAX_REPLY_TOKENS);
         assert_eq!(built.auth_token.as_deref(), Some("jwt"));
         let sent = built.messages[0].text_content();
-        assert!(sent.len() < MAX_PROMPT_CHARS + 100, "prompt is cut short");
+        assert!(sent.len() < MAX_PROMPT_CHARS + 200, "prompt is cut short");
+        assert!(
+            sent.ends_with(
+                "\n\nLabel (question, small_change, multi_file_change, debugging, research, \
+                 planning, writing or other) and difficulty (easy, medium or hard):"
+            ),
+            "the labels come again after the prompt: {sent}"
+        );
         for category in PromptCategory::CLASSES {
             assert!(built.system.contains(category.as_str()), "{category}");
         }

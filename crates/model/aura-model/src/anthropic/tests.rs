@@ -821,6 +821,32 @@ fn thinking_effort_off_emits_no_config() {
     assert!(resolve_output_config(&request, TEST_DEFAULT_MODEL).is_none());
 }
 
+#[test]
+fn thinking_effort_off_disables_haiku_5_thinking() {
+    for model in ["claude-haiku-5-5", "aura-claude-haiku-5-5"] {
+        let request = ModelRequest::builder(model, "system")
+            .max_tokens(32)
+            .thinking_effort(Some(ThinkingEffort::Off))
+            .try_build()
+            .unwrap();
+        let thinking = resolve_thinking(&request, model).expect("{model}");
+        assert_eq!(
+            serde_json::to_value(&thinking).unwrap(),
+            serde_json::json!({"type": "disabled"}),
+            "{model}"
+        );
+        assert!(resolve_output_config(&request, model).is_none(), "{model}");
+    }
+    for model in ["claude-haiku-4-5", "claude-sonnet-5-5", "claude-opus-5-5"] {
+        let request = ModelRequest::builder(model, "system")
+            .max_tokens(32)
+            .thinking_effort(Some(ThinkingEffort::Off))
+            .try_build()
+            .unwrap();
+        assert!(resolve_thinking(&request, model).is_none(), "{model}");
+    }
+}
+
 /// Regression for `thinking.adaptive.budget_tokens: Extra inputs are not
 /// permitted`. Anthropic's `adaptive` thinking mode (Claude 4 family)
 /// rejects `budget_tokens` outright — the model picks its own budget.

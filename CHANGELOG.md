@@ -7,6 +7,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Gate's classifier labels long task prompts
+
+##### Fixed
+
+- Haiku 5 thinks unless a request turns thinking off, so the
+  classifier's 32-token reply went on thinking and long prompts (such as
+  SWE-bench Pro tasks) came back `unclassified`, which kept them off
+  Gate's cheap-first routing for verifiable work. A request with
+  thinking effort `off` now sends `thinking: {"type": "disabled"}` to
+  Haiku 5 models. The classifier also says that features count as
+  `small_change` or `multi_file_change` and lists the labels again after
+  the prompt, as a long prompt otherwise led to made-up labels such as
+  `feature` or `implementation`.
+
 ### Gate follows up work that checked nothing
 
 ##### Added

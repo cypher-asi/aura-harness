@@ -66,7 +66,23 @@ fn thinking_mode_for_model(model: &str) -> Option<ThinkingMode> {
     }
 }
 
+/// Whether `model` thinks when a request leaves `thinking` out, so turning
+/// thinking off takes `{"type": "disabled"}`. Haiku 5 does: a request that
+/// omits it can spend a small `max_tokens` on thinking and return no text.
+/// Sonnet 5.5 rejects `disabled` (it wants `between_tools`) and Opus 5.5
+/// has no off switch, so neither is listed.
+fn thinks_unless_disabled(model: &str) -> bool {
+    normalize_anthropic_model(model).starts_with("claude-haiku-5")
+}
+
 pub(super) fn resolve_thinking(request: &ModelRequest, model: &str) -> Option<ApiThinkingConfig> {
+    if request.thinking_effort == Some(ThinkingEffort::Off) && thinks_unless_disabled(model) {
+        return Some(ApiThinkingConfig {
+            thinking_type: "disabled".to_string(),
+            budget_tokens: None,
+            display: None,
+        });
+    }
     let mut thinking = resolve_thinking_unbounded(request, model)?;
     // Opus 4.7+ and Claude 5 default `display` to "omitted", which streams
     // empty thinking blocks. Always ask for the summary so the UI and the
