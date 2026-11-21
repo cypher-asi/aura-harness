@@ -286,11 +286,18 @@ async fn answer(request: ModelRequest, last: Option<&str>) -> Result<ModelRespon
 /// The classifier's answer to `request`, asking about `prompt`: prompts
 /// that say "across files" are changes across several files, those that
 /// say "plan:" are planning, those that say "fix" are debugging,
-/// "classifier down" fails the call, and the rest are questions. Prompts
-/// that say "(easy)" or "(hard)" get that difficulty; the rest are medium.
+/// "classifier down" fails the call, "classifier rambles" gets a reply
+/// with no label, and the rest are questions. Prompts that say "(easy)"
+/// or "(hard)" get that difficulty; the rest are medium. The answer is a
+/// call to the label tool when the request offers it, else text.
 async fn classify(request: &ModelRequest, prompt: &str) -> Result<ModelResponse, ReasonerError> {
     if prompt.contains("classifier down") {
         return Err(ReasonerError::Internal("classifier offline".to_string()));
+    }
+    if prompt.contains("classifier rambles") {
+        return MockProvider::simple_response("I'll start by reading the code.")
+            .complete(request.clone())
+            .await;
     }
     let label = if prompt.contains("across files") {
         "multi_file_change"
@@ -305,7 +312,18 @@ async fn classify(request: &ModelRequest, prompt: &str) -> Result<ModelResponse,
         .into_iter()
         .find(|d| prompt.contains(&format!("({d})")))
         .unwrap_or("medium");
-    MockProvider::simple_response(format!("{label} {difficulty}"))
+    let tool = aura_agent_gate::classify::LABEL_TOOL;
+    let answer = if request.tools.iter().any(|t| t.name == tool) {
+        MockResponse::tool_use(
+            "toolu_label",
+            tool,
+            serde_json::json!({"category": label, "difficulty": difficulty}),
+        )
+    } else {
+        MockResponse::text(format!("{label} {difficulty}"))
+    };
+    MockProvider::new()
+        .with_response(answer)
         .complete(request.clone())
         .await
 }
@@ -2088,6 +2106,49 @@ async fn a_failing_classifier_fails_the_routed_turn() {
     );
     assert!(prompts_of(&state, first).is_empty());
     assert!(outcomes_of(&state, first).is_empty());
+}
+
+#[tokio::test]
+async fn a_classifier_reply_without_a_label_is_asked_again_then_fails() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = ModelSelection::signed_in(
+        &fixture.config,
+        aura_model::model_catalog::GATE_MODEL_ID,
+        aura_auth::AuthSummary {
+            zos_user: Some("alice".to_string()),
+            ..aura_auth::AuthSummary::default()
+        },
+    );
+
+    turn(&mut state, &mut done, &links, first, "classifier rambles").await;
+
+    let classified = record_of(&state, first)
+        .iter()
+        .filter(|e| e.tx.tx_type == aura_core_types::TransactionType::Reasoning)
+        .filter(|e| {
+            json_payload(&e.tx)
+                .and_then(|payload| payload.get("purpose").cloned())
+                .and_then(|purpose| serde_json::from_value(purpose).ok())
+                == Some(aura_model::ModelCallPurpose::Classify)
+        })
+        .count();
+    assert_eq!(classified, 2, "asked once more");
+    let shown = drain(&mut commands);
+    assert!(
+        shown.iter().any(|(_, c)| matches!(
+            c,
+            UiCommand::ShowError(problem)
+                if problem.contains("gave no category and difficulty")
+                    && problem.contains("I'll start by reading the code.")
+        )),
+        "the turn fails with the reply: {shown:?}"
+    );
+    assert!(prompts_of(&state, first).is_empty());
 }
 
 /// `agent` mode at `yolo`: nothing asks.

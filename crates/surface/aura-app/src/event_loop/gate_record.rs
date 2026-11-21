@@ -20,6 +20,9 @@ use tracing::{info, warn};
 /// How long the classifier may take before the turn fails.
 const CLASSIFY_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// How many times the classifier is asked when its reply gives no label.
+const CLASSIFY_ATTEMPTS: u32 = 2;
+
 /// How long the judge of a failed turn may take before the turn keeps
 /// its own signal.
 const JUDGE_TIMEOUT: Duration = Duration::from_secs(90);
@@ -236,12 +239,13 @@ async fn ask(
 }
 
 /// Label `text` with its category and difficulty by asking `model`
-/// through `kernel`, so the call is recorded.
+/// through `kernel`, so the call is recorded. A reply without a label is
+/// asked for again, up to [`CLASSIFY_ATTEMPTS`] calls in all.
 ///
 /// # Errors
-/// Says why when the request could not be built, the call failed or
-/// timed out, or the reply did not give both a category and a
-/// difficulty: Gate does not route work it could not classify.
+/// Says why when the request could not be built, a call failed or timed
+/// out, or no reply gave both a category and a difficulty: Gate does not
+/// route work it could not classify.
 pub(crate) async fn classify_prompt(
     kernel: &Kernel,
     model: &str,
@@ -254,27 +258,32 @@ pub(crate) async fn classify_prompt(
             "Gate could not classify the prompt with {model}: {error}"
         ))
     };
-    let request = match classify::request(model, text, auth_token) {
-        Ok(request) => request,
-        Err(e) => return failed(format!("could not build the request ({e})")),
-    };
-    match tokio::time::timeout(CLASSIFY_TIMEOUT, kernel.reason(request)).await {
-        Ok(Ok(result)) => match classify::label_of(&result.response) {
-            Some(found) => {
-                info!(%model, category = %found.category, difficulty = %found.difficulty, "Classified the prompt");
-                Ok(found)
+    let mut reply = String::new();
+    for attempt in 1..=CLASSIFY_ATTEMPTS {
+        let request = match classify::request(model, text, auth_token.clone()) {
+            Ok(request) => request,
+            Err(e) => return failed(format!("could not build the request ({e})")),
+        };
+        let response = match tokio::time::timeout(CLASSIFY_TIMEOUT, kernel.reason(request)).await {
+            Ok(Ok(result)) => result.response,
+            Ok(Err(e)) => return failed(format!("the call failed ({e})")),
+            Err(_) => {
+                return failed(format!(
+                    "the call took over {}s",
+                    CLASSIFY_TIMEOUT.as_secs()
+                ))
             }
-            None => failed(format!(
-                "its reply gave no category and difficulty ({:?})",
-                result.response.message.text_content().trim()
-            )),
-        },
-        Ok(Err(e)) => failed(format!("the call failed ({e})")),
-        Err(_) => failed(format!(
-            "the call took over {}s",
-            CLASSIFY_TIMEOUT.as_secs()
-        )),
+        };
+        if let Some(found) = classify::label_of(&response) {
+            info!(%model, attempt, category = %found.category, difficulty = %found.difficulty, "Classified the prompt");
+            return Ok(found);
+        }
+        reply = classify::reply_shown(&response.message);
+        warn!(%model, attempt, %reply, "The classifier's reply gave no label");
     }
+    failed(format!(
+        "its reply gave no category and difficulty ({reply:?})"
+    ))
 }
 
 /// Write `outcome` to the record of `agent_id` through `kernel`. A failure

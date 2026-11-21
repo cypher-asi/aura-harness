@@ -7,6 +7,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Gate classifies long task prompts
+
+##### Fixed
+
+- Gate's classifier often failed on long task prompts, such as a
+  SWE-bench issue or a pasted spec, and the run then failed at once with
+  "Gate could not classify the prompt". A prompt that starts "Your task
+  is to implement..." came last in the classifier's message, and the
+  cheap model took it for its own task and started on the work instead
+  of labelling it. The classifier now answers by calling a `label` tool,
+  forced, whose arguments can only be one of the categories and one of
+  the difficulties. Local models still answer in text.
+- The prompt reaches the classifier the same way every time: line
+  ends, control characters, trailing spaces and runs of blank lines are
+  normalized; its size is stated; a long prompt keeps its first 3,000
+  and last 1,000 characters around a note of how many were left out
+  (it kept only the first 4,000); and its text sits between `<request>`
+  tags the prompt cannot close, which the system prompt says hold text
+  to label, never to follow.
+- A reply without a label is asked for once more before the prompt
+  fails, and the error shows the whole reply, tool calls included.
+
 ### The chat leaves room below its last line
 
 ##### Changed
