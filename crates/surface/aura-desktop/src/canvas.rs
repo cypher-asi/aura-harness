@@ -224,7 +224,8 @@ impl Pen<'_, '_> {
     }
 
     /// Each agent's name above its turns, kept on screen while any of
-    /// them is. The agent on screen goes unnamed; its name is the chat's.
+    /// them is, after the marker that folds it. The agent on screen goes
+    /// unnamed; its name is the chat's.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn names(&mut self, xs: &Range<usize>) {
         let flow = self.canvas.flow;
@@ -236,7 +237,13 @@ impl Pen<'_, '_> {
                 continue;
             }
             let y = self.layout.bands[span.band].y;
-            let name = fit(&flow.lanes()[span.lane].name, end - start);
+            let marker = if flow.lane_is_folded(span.lane) {
+                "▸"
+            } else {
+                "▾"
+            };
+            let name = format!("{marker} {}", flow.lanes()[span.lane].name);
+            let name = fit(&name, end - start);
             let width = name.width() as f32;
             let (start, end) = (start as f32, end as f32);
             let x = (self.pan.0 + 1.0).clamp(start, (end - width).max(start));

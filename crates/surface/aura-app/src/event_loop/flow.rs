@@ -24,7 +24,7 @@ use tracing::warn;
 const TAIL_ENTRIES: usize = 1500;
 /// Agents in one flow. Of an agent with more below it, the ones that
 /// worked last are kept.
-const MAX_AGENTS: usize = 48;
+const MAX_AGENTS: usize = 160;
 /// Flows kept up to date at once: one per window tab showing a graph.
 const MAX_WATCHES: usize = 4;
 /// Entries taken in before the UI is told what changed.

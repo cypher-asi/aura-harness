@@ -71,7 +71,7 @@ impl FlowKind {
 }
 
 /// One agent in the flow.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct FlowLane {
     /// Hex id of the agent
     pub agent_id: String,
@@ -80,6 +80,34 @@ pub struct FlowLane {
     /// Hex id of the agent that spawned it; `None` for the agent the flow
     /// was asked for
     pub parent: Option<String>,
+    /// What it is in a benchmark, when it is one of its runs
+    #[serde(default)]
+    pub bench: Option<FlowBench>,
+    /// Whether it is an arm of a benchmark, the agent the arm's runs are
+    /// registered under; the timeline lists those runs by task instead
+    #[serde(default)]
+    pub bench_arm: bool,
+}
+
+/// One run of a benchmark, as its lane knows it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct FlowBench {
+    /// What the runs that go head to head share: the example task's id,
+    /// else `run 3` for the third run of each arm
+    pub group: String,
+    /// `a-1`, `b-2`, ...
+    pub run: String,
+    /// 0 for arm A, 1 for arm B
+    pub arm: usize,
+    /// What the arm runs on: `gate`, or a model
+    pub arm_label: String,
+    /// Whether its check passed; `None` without one, or before it ran
+    pub check_passed: Option<bool>,
+    /// Every model call of the run, subtasks included
+    pub cost_usd: f64,
+    pub wall_ms: u64,
+    /// Why it did not finish, if it did not
+    pub error: Option<String>,
 }
 
 /// What a model call used, or the calls of a turn together.

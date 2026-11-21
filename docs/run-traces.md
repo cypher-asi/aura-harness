@@ -162,5 +162,6 @@ A task may set `category` (default `general`) and `tags`, may name a `[source]` 
   | `g`/`G` | First and last node. |
   | `q`/`Esc` | Close the graph. |
 
+- The chat panel's **GRAPH** tab shows the same work from the kernel record, as a timeline of agents with their turns as bars, from which Enter opens a turn's cards. A benchmark's runs are listed by task, arm A next to arm B, with their check results; see [The GRAPH tab](cli.md#the-graph-tab).
 - The **TRACE** side tab is a live feed of iterations, tool calls, decisions and rewards; its count is marked `!` when it contains issues. Selecting an entry opens it in the graph. Shift with the arrow keys cycles the side tabs.
 - Calls of one turn that need approval are asked one after another. The prompt's title shows how many are waiting (`1 of 3`), and the activity list shows `awaiting approval` on each waiting call instead of a running timer. Answering "always allow" also allows any waiting calls that the new rule covers.

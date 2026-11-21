@@ -550,6 +550,7 @@ pub fn flow(h: &mut Stage) {
         agent_id: id.into(),
         name: name.into(),
         parent: parent.map(Into::into),
+        ..FlowLane::default()
     };
     let used = |mut node: FlowNode, input_tokens, output_tokens, cost_usd, ms| {
         node.usage = Some(FlowUsage {

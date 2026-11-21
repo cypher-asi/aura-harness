@@ -9,7 +9,7 @@ pub use crate::benchmarks::{
     BenchJudge, BenchRequest, BenchRun, BenchSession, BenchSpec, BenchStatus, BenchTaskCell,
     BenchTaskRow, BenchTokens, BenchTurn, BenchVerdict, BenchView, BenchWork,
 };
-pub use crate::flow::{FlowKind, FlowLane, FlowNode, FlowUsage};
+pub use crate::flow::{FlowBench, FlowKind, FlowLane, FlowNode, FlowUsage};
 use crate::mode_command::{ApprovalLevel, PermissionMode};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

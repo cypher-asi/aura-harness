@@ -16,18 +16,21 @@ use crate::record_loader::{
     tool_target, truncate_chars, tx_type_label,
 };
 use aura_core_types::{
-    ActionResultPayload, AgentId, Hash, PolicyApproval, PolicyApprover, PolicyDecision,
-    RecordEntry, RouteLevel, ToolExecution, ToolGateVerdict, ToolProposal, TransactionType,
+    ActionResultPayload, AgentId, ComparePayload, Hash, PolicyApproval, PolicyApprover,
+    PolicyDecision, RecordEntry, RouteLevel, ToolExecution, ToolGateVerdict, ToolProposal,
+    TransactionType,
 };
 use aura_exec_tools::agents::send_to_agent::SEND_TO_AGENT_TOOL_NAME;
 use aura_exec_tools::agents::task::TASK_TOOL_NAME;
 use aura_model::{model_catalog, ModelCallPurpose};
-use aura_ui_terminal::events::{FlowKind, FlowLane, FlowNode, FlowUsage, TraceNodeStatus};
+use aura_ui_terminal::events::{
+    FlowBench, FlowKind, FlowLane, FlowNode, FlowUsage, TraceNodeStatus,
+};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Nodes kept per flow; the oldest go first.
-const MAX_NODES: usize = 4000;
+const MAX_NODES: usize = 16_000;
 /// Longest label of a node. The tab cuts it to the width of its box.
 const MAX_LABEL_CHARS: usize = 200;
 /// Longest text kept in a node's metadata (prompts, replies, results).
@@ -59,6 +62,8 @@ struct Lane {
     hex: String,
     name: String,
     parent: Option<AgentId>,
+    bench: Option<FlowBench>,
+    bench_arm: bool,
 }
 
 /// A node, and what else finds it.
@@ -116,6 +121,10 @@ pub(crate) struct FlowBuilder {
     /// Nodes touched since the last report, in the order they were
     changed: Vec<String>,
     dirty: HashSet<String>,
+    /// Agents whose record holds a benchmark
+    bench_hosts: HashSet<AgentId>,
+    /// The runs of those benchmarks, by the agent that ran each
+    bench_runs: HashMap<AgentId, FlowBench>,
 }
 
 /// The agent a spawn entry started.
@@ -150,6 +159,8 @@ impl FlowBuilder {
             seen: HashMap::new(),
             changed: Vec::new(),
             dirty: HashSet::new(),
+            bench_hosts: HashSet::new(),
+            bench_runs: HashMap::new(),
         };
         builder.add_lane(focus, name, None);
         builder
@@ -180,8 +191,49 @@ impl FlowBuilder {
             hex: agent.to_hex(),
             name: name.to_string(),
             parent,
+            bench: None,
+            bench_arm: false,
         });
+        self.mark_bench(self.lanes.len() - 1);
         true
+    }
+
+    /// Say of lane `lane` what it is in the benchmarks known so far.
+    fn mark_bench(&mut self, lane: usize) {
+        let it = &self.lanes[lane];
+        let bench = self.bench_runs.get(&it.agent).cloned();
+        let arm = bench.is_none() && it.parent.is_some_and(|p| self.bench_hosts.contains(&p));
+        if it.bench == bench && it.bench_arm == arm {
+            return;
+        }
+        let it = &mut self.lanes[lane];
+        (it.bench, it.bench_arm) = (bench, arm);
+        if !self.lane_news.contains(&lane) {
+            self.lane_news.push(lane);
+        }
+    }
+
+    /// The latest state of the benchmark `host` holds: what each of its
+    /// runs worked on and how it did.
+    fn bench(&mut self, host: AgentId, payload: &ComparePayload) {
+        self.bench_hosts.insert(host);
+        for run in &payload.runs {
+            let n = run.name.rsplit('-').next().unwrap_or(&run.name);
+            let bench = FlowBench {
+                group: run.task.clone().unwrap_or_else(|| format!("run {n}")),
+                run: run.name.clone(),
+                arm: run.arm.index(),
+                arm_label: payload.spec(run.arm).label().to_string(),
+                check_passed: run.check_passed,
+                cost_usd: run.cost_usd,
+                wall_ms: run.wall_ms,
+                error: run.error.clone(),
+            };
+            self.bench_runs.insert(run.agent_id, bench);
+        }
+        for lane in 0..self.lanes.len() {
+            self.mark_bench(lane);
+        }
     }
 
     /// Call `agent`'s lane `name` from now on, and the spawn that started
@@ -742,6 +794,9 @@ impl FlowBuilder {
     }
 
     fn system(&mut self, entry: &RecordEntry) {
+        if let Some(payload) = entry.tx.compare_payload() {
+            self.bench(entry.tx.agent_id, &payload);
+        }
         let Some(payload) = json_payload(&entry.tx) else {
             return self.event(entry, &payload_text(&entry.tx));
         };
@@ -960,6 +1015,8 @@ impl Lane {
             agent_id: self.hex.clone(),
             name: self.name.clone(),
             parent: self.parent.map(|parent| parent.to_hex()),
+            bench: self.bench.clone(),
+            bench_arm: self.bench_arm,
         }
     }
 }
@@ -1692,5 +1749,107 @@ mod tests {
         assert_eq!(nodes.len(), MAX_NODES);
         assert_eq!(nodes[0].label, "reply 5");
         assert_eq!(flow.by_tx.len(), MAX_NODES);
+    }
+
+    #[test]
+    fn a_benchmark_says_what_each_run_worked_on_and_how_it_did() {
+        use aura_core_types::{
+            ArmSpec, BenchSource, CompareArm, CompareCopy, CompareRun, CompareStatus, SystemKind,
+        };
+        let (lead, host, arm_a, arm_b, a_1, b_1, coder) = (
+            agent(1),
+            agent(2),
+            agent(3),
+            agent(4),
+            agent(5),
+            agent(6),
+            agent(7),
+        );
+        let mut flow = FlowBuilder::new(lead, "Lead");
+        flow.add_lane(host, "Compare #1", Some(lead));
+        flow.add_lane(arm_a, "A · gate", Some(host));
+        flow.add_lane(arm_b, "B · opus", Some(host));
+        flow.add_lane(a_1, "a-1", Some(arm_a));
+        let _ = flow.snapshot();
+
+        let run = |arm, agent_id, check, task: &str| CompareRun {
+            name: format!("{arm}-1"),
+            arm,
+            agent_id,
+            prompt_tx: None,
+            model: "sonnet".to_string(),
+            copy: CompareCopy {
+                root: "/c".into(),
+                workdir: "/c".into(),
+                git_dir: None,
+                baseline: "t".to_string(),
+            },
+            wall_ms: 61_000,
+            cost_usd: 0.25,
+            tokens: Vec::new(),
+            plan_usage: Vec::new(),
+            turns: Vec::new(),
+            check_passed: Some(check),
+            files_changed: 1,
+            error: None,
+            task: Some(task.to_string()),
+        };
+        let payload = ComparePayload {
+            system_kind: SystemKind::Compare,
+            task: "5 example tasks".to_string(),
+            plan: None,
+            arm_a: ArmSpec::Gate { delegate: true },
+            arm_b: ArmSpec::Model {
+                model: "opus".to_string(),
+            },
+            against: "opus".to_string(),
+            prompts: Vec::new(),
+            source: BenchSource::Prompt,
+            repeats: 1,
+            check: None,
+            budget_usd: None,
+            requested_by: lead,
+            apply_root: "/repo".into(),
+            started_ms: 0,
+            runs: vec![
+                run(CompareArm::A, a_1, true, "coding/write-file"),
+                run(CompareArm::B, b_1, false, "coding/write-file"),
+            ],
+            judgments: Vec::new(),
+            notes: Vec::new(),
+            status: CompareStatus::Running,
+        };
+        let mut records = Records::default();
+        flow.push(&records.entry(host, TransactionType::System, payload.to_bytes()));
+
+        // The lanes known so far are reported again with what they are.
+        let (lanes, _) = flow.drain().expect("the lanes changed");
+        let bench_of = |lanes: &[FlowLane], agent: AgentId| {
+            lanes
+                .iter()
+                .find(|lane| lane.agent_id == agent.to_hex())
+                .cloned()
+        };
+        let a = bench_of(&lanes, a_1)
+            .and_then(|lane| lane.bench)
+            .expect("a-1 is a run");
+        assert_eq!(a.group, "coding/write-file");
+        assert_eq!((a.run.as_str(), a.arm), ("a-1", 0));
+        assert_eq!(a.arm_label, "gate");
+        assert_eq!(a.check_passed, Some(true));
+        assert!(bench_of(&lanes, arm_a).is_some_and(|lane| lane.bench_arm));
+        assert!(bench_of(&lanes, host).is_none(), "the host did not change");
+
+        // A run that joins later, and an agent under a run, learn theirs.
+        flow.add_lane(b_1, "b-1", Some(arm_b));
+        flow.add_lane(coder, "coder #1", Some(a_1));
+        let (lanes, _) = flow.snapshot();
+        let b = bench_of(&lanes, b_1)
+            .and_then(|lane| lane.bench)
+            .expect("b-1 is a run");
+        assert_eq!((b.arm, b.arm_label.as_str()), (1, "opus"));
+        assert_eq!(b.check_passed, Some(false));
+        let coder = bench_of(&lanes, coder).expect("a lane");
+        assert!(coder.bench.is_none() && !coder.bench_arm);
     }
 }

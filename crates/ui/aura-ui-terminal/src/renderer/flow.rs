@@ -18,11 +18,12 @@
 //! more per frame than a short one. A front end that draws the canvas
 //! itself ([`crate::App::set_host_canvas`]) gets the cells left blank.
 
+use super::flow_timeline::render_timeline;
 use super::graph::status_glyph;
 use super::panels::{body_block, render_scrollbar, truncate_record_info, ScrollView};
 use super::text::display_width;
 use crate::app::flow::layout::{FlowLayout, Wire, WireKind, CARD_WIDTH};
-use crate::app::flow::{FlowState, FlowView};
+use crate::app::flow::{FlowMode, FlowState, FlowView};
 use crate::events::{FlowKind, TraceNodeStatus};
 use crate::{App, Theme};
 use ratatui::{
@@ -76,6 +77,14 @@ pub(super) fn render_flow(
         );
         return;
     }
+
+    if app.flow().mode() == FlowMode::Timeline {
+        // Drawn in cells by every front end.
+        app.flow_mut().set_view(None, false);
+        render_timeline(frame, area, inner, app, theme, is_focused);
+        return;
+    }
+    app.flow_mut().timeline_mut().set_view(None);
 
     let pan = app
         .flow_mut()
@@ -257,7 +266,8 @@ impl Canvas<'_> {
     }
 
     /// Each agent's name above its cards, kept on screen while any of
-    /// them is. The agent on screen goes unnamed; its name is the chat's.
+    /// them is, after the marker that folds it. The agent on screen goes
+    /// unnamed; its name is the chat's.
     fn names(&mut self) {
         let style = Style::default()
             .fg(self.theme.colors.secondary)
@@ -266,7 +276,13 @@ impl Canvas<'_> {
             let y = self.layout.bands[span.band].y;
             let start = FlowLayout::column_x(span.first);
             let end = FlowLayout::column_x(span.last) + CARD_WIDTH;
-            let name = truncate_record_info(&self.flow.lanes()[span.lane].name, end - start);
+            let marker = if self.flow.lane_is_folded(span.lane) {
+                "▸"
+            } else {
+                "▾"
+            };
+            let name = format!("{marker} {}", self.flow.lanes()[span.lane].name);
+            let name = truncate_record_info(&name, end - start);
             let width = display_width(&name);
             let x = whole(self.first.0 + 1).clamp(start, end - width);
             self.text(x, y, &name, width, style);
@@ -677,12 +693,13 @@ mod tests {
                 FlowLane {
                     agent_id: LEAD.into(),
                     name: "Lead".into(),
-                    parent: None,
+                    ..FlowLane::default()
                 },
                 FlowLane {
                     agent_id: CODER.into(),
                     name: "coder #1".into(),
                     parent: Some(LEAD.into()),
+                    ..FlowLane::default()
                 },
             ],
             nodes: [
@@ -774,7 +791,7 @@ mod tests {
             "│    └─┤ sonnet                     │    │                                         │",
             "│      └────────────────────────────┘    │                                         │",
             "│                                        │                                         │",
-            "│                                        │ coder #1                                │",
+            "│                                        │ ▾ coder #1                              │",
             "│                                        │ ┌ ✓ turn ────────────── coder #1 ┐      │",
             "│                                        └─┤ write greet()                  │      │",
             "│                                          │ ↳ done                         │      │",

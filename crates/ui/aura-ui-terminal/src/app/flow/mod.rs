@@ -15,6 +15,7 @@
 pub mod layout;
 #[cfg(test)]
 mod tests;
+pub mod timeline;
 
 use super::file_view::FileView;
 use super::format::{format_cost, format_tokens};
@@ -27,9 +28,10 @@ use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use std::collections::{HashMap, HashSet};
+use timeline::{TimelineState, TIMELINE_LANES};
 
 /// Nodes kept; the oldest go once a flow grows past this.
-const MAX_NODES: usize = 6000;
+const MAX_NODES: usize = 20_000;
 
 /// Cells kept clear around the selected card when the view follows it.
 const ROOM: f32 = 2.0;
@@ -55,16 +57,30 @@ impl Default for Zoom {
 /// shown again.
 const MAX_KEPT: usize = 32;
 
+/// How the GRAPH tab shows a flow.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FlowMode {
+    /// Turns as cards wired together on a canvas
+    #[default]
+    Canvas,
+    /// An agent a row, its turns as bars over time
+    Timeline,
+}
+
 /// What the GRAPH tab keeps of an agent's flow while another's is shown.
 #[derive(Debug, Default)]
 struct Kept {
     turn_folded: HashSet<String>,
     call_folded: HashSet<String>,
+    lane_folded: HashSet<String>,
     selected: Option<String>,
     follow_tail: bool,
     pan: (f32, f32),
     zoom: Zoom,
     detached: bool,
+    mode: FlowMode,
+    mode_chosen: bool,
+    timeline: TimelineState,
 }
 
 /// Where the canvas was drawn in the last frame, for the mouse.
@@ -112,6 +128,16 @@ pub struct FlowState {
     turn_folded: HashSet<String>,
     /// Model calls whose rows are folded away, by node id
     call_folded: HashSet<String>,
+    /// Agents shown as one card, by hex id
+    lane_folded: HashSet<String>,
+    /// Canvas or timeline
+    mode: FlowMode,
+    /// Whether the user picked the mode; until then it follows how
+    /// many agents the flow has
+    mode_chosen: bool,
+    /// The canvas was opened from the timeline, so Esc goes back to it
+    from_timeline: bool,
+    timeline: TimelineState,
     selected: Option<String>,
     /// Whether the selection moves to each new card as it arrives
     follow_tail: bool,
@@ -224,7 +250,9 @@ impl FlowState {
     pub fn card_kind_label(&self, card: usize) -> &'static str {
         let placed = &self.layout.cards[card];
         let kind = self.nodes[placed.head].kind;
-        if placed.kind == CardKind::Turn && kind == FlowKind::Prompt {
+        if placed.kind == CardKind::Agent {
+            "agent"
+        } else if placed.kind == CardKind::Turn && kind == FlowKind::Prompt {
             "turn"
         } else {
             kind.label()
@@ -248,7 +276,9 @@ impl FlowState {
         let placed = &self.layout.cards[card];
         let node = &self.nodes[placed.head];
         let mut facts: Vec<String> = Vec::new();
-        if placed.kind == CardKind::Turn && placed.lane != 0 {
+        if matches!(placed.kind, CardKind::Turn if placed.lane != 0)
+            || placed.kind == CardKind::Agent
+        {
             facts.push(self.lanes[placed.lane].name.clone());
         }
         let plural =
@@ -265,10 +295,13 @@ impl FlowState {
             CardKind::Call if placed.folded => {
                 facts.push(format!("+{}", plural(placed.steps, "tool", "tools")));
             }
+            CardKind::Agent => facts.push(plural(placed.steps, "turn", "turns")),
             _ => {}
         }
-        // A call's tokens and time are on its stats line.
-        let on_stats_line = placed.kind == CardKind::Call && placed.stats.is_some();
+        // A call's tokens and time are on its stats line; a folded agent
+        // has no detail of its own.
+        let on_stats_line = (placed.kind == CardKind::Call && placed.stats.is_some())
+            || placed.kind == CardKind::Agent;
         if !node.detail.is_empty() && !on_stats_line {
             facts.push(node.detail.clone());
         }
@@ -447,11 +480,15 @@ impl FlowState {
             let state = Kept {
                 turn_folded: std::mem::take(&mut self.turn_folded),
                 call_folded: std::mem::take(&mut self.call_folded),
+                lane_folded: std::mem::take(&mut self.lane_folded),
                 selected: self.selected.take(),
                 follow_tail: self.follow_tail,
                 pan: self.pan,
                 zoom: self.zoom,
                 detached: self.detached,
+                mode: self.mode,
+                mode_chosen: self.mode_chosen,
+                timeline: std::mem::take(&mut self.timeline),
             };
             kept.push((std::mem::take(&mut self.agent_id), state));
         }
@@ -468,14 +505,95 @@ impl FlowState {
             agent_id: agent_id.to_string(),
             turn_folded: state.turn_folded,
             call_folded: state.call_folded,
+            lane_folded: state.lane_folded,
             selected: state.selected,
             follow_tail: state.follow_tail,
             pan: state.pan,
             zoom: state.zoom,
             detached: state.detached,
+            mode: state.mode,
+            mode_chosen: state.mode_chosen,
+            timeline: TimelineState {
+                stale: true,
+                ..state.timeline
+            },
             kept,
             ..Self::default()
         };
+    }
+
+    /// How the flow is shown.
+    #[must_use]
+    pub const fn mode(&self) -> FlowMode {
+        self.mode
+    }
+
+    /// The timeline and where in it the user is, as of the last
+    /// [`Self::ensure_timeline`].
+    #[must_use]
+    pub const fn timeline(&self) -> &TimelineState {
+        &self.timeline
+    }
+
+    pub(crate) fn timeline_mut(&mut self) -> &mut TimelineState {
+        &mut self.timeline
+    }
+
+    /// Build the timeline again if the flow or its folds changed.
+    pub fn ensure_timeline(&mut self) {
+        self.timeline
+            .rebuild(&self.lanes, &self.lane_index, &self.nodes);
+    }
+
+    /// Whether lane `lane` is shown as one card.
+    #[must_use]
+    pub fn lane_is_folded(&self, lane: usize) -> bool {
+        self.lanes
+            .get(lane)
+            .is_some_and(|it| self.lane_folded.contains(&it.agent_id))
+    }
+
+    /// Until the user picks, a flow of many agents, or of a benchmark,
+    /// opens on its timeline.
+    fn pick_mode(&mut self) {
+        if self.mode_chosen {
+            return;
+        }
+        let busy =
+            self.lanes.len() > TIMELINE_LANES || self.lanes.iter().any(|lane| lane.bench.is_some());
+        if busy {
+            self.mode = FlowMode::Timeline;
+        }
+    }
+
+    /// Show the flow as `mode`, by the user's choice.
+    fn set_mode(&mut self, mode: FlowMode) {
+        self.mode = mode;
+        self.mode_chosen = true;
+        self.drag = None;
+        if mode == FlowMode::Timeline {
+            self.from_timeline = false;
+            self.timeline_to_selection();
+        }
+    }
+
+    /// Select the timeline row of the agent the canvas has selected, and
+    /// the turn it is in.
+    fn timeline_to_selection(&mut self) {
+        self.ensure_timeline();
+        let Some(&node) = self.selected.as_deref().and_then(|id| self.index.get(id)) else {
+            return;
+        };
+        let agent = self.nodes[node].agent_id.clone();
+        let Some(row) = self.timeline.timeline.row_of(&agent) else {
+            return;
+        };
+        let head = self.layout.folds_over(node).0;
+        let span = self.timeline.timeline.rows[row]
+            .spans
+            .iter()
+            .position(|span| Some(span.head) == head || span.head == node);
+        self.timeline.select_span(row, span);
     }
 
     fn load(&mut self, lanes: Vec<FlowLane>, nodes: Vec<FlowNode>) {
@@ -488,6 +606,9 @@ impl FlowState {
         let index = &self.index;
         self.turn_folded.retain(|id| index.contains_key(id));
         self.call_folded.retain(|id| index.contains_key(id));
+        let lanes = &self.lane_index;
+        self.lane_folded.retain(|id| lanes.contains_key(id));
+        self.pick_mode();
     }
 
     fn upsert(&mut self, lanes: Vec<FlowLane>, nodes: Vec<FlowNode>) {
@@ -505,7 +626,7 @@ impl FlowState {
                 self.add_lane(FlowLane {
                     agent_id: node.agent_id.clone(),
                     name: format!("agent {}", node.agent_id.get(..8).unwrap_or(&node.agent_id)),
-                    parent: None,
+                    ..FlowLane::default()
                 });
             }
             self.index.insert(node.id.clone(), self.nodes.len());
@@ -522,6 +643,10 @@ impl FlowState {
                 .collect();
         }
         self.stale = true;
+        self.timeline.stale = true;
+        if self.loaded {
+            self.pick_mode();
+        }
     }
 
     fn add_lane(&mut self, lane: FlowLane) {
@@ -534,6 +659,7 @@ impl FlowState {
             }
         }
         self.stale = true;
+        self.timeline.stale = true;
     }
 
     /// Fit the columns of cards to a view `rows` tall from the next
@@ -556,6 +682,7 @@ impl FlowState {
         let folds = Folds {
             turns: &self.turn_folded,
             calls: &self.call_folded,
+            lanes: &self.lane_folded,
         };
         self.layout = build_layout(
             &self.lane_index,
@@ -574,7 +701,7 @@ impl FlowState {
         };
         let node = match selected {
             Some(node) if !self.follow_tail => match self.layout.card_of(node) {
-                Some(card) if self.is_folded_away(node) => self.layout.cards[card].head,
+                Some(_) if self.is_folded_away(node) => self.layout.stand_in(node),
                 Some(_) => node,
                 None => newest,
             },
@@ -846,11 +973,17 @@ impl FlowState {
         }
     }
 
-    /// Fold or unfold card `card`: a turn's subcards, a call's rows.
+    /// Fold or unfold card `card`: a turn's subcards, a call's rows, a
+    /// folded agent's turns.
     fn toggle_card(&mut self, card: usize) {
         let placed = &self.layout.cards[card];
         if !placed.folds() {
             return;
+        }
+        if placed.kind == CardKind::Agent {
+            let agent = self.lanes[placed.lane].agent_id.clone();
+            let node = self.selected_node_index().unwrap_or(placed.head);
+            return self.unfold_lane(&agent, node);
         }
         let id = self.nodes[placed.head].id.clone();
         let folded = match placed.kind {
@@ -885,8 +1018,96 @@ impl FlowState {
         self.stale = true;
     }
 
+    fn selected_node_index(&self) -> Option<usize> {
+        self.index.get(self.selected.as_deref()?).copied()
+    }
+
+    /// Show agent `agent`'s turns again, with node `node` selected.
+    fn unfold_lane(&mut self, agent: &str, node: usize) {
+        self.lane_folded.remove(agent);
+        self.selected = Some(self.nodes[node].id.clone());
+        self.follow_tail = false;
+        self.detached = false;
+        self.stale = true;
+    }
+
+    /// Show the agent node `node` is of as one card, or its turns again.
+    fn toggle_lane_of(&mut self, node: usize) {
+        let agent = self.nodes[node].agent_id.clone();
+        if self.lane_folded.contains(&agent) {
+            return self.unfold_lane(&agent, node);
+        }
+        self.lane_folded.insert(agent);
+        self.follow_tail = false;
+        self.detached = false;
+        self.stale = true;
+    }
+
+    /// Fold lane `lane`, or unfold it, from its name above its band.
+    fn toggle_lane(&mut self, lane: usize) {
+        let Some(&head) = self
+            .layout
+            .lane_turns(lane)
+            .first()
+            .map(|&card| &self.layout.cards[card].head)
+        else {
+            return;
+        };
+        self.toggle_lane_of(head);
+        self.selected = Some(self.nodes[head].id.clone());
+    }
+
+    /// Show every agent as one card but the selected node's and the
+    /// agent that spawned it.
+    fn fold_other_lanes(&mut self) {
+        let Some(node) = self.selected_node_index() else {
+            return;
+        };
+        self.fold_lanes_but(&self.nodes[node].agent_id.clone());
+    }
+
+    fn fold_lanes_but(&mut self, agent: &str) {
+        let parent = self
+            .lane_index
+            .get(agent)
+            .and_then(|&lane| self.lanes[lane].parent.clone());
+        self.lane_folded = self
+            .lanes
+            .iter()
+            .map(|lane| lane.agent_id.clone())
+            .filter(|id| id != agent && Some(id) != parent.as_ref())
+            .collect();
+        self.follow_tail = false;
+        self.detached = false;
+        self.stale = true;
+    }
+
+    /// Show every agent's turns.
+    fn unfold_lanes(&mut self) {
+        self.lane_folded.clear();
+        self.follow_tail = false;
+        self.detached = false;
+        self.stale = true;
+    }
+
+    /// From the timeline to the cards of the turn node `node` starts:
+    /// every other agent folded but the one that spawned it.
+    fn drill_in(&mut self, node: usize) {
+        let agent = self.nodes[node].agent_id.clone();
+        self.fold_lanes_but(&agent);
+        self.turn_folded.remove(&self.nodes[node].id);
+        self.selected = Some(self.nodes[node].id.clone());
+        self.mode = FlowMode::Canvas;
+        self.mode_chosen = true;
+        self.from_timeline = true;
+        self.came_from = None;
+    }
+
     /// Unfold whatever hides node `node`.
     fn unfold_to(&mut self, node: usize) {
+        if let Some(agent) = self.nodes.get(node).map(|n| n.agent_id.clone()) {
+            self.lane_folded.remove(&agent);
+        }
         let (turn, call) = self.layout.folds_over(node);
         if let Some(turn) = turn {
             self.turn_folded.remove(&self.nodes[turn].id);
@@ -958,6 +1179,10 @@ impl FlowState {
             }
             Spot::Title { card, .. } | Spot::Head(card) => (card, None),
             Spot::Row(card, row) => (card, Some(row)),
+            Spot::Lane(lane) => {
+                self.toggle_lane(lane);
+                return false;
+            }
         };
         if self.selected_place() == Some((card, row)) {
             return true;
@@ -1097,8 +1322,22 @@ impl App {
         modifiers: KeyModifiers,
         lines: usize,
     ) {
-        let lines = cells(lines);
         let sideways = modifiers.contains(KeyModifiers::SHIFT);
+        if self.flow.mode == FlowMode::Timeline {
+            let rows = isize::try_from(lines).unwrap_or(isize::MAX);
+            let timeline = &mut self.flow.timeline;
+            match kind {
+                MouseEventKind::ScrollUp if sideways => timeline.pan(-0.1),
+                MouseEventKind::ScrollDown if sideways => timeline.pan(0.1),
+                MouseEventKind::ScrollUp => timeline.scroll_by(-rows),
+                MouseEventKind::ScrollDown => timeline.scroll_by(rows),
+                MouseEventKind::ScrollLeft => timeline.pan(-0.1),
+                MouseEventKind::ScrollRight => timeline.pan(0.1),
+                _ => {}
+            }
+            return;
+        }
+        let lines = cells(lines);
         let (dx, dy) = match kind {
             MouseEventKind::ScrollUp if sideways => (-WHEEL_COLUMNS, 0.0),
             MouseEventKind::ScrollDown if sideways => (WHEEL_COLUMNS, 0.0),
@@ -1120,12 +1359,34 @@ impl App {
         {
             return false;
         }
+        if self.flow.mode == FlowMode::Timeline {
+            return self.handle_timeline_key(key);
+        }
         self.flow.ensure_layout();
         let page = self.flow.view.map_or(1.0, |view| {
             f32::from(view.area.height.saturating_sub(2).max(1)) / self.flow.zoom()
         });
         match key.code {
+            KeyCode::Esc if self.flow.from_timeline => self.flow.set_mode(FlowMode::Timeline),
             KeyCode::Esc => self.show_chat_tab(ChatTab::Chat),
+            KeyCode::Char('v') => self.flow.set_mode(FlowMode::Timeline),
+            KeyCode::Char('c') => {
+                if let Some(node) = self.flow.selected_node_index() {
+                    self.flow.toggle_lane_of(node);
+                }
+            }
+            KeyCode::Char('C') => self.flow.fold_other_lanes(),
+            KeyCode::Char('x') => self.flow.unfold_lanes(),
+            KeyCode::Enter
+                if self
+                    .flow
+                    .selected_card()
+                    .is_some_and(|card| self.flow.layout.cards[card].kind == CardKind::Agent) =>
+            {
+                if let Some(card) = self.flow.selected_card() {
+                    self.flow.toggle_card(card);
+                }
+            }
             KeyCode::Up | KeyCode::Char('k') => self.flow.move_line(false),
             KeyCode::Down | KeyCode::Char('j') => self.flow.move_line(true),
             KeyCode::Left | KeyCode::Char('h') => self.flow.move_along(false),
@@ -1161,11 +1422,97 @@ impl App {
         true
     }
 
+    /// Keys of the GRAPH tab's timeline.
+    fn handle_timeline_key(&mut self, key: KeyEvent) -> bool {
+        self.flow.ensure_timeline();
+        let timeline = &mut self.flow.timeline;
+        let page = timeline.view.map_or(10, |view| {
+            isize::try_from(view.rows_shown.max(1)).unwrap_or(10)
+        });
+        let last = timeline.timeline.rows.len().saturating_sub(1);
+        match key.code {
+            KeyCode::Esc => self.show_chat_tab(ChatTab::Chat),
+            KeyCode::Up | KeyCode::Char('k') => timeline.move_row(-1),
+            KeyCode::Down | KeyCode::Char('j') => timeline.move_row(1),
+            KeyCode::Left | KeyCode::Char('h') => timeline.move_span(false),
+            KeyCode::Right | KeyCode::Char('l') => timeline.move_span(true),
+            KeyCode::PageUp => timeline.scroll_by(-page),
+            KeyCode::PageDown => timeline.scroll_by(page),
+            KeyCode::Home | KeyCode::Char('g') => timeline.select_row(0),
+            KeyCode::End | KeyCode::Char('G') => timeline.select_row(last),
+            KeyCode::Char(' ') => {
+                if let Some(row) = timeline.selected_row() {
+                    timeline.toggle(row);
+                }
+            }
+            KeyCode::Char('z') => timeline.toggle_all(),
+            KeyCode::Char('e') => timeline.toggle_issues(),
+            KeyCode::Char('+' | '=') => timeline.zoom_by(Some(timeline::ZOOM_STEP)),
+            KeyCode::Char('-') => timeline.zoom_by(Some(1.0 / timeline::ZOOM_STEP)),
+            KeyCode::Char('0') => timeline.zoom_by(None),
+            KeyCode::Enter => self.open_timeline_selection(),
+            KeyCode::Char('v') => self.flow.set_mode(FlowMode::Canvas),
+            KeyCode::Char('o') => {
+                let lane = timeline
+                    .selected_row()
+                    .and_then(|row| timeline.timeline.rows[row].lane);
+                if let Some(lane) = lane {
+                    let agent = self.flow.lanes[lane].agent_id.clone();
+                    self.open_agent(agent);
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Enter on the timeline: the cards of the selected turn, else of the
+    /// row's first; a row without turns folds.
+    fn open_timeline_selection(&mut self) {
+        let timeline = &self.flow.timeline;
+        let Some(row) = timeline.selected_row() else {
+            return;
+        };
+        let it = &timeline.timeline.rows[row];
+        let head = timeline
+            .selected_span()
+            .map(|(row, span)| timeline.timeline.rows[row].spans[span].head)
+            .or_else(|| it.spans.first().map(|span| span.head));
+        match head {
+            Some(head) if it.lane.is_some() => self.flow.drill_in(head),
+            _ => self.flow.timeline.toggle(row),
+        }
+    }
+
+    /// A press on the timeline: a row's fold marker folds it, a row or
+    /// turn is selected, and a turn already selected opens.
+    fn click_timeline(&mut self, column: u16, row: u16) -> bool {
+        self.flow.ensure_timeline();
+        let timeline = &mut self.flow.timeline;
+        match timeline.spot_at(column, row) {
+            Some(Err(row)) => timeline.toggle(row),
+            Some(Ok((row, span))) => {
+                let again =
+                    span.is_some() && timeline.selected_row() == Some(row) && timeline.span == span;
+                if again {
+                    self.open_timeline_selection();
+                } else {
+                    timeline.select_span(row, span);
+                }
+            }
+            None => return false,
+        }
+        true
+    }
+
     /// A press in the GRAPH tab: on a turn's fold marker it folds the
     /// turn, on a card's line it selects it, and on the selected line it
     /// opens it. On empty canvas it starts a drag that pans the view.
     /// Returns whether the press was on the canvas.
     pub(super) fn click_flow(&mut self, column: u16, row: u16) -> bool {
+        if self.flow.mode == FlowMode::Timeline {
+            return self.click_timeline(column, row);
+        }
         self.flow.ensure_layout();
         if self.flow.hosted {
             // The front end works its own canvas.
@@ -1316,9 +1663,13 @@ impl App {
     /// Switch to the agent whose lane the selected node is in. The GRAPH
     /// tab then shows that agent's flow.
     fn open_flow_agent(&mut self) {
-        let Some(agent_id) = self.flow.selected_node().map(|node| node.agent_id.clone()) else {
-            return;
-        };
+        if let Some(agent_id) = self.flow.selected_node().map(|node| node.agent_id.clone()) {
+            self.open_agent(agent_id);
+        }
+    }
+
+    /// Switch to agent `agent_id`, when it has a chat to open.
+    fn open_agent(&mut self, agent_id: String) {
         let name = self.flow.lane_name(&agent_id).to_string();
         if agent_id == self.active_agent_id {
             self.notification =

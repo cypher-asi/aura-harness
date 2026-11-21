@@ -65,6 +65,8 @@ pub enum CardKind {
     Call,
     /// A message from another agent, or a result no row stands for
     Note,
+    /// A folded agent: all its turns on one card, a row each
+    Agent,
 }
 
 /// One card: a node and the rows that follow it.
@@ -136,12 +138,13 @@ impl Card {
     #[must_use]
     pub const fn indent(&self) -> usize {
         match self.kind {
-            CardKind::Turn => 0,
+            CardKind::Turn | CardKind::Agent => 0,
             CardKind::Call | CardKind::Note => SUB_INDENT,
         }
     }
 
-    /// Whether it folds: a turn with subcards, a call with rows.
+    /// Whether it folds: a turn with subcards, a call with rows, a
+    /// folded agent.
     #[must_use]
     pub const fn folds(&self) -> bool {
         self.steps > 0 && !matches!(self.kind, CardKind::Note)
@@ -268,13 +271,17 @@ pub enum Spot {
     Head(usize),
     /// A card's row
     Row(usize, usize),
+    /// The name of a lane above its band, which folds the lane
+    Lane(usize),
 }
 
 impl Spot {
+    /// The card it is on; `None` off every card.
     #[must_use]
-    pub const fn card(self) -> usize {
+    pub const fn card(self) -> Option<usize> {
         match self {
-            Self::Title { card, .. } | Self::Head(card) | Self::Row(card, _) => card,
+            Self::Title { card, .. } | Self::Head(card) | Self::Row(card, _) => Some(card),
+            Self::Lane(_) => None,
         }
     }
 }
@@ -285,6 +292,8 @@ pub(super) struct Folds<'a> {
     pub turns: &'a HashSet<String>,
     /// Model calls whose rows are folded away
     pub calls: &'a HashSet<String>,
+    /// Agents shown as one card, by hex id
+    pub lanes: &'a HashSet<String>,
 }
 
 /// Where every card of the flow goes.
@@ -396,6 +405,24 @@ impl FlowLayout {
         (of(&self.turn_head), of(&self.call_head))
     }
 
+    /// The node that stands for node `node` while a fold hides it: the
+    /// head of its folded turn, or its turn's row on a folded agent's
+    /// card. Itself when it is shown.
+    #[must_use]
+    pub fn stand_in(&self, node: usize) -> usize {
+        let Some(card) = self.card_of(node) else {
+            return node;
+        };
+        let placed = &self.cards[card];
+        if self.row_of(node).is_some() || placed.head == node {
+            return node;
+        }
+        match self.turn_head.get(node).copied() {
+            Some(turn) if placed.kind == CardKind::Agent && turn != NONE => turn,
+            _ => placed.head,
+        }
+    }
+
     /// The newest node shown.
     #[must_use]
     pub fn newest(&self) -> Option<usize> {
@@ -446,6 +473,13 @@ impl FlowLayout {
             return None;
         }
         let (x, y) = (x.floor() as usize, y.floor() as usize);
+        if let Some(span) = self.spans.iter().find(|span| {
+            span.lane != 0
+                && self.bands[span.band].y == y
+                && (Self::column_x(span.first)..Self::column_x(span.last) + CARD_WIDTH).contains(&x)
+        }) {
+            return Some(Spot::Lane(span.lane));
+        }
         let column = x.checked_sub(MARGIN)? / PITCH;
         let card = self
             .by_column
@@ -660,7 +694,67 @@ pub(super) fn build_layout(
     let mut row_of = vec![NONE; nodes.len()];
     let mut turn_head = vec![NONE; nodes.len()];
     let mut call_head = vec![NONE; nodes.len()];
+    let mut lane_folded = vec![false; lane_count];
+    for (agent, &lane) in lane_index {
+        lane_folded[lane] = folds.lanes.contains(agent);
+    }
+    // The card a folded lane's turns are rows of, once it has one.
+    let mut agent_card = vec![NONE; lane_count];
     for draft in &drafts {
+        if lane_folded[draft.lane] {
+            let stats = turn_stats(draft, nodes);
+            let at = match agent_card[draft.lane] {
+                NONE => {
+                    let at = cards.len();
+                    cards.push(Card {
+                        kind: CardKind::Agent,
+                        head: draft.head,
+                        rows: Vec::new(),
+                        lane: draft.lane,
+                        block: blocks.len(),
+                        column: 0,
+                        band: 0,
+                        top: 0,
+                        steps: 0,
+                        folded: true,
+                        stats: None,
+                    });
+                    blocks.push(Block {
+                        lane: draft.lane,
+                        cards: at..at + 1,
+                        column: 0,
+                        top: 0,
+                        height: 0,
+                    });
+                    lane_turns[draft.lane].push(at);
+                    agent_card[draft.lane] = at;
+                    at
+                }
+                at => at,
+            };
+            let card = &mut cards[at];
+            card.rows.push(draft.head);
+            card.steps += 1;
+            card.stats = match (card.stats, stats) {
+                (Some(a), Some(b)) => Some(a.plus(b)),
+                (a, b) => a.or(b),
+            };
+            row_of[draft.head] = card.rows.len() - 1;
+            let subs = draft
+                .subs
+                .iter()
+                .flat_map(|sub| std::iter::once(&sub.head).chain(&sub.rows));
+            for &node in std::iter::once(&draft.head).chain(&draft.rows).chain(subs) {
+                card_of[node] = at;
+                turn_head[node] = draft.head;
+            }
+            for sub in draft.subs.iter().filter(|sub| sub.kind == CardKind::Call) {
+                for &node in std::iter::once(&sub.head).chain(&sub.rows) {
+                    call_head[node] = sub.head;
+                }
+            }
+            continue;
+        }
         let folded = !draft.subs.is_empty() && folds.turns.contains(&nodes[draft.head].id);
         let main = cards.len();
         let block = blocks.len();

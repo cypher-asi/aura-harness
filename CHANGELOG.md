@@ -7,6 +7,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### GRAPH — a timeline of the agents, and folded agents
+
+##### Added
+
+- The GRAPH tab has a timeline view (`v` switches to it and back): a
+  row per agent, indented under the agent that spawned it, with its
+  turns as bars over the run's time, Gate, judge and error marks, and
+  its cost, time and check result. A flow of more than four agents, or
+  of a benchmark, opens on it. A benchmark's runs are listed by task,
+  arm A next to arm B, under a row that says how many of each arm's
+  runs passed. Rows fold (Space, `z`), `e` keeps only the rows that
+  failed, and `+`/`-`/`0` zoom the time. Enter opens the selected turn's
+  cards with every other agent folded; Esc goes back to the timeline.
+- Agents fold on the canvas: `c`, or the `▾` before an agent's name,
+  puts all its turns on one `agent` card; `C` folds every agent but the
+  selected one and the one that spawned it, and `x` opens them all.
+- The flow keeps up to 160 agents and 16,000 steps (was 48 and 4,000),
+  so a whole benchmark fits.
+
 ### Benchmarks — suites and harder tasks
 
 ##### Added

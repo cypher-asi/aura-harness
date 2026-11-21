@@ -8,6 +8,7 @@ mod context_menu;
 mod detail;
 mod diff;
 mod flow;
+mod flow_timeline;
 mod graph;
 mod header;
 mod hud;
