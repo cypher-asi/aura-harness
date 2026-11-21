@@ -35,7 +35,11 @@ const REFUSING_MODEL: &str = "claude/claude-sonnet-4-6";
 /// [`REFUSING_MODEL`]. Auxiliary calls, like the chat title, quote the
 /// prompt and are answered at once. Gate's judge of failed work blames
 /// the model when the work's request says "judge: blame", excuses it
-/// when it says "judge: excuse", and gives no verdict otherwise. The
+/// when it says "judge: excuse", and gives no verdict otherwise. A turn
+/// asked to "reply unverified" ends on the fast tier saying its work
+/// isn't verified, and Gate's judge of unverified work blames such a
+/// reply when the request says "review: blame", finds it fine when it
+/// says "review: fine", and gives no verdict otherwise. The
 /// comparison judge prefers the first attempt, and, given what the user
 /// kept, rates it as good as that and the second worse.
 struct GatedProvider {
@@ -66,6 +70,18 @@ impl ModelProvider for GatedProvider {
                 "The change is wrong.\nVERDICT: MODEL"
             } else if asked.contains("judge: excuse") {
                 "The check cannot pass here.\nVERDICT: OTHER"
+            } else {
+                "Hard to say."
+            };
+            return MockProvider::simple_response(reply).complete(request).await;
+        }
+        if request.system == aura_agent_gate::turn_judge::UNVERIFIED_SYSTEM_PROMPT {
+            let asked = last.as_deref().unwrap_or_default();
+            let disowned = asked.contains("it isn't verified");
+            let reply = if disowned && asked.contains("review: blame") {
+                "The change is untested and wrong.\nVERDICT: MODEL"
+            } else if disowned && asked.contains("review: fine") {
+                "The change is right.\nVERDICT: OK"
             } else {
                 "Hard to say."
             };
@@ -145,6 +161,17 @@ impl ModelProvider for GatedProvider {
                 status: 400,
                 message: "the model fell over".to_string(),
             });
+        }
+        let disowns = !auxiliary
+            && request.model.as_str().contains("haiku")
+            && request
+                .messages
+                .iter()
+                .any(|m| m.text_content().contains("reply unverified"));
+        if disowns {
+            return MockProvider::simple_response("I made the change, but it isn't verified.")
+                .complete(request)
+                .await;
         }
         if auxiliary {
             // The chat title is written in the background while the turn
@@ -2359,6 +2386,56 @@ async fn a_failed_turn_the_judge_blames_on_the_model_carries_on_on_a_stronger_on
         [Some((1, 0)), None],
         "the failure counts once for Haiku; the stronger model's work is not counted"
     );
+}
+
+#[tokio::test]
+async fn a_passed_check_the_reply_disowns_is_reviewed_and_carries_on_on_a_stronger_model() {
+    const HAIKU: &str = "aura-claude-haiku-4-5";
+    const SONNET: &str = "aura-claude-sonnet-4-6";
+    let (routes, outcomes, shown, rows) = debugging_turn_under_gate(
+        "fix it: run passing check, then reply unverified (review: blame)",
+    )
+    .await;
+
+    assert_eq!(
+        routes,
+        [
+            Route::turn(HAIKU, RouteReason::Default),
+            Route::turn(SONNET, RouteReason::Escalate),
+        ],
+        "{shown}"
+    );
+    assert_eq!(
+        outcomes,
+        [
+            (HAIKU.to_string(), OutcomeSignal::JudgedFail),
+            (SONNET.to_string(), OutcomeSignal::None),
+        ],
+        "the check that passed does not count for Haiku"
+    );
+    assert!(
+        shown.contains("The change is untested and wrong."),
+        "{shown}"
+    );
+    assert_eq!(rows, [Some((1, 0)), None]);
+}
+
+#[tokio::test]
+async fn a_passed_check_the_reply_disowns_stands_when_the_judge_finds_the_work_done() {
+    const HAIKU: &str = "aura-claude-haiku-4-5";
+    let (routes, outcomes, shown, rows) = debugging_turn_under_gate(
+        "fix it: run passing check, then reply unverified (review: fine)",
+    )
+    .await;
+
+    assert_eq!(
+        routes,
+        [Route::turn(HAIKU, RouteReason::Default)],
+        "{shown}"
+    );
+    assert_eq!(outcomes, [(HAIKU.to_string(), OutcomeSignal::ChecksPassed)]);
+    assert!(shown.contains("The change is right."), "{shown}");
+    assert_eq!(rows, [Some((1, 1)), None]);
 }
 
 #[tokio::test]

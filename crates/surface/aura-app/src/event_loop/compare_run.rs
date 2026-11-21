@@ -35,6 +35,7 @@ use super::gate_followup::{
     check_review, check_signal, harness_check, joined, judge_unchecked, nudge_prompt, FollowUp,
     Unchecked,
 };
+use super::gate_log::{self, RunOf};
 use super::gate_record;
 use super::handlers::{handle_agent_success, run_agent_turn, system_message, turn_summary};
 use super::modes::Permissions;
@@ -51,6 +52,7 @@ use crate::isolation::{
     CopyIsolation, IsolatedWorkspace, Isolation, IsolationStrategy, WorktreeIsolation,
 };
 use aura_agent::AgentLoop;
+use aura_agent_gate::attempt_log::Terms;
 use aura_agent_gate::classify::Label;
 use aura_agent_gate::compare::{list_price, plan_shares, run_name, PlanReading, Schedule};
 use aura_agent_gate::followup::Step;
@@ -570,6 +572,15 @@ pub(super) async fn run(
     let mut ran = run_all(&ctx, &session, &user_ui, &mut payload).await;
     for r in &mut ran {
         if let Some((kernel, ended)) = r.checked.take() {
+            if let Some(passed) = ended.success {
+                let of = RunOf {
+                    compare: &host.name,
+                    run: &r.run.name,
+                    task: r.run.task.as_deref(),
+                };
+                hub.gate
+                    .log_truth(r.run.agent_id, ended.prompt_tx, passed, of);
+            }
             gate_record::record(&kernel, r.run.agent_id, &ended).await;
         }
     }
@@ -1229,6 +1240,13 @@ async fn run_prompt(
     // before a nudge cost.
     let mut follow = (String::new(), FollowUp::default());
     let mut nudged_cost_usd = 0.0;
+    // What the attempt left, for Gate's attempt log.
+    let terms = Terms {
+        difficulty: label.difficulty,
+        led: Some(led),
+        routed: gate_arm,
+    };
+    let mut left;
     let diff = || {
         files
             .as_ref()
@@ -1340,6 +1358,10 @@ async fn run_prompt(
             .or_else(|| failure_text(&result, turn_start))
             .unwrap_or_default();
         let survived = result.is_ok();
+        left = result
+            .as_ref()
+            .ok()
+            .map(|result| gate_log::evidence(result, turn_start));
         let (reply, error) = match result {
             Ok(result) => {
                 let text = result.total_text.clone();
@@ -1374,6 +1396,7 @@ async fn run_prompt(
             break (signal, reply, error, ended, false);
         }
         if let Some(failed) = &ended {
+            hub.gate.log_attempt(agent_id, failed, terms, left.take());
             gate_record::record(&session.kernel, agent_id, failed).await;
         }
         let mut review = unchecked;
@@ -1457,6 +1480,7 @@ async fn run_prompt(
         error = Some("stopped by the user".to_string());
     }
     if let (false, Some(ended)) = (recorded, &ended) {
+        hub.gate.log_attempt(agent_id, ended, terms, left);
         gate_record::record(&session.kernel, agent_id, ended).await;
     }
     let routed = RunTurn {

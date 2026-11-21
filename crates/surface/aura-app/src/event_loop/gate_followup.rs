@@ -15,7 +15,7 @@ use super::gate_record::{self, Judged};
 use super::steering::SteerSource;
 use super::task_check::{run_script_within, CheckRun};
 use aura_agent::AgentLoopResult;
-use aura_agent_gate::checks::command_line;
+use aura_agent_gate::checks::{command_line, exit_status_masked, last_check_seen, CheckSeen};
 use aura_agent_gate::followup::{self, Allowed, Ended, Step, Suspicion, Taken, NUDGE_PROMPT};
 use aura_agent_gate::turn_judge::Unverified;
 use aura_agent_gate::Candidate;
@@ -210,6 +210,28 @@ fn commands_run(messages: &[Message]) -> String {
     commands[commands.len().saturating_sub(SHOWN_COMMANDS)..].join("\n")
 }
 
+/// The attempt's last check as the judge of unchecked work sees it: its
+/// command, how it exited, and what it printed. A command whose exit
+/// status is not the check's is pointed out, since its exiting with
+/// success then says nothing of the check.
+fn check_shown(check: &CheckSeen) -> String {
+    let exited = if check.passed {
+        "exited with success"
+    } else {
+        "failed"
+    };
+    let masked = if check.passed && exit_status_masked(&check.command) {
+        " The exit status is that of the command the check's output was piped or chained into, \
+         not the check's own, so only the output says how the check went."
+    } else {
+        ""
+    };
+    format!(
+        "`{}` {exited}.{masked} It printed:\n{}",
+        check.command, check.output
+    )
+}
+
 /// What the judge of unchecked work is shown of an attempt.
 pub(crate) struct Unchecked<'a> {
     /// What the user asked
@@ -239,11 +261,15 @@ pub(crate) async fn judge_unchecked(
         .get(unchecked.turn_start..)
         .unwrap_or_default();
     let commands = commands_run(messages);
+    let last_check = last_check_seen(messages)
+        .map(|check| check_shown(&check))
+        .unwrap_or_default();
     let shown = Unverified {
         task: unchecked.task,
         diff: unchecked.diff,
         reply: &reply,
         commands: &commands,
+        last_check: &last_check,
         suspicions: unchecked.suspicions,
     };
     gate_record::judge_unverified(&session.kernel, judge, ended, &shown, auth_token).await
@@ -311,6 +337,35 @@ mod tests {
         ] {
             assert_eq!(check_signal(&unrun), None, "{unrun:?}");
         }
+    }
+
+    #[test]
+    fn the_judge_is_told_when_a_checks_exit_status_is_not_its_own() {
+        let piped = CheckSeen {
+            command: "pytest -q 2>&1 | head -20".to_string(),
+            passed: true,
+            output: "TypeError: boom\n9 passed".to_string(),
+        };
+        let shown = check_shown(&piped);
+        assert!(
+            shown.starts_with(
+                "`pytest -q 2>&1 | head -20` exited with success. The exit status is that of"
+            ),
+            "{shown}"
+        );
+        assert!(
+            shown.ends_with("It printed:\nTypeError: boom\n9 passed"),
+            "{shown}"
+        );
+
+        let plain = CheckSeen {
+            command: "pytest -q".to_string(),
+            ..piped
+        };
+        assert_eq!(
+            check_shown(&plain),
+            "`pytest -q` exited with success. It printed:\nTypeError: boom\n9 passed"
+        );
     }
 
     #[test]

@@ -339,6 +339,7 @@ dependencies = [
  "aura-core-auth",
  "aura-core-types",
  "aura-model",
+ "serde",
  "serde_json",
 ]
 
@@ -570,6 +571,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "aura-agent",
+ "aura-agent-gate",
  "aura-agent-trace",
  "aura-app",
  "aura-auth",

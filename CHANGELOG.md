@@ -7,6 +7,47 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Gate's attempt log
+
+##### Added
+
+- Gate logs each attempt and what later showed its work right or wrong
+  to `gate/attempts.jsonl` under the data directory, which is not under
+  version control. An `attempt` line holds what Gate made of the attempt
+  and its evidence (the tests or builds it ran and what they printed,
+  the files it changed, the start of its final reply); a `truth` line
+  holds a benchmark task's own check, a rewind, a retry on a stronger
+  model or a `/compare pick`. Comparisons already recorded are read back
+  in at startup from the record and the saved sessions.
+- `aura gate eval` scores Gate's verdicts on that log: how much failed
+  work it let stand, per model, and for each sign of a failed attempt
+  (a check whose exit status is hidden by a pipe, failures in a passed
+  check's output, a reply that says the work was not verified, and
+  others) how many failures it would have caught against how many good
+  attempts it would have questioned. `--routed`, `--passed`, `--task`,
+  `--log` and `--json` narrow or export it.
+
+##### Changed
+
+- A routed turn whose last test or build exited with success, but whose
+  final reply says the work was not verified, goes to Gate's judge once
+  instead of standing as `checks_passed`. The judge also sees that last
+  check, what it printed, and whether the command's exit status was the
+  check's own. Work it finds unfinished moves up to a stronger model;
+  work it finds done stands. On the recorded benchmark runs, 4 of the 8
+  routed attempts that ended this way had failed the task's own check,
+  against 6 of all 57 routed attempts whose check passed.
+
+### Sonnet 5.5 and Opus 5 reason at max effort
+
+##### Changed
+
+- Turns and subtasks on Claude Sonnet 5.5, Opus 5 and Opus 5.5 ask for
+  `max` reasoning effort on every model call, where they asked for
+  `medium`. An effort chosen for the run still wins. Other models keep
+  `medium`. The classifier, the judge and titles still run with thinking
+  off.
+
 ### Sonnet 5.5 and Opus 5 reason at max effort
 
 ##### Changed

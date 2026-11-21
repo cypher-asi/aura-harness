@@ -39,6 +39,13 @@ pub fn last_check(messages: &[Message]) -> Option<bool> {
 /// and output; `None` when they hold none.
 #[must_use]
 pub fn last_check_seen(messages: &[Message]) -> Option<CheckSeen> {
+    checks_seen(messages).pop()
+}
+
+/// Every check in `messages` that ran to its end, in the order they were
+/// called.
+#[must_use]
+pub fn checks_seen(messages: &[Message]) -> Vec<CheckSeen> {
     // Each check's call id, its command and, once it ran to its end,
     // whether it passed and what it printed.
     type Ran = Option<(bool, String)>;
@@ -71,13 +78,16 @@ pub fn last_check_seen(messages: &[Message]) -> Option<CheckSeen> {
             }
         }
     }
-    checks.into_iter().rev().find_map(|(_, command, ran)| {
-        ran.map(|(passed, output)| CheckSeen {
-            command,
-            passed,
-            output,
+    checks
+        .into_iter()
+        .filter_map(|(_, command, ran)| {
+            ran.map(|(passed, output)| CheckSeen {
+                command,
+                passed,
+                output,
+            })
         })
-    })
+        .collect()
 }
 
 /// Pass or fail from a check's result; `None` when the command did not
@@ -127,14 +137,88 @@ pub fn command_line(input: &Value) -> String {
 /// '<check>'` (which runs it in the task's container).
 #[must_use]
 pub fn is_check_command(command: &str) -> bool {
-    command.split(['&', ';', '|', '\n']).any(|part| {
-        let words: Vec<&str> = part
-            .split_whitespace()
-            .map(|word| word.trim_matches(['\'', '"']))
-            .filter(|word| !word.is_empty())
-            .collect();
-        is_check_words(words, true)
-    })
+    command
+        .split(['&', ';', '|', '\n'])
+        .any(|part| is_check_words(words(part), true))
+}
+
+/// What joins one simple command of a command line to the next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Joint {
+    /// `|`: the next command reads this one's output
+    Pipe,
+    /// `&&`: the next runs only when this one succeeded
+    And,
+    /// `||`: the next runs only when this one failed
+    Or,
+    /// `;`, a new line or `&`: the next runs whatever this one did
+    Then,
+    /// Nothing follows
+    End,
+}
+
+/// The simple commands of `command`, each with what joins it to the
+/// next. Quotes are not followed, as in [`is_check_command`]: a wrapper
+/// such as `sh .swe/run '<check> | tail'` is read as its script. A `&`
+/// that is part of a redirection (`2>&1`, `&>`) joins nothing.
+fn parts(command: &str) -> Vec<(&str, Joint)> {
+    let bytes = command.as_bytes();
+    let mut out = Vec::new();
+    let (mut start, mut i) = (0, 0);
+    while i < bytes.len() {
+        let two = bytes.get(i + 1).copied();
+        let (joint, width) = match bytes[i] {
+            b'|' if two == Some(b'|') => (Joint::Or, 2),
+            b'|' => (Joint::Pipe, 1),
+            b'&' if two == Some(b'&') => (Joint::And, 2),
+            b'&' if two == Some(b'>') || (i > 0 && bytes[i - 1] == b'>') => {
+                i += 1;
+                continue;
+            }
+            b'&' | b';' | b'\n' => (Joint::Then, 1),
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        out.push((&command[start..i], joint));
+        i += width;
+        start = i;
+    }
+    out.push((&command[start..], Joint::End));
+    out
+}
+
+fn words(part: &str) -> Vec<&str> {
+    part.split_whitespace()
+        .map(|word| word.trim_matches(['\'', '"']))
+        .filter(|word| !word.is_empty())
+        .collect()
+}
+
+/// Whether the exit status of `command` is not that of the last check it
+/// runs, so that its passing says nothing of the check: the check's
+/// output is piped on (`pytest | tail -20` exits as `tail` does, unless
+/// `pipefail` is set), or another command runs after it whatever it did
+/// (`pytest; echo done`, `pytest || true`). `false` for a command that
+/// runs no check.
+#[must_use]
+pub fn exit_status_masked(command: &str) -> bool {
+    let parts = parts(command);
+    let Some(last) = parts
+        .iter()
+        .rposition(|(part, _)| is_check_words(words(part), true))
+    else {
+        return false;
+    };
+    let follows = parts[last + 1..]
+        .iter()
+        .any(|(part, _)| !part.trim().is_empty());
+    match parts[last].1 {
+        Joint::Pipe => !command.contains("pipefail"),
+        Joint::Or | Joint::Then => follows,
+        Joint::And | Joint::End => false,
+    }
 }
 
 /// Whether one simple command (its words) is a check. Leading variable
@@ -229,6 +313,57 @@ fn is_check_script(name: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_check_whose_output_is_piped_on_does_not_set_the_exit_status() {
+        for command in [
+            "pytest -q | tail -20",
+            "python -m pytest -q test/units 2>&1 | grep -E 'passed|failed|FAILED|Error' | head -20",
+            "sh .swe/run python -m pytest -q -p no:cacheprovider test/units/config 2>&1 | grep -E 'passed|failed' | head -20",
+            "cd app && cargo test 2>&1 | tail -5",
+            "npm test; echo done",
+            "cargo test || true",
+            "pytest -q\necho finished",
+        ] {
+            assert!(exit_status_masked(command), "{command}");
+        }
+        for command in [
+            "pytest -q",
+            "cargo test 2>&1",
+            "cd app && cargo test",
+            "cargo build && cargo test",
+            "set -o pipefail; pytest -q | tail -20",
+            "bash -c 'set -o pipefail && pytest | tee log'",
+            "pytest -q && echo ok",
+            "ls | head; pytest -q",
+            "ls -la | head",
+            "cargo test;",
+        ] {
+            assert!(!exit_status_masked(command), "{command}");
+        }
+    }
+
+    #[test]
+    fn every_check_that_ran_is_seen_in_order() {
+        let messages = [
+            call("a", json!({"command": "cargo test"})),
+            result("a", "exit_code: 1\nboom", true),
+            call("b", json!({"command": "ls"})),
+            result("b", "src", false),
+            call("c", json!({"command": "cargo test | tail -3"})),
+            result("c", "fine", false),
+            call("d", json!({"command": "cargo test", "background": true})),
+            result("d", "started", false),
+        ];
+        let seen = checks_seen(&messages);
+        assert_eq!(
+            seen.iter()
+                .map(|check| (check.command.as_str(), check.passed))
+                .collect::<Vec<_>>(),
+            [("cargo test", false), ("cargo test | tail -3", true)]
+        );
+        assert_eq!(last_check_seen(&messages), seen.last().cloned());
+    }
 
     #[test]
     fn test_and_build_commands_are_checks() {

@@ -10,14 +10,19 @@
 //! It also keeps the latest routing decisions for `/gate`, and the model
 //! each agent's routed work is on, which decides what the subtasks it
 //! dispatches are routed among ([`aura_agent_gate::below_lead`]).
+//!
+//! When it is given an attempt log ([`GateLive::log_attempts_to`]), each
+//! attempt and what later proves it right or wrong is appended there; see
+//! [`super::gate_log`].
 
+use aura_agent_gate::attempt_log::AttemptLog;
 use aura_agent_gate::{Candidate, Decision, GateStats, SplitMix64, Way, Work};
 use aura_agent_kernel::RecordObserver;
 use aura_config::GateConfig;
 use aura_core_types::{AgentId, Difficulty, PromptCategory, RecordEntry, RouteLevel, RouteReason};
 use aura_store_db::ReadStore;
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use tracing::{info, warn};
 
 /// Routing decisions `/gate` lists.
@@ -48,6 +53,8 @@ pub struct GateLive {
     recent: Mutex<VecDeque<RecentRoute>>,
     /// The model Gate sent each agent's work in flight to
     working_on: Mutex<HashMap<AgentId, String>>,
+    /// Where attempts are logged, once set
+    pub(super) log: OnceLock<AttemptLog>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -76,6 +83,7 @@ impl GateLive {
             rng: Mutex::new(rng),
             recent: Mutex::new(VecDeque::with_capacity(RECENT_DECISIONS)),
             working_on: Mutex::new(HashMap::new()),
+            log: OnceLock::new(),
         }
     }
 
@@ -314,6 +322,7 @@ impl RecordObserver for GateLive {
             TransactionType::UserPrompt | TransactionType::Outcome
         ) {
             lock(&self.stats).observe(entry);
+            self.log_user_signal(entry);
         }
     }
 }

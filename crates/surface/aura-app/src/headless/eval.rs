@@ -11,6 +11,7 @@
 use super::output::Output;
 use super::run::{Headless, RunLimits};
 use super::OutputFormat;
+use crate::event_loop::gate_log::RunOf;
 use crate::event_loop::gate_record::{self, Judged};
 use crate::event_loop::subagents::lock;
 use crate::event_loop::task_check::{run_script, CheckRun};
@@ -139,6 +140,14 @@ impl EvalTurns {
         let check_ms = u64::try_from(check_started.elapsed().as_millis()).unwrap_or(u64::MAX);
         match (check.signal(), &last) {
             (Some(signal), Some(ended)) => {
+                if let Some(passed) = signal.success() {
+                    let of = RunOf {
+                        compare: "aura eval",
+                        run: turn.name,
+                        task: None,
+                    };
+                    hub.gate.log_truth(agent_id, ended.prompt_tx, passed, of);
+                }
                 gate_record::record(&session.kernel, agent_id, &ended.with_signal(signal)).await;
             }
             (None, _) => warn!(%agent_id, "{}", check.describe()),

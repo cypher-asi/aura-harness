@@ -48,6 +48,7 @@ use thiserror::Error;
 mod auth_commands;
 pub mod cli;
 pub mod evals;
+mod gate_commands;
 mod runner;
 mod trace_commands;
 

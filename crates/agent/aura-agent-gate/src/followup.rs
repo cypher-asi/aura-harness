@@ -1,8 +1,9 @@
 //! What Gate does about a turn it routed that ended with nothing to judge
-//! it by: no test or build of its own, and no error.
+//! it by: no test or build of its own, and no error; or with a check
+//! that passed while its own reply says the work was not verified.
 //!
-//! Such a turn may have failed without anyone noticing, so before it
-//! counts as done Gate looks for evidence, cheapest first:
+//! A turn with no check may have failed without anyone noticing, so
+//! before it counts as done Gate looks for evidence, cheapest first:
 //!
 //! 1. [`Step::Nudge`]: a turn that changed files is asked once, on the
 //!    same model, to run the tests that cover its change. Its own check
@@ -11,6 +12,14 @@
 //!    the project's tests itself.
 //! 3. [`Step::JudgeUnverified`]: when nothing could be run and the turn
 //!    looks wrong ([`suspicions`]), the judge reviews it without a check.
+//!
+//! A turn whose check passed normally stands. One whose final reply says
+//! the work was not verified ([`says_unverified`]) goes to the judge
+//! as well, since the check then proves less than its passing suggests:
+//! on the benchmark runs in Gate's attempt log
+//! ([`crate::attempt_log`]), half the routed attempts that ended that
+//! way had failed the task's own check, against a tenth of all routed
+//! attempts whose check passed.
 //!
 //! A failure any of them turns up goes on to a stronger model as a failed
 //! check or a judged failure does. Each step runs at most once per
@@ -61,6 +70,9 @@ pub enum Suspicion {
     GaveUp,
     /// It stopped on a limit.
     HitLimit,
+    /// A check it ran passed, but its reply says the work was not
+    /// verified.
+    Unverified,
 }
 
 impl Suspicion {
@@ -71,6 +83,7 @@ impl Suspicion {
             Self::NoChanges => "the request asks for a code change, but no file was changed",
             Self::GaveUp => "the final reply says the work could not be done or was left unfinished",
             Self::HitLimit => "the attempt stopped on a limit (iterations, budget or a stall) instead of finishing",
+            Self::Unverified => "a test or build it ran exited with success, but the final reply says the work was not verified or not tested",
         }
     }
 }
@@ -116,6 +129,45 @@ pub fn gave_up(reply: &str) -> bool {
     GAVE_UP.iter().any(|phrase| reply.contains(phrase))
 }
 
+/// Phrases of a reply that says the work was not verified, lowercase.
+const UNVERIFIED: &[&str] = &[
+    "isn't verified",
+    "is not verified",
+    "not verified",
+    "unverified",
+    "couldn't verify",
+    "could not verify",
+    "didn't verify",
+    "did not verify",
+    "wasn't able to run",
+    "was not able to run",
+    "unable to run",
+    "couldn't run",
+    "could not run",
+    "haven't run",
+    "have not run",
+    "not been tested",
+    "haven't tested",
+    "have not tested",
+    "didn't test",
+    "did not test",
+    "untested",
+    "cut short",
+    "can't say whether",
+    "cannot say whether",
+    "can't confirm",
+    "cannot confirm",
+    "couldn't confirm",
+    "could not confirm",
+];
+
+/// Whether `reply` says the work, or part of it, was not verified.
+#[must_use]
+pub fn says_unverified(reply: &str) -> bool {
+    let reply = reply.to_lowercase().replace('’', "'");
+    UNVERIFIED.iter().any(|phrase| reply.contains(phrase))
+}
+
 /// Whether the steps apply to work asking for `category`: code changes,
 /// debugging, and work nothing classified.
 const fn checkable(category: PromptCategory) -> bool {
@@ -143,11 +195,26 @@ pub fn suspicions(ended: &Ended<'_>) -> Vec<Suspicion> {
 }
 
 /// The next step for `ended`, given the steps `taken` and those
-/// `allowed`. Only a turn that ended with [`OutcomeSignal::None`] gets
-/// any: other signals already say how it went.
+/// `allowed`. A turn that ended with [`OutcomeSignal::None`] gets them
+/// all. One whose own check passed goes to the judge when its reply says
+/// the work was not verified; once the harness has run its check, a
+/// passed check is the harness's and stands. Other signals already say
+/// how the turn went.
 #[must_use]
 pub fn next(ended: &Ended<'_>, taken: Taken, allowed: Allowed) -> Step {
-    if ended.signal != OutcomeSignal::None || !checkable(ended.category) {
+    if !checkable(ended.category) {
+        return Step::Stop;
+    }
+    if ended.signal == OutcomeSignal::ChecksPassed {
+        let doubted =
+            allowed.judge && !taken.judged && !taken.checked && says_unverified(ended.reply);
+        return if doubted {
+            Step::JudgeUnverified(vec![Suspicion::Unverified])
+        } else {
+            Step::Stop
+        };
+    }
+    if ended.signal != OutcomeSignal::None {
         return Step::Stop;
     }
     let changed = ended.files_changed > 0;
@@ -294,6 +361,70 @@ mod tests {
                 "{signal}"
             );
         }
+    }
+
+    #[test]
+    fn a_passed_check_the_reply_disowns_goes_to_the_judge() {
+        let disowned = Ended {
+            signal: OutcomeSignal::ChecksPassed,
+            ..ended(
+                2,
+                "I rewrote `ensure_type()`, but it isn't verified. The only test run was cut short.",
+            )
+        };
+        assert_eq!(
+            next(&disowned, Taken::default(), ALL),
+            Step::JudgeUnverified(vec![Suspicion::Unverified])
+        );
+        let judged = Taken {
+            judged: true,
+            ..Taken::default()
+        };
+        assert_eq!(next(&disowned, judged, ALL), Step::Stop, "once");
+        let no_judge = Allowed {
+            judge: false,
+            ..ALL
+        };
+        assert_eq!(next(&disowned, Taken::default(), no_judge), Step::Stop);
+        let harness_ran = Taken {
+            checked: true,
+            ..Taken::default()
+        };
+        assert_eq!(
+            next(&disowned, harness_ran, ALL),
+            Step::Stop,
+            "the harness's own check passed"
+        );
+
+        let vouched = Ended {
+            signal: OutcomeSignal::ChecksPassed,
+            ..ended(2, "Fixed the parser; `cargo test` passes.")
+        };
+        assert_eq!(next(&vouched, Taken::default(), ALL), Step::Stop);
+        let failed = Ended {
+            signal: OutcomeSignal::ChecksFailed,
+            ..disowned
+        };
+        assert_eq!(
+            next(&failed, Taken::default(), ALL),
+            Step::Stop,
+            "a failed check already goes on"
+        );
+        let answer = Ended {
+            category: PromptCategory::Question,
+            ..disowned
+        };
+        assert_eq!(next(&answer, Taken::default(), ALL), Step::Stop);
+    }
+
+    #[test]
+    fn not_verifying_is_read_from_the_reply() {
+        assert!(says_unverified(
+            "The change is in place but I couldn’t run the tests."
+        ));
+        assert!(says_unverified("It builds; the Python 2 path is UNTESTED."));
+        assert!(!says_unverified("All 286 tests passed."));
+        assert!(!says_unverified(""));
     }
 
     #[test]

@@ -11,6 +11,7 @@ use crate::event_loop::gate_followup::{
     check_review, check_signal, harness_check, joined, judge_unchecked, nudge_prompt, FollowUp,
     Unchecked,
 };
+use crate::event_loop::gate_log;
 use crate::event_loop::gate_record::{self, Judged};
 use crate::event_loop::handlers::{
     drive_turn, mark_session_start, record_response, resume_checkpoint,
@@ -24,6 +25,7 @@ use crate::event_loop::turns::{drain_stale_inbox, ended_signal, failure_text, re
 use crate::event_loop::{AgentHub, AgentSession};
 use crate::session_checkpoint::SessionUsage;
 use aura_agent::{AgentLoop, AgentLoopConfig, AgentLoopResult};
+use aura_agent_gate::attempt_log::Terms;
 use aura_agent_gate::classify::Label;
 use aura_agent_gate::followup::Step;
 use aura_agent_gate::outcome::calls_for_stronger;
@@ -144,6 +146,8 @@ struct TurnOutcome {
     can_go_on: bool,
     /// Where the turn's own messages start in `result`
     turn_start: usize,
+    /// What the turn ran under, for Gate's attempt log
+    terms: Terms,
 }
 
 /// What a turn carries on from the one before it.
@@ -486,8 +490,17 @@ impl Headless {
         output: &Output,
     ) -> FollowedUp {
         let mut found = FollowedUp::default();
+        let terms = turn.terms;
         let (Some(ended), Some(result)) = (turn.ended.as_mut(), turn.result.as_ref()) else {
             return found;
+        };
+        // What the follow-up makes of the attempt replaces its line in
+        // Gate's attempt log.
+        let relog = |ended: &OutcomePayload| {
+            let left = gate_log::evidence(result, since);
+            self.hub
+                .gate
+                .log_attempt(session.agent_id(), ended, terms, Some(left));
         };
         let Some(candidates) = self.hub.gate_candidates(session.definition.as_deref()) else {
             return found;
@@ -518,6 +531,7 @@ impl Headless {
                     });
                     if let Some(signal) = signal {
                         *ended = ended.with_signal(signal);
+                        relog(ended);
                         gate_record::record(&session.kernel, session.agent_id(), ended).await;
                         found.harness =
                             (signal == OutcomeSignal::ChecksFailed).then(|| check_review(&check));
@@ -554,6 +568,7 @@ impl Headless {
                     });
                     if judged.verdict.at_fault {
                         *ended = ended.with_signal(OutcomeSignal::JudgedFail);
+                        relog(ended);
                         gate_record::record(&session.kernel, session.agent_id(), ended).await;
                         found.unchecked = Some(judged.verdict.reasons.clone());
                     }
@@ -711,6 +726,11 @@ impl Headless {
             session.lead = lead.apply(led, &mut config, &mut tools);
             payload.led = Some(led);
         }
+        let terms = Terms {
+            difficulty: payload.difficulty,
+            led: payload.led,
+            routed,
+        };
         let started_ms = crate::event_loop::processes::now_ms();
         let prompt_tx = match record_prompt(session, &payload).await {
             Ok((tx, _)) => tx.hash,
@@ -724,6 +744,7 @@ impl Headless {
                     failure: None,
                     can_go_on: false,
                     turn_start: session.messages.len(),
+                    terms: Terms::default(),
                 };
             }
         };
@@ -873,6 +894,13 @@ impl Headless {
                 outcome.subtask_cost_usd += before.subtask_cost_usd;
                 outcome.latency_ms = outcome.latency_ms.saturating_add(before.latency_ms);
             }
+            let left = result
+                .as_ref()
+                .and_then(|result| result.as_ref().ok())
+                .map(|result| gate_log::evidence(result, turn_start));
+            self.hub
+                .gate
+                .log_attempt(session.agent_id(), &outcome, terms, left);
             gate_record::record(&session.kernel, session.agent_id(), &outcome).await;
             Some(outcome)
         } else {
@@ -888,6 +916,7 @@ impl Headless {
             failure,
             can_go_on: false,
             turn_start,
+            terms,
         };
         match result {
             Some(Ok(result)) => {

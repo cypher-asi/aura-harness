@@ -57,20 +57,24 @@ enough to help whoever takes the work over. Then end with one line that is exact
 `VERDICT: MODEL` or `VERDICT: OTHER`.";
 
 /// System prompt of every request to the judge of unverified turns:
-/// attempts that ran no check and look wrong (see
-/// [`crate::followup::suspicions`]).
+/// attempts that look wrong and that no check vouches for, because they
+/// ran none or because their own reply says the work was not verified
+/// (see [`crate::followup`]).
 pub const UNVERIFIED_SYSTEM_PROMPT: &str = "\
-You are reviewing an attempt at a task a user gave a coding agent. The attempt ran no test or \
-build that checks its work, and something about it looks wrong. You see the user's request, the \
+You are reviewing an attempt at a task a user gave a coding agent. Nothing shows that its work \
+is right: it ran no test or build that checks the work, or it ran one and its own final reply \
+says the work was not verified. Something about it looks wrong. You see the user's request, the \
 changes the attempt made to files as a unified diff (changes made through shell commands are \
-not shown, but the commands it ran are listed), its final reply, and what looks wrong. Decide \
-whether the work is done:
+not shown, but the commands it ran are listed), the last test or build it ran with what that \
+printed when it ran one, its final reply, and what looks wrong. Decide whether the work is done:
 
 - MODEL: the attempt's own work is wrong, incomplete or missing. It misunderstood the request, \
 made a wrong or partial change, changed nothing when a change was needed, or gave up. A more \
 capable model would likely have done better.
 - OK: the work looks complete and correct for what was asked, or no change was needed and the \
-reply shows why.
+reply shows why. A reply that only names something beside the point it left untested (another \
+platform, an optional style check, tests the request did not ask for) is no reason to doubt \
+work that is otherwise right.
 - OTHER: the work could not be done for reasons outside the attempt: the environment got in the \
 way, or the request cannot be carried out as asked.
 
@@ -180,6 +184,9 @@ pub struct Unverified<'a> {
     pub reply: &'a str,
     /// The commands it ran, one per line, latest last.
     pub commands: &'a str,
+    /// The last test or build it ran and what that printed; empty when
+    /// it ran none.
+    pub last_check: &'a str,
     /// What looks wrong.
     pub suspicions: &'a [Suspicion],
 }
@@ -204,6 +211,7 @@ pub fn unverified_prompt(unverified: &Unverified<'_>) -> String {
         "## The user's request\n\n{}\n\n\
          ## Changes\n```diff\n{}\n```\n\n\
          ## Commands it ran\n{}\n\n\
+         ## Its last test or build\n{}\n\n\
          ## Final reply\n{}\n\n\
          ## What looks wrong\n{}",
         cut(unverified.task, MAX_TASK, "request"),
@@ -216,6 +224,11 @@ pub fn unverified_prompt(unverified: &Unverified<'_>) -> String {
             unverified.commands,
             "(none)",
             tail(unverified.commands, MAX_FAILURE)
+        ),
+        or(
+            unverified.last_check,
+            "(it ran none)",
+            tail(unverified.last_check, MAX_FAILURE)
         ),
         or(
             unverified.reply,
@@ -351,6 +364,7 @@ mod tests {
             diff: "",
             reply: "The code already does this.",
             commands: "rg ensure_type\ncat lib/config.py",
+            last_check: "",
             suspicions: &[Suspicion::NoChanges],
         };
         let built = unverified_request(OPUS, &unverified, None).unwrap();
@@ -362,11 +376,34 @@ mod tests {
             "(no file changes recorded)",
             "cat lib/config.py",
             "The code already does this.",
+            "## Its last test or build\n(it ran none)",
             Suspicion::NoChanges.describe(),
         ] {
             assert!(sent.contains(part), "{part}: {sent}");
         }
         assert!(unverified_request("", &unverified, None).is_err());
+    }
+
+    #[test]
+    fn the_unverified_request_shows_a_check_the_reply_disowns() {
+        let unverified = Unverified {
+            task: "make ensure_type keep tags",
+            diff: "+    return value",
+            reply: "I rewrote it, but it isn't verified.",
+            commands: "pytest -q | head -20",
+            last_check:
+                "`pytest -q | head -20` exited with success. It printed:\nTypeError: boom\n9 passed",
+            suspicions: &[Suspicion::Unverified],
+        };
+        let sent = unverified_prompt(&unverified);
+        for part in [
+            "## Its last test or build\n`pytest -q | head -20` exited with success.",
+            "TypeError: boom",
+            "it isn't verified",
+            Suspicion::Unverified.describe(),
+        ] {
+            assert!(sent.contains(part), "{part}: {sent}");
+        }
     }
 
     const OPUS: &str = "claude/claude-opus-4-7";

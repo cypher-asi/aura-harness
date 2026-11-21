@@ -14,6 +14,7 @@ use super::gate_followup::{
     Unchecked,
 };
 use super::gate_live::GateLive;
+use super::gate_log;
 use super::gate_record;
 use super::handlers::{handle_agent_success, record_response, run_agent_turn, system_message};
 use super::run_command::run_user_command;
@@ -24,6 +25,7 @@ use super::tasks::{request_state, summary_of};
 use crate::long_run::LongRunSettings;
 use crate::model_selection::ModelLimits;
 use aura_agent::{AgentLoop, CompactHistoryError};
+use aura_agent_gate::attempt_log::Terms;
 use aura_agent_gate::checks::{last_check, last_check_seen};
 use aura_agent_gate::followup::Step;
 use aura_agent_gate::outcome::{calls_for_stronger, turn_signal};
@@ -462,6 +464,7 @@ async fn run_prompt(
                 prompt_tx: recorded.0,
                 category,
                 difficulty: label.difficulty,
+                led: label.led,
                 turn_start,
                 started,
                 started_ms,
@@ -514,6 +517,12 @@ async fn run_prompt(
         .ok()
         .and_then(|result| summary_of(&result.total_text));
     let failed = process_result.is_err() && !cancelled;
+    // What the last attempt left, for Gate's attempt log.
+    let left = process_result
+        .as_ref()
+        .ok()
+        .filter(|_| hub.is_some())
+        .map(|result| gate_log::evidence(result, turn_start));
     session
         .tasks
         .end_request(
@@ -545,11 +554,20 @@ async fn run_prompt(
             success: signal.success(),
             signal,
             cost_usd: attempts.cost_usd + forwarded.usage.cost_usd,
-            subtask_cost_usd: hub.map_or(0.0, |hub| {
+            subtask_cost_usd: hub.as_ref().map_or(0.0, |hub| {
                 hub.subtask_cost_usd(session.agent_id(), started_ms)
             }),
             latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         };
+        if let Some(hub) = &hub {
+            let terms = Terms {
+                difficulty: label.difficulty,
+                led: label.led,
+                routed: label.route.reason != RouteReason::Pinned,
+            };
+            hub.gate
+                .log_attempt(session.agent_id(), &outcome, terms, left);
+        }
         gate_record::record(&session.kernel, session.agent_id(), &outcome).await;
     }
     Outcome {
@@ -740,6 +758,8 @@ struct Asked<'a> {
     category: PromptCategory,
     /// How hard the classifier judged it
     difficulty: Option<Difficulty>,
+    /// Whether Gate had the turn led
+    led: Option<bool>,
     /// Where the turn's messages start in the session
     turn_start: usize,
     started: Instant,
@@ -954,6 +974,16 @@ async fn run_attempts(
                 break (result, forwarded);
             }
         }
+        let terms = Terms {
+            difficulty: asked.difficulty,
+            led: asked.led,
+            routed: true,
+        };
+        let left = result
+            .as_ref()
+            .ok()
+            .map(|result| gate_log::evidence(result, turn_start));
+        gate.live.log_attempt(agent, &failed, terms, left);
         gate_record::record(&session.kernel, agent, &failed).await;
         attempts.settled = true;
         let mut review = unchecked;

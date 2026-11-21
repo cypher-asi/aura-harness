@@ -24,15 +24,22 @@
 //! - [`delegation`]: how much of a lead's work went to subtasks
 //! - [`replay`]: how another way of routing would have done on the
 //!   recorded work
+//! - [`evidence`]: what an attempt left behind that says how it went,
+//!   and the signs of a failed attempt read out of it
+//! - [`attempt_log`]: the local log of attempts and what later proved
+//!   them right or wrong, and the report that scores Gate and each sign
+//!   against it
 //!
 //! Gate never calls a model itself: it chooses which model a turn runs
 //! on and builds the classifier's and judge's requests, and the calls go
 //! through the agent's kernel as usual.
 
+pub mod attempt_log;
 pub mod checks;
 pub mod classify;
 pub mod compare;
 pub mod delegation;
+pub mod evidence;
 pub mod followup;
 pub mod judge;
 pub mod lead;

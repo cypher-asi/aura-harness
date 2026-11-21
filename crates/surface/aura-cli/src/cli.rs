@@ -226,6 +226,41 @@ pub enum Commands {
     Dataset(DatasetCommand),
     /// Run coding eval suites and compare harness arms.
     Eval(EvalCommand),
+    /// Check Gate's verdicts against what happened.
+    Gate(GateCommand),
+}
+
+/// `aura gate` parent command.
+#[derive(Args, Debug)]
+pub struct GateCommand {
+    /// Gate subcommand to run.
+    #[command(subcommand)]
+    pub action: GateSubcommand,
+}
+
+/// Subcommands under `aura gate`.
+#[derive(Subcommand, Debug)]
+pub enum GateSubcommand {
+    /// Score Gate's verdicts, and each sign of a failed attempt, on the
+    /// attempt log.
+    Eval {
+        /// Log to read (default: `gate/attempts.jsonl` under
+        /// `AURA_DATA_DIR` or `./aura_data`).
+        #[arg(long)]
+        log: Option<PathBuf>,
+        /// Only attempts whose model Gate chose.
+        #[arg(long)]
+        routed: bool,
+        /// Only attempts Gate counted as passed.
+        #[arg(long)]
+        passed: bool,
+        /// Only attempts at benchmark tasks whose id contains this.
+        #[arg(long)]
+        task: Option<String>,
+        /// Print JSON instead of tables, with every scored attempt.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// `aura runs` parent command.
@@ -664,6 +699,44 @@ mod tests {
             Some("-")
         );
         assert!(parse(&[]).unwrap().print.is_none());
+    }
+
+    #[test]
+    fn gate_eval_parses() {
+        let eval = |args: &[&str]| match parse(args).unwrap().command {
+            Some(Commands::Gate(GateCommand {
+                action:
+                    GateSubcommand::Eval {
+                        log,
+                        routed,
+                        passed,
+                        task,
+                        json,
+                    },
+            })) => (log, routed, passed, task, json),
+            _ => panic!("not gate eval: {args:?}"),
+        };
+        assert_eq!(eval(&["gate", "eval"]), (None, false, false, None, false));
+        assert_eq!(
+            eval(&[
+                "gate",
+                "eval",
+                "--log",
+                "/tmp/attempts.jsonl",
+                "--routed",
+                "--passed",
+                "--task",
+                "swe_bench",
+                "--json"
+            ]),
+            (
+                Some(PathBuf::from("/tmp/attempts.jsonl")),
+                true,
+                true,
+                Some("swe_bench".to_string()),
+                true
+            )
+        );
     }
 
     #[test]
