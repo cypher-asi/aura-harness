@@ -8,6 +8,8 @@
 //!   built from the record
 //! - [`classify`]: the request that labels a prompt with its category,
 //!   and reading the reply
+//! - [`criteria`]: the acceptance criteria a routed code turn is written
+//!   before its work starts, and what the review found of each
 //! - [`checks`]: whether the tests or build a turn ran last passed
 //! - [`followup`]: what Gate does about a routed turn that ran no check:
 //!   ask it to verify, run the tests itself, or have the judge review it
@@ -41,6 +43,7 @@ pub mod checks;
 pub mod classify;
 pub mod compare;
 pub mod coverage;
+pub mod criteria;
 pub mod delegation;
 pub mod evidence;
 pub mod followup;

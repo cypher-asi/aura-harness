@@ -28,6 +28,7 @@ use crate::model_selection::{routed_effort, ModelLimits};
 use aura_agent::{AgentLoop, CompactHistoryError};
 use aura_agent_gate::attempt_log::Terms;
 use aura_agent_gate::checks::{last_check, last_check_seen};
+use aura_agent_gate::criteria::Criteria;
 use aura_agent_gate::followup::Step;
 use aura_agent_gate::outcome::{calls_for_stronger, turn_signal};
 use aura_agent_gate::turn_judge::Failed;
@@ -381,7 +382,7 @@ pub(crate) async fn record_prompt(
 /// next stronger model (see [`run_attempts`]).
 async fn run_prompt(
     session: &mut AgentSession,
-    prompt: Prompt,
+    mut prompt: Prompt,
     mut turn: TurnParts<'_>,
     ui: &AgentUi,
     cancel: &CancellationToken,
@@ -441,7 +442,20 @@ async fn run_prompt(
                     return Outcome::default();
                 }
             };
+            let mut criteria = None;
             if let Some(gate) = turn.gate.as_deref() {
+                criteria = gate_record::hold_to_criteria(
+                    &session.kernel,
+                    (&gate.live, &gate.candidates),
+                    category,
+                    &mut label.difficulty,
+                    &label.text,
+                    label.auth_token.clone(),
+                )
+                .await;
+                if let Some(note) = gate_record::worker_note_for(&gate.live, criteria.as_deref()) {
+                    prompt.text.push_str(&note);
+                }
                 let agent = session.agent_id();
                 if route_turn(gate, agent, &mut turn.agent_loop, &mut label, category, ui).await {
                     let (led, enforced) = gate.lead(
@@ -461,7 +475,7 @@ async fn run_prompt(
                     return Outcome::default();
                 }
             };
-            begin_files(session, &prompt.text);
+            begin_files(session, &label.text);
             if let Some(files) = &session.file_checkpoints {
                 files.note_prompt_tx(session.agent_id(), recorded.0);
             }
@@ -472,6 +486,7 @@ async fn run_prompt(
                 category,
                 difficulty: label.difficulty,
                 led: label.led,
+                criteria,
                 turn_start,
                 started,
                 started_ms,
@@ -767,6 +782,8 @@ struct Asked<'a> {
     difficulty: Option<Difficulty>,
     /// Whether Gate had the turn led
     led: Option<bool>,
+    /// What its work is checked against, written down before it started
+    criteria: Option<Arc<Criteria>>,
     /// Where the turn's messages start in the session
     turn_start: usize,
     started: Instant,
@@ -885,6 +902,7 @@ async fn run_attempts(
                 let ran = (model.as_str(), routed_effort(turn.agent_loop.config()));
                 let fresh = FollowUp::new(&gate.live, &gate.candidates, ran, &workspace)
                     .since(before.clone())
+                    .held_to(asked.criteria.clone())
                     .after(&follow.1);
                 follow = (model.clone(), fresh);
             }

@@ -79,7 +79,10 @@ impl TurnCalls {
                     .and_then(|payload| payload.get("purpose").cloned())
                     .and_then(|purpose| serde_json::from_value(purpose).ok());
                 let call = call_usage(&model, &usage);
-                if purpose == Some(ModelCallPurpose::Classify) {
+                if matches!(
+                    purpose,
+                    Some(ModelCallPurpose::Classify | ModelCallPurpose::Criteria)
+                ) {
                     self.next.add(&model, purpose, call);
                     return Seen::Other;
                 }
@@ -149,6 +152,7 @@ impl Tally {
         let groups = [
             (None, ""),
             (Some(ModelCallPurpose::Classify), classified),
+            (Some(ModelCallPurpose::Criteria), "gate: "),
             (Some(ModelCallPurpose::Judge), "gate: "),
             (Some(ModelCallPurpose::Title), "title: "),
         ];

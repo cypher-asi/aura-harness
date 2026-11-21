@@ -186,6 +186,7 @@ impl Prepared {
             checks: &self.checks,
             reply: &self.reply,
             why,
+            criteria: None,
         }
     }
 
@@ -376,6 +377,7 @@ async fn ask(
             judge: judge.clone(),
             cost_usd: *cost_usd,
             variant: variant.name().to_string(),
+            criteria: Vec::new(),
             acted: false,
             replayed: true,
         });

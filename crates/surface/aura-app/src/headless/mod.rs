@@ -410,6 +410,8 @@ async fn build(
         trace: None,
         notes,
         judged: Vec::new(),
+        criteria: None,
+        criteria_due: false,
     })
 }
 

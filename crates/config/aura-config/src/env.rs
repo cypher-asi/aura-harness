@@ -88,6 +88,11 @@ pub const AURA_GATE_CHECK: &str = "AURA_GATE_CHECK";
 /// `on`, `log` (ask and log the verdict without acting on it) or `off`.
 /// Consumed by [`crate::GateConfig::review`].
 pub const AURA_GATE_REVIEW: &str = "AURA_GATE_REVIEW";
+/// Whether Gate writes down a routed code turn's acceptance criteria
+/// before the work starts and reviews the work against them: `on`, `log`
+/// (write them and log the review's verdict without acting on it) or
+/// `off`. Consumed by [`crate::GateConfig::criteria`].
+pub const AURA_GATE_CRITERIA: &str = "AURA_GATE_CRITERIA";
 
 /// The full list of env-var names this crate owns. Boundary tests use
 /// this to enforce that no other crate calls `std::env::var(...)` on
@@ -126,6 +131,7 @@ pub const ENV_VAR_NAMES: &[&str] = &[
     AURA_GATE_NUDGE,
     AURA_GATE_CHECK,
     AURA_GATE_REVIEW,
+    AURA_GATE_CRITERIA,
 ];
 
 // ---------------------------------------------------------------------------

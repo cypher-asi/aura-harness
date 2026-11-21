@@ -1710,6 +1710,7 @@ impl AgentHub {
                     review_signs: &[],
                     acting_signs: &[],
                     uncovered: &[],
+                    criteria: false,
                 });
                 let unverified = Unverified {
                     task: &prompt,

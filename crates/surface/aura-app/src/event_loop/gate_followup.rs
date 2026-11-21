@@ -35,6 +35,7 @@ use aura_agent_gate::checks::{
     checks_seen, command_line, exit_status_masked, last_check_seen, CheckSeen,
 };
 use aura_agent_gate::coverage;
+use aura_agent_gate::criteria::{checked, Checked, Criteria, Status};
 use aura_agent_gate::evidence::{flags, is_test_path, Flag};
 use aura_agent_gate::followup::{self, Allowed, Ended, Step, Suspicion, Taken, Why, NUDGE_PROMPT};
 use aura_agent_gate::router::verifiable;
@@ -202,7 +203,8 @@ impl Before {
 /// work reviewed before it stands, so the workspace is worth recording
 /// before it starts.
 pub(crate) fn may_review(live: &GateLive, candidates: &[Candidate], model: &str) -> bool {
-    live.settings().review != ReviewMode::Off
+    let settings = live.settings();
+    (settings.review != ReviewMode::Off || settings.criteria != ReviewMode::Off)
         && gate_record::reviewer_for(live, candidates, model).is_some()
 }
 
@@ -245,6 +247,8 @@ pub(crate) struct FollowUp {
     /// What the attempt added that no test names, as of the run that
     /// left this many messages
     uncovered: Option<(usize, Vec<String>)>,
+    /// What the work is checked against, written down before it started
+    criteria: Option<Arc<Criteria>>,
 }
 
 /// What the reviewer made of work that was about to stand.
@@ -261,6 +265,8 @@ pub(crate) struct Reviewed {
     pub cost_usd: f64,
     /// Whether Gate acts on the answer
     pub act: bool,
+    /// The acceptance criteria it was held to, each with what it found
+    pub checked: Vec<Checked>,
 }
 
 impl Reviewed {
@@ -280,18 +286,24 @@ impl Reviewed {
         let label = |id: &str| aura_model::model_catalog::route_label(id);
         let model = label(&self.model);
         let findings = self.findings.trim();
+        let setting = if self.checked.is_empty() {
+            "AURA_GATE_REVIEW"
+        } else {
+            "AURA_GATE_CRITERIA"
+        };
         let found = match self.answer {
             Answer::Model if self.act => format!("{model}'s work is not finished.\n{findings}"),
             Answer::Model => format!(
-                "{model}'s work looks unfinished (logged only; AURA_GATE_REVIEW=on acts on it).\n{findings}"
+                "{model}'s work looks unfinished (logged only; {setting}=on acts on it).\n{findings}"
             ),
             Answer::Ok => format!("found nothing missing in {model}'s work"),
             Answer::Other => format!("{model}'s work was held up by something outside it.\n{findings}"),
         };
         format!(
-            "Gate's review ({}, ${:.4}): {}",
+            "Gate's review ({}, ${:.4}{}): {}",
             label(&self.judge),
             self.cost_usd,
+            tally(&self.checked),
             found.trim_end()
         )
     }
@@ -309,6 +321,23 @@ impl Reviewed {
             unverified: true,
         }
     }
+}
+
+/// How many of the criteria `checked` the reviewer found met, e.g.
+/// `, criteria 3/5 met, 1 unmet, 1 untested`; empty when there were none.
+fn tally(checked: &[Checked]) -> String {
+    if checked.is_empty() {
+        return String::new();
+    }
+    let count = |status: Status| checked.iter().filter(|c| c.status == Some(status)).count();
+    let mut said = format!(", criteria {}/{} met", count(Status::Met), checked.len());
+    for status in [Status::Unmet, Status::Untested] {
+        let n = count(status);
+        if n > 0 {
+            said.push_str(&format!(", {n} {}", status.word().to_lowercase()));
+        }
+    }
+    said
 }
 
 /// What the reviewer of work about to stand is shown of an attempt.
@@ -371,6 +400,11 @@ impl FollowUp {
                 } else {
                     ReviewMode::Off
                 },
+                criteria: if reviewer.is_some() {
+                    settings.criteria
+                } else {
+                    ReviewMode::Off
+                },
             },
             taken: Taken::default(),
             check,
@@ -382,6 +416,7 @@ impl FollowUp {
             changed: None,
             workspace: workspace.to_path_buf(),
             uncovered: None,
+            criteria: None,
         }
     }
 
@@ -389,6 +424,13 @@ impl FollowUp {
     /// `before`.
     pub(crate) fn since(mut self, before: Option<Before>) -> Self {
         self.before = before;
+        self
+    }
+
+    /// The same steps for work held to `criteria`, written down before
+    /// it started.
+    pub(crate) fn held_to(mut self, criteria: Option<Arc<Criteria>>) -> Self {
+        self.criteria = criteria;
         self
     }
 
@@ -504,6 +546,7 @@ impl FollowUp {
             review_signs: &review_signs,
             acting_signs: &acting_signs,
             uncovered: &uncovered,
+            criteria: self.criteria.is_some(),
         };
         let step = followup::next(&ended, self.taken, self.allowed);
         match step {
@@ -566,6 +609,12 @@ impl FollowUp {
             .iter()
             .map(|why| why.describe().to_string())
             .collect();
+        // Only a review the criteria called for is held to them, so one
+        // acted on for other reasons asks what it always asked.
+        let criteria = self
+            .criteria
+            .as_deref()
+            .filter(|_| shown.why.contains(&Why::Criteria));
         let standing = Standing {
             task: shown.task,
             diff: whole.map_or(shown.edits, |changed| changed.diff.as_str()),
@@ -574,6 +623,7 @@ impl FollowUp {
             checks: &checks,
             reply: &reply,
             why: &why,
+            criteria,
         };
         let request = turn_judge::review_request(judge, &standing, LIVE_REVIEW, auth_token);
         let (answer, findings, cost_usd) =
@@ -583,6 +633,11 @@ impl FollowUp {
             &self.evidence(shown.result, shown.turn_start),
             shown.category,
         );
+        let checked = criteria.map(|c| checked(c, &findings)).unwrap_or_default();
+        let variant = match criteria {
+            Some(_) => format!("{}+criteria", LIVE_REVIEW.name()),
+            None => LIVE_REVIEW.name().to_string(),
+        };
         live.log_review(Review {
             at_ms: now_ms(),
             agent: session.agent_id().to_hex(),
@@ -593,7 +648,8 @@ impl FollowUp {
             findings: findings.clone(),
             judge: judge.to_string(),
             cost_usd,
-            variant: LIVE_REVIEW.name().to_string(),
+            variant,
+            criteria: checked.clone(),
             acted: shown.act,
             replayed: false,
         });
@@ -604,6 +660,7 @@ impl FollowUp {
             findings,
             cost_usd,
             act: shown.act,
+            checked,
         })
     }
 
@@ -936,7 +993,49 @@ pub(crate) fn joined(first: Option<String>, second: Option<String>) -> Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aura_agent_gate::criteria::{Criterion, Kind};
     use serde_json::json;
+
+    #[test]
+    fn a_review_held_to_criteria_says_how_many_it_found_met() {
+        let checked = |status| Checked {
+            criterion: Criterion {
+                text: "the body is byte-identical to MIMEMultipart's".to_string(),
+                kind: Kind::ReferenceMatch,
+                reference: None,
+            },
+            status,
+        };
+        let reviewed = Reviewed {
+            model: "claude/claude-haiku-4-5".to_string(),
+            judge: "claude/claude-opus-5-5".to_string(),
+            answer: Answer::Model,
+            findings: "CRITERION 2: UNTESTED".to_string(),
+            cost_usd: 0.1,
+            act: false,
+            checked: vec![
+                checked(Some(Status::Met)),
+                checked(Some(Status::Untested)),
+                checked(None),
+            ],
+        };
+        let shown = reviewed.describe();
+        assert!(
+            shown.contains(", criteria 1/3 met, 1 untested): "),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("AURA_GATE_CRITERIA=on acts on it"),
+            "{shown}"
+        );
+        let plain = Reviewed {
+            checked: Vec::new(),
+            ..reviewed
+        };
+        let shown = plain.describe();
+        assert!(!shown.contains("criteria"), "{shown}");
+        assert!(shown.contains("AURA_GATE_REVIEW=on acts on it"), "{shown}");
+    }
 
     #[tokio::test]
     async fn what_no_test_names_is_untested() {

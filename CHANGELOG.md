@@ -7,6 +7,35 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Gate writes down a code turn's acceptance criteria before the work starts
+
+##### Added
+
+- Before a routed code turn starts, a model other than the one doing
+  the work (the cheapest standard-tier candidate) reads the whole
+  request and lists what the finished work must do that can be checked:
+  exact output formats, references the output must match, errors,
+  interfaces and behaviours. The classifier reads only the first 3,000
+  and last 1,000 characters of a long prompt, so it can miss demands in
+  the middle. This call reads up to 40,000, so the review no longer
+  depends on the worker's own tests to notice them.
+- The review of work about to stand goes through the criteria one at a
+  time, saying for each whether it is met, unmet or untested, and a
+  test that compares against output written out by hand does not count
+  for a criterion that names a reference. The review line in the chat
+  says how many were met (`criteria 3/5 met, 1 unmet, 1 untested`),
+  and the attempt log keeps each criterion's result. Reviews given
+  criteria are scored as their own variant, `plain+criteria`, in
+  `aura gate eval`.
+- `AURA_GATE_CRITERIA` (`on`, `log` or `off`; default `log`). With
+  `log`, the criteria are written and work about to stand that gets no
+  other review is reviewed against them, with the verdict only logged.
+  With `on`, the worker is shown the criteria after its prompt, strict
+  criteria rate the work hard so it starts on a stronger model, and
+  work the review finds short of them goes back to its model once, then
+  on to a stronger one. The call is shown as `gate:` in the turn's
+  footer.
+
 ### BENCH runs table shows difficulty and wastes less room
 
 ##### Changed

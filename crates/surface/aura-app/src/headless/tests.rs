@@ -180,6 +180,8 @@ fn harness(
         trace: None,
         notes: Vec::new(),
         judged: Vec::new(),
+        criteria: None,
+        criteria_due: false,
     };
     (headless, requests)
 }

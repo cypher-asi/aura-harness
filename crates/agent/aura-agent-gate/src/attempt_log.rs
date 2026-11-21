@@ -41,6 +41,7 @@ use aura_core_types::{Difficulty, OutcomePayload, OutcomeSignal, PromptCategory}
 use aura_model::model_catalog::{infer_tier, ModelTier};
 use serde::{Deserialize, Serialize};
 
+use crate::criteria::Checked;
 use crate::evidence::{flags, Evidence, Flag};
 use crate::turn_judge::Answer;
 
@@ -244,8 +245,13 @@ pub struct Review {
     pub judge: String,
     /// List-price cost of the review in USD
     pub cost_usd: f64,
-    /// How the judge was asked, e.g. `plain` or `thinking`
+    /// How the judge was asked, e.g. `plain`, `thinking`, or
+    /// `plain+criteria` when it was given the attempt's acceptance
+    /// criteria
     pub variant: String,
+    /// The acceptance criteria it was given, each with what it found
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub criteria: Vec<Checked>,
     /// Whether Gate acted on the verdict: sent work found unfinished
     /// back to the model or on to a stronger one
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -1235,6 +1241,7 @@ mod tests {
             judge: "claude/claude-opus-5-5".to_string(),
             cost_usd: 0.05,
             variant: variant.to_string(),
+            criteria: Vec::new(),
             acted: false,
             replayed: true,
         }

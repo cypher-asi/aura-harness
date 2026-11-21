@@ -28,6 +28,7 @@ use crate::model_selection::routed_effort;
 use crate::session_checkpoint::SessionUsage;
 use aura_agent::{AgentLoop, AgentLoopConfig, AgentLoopResult};
 use aura_agent_gate::attempt_log::Terms;
+use aura_agent_gate::criteria::Criteria;
 use aura_agent_gate::followup::Step;
 use aura_agent_gate::outcome::calls_for_stronger;
 use aura_agent_gate::turn_judge::Failed;
@@ -107,6 +108,12 @@ pub struct Headless {
     /// What Gate's judge found on the turns that failed, oldest first;
     /// whoever reports on the run takes them
     pub(crate) judged: Vec<Judged>,
+    /// What the work on the run's prompt is checked against, written
+    /// down before it started
+    pub(crate) criteria: Option<Arc<Criteria>>,
+    /// Whether the next prompt Gate classifies is the run's own, whose
+    /// criteria are written, rather than a notice
+    pub(crate) criteria_due: bool,
 }
 
 /// `<agent hex>:<session start ms>`: names one saved session.
@@ -305,7 +312,10 @@ impl Headless {
         // The workspace as it is now, so a review sees everything the
         // turns change, by their commands as well as their file tools.
         let settings = *self.hub.gate.settings();
-        let reviews = settings.review != aura_config::ReviewMode::Off
+        self.criteria = None;
+        self.criteria_due = true;
+        let reviews = (settings.review != aura_config::ReviewMode::Off
+            || settings.criteria != aura_config::ReviewMode::Off)
             && settings.judge
             && self
                 .hub
@@ -570,6 +580,7 @@ impl Headless {
             let ran = (ended.model.as_str(), self.effort);
             let fresh = FollowUp::new(&self.hub.gate, &candidates, ran, &workspace)
                 .since(before.cloned())
+                .held_to(self.criteria.clone())
                 .after(&follow.1);
             *follow = (ended.model.clone(), fresh);
         }
@@ -847,14 +858,14 @@ impl Headless {
                 if config.model != ended.model {
                     self.hub.model_limits().configure(&mut config, &ended.model);
                 }
-                Ok((PromptPayload::new(text.clone()), Some(ended.category)))
+                Ok((PromptPayload::new(text.clone()), Some(ended.category), None))
             }
             None => {
                 self.route_turn(session, &mut config, &text, escalation)
                     .await
             }
         };
-        let (mut payload, category) = match routing {
+        let (mut payload, category, told) = match routing {
             Ok(routing) => routing,
             Err(problem) => return TurnOutcome::stopped(problem, session.messages.len()),
         };
@@ -884,7 +895,9 @@ impl Headless {
             trace.begin_turn(&text);
         }
         let turn_start = session.messages.len();
-        session.messages.push(Message::user(text));
+        session
+            .messages
+            .push(Message::user(format!("{text}{}", told.unwrap_or_default())));
         self.hub.register_root(
             session.agent_id(),
             &session.identity.name,
@@ -1096,7 +1109,7 @@ impl Headless {
         config: &mut AgentLoopConfig,
         text: &str,
         escalation: Option<(Decision, PromptCategory)>,
-    ) -> Result<(PromptPayload, Option<PromptCategory>), String> {
+    ) -> Result<(PromptPayload, Option<PromptCategory>, Option<String>), String> {
         if let Some((decision, category)) = escalation {
             self.point(session, config, &decision);
             let payload = PromptPayload {
@@ -1104,14 +1117,14 @@ impl Headless {
                 route: decision.route(RouteLevel::Turn),
                 ..PromptPayload::new(text)
             };
-            return Ok((payload, Some(category)));
+            return Ok((payload, Some(category), None));
         }
         let Some(candidates) = self
             .hub
             .gate_candidates(session.definition.as_deref())
             .filter(|candidates| !candidates.is_empty())
         else {
-            return Ok((PromptPayload::new(text), None));
+            return Ok((PromptPayload::new(text), None, None));
         };
         let classifier = self.hub.classifier();
         if classifier.is_empty() {
@@ -1125,7 +1138,20 @@ impl Headless {
         )
         .await?;
         let category = label.category;
-        let difficulty = Some(label.difficulty);
+        let mut difficulty = Some(label.difficulty);
+        let mut told = None;
+        if std::mem::take(&mut self.criteria_due) {
+            self.criteria = gate_record::hold_to_criteria(
+                &session.kernel,
+                (&self.hub.gate, &candidates),
+                category,
+                &mut difficulty,
+                text,
+                config.auth_token.clone(),
+            )
+            .await;
+            told = gate_record::worker_note_for(&self.hub.gate, self.criteria.as_deref());
+        }
         let route = match self
             .hub
             .gate
@@ -1150,7 +1176,7 @@ impl Headless {
             difficulty,
             ..PromptPayload::new(text)
         };
-        Ok((payload, Some(category)))
+        Ok((payload, Some(category), told))
     }
 
     /// Point `config`, of a turn of `session`, at `decision`'s model and

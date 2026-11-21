@@ -27,6 +27,8 @@ pub enum ModelRequestKind {
 pub enum ModelCallPurpose {
     /// Gate labelling a prompt with its category
     Classify,
+    /// Gate writing down what a prompt's work will be checked against
+    Criteria,
     /// Gate's judge reviewing failed work
     Judge,
     /// Naming a chat after its first turn

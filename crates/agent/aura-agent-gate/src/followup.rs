@@ -47,6 +47,12 @@
 //! took, a passed check the reply disowns; `log` is `off` plus a review
 //! whose verdict is only logged, of passed work the judge would not see.
 //!
+//! Code work whose acceptance criteria were written down before it
+//! started ([`crate::criteria`]) is also reviewed against them, as its
+//! own [`ReviewMode`] says: with `on`, every such attempt is reviewed as
+//! above and its review stands in for the judge's; with `log`, work about
+//! to stand gets a logged review against them if it gets no other review.
+//!
 //! A failure any of them turns up goes on to a stronger model as a failed
 //! check or a judged failure does. Each step runs at most once per
 //! attempt, the review twice when the work was sent back between. Only
@@ -85,6 +91,9 @@ pub struct Ended<'a> {
     /// its check passed; empty when a test names any of it, or when it
     /// is not known.
     pub uncovered: &'a [String],
+    /// Whether its acceptance criteria were written down before it
+    /// started.
+    pub criteria: bool,
 }
 
 /// The steps already taken for the attempt.
@@ -110,6 +119,9 @@ pub struct Allowed {
     pub judge: bool,
     /// Whether work about to stand is reviewed; needs `judge`.
     pub review: ReviewMode,
+    /// Whether work with acceptance criteria is reviewed against them;
+    /// needs `judge`.
+    pub criteria: ReviewMode,
 }
 
 /// Why a turn with no check looks wrong.
@@ -173,16 +185,20 @@ pub enum Why {
     Sign(Flag),
     /// Its check passed, but no test names what its change added.
     Uncovered,
+    /// Its acceptance criteria were written down before it started.
+    Criteria,
 }
 
 impl Why {
-    /// The reason's name as logged: `hard`, `uncovered`, or the sign's.
+    /// The reason's name as logged: `hard`, `uncovered`, `criteria`, or
+    /// the sign's.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Hard => "hard",
             Self::Sign(flag) => flag.name(),
             Self::Uncovered => "uncovered",
+            Self::Criteria => "criteria",
         }
     }
 
@@ -195,6 +211,10 @@ impl Why {
             }
             Self::Sign(flag) => flag.describe(),
             Self::Uncovered => Suspicion::Uncovered.describe(),
+            Self::Criteria => {
+                "acceptance criteria were written down before the work started, and the work is \
+                 checked against each before it is accepted"
+            }
         }
     }
 }
@@ -327,21 +347,55 @@ fn reasons(ended: &Ended<'_>, looks: &[Suspicion]) -> Vec<Why> {
     why
 }
 
-/// With [`ReviewMode::On`], the review or repair `ended` is due, if any:
-/// work that is hard, shows a sign or looks wrong is reviewed, twice at
-/// most and the second time only after it was sent back.
-fn acted_review(ended: &Ended<'_>, taken: Taken, looks: &[Suspicion]) -> Option<Step> {
+/// Why `ended` gets a review that is acted on: with [`ReviewMode::On`],
+/// for being hard, showing a sign or looking wrong; with criteria `on`,
+/// for its criteria.
+fn acting_reasons(ended: &Ended<'_>, looks: &[Suspicion], allowed: Allowed) -> Vec<Why> {
+    let mut why = if allowed.review == ReviewMode::On {
+        reasons(ended, looks)
+    } else {
+        Vec::new()
+    };
+    if ended.criteria && allowed.criteria == ReviewMode::On {
+        why.push(Why::Criteria);
+    }
+    why
+}
+
+/// Why `ended` gets a review whose verdict is only logged: as
+/// [`acting_reasons`] for the settings that are `log`.
+fn logged_reasons(ended: &Ended<'_>, allowed: Allowed) -> Vec<Why> {
+    let mut why = if allowed.review == ReviewMode::Log {
+        reasons(ended, &[])
+    } else {
+        Vec::new()
+    };
+    if ended.criteria && allowed.criteria == ReviewMode::Log {
+        why.push(Why::Criteria);
+    }
+    why
+}
+
+/// Whether a review of `ended` stands in for the judge's verdict.
+fn review_decides(ended: &Ended<'_>, allowed: Allowed) -> bool {
+    allowed.review == ReviewMode::On || (ended.criteria && allowed.criteria == ReviewMode::On)
+}
+
+/// The acted review or repair `ended` is due for `why`, if any: twice at
+/// most, and the second time only after the work was sent back. With
+/// [`ReviewMode::On`], a sign that acts on its own sends the work back
+/// first.
+fn acted_review(ended: &Ended<'_>, taken: Taken, why: Vec<Why>, allowed: Allowed) -> Option<Step> {
     let fresh = taken.reviews == 0 && !taken.repaired;
-    if fresh && !ended.hit_limit && !ended.acting_signs.is_empty() {
+    if allowed.review == ReviewMode::On
+        && fresh
+        && !ended.hit_limit
+        && !ended.acting_signs.is_empty()
+    {
         return Some(Step::Repair(ended.acting_signs.to_vec()));
     }
-    if taken.reviews == 0 || (taken.reviews == 1 && taken.repaired) {
-        let why = reasons(ended, looks);
-        if !why.is_empty() {
-            return Some(Step::Review { why, act: true });
-        }
-    }
-    None
+    let due = taken.reviews == 0 || (taken.reviews == 1 && taken.repaired);
+    (due && !why.is_empty()).then_some(Step::Review { why, act: true })
 }
 
 /// The next step for `ended`, given the steps `taken` and those
@@ -380,8 +434,9 @@ fn unchecked(ended: &Ended<'_>, taken: Taken, allowed: Allowed) -> Step {
         return Step::Stop;
     }
     let looks = suspicions(ended);
-    if code && allowed.review == ReviewMode::On {
-        if let Some(step) = acted_review(ended, taken, &looks) {
+    if code {
+        let why = acting_reasons(ended, &looks, allowed);
+        if let Some(step) = acted_review(ended, taken, why, allowed) {
             return step;
         }
     }
@@ -400,18 +455,22 @@ fn passed(ended: &Ended<'_>, taken: Taken, allowed: Allowed) -> Step {
     } else {
         Vec::new()
     };
-    match allowed.review {
-        // The review stands in for the judge of work that looks wrong.
-        ReviewMode::On => return acted_review(ended, taken, &looks).unwrap_or(Step::Stop),
-        // Work that looks wrong goes to the judge below; the rest is
-        // reviewed for the log.
-        ReviewMode::Log if looks.is_empty() && taken.reviews == 0 => {
-            let why = reasons(ended, &[]);
-            if !why.is_empty() {
-                return Step::Review { why, act: false };
-            }
+    let why = acting_reasons(ended, &looks, allowed);
+    if let Some(step) = acted_review(ended, taken, why, allowed) {
+        return step;
+    }
+    // The review stands in for the judge of work that looks wrong; when
+    // it does not, such work goes to the judge below. The rest is
+    // reviewed for the log.
+    let decides = review_decides(ended, allowed);
+    if (decides || looks.is_empty()) && taken.reviews == 0 {
+        let why = logged_reasons(ended, allowed);
+        if !why.is_empty() {
+            return Step::Review { why, act: false };
         }
-        ReviewMode::Log | ReviewMode::Off => {}
+    }
+    if decides {
+        return Step::Stop;
     }
     if !taken.judged && !looks.is_empty() {
         return Step::JudgeUnverified(looks);
@@ -505,6 +564,7 @@ mod tests {
         harness_check: true,
         judge: true,
         review: ReviewMode::Off,
+        criteria: ReviewMode::Off,
     };
 
     const REVIEWING: Allowed = Allowed {
@@ -528,6 +588,7 @@ mod tests {
             review_signs: &[],
             acting_signs: &[],
             uncovered: &[],
+            criteria: false,
         }
     }
 
@@ -684,6 +745,146 @@ mod tests {
             ..Taken::default()
         };
         assert_eq!(next(&disowned, judged, LOGGING), Step::Stop);
+    }
+
+    #[test]
+    fn logged_criteria_have_work_about_to_stand_reviewed_for_the_log() {
+        let held = Ended {
+            criteria: true,
+            ..passed("All tests pass.")
+        };
+        let logged = Allowed {
+            criteria: ReviewMode::Log,
+            ..ALL
+        };
+        assert_eq!(
+            next(&held, Taken::default(), logged),
+            review(&[Why::Criteria], false)
+        );
+        let reviewed = Taken {
+            reviews: 1,
+            ..Taken::default()
+        };
+        assert_eq!(next(&held, reviewed, logged), Step::Stop, "once");
+        let hard = Ended {
+            difficulty: Some(Difficulty::Hard),
+            ..held
+        };
+        let both = Allowed {
+            review: ReviewMode::Log,
+            ..logged
+        };
+        assert_eq!(
+            next(&hard, Taken::default(), both),
+            review(&[Why::Hard, Why::Criteria], false),
+            "one review for both"
+        );
+        assert_eq!(
+            next(
+                &hard,
+                Taken::default(),
+                Allowed {
+                    review: ReviewMode::On,
+                    ..logged
+                }
+            ),
+            review(&[Why::Hard], true),
+            "a review that acts goes first"
+        );
+        assert_eq!(
+            next(
+                &held,
+                Taken::default(),
+                Allowed {
+                    review: ReviewMode::On,
+                    ..logged
+                }
+            ),
+            review(&[Why::Criteria], false),
+            "nothing else called for a review"
+        );
+        let unwritten = Ended {
+            criteria: false,
+            ..held
+        };
+        assert_eq!(next(&unwritten, Taken::default(), logged), Step::Stop);
+        let disowned = Ended {
+            criteria: true,
+            ..passed("I rewrote it, but it isn't verified.")
+        };
+        assert_eq!(
+            next(&disowned, Taken::default(), logged),
+            Step::JudgeUnverified(vec![Suspicion::Unverified]),
+            "the judge still sees work that looks wrong"
+        );
+    }
+
+    #[test]
+    fn criteria_that_act_have_every_attempt_reviewed() {
+        let acting = Allowed {
+            criteria: ReviewMode::On,
+            ..ALL
+        };
+        let held = Ended {
+            criteria: true,
+            ..passed("All tests pass.")
+        };
+        assert_eq!(
+            next(&held, Taken::default(), acting),
+            review(&[Why::Criteria], true)
+        );
+        let sent_back = Taken {
+            reviews: 1,
+            repaired: true,
+            ..Taken::default()
+        };
+        assert_eq!(
+            next(&held, sent_back, acting),
+            review(&[Why::Criteria], true),
+            "again after it was sent back"
+        );
+        let disowned = Ended {
+            criteria: true,
+            ..passed("I rewrote it, but it isn't verified.")
+        };
+        let reviewed = Taken {
+            reviews: 1,
+            ..Taken::default()
+        };
+        assert_eq!(
+            next(&disowned, reviewed, acting),
+            Step::Stop,
+            "the review stands in for the judge"
+        );
+        let signs = [Flag::MaskedCheckWithFailures];
+        let flagged = Ended {
+            acting_signs: &signs,
+            ..held
+        };
+        assert_eq!(
+            next(&flagged, Taken::default(), acting),
+            review(&[Why::Criteria], true),
+            "signs act only when reviews do"
+        );
+
+        let unchecked = Ended {
+            criteria: true,
+            ..ended(2, "Done.")
+        };
+        let checked = Taken {
+            nudged: true,
+            checked: true,
+            ..Taken::default()
+        };
+        assert_eq!(
+            next(&unchecked, Taken::default(), acting),
+            Step::Nudge(Vec::new())
+        );
+        assert_eq!(
+            next(&unchecked, checked, acting),
+            review(&[Why::Criteria], true)
+        );
+        assert_eq!(Why::Criteria.name(), "criteria");
     }
 
     #[test]

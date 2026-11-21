@@ -16,6 +16,7 @@
 //! | `AURA_GATE_NUDGE` | `on` / `off` | `on` | [`GateConfig::nudge`] |
 //! | `AURA_GATE_CHECK` | `on` / `off` | `on` | [`GateConfig::harness_check`] |
 //! | `AURA_GATE_REVIEW` | `on` / `log` / `off` | `log` | [`GateConfig::review`] |
+//! | `AURA_GATE_CRITERIA` | `on` / `log` / `off` | `log` | [`GateConfig::criteria`] |
 //!
 //! A value outside what a variable accepts keeps that setting's default
 //! and logs a warning naming the variable and its accepted values; the
@@ -26,9 +27,9 @@ use std::fmt::Display;
 use serde::{Deserialize, Serialize};
 
 use crate::env::{
-    lookup_string, AURA_GATE_CHECK, AURA_GATE_DELEGATE, AURA_GATE_EXPLORE, AURA_GATE_JUDGE,
-    AURA_GATE_MIN_TRIES, AURA_GATE_NUDGE, AURA_GATE_REVIEW, AURA_GATE_TARGET, FALSY_LITERALS,
-    TRUTHY_LITERALS,
+    lookup_string, AURA_GATE_CHECK, AURA_GATE_CRITERIA, AURA_GATE_DELEGATE, AURA_GATE_EXPLORE,
+    AURA_GATE_JUDGE, AURA_GATE_MIN_TRIES, AURA_GATE_NUDGE, AURA_GATE_REVIEW, AURA_GATE_TARGET,
+    FALSY_LITERALS, TRUTHY_LITERALS,
 };
 use crate::ConfigError;
 
@@ -124,6 +125,17 @@ pub struct GateConfig {
     ///
     /// env: `AURA_GATE_REVIEW` (default: `log`)
     pub review: ReviewMode,
+    /// Whether a routed code turn's acceptance criteria are written down,
+    /// by a model other than the one doing the work, before the work
+    /// starts, and the work is reviewed against them before it stands.
+    /// With `on`, the worker is shown them, strict criteria make the work
+    /// hard, and work the review finds short of them goes back to the
+    /// model once, then on to a stronger one. With `log` they are written
+    /// and the review's verdict only goes to the attempt log. Needs
+    /// [`Self::judge`] on for the review.
+    ///
+    /// env: `AURA_GATE_CRITERIA` (default: `log`)
+    pub criteria: ReviewMode,
 }
 
 impl GateConfig {
@@ -139,6 +151,7 @@ impl GateConfig {
             nudge: true,
             harness_check: true,
             review: ReviewMode::Log,
+            criteria: ReviewMode::Log,
         }
     }
 
@@ -220,6 +233,15 @@ impl GateConfig {
         ) {
             cfg.review = v;
         }
+        if let Some(v) = read(
+            AURA_GATE_CRITERIA,
+            REVIEW_ACCEPTS,
+            Self::defaults().criteria,
+            parse_review,
+            &mut rejected,
+        ) {
+            cfg.criteria = v;
+        }
         (cfg, rejected)
     }
 }
@@ -292,6 +314,7 @@ mod tests {
         std::env::remove_var(AURA_GATE_NUDGE);
         std::env::remove_var(AURA_GATE_CHECK);
         std::env::remove_var(AURA_GATE_REVIEW);
+        std::env::remove_var(AURA_GATE_CRITERIA);
     }
 
     #[test]
@@ -305,6 +328,23 @@ mod tests {
         assert!(cfg.nudge);
         assert!(cfg.harness_check);
         assert_eq!(cfg.review, ReviewMode::Log);
+        assert_eq!(cfg.criteria, ReviewMode::Log);
+    }
+
+    #[test]
+    fn the_criteria_are_on_logged_or_off() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for (raw, criteria) in [
+            ("on", ReviewMode::On),
+            ("Log", ReviewMode::Log),
+            ("off", ReviewMode::Off),
+            ("false", ReviewMode::Off),
+        ] {
+            clear_gate_env();
+            std::env::set_var(AURA_GATE_CRITERIA, raw);
+            assert_eq!(GateConfig::from_env().criteria, criteria, "{raw}");
+        }
+        clear_gate_env();
     }
 
     #[test]
@@ -346,6 +386,7 @@ mod tests {
         std::env::set_var(AURA_GATE_NUDGE, "off");
         std::env::set_var(AURA_GATE_CHECK, "0");
         std::env::set_var(AURA_GATE_REVIEW, "off");
+        std::env::set_var(AURA_GATE_CRITERIA, "on");
         let cfg = GateConfig::from_env();
         clear_gate_env();
         assert_eq!(
@@ -359,6 +400,7 @@ mod tests {
                 nudge: false,
                 harness_check: false,
                 review: ReviewMode::Off,
+                criteria: ReviewMode::On,
             }
         );
     }
@@ -397,6 +439,7 @@ mod tests {
             (AURA_GATE_NUDGE, "sometimes", SWITCH_ACCEPTS),
             (AURA_GATE_CHECK, "sometimes", SWITCH_ACCEPTS),
             (AURA_GATE_REVIEW, "sometimes", REVIEW_ACCEPTS),
+            (AURA_GATE_CRITERIA, "sometimes", REVIEW_ACCEPTS),
         ] {
             clear_gate_env();
             std::env::set_var(name, raw);

@@ -28,6 +28,7 @@ use aura_model::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::criteria::{self, Criteria};
 use crate::followup::Suspicion;
 use crate::judge::{cut, MAX_DIFF, MAX_REPLY};
 use crate::router::Candidate;
@@ -325,6 +326,9 @@ pub struct Standing<'a> {
     pub reply: &'a str,
     /// Why it is reviewed, one reason per entry.
     pub why: &'a [String],
+    /// What it is checked against, written down before it started; the
+    /// reviewer says how the work stands against each.
+    pub criteria: Option<&'a Criteria>,
 }
 
 /// How the reviewer of work about to stand is asked.
@@ -365,8 +369,12 @@ pub fn review_prompt(standing: &Standing<'_>) -> String {
         "## Changes (made with the file tools; changes made by the commands it ran are not shown)"
     };
     let why: Vec<String> = standing.why.iter().map(|why| format!("- {why}")).collect();
+    let criteria = standing.criteria.map_or_else(String::new, |c| {
+        format!("{}\n\n", criteria::review_section(c))
+    });
     format!(
         "## The user's request\n\n{}\n\n\
+         {criteria}\
          {changes}\n```diff\n{}\n```\n\n\
          ## Commands it ran\n{}\n\n\
          ## Its last tests or builds\n{}\n\n\
@@ -633,6 +641,38 @@ mod tests {
             assert!(sent.contains(part), "{part}: {sent}");
         }
         assert!(request("", &failed(), None).is_err());
+    }
+
+    #[test]
+    fn the_review_shows_the_criteria_it_is_given() {
+        let why = ["the task was rated hard".to_string()];
+        let mut standing = Standing {
+            task: "add prepare_multipart",
+            diff: "--- lib/urls.py\n+def prepare_multipart(fields):",
+            whole: true,
+            commands: "pytest test/urls",
+            checks: "3 passed",
+            reply: "Done.",
+            why: &why,
+            criteria: None,
+        };
+        let plain = review_prompt(&standing);
+        assert!(!plain.contains("Acceptance criteria"), "{plain}");
+        let criteria = Criteria {
+            items: vec![criteria::Criterion {
+                text: "the body is byte-identical to MIMEMultipart's".to_string(),
+                kind: criteria::Kind::ReferenceMatch,
+                reference: Some("email.mime.multipart".to_string()),
+            }],
+            strict: true,
+        };
+        standing.criteria = Some(&criteria);
+        let held = review_prompt(&standing);
+        let request = held.find("## The user's request").unwrap();
+        let listed = held.find(&criteria.listed()).unwrap();
+        let changes = held.find("## Changes").unwrap();
+        assert!(request < listed && listed < changes, "{held}");
+        assert!(held.contains("CRITERION <number>: MET"), "{held}");
     }
 
     #[test]

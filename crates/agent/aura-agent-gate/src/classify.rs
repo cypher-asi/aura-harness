@@ -221,12 +221,18 @@ fn message(prompt: &str, answer: Answer) -> String {
 /// that would open or close the fence are broken up.
 #[must_use]
 pub fn prepare(prompt: &str) -> String {
+    prepare_within(prompt, HEAD_CHARS, TAIL_CHARS)
+}
+
+/// [`prepare`] keeping the first `head` and last `tail` characters of a
+/// long prompt.
+pub(crate) fn prepare_within(prompt: &str, head: usize, tail: usize) -> String {
     let text = normalize(prompt);
     let chars = text.chars().count();
     let lines = text.lines().count();
     format!(
         "Length: {chars} characters, {lines} lines.\n<request>\n{}\n</request>",
-        unfenced(&excerpt(&text, chars))
+        unfenced(&excerpt(&text, chars, head, tail))
     )
 }
 
@@ -253,17 +259,18 @@ fn normalize(prompt: &str) -> String {
     out.join("\n")
 }
 
-/// `text`, `chars` long, whole when short, else its start and end around
-/// a note of how many characters were left out.
-fn excerpt(text: &str, chars: usize) -> String {
-    if chars <= HEAD_CHARS + TAIL_CHARS {
+/// `text`, `chars` long, whole when it is at most `head + tail`, else its
+/// first `head` and last `tail` characters around a note of how many were
+/// left out.
+fn excerpt(text: &str, chars: usize, head: usize, tail: usize) -> String {
+    if chars <= head + tail {
         return text.to_string();
     }
-    let head: String = text.chars().take(HEAD_CHARS).collect();
-    let tail: String = text.chars().skip(chars - TAIL_CHARS).collect();
+    let start: String = text.chars().take(head).collect();
+    let end: String = text.chars().skip(chars - tail).collect();
     format!(
-        "{head}\n[... {} characters omitted ...]\n{tail}",
-        chars - HEAD_CHARS - TAIL_CHARS
+        "{start}\n[... {} characters omitted ...]\n{end}",
+        chars - head - tail
     )
 }
 

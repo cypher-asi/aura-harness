@@ -494,7 +494,7 @@ impl FlowBuilder {
             .cloned()
             .and_then(|purpose| serde_json::from_value(purpose).ok());
         let kind = match purpose {
-            Some(ModelCallPurpose::Classify) => FlowKind::Gate,
+            Some(ModelCallPurpose::Classify | ModelCallPurpose::Criteria) => FlowKind::Gate,
             Some(ModelCallPurpose::Judge) => FlowKind::Judge,
             Some(ModelCallPurpose::Title) => FlowKind::Title,
             None => FlowKind::Model,

@@ -1270,7 +1270,21 @@ async fn run_prompt(
         }
     };
     let category = label.category;
-    let difficulty = Some(label.difficulty);
+    let mut difficulty = Some(label.difficulty);
+    let criteria = match routing {
+        ArmRouting::Gate { .. } => {
+            gate_record::hold_to_criteria(
+                &session.kernel,
+                (&hub.gate, &plan.candidates),
+                category,
+                &mut difficulty,
+                text,
+                config.auth_token.clone(),
+            )
+            .await
+        }
+        ArmRouting::Pinned(_) => None,
+    };
     let work = Work::turn(category).of(difficulty);
     let decision = match routing {
         ArmRouting::Gate { .. } if plan.learn => hub.gate.decide(&work, &plan.candidates),
@@ -1345,7 +1359,10 @@ async fn run_prompt(
     let (mut attempt_started, mut attempt_ms) = (started, started_ms);
     let (mut escalations, mut nudges, mut sent_back) = (0, 0, 0);
     let mut turn_start = session.messages.len();
-    session.messages.push(Message::user(text.to_string()));
+    let note = gate_record::worker_note_for(&hub.gate, criteria.as_deref());
+    session
+        .messages
+        .push(Message::user(format!("{text}{}", note.unwrap_or_default())));
     if let Some(rec) = recorder {
         rec.begin_turn(text);
     }
@@ -1429,6 +1446,7 @@ async fn run_prompt(
                 let ran = (model.as_str(), routed_effort(&config));
                 let fresh = FollowUp::new(&hub.gate, &plan.candidates, ran, &workdir)
                     .since(copy_before.clone())
+                    .held_to(criteria.clone())
                     .after(&follow.1);
                 follow = (model.clone(), fresh);
             }
