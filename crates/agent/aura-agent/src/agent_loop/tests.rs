@@ -651,6 +651,55 @@ fn effort_low_after_submit_plan() {
     );
 }
 
+/// Claude Sonnet 5.5 and Opus 5 reason at max on every iteration,
+/// whatever the run has done and also in a dev-loop run. A choice of the
+/// user's still wins.
+#[test]
+fn effort_max_on_sonnet_5_5_and_opus_5() {
+    use aura_model::ThinkingEffort;
+
+    for model in ["claude/claude-sonnet-5-5", "claude/claude-opus-5-5"] {
+        for dev_loop in [false, true] {
+            let config = AgentLoopConfig {
+                disable_thinking_iteration_0: dev_loop,
+                ..AgentLoopConfig::for_agent(model)
+            };
+            let mut state = super::LoopState::new(&config, vec![]);
+            assert_eq!(
+                state.compute_thinking_effort(&config, 0),
+                ThinkingEffort::Max,
+                "{model}"
+            );
+            state.had_any_file_write = true;
+            state.submit_plan_called = true;
+            assert_eq!(
+                state.compute_thinking_effort(&config, 3),
+                ThinkingEffort::Max,
+                "{model}"
+            );
+        }
+        let chosen = AgentLoopConfig {
+            user_thinking_effort: Some(ThinkingEffort::Low),
+            ..AgentLoopConfig::for_agent(model)
+        };
+        let state = super::LoopState::new(&chosen, vec![]);
+        let request = state.build_request(&chosen, &[], 0).unwrap();
+        assert_eq!(
+            request.thinking_effort,
+            Some(ThinkingEffort::Low),
+            "{model}"
+        );
+        let default = AgentLoopConfig::for_agent(model);
+        let state = super::LoopState::new(&default, vec![]);
+        let request = state.build_request(&default, &[], 2).unwrap();
+        assert_eq!(
+            request.thinking_effort,
+            Some(ThinkingEffort::Max),
+            "{model}"
+        );
+    }
+}
+
 /// A change of effort makes Claude write the conversation to its prompt
 /// cache again, so a Claude model keeps `Medium` after a write or a plan.
 #[test]
@@ -658,7 +707,7 @@ fn effort_stays_medium_on_claude_models() {
     use aura_model::ThinkingEffort;
 
     for model in [
-        "claude/claude-sonnet-5-5",
+        "claude/claude-sonnet-5",
         "aura-claude-opus-4-7",
         "claude-haiku-4-5",
     ] {

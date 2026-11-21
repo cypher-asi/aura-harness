@@ -7,6 +7,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Sonnet 5.5 and Opus 5 reason at max effort
+
+##### Changed
+
+- Turns and subtasks on Claude Sonnet 5.5, Opus 5 and Opus 5.5 ask for
+  `max` reasoning effort on every model call, where they asked for
+  `medium`. An effort chosen for the run still wins. Other models keep
+  `medium`. The classifier, the judge and titles still run with thinking
+  off.
+
 ### Gate prices work by what it has cost
 
 ##### Fixed

@@ -324,6 +324,18 @@ pub fn effort_change_resets_prompt_cache(model: &str) -> bool {
     model_key(model).starts_with("claude-")
 }
 
+/// Whether an agent's turns on `model` reason at the highest effort the
+/// model has when nobody chose one: Claude Sonnet 5.5 and the Claude
+/// Opus 5 models. They get the work that is hard to get right, where an
+/// attempt that fails costs more than the extra reasoning does.
+#[must_use]
+pub fn reasons_at_max(model: &str) -> bool {
+    let key = model_key(model);
+    is_snapshot_of(&key, "claude-sonnet-5-5")
+        || is_snapshot_of(&key, "claude-opus-5")
+        || is_snapshot_of(&key, "claude-opus-5-5")
+}
+
 /// Whether `name` is `key` or one of its dated snapshots
 /// (`claude-haiku-4-5-20251001`, `gpt-5-4-2026-03-05`).
 fn is_snapshot_of(name: &str, key: &str) -> bool {
@@ -781,6 +793,28 @@ mod tests {
         assert_cost("claude-opus-4-20250514", &usage, 15.0);
         assert_cost("gpt-5.4-2026-03-05", &usage, 2.5);
         assert_cost("claude-opus-5-5", &usage, 4.0);
+    }
+
+    #[test]
+    fn sonnet_5_5_and_opus_5_reason_at_max() {
+        for model in [
+            "claude/claude-sonnet-5-5",
+            "claude-sonnet-5-5-20261001",
+            "aura-claude-opus-5-5",
+            "claude/claude-opus-5",
+        ] {
+            assert!(reasons_at_max(model), "{model}");
+        }
+        for model in [
+            "claude/claude-sonnet-5",
+            "claude/claude-haiku-5-5",
+            "claude/claude-opus-4-8",
+            "claude/claude-fable-5-2",
+            "chatgpt/gpt-5.6-sol",
+            "ollama/qwen3",
+        ] {
+            assert!(!reasons_at_max(model), "{model}");
+        }
     }
 
     #[test]
