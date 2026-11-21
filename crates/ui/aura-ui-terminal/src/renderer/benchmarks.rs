@@ -59,13 +59,27 @@ pub(super) fn short_model(model: &str) -> &str {
     name.strip_prefix("claude-").unwrap_or(name)
 }
 
-/// `sonnet-4-6 › opus-4-7` for a run a failed attempt moved up, else the
-/// model its first turn was sent to.
-fn run_models(run: &BenchRun) -> String {
-    match &run.escalated_to {
-        Some(to) => format!("{} › {}", short_model(&run.model), short_model(to)),
-        None => short_model(&run.model).to_string(),
-    }
+/// `multi-file hard`: what the classifier said of a run's first prompt;
+/// empty when nothing was recorded.
+fn classified(run: &BenchRun) -> String {
+    let category = run.category.as_deref().map(|category| match category {
+        "small_change" => "small change",
+        "multi_file_change" => "multi-file",
+        other => other,
+    });
+    [category, run.difficulty.as_deref()]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `to opus-4-7` for a run a failed attempt moved to a stronger model,
+/// else `no`.
+fn moved_up(run: &BenchRun) -> String {
+    run.escalated_to
+        .as_deref()
+        .map_or_else(|| "no".to_string(), |to| format!("to {}", short_model(to)))
 }
 
 /// `-74%` for the cheaper of two costs, nothing for the other or when
@@ -990,6 +1004,8 @@ fn detail_lines(
         "",
         "run",
         "model",
+        "classified",
+        "moved up",
         if has_task { "task" } else { "" },
         "time",
         "cost",
@@ -1014,7 +1030,9 @@ fn detail_lines(
         let cells = vec![
             ((if selected { "›" } else { " " }).to_string(), base),
             (r.name.clone(), base),
-            (run_models(r), base),
+            (short_model(&r.model).to_string(), base),
+            (classified(r), base),
+            (moved_up(r), base),
             (
                 r.task
                     .as_deref()
@@ -1046,6 +1064,8 @@ fn detail_lines(
             (" ".to_string(), text),
             (live.name.clone(), text),
             (short_model(&arm.label).to_string(), text),
+            (String::new(), text),
+            (String::new(), text),
             (
                 live.task
                     .as_deref()
@@ -1078,6 +1098,8 @@ fn detail_lines(
         &[
             Col::L,
             Col::L,
+            Col::L.flex(),
+            Col::L.flex(),
             Col::L.flex(),
             Col::L.flex(),
             Col::R,
@@ -1408,18 +1430,45 @@ mod tests {
             "{shown}"
         );
         assert!(shown.contains("›  a-1  sonnet-4-6"), "{shown}");
-        assert!(!shown.contains("moved up"), "{shown}");
+        assert!(
+            !shown.lines().any(|l| l.starts_with("moved up")),
+            "no summary row when nothing moved up: {shown}"
+        );
     }
 
     #[test]
-    fn a_run_moved_up_shows_both_models_and_how_many_moved() {
+    fn a_run_shows_how_it_was_classified_and_where_it_moved_up() {
         let theme = Theme::default();
         let mut view = view();
         view.runs[0].escalated_to = Some("claude-opus-4-7".to_string());
+        view.runs[0].category = Some("multi_file_change".to_string());
+        view.runs[0].difficulty = Some("hard".to_string());
+        view.runs.push(BenchRun {
+            name: "b-1".to_string(),
+            arm: 1,
+            model: "claude-opus-4-7".to_string(),
+            category: Some("small_change".to_string()),
+            ..BenchRun::default()
+        });
         view.arms[0].escalated = 1;
         view.arms[0].nudged = 1;
         let shown = text(&detail_lines(&view, None, &theme, 120, None));
-        assert!(shown.contains("a-1  sonnet-4-6 › opus-4-7"), "{shown}");
+        let run = |name: &str| {
+            shown
+                .lines()
+                .skip_while(|l| !l.contains("── runs"))
+                .find(|l| l.split_whitespace().next() == Some(name))
+                .unwrap_or_else(|| panic!("no {name} run in\n{shown}"))
+                .to_string()
+        };
+        let moved = run("a-1");
+        assert!(moved.contains("sonnet-4-6"), "{shown}");
+        assert!(moved.contains("multi-file hard"), "{shown}");
+        assert!(moved.contains("to opus-4-7"), "{shown}");
+        let stayed = run("b-1");
+        assert!(stayed.contains("small change"), "{shown}");
+        assert!(stayed.contains(" no "), "{shown}");
+        assert!(shown.contains("classified"), "{shown}");
         let row = |label: &str| {
             shown
                 .lines()

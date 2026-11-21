@@ -311,11 +311,18 @@ pub(super) fn view(
             .iter()
             .map(|run| {
                 let (model, escalated_to) = models(run);
+                let first = run.turns.first();
                 BenchRun {
                     name: run.name.clone(),
                     arm: run.arm.index(),
                     model,
                     escalated_to,
+                    category: first
+                        .and_then(|turn| turn.category)
+                        .map(|category| category.as_str().to_string()),
+                    difficulty: first
+                        .and_then(|turn| turn.difficulty)
+                        .map(|difficulty| difficulty.as_str().to_string()),
                     wall_ms: run.wall_ms,
                     cost_usd: run.cost_usd,
                     check_passed: run.check_passed,

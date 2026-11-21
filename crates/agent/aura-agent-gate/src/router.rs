@@ -370,7 +370,8 @@ pub fn by_expected_cost<'a>(
 /// [`by_expected_cost`]. `None` when there are no candidates.
 ///
 /// Work a check verifies ([`verifiable`]) goes by [`cascade`] instead
-/// while `settings.cascade` is on.
+/// while `settings.cascade` is on. Either way, hard work starts no lower
+/// than [`start_floor`], whether proven, by default or explored.
 pub fn pick(
     stats: &GateStats,
     work: &Work<'_>,
@@ -391,8 +392,10 @@ pub fn pick(
     } = *work;
     let row = |model: &str| judged(stats, level, category, kind, model, settings.min_tries);
     let order = by_expected_cost(stats, level, candidates);
+    let floor = start_floor(work.difficulty, order.iter().map(|c| c.tier));
+    let may_start = |c: &Candidate| floor.is_none_or(|floor| c.tier >= floor);
     let proven = order.iter().position(|c| {
-        row(&c.id).is_some_and(|row| {
+        may_start(c) && row(&c.id).is_some_and(|row| {
             row.tries >= settings.min_tries
                 && row
                     .success_rate()
@@ -418,15 +421,16 @@ pub fn pick(
             propensity,
         })
     };
-    if index == 0 {
+    let cheaper: Vec<usize> = (0..index).filter(|&i| may_start(order[i])).collect();
+    let Some(&nearest) = cheaper.last() else {
         return decide(index, reason, false, 1.0);
-    }
+    };
     if rate > 0.0 && rng.unit() < rate {
-        let open = (0..index).rev().find(|&cheaper| {
+        let open = cheaper.iter().rev().copied().find(|&cheaper| {
             row(&order[cheaper].id)
                 .is_none_or(|row| row.can_still_reach(settings.target, settings.min_tries))
         });
-        return decide(open.unwrap_or(index - 1), RouteReason::Explore, true, rate);
+        return decide(open.unwrap_or(nearest), RouteReason::Explore, true, rate);
     }
     decide(index, reason, false, 1.0 - rate)
 }
@@ -510,6 +514,19 @@ pub fn judged(
             .or_else(|| stats.row(level, category, model))
             .copied(),
     }
+}
+
+/// The weakest tier work of `difficulty` may start on, among candidates of
+/// `tiers`: the standard tier for hard work when a model at least that
+/// strong is there, else any. Below it, a model's own test passes on hard
+/// work it got wrong (tests it wrote for its own code, or tests that miss
+/// the change), so the work is never moved up.
+fn start_floor(
+    difficulty: Option<Difficulty>,
+    mut tiers: impl Iterator<Item = ModelTier>,
+) -> Option<ModelTier> {
+    (difficulty == Some(Difficulty::Hard) && tiers.any(|tier| tier >= ModelTier::Standard))
+        .then_some(ModelTier::Standard)
 }
 
 /// Position in `order` of the model work starts on: the cheapest model of
@@ -699,9 +716,10 @@ pub fn belief(stats: &GateStats, work: &Work<'_>, candidate: &Candidate, min_tri
 /// strongest tier; a subtask goes on once. `p` is each model's [`belief`]
 /// mean, and a model must be expected to succeed at least
 /// [`MIN_START_SUCCESS`] of the time to start the work unless it is of
-/// the strongest tier. `c` is a model's mean cost on the category, its
-/// subtasks' included, once it has [`COST_TRIES`] outcomes there, else
-/// its [`expected_costs`].
+/// the strongest tier, and hard work starts no lower than [`start_floor`].
+/// `c` is a model's mean cost on the category, its subtasks' included,
+/// once it has [`COST_TRIES`] outcomes there, else its
+/// [`expected_costs`].
 ///
 /// With probability `explore_rate`, the success rates are drawn from the
 /// beliefs instead of taken at their means (Thompson sampling): a model
@@ -782,8 +800,10 @@ fn cascade(
             }))
         })
     };
+    let floor = start_floor(work.difficulty, priced.iter().map(|(c, _)| c.tier));
     let best = |success: &[f64]| {
         (0..priced.len())
+            .filter(|&i| floor.is_none_or(|floor| priced[i].0.tier >= floor))
             .filter(|&i| success[i] >= MIN_START_SUCCESS || priced[i].0.tier == top)
             .filter_map(|i| Some((i, expected(i, success)?)))
             .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -2003,6 +2023,63 @@ mod tests {
             )
             .mean();
             assert!(learned < unrated, "hard is still harder than usual");
+        }
+
+        #[test]
+        fn hard_work_never_starts_below_the_standard_tier() {
+            let mut log = Log::default();
+            for _ in 0..12 {
+                log.rated_turn(PromptCategory::MultiFileChange, HAIKU, Difficulty::Hard, true);
+            }
+            let stats = log.stats();
+            let hard = Work::turn(PromptCategory::MultiFileChange).of(Some(Difficulty::Hard));
+            let haiku = claude().into_iter().find(|c| c.id == HAIKU).unwrap();
+            assert!(
+                belief(&stats, &hard, &haiku, 10).mean() > MIN_START_SUCCESS,
+                "haiku's own passes make it look able"
+            );
+            let start = |settings: &GateConfig, candidates: &[Candidate], work: &Work<'_>| {
+                pick(&stats, work, candidates, settings, &mut || 0.0)
+                    .unwrap()
+                    .model
+                    .id
+            };
+            assert_eq!(start(&cascading(), &claude(), &hard), SONNET);
+            assert_eq!(
+                start(&no_exploring(), &claude(), &hard),
+                SONNET,
+                "not even where it is proven"
+            );
+            assert_eq!(
+                start(&cascading(), &claude(), &hard.of(Some(Difficulty::Medium))),
+                HAIKU,
+                "work that is not hard still starts cheap"
+            );
+            let below_standard: Vec<Candidate> = claude()
+                .into_iter()
+                .filter(|c| c.tier < ModelTier::Standard)
+                .collect();
+            assert_eq!(
+                start(&cascading(), &below_standard, &hard),
+                HAIKU,
+                "with nothing stronger it starts where it can"
+            );
+
+            let mut rng = SplitMix64::seeded(5);
+            for cascade in [true, false] {
+                let settings = GateConfig {
+                    explore_rate: 1.0,
+                    cascade,
+                    ..GateConfig::defaults()
+                };
+                for _ in 0..200 {
+                    let decision = pick(&stats, &hard, &claude(), &settings, &mut rng).unwrap();
+                    assert!(
+                        decision.model.tier >= ModelTier::Standard,
+                        "exploring stays at or above the floor: {decision:?}"
+                    );
+                }
+            }
         }
 
         #[test]

@@ -7,6 +7,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### BENCH runs show how Gate classified them
+
+##### Changed
+
+- The runs table in BENCH now has a `classified` column with the task type
+  and difficulty the classifier gave the run's first prompt, and a
+  `moved up` column naming the model Gate moved up to, or `no`.
+
+### Gate starts hard work on the standard tier or above
+
+##### Changed
+
+- Work the classifier found `hard` no longer starts on a fast or local
+  model while a standard or frontier one can be used, whether Gate picks
+  it by expected cost, because it is proven, or by exploring. On SWE-bench
+  Pro tasks Haiku 5.5 ended its turns with passing tests it wrote for its
+  own code, or tests that did not cover the change, so Gate counted them
+  as done and never moved them up, and the benchmark's own checks failed.
+
 ### Gate's classifier labels long task prompts
 
 ##### Fixed

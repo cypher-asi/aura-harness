@@ -165,6 +165,11 @@ pub struct BenchRun {
     pub model: String,
     /// The stronger model a failed attempt last moved its work to
     pub escalated_to: Option<String>,
+    /// What the classifier said its first prompt asks for, as stored
+    /// (`multi_file_change`); `None` in older records
+    pub category: Option<String>,
+    /// How hard the classifier said its first prompt's work is (`hard`)
+    pub difficulty: Option<String>,
     pub wall_ms: u64,
     pub cost_usd: f64,
     pub check_passed: Option<bool>,
