@@ -219,19 +219,37 @@ pub fn diff_since(
     tree: &str,
     leave_out: &[&str],
 ) -> Result<String, IsolationError> {
+    diff_index(root, git_dir, tree, leave_out, true)
+}
+
+/// [`diff_since`] to read rather than to apply: a binary file that
+/// changed is named, its bytes left out.
+///
+/// # Errors
+/// Fails when git can't stage or diff the tree.
+pub fn readable_diff_since(
+    root: &Path,
+    git_dir: Option<&Path>,
+    tree: &str,
+    leave_out: &[&str],
+) -> Result<String, IsolationError> {
+    diff_index(root, git_dir, tree, leave_out, false)
+}
+
+fn diff_index(
+    root: &Path,
+    git_dir: Option<&Path>,
+    tree: &str,
+    leave_out: &[&str],
+    binary: bool,
+) -> Result<String, IsolationError> {
     stage(root, git_dir)?;
     let mut diff = git(root, git_dir);
-    diff.args([
-        "diff-index",
-        "--cached",
-        "--patch",
-        "--binary",
-        "--no-color",
-        "--no-ext-diff",
-        tree,
-        "--",
-        ".",
-    ]);
+    diff.args(["diff-index", "--cached", "--patch"]);
+    if binary {
+        diff.arg("--binary");
+    }
+    diff.args(["--no-color", "--no-ext-diff", tree, "--", "."]);
     diff.args(
         leave_out
             .iter()
@@ -248,6 +266,49 @@ pub fn files_in(patch: &str) -> usize {
         .lines()
         .filter(|line| line.starts_with("diff --git "))
         .count()
+}
+
+/// The files `patch` (as [`diff_since`] writes it) changes, relative to
+/// the root it was taken in, in the patch's order. A renamed file is
+/// named as it is after the patch.
+#[must_use]
+pub fn paths_in(patch: &str) -> Vec<String> {
+    patch
+        .lines()
+        .filter_map(|line| line.strip_prefix("diff --git "))
+        .filter_map(|names| {
+            // `a/<old> b/<new>`; a name with spaces or quotes is taken
+            // from the last ` b/`.
+            let new = names.rsplit_once(" b/").map(|(_, new)| new)?;
+            Some(new.trim_matches('"').to_string())
+        })
+        .collect()
+}
+
+/// Bytes in the untracked files under `workspace` that git does not
+/// ignore: what a [`snapshot`] would have to read and store beyond the
+/// tracked files. `None` when `workspace` is in no git working tree.
+#[must_use]
+pub fn untracked_bytes(workspace: &Path) -> Option<u64> {
+    repo_root(workspace)?;
+    let mut ls = literal_git(workspace);
+    ls.args([
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "--",
+        ".",
+    ]);
+    let listed = output(ls, "ls-files").ok()?;
+    let workspace = workspace.canonicalize().ok()?;
+    Some(
+        names(&listed)
+            .filter_map(|name| std::fs::symlink_metadata(workspace.join(name)).ok())
+            .filter(std::fs::Metadata::is_file)
+            .map(|meta| meta.len())
+            .sum(),
+    )
 }
 
 /// Apply `patch` to the files under `dest`, which need not be a git
@@ -409,6 +470,36 @@ pub fn snapshot(workspace: &Path) -> Result<Option<Snapshot>, IsolationError> {
 }
 
 impl Snapshot {
+    /// Everything that changed in the recorded folder since the snapshot
+    /// was taken, as a unified diff to read: files changed, created and
+    /// deleted, by whatever means. Empty when nothing did. A binary file
+    /// is named, its bytes left out. Paths are relative to the root of
+    /// the working tree.
+    ///
+    /// # Errors
+    /// Fails when git can't stage or compare the files.
+    pub fn diff(&self) -> Result<String, IsolationError> {
+        let now = worktree_tree(&self.root, &self.scope)?;
+        if now == self.tree {
+            return Ok(String::new());
+        }
+        let mut diff = literal_git(&self.root);
+        diff.args([
+            "diff-tree",
+            "-r",
+            "--patch",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-renames",
+            self.tree.as_str(),
+            now.as_str(),
+            "--",
+        ])
+        .arg(&self.scope);
+        let patch = output(diff, "diff-tree")?;
+        Ok(String::from_utf8_lossy(&patch).into_owned())
+    }
+
     /// Whether `path` (relative to the root) was an ignored file, or in
     /// an ignored folder, when the snapshot was taken.
     fn was_ignored(&self, path: &str) -> bool {
@@ -752,6 +843,78 @@ mod tests {
         assert_eq!(read(root.join("app/main.rs")), "fn main() {}\n");
         assert_eq!(read(root.join("lib.rs")), "fn a() { elsewhere }\n");
         assert!(root.join("outside.rs").exists());
+    }
+
+    #[test]
+    fn a_snapshot_diffs_everything_changed_since_by_whatever_means() {
+        if !git_available() {
+            return;
+        }
+        let repo = repo();
+        let root = repo.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("app")).unwrap();
+        std::fs::write(root.join("app/main.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(root.join("app/old.rs"), "fn old() {}\n").unwrap();
+        std::fs::write(root.join(".gitignore"), "*.log\n").unwrap();
+        run(&root, &["add", "."]);
+        run(&root, &["commit", "--quiet", "-m", "app"]);
+        // Uncommitted work from before the snapshot is not part of the
+        // change.
+        std::fs::write(root.join("app/draft.rs"), "fn draft() {}\n").unwrap();
+        let index_before = stdout(&root, &["status", "--porcelain"]);
+
+        let snapshot = snapshot(&root.join("app")).unwrap().unwrap();
+        assert_eq!(snapshot.diff().unwrap(), "", "nothing changed yet");
+        assert_eq!(untracked_bytes(&root.join("app")), Some(14));
+        std::fs::write(root.join("app/main.rs"), "fn main() { x }\n").unwrap();
+        std::fs::write(root.join("app/new file.rs"), "fn new() {}\n").unwrap();
+        std::fs::remove_file(root.join("app/old.rs")).unwrap();
+        std::fs::write(root.join("app/run.log"), "noise\n").unwrap();
+        std::fs::write(root.join("outside.rs"), "\n").unwrap();
+
+        let diff = snapshot.diff().unwrap();
+        assert!(diff.contains("-fn main() {}\n+fn main() { x }"), "{diff}");
+        assert!(diff.contains("+fn new() {}"), "{diff}");
+        assert!(diff.contains("-fn old() {}"), "{diff}");
+        for absent in ["draft", "run.log", "outside.rs"] {
+            assert!(!diff.contains(absent), "{absent}: {diff}");
+        }
+        assert_eq!(
+            paths_in(&diff),
+            ["app/main.rs", "app/new file.rs", "app/old.rs"]
+        );
+        assert_eq!(files_in(&diff), 3);
+        // The user's index is as it was.
+        run(&root, &["add", "outside.rs"]);
+        run(&root, &["reset", "--quiet", "outside.rs"]);
+        std::fs::remove_file(root.join("outside.rs")).unwrap();
+        std::fs::write(root.join("app/main.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(root.join("app/old.rs"), "fn old() {}\n").unwrap();
+        std::fs::remove_file(root.join("app/new file.rs")).unwrap();
+        assert_eq!(stdout(&root, &["status", "--porcelain"]), index_before);
+        assert_eq!(untracked_bytes(repo.path().parent().unwrap()), None);
+    }
+
+    #[test]
+    fn a_copys_diff_can_leave_binary_bytes_out() {
+        if !git_available() {
+            return;
+        }
+        let copy = TempDir::new().unwrap();
+        let root = copy.path().join("copy");
+        let git_dir = copy.path().join("copy.git");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("a.txt"), "one\n").unwrap();
+        let tree = baseline(&root, Some(&git_dir)).unwrap();
+        std::fs::write(root.join("a.txt"), "two\n").unwrap();
+        std::fs::write(root.join("blob.bin"), [0u8, 159, 146, 150, 0, 1, 2]).unwrap();
+        let readable = readable_diff_since(&root, Some(&git_dir), &tree, &[]).unwrap();
+        assert!(readable.contains("-one\n+two"), "{readable}");
+        assert!(readable.contains("Binary files"), "{readable}");
+        assert!(!readable.contains("GIT binary patch"), "{readable}");
+        assert_eq!(paths_in(&readable), ["a.txt", "blob.bin"]);
+        let patch = diff_since(&root, Some(&git_dir), &tree, &[]).unwrap();
+        assert!(patch.contains("GIT binary patch"), "{patch}");
     }
 
     #[test]

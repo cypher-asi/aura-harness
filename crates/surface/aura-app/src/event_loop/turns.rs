@@ -10,8 +10,9 @@ use super::agent_events::ForwarderState;
 use super::agents::AgentSession;
 use super::attachments::{expand_mentions_in, mentioned_paths};
 use super::gate_followup::{
-    check_review, check_signal, harness_check, joined, judge_unchecked, nudge_prompt, FollowUp,
-    Unchecked,
+    check_review, check_signal, harness_check, joined, judge_unchecked, may_review, nudge_prompt,
+    repair_message, repair_notice, sign_repair_message, sign_repair_notice, At, Before, FollowUp,
+    Reviewing, Unchecked,
 };
 use super::gate_live::GateLive;
 use super::gate_log;
@@ -522,7 +523,7 @@ async fn run_prompt(
         .as_ref()
         .ok()
         .filter(|_| hub.is_some())
-        .map(|result| gate_log::evidence(result, turn_start));
+        .map(|result| gate_log::evidence_of(result, turn_start, attempts.changed.as_deref()));
     session
         .tasks
         .end_request(
@@ -747,6 +748,9 @@ struct Attempts {
     /// more than its messages say: a harness check's result, or the
     /// judge finding unchecked work unfinished
     signal: Option<OutcomeSignal>,
+    /// The files the last attempt changed by any means, when the harness
+    /// compared the workspace before and after
+    changed: Option<Vec<String>>,
 }
 
 /// The prompt a turn answers, for the attempts at it.
@@ -772,9 +776,11 @@ struct Asked<'a> {
 /// no check of its own gets Gate's follow-up first (see
 /// [`gate_followup`]): when it changed files it is asked once to check
 /// them, then the harness runs the project's tests, and work that still
-/// looks wrong goes to the judge. An attempt that fails (a model error,
-/// its last check or the harness's failing, or the judge finding its
-/// unchecked work unfinished) is handled here:
+/// looks wrong goes to the judge. Work that is hard or shows a sign of
+/// failure is reviewed against the request before it stands; what the
+/// review finds unfinished goes back to the same model once. An attempt
+/// that fails (a model error, its last check or the harness's failing,
+/// or the judge finding its work unfinished) is handled here:
 ///
 /// 1. its `Outcome` is recorded and, for a failed check or an error,
 ///    Gate's judge says whether the model was at fault
@@ -808,6 +814,21 @@ async fn run_attempts(
     }
     let (mut prompt_tx, mut turn_start, mut started) =
         (asked.prompt_tx, asked.turn_start, asked.started);
+    // The workspace as it is now, so a review sees everything the turn
+    // changes, by its commands as well as its file tools.
+    let before = match gate.as_ref() {
+        Some(gate)
+            if aura_agent_gate::router::verifiable(category)
+                && may_review(
+                    &gate.live,
+                    &gate.candidates,
+                    &turn.agent_loop.config().model,
+                ) =>
+        {
+            Before::of_workspace(session.kernel.agent_workspace()).await
+        }
+        _ => None,
+    };
     // The follow-up steps of the attempt on `follow.0`; a new model starts
     // them afresh.
     let mut follow = (String::new(), FollowUp::default());
@@ -859,34 +880,89 @@ async fn run_attempts(
         if let Ok(partial) = &result {
             if follow.0 != model {
                 let workspace = session.kernel.agent_workspace();
-                let fresh = FollowUp::new(&gate.live, &gate.candidates, &model, &workspace);
+                let fresh = FollowUp::new(&gate.live, &gate.candidates, &model, &workspace)
+                    .since(before.clone())
+                    .after(&follow.1);
                 follow = (model.clone(), fresh);
             }
+            let edits = || {
+                let workspace = session.kernel.agent_workspace();
+                files
+                    .as_ref()
+                    .map(|files| files.attempt(agent).diff(Some(&workspace)))
+                    .unwrap_or_default()
+            };
+            // What the same model is told when it carries on, and what
+            // the user is told of that.
+            let mut carry_on = None;
             loop {
-                match follow.1.next(partial, category, signal) {
+                let at = At {
+                    category,
+                    difficulty: asked.difficulty,
+                    signal,
+                    turn_start,
+                };
+                match follow.1.next(partial, at).await {
                     Step::Stop => break,
                     Step::Nudge => {
-                        // The same model carries on, asked to check its change.
-                        let nudge = nudge_prompt();
-                        session.messages.clone_from(&partial.messages);
-                        session.todos.clone_from(&partial.todos);
-                        record_response(session, &partial.total_text).await;
-                        if let Err(problem) = record_user_prompt(session, nudge.clone()).await {
-                            warn!(%problem, "Could not record Gate's request to check the change");
+                        carry_on = Some((
+                            nudge_prompt(),
+                            format!(
+                                "gate: {} changed files without running a test or build; asking it to check its change",
+                                aura_model::model_catalog::route_label(&model)
+                            ),
+                        ));
+                        break;
+                    }
+                    Step::Repair(signs) => {
+                        carry_on = Some((
+                            sign_repair_message(&signs),
+                            sign_repair_notice(&model, &signs),
+                        ));
+                        break;
+                    }
+                    Step::Review { why, act } => {
+                        let ended = OutcomePayload {
+                            prompt_tx,
+                            category,
+                            model: model.clone(),
+                            success: None,
+                            signal,
+                            cost_usd: attempts.cost_usd + forwarded.usage.cost_usd,
+                            subtask_cost_usd: gate.hub.subtask_cost_usd(agent, asked.started_ms),
+                            latency_ms: u64::try_from(started.elapsed().as_millis())
+                                .unwrap_or(u64::MAX),
+                        };
+                        let edits = edits();
+                        let shown = Reviewing {
+                            task: asked.task,
+                            result: partial,
+                            turn_start,
+                            category,
+                            edits: &edits,
+                            why: &why,
+                            act,
+                        };
+                        let auth_token = turn.agent_loop.config().auth_token.clone();
+                        let reviewed = follow
+                            .1
+                            .review(session, &gate.live, &ended, &shown, auth_token)
+                            .await;
+                        let Some(reviewed) = reviewed else {
+                            continue;
+                        };
+                        ui.send(system_message(reviewed.describe())).await;
+                        if reviewed.unfinished() {
+                            if follow.1.send_back(partial) {
+                                carry_on = Some((
+                                    repair_message(&reviewed.findings),
+                                    repair_notice(&model),
+                                ));
+                                break;
+                            }
+                            signal = OutcomeSignal::JudgedFail;
+                            unchecked = Some(reviewed.findings);
                         }
-                        session.usage.add(&forwarded.usage);
-                        attempts.cost_usd += forwarded.usage.cost_usd;
-                        session.messages.push(Message::user(nudge));
-                        info!(%model, "Gate asks the turn to check its change");
-                        ui.send(system_message(format!(
-                            "gate: {} changed files without running a test or build; asking it to check its change",
-                            aura_model::model_catalog::route_label(&model)
-                        )))
-                        .await;
-                        let mut config = turn.agent_loop.config().clone();
-                        config.initial_todos.clone_from(&session.todos);
-                        *turn.agent_loop = AgentLoop::new(config);
-                        continue 'attempts;
                     }
                     Step::HarnessCheck => {
                         let Some(command) = follow.1.check().map(str::to_string) else {
@@ -919,11 +995,7 @@ async fn run_attempts(
                             latency_ms: u64::try_from(started.elapsed().as_millis())
                                 .unwrap_or(u64::MAX),
                         };
-                        let workspace = session.kernel.agent_workspace();
-                        let diff = files
-                            .as_ref()
-                            .map(|files| files.attempt(agent).diff(Some(&workspace)))
-                            .unwrap_or_default();
+                        let diff = follow.1.diff(partial, edits()).await;
                         let shown = Unchecked {
                             task: asked.task,
                             diff: &diff,
@@ -943,6 +1015,24 @@ async fn run_attempts(
                         }
                     }
                 }
+            }
+            if let Some((message, notice)) = carry_on {
+                // The same model carries on in the same conversation.
+                session.messages.clone_from(&partial.messages);
+                session.todos.clone_from(&partial.todos);
+                record_response(session, &partial.total_text).await;
+                if let Err(problem) = record_user_prompt(session, message.clone()).await {
+                    warn!(%problem, "Could not record Gate's message to the model");
+                }
+                session.usage.add(&forwarded.usage);
+                attempts.cost_usd += forwarded.usage.cost_usd;
+                session.messages.push(Message::user(message));
+                info!(%model, %notice, "Gate has the turn carry on");
+                ui.send(system_message(notice)).await;
+                let mut config = turn.agent_loop.config().clone();
+                config.initial_todos.clone_from(&session.todos);
+                *turn.agent_loop = AgentLoop::new(config);
+                continue 'attempts;
             }
         }
         attempts.signal = (signal != own).then_some(signal);
@@ -982,17 +1072,21 @@ async fn run_attempts(
         let left = result
             .as_ref()
             .ok()
-            .map(|result| gate_log::evidence(result, turn_start));
+            .map(|result| follow.1.evidence(result, turn_start));
         gate.live.log_attempt(agent, &failed, terms, left);
         gate_record::record(&session.kernel, agent, &failed).await;
         attempts.settled = true;
         let mut review = unchecked;
         if let Some(judge) = judge {
             let workspace = session.kernel.agent_workspace();
-            let diff = files
+            let edits = files
                 .as_ref()
                 .map(|files| files.attempt(agent).diff(Some(&workspace)))
                 .unwrap_or_default();
+            let diff = match &result {
+                Ok(partial) => follow.1.diff(partial, edits).await,
+                Err(_) => edits,
+            };
             let failure = harness
                 .clone()
                 .or_else(|| failure_text(&result, turn_start))
@@ -1064,6 +1158,11 @@ async fn run_attempts(
     if let Some(files) = &files {
         let _ = files.take_attempt(agent);
     }
+    attempts.changed = result
+        .as_ref()
+        .ok()
+        .and_then(|result| follow.1.changed_paths(result))
+        .map(<[String]>::to_vec);
     (result, forwarded, attempts)
 }
 

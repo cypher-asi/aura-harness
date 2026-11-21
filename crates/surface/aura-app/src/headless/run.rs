@@ -8,8 +8,9 @@ use super::output::{ExitReason, Output, RunReport, StreamEvent, UsageReport};
 use super::sink::{CallLimits, HeadlessSink, TurnTally};
 use super::tools::ToolFilter;
 use crate::event_loop::gate_followup::{
-    check_review, check_signal, harness_check, joined, judge_unchecked, nudge_prompt, FollowUp,
-    Unchecked,
+    check_review, check_signal, harness_check, joined, judge_unchecked, nudge_prompt,
+    repair_message, repair_notice, sign_repair_message, sign_repair_notice, At, Before, FollowUp,
+    Reviewing, Unchecked,
 };
 use crate::event_loop::gate_log;
 use crate::event_loop::gate_record::{self, Judged};
@@ -160,11 +161,13 @@ enum Carry {
     Nudge(OutcomePayload),
 }
 
-/// What Gate's follow-up made of a turn that checked nothing.
+/// What Gate's follow-up made of a turn.
 #[derive(Default)]
 struct FollowedUp {
-    /// The same model is asked to check its change.
-    nudge: bool,
+    /// What the same model is told when it carries on (asked to check
+    /// its change, or sent back with what is wrong with it), and what
+    /// the run's output says of that
+    carry_on: Option<(String, String)>,
     /// What the harness's check printed when it failed
     harness: Option<String>,
     /// What the judge found wrong with the unchecked work
@@ -247,8 +250,10 @@ impl Headless {
     /// Run `prompt` on `session`, then the notices of the agent's
     /// background work, until it has nothing left to do or a limit stops
     /// it; `started` is when the run began. When Gate routes `prompt`'s
-    /// turn and it ran no check of its own, Gate follows it up first
-    /// ([`Self::follow_up`]). When it ends in a model error, with its last
+    /// turn, Gate follows it up first ([`Self::follow_up`]): a turn that
+    /// ran no check is asked for one, and work that is hard or shows a
+    /// sign of failure is reviewed before it stands. When it ends in a
+    /// model error, with its last
     /// check or the harness's failing, or with its unchecked work judged
     /// unfinished, Gate's judge says whether the model was at fault
     /// ([`Self::judge`]). If it was, or nothing judged the turn, it goes
@@ -273,6 +278,21 @@ impl Headless {
         if let Some(files) = &files {
             files.begin_attempt(session.agent_id());
         }
+        // The workspace as it is now, so a review sees everything the
+        // turns change, by their commands as well as their file tools.
+        let settings = *self.hub.gate.settings();
+        let reviews = settings.review != aura_config::ReviewMode::Off
+            && settings.judge
+            && settings.suspect_judge
+            && self
+                .hub
+                .gate_candidates(session.definition.as_deref())
+                .is_some_and(|candidates| !candidates.is_empty());
+        let before = if reviews {
+            Before::of_workspace(session.kernel.agent_workspace()).await
+        } else {
+            None
+        };
         let task = prompt.clone();
         let mut prompt = prompt;
         let mut first_ended = None;
@@ -310,7 +330,7 @@ impl Headless {
                         session,
                         &task,
                         &mut outcome,
-                        &mut follow,
+                        (&mut follow, before.as_ref()),
                         attempt_start,
                         output,
                     )
@@ -323,8 +343,9 @@ impl Headless {
             // with it.
             let raw = outcome.ended.as_ref().map(|ended| ended.signal);
             let mut review = found.unchecked.take();
-            if answering && !found.nudge && review.is_none() {
-                if let Some((judged_as, judged)) = self.judge(session, &task, &outcome).await {
+            if answering && found.carry_on.is_none() && review.is_none() {
+                let judged = self.judge(session, &task, &outcome, &mut follow.1).await;
+                if let Some((judged_as, judged)) = judged {
                     output.event(&StreamEvent::Judged {
                         model: &judged.model,
                         judge: &judged.judge,
@@ -352,13 +373,13 @@ impl Headless {
                     totals.reply.clone_from(&result.total_text);
                 }
             }
-            if let Some(ended) = outcome.ended.take_if(|_| found.nudge) {
-                let text = format!(
-                    "gate: {} changed files without running a test or build; asking it to check its change",
-                    aura_model::model_catalog::route_label(&ended.model)
-                );
+            let carried = found
+                .carry_on
+                .take()
+                .and_then(|carry_on| Some((carry_on, outcome.ended.take()?)));
+            if let Some(((message, text), ended)) = carried {
                 output.event(&StreamEvent::Notice { text: &text });
-                let mut next = nudge_prompt();
+                let mut next = message;
                 for unseen in &outcome.unseen {
                     next.push_str("\n\n");
                     next.push_str(unseen);
@@ -452,15 +473,20 @@ impl Headless {
         session: &AgentSession,
         task: &str,
         turn: &TurnOutcome,
+        follow: &mut FollowUp,
     ) -> Option<(OutcomePayload, Judged)> {
         let ended = turn.ended.as_ref()?;
         let judge = self.hub.judge_of(session.definition.as_deref(), ended)?;
         let workspace = session.kernel.agent_workspace();
-        let diff = session
+        let edits = session
             .file_checkpoints
             .as_ref()
             .map(|files| files.attempt(session.agent_id()).diff(Some(&workspace)))
             .unwrap_or_default();
+        let diff = match &turn.result {
+            Some(result) => follow.diff(result, edits).await,
+            None => edits,
+        };
         let (config, _) = self.hub.turn(session.definition.as_deref(), &workspace);
         let failed = Failed {
             task,
@@ -472,20 +498,23 @@ impl Headless {
     }
 
     /// Follow up `turn`, a turn of `session` answering `task` that Gate
-    /// routed and that ran no check of its own, as Gate's settings allow
-    /// (see [`gate_followup`](crate::event_loop::gate_followup)): it is
-    /// asked once to check its change, else the harness runs the
-    /// project's tests, else the judge looks at work that seems
-    /// unfinished. What the harness's check or the judge finds is recorded
-    /// as a later `Outcome` of the turn's prompt and becomes `turn`'s.
-    /// `follow` holds the steps the attempt on `follow.0` has taken, and
-    /// `since` is where that attempt's messages start.
+    /// routed, as Gate's settings allow (see
+    /// [`gate_followup`](crate::event_loop::gate_followup)): one that ran
+    /// no check of its own is asked once to check its change, else the
+    /// harness runs the project's tests, else the judge looks at work
+    /// that seems unfinished; and work that is hard or shows a sign of
+    /// failure is reviewed before it stands, going back to its model once
+    /// with what the review finds. What the harness's check, the judge or
+    /// the review finds is recorded as a later `Outcome` of the turn's
+    /// prompt and becomes `turn`'s. `follow` holds the steps the attempt
+    /// on `follow.0` has taken, `before` the workspace as it was when the
+    /// run began, and `since` is where that attempt's messages start.
     async fn follow_up(
         &mut self,
         session: &AgentSession,
         task: &str,
         turn: &mut TurnOutcome,
-        follow: &mut (String, FollowUp),
+        (follow, before): (&mut (String, FollowUp), Option<&Before>),
         since: usize,
         output: &Output,
     ) -> FollowedUp {
@@ -496,26 +525,95 @@ impl Headless {
         };
         // What the follow-up makes of the attempt replaces its line in
         // Gate's attempt log.
-        let relog = |ended: &OutcomePayload| {
-            let left = gate_log::evidence(result, since);
-            self.hub
-                .gate
-                .log_attempt(session.agent_id(), ended, terms, Some(left));
+        let gate = Arc::clone(&self.hub.gate);
+        let relog = |follow: &FollowUp, ended: &OutcomePayload| {
+            let left = follow.evidence(result, since);
+            gate.log_attempt(session.agent_id(), ended, terms, Some(left));
         };
         let Some(candidates) = self.hub.gate_candidates(session.definition.as_deref()) else {
             return found;
         };
         let workspace = session.kernel.agent_workspace();
         if follow.0 != ended.model {
-            let fresh = FollowUp::new(&self.hub.gate, &candidates, &ended.model, &workspace);
+            let fresh = FollowUp::new(&self.hub.gate, &candidates, &ended.model, &workspace)
+                .since(before.cloned())
+                .after(&follow.1);
             *follow = (ended.model.clone(), fresh);
         }
+        let edits = || {
+            session
+                .file_checkpoints
+                .as_ref()
+                .map(|files| files.attempt(session.agent_id()).diff(Some(&workspace)))
+                .unwrap_or_default()
+        };
         loop {
-            match follow.1.next(result, ended.category, ended.signal) {
+            let at = At {
+                category: ended.category,
+                difficulty: terms.difficulty,
+                signal: ended.signal,
+                turn_start: since,
+            };
+            match follow.1.next(result, at).await {
                 Step::Stop => break,
                 Step::Nudge => {
-                    found.nudge = true;
+                    found.carry_on = Some((
+                        nudge_prompt(),
+                        format!(
+                            "gate: {} changed files without running a test or build; asking it to check its change",
+                            aura_model::model_catalog::route_label(&ended.model)
+                        ),
+                    ));
                     break;
+                }
+                Step::Repair(signs) => {
+                    found.carry_on = Some((
+                        sign_repair_message(&signs),
+                        sign_repair_notice(&ended.model, &signs),
+                    ));
+                    break;
+                }
+                Step::Review { why, act } => {
+                    let edits = edits();
+                    let shown = Reviewing {
+                        task,
+                        result,
+                        turn_start: since,
+                        category: ended.category,
+                        edits: &edits,
+                        why: &why,
+                        act,
+                    };
+                    let (config, _) = self.hub.turn(session.definition.as_deref(), &workspace);
+                    let reviewed = follow
+                        .1
+                        .review(session, &gate, ended, &shown, config.auth_token)
+                        .await;
+                    let Some(reviewed) = reviewed else {
+                        continue;
+                    };
+                    let judged = reviewed.judged();
+                    output.event(&StreamEvent::Judged {
+                        model: &judged.model,
+                        judge: &judged.judge,
+                        at_fault: reviewed.unfinished(),
+                        reasons: &judged.verdict.reasons,
+                        cost_usd: judged.cost_usd,
+                    });
+                    self.judged.push(judged);
+                    if reviewed.unfinished() {
+                        if follow.1.send_back(result) {
+                            found.carry_on = Some((
+                                repair_message(&reviewed.findings),
+                                repair_notice(&ended.model),
+                            ));
+                            break;
+                        }
+                        *ended = ended.with_signal(OutcomeSignal::JudgedFail);
+                        relog(&follow.1, ended);
+                        gate_record::record(&session.kernel, session.agent_id(), ended).await;
+                        found.unchecked = Some(reviewed.findings);
+                    }
                 }
                 Step::HarnessCheck => {
                     let Some(command) = follow.1.check().map(str::to_string) else {
@@ -531,7 +629,7 @@ impl Headless {
                     });
                     if let Some(signal) = signal {
                         *ended = ended.with_signal(signal);
-                        relog(ended);
+                        relog(&follow.1, ended);
                         gate_record::record(&session.kernel, session.agent_id(), ended).await;
                         found.harness =
                             (signal == OutcomeSignal::ChecksFailed).then(|| check_review(&check));
@@ -541,11 +639,7 @@ impl Headless {
                     let Some(judge) = follow.1.judge().map(str::to_string) else {
                         continue;
                     };
-                    let diff = session
-                        .file_checkpoints
-                        .as_ref()
-                        .map(|files| files.attempt(session.agent_id()).diff(Some(&workspace)))
-                        .unwrap_or_default();
+                    let diff = follow.1.diff(result, edits()).await;
                     let shown = Unchecked {
                         task,
                         diff: &diff,
@@ -568,13 +662,17 @@ impl Headless {
                     });
                     if judged.verdict.at_fault {
                         *ended = ended.with_signal(OutcomeSignal::JudgedFail);
-                        relog(ended);
+                        relog(&follow.1, ended);
                         gate_record::record(&session.kernel, session.agent_id(), ended).await;
                         found.unchecked = Some(judged.verdict.reasons.clone());
                     }
                     self.judged.push(judged);
                 }
             }
+        }
+        // The files the attempt changed by any means belong in its line.
+        if found.carry_on.is_none() && follow.1.changed_paths(result).is_some() {
+            relog(&follow.1, ended);
         }
         found
     }

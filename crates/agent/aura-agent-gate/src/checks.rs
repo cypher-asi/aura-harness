@@ -46,17 +46,33 @@ pub fn last_check_seen(messages: &[Message]) -> Option<CheckSeen> {
 /// called.
 #[must_use]
 pub fn checks_seen(messages: &[Message]) -> Vec<CheckSeen> {
-    // Each check's call id, its command and, once it ran to its end,
-    // whether it passed and what it printed.
+    checks_placed(messages)
+        .into_iter()
+        .map(|(_, check)| check)
+        .collect()
+}
+
+/// [`checks_seen`], each check with the place of its call among the tool
+/// calls in `messages` (0 for the first).
+#[must_use]
+pub fn checks_placed(messages: &[Message]) -> Vec<(usize, CheckSeen)> {
+    // Each check's call id, its place, its command and, once it ran to
+    // its end, whether it passed and what it printed.
     type Ran = Option<(bool, String)>;
-    let mut checks: Vec<(&str, String, Ran)> = Vec::new();
+    let mut checks: Vec<(&str, usize, String, Ran)> = Vec::new();
+    let mut calls = 0;
     for message in messages {
         for block in &message.content {
             match block {
-                ContentBlock::ToolUse { id, name, input } if name == RUN_COMMAND => {
+                ContentBlock::ToolUse { id, name, input } => {
+                    let at = calls;
+                    calls += 1;
+                    if name != RUN_COMMAND {
+                        continue;
+                    }
                     let command = command_line(input);
                     if input["background"].as_bool() != Some(true) && is_check_command(&command) {
-                        checks.push((id.as_str(), command, None));
+                        checks.push((id.as_str(), at, command, None));
                     }
                 }
                 ContentBlock::ToolResult {
@@ -65,7 +81,7 @@ pub fn checks_seen(messages: &[Message]) -> Vec<CheckSeen> {
                     is_error,
                 } => {
                     if let Some(check) = checks.iter_mut().find(|(id, ..)| id == tool_use_id) {
-                        check.2 = verdict(content, *is_error).map(|passed| {
+                        check.3 = verdict(content, *is_error).map(|passed| {
                             let output = match content {
                                 ToolResultContent::Text(text) => text.clone(),
                                 ToolResultContent::Json(value) => value.to_string(),
@@ -80,11 +96,16 @@ pub fn checks_seen(messages: &[Message]) -> Vec<CheckSeen> {
     }
     checks
         .into_iter()
-        .filter_map(|(_, command, ran)| {
-            ran.map(|(passed, output)| CheckSeen {
-                command,
-                passed,
-                output,
+        .filter_map(|(_, at, command, ran)| {
+            ran.map(|(passed, output)| {
+                (
+                    at,
+                    CheckSeen {
+                        command,
+                        passed,
+                        output,
+                    },
+                )
             })
         })
         .collect()

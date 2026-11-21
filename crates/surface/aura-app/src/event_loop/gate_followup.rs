@@ -8,20 +8,44 @@
 //! ([`harness_check`]); and so does the judge of unchecked work
 //! ([`judge_unchecked`]). What either finds wrong sends the work on to a
 //! stronger model as a failed check of the turn's own does.
+//!
+//! Work that is about to stand may be reviewed first
+//! ([`FollowUp::review`]): the judge goes through the request against
+//! everything the attempt changed. To show it that, the harness compares
+//! the workspace with how it was before the attempt ([`Before`]): a
+//! `/compare` run's copy against its baseline, a git working tree against
+//! a snapshot taken when the turn started. Changes made by the commands
+//! the attempt ran are then in the diff with those its file tools made.
+//! Work the review finds unfinished goes back to its model once
+//! ([`repair_message`]) and on to a stronger model after that.
 
 use super::agents::AgentSession;
 use super::gate_live::GateLive;
+use super::gate_log;
 use super::gate_record::{self, Judged};
+use super::processes::now_ms;
 use super::steering::SteerSource;
 use super::task_check::{run_script_within, CheckRun};
+use super::tasks::TASKS_DIR;
+use crate::isolation::changes;
 use aura_agent::AgentLoopResult;
-use aura_agent_gate::checks::{command_line, exit_status_masked, last_check_seen, CheckSeen};
-use aura_agent_gate::followup::{self, Allowed, Ended, Step, Suspicion, Taken, NUDGE_PROMPT};
-use aura_agent_gate::turn_judge::Unverified;
+use aura_agent_gate::attempt_log::{CopyAt, Review, Tier, Tiers};
+use aura_agent_gate::checks::{
+    checks_seen, command_line, exit_status_masked, last_check_seen, CheckSeen,
+};
+use aura_agent_gate::evidence::{flags, Flag};
+use aura_agent_gate::followup::{self, Allowed, Ended, Step, Suspicion, Taken, Why, NUDGE_PROMPT};
+use aura_agent_gate::turn_judge::{self, Answer, ReviewVariant, Standing, Unverified, Verdict};
 use aura_agent_gate::Candidate;
-use aura_core_types::{OutcomePayload, OutcomeSignal, PromptCategory, RouteLevel};
+use aura_config::ReviewMode;
+use aura_core_types::{
+    CompareCopy, Difficulty, OutcomePayload, OutcomeSignal, PromptCategory, RouteLevel,
+};
 use aura_model::{ContentBlock, Message, Role};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+use tracing::{info, warn};
 
 /// `ToolProposal::source` of the harness's checks.
 const CHECK_SOURCE: &str = "gate_check";
@@ -50,6 +74,146 @@ const NOT_RUN_OUTPUT: &[&str] = &[
 /// Commands shown to the judge of unchecked work, latest last.
 const SHOWN_COMMANDS: usize = 15;
 
+/// Commands shown to the reviewer of work about to stand, latest last.
+const REVIEWED_COMMANDS: usize = 40;
+
+/// Checks shown to the reviewer of work about to stand, latest last.
+const REVIEWED_CHECKS: usize = 3;
+
+/// How the reviewer of work about to stand is asked while the app runs.
+pub(crate) const LIVE_REVIEW: ReviewVariant = ReviewVariant::Plain;
+
+/// How long recording a workspace before a turn may take; a workspace
+/// that takes longer is not watched.
+const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long reading what an attempt changed may take.
+const DIFF_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Most bytes of untracked files a workspace may hold and still be
+/// recorded before a turn: recording stores a copy of each in the
+/// repository's objects.
+const MAX_UNTRACKED_BYTES: u64 = 64 * 1024 * 1024;
+
+/// A workspace as it was before an attempt, to read everything the
+/// attempt changed from.
+#[derive(Debug, Clone)]
+pub(crate) enum Before {
+    /// A `/compare` run's copy and the tree it started from
+    Copy(CopyAt),
+    /// A git working tree as it was when the turn started
+    Snapshot(Arc<changes::Snapshot>),
+}
+
+/// Everything an attempt changed, by its file tools and by the commands
+/// it ran.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Changed {
+    /// As a unified diff
+    pub diff: String,
+    /// The files, relative to the root of the working tree or copy
+    pub paths: Vec<String>,
+}
+
+impl Before {
+    /// The copy a `/compare` run works in, as it was before the run.
+    pub(crate) fn of_copy(copy: &CompareCopy) -> Self {
+        Self::Copy(gate_log::copy_at(copy))
+    }
+
+    /// The copy `copy` as it is now, part of the way through its run.
+    /// `None` when git could not record it.
+    pub(crate) async fn of_copy_now(copy: &CompareCopy) -> Option<Self> {
+        let mut at = gate_log::copy_at(copy);
+        let (root, git_dir) = (at.root.clone(), at.git_dir.clone());
+        let tree =
+            tokio::task::spawn_blocking(move || changes::baseline(&root, git_dir.as_deref()));
+        match tokio::time::timeout(SNAPSHOT_TIMEOUT, tree).await {
+            Ok(Ok(Ok(tree))) => {
+                at.baseline = tree;
+                Some(Self::Copy(at))
+            }
+            _ => None,
+        }
+    }
+
+    /// `workspace` as it is now, when it is in a git working tree that
+    /// can be recorded within [`SNAPSHOT_TIMEOUT`] and holds no more
+    /// than [`MAX_UNTRACKED_BYTES`] of untracked files. Only objects are
+    /// written to the repository (see [`changes::snapshot`]).
+    pub(crate) async fn of_workspace(workspace: PathBuf) -> Option<Self> {
+        let taken = tokio::task::spawn_blocking(move || {
+            if changes::untracked_bytes(&workspace)? > MAX_UNTRACKED_BYTES {
+                info!(workspace = %workspace.display(), "Too many untracked bytes to record the workspace before the turn");
+                return None;
+            }
+            match changes::snapshot(&workspace) {
+                Ok(snapshot) => snapshot,
+                Err(e) => {
+                    warn!(workspace = %workspace.display(), error = %e, "Could not record the workspace before the turn");
+                    None
+                }
+            }
+        });
+        match tokio::time::timeout(SNAPSHOT_TIMEOUT, taken).await {
+            Ok(Ok(Some(snapshot))) => Some(Self::Snapshot(Arc::new(snapshot))),
+            Ok(_) => None,
+            Err(_) => {
+                warn!("Recording the workspace before the turn took too long");
+                None
+            }
+        }
+    }
+
+    /// Everything that changed since. `None` when git could not say
+    /// within [`DIFF_TIMEOUT`].
+    pub(crate) async fn changed(&self) -> Option<Changed> {
+        let before = self.clone();
+        let read = tokio::task::spawn_blocking(move || match before {
+            Self::Copy(copy) => changes::readable_diff_since(
+                &copy.root,
+                copy.git_dir.as_deref(),
+                &copy.baseline,
+                &[TASKS_DIR],
+            ),
+            Self::Snapshot(snapshot) => snapshot.diff(),
+        });
+        match tokio::time::timeout(DIFF_TIMEOUT, read).await {
+            Ok(Ok(Ok(diff))) => Some(Changed {
+                paths: changes::paths_in(&diff),
+                diff,
+            }),
+            Ok(Ok(Err(e))) => {
+                warn!(error = %e, "Could not read what the attempt changed");
+                None
+            }
+            _ => {
+                warn!("Reading what the attempt changed took too long");
+                None
+            }
+        }
+    }
+}
+
+/// Whether a turn on `model`, routed among `candidates`, may have its
+/// work reviewed before it stands, so the workspace is worth recording
+/// before it starts.
+pub(crate) fn may_review(live: &GateLive, candidates: &[Candidate], model: &str) -> bool {
+    live.settings().review != ReviewMode::Off
+        && gate_record::unverified_judge_for(live, candidates, model).is_some()
+}
+
+/// How an attempt ended, for [`FollowUp::next`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct At {
+    pub category: PromptCategory,
+    /// How hard the classifier judged the work
+    pub difficulty: Option<Difficulty>,
+    pub signal: OutcomeSignal,
+    /// Where the attempt's own messages start in its result
+    pub turn_start: usize,
+}
+
 /// The steps one attempt at a routed turn may still take.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct FollowUp {
@@ -59,8 +223,91 @@ pub(crate) struct FollowUp {
     check: Option<String>,
     /// Model that judges unchecked work
     judge: Option<String>,
-    /// Files changed before the nudge, whose run ended there
+    /// Files changed before the attempt was last sent on (asked to check
+    /// its change, or sent back), as its file tools reported them
     changed_before: usize,
+    /// The workspace before the attempt, when the harness recorded it
+    before: Option<Before>,
+    /// What each sign of failure has earned in the attempt log
+    tiers: Tiers,
+    /// What the attempt changed as of the run that left this many
+    /// messages
+    changed: Option<(usize, Option<Changed>)>,
+}
+
+/// What the reviewer made of work that was about to stand.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Reviewed {
+    /// Model whose work was reviewed
+    pub model: String,
+    /// Model that reviewed it
+    pub judge: String,
+    pub answer: Answer,
+    /// What it found
+    pub findings: String,
+    /// List-price cost of the review in USD
+    pub cost_usd: f64,
+    /// Whether Gate acts on the answer
+    pub act: bool,
+}
+
+impl Reviewed {
+    /// Whether the work goes back to its model or on to a stronger one.
+    pub(crate) fn unfinished(&self) -> bool {
+        self.act && self.answer == Answer::Model
+    }
+
+    /// One line saying what the reviewer found.
+    pub(crate) fn describe(&self) -> String {
+        let label = |id: &str| aura_model::model_catalog::route_label(id);
+        let model = label(&self.model);
+        let findings = self.findings.trim();
+        let found = match self.answer {
+            Answer::Model if self.act => format!("{model}'s work is not finished.\n{findings}"),
+            Answer::Model => format!(
+                "{model}'s work looks unfinished (logged only; AURA_GATE_REVIEW=on acts on it).\n{findings}"
+            ),
+            Answer::Ok => format!("found nothing missing in {model}'s work"),
+            Answer::Other => format!("{model}'s work was held up by something outside it.\n{findings}"),
+        };
+        format!(
+            "Gate's review ({}, ${:.4}): {}",
+            label(&self.judge),
+            self.cost_usd,
+            found.trim_end()
+        )
+    }
+
+    /// The review as a judge's finding, for reports that list those.
+    pub(crate) fn judged(&self) -> Judged {
+        Judged {
+            model: self.model.clone(),
+            judge: self.judge.clone(),
+            verdict: Verdict {
+                at_fault: self.answer == Answer::Model,
+                reasons: self.findings.clone(),
+            },
+            cost_usd: self.cost_usd,
+            unverified: true,
+        }
+    }
+}
+
+/// What the reviewer of work about to stand is shown of an attempt.
+pub(crate) struct Reviewing<'a> {
+    /// What the user asked
+    pub task: &'a str,
+    /// How it ended
+    pub result: &'a AgentLoopResult,
+    /// Where its own messages start in `result`
+    pub turn_start: usize,
+    pub category: PromptCategory,
+    /// What its file tools changed, as a unified diff: shown when the
+    /// harness could not compare the workspace before and after
+    pub edits: &'a str,
+    pub why: &'a [Why],
+    /// Whether Gate acts on the answer
+    pub act: bool,
 }
 
 impl FollowUp {
@@ -90,42 +337,212 @@ impl FollowUp {
                 nudge: settings.nudge,
                 harness_check: check.is_some(),
                 judge: judge.is_some(),
+                review: settings.review,
             },
             taken: Taken::default(),
             check,
             judge,
             changed_before: 0,
+            before: None,
+            tiers: live.tiers(),
+            changed: None,
         }
     }
 
-    /// The next step for an attempt that ended with `result` and
-    /// `signal`, asking for `category`; the step counts as taken.
-    pub(crate) fn next(
-        &mut self,
+    /// The same steps, reading what the attempt changed against
+    /// `before`.
+    pub(crate) fn since(mut self, before: Option<Before>) -> Self {
+        self.before = before;
+        self
+    }
+
+    /// The same steps for an attempt that takes over from the one
+    /// `earlier` followed: a turn's work is sent back to its model once,
+    /// so if that attempt was, this one is not.
+    pub(crate) fn after(mut self, earlier: &Self) -> Self {
+        self.taken.repaired = earlier.taken.repaired;
+        self
+    }
+
+    /// Whether any step may be taken at all.
+    fn follows(&self) -> bool {
+        self.allowed.nudge || self.allowed.harness_check || self.allowed.judge
+    }
+
+    /// What the attempt changed as of `result`, read once per run of the
+    /// attempt; `None` when the workspace was not recorded before it.
+    async fn changed_as_of(&mut self, result: &AgentLoopResult) -> Option<&Changed> {
+        let as_of = result.messages.len();
+        if self.changed.as_ref().is_none_or(|(at, _)| *at != as_of) {
+            let changed = match &self.before {
+                Some(before) => before.changed().await,
+                None => None,
+            };
+            self.changed = Some((as_of, changed));
+        }
+        self.changed
+            .as_ref()
+            .and_then(|(_, changed)| changed.as_ref())
+    }
+
+    /// The files the attempt changed by any means as of `result`, when
+    /// [`Self::next`] read them for it.
+    pub(crate) fn changed_paths(&self, result: &AgentLoopResult) -> Option<&[String]> {
+        self.changed
+            .as_ref()
+            .filter(|(at, _)| *at == result.messages.len())
+            .and_then(|(_, changed)| changed.as_ref())
+            .map(|changed| changed.paths.as_slice())
+    }
+
+    /// The attempt's change as of `result` as a judge is shown it:
+    /// everything it changed when the workspace was recorded before it,
+    /// else `edits`, what its file tools changed.
+    pub(crate) async fn diff(&mut self, result: &AgentLoopResult, edits: String) -> String {
+        match self.changed_as_of(result).await {
+            Some(changed) => changed.diff.clone(),
+            None => edits,
+        }
+    }
+
+    /// The evidence the attempt that ended in `result` left, its
+    /// messages starting at `turn_start`, with the files it changed by
+    /// any means when they were read.
+    pub(crate) fn evidence(
+        &self,
         result: &AgentLoopResult,
-        category: PromptCategory,
-        signal: OutcomeSignal,
-    ) -> Step {
+        turn_start: usize,
+    ) -> aura_agent_gate::evidence::Evidence {
+        gate_log::evidence_of(result, turn_start, self.changed_paths(result))
+    }
+
+    /// The next step for an attempt that ended with `result` as `at`
+    /// says; the step counts as taken.
+    pub(crate) async fn next(&mut self, result: &AgentLoopResult, at: At) -> Step {
+        let follows = self.follows()
+            && matches!(at.signal, OutcomeSignal::None | OutcomeSignal::ChecksPassed);
+        if !follows {
+            return Step::Stop;
+        }
+        let reported = self.changed_before + result.file_changes.len();
+        let changed = self.changed_as_of(result).await.map(|c| c.paths.len());
+        // A file the tools reported counts even when it reads as
+        // unchanged in the end.
+        let files_changed = changed.map_or(reported, |changed| changed.max(reported));
+        let raised = flags(&self.evidence(result, at.turn_start), at.category);
+        let review_signs = self.tiers.in_tier(&raised, Tier::Review);
+        let acting_signs = self.tiers.in_tier(&raised, Tier::Act);
         let reply = final_reply(result);
-        let files_changed = self.changed_before + result.file_changes.len();
         let ended = Ended {
-            signal,
-            category,
+            signal: at.signal,
+            category: at.category,
             files_changed,
             reply: &reply,
-            hit_limit: result.budget_exhausted || result.stalled || result.output_truncated,
+            hit_limit: hit_limit(result),
+            difficulty: at.difficulty,
+            review_signs: &review_signs,
+            acting_signs: &acting_signs,
         };
         let step = followup::next(&ended, self.taken, self.allowed);
         match step {
             Step::Nudge => {
                 self.taken.nudged = true;
-                self.changed_before = files_changed;
+                self.changed_before = reported;
             }
             Step::HarnessCheck => self.taken.checked = true,
             Step::JudgeUnverified(_) => self.taken.judged = true,
+            Step::Review { .. } => self.taken.reviews += 1,
+            Step::Repair(_) => {
+                self.taken.repaired = true;
+                self.changed_before = reported;
+            }
             Step::Stop => {}
         }
         step
+    }
+
+    /// Whether work a review found unfinished, which ended in `result`,
+    /// goes back to its model: once per attempt, and not when the
+    /// attempt ran out of room. Counts as sent back when it does.
+    pub(crate) fn send_back(&mut self, result: &AgentLoopResult) -> bool {
+        if self.taken.repaired || hit_limit(result) {
+            return false;
+        }
+        self.taken.repaired = true;
+        self.changed_before += result.file_changes.len();
+        true
+    }
+
+    /// Have the judge go through the work of `ended`, shown as `shown`,
+    /// against the request before it stands, through `session`'s kernel,
+    /// and log what it made of it to `live`'s attempt log. `None` when no
+    /// model reviews or it gave no verdict.
+    pub(crate) async fn review(
+        &self,
+        session: &AgentSession,
+        live: &GateLive,
+        ended: &OutcomePayload,
+        shown: &Reviewing<'_>,
+        auth_token: Option<String>,
+    ) -> Option<Reviewed> {
+        let judge = self.judge.as_deref()?;
+        let messages = shown
+            .result
+            .messages
+            .get(shown.turn_start..)
+            .unwrap_or_default();
+        let whole = self
+            .changed
+            .as_ref()
+            .filter(|(at, _)| *at == shown.result.messages.len())
+            .and_then(|(_, changed)| changed.as_ref());
+        let reply = final_reply(shown.result);
+        let commands = commands_run(messages, REVIEWED_COMMANDS);
+        let checks = checks_shown(messages);
+        let why: Vec<String> = shown
+            .why
+            .iter()
+            .map(|why| why.describe().to_string())
+            .collect();
+        let standing = Standing {
+            task: shown.task,
+            diff: whole.map_or(shown.edits, |changed| changed.diff.as_str()),
+            whole: whole.is_some(),
+            commands: &commands,
+            checks: &checks,
+            reply: &reply,
+            why: &why,
+        };
+        let request = turn_judge::review_request(judge, &standing, LIVE_REVIEW, auth_token);
+        let (answer, findings, cost_usd) =
+            gate_record::ask_review(&session.kernel, judge, request).await?;
+        info!(%judge, model = %ended.model, ?answer, cost_usd, act = shown.act, "The judge reviewed work about to stand");
+        let signs: Vec<Flag> = flags(
+            &self.evidence(shown.result, shown.turn_start),
+            shown.category,
+        );
+        live.log_review(Review {
+            at_ms: now_ms(),
+            agent: session.agent_id().to_hex(),
+            prompt_tx: ended.prompt_tx.to_hex(),
+            why: shown.why.iter().map(|why| why.name().to_string()).collect(),
+            signs,
+            verdict: answer,
+            findings: findings.clone(),
+            judge: judge.to_string(),
+            cost_usd,
+            variant: LIVE_REVIEW.name().to_string(),
+            acted: shown.act,
+            replayed: false,
+        });
+        Some(Reviewed {
+            model: ended.model.clone(),
+            judge: judge.to_string(),
+            answer,
+            findings,
+            cost_usd,
+            act: shown.act,
+        })
     }
 
     /// The test command the harness runs, when it may run one.
@@ -139,11 +556,20 @@ impl FollowUp {
     }
 }
 
+/// Whether `result` stopped on a limit rather than by finishing.
+fn hit_limit(result: &AgentLoopResult) -> bool {
+    result.budget_exhausted || result.stalled || result.output_truncated
+}
+
 /// The text of the last assistant message of `result`: its final reply,
 /// without what the model narrated along the way.
-fn final_reply(result: &AgentLoopResult) -> String {
-    result
-        .messages
+pub(crate) fn final_reply(result: &AgentLoopResult) -> String {
+    final_reply_in(&result.messages)
+}
+
+/// The text of the last assistant message in `messages` that has any.
+pub(crate) fn final_reply_in(messages: &[Message]) -> String {
+    messages
         .iter()
         .rev()
         .find(|m| m.role == Role::Assistant && !m.text_content().trim().is_empty())
@@ -155,6 +581,45 @@ fn final_reply(result: &AgentLoopResult) -> String {
 /// harness's.
 pub(crate) fn nudge_prompt() -> String {
     format!("{}{NUDGE_PROMPT}", SteerSource::Harness.prefix())
+}
+
+/// The message that sends work a review found unfinished back to its
+/// model with the `findings`, marked as the harness's.
+pub(crate) fn repair_message(findings: &str) -> String {
+    format!(
+        "{}{}",
+        SteerSource::Harness.prefix(),
+        followup::repair_prompt(findings)
+    )
+}
+
+/// The message that sends work back to its model for the `signs` it
+/// shows, marked as the harness's.
+pub(crate) fn sign_repair_message(signs: &[Flag]) -> String {
+    format!(
+        "{}{}",
+        SteerSource::Harness.prefix(),
+        followup::sign_repair_prompt(signs)
+    )
+}
+
+/// What the user is told when work goes back to `model` for `signs`.
+pub(crate) fn sign_repair_notice(model: &str, signs: &[Flag]) -> String {
+    let names: Vec<&str> = signs.iter().map(|sign| sign.name()).collect();
+    format!(
+        "gate: sending {}'s work back to it ({})",
+        aura_model::model_catalog::route_label(model),
+        names.join(", ")
+    )
+}
+
+/// What the user is told when work a review found unfinished goes back
+/// to `model`.
+pub(crate) fn repair_notice(model: &str) -> String {
+    format!(
+        "gate: sending the review's findings back to {}",
+        aura_model::model_catalog::route_label(model)
+    )
 }
 
 /// The test command the harness runs in `workspace`: the operator's
@@ -194,9 +659,20 @@ fn could_not_run(check: &CheckRun) -> bool {
     }
 }
 
+/// The last [`REVIEWED_CHECKS`] tests or builds in `messages` as the
+/// reviewer sees them; empty when it ran none.
+pub(crate) fn checks_shown(messages: &[Message]) -> String {
+    let seen = checks_seen(messages);
+    seen[seen.len().saturating_sub(REVIEWED_CHECKS)..]
+        .iter()
+        .map(check_shown)
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 /// The commands the `run_command` calls in `messages` ran, one per line,
-/// the last [`SHOWN_COMMANDS`] of them.
-fn commands_run(messages: &[Message]) -> String {
+/// the last `shown` of them.
+pub(crate) fn commands_run(messages: &[Message], shown: usize) -> String {
     let commands: Vec<String> = messages
         .iter()
         .flat_map(|m| &m.content)
@@ -207,7 +683,7 @@ fn commands_run(messages: &[Message]) -> String {
             _ => None,
         })
         .collect();
-    commands[commands.len().saturating_sub(SHOWN_COMMANDS)..].join("\n")
+    commands[commands.len().saturating_sub(shown)..].join("\n")
 }
 
 /// The attempt's last check as the judge of unchecked work sees it: its
@@ -260,7 +736,7 @@ pub(crate) async fn judge_unchecked(
         .messages
         .get(unchecked.turn_start..)
         .unwrap_or_default();
-    let commands = commands_run(messages);
+    let commands = commands_run(messages, SHOWN_COMMANDS);
     let last_check = last_check_seen(messages)
         .map(|check| check_shown(&check))
         .unwrap_or_default();
@@ -381,13 +857,13 @@ mod tests {
             )
         };
         let messages: Vec<Message> = (0..20).map(call).collect();
-        let shown = commands_run(&messages);
+        let shown = commands_run(&messages, SHOWN_COMMANDS);
         assert_eq!(shown.lines().count(), SHOWN_COMMANDS);
         assert!(
             shown.starts_with("cmd 5\n") && shown.ends_with("cmd 19"),
             "{shown}"
         );
-        assert_eq!(commands_run(&[]), "");
+        assert_eq!(commands_run(&[], SHOWN_COMMANDS), "");
     }
 
     #[test]

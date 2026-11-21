@@ -145,6 +145,7 @@ impl EvalTurns {
                         compare: "aura eval",
                         run: turn.name,
                         task: None,
+                        copy: None,
                     };
                     hub.gate.log_truth(agent_id, ended.prompt_tx, passed, of);
                 }

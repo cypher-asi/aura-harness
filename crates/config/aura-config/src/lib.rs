@@ -78,6 +78,7 @@
 //! | `AURA_GATE_NUDGE` | `on` / `off` | `on` | [`GateConfig::nudge`] |
 //! | `AURA_GATE_CHECK` | `on` / `off` | `on` | [`GateConfig::harness_check`] |
 //! | `AURA_GATE_SUSPECT` | `on` / `off` | `on` | [`GateConfig::suspect_judge`] |
+//! | `AURA_GATE_REVIEW` | `on` / `log` / `off` | `log` | [`GateConfig::review`] |
 //! | `AURA_HOME` | path | `~/.aura` | [`AuraHome::resolve`] (read-only `CODEX_HOME` compat alias also honoured during V1 transition) |
 //!
 //! Tool-sandbox knobs (`file_ops::SKIP_DIRS`, `INCLUDE_EXTENSIONS`),
@@ -152,7 +153,7 @@ pub use automaton::AutomatonConfig;
 pub use compaction::{CompactionConfig, COMPACTION_TRIGGER_DEFAULT};
 pub use conflict::ConflictConfig;
 pub use env::{ConfigError, ENV_VAR_NAMES};
-pub use gate::GateConfig;
+pub use gate::{GateConfig, ReviewMode};
 pub use plugins::{PluginConfig, PluginsConfig, PluginsTable};
 pub use prompts::PromptsConfig;
 pub use reasoner::{LlmRetryConfig, ReasonerConfig, ReasonerThinkingConfig};

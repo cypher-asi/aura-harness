@@ -258,12 +258,22 @@ async fn recorded_comparisons_are_caught_up_on_once() {
             runs: 1,
             attempts: 2,
             truths: 1,
-            skipped: 0
+            skipped: 0,
+            placed: 0,
         }
     );
     assert_eq!(
         catch_up(&store, &hosts, &sessions, &log),
         CaughtUp::default()
+    );
+    // The check's result says where the run's copy is kept.
+    let lines = log.read().unwrap().lines;
+    let Some(Line::Truth(truth)) = lines.last() else {
+        panic!("{lines:?}");
+    };
+    assert_eq!(
+        truth.copy.as_ref().map(|copy| copy.baseline.as_str()),
+        Some("abc")
     );
 
     let report = evaluate(&log.read().unwrap().lines);
@@ -286,6 +296,48 @@ async fn recorded_comparisons_are_caught_up_on_once() {
         .unwrap();
     let caught = catch_up(&store, &hosts, &sessions, &log);
     assert_eq!((caught.runs, caught.attempts, caught.skipped), (1, 0, 1));
+}
+
+#[tokio::test]
+async fn a_check_result_logged_without_its_copy_gets_the_copys_place() {
+    let dir = TempDir::new().unwrap();
+    let store = RocksStore::open(dir.path().join("db"), false).unwrap();
+    let (host, agent) = (AgentId::generate(), AgentId::generate());
+    let (entries, _) = run(agent);
+    let payload = comparison(compare_run(agent, entries[0].tx.hash));
+    store
+        .append_entry_direct(host, 1, &entry(1, Transaction::compare(host, &payload)))
+        .unwrap();
+    let log = AttemptLog::in_data_dir(dir.path());
+    let live = GateLive::default();
+    live.log_attempts_to(AttemptLog::in_data_dir(dir.path()));
+    let of = RunOf {
+        compare: "Compare #22",
+        run: "a-4",
+        task: Some("ansible-d33bedc4"),
+        copy: None,
+    };
+    live.log_truth(agent, entries[0].tx.hash, false, of);
+
+    let hosts = [(host, "Compare #22".to_string())];
+    let sessions = Checkpoints::new(dir.path());
+    let caught = catch_up(&store, &hosts, &sessions, &log);
+    assert_eq!((caught.placed, caught.truths, caught.runs), (1, 0, 0));
+    let lines = log.read().unwrap().lines;
+    let [Line::Truth(before), Line::Truth(after)] = &lines[..] else {
+        panic!("{lines:?}");
+    };
+    assert_eq!(before.copy, None);
+    assert_eq!(
+        after.copy.as_ref().map(|copy| copy.root.clone()),
+        Some(PathBuf::from("/tmp/a-4"))
+    );
+    assert_eq!((after.passed, &after.prompt_tx), (false, &before.prompt_tx));
+    assert_eq!(
+        catch_up(&store, &hosts, &sessions, &log),
+        CaughtUp::default(),
+        "once"
+    );
 }
 
 #[test]
@@ -320,6 +372,7 @@ fn attempts_and_the_users_verdicts_are_logged_as_they_happen() {
             compare: "Compare #22",
             run: "a-4",
             task: Some("ansible-d33bedc4"),
+            copy: None,
         },
     );
 

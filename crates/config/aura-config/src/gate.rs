@@ -17,6 +17,7 @@
 //! | `AURA_GATE_NUDGE` | `on` / `off` | `on` | [`GateConfig::nudge`] |
 //! | `AURA_GATE_CHECK` | `on` / `off` | `on` | [`GateConfig::harness_check`] |
 //! | `AURA_GATE_SUSPECT` | `on` / `off` | `on` | [`GateConfig::suspect_judge`] |
+//! | `AURA_GATE_REVIEW` | `on` / `log` / `off` | `log` | [`GateConfig::review`] |
 //!
 //! A value outside what a variable accepts keeps that setting's default
 //! and logs a warning naming the variable and its accepted values; the
@@ -28,8 +29,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::env::{
     lookup_string, AURA_GATE_CASCADE, AURA_GATE_CHECK, AURA_GATE_DELEGATE, AURA_GATE_EXPLORE,
-    AURA_GATE_JUDGE, AURA_GATE_MIN_TRIES, AURA_GATE_NUDGE, AURA_GATE_SUSPECT, AURA_GATE_TARGET,
-    FALSY_LITERALS, TRUTHY_LITERALS,
+    AURA_GATE_JUDGE, AURA_GATE_MIN_TRIES, AURA_GATE_NUDGE, AURA_GATE_REVIEW, AURA_GATE_SUSPECT,
+    AURA_GATE_TARGET, FALSY_LITERALS, TRUTHY_LITERALS,
 };
 use crate::ConfigError;
 
@@ -40,6 +41,33 @@ const DEFAULT_EXPLORE_RATE: f64 = 0.05;
 const RATE_ACCEPTS: &str = "a number from 0 to 1";
 const MIN_TRIES_ACCEPTS: &str = "a whole number of at least 1";
 const SWITCH_ACCEPTS: &str = "on or off (also 1/0, true/false, yes/no)";
+const REVIEW_ACCEPTS: &str = "on, log or off (also 1/0, true/false, yes/no)";
+
+/// What Gate's judge does about work a routed turn is about to let
+/// stand.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewMode {
+    /// It is not asked.
+    Off,
+    /// It reviews the work and its verdict is logged, but the turn goes
+    /// on as if it had not been asked.
+    #[default]
+    Log,
+    /// It reviews the work, and work it finds unfinished goes back to
+    /// the model once, then on to a stronger one.
+    On,
+}
+
+impl Display for ReviewMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Off => "off",
+            Self::Log => "log",
+            Self::On => "on",
+        })
+    }
+}
 
 /// Gate's routing settings.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
@@ -100,6 +128,17 @@ pub struct GateConfig {
     ///
     /// env: `AURA_GATE_SUSPECT` (default: `on`)
     pub suspect_judge: bool,
+    /// Whether the judge reviews work a routed turn below the strongest
+    /// tier is about to let stand, when the work was classified hard or
+    /// shows a sign of failure the attempt log backs: it sees the request,
+    /// everything the turn changed, its checks and its reply. With `on`,
+    /// work it finds unfinished goes back to the same model once with
+    /// what it found, then on to a stronger model. With `log` its verdict
+    /// is only written to the attempt log. Needs [`Self::judge`] on as
+    /// well.
+    ///
+    /// env: `AURA_GATE_REVIEW` (default: `log`)
+    pub review: ReviewMode,
 }
 
 impl GateConfig {
@@ -116,6 +155,7 @@ impl GateConfig {
             nudge: true,
             harness_check: true,
             suspect_judge: true,
+            review: ReviewMode::Log,
         }
     }
 
@@ -198,6 +238,15 @@ impl GateConfig {
                 *setting = v;
             }
         }
+        if let Some(v) = read(
+            AURA_GATE_REVIEW,
+            REVIEW_ACCEPTS,
+            Self::defaults().review,
+            parse_review,
+            &mut rejected,
+        ) {
+            cfg.review = v;
+        }
         (cfg, rejected)
     }
 }
@@ -238,6 +287,13 @@ fn parse_min_tries(raw: &str) -> Option<u32> {
     raw.parse::<u32>().ok().filter(|v| *v >= 1)
 }
 
+fn parse_review(raw: &str) -> Option<ReviewMode> {
+    if raw.eq_ignore_ascii_case("log") {
+        return Some(ReviewMode::Log);
+    }
+    parse_switch(raw).map(|on| if on { ReviewMode::On } else { ReviewMode::Off })
+}
+
 fn parse_switch(raw: &str) -> Option<bool> {
     let matches = |literals: &[&str]| literals.iter().any(|l| l.eq_ignore_ascii_case(raw));
     if matches(TRUTHY_LITERALS) {
@@ -264,6 +320,7 @@ mod tests {
         std::env::remove_var(AURA_GATE_NUDGE);
         std::env::remove_var(AURA_GATE_CHECK);
         std::env::remove_var(AURA_GATE_SUSPECT);
+        std::env::remove_var(AURA_GATE_REVIEW);
     }
 
     #[test]
@@ -278,6 +335,25 @@ mod tests {
         assert!(cfg.nudge);
         assert!(cfg.harness_check);
         assert!(cfg.suspect_judge);
+        assert_eq!(cfg.review, ReviewMode::Log);
+    }
+
+    #[test]
+    fn the_review_is_on_logged_or_off() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for (raw, review) in [
+            ("on", ReviewMode::On),
+            ("LOG", ReviewMode::Log),
+            ("off", ReviewMode::Off),
+            ("0", ReviewMode::Off),
+            ("yes", ReviewMode::On),
+        ] {
+            clear_gate_env();
+            std::env::set_var(AURA_GATE_REVIEW, raw);
+            assert_eq!(GateConfig::from_env().review, review, "{raw}");
+        }
+        clear_gate_env();
+        assert_eq!(ReviewMode::On.to_string(), "on");
     }
 
     #[test]
@@ -302,6 +378,7 @@ mod tests {
         std::env::set_var(AURA_GATE_NUDGE, "off");
         std::env::set_var(AURA_GATE_CHECK, "0");
         std::env::set_var(AURA_GATE_SUSPECT, "false");
+        std::env::set_var(AURA_GATE_REVIEW, "off");
         let cfg = GateConfig::from_env();
         clear_gate_env();
         assert_eq!(
@@ -316,6 +393,7 @@ mod tests {
                 nudge: false,
                 harness_check: false,
                 suspect_judge: false,
+                review: ReviewMode::Off,
             }
         );
     }
@@ -355,6 +433,7 @@ mod tests {
             (AURA_GATE_NUDGE, "sometimes", SWITCH_ACCEPTS),
             (AURA_GATE_CHECK, "sometimes", SWITCH_ACCEPTS),
             (AURA_GATE_SUSPECT, "sometimes", SWITCH_ACCEPTS),
+            (AURA_GATE_REVIEW, "sometimes", REVIEW_ACCEPTS),
         ] {
             clear_gate_env();
             std::env::set_var(name, raw);

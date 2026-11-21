@@ -7,7 +7,7 @@
 
 use super::agents::AgentSession;
 use super::gate_live::GateLive;
-use aura_agent_gate::turn_judge::{self, Failed, Unverified, Verdict};
+use aura_agent_gate::turn_judge::{self, Answer, Failed, Unverified, Verdict};
 use aura_agent_gate::{classify, outcome::is_retry_stronger, Candidate};
 use aura_agent_kernel::Kernel;
 use aura_core_types::{
@@ -23,6 +23,10 @@ const CLASSIFY_TIMEOUT: Duration = Duration::from_secs(20);
 /// How long the judge of a failed turn may take before the turn keeps
 /// its own signal.
 const JUDGE_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// How long the reviewer of work about to stand may take: it reads the
+/// whole change, and may reason before it answers.
+const REVIEW_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Entries scanned back from the head of a record to find a turn's
 /// outcome.
@@ -163,6 +167,38 @@ async fn ask_judge(
     request: Result<aura_model::ModelRequest, aura_model::ReasonerError>,
     unverified: bool,
 ) -> Option<Judged> {
+    let (answer, reasons, cost_usd) = ask(kernel, judge, request, JUDGE_TIMEOUT).await?;
+    Some(Judged {
+        model: ended.model.clone(),
+        judge: judge.to_string(),
+        verdict: Verdict {
+            at_fault: answer == Answer::Model,
+            reasons,
+        },
+        cost_usd,
+        unverified,
+    })
+}
+
+/// Send `request`, a review of work about to stand
+/// ([`turn_judge::review_request`]), to `judge` through `kernel`. Returns
+/// its answer, what it found and the list-price cost of the call; `None`
+/// when the request could not be built, the call failed or timed out, or
+/// the reply held no verdict. Nothing is recorded.
+pub(crate) async fn ask_review(
+    kernel: &Kernel,
+    judge: &str,
+    request: Result<aura_model::ModelRequest, aura_model::ReasonerError>,
+) -> Option<(Answer, String, f64)> {
+    ask(kernel, judge, request, REVIEW_TIMEOUT).await
+}
+
+async fn ask(
+    kernel: &Kernel,
+    judge: &str,
+    request: Result<aura_model::ModelRequest, aura_model::ReasonerError>,
+    within: Duration,
+) -> Option<(Answer, String, f64)> {
     let request = match request {
         Ok(request) => request,
         Err(e) => {
@@ -170,7 +206,7 @@ async fn ask_judge(
             return None;
         }
     };
-    let response = match tokio::time::timeout(JUDGE_TIMEOUT, kernel.reason(request)).await {
+    let response = match tokio::time::timeout(within, kernel.reason(request)).await {
         Ok(Ok(result)) => result.response,
         Ok(Err(e)) => {
             warn!(%judge, error = %e, "The judge's call failed");
@@ -181,19 +217,13 @@ async fn ask_judge(
             return None;
         }
     };
-    let Some(verdict) = turn_judge::parse(&response.message.text_content()) else {
+    let Some((answer, reasons)) = turn_judge::parse_answer(&response.message.text_content()) else {
         warn!(%judge, "The judge gave no verdict");
         return None;
     };
     let cost_usd =
         aura_model::model_catalog::estimate_cost_usd(judge, &response.usage).unwrap_or(0.0);
-    Some(Judged {
-        model: ended.model.clone(),
-        judge: judge.to_string(),
-        verdict,
-        cost_usd,
-        unverified,
-    })
+    Some((answer, reasons, cost_usd))
 }
 
 /// Label `text` with its category and difficulty by asking `model`

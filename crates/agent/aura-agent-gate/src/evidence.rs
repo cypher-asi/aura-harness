@@ -13,7 +13,7 @@ use aura_model::{ContentBlock, Message, Role};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::checks::{checks_seen, exit_status_masked};
+use crate::checks::{checks_placed, command_line, exit_status_masked};
 use crate::followup::{gave_up, says_unverified, NUDGE_PROMPT};
 use crate::router::verifiable;
 
@@ -32,6 +32,21 @@ const KEPT_PATHS: usize = 40;
 
 /// Tools that change a file.
 const FILE_TOOLS: [&str; 3] = ["write_file", "edit_file", "delete_file"];
+
+/// Text in a command line that changes files in the workspace, as far as
+/// a command line shows it.
+const SHELL_WRITES: &[&str] = &[
+    "sed -i",
+    "perl -pi",
+    "perl -i",
+    "git apply",
+    "git checkout ",
+    "git restore ",
+    "git stash",
+    "patch -p",
+    ".write(",
+    "write_text(",
+];
 
 /// A check the attempt ran to its end.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +82,15 @@ pub struct Evidence {
     /// Files it changed, when the harness counted them
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files_changed: Option<u32>,
+    /// The files it changed by any means, relative to the workspace,
+    /// when the harness compared the workspace before and after: those
+    /// changed by commands it ran are among them
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_paths: Option<Vec<String>>,
+    /// Whether it changed a file after the last check it ran to its end,
+    /// as far as its tool calls show
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub changed_after_check: bool,
     /// Whether it stopped on a limit rather than by finishing, when known
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hit_limit: Option<bool>,
@@ -83,14 +107,15 @@ impl Evidence {
     /// The evidence in `messages`, an attempt's own.
     #[must_use]
     pub fn of(messages: &[Message]) -> Self {
-        let seen = checks_seen(messages);
+        let seen = checks_placed(messages);
         let checks_run = u32::try_from(seen.len()).unwrap_or(u32::MAX);
+        let last_check_at = seen.last().map(|(at, _)| *at);
         let checks = seen
             .into_iter()
             .rev()
             .take(KEPT_CHECKS)
             .rev()
-            .map(|check| CheckEvidence {
+            .map(|(_, check)| CheckEvidence {
                 command: head(&check.command, KEPT_COMMAND),
                 passed: check.passed,
                 output: tail(&printed(&check.output), KEPT_TEXT),
@@ -98,6 +123,9 @@ impl Evidence {
             .collect();
         let mut files_edited: Vec<String> = Vec::new();
         let (mut calls, mut commands, mut nudges) = (0, 0, 0);
+        // The place of the tool call that last changed a file, among the
+        // tool calls.
+        let (mut tool_calls, mut last_change_at) = (0, None);
         for message in messages {
             match message.role {
                 Role::Assistant => calls += 1,
@@ -108,9 +136,16 @@ impl Evidence {
                 let ContentBlock::ToolUse { name, input, .. } = block else {
                     continue;
                 };
+                let at = tool_calls;
+                tool_calls += 1;
                 if name == "run_command" {
                     commands += 1;
+                    let command = command_line(input);
+                    if SHELL_WRITES.iter().any(|mark| command.contains(mark)) {
+                        last_change_at = Some(at);
+                    }
                 } else if FILE_TOOLS.contains(&name.as_str()) {
+                    last_change_at = Some(at);
                     let path = input["path"].as_str().unwrap_or_default().to_string();
                     if !path.is_empty()
                         && !files_edited.contains(&path)
@@ -135,9 +170,49 @@ impl Evidence {
             checks,
             files_edited,
             files_changed: None,
+            changed_paths: None,
+            changed_after_check: last_check_at
+                .zip(last_change_at)
+                .is_some_and(|(check, change)| change > check),
             hit_limit: None,
             reply: head(reply.trim(), KEPT_TEXT),
         }
+    }
+
+    /// Note the files the attempt changed by any means, as the harness
+    /// found by comparing the workspace before and after.
+    pub fn note_changed(&mut self, paths: &[String]) {
+        self.files_changed = Some(u32::try_from(paths.len()).unwrap_or(u32::MAX));
+        self.changed_paths = Some(paths.iter().take(KEPT_PATHS).cloned().collect());
+    }
+
+    /// The changed files its file tools did not change: `None` when the
+    /// harness did not compare the workspace, or when more files were
+    /// changed than are kept.
+    #[must_use]
+    pub fn changed_by_commands(&self) -> Option<Vec<&str>> {
+        let changed = self.changed_paths.as_ref()?;
+        if changed.len() >= KEPT_PATHS || self.files_edited.len() >= KEPT_PATHS {
+            return None;
+        }
+        Some(
+            changed
+                .iter()
+                .filter(|path| {
+                    !self
+                        .files_edited
+                        .iter()
+                        .any(|edited| same_file(edited, path))
+                })
+                .map(String::as_str)
+                .collect(),
+        )
+    }
+
+    /// The paths known of what it changed: every changed file when the
+    /// harness compared the workspace, else those its file tools changed.
+    fn known_paths(&self) -> &[String] {
+        self.changed_paths.as_deref().unwrap_or(&self.files_edited)
     }
 
     /// The last check the attempt ran to its end.
@@ -163,6 +238,23 @@ fn printed(result: &str) -> String {
     } else {
         parts.join("\n")
     }
+}
+
+/// Whether `a` and `b` name one file: equal, or one the other's path
+/// from further up (an absolute path and one relative to the workspace).
+fn same_file(a: &str, b: &str) -> bool {
+    let (a, b) = (a.trim_start_matches("./"), b.trim_start_matches("./"));
+    let under = |long: &str, short: &str| {
+        long.strip_suffix(short)
+            .is_some_and(|rest| rest.is_empty() || rest.ends_with('/'))
+    };
+    under(a, b) || under(b, a)
+}
+
+/// Whether `path` looks like a test or its data.
+fn is_test_path(path: &str) -> bool {
+    let path = path.to_lowercase();
+    path.contains("test") || path.contains("spec")
 }
 
 fn head(text: &str, chars: usize) -> String {
@@ -201,11 +293,20 @@ pub enum Flag {
     GaveUp,
     /// It stopped on a limit.
     HitLimit,
+    /// It changed files with commands it ran rather than with the file
+    /// tools ([`Evidence::changed_by_commands`]).
+    ShellEdit,
+    /// It changed a file after the last check it ran.
+    StaleCheck,
+    /// Its reply says the tests it ran do not cover its change.
+    ReplyNotCovered,
+    /// Work that changes code added or changed no test.
+    NoTestChanged,
 }
 
 impl Flag {
     /// Every flag, in the order reports list them.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 13] = [
         Self::MaskedCheck,
         Self::CheckOutputFailures,
         Self::MaskedCheckWithFailures,
@@ -215,6 +316,10 @@ impl Flag {
         Self::NoChanges,
         Self::GaveUp,
         Self::HitLimit,
+        Self::ShellEdit,
+        Self::StaleCheck,
+        Self::ReplyNotCovered,
+        Self::NoTestChanged,
     ];
 
     /// The flag's name as logged, e.g. `masked_check`.
@@ -230,6 +335,30 @@ impl Flag {
             Self::NoChanges => "no_changes",
             Self::GaveUp => "gave_up",
             Self::HitLimit => "hit_limit",
+            Self::ShellEdit => "shell_edit",
+            Self::StaleCheck => "stale_check",
+            Self::ReplyNotCovered => "reply_not_covered",
+            Self::NoTestChanged => "no_test_changed",
+        }
+    }
+
+    /// The flag in words, for whoever reviews or repairs the work.
+    #[must_use]
+    pub const fn describe(self) -> &'static str {
+        match self {
+            Self::MaskedCheck => "the last test or build ran through a pipe or a chain of commands, so its exit status is not the check's own",
+            Self::CheckOutputFailures => "the last test or build exited with success, but what it printed shows failures or errors",
+            Self::MaskedCheckWithFailures => "the last test or build printed failures or errors, and its exit status was another command's",
+            Self::ReplyUnverified => "the final reply says the work was not verified or not tested",
+            Self::ReplyFailures => "the final reply says tests still fail",
+            Self::NoCheck => "no test or build was run to its end",
+            Self::NoChanges => "the request asks for a code change, but no file was changed",
+            Self::GaveUp => "the final reply says the work could not be done or was left unfinished",
+            Self::HitLimit => "the attempt stopped on a limit (iterations, budget or a stall) instead of finishing",
+            Self::ShellEdit => "files were changed by shell commands rather than the file tools",
+            Self::StaleCheck => "a file was changed after the last test or build ran",
+            Self::ReplyNotCovered => "the final reply says the tests that were run do not cover the change",
+            Self::NoTestChanged => "no test was added or changed",
         }
     }
 }
@@ -272,8 +401,42 @@ pub fn flags(evidence: &Evidence, category: PromptCategory) -> Vec<Flag> {
     if evidence.hit_limit == Some(true) {
         found.push(Flag::HitLimit);
     }
+    if evidence
+        .changed_by_commands()
+        .is_some_and(|paths| !paths.is_empty())
+    {
+        found.push(Flag::ShellEdit);
+    }
+    if evidence.changed_after_check {
+        found.push(Flag::StaleCheck);
+    }
+    if NOT_COVERED.iter().any(|phrase| reply.contains(phrase)) {
+        found.push(Flag::ReplyNotCovered);
+    }
+    let paths = evidence.known_paths();
+    if verifiable(category) && !paths.is_empty() && !paths.iter().any(|path| is_test_path(path)) {
+        found.push(Flag::NoTestChanged);
+    }
     found
 }
+
+/// Phrases of a reply that says the tests it ran do not cover the
+/// change, lowercase.
+const NOT_COVERED: &[&str] = &[
+    "don't cover",
+    "doesn't cover",
+    "do not cover",
+    "does not cover",
+    "not covered by",
+    "isn't covered",
+    "aren't covered",
+    "no unit tests exist",
+    "no tests exist",
+    "no test covers",
+    "no tests cover",
+    "nothing covers",
+    "no existing test",
+];
 
 /// Phrases of a reply that says tests still fail, lowercase.
 const STILL_FAILING: &[&str] = &[
@@ -418,6 +581,7 @@ mod tests {
                 Flag::CheckOutputFailures,
                 Flag::MaskedCheckWithFailures,
                 Flag::ReplyUnverified,
+                Flag::NoTestChanged,
             ]
         );
     }
@@ -427,6 +591,8 @@ mod tests {
         let messages = [
             call("1", "edit_file", json!({"path": "src/lib.rs"})),
             result("1", "ok"),
+            call("0", "edit_file", json!({"path": "tests/parser.rs"})),
+            result("0", "ok"),
             call(
                 "2",
                 "run_command",
@@ -436,9 +602,70 @@ mod tests {
             Message::assistant("Fixed the parser; `cargo test -p parser` passes (12 tests)."),
         ];
         let mut evidence = Evidence::of(&messages);
-        evidence.files_changed = Some(1);
+        evidence.note_changed(&["src/lib.rs".to_string(), "tests/parser.rs".to_string()]);
         evidence.hit_limit = Some(false);
         assert_eq!(flags(&evidence, PromptCategory::SmallChange), []);
+    }
+
+    #[test]
+    fn how_the_change_was_made_and_checked_is_flagged() {
+        let messages = [
+            call("1", "edit_file", json!({"path": "/work/copy/src/lib.rs"})),
+            result("1", "ok"),
+            call(
+                "2",
+                "run_command",
+                json!({"command": "cargo test -p parser"}),
+            ),
+            result("2", "test result: ok. 12 passed; 0 failed"),
+            call(
+                "3",
+                "run_command",
+                json!({"command": "sed -i 's/a/b/' src/parse.rs"}),
+            ),
+            result("3", ""),
+            Message::assistant(
+                "Done. No tests exist for the new path, so the suite doesn't cover it.",
+            ),
+        ];
+        let mut evidence = Evidence::of(&messages);
+        assert!(evidence.changed_after_check, "sed ran after the tests");
+        assert_eq!(evidence.changed_by_commands(), None, "nothing compared");
+        assert_eq!(
+            flags(&evidence, PromptCategory::SmallChange),
+            [Flag::StaleCheck, Flag::ReplyNotCovered, Flag::NoTestChanged]
+        );
+        evidence.note_changed(&["src/lib.rs".to_string(), "src/parse.rs".to_string()]);
+        assert_eq!(evidence.files_changed, Some(2));
+        assert_eq!(evidence.changed_by_commands(), Some(vec!["src/parse.rs"]));
+        assert_eq!(
+            flags(&evidence, PromptCategory::SmallChange),
+            [
+                Flag::ShellEdit,
+                Flag::StaleCheck,
+                Flag::ReplyNotCovered,
+                Flag::NoTestChanged
+            ]
+        );
+        let back: Evidence =
+            serde_json::from_str(&serde_json::to_string(&evidence).unwrap()).unwrap();
+        assert_eq!(back, evidence);
+
+        let checked_last = [
+            call(
+                "1",
+                "run_command",
+                json!({"command": "sed -i 's/a/b/' src/parse.rs"}),
+            ),
+            result("1", ""),
+            call("2", "run_command", json!({"command": "cargo test"})),
+            result("2", "ok"),
+        ];
+        assert!(!Evidence::of(&checked_last).changed_after_check);
+        assert!(same_file("/work/copy/src/lib.rs", "src/lib.rs"));
+        assert!(same_file("./src/lib.rs", "src/lib.rs"));
+        assert!(!same_file("src/mylib.rs", "lib.rs"));
+        assert!(Flag::ALL.iter().all(|flag| !flag.describe().is_empty()));
     }
 
     #[test]

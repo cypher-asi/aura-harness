@@ -8,6 +8,7 @@
 //! stdout carries only the chosen output format; logs go to stderr.
 
 mod eval;
+mod gate_replay;
 mod output;
 mod run;
 mod sink;
@@ -19,6 +20,7 @@ mod tests;
 pub use crate::event_loop::gate_record::Judged;
 pub use crate::event_loop::task_check::CheckRun;
 pub use eval::{copy_dir, EvalRan, EvalTurn, EvalTurns, GateUse};
+pub use gate_replay::{gate_replay, ReplayOptions};
 pub(crate) use output::{ExitReason, Output, RunReport};
 pub use run::Headless;
 pub(crate) use run::{Request, RunLimits, SessionChoice};

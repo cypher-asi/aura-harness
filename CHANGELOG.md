@@ -7,6 +7,54 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Gate reviews work before it stands
+
+##### Added
+
+- `AURA_GATE_REVIEW` (`log`, `on` or `off`; default `log`). Routed work
+  that is about to stand on a model below the strongest tier, because
+  its check passed or nothing judged it, can be reviewed by the judge's
+  model first when the classifier found it hard or it raises a sign the
+  attempt log backs. The reviewer goes through the request one
+  requirement at a time against everything the turn changed, the
+  commands and checks it ran and its final reply. With `log` the verdict
+  is shown and logged and nothing else changes. With `on`, work found
+  unfinished goes back to the same model once with the findings, is
+  reviewed once more, and moves up to a stronger model if it is found
+  unfinished again. This applies to the terminal, the desktop app,
+  `aura -p`, `aura eval run` and `/compare`, whose summary says how
+  often a run's work was sent back. How often the reviewer is right has
+  not been measured yet, which is why the default only logs.
+- Four more signs in the attempt log: `shell_edit`, `stale_check`,
+  `reply_not_covered` and `no_test_changed`. `aura gate eval` shows what
+  each sign has earned on the routed attempts below the strongest tier:
+  log only, review (raised at least 5 times and wrong at least twice as
+  often as attempts of the same difficulty) or acts (raised at least 10
+  times and wrong 4 times in 5). Gate reads these tiers from the log, so
+  a sign starts to send work to the reviewer when the record backs it
+  and not before.
+- `review` lines in the attempt log, and a reviews table in
+  `aura gate eval`: how often the reviewer said unfinished, how many
+  wrong attempts that caught, how many right ones it flagged and what
+  the reviews cost.
+- `aura gate replay` asks the reviewer about attempts already in the
+  log that a benchmark task's check proved right or wrong, from their
+  kept `/compare` copies and saved sessions, and logs the answers for
+  `aura gate eval`. `--dry-run` lists the attempts with a cost estimate
+  and calls nothing; `--thinking`, `--all`, `--task`, `--limit`,
+  `--judge`, `--again` and `--jobs` choose what is asked and how.
+
+##### Changed
+
+- Gate's judges see everything a turn changed, shell commands' edits
+  included, where it is known: a `/compare` run's copy against the state
+  it started from, and for other turns (while reviews are not `off`) the
+  git working tree against a snapshot taken when the turn started.
+  Before, they saw only what the file tools changed.
+- A `/compare` run's `truth` line in the attempt log says where the
+  run's copy is kept and the git tree it started from. Lines already
+  logged are written again with it at the next start.
+
 ### Gate's attempt log
 
 ##### Added

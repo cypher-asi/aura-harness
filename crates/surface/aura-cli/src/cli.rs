@@ -261,6 +261,40 @@ pub enum GateSubcommand {
         #[arg(long)]
         json: bool,
     },
+    /// Ask Gate's reviewer about logged attempts that a benchmark task's
+    /// check proved right or wrong, from their kept copies and saved
+    /// sessions, and log its answers for `aura gate eval` to score. This
+    /// calls the model once per attempt.
+    Replay {
+        /// Data directory holding the log and the saved sessions
+        /// (default: `AURA_DATA_DIR` or `./aura_data`).
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+        /// Only attempts at benchmark tasks whose id contains this.
+        #[arg(long)]
+        task: Option<String>,
+        /// At most this many attempts, oldest first.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Let the reviewer reason before it answers.
+        #[arg(long)]
+        thinking: bool,
+        /// Attempts of any difficulty, not only those rated hard.
+        #[arg(long)]
+        all: bool,
+        /// Model that reviews (default: the strongest model in the log).
+        #[arg(long)]
+        judge: Option<String>,
+        /// List the attempts and what asking may cost, then stop.
+        #[arg(long)]
+        dry_run: bool,
+        /// Ask again about attempts already replayed the same way.
+        #[arg(long)]
+        again: bool,
+        /// Reviews asked at a time.
+        #[arg(long, default_value_t = 4)]
+        jobs: usize,
+    },
 }
 
 /// `aura runs` parent command.
@@ -735,6 +769,66 @@ mod tests {
                 true,
                 Some("swe_bench".to_string()),
                 true
+            )
+        );
+    }
+
+    #[test]
+    fn gate_replay_parses() {
+        let replay = |args: &[&str]| match parse(args).unwrap().command {
+            Some(Commands::Gate(GateCommand {
+                action:
+                    GateSubcommand::Replay {
+                        data_dir,
+                        task,
+                        limit,
+                        thinking,
+                        all,
+                        judge,
+                        dry_run,
+                        again,
+                        jobs,
+                    },
+            })) => (
+                data_dir,
+                task,
+                limit,
+                (thinking, all, dry_run, again),
+                judge,
+                jobs,
+            ),
+            _ => panic!("not gate replay: {args:?}"),
+        };
+        assert_eq!(
+            replay(&["gate", "replay"]),
+            (None, None, None, (false, false, false, false), None, 4)
+        );
+        assert_eq!(
+            replay(&[
+                "gate",
+                "replay",
+                "--data-dir",
+                "/tmp/data",
+                "--task",
+                "ansible",
+                "--limit",
+                "5",
+                "--thinking",
+                "--all",
+                "--judge",
+                "claude/claude-opus-5-5",
+                "--dry-run",
+                "--again",
+                "--jobs",
+                "2"
+            ]),
+            (
+                Some(PathBuf::from("/tmp/data")),
+                Some("ansible".to_string()),
+                Some(5),
+                (true, true, true, true),
+                Some("claude/claude-opus-5-5".to_string()),
+                2
             )
         );
     }

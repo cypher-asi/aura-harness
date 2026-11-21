@@ -182,6 +182,10 @@ pub struct RunTurn {
     /// Times Gate asked the model to check a change it had not checked.
     #[serde(default)]
     pub nudges: u32,
+    /// Times Gate sent the work back to the model that did it, with what
+    /// a review found unfinished or the signs of failure it showed.
+    #[serde(default)]
+    pub sent_back: u32,
     /// The part of `cost_usd` its subtasks spent.
     #[serde(default)]
     pub subtask_cost_usd: f64,
@@ -208,6 +212,7 @@ impl RunTurn {
             escalations: 0,
             first_model: None,
             nudges: 0,
+            sent_back: 0,
             subtask_cost_usd: 0.0,
         }
     }
@@ -614,6 +619,7 @@ mod tests {
                     escalations: 1,
                     first_model: Some("claude/claude-haiku-4-5".to_string()),
                     nudges: 1,
+                    sent_back: 1,
                     ..RunTurn::new(
                         "claude/claude-sonnet-4-6",
                         0.12,
@@ -669,6 +675,7 @@ mod tests {
             "claude/claude-haiku-4-5"
         );
         assert_eq!(json["runs"][0]["turns"][0]["nudges"], 1);
+        assert_eq!(json["runs"][0]["turns"][0]["sent_back"], 1);
         assert!(json["runs"][0].get("error").is_none());
         assert!(json["judgments"][0].get("a_vs_reference").is_none());
         assert_eq!(json["runs"][0]["plan_usage"][0]["plan"], "claude");
@@ -685,6 +692,7 @@ mod tests {
             "escalations",
             "first_model",
             "nudges",
+            "sent_back",
             "subtask_cost_usd",
         ] {
             turn.remove(field);

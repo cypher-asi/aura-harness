@@ -8,23 +8,29 @@
 //!   on a run's work ([`GateLive::log_truth`]), and when the user rewinds
 //!   a turn, sends it again to a stronger model or picks between runs
 //!   ([`GateLive::log_user_signal`], from the record as it is committed)
+//! - a `review` line is written when Gate's judge has gone through work
+//!   that was about to stand ([`GateLive::log_review`])
 //! - at startup the comparisons already recorded are caught up on
 //!   ([`catch_up`]): their runs' attempts are rebuilt from the record and
 //!   the saved sessions, so the log covers work done before it existed
 //!
-//! Nothing here changes how a turn runs. A line that cannot be written
-//! is logged and dropped.
+//! The log is read back for one thing while the app runs: what each sign
+//! of failure has earned on the attempts it was raised on
+//! ([`GateLive::learn_tiers`]), which decides the signs that have work
+//! reviewed. A line that cannot be written is logged and dropped.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use aura_agent::AgentLoopResult;
-use aura_agent_gate::attempt_log::{Attempt, AttemptLog, Line, Terms, Truth, TruthSource};
+use aura_agent_gate::attempt_log::{
+    self, Attempt, AttemptLog, CopyAt, Kind, Line, Review, Terms, Truth, TruthSource,
+};
 use aura_agent_gate::evidence::Evidence;
-use aura_agent_gate::followup::NUDGE_PROMPT;
+use aura_agent_gate::followup::{NUDGE_PROMPT, REPAIR_OPENING};
 use aura_core_types::{
-    AgentId, ArmSpec, ComparePayload, CompareRun, Hash, OutcomePayload, OutcomeSignal, RecordEntry,
-    RouteLevel,
+    AgentId, ArmSpec, CompareCopy, ComparePayload, CompareRun, Hash, OutcomePayload, OutcomeSignal,
+    RecordEntry, RouteLevel,
 };
 use aura_model::{ContentBlock, Message, Role};
 use aura_store_db::ReadStore;
@@ -53,6 +59,29 @@ pub(crate) fn evidence(result: &AgentLoopResult, turn_start: usize) -> Evidence 
     evidence
 }
 
+/// [`evidence`], with the files the attempt changed by any means when
+/// the harness compared the workspace before and after (`changed`).
+pub(crate) fn evidence_of(
+    result: &AgentLoopResult,
+    turn_start: usize,
+    changed: Option<&[String]>,
+) -> Evidence {
+    let mut evidence = evidence(result, turn_start);
+    if let Some(changed) = changed {
+        evidence.note_changed(changed);
+    }
+    evidence
+}
+
+/// Where the kept copy `copy` of a run is, for the log.
+pub(crate) fn copy_at(copy: &CompareCopy) -> CopyAt {
+    CopyAt {
+        root: copy.root.clone(),
+        git_dir: copy.git_dir.clone(),
+        baseline: copy.baseline.clone(),
+    }
+}
+
 /// Where a truth's attempt ran, for a run of `/compare`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RunOf<'a> {
@@ -62,12 +91,41 @@ pub(crate) struct RunOf<'a> {
     pub run: &'a str,
     /// The benchmark task it did
     pub task: Option<&'a str>,
+    /// The copy of the workspace it worked in
+    pub copy: Option<&'a CompareCopy>,
 }
 
 impl GateLive {
     /// Log attempts to `log` from here on. The first call decides.
     pub fn log_attempts_to(&self, log: AttemptLog) {
         let _ = self.log.set(log);
+        self.learn_tiers();
+    }
+
+    /// Read the attempt log and take from it what each sign of failure
+    /// has earned ([`attempt_log::tiers`]). A log that cannot be read
+    /// leaves the tiers as they are.
+    pub(crate) fn learn_tiers(&self) {
+        let Some(log) = self.log.get() else {
+            return;
+        };
+        match log.read() {
+            Ok(read) => {
+                let tiers = attempt_log::tiers(&read.lines);
+                *self
+                    .tiers
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = tiers;
+            }
+            Err(e) => {
+                warn!(path = %log.path().display(), error = %e, "Could not read Gate's attempt log");
+            }
+        }
+    }
+
+    /// Log what Gate's judge made of work that was about to stand.
+    pub(crate) fn log_review(&self, review: Review) {
+        self.append(&Line::Review(review));
     }
 
     /// The attempt log, when attempts are logged.
@@ -117,6 +175,7 @@ impl GateLive {
             compare: Some(of.compare.to_string()),
             run: Some(of.run.to_string()),
             task: of.task.map(str::to_string),
+            copy: of.copy.map(copy_at),
         }));
     }
 
@@ -142,6 +201,7 @@ impl GateLive {
             compare: None,
             run: None,
             task: None,
+            copy: None,
         }));
     }
 }
@@ -158,13 +218,17 @@ pub(crate) struct CaughtUp {
     /// Runs left out: no saved session, or one that does not line up
     /// with the record
     pub skipped: usize,
+    /// Check results written again with the place of the run's copy
+    pub placed: usize,
 }
 
 /// Write to `log` the attempts and check results of the comparisons held
 /// by `hosts` (each with its name) that it does not have yet, rebuilt
 /// from `store` and the sessions saved in `sessions`. Only runs whose
 /// check ran are taken: the others have nothing to score an attempt
-/// against.
+/// against. A run whose check result is logged without the place of its
+/// copy gets the result again with it, so what the run changed can be
+/// read back while the copy is kept.
 pub(crate) fn catch_up(
     store: &dyn ReadStore,
     hosts: &[(AgentId, String)],
@@ -179,20 +243,21 @@ pub(crate) fn catch_up(
             return caught;
         }
     };
-    let have: HashSet<(String, String, bool)> = read
+    let have: HashSet<(String, String, Kind)> = read
         .lines
         .iter()
         .map(|line| {
-            let (agent, prompt, attempt) = line.key();
-            (agent.to_string(), prompt.to_string(), attempt)
+            let (agent, prompt, kind) = line.key();
+            (agent.to_string(), prompt.to_string(), kind)
         })
         .collect();
-    let judged: HashSet<&str> = read
+    // The last check result logged for each run.
+    let judged: HashMap<&str, &Truth> = read
         .lines
         .iter()
         .filter_map(|line| match line {
             Line::Truth(truth) if truth.source == TruthSource::TaskCheck => {
-                Some(truth.agent.as_str())
+                Some((truth.agent.as_str(), truth))
             }
             _ => None,
         })
@@ -203,7 +268,21 @@ pub(crate) fn catch_up(
         };
         for run in &payload.runs {
             let agent = run.agent_id.to_hex();
-            if run.check_passed.is_none() || judged.contains(agent.as_str()) {
+            if run.check_passed.is_none() {
+                continue;
+            }
+            if let Some(logged) = judged.get(agent.as_str()) {
+                if logged.copy.is_none() {
+                    let placed = Truth {
+                        copy: Some(copy_at(&run.copy)),
+                        ..(*logged).clone()
+                    };
+                    if let Err(e) = log.append(&Line::Truth(placed)) {
+                        warn!(path = %log.path().display(), error = %e, "Could not write Gate's attempt log");
+                        return caught;
+                    }
+                    caught.placed += 1;
+                }
                 continue;
             }
             caught.runs += 1;
@@ -215,15 +294,15 @@ pub(crate) fn catch_up(
                 continue;
             };
             for line in lines {
-                let (agent, prompt, attempt) = line.key();
-                if have.contains(&(agent.to_string(), prompt.to_string(), attempt)) {
+                let (agent, prompt, kind) = line.key();
+                if have.contains(&(agent.to_string(), prompt.to_string(), kind)) {
                     continue;
                 }
                 if let Err(e) = log.append(&line) {
                     warn!(path = %log.path().display(), error = %e, "Could not write Gate's attempt log");
                     return caught;
                 }
-                if attempt {
+                if kind == Kind::Attempt {
                     caught.attempts += 1;
                 } else {
                     caught.truths += 1;
@@ -249,14 +328,16 @@ impl GateLive {
                 return;
             };
             let caught = catch_up(store.as_ref(), &hosts, &sessions, log);
-            if caught.attempts + caught.truths > 0 {
+            if caught.attempts + caught.truths + caught.placed > 0 {
                 info!(
                     runs = caught.runs,
                     attempts = caught.attempts,
                     truths = caught.truths,
                     skipped = caught.skipped,
+                    placed = caught.placed,
                     "Gate's attempt log caught up on recorded comparisons"
                 );
+                live.learn_tiers();
             }
         };
         match tokio::runtime::Handle::try_current() {
@@ -326,6 +407,7 @@ fn rebuilt(
             compare: Some(name.to_string()),
             run: Some(run.name.clone()),
             task: run.task.clone(),
+            copy: Some(copy_at(&run.copy)),
         });
     lines.extend(attempts.into_iter().map(Line::Attempt));
     lines.extend(truth.map(Line::Truth));
@@ -334,7 +416,7 @@ fn rebuilt(
 
 /// The text of a message the user (or the harness in the user's place)
 /// sent; `None` for tool results and the model's messages.
-fn sent_text(message: &Message) -> Option<String> {
+pub(crate) fn sent_text(message: &Message) -> Option<String> {
     let sent = message.role == Role::User
         && !message
             .content
@@ -373,7 +455,9 @@ fn attempts_of(
                     sent_text(message).is_some_and(|text| text.trim() == wanted)
                 })?;
             cursor = at + 1;
-            if prompt.text.contains(NUDGE_PROMPT) {
+            // Gate's own messages to the model carry on the attempt they
+            // are sent in.
+            if prompt.text.contains(NUDGE_PROMPT) || prompt.text.contains(REPAIR_OPENING) {
                 continue;
             }
             // A prompt recorded for a move to a stronger model carries no

@@ -39,13 +39,21 @@ const REFUSING_MODEL: &str = "claude/claude-sonnet-4-6";
 /// asked to "reply unverified" ends on the fast tier saying its work
 /// isn't verified, and Gate's judge of unverified work blames such a
 /// reply when the request says "review: blame", finds it fine when it
-/// says "review: fine", and gives no verdict otherwise. The
+/// says "review: fine", and gives no verdict otherwise. Gate's review of
+/// work about to stand finds it unfinished when the request says
+/// "inspect: blame", finds it unfinished until the model was sent back
+/// to it when it says "inspect: once", finds it done when it says
+/// "inspect: fine", and gives no verdict otherwise; a model sent back to
+/// its work replies that it fixed what the review found. The
 /// comparison judge prefers the first attempt, and, given what the user
 /// kept, rates it as good as that and the second worse.
 struct GatedProvider {
     inner: MockProvider,
     gate: Arc<Semaphore>,
 }
+
+/// What a model sent back to its work by Gate's review replies.
+const REPAIRED_REPLY: &str = "Fixed what the review found.";
 
 #[async_trait]
 impl ModelProvider for GatedProvider {
@@ -82,6 +90,19 @@ impl ModelProvider for GatedProvider {
                 "The change is untested and wrong.\nVERDICT: MODEL"
             } else if disowned && asked.contains("review: fine") {
                 "The change is right.\nVERDICT: OK"
+            } else {
+                "Hard to say."
+            };
+            return MockProvider::simple_response(reply).complete(request).await;
+        }
+        if request.system == aura_agent_gate::turn_judge::REVIEW_SYSTEM_PROMPT {
+            let asked = last.as_deref().unwrap_or_default();
+            let repaired = asked.contains(REPAIRED_REPLY);
+            let once = asked.contains("inspect: once");
+            let reply = if asked.contains("inspect: blame") || (once && !repaired) {
+                "1. The fix misses the empty case.\nVERDICT: MODEL"
+            } else if once || asked.contains("inspect: fine") {
+                "Every requirement is met.\nVERDICT: OK"
             } else {
                 "Hard to say."
             };
@@ -170,6 +191,15 @@ impl ModelProvider for GatedProvider {
                 .any(|m| m.text_content().contains("reply unverified"));
         if disowns {
             return MockProvider::simple_response("I made the change, but it isn't verified.")
+                .complete(request)
+                .await;
+        }
+        let sent_back = !auxiliary
+            && last
+                .as_deref()
+                .is_some_and(|text| text.contains(aura_agent_gate::followup::REPAIR_OPENING));
+        if sent_back {
+            return MockProvider::simple_response(REPAIRED_REPLY)
                 .complete(request)
                 .await;
         }
@@ -2320,7 +2350,80 @@ async fn debugging_turn_under_gate(
     String,
     [Option<(u32, u32)>; 2],
 ) {
-    let (fixture, mut commands) = fixture();
+    debugging_turn_under(steady_gate(), text).await
+}
+
+/// [`steady_gate`] that reviews work about to stand as `review` says,
+/// with an attempt log (in the folder returned) in which checked work
+/// that changed no file has been wrong often enough to be reviewed.
+fn reviewing_gate(review: aura_config::ReviewMode) -> (GateLive, TempDir) {
+    use aura_agent_gate::attempt_log::{Attempt, AttemptLog, Line, Terms, Truth, TruthSource};
+    use aura_agent_gate::evidence::Evidence;
+    let dir = TempDir::new().unwrap();
+    let log = AttemptLog::in_data_dir(dir.path());
+    let agent = AgentId::generate().to_hex();
+    for n in 0..10u8 {
+        let unchanged = n < 5;
+        let ended = OutcomePayload {
+            prompt_tx: Hash::from_content(&[n]),
+            category: PromptCategory::Debugging,
+            model: "aura-claude-haiku-4-5".to_string(),
+            success: Some(true),
+            signal: OutcomeSignal::ChecksPassed,
+            cost_usd: 0.01,
+            subtask_cost_usd: 0.0,
+            latency_ms: 10,
+        };
+        let terms = Terms {
+            difficulty: None,
+            led: Some(false),
+            routed: true,
+        };
+        let evidence = Evidence {
+            checks_run: 1,
+            files_changed: Some(u32::from(!unchanged)),
+            reply: "Done.".to_string(),
+            ..Evidence::default()
+        };
+        let attempt = Attempt::new(u64::from(n), agent.clone(), &ended, terms, evidence);
+        let truth = Truth {
+            at_ms: u64::from(n),
+            agent: agent.clone(),
+            prompt_tx: attempt.prompt_tx.clone(),
+            source: TruthSource::TaskCheck,
+            passed: !unchanged,
+            compare: None,
+            run: None,
+            task: None,
+            copy: None,
+        };
+        log.append(&Line::Attempt(attempt)).unwrap();
+        log.append(&Line::Truth(truth)).unwrap();
+    }
+    let gate = GateLive::new(aura_config::GateConfig {
+        explore_rate: 0.0,
+        review,
+        ..aura_config::GateConfig::defaults()
+    });
+    gate.log_attempts_to(log);
+    assert_eq!(
+        gate.tiers().of(aura_agent_gate::evidence::Flag::NoChanges),
+        aura_agent_gate::attempt_log::Tier::Review
+    );
+    (gate, dir)
+}
+
+/// [`debugging_turn_under_gate`] with Gate's table `gate`.
+async fn debugging_turn_under(
+    gate: GateLive,
+    text: &str,
+) -> (
+    Vec<Route>,
+    Vec<(String, OutcomeSignal)>,
+    String,
+    [Option<(u32, u32)>; 2],
+) {
+    let (fixture, mut commands) = fixture_with_gate(gate);
     let mut b = borrowed(&fixture);
     let links = b.links.clone();
     let first = fixture.first;
@@ -2436,6 +2539,159 @@ async fn a_passed_check_the_reply_disowns_stands_when_the_judge_finds_the_work_d
     assert_eq!(outcomes, [(HAIKU.to_string(), OutcomeSignal::ChecksPassed)]);
     assert!(shown.contains("The change is right."), "{shown}");
     assert_eq!(rows, [Some((1, 1)), None]);
+}
+
+#[tokio::test]
+async fn hard_work_a_review_finds_unfinished_goes_back_to_its_model_once() {
+    use aura_agent_gate::attempt_log::Line;
+    use aura_agent_gate::turn_judge::Answer;
+    let (gate, _log_dir) = reviewing_gate(aura_config::ReviewMode::On);
+    let (fixture, mut commands) = fixture_with_gate(gate);
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+    unrestricted(&mut state, &links, first).await;
+    drain(&mut commands);
+
+    let text = "fix it: run passing check (inspect: once)";
+    let finished = turn(&mut state, &mut done, &links, first, text).await;
+    assert_eq!(finished.failure, None);
+    let shown = system_texts(&drain(&mut commands));
+
+    let prompts = prompts_of(&state, first);
+    let model = prompts[0].2.route.model.clone();
+    assert!(
+        prompts
+            .iter()
+            .all(|(_, _, p)| p.route.reason != RouteReason::Escalate),
+        "the work stays on its model: {shown}"
+    );
+    let sent_back: Vec<&str> = prompts
+        .iter()
+        .map(|(_, _, p)| p.text.as_str())
+        .filter(|text| text.contains(aura_agent_gate::followup::REPAIR_OPENING))
+        .collect();
+    assert_eq!(sent_back.len(), 1, "{shown}");
+    assert!(
+        sent_back[0].contains("1. The fix misses the empty case."),
+        "{}",
+        sent_back[0]
+    );
+    let outcomes: Vec<(String, OutcomeSignal)> = outcomes_of(&state, first)
+        .into_iter()
+        .map(|(_, o)| (o.model, o.signal))
+        .collect();
+    assert_eq!(
+        outcomes,
+        [(model.clone(), OutcomeSignal::ChecksPassed)],
+        "one attempt, which stands once the review finds nothing missing: {shown}"
+    );
+    for part in [
+        "work is not finished.\n1. The fix misses the empty case.",
+        "gate: sending the review's findings back to",
+        "found nothing missing in",
+    ] {
+        assert!(shown.contains(part), "{part}: {shown}");
+    }
+
+    // Both reviews are in the attempt log, with why they were asked.
+    let lines = fixture
+        .hub
+        .gate
+        .attempt_log()
+        .unwrap()
+        .read()
+        .unwrap()
+        .lines;
+    let reviews: Vec<_> = lines
+        .iter()
+        .filter_map(|line| match line {
+            Line::Review(review) => Some(review),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reviews
+            .iter()
+            .map(|review| review.verdict)
+            .collect::<Vec<_>>(),
+        [Answer::Model, Answer::Ok]
+    );
+    for review in &reviews {
+        assert_eq!(review.why, ["no_changes"]);
+        assert!(review.acted && !review.replayed);
+        assert_eq!(review.variant, "plain");
+        assert_eq!(review.prompt_tx, prompts[0].1.to_hex());
+    }
+    assert!(
+        lines.iter().any(
+            |line| matches!(line, Line::Attempt(attempt) if attempt.prompt_tx == prompts[0].1.to_hex())
+        ),
+        "{lines:?}"
+    );
+}
+
+#[tokio::test]
+async fn work_a_review_finds_unfinished_twice_moves_to_a_stronger_model() {
+    let (gate, _log_dir) = reviewing_gate(aura_config::ReviewMode::On);
+    let (routes, outcomes, shown, _) =
+        debugging_turn_under(gate, "fix it: run passing check (inspect: blame)").await;
+
+    let first = routes[0].model.clone();
+    assert_eq!(
+        outcomes[0],
+        (first.clone(), OutcomeSignal::JudgedFail),
+        "the check that passed does not count for the model: {shown}"
+    );
+    let moved: Vec<&Route> = routes
+        .iter()
+        .filter(|route| route.reason == RouteReason::Escalate)
+        .collect();
+    assert!(!moved.is_empty(), "{shown}");
+    assert_ne!(moved[0].model, first);
+    assert_eq!(
+        shown
+            .matches("gate: sending the review's findings back to")
+            .count(),
+        1,
+        "sent back once, on the model it started on: {shown}"
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|(_, signal)| *signal == OutcomeSignal::JudgedFail)
+            .count(),
+        2,
+        "what the next model leaves unfinished moves on again: {outcomes:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_logged_review_changes_nothing_about_the_turn() {
+    let text = "fix it: run passing check (inspect: blame)";
+    let (gate, _log_dir) = reviewing_gate(aura_config::ReviewMode::Log);
+    let (routes, outcomes, shown, _) = debugging_turn_under(gate, text).await;
+    assert_eq!(routes.len(), 1, "{shown}");
+    assert_eq!(
+        outcomes,
+        [(routes[0].model.clone(), OutcomeSignal::ChecksPassed)]
+    );
+    assert!(
+        shown.contains("work looks unfinished (logged only; AURA_GATE_REVIEW=on acts on it)."),
+        "{shown}"
+    );
+
+    let (gate, _log_dir) = reviewing_gate(aura_config::ReviewMode::Off);
+    let (routes, outcomes, shown, _) = debugging_turn_under(gate, text).await;
+    assert_eq!(routes.len(), 1);
+    assert_eq!(
+        outcomes,
+        [(routes[0].model.clone(), OutcomeSignal::ChecksPassed)]
+    );
+    assert!(!shown.contains("Gate's review"), "{shown}");
 }
 
 #[tokio::test]

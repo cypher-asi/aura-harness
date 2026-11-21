@@ -13,9 +13,11 @@
 //!
 //! When it is given an attempt log ([`GateLive::log_attempts_to`]), each
 //! attempt and what later proves it right or wrong is appended there; see
-//! [`super::gate_log`].
+//! [`super::gate_log`]. What the log says each sign of failure has
+//! earned ([`GateLive::tiers`]) decides which signs have work reviewed
+//! before it stands.
 
-use aura_agent_gate::attempt_log::AttemptLog;
+use aura_agent_gate::attempt_log::{AttemptLog, Tiers};
 use aura_agent_gate::{Candidate, Decision, GateStats, SplitMix64, Way, Work};
 use aura_agent_kernel::RecordObserver;
 use aura_config::GateConfig;
@@ -55,6 +57,9 @@ pub struct GateLive {
     working_on: Mutex<HashMap<AgentId, String>>,
     /// Where attempts are logged, once set
     pub(super) log: OnceLock<AttemptLog>,
+    /// What each sign of failure has earned in the attempt log, as last
+    /// read
+    pub(super) tiers: Mutex<Tiers>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -84,7 +89,14 @@ impl GateLive {
             recent: Mutex::new(VecDeque::with_capacity(RECENT_DECISIONS)),
             working_on: Mutex::new(HashMap::new()),
             log: OnceLock::new(),
+            tiers: Mutex::new(Tiers::default()),
         }
+    }
+
+    /// What each sign of failure has earned in the attempt log, as last
+    /// read ([`Self::learn_tiers`]); nothing before that.
+    pub(crate) fn tiers(&self) -> Tiers {
+        lock(&self.tiers).clone()
     }
 
     /// Note that Gate sent the work `agent` is starting to `model`.

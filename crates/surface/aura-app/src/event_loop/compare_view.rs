@@ -600,6 +600,10 @@ fn routing(run: &CompareRun) -> Option<String> {
     if nudged > 0 {
         let _ = write!(text, ", asked to check {nudged}×");
     }
+    let sent_back: u32 = routed.iter().map(|t| t.sent_back).sum();
+    if sent_back > 0 {
+        let _ = write!(text, ", sent back {sent_back}×");
+    }
     let moved: u32 = routed.iter().map(|t| t.escalations).sum();
     if moved > 0 {
         let _ = write!(text, ", moved up {moved}×");

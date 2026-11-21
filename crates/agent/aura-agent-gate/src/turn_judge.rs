@@ -11,7 +11,10 @@
 //!
 //! The same judge reviews work that ran no check but looks wrong (see
 //! [`crate::followup`]), through [`unverified_request`]: there it may
-//! also find the work done (`OK`).
+//! also find the work done (`OK`). And it reviews work that is about to
+//! stand, through [`review_request`]: hard work, or work that shows a
+//! sign of failure the attempt log backs, is gone through against the
+//! request before it counts as done.
 //!
 //! This module builds the request and reads the verdict; the caller
 //! sends the request through the agent's kernel, so the call is recorded
@@ -22,6 +25,7 @@ use aura_model::{
     Message, ModelCallPurpose, ModelRequest, ModelRequestKind, ReasonerError, ThinkingEffort,
     ToolChoice,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::followup::Suspicion;
 use crate::judge::{cut, MAX_DIFF, MAX_REPLY};
@@ -42,8 +46,8 @@ const MAX_REPLY_TOKENS: u32 = 512;
 pub const SYSTEM_PROMPT: &str = "\
 You are reviewing an attempt at a task a user gave a coding agent. The attempt failed: its last \
 test or build command failed, or the run ended in an error. You see the user's request, the \
-changes the attempt made to files as a unified diff (changes made through shell commands are \
-not shown), its final reply, and how it failed. Decide what caused the failure:
+changes the attempt made to files as a unified diff (it may lack changes made through shell \
+commands), its final reply, and how it failed. Decide what caused the failure:
 
 - MODEL: the attempt's own work is wrong or incomplete. It misunderstood the request, made a \
 wrong or partial change, or gave up. A more capable model would likely have done better.
@@ -64,8 +68,8 @@ pub const UNVERIFIED_SYSTEM_PROMPT: &str = "\
 You are reviewing an attempt at a task a user gave a coding agent. Nothing shows that its work \
 is right: it ran no test or build that checks the work, or it ran one and its own final reply \
 says the work was not verified. Something about it looks wrong. You see the user's request, the \
-changes the attempt made to files as a unified diff (changes made through shell commands are \
-not shown, but the commands it ran are listed), the last test or build it ran with what that \
+changes the attempt made to files as a unified diff (it may lack changes made through shell \
+commands; the commands it ran are listed), the last test or build it ran with what that \
 printed when it ran one, its final reply, and what looks wrong. Decide whether the work is done:
 
 - MODEL: the attempt's own work is wrong, incomplete or missing. It misunderstood the request, \
@@ -81,6 +85,49 @@ way, or the request cannot be carried out as asked.
 Judge the work itself, not how it was described. Say in one to three sentences what you found, \
 concretely enough to help whoever takes the work over. Then end with one line that is exactly \
 `VERDICT: MODEL`, `VERDICT: OK` or `VERDICT: OTHER`.";
+
+/// Longest diff shown to the reviewer of work about to stand, in
+/// characters: it has to see the whole change to say what is missing.
+pub const MAX_REVIEW_DIFF: usize = 60_000;
+
+/// Room for the reviewer's findings and the verdict line.
+const MAX_REVIEW_TOKENS: u32 = 1_500;
+
+/// Room for the reviewer's reasoning, findings and verdict when it
+/// thinks first.
+const MAX_THINKING_REVIEW_TOKENS: u32 = 12_000;
+
+/// System prompt of every review of work about to stand (see
+/// [`crate::followup`]).
+pub const REVIEW_SYSTEM_PROMPT: &str = "\
+You are reviewing an attempt at a task a user gave a coding agent, before the attempt is accepted. \
+You see the user's request, what the attempt changed as a unified diff, the commands it ran, the \
+last tests or builds it ran with what they printed, its final reply, and why it is being \
+reviewed. Decide whether the work does what was asked.
+
+Go through the request one requirement at a time: every behaviour, name, signature, message \
+text, default, edge case and file it asks for. For each, find where the diff does it. A \
+requirement the diff does not meet, meets only in part, or meets differently from what the \
+request says (another name, message or default; a case left out; a file not touched that has to \
+change) is a finding. Then read the diff for mistakes of its own: code that cannot work as \
+written, a call to something that does not exist, a change that breaks what was there.
+
+Do not take the attempt's word for it. Its reply says what it meant to do. A check that exited \
+with success proves only what that check covers, and a test run that does not exercise the \
+change says nothing about it. Failures the checks printed count against the work unless the diff \
+plainly cannot have caused them.
+
+- MODEL: there is at least one finding: the work is wrong or incomplete in a way that matters to \
+what was asked. A more capable model would likely have done better.
+- OK: every requirement is met as far as the diff shows and nothing in it looks broken. Missing \
+tests, style, and things the request did not ask for are no reason to answer MODEL.
+- OTHER: the work could not be done for reasons outside the attempt: the environment got in the \
+way, or the request cannot be carried out as asked.
+
+A finding has to name what the request asks for and what the diff does instead; when you have \
+none, answer OK. List the findings as short numbered points, each concrete enough to act on \
+without rereading the request: the file, the function, what is asked, what is there. Then end \
+with one line that is exactly `VERDICT: MODEL`, `VERDICT: OK` or `VERDICT: OTHER`.";
 
 /// What the judge sees of a failed turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -260,12 +307,142 @@ pub fn unverified_request(
         .try_build()
 }
 
-/// The verdict in the judge's `reply`: its last `VERDICT:` line, with the
-/// text before it as the reasons. `MODEL` puts the fault on the model;
-/// `OTHER`, and `OK` from the judge of unverified turns, do not. `None`
-/// when the reply has no such line or the line names no answer.
+/// What the reviewer of work about to stand sees of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Standing<'a> {
+    /// What the user asked.
+    pub task: &'a str,
+    /// What the attempt changed, as a unified diff; empty when it
+    /// changed nothing.
+    pub diff: &'a str,
+    /// Whether `diff` holds every change: those made by commands it ran
+    /// as well as those made with the file tools.
+    pub whole: bool,
+    /// The commands it ran, one per line, latest last.
+    pub commands: &'a str,
+    /// The last tests or builds it ran and what they printed; empty when
+    /// it ran none.
+    pub checks: &'a str,
+    /// Its final reply.
+    pub reply: &'a str,
+    /// Why it is reviewed, one reason per entry.
+    pub why: &'a [String],
+}
+
+/// How the reviewer of work about to stand is asked.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ReviewVariant {
+    /// With thinking off: one pass over the request and the diff.
+    #[default]
+    Plain,
+    /// With room to reason before it answers.
+    Thinking,
+}
+
+impl ReviewVariant {
+    /// The variant's name as logged, e.g. `plain`.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Thinking => "thinking",
+        }
+    }
+}
+
+/// The reviewer's message about `standing`. Nothing in it names the
+/// model that did the work.
 #[must_use]
-pub fn parse(reply: &str) -> Option<Verdict> {
+pub fn review_prompt(standing: &Standing<'_>) -> String {
+    let or = |text: &str, empty: &str, shown: String| {
+        if text.trim().is_empty() {
+            empty.to_string()
+        } else {
+            shown
+        }
+    };
+    let changes = if standing.whole {
+        "## Changes (everything the attempt changed)"
+    } else {
+        "## Changes (made with the file tools; changes made by the commands it ran are not shown)"
+    };
+    let why: Vec<String> = standing.why.iter().map(|why| format!("- {why}")).collect();
+    format!(
+        "## The user's request\n\n{}\n\n\
+         {changes}\n```diff\n{}\n```\n\n\
+         ## Commands it ran\n{}\n\n\
+         ## Its last tests or builds\n{}\n\n\
+         ## Final reply\n{}\n\n\
+         ## Why it is reviewed\n{}",
+        cut(standing.task, MAX_TASK, "request"),
+        or(
+            standing.diff,
+            "(no file changes recorded)",
+            cut(standing.diff, MAX_REVIEW_DIFF, "diff")
+        ),
+        or(
+            standing.commands,
+            "(none)",
+            tail(standing.commands, MAX_FAILURE)
+        ),
+        or(
+            standing.checks,
+            "(it ran none)",
+            tail(standing.checks, 2 * MAX_FAILURE)
+        ),
+        or(
+            standing.reply,
+            "(no reply)",
+            cut(standing.reply, MAX_REPLY, "reply")
+        ),
+        why.join("\n"),
+    )
+}
+
+/// The request that asks `model` to review `standing`, asked as
+/// `variant` says and sent with the user's `auth_token` when the route
+/// needs one.
+///
+/// # Errors
+/// Returns the builder's error when `model` is empty.
+pub fn review_request(
+    model: &str,
+    standing: &Standing<'_>,
+    variant: ReviewVariant,
+    auth_token: Option<String>,
+) -> Result<ModelRequest, ReasonerError> {
+    let (effort, max_tokens) = match variant {
+        ReviewVariant::Plain => (ThinkingEffort::Off, MAX_REVIEW_TOKENS),
+        ReviewVariant::Thinking => (ThinkingEffort::High, MAX_THINKING_REVIEW_TOKENS),
+    };
+    ModelRequest::builder(model, REVIEW_SYSTEM_PROMPT)
+        .message(Message::user(review_prompt(standing)))
+        .tool_choice(ToolChoice::None)
+        .max_tokens(max_tokens)
+        .thinking_effort(Some(effort))
+        .auth_token(auth_token)
+        .request_kind(ModelRequestKind::Auxiliary)
+        .purpose(ModelCallPurpose::Judge)
+        .try_build()
+}
+
+/// What a judge answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Answer {
+    /// The model's work is wrong, incomplete or missing.
+    Model,
+    /// The work is done.
+    Ok,
+    /// Something outside the work got in the way.
+    Other,
+}
+
+/// The answer in the judge's `reply`: its last `VERDICT:` line, with the
+/// text before it as the reasons. `None` when the reply has no such line
+/// or the line names no answer.
+#[must_use]
+pub fn parse_answer(reply: &str) -> Option<(Answer, String)> {
     let reply = reply
         .rsplit_once("</think>")
         .map_or(reply, |(_, after)| after);
@@ -276,10 +453,10 @@ pub fn parse(reply: &str) -> Option<Verdict> {
         .last()?;
     let upper = line.to_ascii_uppercase();
     let answer = upper.split("VERDICT:").nth(1)?;
-    let answer = answer.trim_matches(|c: char| !c.is_ascii_alphabetic());
-    let at_fault = match answer {
-        "MODEL" => true,
-        "OTHER" | "OK" => false,
+    let answer = match answer.trim_matches(|c: char| !c.is_ascii_alphabetic()) {
+        "MODEL" => Answer::Model,
+        "OK" => Answer::Ok,
+        "OTHER" => Answer::Other,
         _ => return None,
     };
     let reasons = reply
@@ -289,7 +466,19 @@ pub fn parse(reply: &str) -> Option<Verdict> {
         .join("\n")
         .trim()
         .to_string();
-    Some(Verdict { at_fault, reasons })
+    Some((answer, reasons))
+}
+
+/// The verdict in the judge's `reply` ([`parse_answer`]): `MODEL` puts
+/// the fault on the model; `OTHER`, and `OK` from the judge of unverified
+/// turns, do not.
+#[must_use]
+pub fn parse(reply: &str) -> Option<Verdict> {
+    let (answer, reasons) = parse_answer(reply)?;
+    Some(Verdict {
+        at_fault: answer == Answer::Model,
+        reasons,
+    })
 }
 
 /// Whether `judge` reviews failed work done on `model`: only work on a
