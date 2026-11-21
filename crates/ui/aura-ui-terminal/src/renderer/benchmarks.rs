@@ -5,8 +5,8 @@ use super::panels::body_block;
 use super::text::display_width;
 use crate::app::benchmarks::{BenchMode, BenchState, FormField, WorkChoice};
 use crate::events::{
-    arm_letter, cost_per_fix, BenchArm, BenchRun, BenchStatus, BenchTaskCell, BenchTaskSetup,
-    BenchTurn, BenchVerdict, BenchView,
+    arm_letter, cost_per_fix, BenchArm, BenchLiveRun, BenchRun, BenchStatus, BenchTaskCell,
+    BenchTaskSetup, BenchTokens, BenchTurn, BenchVerdict, BenchView,
 };
 use crate::{App, Theme};
 use ratatui::{
@@ -632,6 +632,28 @@ fn reference_mark(rating: Option<&str>) -> &'static str {
     }
 }
 
+/// An arm's tokens per model: its ended runs' `done` and what its runs
+/// under way, `live`, have used so far, most expensive first.
+fn tokens_so_far<'a>(
+    done: &[BenchTokens],
+    live: impl Iterator<Item = &'a BenchLiveRun>,
+) -> Vec<BenchTokens> {
+    let mut rows = done.to_vec();
+    for t in live.flat_map(|r| &r.tokens) {
+        match rows.iter_mut().find(|row| row.model == t.model) {
+            Some(row) => {
+                row.calls += t.calls;
+                row.input_tokens += t.input_tokens;
+                row.output_tokens += t.output_tokens;
+                row.cost_usd += t.cost_usd;
+            }
+            None => rows.push(t.clone()),
+        }
+    }
+    rows.sort_by(|x, y| y.cost_usd.total_cmp(&x.cost_usd));
+    rows
+}
+
 /// One benchmark's numbers; `frame` lights what is under way while it
 /// runs.
 #[allow(clippy::too_many_lines)]
@@ -712,6 +734,25 @@ fn detail_lines(
 
     let pair = |f: &dyn Fn(&BenchArm) -> String| [f(a), f(b)];
     let none = || [String::new(), String::new()];
+    let live_of = |arm: usize| view.live.iter().filter(move |r| r.arm.min(1) == arm);
+    let finished = |arm: usize| {
+        let done = &view.arms[arm];
+        if view.status != BenchStatus::Running {
+            return format!("{}/{}", done.finished, done.runs);
+        }
+        let per_arm = usize::try_from(view.repeats.max(1))
+            .unwrap_or(usize::MAX)
+            .saturating_mul(view.tasks.len().max(1));
+        let planned = per_arm.max(done.runs + live_of(arm).count());
+        let working = live_of(arm).filter(|r| r.wall_ms.is_some()).count();
+        let mut text = format!("{}/{planned}", done.finished);
+        if working > 0 {
+            text.push_str(&format!(", {working} working"));
+        }
+        text
+    };
+    let spent =
+        |arm: usize| view.arms[arm].total_cost_usd + live_of(arm).map(|r| r.cost_usd).sum::<f64>();
     let mut summary = Vec::new();
     let mut add = |label: &str, [x, y]: [String; 2], [dx, dy]: [String; 2]| {
         summary.push(Row::Cells(vec![
@@ -722,11 +763,7 @@ fn detail_lines(
             (dy, good),
         ]));
     };
-    add(
-        "finished",
-        pair(&|arm| format!("{}/{}", arm.finished, arm.runs)),
-        none(),
-    );
+    add("finished", [finished(0), finished(1)], none());
     add(
         "time",
         pair(&|arm| arm.median_wall_ms.map_or_else(|| "-".to_string(), duration)),
@@ -734,8 +771,8 @@ fn detail_lines(
     );
     add(
         "cost",
-        pair(&|arm| money(arm.total_cost_usd)),
-        saving(Some(a.total_cost_usd), Some(b.total_cost_usd)),
+        [money(spent(0)), money(spent(1))],
+        saving(Some(spent(0)), Some(spent(1))),
     );
     add(
         "cost/run",
@@ -939,13 +976,14 @@ fn detail_lines(
         if i > 0 {
             rows.push(Row::Rule);
         }
-        if arm.tokens.is_empty() {
+        let used = tokens_so_far(&arm.tokens, live_of(i));
+        if used.is_empty() {
             rows.push(Row::Cells(vec![
                 cell(arm_letter(i).to_string()),
                 ("no model calls".to_string(), muted),
             ]));
         }
-        for (n, t) in arm.tokens.iter().enumerate() {
+        for (n, t) in used.iter().enumerate() {
             rows.push(Row::Cells(vec![
                 cell(if n == 0 { arm_letter(i) } else { "" }.to_string()),
                 cell(short_model(&t.model).to_string()),
@@ -1616,7 +1654,7 @@ mod tests {
 
     #[test]
     fn a_running_benchmark_shows_its_setup_and_the_runs_under_way() {
-        use crate::events::{BenchLiveRun, BenchTaskRow};
+        use crate::events::BenchTaskRow;
         let theme = Theme::default();
         let mut view = view();
         view.status = BenchStatus::Running;
@@ -1641,6 +1679,13 @@ mod tests {
                 task: Some("swe/ansible-1".to_string()),
                 wall_ms: Some(72_000),
                 cost_usd: 0.04,
+                tokens: vec![BenchTokens {
+                    model: "claude-sonnet-4-6".to_string(),
+                    calls: 3,
+                    input_tokens: 42_000,
+                    output_tokens: 1_500,
+                    cost_usd: 0.04,
+                }],
                 ..BenchLiveRun::default()
             },
             BenchLiveRun {
@@ -1684,11 +1729,41 @@ mod tests {
             live("waiting for its task's files").contains(" b-2 "),
             "{shown}"
         );
+        let finished = row("finished ");
+        assert!(finished.contains("2/8, 1 working"), "{finished}");
+        assert!(finished.ends_with("2/8"), "{finished}");
+        assert!(row("cost ").contains("$0.16"), "spent so far: {shown}");
+        assert!(row("A  sonnet-4-6 ").contains("42k"), "{shown}");
+    }
+
+    #[test]
+    fn runs_under_way_add_to_tokens_used_so_far() {
+        let token = |model: &str, cost: f64| BenchTokens {
+            model: model.to_string(),
+            calls: 1,
+            input_tokens: 1_000,
+            output_tokens: 100,
+            cost_usd: cost,
+        };
+        let live = [
+            BenchLiveRun {
+                tokens: vec![token("opus", 0.5), token("haiku", 0.01)],
+                ..BenchLiveRun::default()
+            },
+            BenchLiveRun {
+                tokens: vec![token("sonnet", 0.2)],
+                ..BenchLiveRun::default()
+            },
+        ];
+        let used = tokens_so_far(&[token("sonnet", 0.1)], live.iter());
+        let models: Vec<&str> = used.iter().map(|t| t.model.as_str()).collect();
+        assert_eq!(models, ["opus", "sonnet", "haiku"]);
+        assert_eq!(used[1].calls, 2);
+        assert!((used[1].cost_usd - 0.3).abs() < 1e-9);
     }
 
     #[test]
     fn running_and_working_shimmer_while_it_runs() {
-        use crate::events::BenchLiveRun;
         let theme = Theme::default();
         let mut view = view();
         view.status = BenchStatus::Running;

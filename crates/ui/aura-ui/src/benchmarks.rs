@@ -249,6 +249,8 @@ pub struct BenchLiveRun {
     pub wall_ms: Option<u64>,
     /// What its model calls have cost so far
     pub cost_usd: f64,
+    /// Tokens per model its calls have used so far
+    pub tokens: Vec<BenchTokens>,
 }
 
 /// The judge's verdict on one pair of runs.

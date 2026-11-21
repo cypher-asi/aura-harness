@@ -392,13 +392,18 @@ async fn show_live(ctx: &Context, payload: &ComparePayload) {
         .collect();
     view.live = live
         .into_iter()
-        .map(|(name, arm, task, working)| BenchLiveRun {
-            name,
-            arm: arm.index(),
-            task,
-            wall_ms: working
-                .map(|(_, since)| u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX)),
-            cost_usd: working.map_or(0.0, |(agent, _)| spent(&ctx.hub, agent)),
+        .map(|(name, arm, task, working)| {
+            let used = working.map_or_else(Vec::new, |(agent, _)| ctx.hub.tokens_by_model(agent));
+            BenchLiveRun {
+                name,
+                arm: arm.index(),
+                task,
+                wall_ms: working.map(|(_, since)| {
+                    u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX)
+                }),
+                cost_usd: used.iter().map(|row| row.cost_usd).sum(),
+                tokens: super::bench::tokens(&used),
+            }
         })
         .collect();
     let _ = ctx

@@ -148,7 +148,7 @@ fn status(status: &CompareStatus) -> BenchStatus {
     }
 }
 
-fn tokens(rows: &[ModelTokens]) -> Vec<BenchTokens> {
+pub(super) fn tokens(rows: &[ModelTokens]) -> Vec<BenchTokens> {
     rows.iter()
         .map(|row| BenchTokens {
             model: row.model.clone(),

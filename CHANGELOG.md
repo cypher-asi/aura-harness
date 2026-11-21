@@ -7,6 +7,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### BENCH: a running benchmark's numbers count the runs under way
+
+##### Fixed
+
+- A benchmark's detail view counted only the runs that had ended, so
+  while its first runs worked it read `finished 0/0`, `cost free` and
+  `no model calls` for each arm, even with dollars already spent; only
+  the runs table below moved. `finished` now reads against the runs
+  planned, with how many are working (`0/2, 2 working`), `cost` adds
+  what the runs under way have spent so far, and the tokens table adds
+  their tokens per model. Medians, cost per fix and the per-task cells
+  still wait for runs to end.
+
 ### Quitting keeps what running turns did
 
 ##### Fixed
