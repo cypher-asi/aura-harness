@@ -180,12 +180,15 @@ impl App {
         }
     }
 
-    /// Expand `pane` to fill the screen, or restore it, and focus it, as
-    /// its bar's expand button does.
+    /// Expand `pane` to fill the screen, or the side panel the right
+    /// column, or restore it, and focus it, as its bar's expand button
+    /// does.
     pub fn expand_pane(&mut self, pane: Pane) {
         self.focus_pane(pane);
-        if pane == Pane::Chat {
-            self.toggle_chat_expanded();
+        match pane {
+            Pane::Chat => self.toggle_chat_expanded(),
+            Pane::Side => self.toggle_side_expanded(),
+            Pane::Agents | Pane::Records => {}
         }
     }
 
@@ -255,6 +258,51 @@ mod tests {
         app.expand_pane(Pane::Chat);
         assert!(!app.chat_expanded());
         assert!(app.swarm_panel_visible());
+        assert!(app.record_panel_visible());
+        assert!(app.sandbox_panel_visible());
+    }
+
+    #[test]
+    fn the_side_panel_maximizes_over_the_record_panel_and_back() {
+        let mut app = App::new();
+        let splits = PaneSplits {
+            records: Some(0.3),
+            ..PaneSplits::default()
+        };
+        app.set_pane_splits(splits);
+        app.focus_pane(Pane::Records);
+        app.expand_pane(Pane::Side);
+        assert!(app.side_expanded());
+        assert_eq!(app.focus(), PanelFocus::Sandbox);
+        assert!(!app.record_panel_visible());
+        assert!(app.sandbox_panel_visible());
+        assert!(app.swarm_panel_visible());
+
+        // The chat expands over it and gives it back maximized.
+        app.expand_pane(Pane::Chat);
+        assert!(!app.sandbox_panel_visible());
+        app.expand_pane(Pane::Chat);
+        assert!(app.side_expanded());
+        assert!(!app.record_panel_visible());
+
+        app.expand_pane(Pane::Side);
+        assert!(!app.side_expanded());
+        assert!(app.record_panel_visible());
+        assert_eq!(app.pane_splits(), splits, "the split comes back");
+    }
+
+    #[test]
+    fn hiding_the_maximized_side_panel_brings_the_record_panel_back() {
+        let mut app = App::new();
+        app.expand_pane(Pane::Side);
+        let _ = app.handle_command("/files");
+        assert!(!app.side_expanded());
+        assert!(app.record_panel_visible());
+
+        let _ = app.handle_command("/files");
+        app.expand_pane(Pane::Side);
+        let _ = app.handle_command("/kernel");
+        assert!(!app.side_expanded(), "/kernel shows the record panel");
         assert!(app.record_panel_visible());
         assert!(app.sandbox_panel_visible());
     }

@@ -277,6 +277,7 @@ impl App {
     /// Show the Kernel panel's MEMBERS tab, focused, as `/members` does.
     pub(super) fn show_members(&mut self) {
         self.record_panel_visible = true;
+        self.side_expanded = false;
         self.show_records_tab(RecordsTab::Members);
         self.focus = PanelFocus::Records;
     }

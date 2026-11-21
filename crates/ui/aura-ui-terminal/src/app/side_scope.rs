@@ -1,6 +1,6 @@
 //! Whose items the side panel's PROCESSES, TRACE, PLANS and TASKS tabs
 //! list: the active agent's, with the agents it spawned, or every agent's
-//! in its project. The ALL button at the right end of the panel's header
+//! in its project. The `*` button at the right end of the panel's header
 //! bar switches every tab at once.
 
 use std::collections::HashSet;
@@ -21,7 +21,7 @@ pub enum SideScope {
 
 impl SideScope {
     /// Label of the button that switches to [`Self::Project`] and back.
-    pub const BUTTON: &'static str = "ALL";
+    pub const BUTTON: &'static str = "*";
 
     const fn toggled(self) -> Self {
         match self {
@@ -61,7 +61,7 @@ impl App {
         self.refresh_side_scope();
     }
 
-    /// Record where the side panel's ALL button was drawn this frame.
+    /// Record where the side panel's `*` button was drawn this frame.
     pub fn set_side_scope_area(&mut self, area: Option<Rect>) {
         self.areas.side_scope = area;
     }

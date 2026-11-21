@@ -1,0 +1,11 @@
+{
+  "id": "01a200179e9d0001",
+  "title": "when dragging and dropping projects, agents on left side, hit area should show horizontally as line between sections no…",
+  "state": "completed",
+  "agent_id": "9428f3642d1b5f6dcf197fd33fca8384ca8cc491e368ad2e9c8d00befa9707a3",
+  "agent_name": "Agent 677",
+  "items": [],
+  "summary": "Now I'll make the changes. First the drag state in `project_drag.rs`:",
+  "updated_ms": 1795298208175,
+  "created_ms": 1795297877661
+}

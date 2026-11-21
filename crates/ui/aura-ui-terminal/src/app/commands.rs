@@ -46,7 +46,13 @@ impl App {
                 }
             }
             "kernel" | "record" | "k" | "r" => {
-                self.record_panel_visible = !self.record_panel_visible;
+                if self.side_maximized() {
+                    // Hidden under the side panel, it comes back.
+                    self.side_expanded = false;
+                    self.record_panel_visible = true;
+                } else {
+                    self.record_panel_visible = !self.record_panel_visible;
+                }
                 if !self.record_panel_visible && self.focus == PanelFocus::Records {
                     self.focus = PanelFocus::Chat;
                 }
@@ -67,8 +73,13 @@ impl App {
                 self.sandbox_panel_visible = !self.sandbox_panel_visible;
                 if self.sandbox_panel_visible {
                     self.sandbox.refresh();
-                } else if self.focus == PanelFocus::Sandbox {
-                    self.focus = PanelFocus::Chat;
+                } else {
+                    // The Record panel gets the column back, and the
+                    // panel comes back to its own slot next time.
+                    self.side_expanded = false;
+                    if self.focus == PanelFocus::Sandbox {
+                        self.focus = PanelFocus::Chat;
+                    }
                 }
             }
             "expand" | "zoom" | "fullscreen" => self.toggle_chat_expanded(),

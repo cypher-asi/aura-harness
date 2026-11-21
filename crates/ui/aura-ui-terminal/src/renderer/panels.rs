@@ -36,11 +36,15 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     let hosted = app.host_chrome();
     let panel = area;
     let (bar, area) = header::split(area, hosted);
-    let expand = Some(header::ExpandButton {
-        expanded: app.chat_expanded(),
-        hovered: app.hover() == Some(HoverTarget::ExpandChat),
-    });
+    let expand = |cell| {
+        Some(header::ExpandButton {
+            expanded: app.chat_expanded(),
+            hovered: app.hover() == Some(HoverTarget::ExpandChat),
+            cell,
+        })
+    };
     if let Some((title, info)) = detail_header(app, theme) {
+        let expand = expand(header::expand_cell(bar, true));
         if !hosted {
             app.set_detail_close_area(header::close_cell(bar));
             app.set_chat_expand_area(header::expand_cell(bar, true));
@@ -60,6 +64,7 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
         header::show(frame, app, (Pane::Chat, panel, bar), &header, theme);
     } else {
         let tabs = header::tabs_beside_expand(bar);
+        let expand = expand(header::expand_cell(bar, false));
         if !hosted {
             app.set_chat_tabs_area(Rect { width: tabs, ..bar });
             app.set_chat_expand_area(header::expand_cell(bar, false));
@@ -1100,10 +1105,14 @@ fn build_swarm_lines<'a>(
     let agent_name = Style::default().fg(theme.colors.foreground);
     let subagent_name = Style::default().fg(theme.colors.muted);
     let menu_target = app.context_menu().map(|menu| &menu.target);
-    // While a project or agent is dragged its rows stay lit, and a rail
-    // in the accent color marks the rows under the pointer: where it goes.
+    // While a project or agent is dragged its rows stay lit, and a line
+    // in the accent color between rows marks where they go.
     let drag = app.project_drag_hit();
     let rows = app.project_rows();
+    let drop_line = drag
+        .as_ref()
+        .and_then(|drag| drag.edge)
+        .and_then(|edge| drop_line_at(&rows, edge));
     let listed = rows.len().saturating_sub(1);
     // A project's agents run up to the next project's root.
     let roots: Vec<usize> = rows
@@ -1156,11 +1165,6 @@ fn build_swarm_lines<'a>(
             || drag
                 .as_ref()
                 .is_some_and(|drag| drag.dragged.contains(&row_index));
-        let on_target = !pinned
-            && drag
-                .as_ref()
-                .and_then(|drag| drag.target.as_ref())
-                .is_some_and(|target| target.contains(&row_index));
         match row {
             ProjectListRow::Project { root, expanded } => {
                 let end = roots
@@ -1259,27 +1263,68 @@ fn build_swarm_lines<'a>(
             }
             ProjectListRow::Gap => lines.push(Line::default()),
         }
-        if on_target {
+        if !pinned {
             if let Some(line) = lines.last_mut() {
-                mark_drop_target(line, theme.colors.success);
+                match drop_line {
+                    Some(DropLine::Rule(at)) if at == row_index => {
+                        *line = drop_rule(width, theme.colors.success);
+                    }
+                    Some(DropLine::Under(at)) if at == row_index => {
+                        underline(line, theme.colors.success);
+                    }
+                    _ => {}
+                }
             }
         }
     }
     (lines, new_project, listed)
 }
 
-/// Draw a rail over the leading padding column of `line`, keeping the
-/// row's background: the mark of a drag's hit area.
-fn mark_drop_target(line: &mut Line<'_>, color: Color) {
-    let Some(first) = line.spans.first_mut() else {
-        return;
-    };
-    let style = first.style;
-    let rest: String = first.content.chars().skip(1).collect();
-    first.content = rest.into();
-    line.spans
-        .insert(0, Span::styled(DROP_RAIL, style.fg(color)));
+/// How the edge a drag's rows go to is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DropLine {
+    /// A rule across this gap row, between two projects
+    Rule(usize),
+    /// An underline along this row, the one just above the edge
+    Under(usize),
 }
+
+/// How to draw the edge just above list row `edge`: across the gap row
+/// beside it when there is one, else under the row above it. `None` above
+/// the first row, where there is no row to draw on.
+fn drop_line_at(rows: &[ProjectListRow], edge: usize) -> Option<DropLine> {
+    let above = edge.checked_sub(1);
+    if let Some(above) = above.filter(|&above| rows.get(above) == Some(&ProjectListRow::Gap)) {
+        return Some(DropLine::Rule(above));
+    }
+    if rows.get(edge) == Some(&ProjectListRow::Gap) {
+        return Some(DropLine::Rule(edge));
+    }
+    above.map(DropLine::Under)
+}
+
+/// A horizontal rule `width` columns wide, padded like the list's rows.
+fn drop_rule(width: usize, color: Color) -> Line<'static> {
+    let rule = DROP_RULE.repeat(width.saturating_sub(2));
+    Line::from(vec![
+        Span::raw(" "),
+        Span::styled(rule, Style::default().fg(color)),
+        Span::raw(" "),
+    ])
+}
+
+/// Underline all of `line` in `color`, keeping its text colors.
+fn underline(line: &mut Line<'_>, color: Color) {
+    for span in &mut line.spans {
+        span.style = span
+            .style
+            .add_modifier(Modifier::UNDERLINED)
+            .underline_color(color);
+    }
+}
+
+/// Glyph of the rule drawn where a dragged project or agent goes.
+pub(super) const DROP_RULE: &str = "─";
 
 /// Glyph of the rail beside a drag's hit area.
 pub(super) const DROP_RAIL: &str = "▎";

@@ -1,0 +1,11 @@
+{
+  "id": "01a2001e7cfc0005",
+  "title": "when right clicking an agent or project, should be able to move to another workspace #, that should show submenu",
+  "state": "completed",
+  "agent_id": "6a751d869928858d6c498e8721bb6f861db8f8f28963e75ffafaa6fcd09eb284",
+  "agent_name": "Agent 679",
+  "items": [],
+  "summary": "I couldn't make this change because the code for that UI doesn't seem to be on this machine.",
+  "updated_ms": 1795298383395,
+  "created_ms": 1795298327804
+}

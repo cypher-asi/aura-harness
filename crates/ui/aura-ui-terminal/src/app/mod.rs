@@ -27,10 +27,10 @@ pub mod mentions;
 mod panes;
 pub mod plans;
 mod processes;
-pub mod run_log;
 mod project_drag;
 mod prose;
 pub(crate) mod queue_panel;
+pub mod run_log;
 pub mod tasks;
 pub use aura_ui::sandbox;
 pub(crate) mod scrollbar;
@@ -236,6 +236,9 @@ pub struct App {
     pub(super) sandbox_panel_visible: bool,
     /// Whether the chat panel fills the screen, the other panels hidden
     pub(super) chat_expanded: bool,
+    /// Whether the side panel fills the right column, over the Record
+    /// panel, while it is shown
+    pub(super) side_expanded: bool,
     /// File tree of the active agent's sandbox
     pub(super) sandbox: SandboxTree,
     /// Whether a tool may have changed files since the tree was read; the
@@ -503,12 +506,15 @@ pub struct PanelAreas {
     pub sandbox_rows: Option<Rect>,
     /// Tree row shown at the top of `sandbox_rows`
     pub sandbox_scroll: usize,
-    /// Header bar of the panel below the Record panel, up to its ALL
+    /// Header bar of the panel below the Record panel, up to its `*`
     /// button
     pub side_tabs: Option<Rect>,
     /// Button at the right end of that bar that shows the whole
     /// project's items in its lists, or the active agent's
     pub side_scope: Option<Rect>,
+    /// Button right of that one that maximizes the panel over the Record
+    /// panel, or restores it
+    pub side_expand: Option<Rect>,
     /// Rows of the Processes tab inside the panel
     pub process_rows: Option<Rect>,
     /// Process row shown at the top of `process_rows`
@@ -580,8 +586,11 @@ pub(crate) enum HoverTarget {
     MemberRow(usize),
     /// A label in the side panel's tab bar.
     SideTab(SidePanelTab),
-    /// The ALL button at the right end of the side panel's tab bar.
+    /// The `*` button at the right end of the side panel's tab bar.
     SideScope,
+    /// The button right of it that maximizes the side panel or restores
+    /// it.
+    ExpandSide,
     /// A row in the Processes tab.
     ProcessRow(usize),
     /// A row in the Trace tab.
@@ -840,6 +849,7 @@ impl App {
             swarm_panel_visible: true,
             sandbox_panel_visible: true,
             chat_expanded: false,
+            side_expanded: false,
             sandbox: SandboxTree::default(),
             sandbox_stale: false,
             animation_frame: 0,
@@ -2302,10 +2312,16 @@ impl App {
         self.focus
     }
 
-    /// Check if the Record panel is visible.
+    /// Check if the Record panel is visible. It hides while the side
+    /// panel is maximized over it.
     #[must_use]
     pub const fn record_panel_visible(&self) -> bool {
-        self.record_panel_visible && !self.chat_expanded
+        self.record_panel_visible && !self.chat_expanded && !self.side_maximized()
+    }
+
+    /// Whether the side panel, shown, takes the Record panel's room too.
+    const fn side_maximized(&self) -> bool {
+        self.side_expanded && self.sandbox_panel_visible
     }
 
     /// Check if the Swarm panel is visible.
@@ -2333,6 +2349,27 @@ impl App {
         if self.chat_expanded {
             self.focus = PanelFocus::Chat;
         }
+    }
+
+    /// Whether the side panel fills the right column, the Record panel
+    /// above it hidden.
+    #[must_use]
+    pub const fn side_expanded(&self) -> bool {
+        self.side_expanded
+    }
+
+    /// Maximize the side panel over the Record panel, focused, or put it
+    /// back below it with the split it had.
+    pub fn toggle_side_expanded(&mut self) {
+        self.side_expanded = !self.side_expanded;
+        if self.side_expanded {
+            self.focus = PanelFocus::Sandbox;
+        }
+    }
+
+    /// Record where the side panel's expand button was drawn this frame.
+    pub fn set_side_expand_area(&mut self, area: Option<Rect>) {
+        self.areas.side_expand = area;
     }
 
     /// File tree of the active agent's sandbox.

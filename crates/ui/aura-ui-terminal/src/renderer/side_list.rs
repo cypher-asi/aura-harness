@@ -91,9 +91,11 @@ pub(super) fn render_hidden(
     (what, hidden): (&str, usize),
     theme: &Theme,
 ) {
+    // Two short lines, so a narrow panel does not cut them off.
     let message = [
         format!("No {what} for this agent."),
-        format!("{} lists the project's {hidden}.", SideScope::BUTTON),
+        format!("The {} button lists", SideScope::BUTTON),
+        format!("the project's {hidden}."),
     ];
     render_empty(frame, inner, &message.each_ref().map(String::as_str), theme);
 }

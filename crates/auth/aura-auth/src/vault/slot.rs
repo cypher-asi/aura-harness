@@ -37,6 +37,17 @@ pub(crate) const KEYRING_SERVICE: &str = "aura";
 const KEYRING_READ_RETRIES: u32 = 3;
 const KEYRING_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(100);
 
+/// What reading a [`SecretSlot`] found.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Read {
+    Found(String),
+    /// Neither the keyring nor the file holds it
+    Absent,
+    /// The keyring failed and the file holds nothing, so whether the
+    /// secret is stored is unknown
+    Unanswered,
+}
+
 /// A named secret: keyring entry `aura/<user>` plus a fallback file.
 #[derive(Debug, Clone)]
 pub(crate) struct SecretSlot {
@@ -88,11 +99,16 @@ impl SecretSlot {
         }
     }
 
-    /// Load the secret, probing the file when the keyring has no entry
+    /// Read the secret, probing the file when the keyring has no entry
     /// so users are not logged out by a keyring rollout.
-    pub(crate) fn load(&self) -> Option<String> {
+    pub(crate) fn read(&self) -> Read {
+        let from_file = |unanswered: bool| match load_from_path(&self.path) {
+            Some(secret) => Read::Found(secret),
+            None if unanswered => Read::Unanswered,
+            None => Read::Absent,
+        };
         let Some(user) = &self.keyring_user else {
-            return load_from_path(&self.path);
+            return from_file(false);
         };
         // Another process replacing the entry (a token refresh) can leave
         // it briefly missing, and Secret Service calls fail transiently.
@@ -107,15 +123,15 @@ impl SecretSlot {
             }
         }
         match read {
-            Ok(secret) => Some(secret),
-            Err(e) if is_no_entry(&e) => load_from_path(&self.path),
+            Ok(secret) => Read::Found(secret),
+            Err(e) if is_no_entry(&e) => from_file(false),
             Err(e) if is_no_storage_access(&e) => {
                 warn!(error = %e, "OS keyring unavailable; reading credentials from file fallback");
-                load_from_path(&self.path)
+                from_file(true)
             }
             Err(e) => {
                 warn!(error = %e, "Failed to read from OS keyring; trying file fallback");
-                load_from_path(&self.path)
+                from_file(true)
             }
         }
     }

@@ -1059,7 +1059,7 @@ fn test_sandbox_panel_sits_below_record() {
         "{}",
         rows[sandbox]
     );
-    assert!(rows[sandbox].contains("PLANS"));
+    assert!(rows[sandbox].contains("PLN"), "{}", rows[sandbox]);
     assert!(
         rows[sandbox + 3].contains("▸  src"),
         "{}",
@@ -1079,16 +1079,16 @@ fn test_side_panel_header_matches_the_agents_header() {
     let rows = render_rows(&mut app, 150);
     let (tabs, widths) = header_bar(&rows, "SBX");
     assert!(
-        rows[tabs].contains(" PRC ") && rows[tabs].contains("│TASKS│ALL│"),
-        "full labels where they fit, then the ALL button: {}",
+        rows[tabs].contains("PRC") && rows[tabs].contains("│ * │ ⤢ │"),
+        "the tabs, then the * and ⤢ buttons: {}",
         rows[tabs]
     );
     assert_eq!(
         widths.len(),
-        6,
-        "the tabs and the ALL button fill the bar: {widths:?}"
+        7,
+        "the tabs and the two buttons fill the bar: {widths:?}"
     );
-    assert_eq!(widths[5], 3);
+    assert_eq!(widths[5..], [3, 3]);
     assert!(
         widths[..5].iter().all(|w| w.abs_diff(widths[0]) <= 1),
         "{widths:?}"
@@ -1102,11 +1102,11 @@ fn test_side_panel_header_matches_the_agents_header() {
     let rows = render_rows(&mut app, 260);
     let (tabs, widths) = header_bar(&rows, "SANDBOX");
     assert!(rows[tabs].contains("PROCESSES"), "{}", rows[tabs]);
-    assert_eq!(widths.len(), 6, "{widths:?}");
+    assert_eq!(widths.len(), 7, "{widths:?}");
 }
 
 #[test]
-fn test_side_panel_all_button_lists_the_whole_project() {
+fn test_side_panel_star_button_lists_the_whole_project() {
     use crate::app::SideScope;
     use crate::events::{AgentSummary, ProcessSummary, UiCommand};
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -1146,7 +1146,7 @@ fn test_side_panel_all_button_lists_the_whole_project() {
     };
 
     let buffer = render_buffer(&mut app, 150);
-    let row = row_of(&buffer, "│ALL│");
+    let row = row_of(&buffer, "│ * │");
     let (prc, _) = find_cell(&buffer, row, "PRC").unwrap();
     click(&mut app, prc, row);
     let screen = render_rows(&mut app, 150).join("\n");
@@ -1154,12 +1154,15 @@ fn test_side_panel_all_button_lists_the_whole_project() {
     assert!(!screen.contains("job-b1"), "{screen}");
 
     let buffer = render_buffer(&mut app, 150);
-    let (all, idle) = find_cell(&buffer, row, "ALL").unwrap();
+    let (cell, _) = find_cell(&buffer, row, "│ * │").unwrap();
+    let all = cell + 2;
+    let idle = buffer[(all, row)].style();
     assert_eq!(idle.fg, Some(test_theme().colors.muted));
     click(&mut app, all, row);
     assert_eq!(app.side_scope(), SideScope::Project);
     let buffer = render_buffer(&mut app, 150);
-    let (_, lit) = find_cell(&buffer, row, "ALL").unwrap();
+    let lit = buffer[(all, row)].style();
+    assert_eq!(buffer[(all, row)].symbol(), SideScope::BUTTON);
     assert!(lit.add_modifier.contains(ratatui::style::Modifier::BOLD));
     let screen = render_rows(&mut app, 150).join("\n");
     assert!(
@@ -1175,7 +1178,7 @@ fn test_side_panel_all_button_lists_the_whole_project() {
 }
 
 #[test]
-fn test_scoped_tabs_say_what_all_would_list() {
+fn test_scoped_tabs_say_what_the_star_button_would_list() {
     use crate::events::{AgentSummary, ProcessSummary, UiCommand};
 
     let mut app = crate::App::new();
@@ -1198,7 +1201,8 @@ fn test_scoped_tabs_say_what_all_would_list() {
     ));
     let screen = render_rows(&mut app, 150).join("\n");
     assert!(screen.contains("No processes for this agent."), "{screen}");
-    assert!(screen.contains("ALL lists the project's 1."), "{screen}");
+    assert!(screen.contains("The * button lists"), "{screen}");
+    assert!(screen.contains("the project's 1."), "{screen}");
 }
 
 #[test]
@@ -1342,11 +1346,11 @@ fn test_files_command_toggles_sandbox_panel() {
     submit(&mut app, "/files");
     let screen = render_rows(&mut app, 150).join("\n");
     assert!(!screen.contains(" KERNEL "));
-    assert!(!screen.contains("PLANS"));
+    assert!(!screen.contains("PLN"));
 
     submit(&mut app, "/files");
     let screen = render_rows(&mut app, 150).join("\n");
-    assert!(screen.contains("PLANS"));
+    assert!(screen.contains("PLN"), "{screen}");
     assert!(!screen.contains(" KERNEL "));
 }
 
@@ -2217,6 +2221,109 @@ fn test_expand_button_fills_the_screen_with_the_chat_panel() {
     assert_eq!(chat_panel(&rows), (tabs, left, right));
 }
 
+/// The side panel's header tab row and its left and right border
+/// columns, found from its SBX tab.
+fn side_panel(rows: &[String]) -> (usize, usize, usize) {
+    let tabs = rows
+        .iter()
+        .position(|r| r.contains("SBX"))
+        .unwrap_or_else(|| panic!("no side panel bar in:\n{}", rows.join("\n")));
+    let row: Vec<char> = rows[tabs].chars().collect();
+    let sbx = rows[tabs][..rows[tabs].find("SBX").unwrap()]
+        .chars()
+        .count();
+    let left = row[..=sbx].iter().rposition(|&c| c == '│').unwrap();
+    let top: Vec<char> = rows[tabs - 1].chars().collect();
+    let right = left + top[left..].iter().position(|&c| c == '┐').unwrap();
+    (tabs, left, right)
+}
+
+#[test]
+fn test_expand_button_maximizes_the_side_panel_over_the_record_panel() {
+    use crate::app::{HoverTarget, PanelFocus};
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    let mut app = crate::App::new();
+    let rows = render_rows(&mut app, 120);
+    let (kernel, _) = header_bar(&rows, "KERNEL");
+    let (tabs, left, right) = side_panel(&rows);
+    assert!(
+        tabs > kernel,
+        "the side panel starts below the Record panel"
+    );
+    let buffer = render_buffer(&mut app, 120);
+    let row = u16::try_from(tabs).unwrap();
+    let (expand, idle) = find_cell(&buffer, row, "⤢").expect("the expand button is drawn");
+    assert_eq!(idle.fg, Some(test_theme().colors.muted));
+    let mouse = |kind| MouseEvent {
+        kind,
+        column: expand,
+        row,
+        modifiers: KeyModifiers::empty(),
+    };
+    app.handle_mouse(mouse(MouseEventKind::Moved));
+    assert_eq!(app.hover(), Some(HoverTarget::ExpandSide));
+    let buffer = render_buffer(&mut app, 120);
+    let lit = buffer[(expand, row)].style();
+    assert_eq!(lit.bg, Some(test_theme().colors.surface_hover));
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left)));
+    assert!(app.side_expanded());
+    assert_eq!(app.focus(), PanelFocus::Sandbox);
+
+    let rows = render_rows(&mut app, 120);
+    let screen = rows.join("\n");
+    assert!(
+        !screen.contains("KERNEL"),
+        "the Record panel hides: {screen}"
+    );
+    assert_eq!(
+        side_panel(&rows),
+        (kernel, left, right),
+        "the side panel covers the Record panel's room exactly"
+    );
+    let buffer = render_buffer(&mut app, 120);
+    let row = u16::try_from(kernel).unwrap();
+    assert!(
+        find_cell(&buffer, row, "⤡").is_some(),
+        "the button now restores"
+    );
+    let (restore, _) = find_cell(&buffer, row, "⤡").unwrap();
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: restore,
+        row,
+        modifiers: KeyModifiers::empty(),
+    });
+    assert!(!app.side_expanded());
+    let rows = render_rows(&mut app, 120);
+    assert_eq!(header_bar(&rows, "KERNEL").0, kernel);
+    assert_eq!(side_panel(&rows), (tabs, left, right));
+}
+
+#[test]
+fn test_hosted_side_bar_tells_the_front_end_it_maximizes() {
+    use crate::app::Pane;
+
+    let mut app = crate::App::new();
+    app.set_host_chrome(true);
+    let side_expand = |app: &mut crate::App| {
+        render_rows(app, 120);
+        app.pane_chrome()
+            .iter()
+            .find(|chrome| chrome.pane == Pane::Side)
+            .map(|chrome| (chrome.expand, chrome.scope))
+    };
+    assert_eq!(side_expand(&mut app), Some((Some(false), Some(false))));
+    app.expand_pane(Pane::Side);
+    assert_eq!(side_expand(&mut app), Some((Some(true), Some(false))));
+    assert!(
+        app.pane_chrome()
+            .iter()
+            .all(|chrome| chrome.pane != Pane::Records),
+        "the Record panel is not drawn under it"
+    );
+}
+
 #[test]
 fn test_long_command_wraps_at_the_last_column() {
     let mut app = app_with_model(None);
@@ -2448,7 +2555,10 @@ fn test_long_notification_scrolls_along_the_footer_without_a_right_column() {
     app.notification_since = Some(long_ago);
     let rows = render_rows(&mut app, 120);
     let last = rows.last().unwrap();
-    assert!(last.contains("w38 w39  ● Ready"), "ends at the end: {last:?}");
+    assert!(
+        last.contains("w38 w39  ● Ready"),
+        "ends at the end: {last:?}"
+    );
     assert!(last.contains("! "), "the icon stays: {last:?}");
     assert!(!last.contains("w0 "), "{last:?}");
 }
@@ -4155,30 +4265,78 @@ fn test_a_dragged_project_shows_its_hit_area() {
         });
     };
     press(&mut app, MouseEventKind::Down(MouseButton::Left), alpha);
+    // A rule cell in the list's columns, clear of the other panels.
+    let rule_at = |buffer: &ratatui::buffer::Buffer, y: u16| {
+        let cell = &buffer[(column, y)];
+        (cell.symbol() == "─").then(|| cell.style())
+    };
     let buffer = render_buffer(&mut app, 120);
-    assert!(
-        find_cell(&buffer, alpha, "▎").is_none(),
-        "no rail on a press"
-    );
+    assert!(rule_at(&buffer, beta - 1).is_none(), "no line on a press");
 
     press(&mut app, MouseEventKind::Drag(MouseButton::Left), beta);
     let buffer = render_buffer(&mut app, 120);
-    // Alpha took Beta's place under the pointer: lifted, with the rail.
+    // Alpha took Beta's place under the pointer: lifted, with a line in
+    // the gap between Beta and itself, where it went.
     let moved = row_of(&buffer, "ALPHA");
     assert_eq!(moved, beta);
-    let (_, rail) = find_cell(&buffer, moved, "▎").expect("rail on the hit area");
-    assert_eq!(rail.fg, Some(theme.colors.success));
+    let line = rule_at(&buffer, moved - 1).expect("line above the dragged rows");
+    assert_eq!(line.fg, Some(theme.colors.success));
     let (_, name) = find_cell(&buffer, moved, "ALPHA").unwrap();
     assert_eq!(name.bg, Some(theme.colors.surface_hover));
     assert!(
-        find_cell(&buffer, moved + 1, "▎").is_some(),
-        "its agent too"
+        find_cell(&buffer, moved, "▎").is_none(),
+        "no rail beside the rows"
     );
-    assert!(find_cell(&buffer, row_of(&buffer, "BETA"), "▎").is_none());
+    assert!(rule_at(&buffer, moved + 2).is_none(), "one line only");
 
     press(&mut app, MouseEventKind::Up(MouseButton::Left), beta);
     let buffer = render_buffer(&mut app, 120);
-    assert!(find_cell(&buffer, beta, "▎").is_none(), "gone on drop");
+    assert!(rule_at(&buffer, beta - 1).is_none(), "gone on drop");
+}
+
+#[test]
+fn test_a_dragged_agent_shows_a_line_between_agents() {
+    use crate::events::{AgentSummary, UiCommand};
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::style::Modifier;
+
+    let theme = test_theme();
+    let agent = |id: &str| AgentSummary {
+        id: id.to_string(),
+        name: format!("Agent {id}"),
+        project_id: Some("alpha".to_string()),
+        project: Some("Alpha".to_string()),
+        ..Default::default()
+    };
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetAgents(vec![
+        agent("a"),
+        agent("b"),
+        agent("c"),
+    ]));
+    let buffer = render_buffer(&mut app, 120);
+    let first = row_of(&buffer, "Agent a");
+    let third = row_of(&buffer, "Agent c");
+    let (column, _) = find_cell(&buffer, first, "Agent").unwrap();
+    let press = |app: &mut crate::App, kind, row| {
+        app.handle_mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        });
+    };
+    press(&mut app, MouseEventKind::Down(MouseButton::Left), first);
+    press(&mut app, MouseEventKind::Drag(MouseButton::Left), first + 1);
+    press(&mut app, MouseEventKind::Drag(MouseButton::Left), third);
+    let buffer = render_buffer(&mut app, 120);
+    // a went down past b and then c: the line runs under c, above a.
+    assert_eq!(row_of(&buffer, "Agent a"), third);
+    let (_, above) = find_cell(&buffer, third - 1, "Agent").unwrap();
+    assert!(above.add_modifier.contains(Modifier::UNDERLINED));
+    assert_eq!(above.underline_color, Some(theme.colors.success));
+    let (_, dragged) = find_cell(&buffer, third, "Agent").unwrap();
+    assert!(!dragged.add_modifier.contains(Modifier::UNDERLINED));
 }
 
 #[test]
@@ -4613,8 +4771,16 @@ fn clicking_copy_log_copies_the_log_and_says_so() {
     let buffer = render_buffer(&mut app, 120);
     let row = row_of(&buffer, "Copy log");
     let (column, _) = find_cell(&buffer, row, "Copy log").unwrap();
-    mouse_at(&mut app, MouseEventKind::Down(MouseButton::Left), (column, row));
-    mouse_at(&mut app, MouseEventKind::Up(MouseButton::Left), (column, row));
+    mouse_at(
+        &mut app,
+        MouseEventKind::Down(MouseButton::Left),
+        (column, row),
+    );
+    mouse_at(
+        &mut app,
+        MouseEventKind::Up(MouseButton::Left),
+        (column, row),
+    );
     assert!(app.copy_pending(), "the click asked for a copy");
     let buffer = render_buffer(&mut app, 120);
     assert_eq!(
@@ -4626,5 +4792,8 @@ fn clicking_copy_log_copies_the_log_and_says_so() {
         .notification()
         .is_some_and(|(message, _)| message.contains("Copied the log")));
     let buffer = render_buffer(&mut app, 120);
-    assert!(find_cell(&buffer, row, "✓ Copied").is_some(), "the button says so");
+    assert!(
+        find_cell(&buffer, row, "✓ Copied").is_some(),
+        "the button says so"
+    );
 }

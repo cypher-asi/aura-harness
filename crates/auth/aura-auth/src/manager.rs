@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use aura_auth_kit::{LoopbackListener, CALLBACK_TIMEOUT};
 use aura_core_auth::{
     AuthError as ProviderError, AuthorizationRequest, CredentialResolver, IdentityProvider,
-    InferenceCredential, LinkStatus, LinkedAccount, Owner, ProviderKind, StoredSession,
-    SubscriptionProvider,
+    InferenceCredential, LinkStatus, LinkedAccount, OAuthTokens, Owner, ProviderKind,
+    StoredSession, SubscriptionProvider,
 };
 use chrono::Utc;
 use std::collections::{BTreeMap, HashMap};
@@ -431,6 +431,27 @@ impl AuthManager {
         locks.entry(link_id.to_string()).or_default().clone()
     }
 
+    /// `link`'s stored tokens. A keyring that did not answer is a
+    /// passing failure, not a sign-out.
+    fn stored_tokens(&self, link: &LinkedAccount) -> Result<OAuthTokens, ProviderError> {
+        let provider = link.provider;
+        self.vault
+            .read_tokens(link)
+            .map_err(|e| {
+                ProviderError::Unavailable(format!(
+                    "Could not read the {} credentials ({e}); try again",
+                    provider.label()
+                ))
+            })?
+            .ok_or_else(|| {
+                ProviderError::ReauthRequired(format!(
+                    "{} credentials are missing; run `aura login {}`",
+                    provider.label(),
+                    provider.id()
+                ))
+            })
+    }
+
     async fn credential_for(
         &self,
         provider: ProviderKind,
@@ -459,14 +480,14 @@ impl AuthManager {
                 provider.id()
             )));
         }
-        let tokens = self.vault.tokens(&link).ok_or_else(|| {
-            ProviderError::ReauthRequired(format!(
-                "{} credentials are missing; run `aura login {}`",
-                provider.label(),
-                provider.id()
-            ))
-        })?;
+        let mut tokens = self.stored_tokens(&link)?;
         let now = Utc::now();
+        if tokens.expires_within(now, REFRESH_MARGIN_SECS) {
+            // Another process may have refreshed them since they were
+            // kept, spending the refresh token held here.
+            self.vault.forget_tokens(&link);
+            tokens = self.stored_tokens(&link)?;
+        }
         if !tokens.expires_within(now, REFRESH_MARGIN_SECS) {
             return Ok(adapter.credential(&tokens));
         }

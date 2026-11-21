@@ -1775,10 +1775,12 @@ fn test_a_project_drag_reports_the_rows_under_the_pointer() {
         Some(ProjectDragHit {
             dragged: 4..6,
             target: Some(0..3),
+            edge: Some(0),
         })
     );
 
-    // Onto aa's header: bb takes its place and is its own hit area.
+    // Onto aa's header: bb takes its place and is its own hit area, and
+    // goes between itself and aa, which it passed.
     left(&mut app, MouseEventKind::Drag, 4);
     assert_eq!(agent_ids(&app), ["bb", "aa", "aa1", "cc"]);
     assert_eq!(
@@ -1786,6 +1788,7 @@ fn test_a_project_drag_reports_the_rows_under_the_pointer() {
         Some(ProjectDragHit {
             dragged: 0..2,
             target: Some(0..2),
+            edge: Some(2),
         })
     );
 
@@ -3292,7 +3295,11 @@ fn thinking_command_and_alt_t_ask_the_event_loop() {
 
     app.handle_command("/thinking lots");
     assert!(rx.try_recv().is_err());
-    assert!(app.notification().unwrap().0.contains("Unknown thinking level"));
+    assert!(app
+        .notification()
+        .unwrap()
+        .0
+        .contains("Unknown thinking level"));
 
     app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::ALT));
     assert!(matches!(rx.try_recv(), Ok(UiEvent::SetThinking(Some(l))) if l == "xhigh"));

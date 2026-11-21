@@ -7,8 +7,8 @@
 //! only outlined. A bar over a view that closes, such as a file shown
 //! over the chat, ends in a close box; a panel that expands to fill the
 //! window has an expand box left of it. A panel whose lists can show the
-//! whole project's items rather than the active agent's ends in an ALL
-//! box, filled like a shown tab while it is on.
+//! whole project's items rather than the active agent's ends in a `*`
+//! box, filled like a shown tab while it is on, left of its expand box.
 //!
 //! The dividers between panels live here too: bands over the gap between
 //! two panels and the border right of it, which drag to move the border.
@@ -55,7 +55,7 @@ pub enum Hit {
     Close(Pane),
     /// The box that expands a panel to fill the window, or restores it
     Expand(Pane),
-    /// The ALL box, which switches a panel's lists between the active
+    /// The `*` box, which switches a panel's lists between the active
     /// agent's items and the whole project's
     Scope(Pane),
     /// The rest of a title bar
@@ -143,7 +143,7 @@ struct BarLayout {
     close: Option<Rectangle>,
     /// The expand box, and whether the panel is expanded
     expand: Option<(Rectangle, bool)>,
-    /// The ALL box, and whether it is on
+    /// The `*` box, and whether it is on
     scope: Option<(Rectangle, bool)>,
 }
 
@@ -308,7 +308,8 @@ fn bar_layout(model: &Model, pane: &PaneChrome) -> BarLayout {
         .and_then(|expanded| Some((square(true)?, expanded)));
     let width = |text: &str| ((text.width() as f32 + 2.0 * SIDE) * unit).round();
     let scope = pane.scope.and_then(|on| {
-        let w = width(SideScope::BUTTON);
+        // A one-glyph label still gets a box at least as wide as tall.
+        let w = width(SideScope::BUTTON).max(height);
         (end - start >= 3.0 * w).then(|| {
             let rect = Rectangle::new(Point::new(end - w, top), Size::new(w, height));
             end = rect.x - gap;
@@ -464,7 +465,7 @@ impl Chrome {
         bar.expand.map(|(rect, _)| rect)
     }
 
-    /// The ALL box of `pane`'s bar, if it is drawn.
+    /// The `*` box of `pane`'s bar, if it is drawn.
     #[cfg(test)]
     pub fn scope_box(&self, pane: Pane) -> Option<Rectangle> {
         let bar = self.layout.bars.iter().find(|bar| bar.pane == pane)?;
@@ -695,20 +696,40 @@ mod tests {
     }
 
     #[test]
-    fn scoped_bars_end_in_an_all_box_after_their_tabs() {
+    fn scoped_bars_end_in_a_star_box_after_their_tabs() {
         let mut model = four_panes();
         model.panes[3].scope = Some(true);
         let layout = Layout::of(&model);
         let bar = &layout.bars[3];
         assert_eq!(bar.pane, Pane::Side);
-        let (scope, on) = bar.scope.expect("room for the ALL box");
+        let (scope, on) = bar.scope.expect("room for the * box");
         assert!(on);
+        assert!(scope.width >= scope.height, "at least square: {scope:?}");
         assert!(scope.x + scope.width <= bar.rect.x + bar.rect.width);
         let last = bar.boxes.last().expect("the tabs are drawn");
         assert!(last.rect.x + last.rect.width < scope.x);
         let middle = Point::new(scope.center_x(), scope.center_y());
         assert_eq!(layout.hit(middle), Some(Hit::Scope(Pane::Side)));
         assert!(Layout::of(&four_panes()).bars[3].scope.is_none());
+    }
+
+    #[test]
+    fn the_side_bar_ends_in_a_star_box_then_an_expand_box() {
+        let mut model = four_panes();
+        model.panes[3].scope = Some(false);
+        model.panes[3].expand = Some(false);
+        let layout = Layout::of(&model);
+        let bar = &layout.bars[3];
+        let (scope, on) = bar.scope.expect("room for the * box");
+        let (expand, expanded) = bar.expand.expect("room for the expand box");
+        assert!(!on && !expanded);
+        assert!(scope.x + scope.width < expand.x, "{scope:?} {expand:?}");
+        assert!(expand.x + expand.width <= bar.rect.x + bar.rect.width);
+        let last = bar.boxes.last().expect("the tabs are drawn");
+        assert!(last.rect.x + last.rect.width < scope.x);
+        let hit = |rect: Rectangle| layout.hit(Point::new(rect.center_x(), rect.center_y()));
+        assert_eq!(hit(scope), Some(Hit::Scope(Pane::Side)));
+        assert_eq!(hit(expand), Some(Hit::Expand(Pane::Side)));
     }
 
     #[test]

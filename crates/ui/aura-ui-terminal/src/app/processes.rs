@@ -362,6 +362,11 @@ impl App {
             self.toggle_side_scope();
             return;
         }
+        if contains(self.areas.side_expand, column, row) {
+            self.toggle_side_expanded();
+            self.clear_selection();
+            return;
+        }
         if let Some(tab) = self.side_tab_at(column, row) {
             self.show_side_tab(tab);
             return;
@@ -426,6 +431,9 @@ impl App {
     pub(super) fn hovered_side_panel(&self, column: u16, row: u16) -> Option<HoverTarget> {
         if self.side_scope_at(column, row) {
             return Some(HoverTarget::SideScope);
+        }
+        if contains(self.areas.side_expand, column, row) {
+            return Some(HoverTarget::ExpandSide);
         }
         if let Some(tab) = self.side_tab_at(column, row) {
             return Some(HoverTarget::SideTab(tab));

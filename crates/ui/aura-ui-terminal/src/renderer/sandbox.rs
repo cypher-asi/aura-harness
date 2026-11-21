@@ -1,8 +1,9 @@
 //! The panel below the Record panel: a SANDBOX | PROCESSES | TRACE | PLANS
 //! | TASKS header bar over the file tree of the active agent's workspace,
 //! the Processes list, the trace feed, the workspace's plans or its tasks.
-//! The bar ends in an ALL button that lists the whole project's processes,
-//! steps, plans and tasks instead of the active agent's.
+//! The bar ends in a `*` button that lists the whole project's processes,
+//! steps, plans and tasks instead of the active agent's, then a ⤢ button
+//! that maximizes the panel over the Record panel, or restores it.
 
 use super::header::{self, PanelHeader};
 use super::panels::{
@@ -20,26 +21,35 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
     let hosted = app.host_chrome();
     let panel = area;
     let (bar, area) = header::split(area, hosted);
-    let tabs = header::tabs_beside_scope(bar);
+    let end = header::bar_end(bar, (true, true), SidePanelTab::layout);
     if !hosted {
-        app.set_side_tabs_area(Rect { width: tabs, ..bar });
-        app.set_side_scope_area(header::scope_cell(bar));
+        app.set_side_tabs_area(Rect {
+            width: end.tabs,
+            ..bar
+        });
+        app.set_side_scope_area(end.scope);
+        app.set_side_expand_area(end.expand);
     }
     let hovered = match app.hover() {
         Some(HoverTarget::SideTab(tab)) => Some(tab),
         _ => None,
     };
     let header = PanelHeader {
-        layout: SidePanelTab::layout(tabs),
+        layout: SidePanelTab::layout(end.tabs),
         active: Some(app.side_tab()),
         hovered,
         title: None,
         info: None,
         close: None,
-        expand: None,
+        expand: Some(header::ExpandButton {
+            expanded: app.side_expanded(),
+            hovered: app.hover() == Some(HoverTarget::ExpandSide),
+            cell: end.expand,
+        }),
         scope: Some(header::ScopeButton {
             on: app.side_scope() == SideScope::Project,
             hovered: app.hover() == Some(HoverTarget::SideScope),
+            cell: end.scope,
         }),
         focused: is_focused,
         hosted,

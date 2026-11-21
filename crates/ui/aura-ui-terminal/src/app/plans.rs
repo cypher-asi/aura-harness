@@ -455,7 +455,7 @@ impl App {
         if hidden {
             self.notification = Some((
                 format!(
-                    "Another agent is doing this todo; {} lists it",
+                    "Another agent is doing this todo; the {} button lists it",
                     SideScope::BUTTON
                 ),
                 super::NotificationType::Warning,

@@ -220,7 +220,10 @@ fn split_at_width(text: &str, max: usize) -> (String, String) {
         .take_while(|&i| display_width(&text[..i]) <= max)
         .last();
     match end {
-        Some(end) if end > 0 => (text[..end].to_string(), text[end..].trim_start().to_string()),
+        Some(end) if end > 0 => (
+            text[..end].to_string(),
+            text[end..].trim_start().to_string(),
+        ),
         _ => (fit(text, max), String::new()),
     }
 }
@@ -433,7 +436,12 @@ fn header_line(
             let (kind, style) = if run.depth == 0 {
                 ("RUN  ", bold)
             } else {
-                ("SUBAGENT  ", Style::default().fg(theme.colors.secondary).add_modifier(Modifier::BOLD))
+                (
+                    "SUBAGENT  ",
+                    Style::default()
+                        .fg(theme.colors.secondary)
+                        .add_modifier(Modifier::BOLD),
+                )
             };
             spans.push(Span::styled(kind, style));
             (run.title.as_str(), bold, "", muted, run.detail.clone())
@@ -511,7 +519,12 @@ fn header_line(
     Line::from(spans)
 }
 
-fn field_lines(fields: &[LogField], width: usize, theme: &Theme, accent: Option<&str>) -> Vec<Line<'static>> {
+fn field_lines(
+    fields: &[LogField],
+    width: usize,
+    theme: &Theme,
+    accent: Option<&str>,
+) -> Vec<Line<'static>> {
     let label_width = fields
         .iter()
         .map(|(label, _)| display_width(label))
@@ -576,14 +589,22 @@ fn section_lines(section: &LogSection, width: usize, theme: &Theme) -> Vec<Line<
     }
     if total > SECTION_LINES {
         lines.push(Line::from(Span::styled(
-            format!("… {} more lines; y copies the whole step", total - SECTION_LINES),
+            format!(
+                "… {} more lines; y copies the whole step",
+                total - SECTION_LINES
+            ),
             Style::default().fg(theme.colors.muted),
         )));
     }
     lines
 }
 
-fn body_lines(state: &LogState, panel: &LogPanel, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+fn body_lines(
+    state: &LogState,
+    panel: &LogPanel,
+    width: usize,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
     match panel {
         LogPanel::Run(_) | LogPanel::Turn(..) => Vec::new(),
         LogPanel::Details(id) => {
@@ -592,7 +613,10 @@ fn body_lines(state: &LogState, panel: &LogPanel, width: usize, theme: &Theme) -
             };
             let mut lines = field_lines(&run.fields, width, theme, None);
             for problem in &run.problems {
-                for (i, part) in prose_wrap(problem, width.saturating_sub(2)).into_iter().enumerate() {
+                for (i, part) in prose_wrap(problem, width.saturating_sub(2))
+                    .into_iter()
+                    .enumerate()
+                {
                     let head = if i == 0 { "! " } else { "  " };
                     lines.push(Line::from(Span::styled(
                         format!("{head}{part}"),
@@ -622,7 +646,9 @@ fn body_lines(state: &LogState, panel: &LogPanel, width: usize, theme: &Theme) -
             if state.raw.contains(panel) {
                 return hard_wrap(&step.json, width)
                     .into_iter()
-                    .map(|line| Line::from(Span::styled(line, Style::default().fg(theme.colors.text))))
+                    .map(|line| {
+                        Line::from(Span::styled(line, Style::default().fg(theme.colors.text)))
+                    })
                     .collect();
             }
             let mut lines = field_lines(&step.fields, width, theme, None);
@@ -738,11 +764,13 @@ mod tests {
     fn shows_where_the_log_is_the_copy_button_and_nested_subagents() {
         let mut app = App::new();
         app.process_command(UiCommand::LogView(Box::new(view())));
-        app.run_log_mut()
-            .toggle(&LogPanel::Step("1a-x".into(), 2));
+        app.run_log_mut().toggle(&LogPanel::Step("1a-x".into(), 2));
         let text = screen(&mut app);
         assert!(text.contains("Copy log"), "{text}");
-        assert!(text.contains("Stored at /home/me/.aura/runs/1a-x/log.json"), "{text}");
+        assert!(
+            text.contains("Stored at /home/me/.aura/runs/1a-x/log.json"),
+            "{text}"
+        );
         assert!(text.contains("RUN  fix the parser"), "{text}");
         assert!(text.contains("Turn 1"), "{text}");
         assert!(text.contains("the parser drops the last token"), "{text}");
@@ -753,7 +781,10 @@ mod tests {
         let buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 1, 1));
         assert_eq!(app.take_copy_text(&buffer).as_deref(), Some("{}"));
         app.notify_copied(2, &Ok(()));
-        assert!(screen(&mut app).contains("✓ Copied"), "the button says it copied");
+        assert!(
+            screen(&mut app).contains("✓ Copied"),
+            "the button says it copied"
+        );
     }
 
     /// The row of `screen` that holds `needle`.
@@ -770,7 +801,10 @@ mod tests {
         app.process_command(UiCommand::LogView(Box::new(view())));
         let text = screen(&mut app);
         let model = row(&text, "  3 model");
-        assert!(model.contains("read_file src/parser.rs · run_command cargo test"), "{text}");
+        assert!(
+            model.contains("read_file src/parser.rs · run_command cargo test"),
+            "{text}"
+        );
         let read = row(&text, "↳ read_file src/parser.rs  340 lines");
         let failed = row(&text, "↳ run_command cargo test  exit 101 · 40 lines");
         assert!(failed.contains("✗"), "a failure is marked: {failed}");
@@ -783,7 +817,11 @@ mod tests {
         };
         let turn = row(&text, "Turn 1");
         assert!(turn.contains("3 calls · end_turn"), "{turn}");
-        assert_eq!(end(model, "3s"), end(turn, "4m 02s"), "times line up:\n{text}");
+        assert_eq!(
+            end(model, "3s"),
+            end(turn, "4m 02s"),
+            "times line up:\n{text}"
+        );
         assert_eq!(end(read, "19ms"), end(model, "3s"), "{text}");
         assert_eq!(end(model, "$0.0091"), end(turn, "$1.45"), "{text}");
         assert_eq!(end(model, "14k tok"), end(turn, "2.2M tok"), "{text}");

@@ -931,7 +931,7 @@ mod tests {
     }
 
     #[test]
-    fn the_all_box_switches_the_side_panels_lists_to_the_project() {
+    fn the_star_box_switches_the_side_panels_lists_to_the_project() {
         use aura_ui_terminal::SideScope;
         let mut stage = stage();
         stage.seed(false);
@@ -947,7 +947,7 @@ mod tests {
             .shell
             .chrome
             .scope_box(Pane::Side)
-            .expect("the ALL box is drawn");
+            .expect("the * box is drawn");
         let middle = Point::new(all.center_x(), all.center_y());
         stage.shell.pointer_moved(Point::new(
             middle.x,
@@ -959,6 +959,36 @@ mod tests {
         assert_eq!(tui.side_scope(), SideScope::Project);
         assert_eq!(side(&stage).scope, Some(true));
         assert!(side(&stage).focused);
+    }
+
+    #[test]
+    fn the_side_expand_box_maximizes_the_side_panel_over_the_records() {
+        let mut stage = stage();
+        stage.seed(false);
+        stage.draw();
+        let has = |stage: &Stage, pane: Pane| {
+            let tui = &stage.shell.tabs.front().tui;
+            tui.pane_chrome().iter().any(|c| c.pane == pane)
+        };
+        assert!(has(&stage, Pane::Records));
+        let press = |stage: &mut Stage| {
+            let expand = stage
+                .shell
+                .chrome
+                .expand_box(Pane::Side)
+                .expect("the side panel's expand box is drawn");
+            let middle = Point::new(expand.center_x(), expand.center_y());
+            stage.drag(middle, middle);
+            stage.draw();
+        };
+        press(&mut stage);
+        let tui = &stage.shell.tabs.front().tui;
+        assert!(tui.side_expanded());
+        assert!(!has(&stage, Pane::Records), "the side panel covers it");
+
+        press(&mut stage);
+        assert!(!stage.shell.tabs.front().tui.side_expanded());
+        assert!(has(&stage, Pane::Records));
     }
 
     #[test]

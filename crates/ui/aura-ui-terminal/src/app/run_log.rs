@@ -251,7 +251,8 @@ impl LogState {
             let before = self.view.as_ref().and_then(last_turn);
             if let (Some(root), Some(turn)) = (view.root(), last_turn(&view)) {
                 if before != Some(turn) {
-                    self.expanded.insert(LogPanel::Turn(root.run_id.clone(), turn));
+                    self.expanded
+                        .insert(LogPanel::Turn(root.run_id.clone(), turn));
                 }
             }
         } else {
@@ -749,7 +750,10 @@ mod tests {
         next.runs[0].turns.push(turn(3, vec![step(9, vec![])]));
         state.load(next);
         assert!(!state.is_expanded(&LogPanel::Details("root".into())));
-        assert!(state.is_expanded(&LogPanel::Turn("root".into(), 3)), "a new turn opens");
+        assert!(
+            state.is_expanded(&LogPanel::Turn("root".into(), 3)),
+            "a new turn opens"
+        );
     }
 
     #[test]
@@ -758,7 +762,10 @@ mod tests {
         app.log.load(view());
         app.copy_whole_log();
         let buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 1, 1));
-        assert_eq!(app.take_copy_text(&buffer).as_deref(), Some("{\"whole\":true}"));
+        assert_eq!(
+            app.take_copy_text(&buffer).as_deref(),
+            Some("{\"whole\":true}")
+        );
         app.log.selected = Some(LogPanel::Turn("root".into(), 2));
         app.copy_selected_log();
         assert_eq!(app.take_copy_text(&buffer).as_deref(), Some("{\"turn\":2}"));
@@ -850,7 +857,11 @@ mod tests {
 
         app.show_chat_tab(ChatTab::Chat);
         app.process_command(UiCommand::SetActiveAgent("a".into()));
-        assert_eq!(app.chat_tab(), ChatTab::Chat, "the wait ended with the switch");
+        assert_eq!(
+            app.chat_tab(),
+            ChatTab::Chat,
+            "the wait ended with the switch"
+        );
     }
 
     #[test]

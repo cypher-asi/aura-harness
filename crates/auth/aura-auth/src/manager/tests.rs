@@ -270,6 +270,56 @@ async fn concurrent_requests_refresh_once() {
 }
 
 #[tokio::test]
+async fn requests_use_kept_tokens_without_reading_the_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let (manager, _) = manager(
+        dir.path(),
+        FakeSub {
+            expires_in: 3600,
+            ..FakeSub::default()
+        },
+    );
+    let link = link_by_paste(&manager).await;
+    std::fs::remove_file(dir.path().join(format!("auth/secrets/{}.json", link.id))).unwrap();
+    for _ in 0..3 {
+        let credential = manager
+            .inference_credential(ProviderKind::Claude)
+            .await
+            .unwrap();
+        assert_eq!(credential.bearer, "access-0");
+    }
+}
+
+#[tokio::test]
+async fn a_refresh_by_another_process_is_picked_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let sub = || FakeSub {
+        expires_in: 10,
+        ..FakeSub::default()
+    };
+    let (here, here_sub) = manager(dir.path(), sub());
+    link_by_paste(&here).await;
+    let (there, there_sub) = manager(dir.path(), sub());
+    let refreshed = there
+        .inference_credential(ProviderKind::Claude)
+        .await
+        .unwrap();
+    assert_eq!(refreshed.bearer, "access-1");
+    assert_eq!(there_sub.refreshes.load(Ordering::SeqCst), 1);
+
+    let credential = here
+        .inference_credential(ProviderKind::Claude)
+        .await
+        .unwrap();
+    assert_eq!(credential.bearer, "access-1");
+    assert_eq!(
+        here_sub.refreshes.load(Ordering::SeqCst),
+        0,
+        "the spent refresh token kept here is not used"
+    );
+}
+
+#[tokio::test]
 async fn revoked_refresh_marks_link_for_reauth() {
     let dir = tempfile::tempdir().unwrap();
     let (manager, sub) = manager(

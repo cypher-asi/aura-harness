@@ -17,9 +17,11 @@
 //! session, which keeps it.
 //!
 //! While a drag is on, [`App::project_drag_hit`] tells the renderer which
-//! rows are being dragged and which rows the pointer is over. The renderer
-//! draws the dragged rows lit and puts an accent rail beside the hit area,
-//! so you can see where the rows will go before they move.
+//! rows are being dragged, which rows the pointer is over and the edge
+//! between rows the dragged ones go to. The renderer draws the dragged
+//! rows lit and an accent line across that edge, so you can see where the
+//! rows will go before they move: between the block they pass and
+//! themselves, in the gap between two projects when there is one.
 //!
 //! Invariants: only whole projects move, so the agents of a project stay
 //! together; an agent moves with everything under it. A swap happens only
@@ -51,6 +53,9 @@ pub(crate) struct ProjectPress {
     pointer: u16,
     /// The pointer has left that row
     moved: bool,
+    /// Which way the pressed rows last moved: `Some(true)` down past the
+    /// block below them, `Some(false)` up; `None` before any move.
+    swapped_down: Option<bool>,
 }
 
 /// Where a drag stands, for drawing it: list rows, as indexes into
@@ -64,6 +69,11 @@ pub(crate) struct ProjectDragHit {
     /// there. `None` over nothing they may move to, such as another
     /// project for an agent.
     pub(crate) target: Option<Range<usize>>,
+    /// Where the dragged rows go, as the edge just above this list row:
+    /// below the target when it is below the dragged rows, above it when
+    /// above. Once they landed, the edge between them and the block they
+    /// passed. `None` with no target, or before they moved at all.
+    pub(crate) edge: Option<usize>,
 }
 
 impl App {
@@ -100,6 +110,7 @@ impl App {
             row,
             pointer: row,
             moved: false,
+            swapped_down: None,
         });
         header
     }
@@ -114,9 +125,12 @@ impl App {
         press.moved |= row != press.row;
         press.pointer = row;
         if press.moved {
-            match press.pressed.clone() {
+            let swapped = match press.pressed.clone() {
                 Pressed::Project(key) => self.move_project_under(&key, row),
                 Pressed::Agent(id) => self.move_agent_under(&id, row),
+            };
+            if let (Some(down), Some(press)) = (swapped, self.project_press.as_mut()) {
+                press.swapped_down = Some(down);
             }
         }
         true
@@ -176,14 +190,14 @@ impl App {
             Some(first..first + len)
         };
         let at = self.list_row_at(press.pointer);
-        match &press.pressed {
+        let (dragged, target) = match &press.pressed {
             Pressed::Project(key) => {
                 let from = self.project_root_of_key(key)?;
                 let dragged = block_rows(from, self.project_end(from), true)?;
                 let target = at
                     .and_then(|at| self.project_at_row(&rows, at))
                     .and_then(|root| block_rows(root, self.project_end(root), true));
-                Some(ProjectDragHit { dragged, target })
+                (dragged, target)
             }
             Pressed::Agent(id) => {
                 let from = self.agents_position(id)?;
@@ -192,9 +206,25 @@ impl App {
                     .and_then(|at| self.agent_block_at_row(&rows, at))
                     .filter(|&start| self.project_root(start) == self.project_root(from))
                     .and_then(|start| block_rows(start, self.block_end(start), false));
-                Some(ProjectDragHit { dragged, target })
+                (dragged, target)
             }
-        }
+        };
+        let edge = target
+            .as_ref()
+            .and_then(|target| match target.start.cmp(&dragged.start) {
+                std::cmp::Ordering::Greater => Some(target.end),
+                std::cmp::Ordering::Less => Some(target.start),
+                std::cmp::Ordering::Equal => {
+                    press
+                        .swapped_down
+                        .map(|down| if down { dragged.start } else { dragged.end })
+                }
+            });
+        Some(ProjectDragHit {
+            dragged,
+            target,
+            edge,
+        })
     }
 
     /// Keys of the projects, in the order listed.
@@ -222,18 +252,13 @@ impl App {
 
     /// Swap the project with key `key` into the place of the project drawn
     /// at screen `row`, if the pointer would still be over it afterwards.
-    fn move_project_under(&mut self, key: &str, row: u16) {
-        let Some(at) = self.list_row_at(row) else {
-            return;
-        };
-        let Some(from) = self.project_root_of_key(key) else {
-            return;
-        };
-        let Some(target) = self.project_at_row(&self.project_rows(), at) else {
-            return;
-        };
+    /// Returns `Some(true)` when it moved down, `Some(false)` up.
+    fn move_project_under(&mut self, key: &str, row: u16) -> Option<bool> {
+        let at = self.list_row_at(row)?;
+        let from = self.project_root_of_key(key)?;
+        let target = self.project_at_row(&self.project_rows(), at)?;
         if target == from {
-            return;
+            return None;
         }
         let before: Vec<AgentSummary> = self.agents.clone();
         let selected = self.selected_row_key();
@@ -242,26 +267,23 @@ impl App {
         if lands {
             self.restore_selected_row(selected);
             self.project_moves += 1;
+            Some(from < target)
         } else {
             self.agents = before;
+            None
         }
     }
 
     /// Swap the top-level agent `id`, with the agents under it, into the
     /// place of the top-level agent of its project drawn at screen `row`,
-    /// if the pointer would still be over it afterwards.
-    fn move_agent_under(&mut self, id: &str, row: u16) {
-        let Some(at) = self.list_row_at(row) else {
-            return;
-        };
-        let Some(from) = self.agents_position(id) else {
-            return;
-        };
-        let Some(target) = self.agent_block_at_row(&self.project_rows(), at) else {
-            return;
-        };
+    /// if the pointer would still be over it afterwards. Returns
+    /// `Some(true)` when it moved down, `Some(false)` up.
+    fn move_agent_under(&mut self, id: &str, row: u16) -> Option<bool> {
+        let at = self.list_row_at(row)?;
+        let from = self.agents_position(id)?;
+        let target = self.agent_block_at_row(&self.project_rows(), at)?;
         if target == from || self.project_root(target) != self.project_root(from) {
-            return;
+            return None;
         }
         let before: Vec<AgentSummary> = self.agents.clone();
         let selected = self.selected_row_key();
@@ -270,8 +292,10 @@ impl App {
         if lands {
             self.restore_selected_row(selected);
             self.project_moves += 1;
+            Some(from < target)
         } else {
             self.agents = before;
+            None
         }
     }
 

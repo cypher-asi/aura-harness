@@ -135,6 +135,14 @@ impl<T: Copy + PartialEq> TabLayout<T> {
         Self { fit, cells, info }
     }
 
+    /// Whether the cells end before the right border of a bar `width`
+    /// columns wide; tabs too many for the bar run past it.
+    pub fn fits(&self, width: u16) -> bool {
+        self.cells
+            .last()
+            .is_none_or(|cell| cell.start + cell.width < width)
+    }
+
     /// The tab whose cell covers `offset` columns from the bar's left edge.
     pub fn tab_at(&self, offset: u16) -> Option<T> {
         self.cells
@@ -188,6 +196,15 @@ mod tests {
         assert_eq!(narrow.cells[0].label, "SBX");
         let last = narrow.cells[2];
         assert_eq!(last.start + last.width, 19);
+        assert!(narrow.fits(20));
+    }
+
+    #[test]
+    fn tabs_too_many_for_the_bar_do_not_fit_it() {
+        // Three short cells and their dividers need 13 columns.
+        assert!(layout(13).fits(13));
+        assert!(!layout(12).fits(12));
+        assert!(TabLayout::untabbed(2).fits(2));
     }
 
     #[test]

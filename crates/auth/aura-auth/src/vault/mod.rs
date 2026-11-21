@@ -11,20 +11,49 @@
 //!   well under platform keyring size limits.
 //!
 //! Every operation re-reads the index so a CLI command and a running
-//! TUI observe each other's changes.
+//! TUI observe each other's changes. Secrets are kept once read: a
+//! link's tokens until the index shows another expiry for it (every
+//! refresh, by any process, changes it, and a new sign-in makes a new
+//! link), the zOS session for [`ZOS_SESSION_TTL`]. Reading the keyring
+//! for every model request opens a Secret Service session each time,
+//! and gnome-keyring-daemon aborts under that churn.
 
 mod slot;
 
 use crate::error::AuthError;
 use aura_core_auth::{LinkedAccount, OAuthTokens, Owner, ProviderKind, StoredSession};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 use tracing::warn;
 
+use slot::Read;
 pub(crate) use slot::SecretSlot;
 
 const INDEX_VERSION: u32 = 1;
+
+/// How long a zOS session read is used before it is read again, so a
+/// sign-in or sign-out by another process shows up.
+const ZOS_SESSION_TTL: Duration = Duration::from_secs(30);
+
+/// Secrets this vault read or wrote.
+#[derive(Default)]
+struct Kept {
+    /// The raw zOS session, `None` when signed out, and when it was read
+    zos: Option<(Instant, Option<String>)>,
+    /// Tokens by link id, with the link's expiry in the index then
+    tokens: HashMap<String, (DateTime<Utc>, OAuthTokens)>,
+}
+
+impl fmt::Debug for Kept {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Kept { .. }")
+    }
+}
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Index {
@@ -42,6 +71,7 @@ struct Index {
 pub struct Vault {
     root: PathBuf,
     use_keyring: bool,
+    kept: Arc<Mutex<Kept>>,
 }
 
 impl Vault {
@@ -57,6 +87,7 @@ impl Vault {
         Ok(Self {
             root,
             use_keyring: true,
+            kept: Arc::default(),
         })
     }
 
@@ -66,7 +97,12 @@ impl Vault {
         Self {
             root: root.into(),
             use_keyring: false,
+            kept: Arc::default(),
         }
+    }
+
+    fn kept(&self) -> MutexGuard<'_, Kept> {
+        self.kept.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Vault root directory.
@@ -106,7 +142,19 @@ impl Vault {
     /// The stored zOS session, if any.
     #[must_use]
     pub fn zos_session(&self) -> Option<StoredSession> {
-        let raw = self.zos_slot().load()?;
+        let kept = self.kept().zos.clone();
+        let raw = match kept {
+            Some((read_at, raw)) if read_at.elapsed() < ZOS_SESSION_TTL => raw,
+            kept => {
+                let raw = match self.zos_slot().read() {
+                    Read::Found(raw) => Some(raw),
+                    Read::Absent => None,
+                    Read::Unanswered => kept?.1,
+                };
+                self.kept().zos = Some((Instant::now(), raw.clone()));
+                raw
+            }
+        }?;
         match serde_json::from_str::<StoredSession>(&raw) {
             Ok(session) => Some(session),
             Err(e) => {
@@ -122,7 +170,10 @@ impl Vault {
     ///
     /// Propagates storage failures.
     pub fn save_zos_session(&self, session: &StoredSession) -> Result<(), AuthError> {
-        self.zos_slot().save(&serde_json::to_string(session)?)
+        let raw = serde_json::to_string(session)?;
+        self.zos_slot().save(&raw)?;
+        self.kept().zos = Some((Instant::now(), Some(raw)));
+        Ok(())
     }
 
     /// Remove the zOS session. Linked subscriptions are kept.
@@ -131,7 +182,9 @@ impl Vault {
     ///
     /// Propagates storage failures.
     pub fn clear_zos_session(&self) -> Result<(), AuthError> {
-        self.zos_slot().clear()
+        self.zos_slot().clear()?;
+        self.kept().zos = Some((Instant::now(), None));
+        Ok(())
     }
 
     // ---- index -----------------------------------------------------------
@@ -192,7 +245,7 @@ impl Vault {
     ///
     /// Propagates storage failures.
     pub fn put_link(&self, link: &LinkedAccount, tokens: &OAuthTokens) -> Result<(), AuthError> {
-        self.link_slot(link).save(&serde_json::to_string(tokens)?)?;
+        self.save_link_tokens(link, link.expires_at, tokens)?;
         let replaced = self.update_index(|index| {
             let replaced: Vec<LinkedAccount> = index
                 .links
@@ -207,7 +260,7 @@ impl Vault {
             replaced
         })?;
         for old in replaced {
-            let _ = self.link_slot(&old).clear();
+            let _ = self.clear_tokens(&old);
         }
         Ok(())
     }
@@ -225,22 +278,77 @@ impl Vault {
         })
     }
 
-    /// Tokens for `link`.
+    /// Tokens for `link`; `None` also when the keyring could not be read.
     #[must_use]
     pub fn tokens(&self, link: &LinkedAccount) -> Option<OAuthTokens> {
-        let raw = self.link_slot(link).load()?;
-        serde_json::from_str(&raw)
-            .map_err(|e| warn!(error = %e, link = %link.id, "Stored tokens unreadable"))
-            .ok()
+        self.read_tokens(link).ok().flatten()
     }
 
-    /// Replace the tokens for `link`.
+    /// Tokens for `link`, as kept since they were last read while the
+    /// index still has the link's expiry from then.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the keyring could not say whether it holds them.
+    pub fn read_tokens(&self, link: &LinkedAccount) -> Result<Option<OAuthTokens>, AuthError> {
+        if let Some((_, tokens)) = self
+            .kept()
+            .tokens
+            .get(&link.id)
+            .filter(|(expires_at, _)| *expires_at == link.expires_at)
+        {
+            return Ok(Some(tokens.clone()));
+        }
+        let tokens = match self.link_slot(link).read() {
+            Read::Found(raw) => serde_json::from_str::<OAuthTokens>(&raw)
+                .map_err(|e| warn!(error = %e, link = %link.id, "Stored tokens unreadable"))
+                .ok(),
+            Read::Absent => None,
+            Read::Unanswered => {
+                return Err(AuthError::CredentialKeyring(
+                    "the OS keyring did not answer".into(),
+                ))
+            }
+        };
+        let mut kept = self.kept();
+        match &tokens {
+            Some(tokens) => {
+                kept.tokens
+                    .insert(link.id.clone(), (link.expires_at, tokens.clone()));
+            }
+            None => {
+                kept.tokens.remove(&link.id);
+            }
+        }
+        Ok(tokens)
+    }
+
+    /// Drop what is kept of `link`'s tokens, so they are read again.
+    pub fn forget_tokens(&self, link: &LinkedAccount) {
+        self.kept().tokens.remove(&link.id);
+    }
+
+    /// Replace the tokens for `link`, whose expiry in the index becomes
+    /// theirs.
     ///
     /// # Errors
     ///
     /// Propagates storage failures.
     pub fn save_tokens(&self, link: &LinkedAccount, tokens: &OAuthTokens) -> Result<(), AuthError> {
-        self.link_slot(link).save(&serde_json::to_string(tokens)?)
+        self.save_link_tokens(link, tokens.expires_at, tokens)
+    }
+
+    fn save_link_tokens(
+        &self,
+        link: &LinkedAccount,
+        expires_at: DateTime<Utc>,
+        tokens: &OAuthTokens,
+    ) -> Result<(), AuthError> {
+        self.link_slot(link).save(&serde_json::to_string(tokens)?)?;
+        self.kept()
+            .tokens
+            .insert(link.id.clone(), (expires_at, tokens.clone()));
+        Ok(())
     }
 
     /// Delete the tokens for `link`, keeping its metadata.
@@ -249,6 +357,7 @@ impl Vault {
     ///
     /// Propagates storage failures.
     pub fn clear_tokens(&self, link: &LinkedAccount) -> Result<(), AuthError> {
+        self.forget_tokens(link);
         self.link_slot(link).clear()
     }
 
@@ -258,7 +367,7 @@ impl Vault {
     ///
     /// Propagates storage failures.
     pub fn remove_link(&self, link: &LinkedAccount) -> Result<(), AuthError> {
-        self.link_slot(link).clear()?;
+        self.clear_tokens(link)?;
         self.update_index(|index| index.links.retain(|l| l.id != link.id))
     }
 
@@ -296,7 +405,7 @@ impl Vault {
             (moved, dropped)
         })?;
         for link in dropped {
-            let _ = self.link_slot(&link).clear();
+            let _ = self.clear_tokens(&link);
         }
         Ok(moved)
     }
@@ -389,6 +498,40 @@ mod tests {
         assert_eq!(vault.zos_session().unwrap().access_token, "jwt");
         vault.clear_zos_session().unwrap();
         assert!(vault.zos_session().is_none());
+    }
+
+    #[test]
+    fn the_zos_session_is_kept_for_a_while_then_read_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("credentials.json");
+        std::fs::write(
+            &file,
+            r#"{"access_token":"jwt","user_id":"u","display_name":"n","primary_zid":"z","created_at":"2025-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        let vault = Vault::files_at(dir.path());
+        assert!(vault.zos_session().is_some());
+        std::fs::remove_file(&file).unwrap();
+        assert!(vault.zos_session().is_some(), "kept, not read again");
+        vault.kept().zos.as_mut().unwrap().0 -= ZOS_SESSION_TTL;
+        assert!(vault.zos_session().is_none(), "read again once stale");
+    }
+
+    #[test]
+    fn tokens_are_read_again_when_the_index_has_another_expiry() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::files_at(dir.path());
+        let l = link("l1", Owner::Local, ProviderKind::Claude);
+        vault.put_link(&l, &tokens("a1")).unwrap();
+        let other_process = Vault::files_at(dir.path());
+        let rotated = tokens("a2");
+        other_process.save_tokens(&l, &rotated).unwrap();
+        assert_eq!(vault.tokens(&l).unwrap().access_token, "a1");
+        let refreshed = LinkedAccount {
+            expires_at: rotated.expires_at,
+            ..l
+        };
+        assert_eq!(vault.tokens(&refreshed).unwrap().access_token, "a2");
     }
 
     #[test]
