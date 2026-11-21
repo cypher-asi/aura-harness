@@ -5,8 +5,8 @@ use super::panels::body_block;
 use super::text::display_width;
 use crate::app::benchmarks::{BenchMode, BenchState, FormField, WorkChoice};
 use crate::events::{
-    arm_letter, cost_per_fix, BenchArm, BenchLiveRun, BenchRun, BenchStatus, BenchTaskCell,
-    BenchTaskSetup, BenchTokens, BenchTurn, BenchVerdict, BenchView,
+    arm_letter, cost_per_fix, BenchArm, BenchDoing, BenchLiveRun, BenchRun, BenchStatus,
+    BenchTaskCell, BenchTaskSetup, BenchTokens, BenchTurn, BenchVerdict, BenchView,
 };
 use crate::{App, Theme};
 use ratatui::{
@@ -39,6 +39,23 @@ fn duration(ms: u64) -> String {
         return format!("{secs}s");
     }
     format!("{}m{:02}s", secs / 60, secs % 60)
+}
+
+/// `thinking 1m40s · call 12 · restarted 2×`, or `running task 8m12s ›`
+/// and what the subtask is doing.
+fn doing_text(doing: &BenchDoing) -> String {
+    let mut text = format!("{} {}", doing.what, duration(doing.for_ms));
+    if doing.call > 0 {
+        text.push_str(&format!(" · call {}", doing.call));
+    }
+    if doing.restarts > 0 {
+        text.push_str(&format!(" · restarted {}×", doing.restarts));
+    }
+    if let Some(subtask) = &doing.subtask {
+        text.push_str(" › ");
+        text.push_str(&doing_text(subtask));
+    }
+    text
 }
 
 /// `950`, `471k`, `1.5M`.
@@ -1129,12 +1146,11 @@ fn detail_lines(
             (String::new(), text),
             (String::new(), text),
             (
-                if live.wall_ms.is_some() {
-                    "working"
-                } else {
-                    "waiting for its task's files"
-                }
-                .to_string(),
+                match (&live.doing, live.wall_ms) {
+                    (_, None) => "waiting for its task's files".to_string(),
+                    (Some(doing), Some(_)) => doing_text(doing),
+                    (None, Some(_)) => "working".to_string(),
+                },
                 pending,
             ),
         ];
@@ -1734,6 +1750,29 @@ mod tests {
         assert!(finished.ends_with("2/8"), "{finished}");
         assert!(row("cost ").contains("$0.16"), "spent so far: {shown}");
         assert!(row("A  sonnet-4-6 ").contains("42k"), "{shown}");
+
+        view.live[0].doing = Some(BenchDoing {
+            what: "running task".to_string(),
+            for_ms: 492_000,
+            subtask: Some(Box::new(BenchDoing {
+                what: "thinking".to_string(),
+                for_ms: 100_000,
+                call: 4,
+                restarts: 2,
+                subtask: None,
+            })),
+            ..BenchDoing::default()
+        });
+        let shown = text(&detail_lines(&view, None, &theme, 200, Some(3)));
+        let a_1 = shown
+            .lines()
+            .find(|l| l.contains(" a-1 ") && l.contains("ansible-1"))
+            .unwrap_or_else(|| panic!("{shown}"));
+        assert!(
+            a_1.trim_end()
+                .ends_with("running task 8m12s › thinking 1m40s · call 4 · restarted 2×"),
+            "{shown}"
+        );
     }
 
     #[test]

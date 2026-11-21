@@ -18,8 +18,8 @@ use aura_agent::{AgentError, AgentLoopEvent, AgentLoopResult};
 use aura_agent_trace::bundle::{child_runs, list_run_dirs, list_runs, RunBundle};
 use aura_agent_trace::graph::{GraphNode, NodeStatus};
 use aura_agent_trace::{
-    db, report, run_log, DbSink, RecordRouter, RunGraph, RunLog, RunMeta, RunRecorder, RunSource,
-    RunTrace,
+    db, report, run_log, Activity, DbSink, RecordRouter, RunGraph, RunLog, RunMeta, RunRecorder,
+    RunSource, RunTrace,
 };
 use aura_core_types::trace::{Reward, RewardKind, RewardTarget, StepAction};
 use aura_core_types::{AgentId, SubagentExit};
@@ -140,6 +140,14 @@ impl Traces {
         lock(&self.live)
             .get(&agent)
             .map(|run| Arc::clone(&run.recorder))
+    }
+
+    /// What the open run of `agent` is doing, and whether a turn of it
+    /// is under way (only hosted turns say so).
+    pub(crate) fn activity(&self, agent: AgentId) -> Option<(Activity, bool)> {
+        lock(&self.live)
+            .get(&agent)
+            .map(|run| (run.recorder.activity(), run.in_turn))
     }
 
     /// Id of the open run of `agent`.

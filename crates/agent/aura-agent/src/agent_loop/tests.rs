@@ -168,7 +168,12 @@ async fn final_text_is_the_last_reply_without_remarks_between_tools() {
         serde_json::json!({"type": "object"}),
     )];
     let result = agent
-        .run(&provider, &executor, vec![Message::user("Read test.txt")], tools)
+        .run(
+            &provider,
+            &executor,
+            vec![Message::user("Read test.txt")],
+            tools,
+        )
         .await
         .unwrap();
 
@@ -680,11 +685,11 @@ fn effort_low_after_submit_plan() {
     );
 }
 
-/// Claude Sonnet 5.5 and Opus 5 reason at max on every iteration,
+/// Claude Sonnet 5.5 and Opus 5 reason high on every iteration,
 /// whatever the run has done and also in a dev-loop run. A choice of the
 /// user's still wins.
 #[test]
-fn effort_max_on_sonnet_5_5_and_opus_5() {
+fn effort_high_on_sonnet_5_5_and_opus_5() {
     use aura_model::ThinkingEffort;
 
     for model in ["claude/claude-sonnet-5-5", "claude/claude-opus-5-5"] {
@@ -696,14 +701,14 @@ fn effort_max_on_sonnet_5_5_and_opus_5() {
             let mut state = super::LoopState::new(&config, vec![]);
             assert_eq!(
                 state.compute_thinking_effort(&config, 0),
-                ThinkingEffort::Max,
+                ThinkingEffort::High,
                 "{model}"
             );
             state.had_any_file_write = true;
             state.submit_plan_called = true;
             assert_eq!(
                 state.compute_thinking_effort(&config, 3),
-                ThinkingEffort::Max,
+                ThinkingEffort::High,
                 "{model}"
             );
         }
@@ -723,7 +728,7 @@ fn effort_max_on_sonnet_5_5_and_opus_5() {
         let request = state.build_request(&default, &[], 2).unwrap();
         assert_eq!(
             request.thinking_effort,
-            Some(ThinkingEffort::Max),
+            Some(ThinkingEffort::High),
             "{model}"
         );
     }

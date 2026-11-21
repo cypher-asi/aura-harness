@@ -350,7 +350,12 @@ pub fn build(
 /// Returns an error when the run can't be read.
 pub fn of_bundle(home: &Path, bundle: &RunBundle) -> Result<RunLog, TraceError> {
     let trace = RunTrace::load(bundle)?;
-    Ok(build(Some(home), &trace, bundle.dir(), &bundle_loader(home)))
+    Ok(build(
+        Some(home),
+        &trace,
+        bundle.dir(),
+        &bundle_loader(home),
+    ))
 }
 
 /// Write `log` to `log.json` in `dir`, returning its path.
@@ -368,7 +373,9 @@ pub fn write(dir: &Path, log: &RunLog) -> Result<PathBuf, TraceError> {
 #[must_use]
 pub fn home_of(dir: &Path) -> Option<&Path> {
     let runs = dir.parent()?;
-    (runs.file_name()? == "runs").then(|| runs.parent()).flatten()
+    (runs.file_name()? == "runs")
+        .then(|| runs.parent())
+        .flatten()
 }
 
 struct Ctx<'a> {
@@ -378,7 +385,13 @@ struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
-    fn run(&self, trace: &RunTrace, dir: &Path, seen: &mut HashSet<String>, depth: usize) -> RunLog {
+    fn run(
+        &self,
+        trace: &RunTrace,
+        dir: &Path,
+        seen: &mut HashSet<String>,
+        depth: usize,
+    ) -> RunLog {
         let meta = &trace.meta;
         let children = match self.home {
             Some(home) if depth < MAX_DEPTH => child_runs(home, &meta.run_id),
@@ -572,8 +585,7 @@ impl Ctx<'_> {
                 files,
             } => {
                 let full = content.as_ref().and_then(|id| self.blob(id));
-                let output_complete =
-                    full.is_some() || excerpt.chars().count() >= *content_chars;
+                let output_complete = full.is_some() || excerpt.chars().count() >= *content_chars;
                 LogEvent::ToolResult {
                     tool_use_id: tool_use_id.clone(),
                     tool: tool.clone(),
@@ -971,7 +983,11 @@ mod tests {
         );
         let mut grandchild = RunMeta::new("m", RunSource::Test);
         grandchild.spawned_by = Some(cid.clone());
-        save(home.path(), &grandchild, &[prompt(&grandchild.run_id, 1, 1, "x")]);
+        save(
+            home.path(),
+            &grandchild,
+            &[prompt(&grandchild.run_id, 1, 1, "x")],
+        );
 
         let log = of_bundle(home.path(), &bundle).unwrap();
         assert_eq!(log.subagents.len(), 1);

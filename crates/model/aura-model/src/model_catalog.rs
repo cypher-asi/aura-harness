@@ -324,12 +324,14 @@ pub fn effort_change_resets_prompt_cache(model: &str) -> bool {
     model_key(model).starts_with("claude-")
 }
 
-/// Whether an agent's turns on `model` reason at the highest effort the
-/// model has when nobody chose one: Claude Sonnet 5.5 and the Claude
-/// Opus 5 models. They get the work that is hard to get right, where an
-/// attempt that fails costs more than the extra reasoning does.
+/// Whether an agent's turns on `model` reason at high effort when nobody
+/// chose one: Claude Sonnet 5.5 and the Claude Opus 5 models. They get
+/// the work that is hard to get right, where an attempt that fails costs
+/// more than the extra reasoning does. Not max: at max one call on a long
+/// conversation thinks for minutes, and a stream cut off before it ends
+/// starts that thinking over.
 #[must_use]
-pub fn reasons_at_max(model: &str) -> bool {
+pub fn reasons_high(model: &str) -> bool {
     let key = model_key(model);
     is_snapshot_of(&key, "claude-sonnet-5-5")
         || is_snapshot_of(&key, "claude-opus-5")
@@ -796,14 +798,14 @@ mod tests {
     }
 
     #[test]
-    fn sonnet_5_5_and_opus_5_reason_at_max() {
+    fn sonnet_5_5_and_opus_5_reason_high() {
         for model in [
             "claude/claude-sonnet-5-5",
             "claude-sonnet-5-5-20261001",
             "aura-claude-opus-5-5",
             "claude/claude-opus-5",
         ] {
-            assert!(reasons_at_max(model), "{model}");
+            assert!(reasons_high(model), "{model}");
         }
         for model in [
             "claude/claude-sonnet-5",
@@ -813,7 +815,7 @@ mod tests {
             "chatgpt/gpt-5.6-sol",
             "ollama/qwen3",
         ] {
-            assert!(!reasons_at_max(model), "{model}");
+            assert!(!reasons_high(model), "{model}");
         }
     }
 

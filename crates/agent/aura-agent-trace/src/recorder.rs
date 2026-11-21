@@ -22,6 +22,7 @@ use aura_core_types::trace::{
 use aura_store_snapshot::{FsSnapshotStore, SnapshotStore};
 use serde_json::{json, Value};
 
+use crate::activity::Activity;
 use crate::bundle::{self, now_ms, RunBundle, RunMeta, STEPS_FILE};
 use crate::health::{duration, APPROVAL_GUESS_MS, DEFAULT_SLOW_MS};
 use crate::records::RecordRow;
@@ -509,6 +510,7 @@ pub struct RunRecorder {
     level: TraceLevel,
     blobs: Option<Arc<FsSnapshotStore>>,
     builder: Mutex<StepBuilder>,
+    activity: Mutex<Activity>,
     tx: Mutex<Option<SyncSender<WriteOp>>>,
     writer: Mutex<Option<JoinHandle<()>>>,
     listeners: Mutex<Vec<Listener>>,
@@ -565,6 +567,7 @@ impl RunRecorder {
             level,
             blobs,
             builder: Mutex::new(builder),
+            activity: Mutex::new(Activity::default()),
             tx: Mutex::new(Some(tx)),
             writer: Mutex::new(Some(writer)),
             listeners: Mutex::new(Vec::new()),
@@ -724,13 +727,23 @@ impl RunRecorder {
         if titled {
             self.push_meta();
         }
-        let step = lock(&self.builder).user_prompt(prompt, now_ms());
+        let at_ms = now_ms();
+        lock(&self.activity).turn_started(at_ms);
+        let step = lock(&self.builder).user_prompt(prompt, at_ms);
         self.emit(step);
+    }
+
+    /// What the run is doing right now.
+    #[must_use]
+    pub fn activity(&self) -> Activity {
+        lock(&self.activity).clone()
     }
 
     /// Record one loop event.
     pub fn on_event(&self, event: &AgentLoopEvent) {
-        let step = lock(&self.builder).on_event(event, now_ms());
+        let at_ms = now_ms();
+        lock(&self.activity).on_event(event, at_ms);
+        let step = lock(&self.builder).on_event(event, at_ms);
         if let Some(step) = step {
             self.emit(step);
         }
@@ -811,7 +824,8 @@ impl RunRecorder {
         if let Some(trace) = &trace {
             let dir = self.bundle.dir();
             let home = crate::run_log::home_of(dir);
-            let load = |run_id: &str| home.and_then(|home| crate::run_log::bundle_loader(home)(run_id));
+            let load =
+                |run_id: &str| home.and_then(|home| crate::run_log::bundle_loader(home)(run_id));
             let log = crate::run_log::build(home, trace, dir, &load);
             if let Err(e) = crate::run_log::write(dir, &log) {
                 tracing::debug!(error = %e, "trace log write failed");

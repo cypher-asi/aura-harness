@@ -393,9 +393,9 @@ impl LoopState {
     /// only set by `configure_loop_config` for dev-loop tasks, so chat
     /// and other callers retain the original tiered policy below.
     ///
-    /// A model that reasons at max
-    /// ([`aura_model::model_catalog::reasons_at_max`]: Claude Sonnet 5.5
-    /// and Opus 5) gets `Max` on every iteration of every run, dev-loop
+    /// A model that reasons high
+    /// ([`aura_model::model_catalog::reasons_high`]: Claude Sonnet 5.5
+    /// and Opus 5) gets `High` on every iteration of every run, dev-loop
     /// runs included. The effort never changes within a run, so its
     /// prompt cache is kept.
     ///
@@ -419,8 +419,8 @@ impl LoopState {
         config: &AgentLoopConfig,
         iteration: usize,
     ) -> ThinkingEffort {
-        if aura_model::model_catalog::reasons_at_max(&config.model) {
-            return ThinkingEffort::Max;
+        if aura_model::model_catalog::reasons_high(&config.model) {
+            return ThinkingEffort::High;
         }
         if config.disable_thinking_iteration_0 {
             return ThinkingEffort::Medium;
