@@ -554,10 +554,6 @@ impl App {
             KeyCode::Char('d') if has_copies => {
                 self.send_bench(BenchRequest::Diff { id, run });
             }
-            KeyCode::Char(c @ ('a' | 'b')) if has_copies => {
-                let arm = usize::from(c == 'b');
-                self.send_bench(BenchRequest::Pick { id, arm });
-            }
             KeyCode::Char('y') if has_copies && examples => {
                 self.notification = Some((
                     "Example tasks ran in their own fixtures; there is nothing to apply"

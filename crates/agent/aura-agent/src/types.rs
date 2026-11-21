@@ -248,6 +248,9 @@ pub struct AgentLoopResult {
     pub llm_unavailable: bool,
     /// Accumulated assistant text across all iterations.
     pub total_text: String,
+    /// Text of the last model response that had any: the turn's closing
+    /// answer, without the remarks made between tool calls.
+    pub final_text: String,
     /// Accumulated thinking text across all iterations.
     pub total_thinking: String,
     /// Total input tokens used.

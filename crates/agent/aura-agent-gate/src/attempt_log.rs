@@ -70,6 +70,7 @@ pub struct Attempt {
     /// The model that did the work
     pub model: String,
     /// What Gate recorded of how it went, after any follow-up
+    #[serde(deserialize_with = "stored_signal")]
     pub signal: OutcomeSignal,
     /// Whether that counts as success; absent when nothing said
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -87,6 +88,20 @@ pub struct Attempt {
     /// rather than written as the attempt ended
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub backfilled: bool,
+}
+
+/// A stored attempt's signal. Older logs wrote `none` for work that
+/// ended with nothing to say how it went, which reads as
+/// [`OutcomeSignal::Unavailable`]: it counts neither way.
+fn stored_signal<'de, D>(deserializer: D) -> Result<OutcomeSignal, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let name = String::deserialize(deserializer)?;
+    if name == "none" {
+        return Ok(OutcomeSignal::Unavailable);
+    }
+    OutcomeSignal::deserialize(serde::de::value::StrDeserializer::new(&name))
 }
 
 /// What an attempt ran under, the part its `Outcome` does not hold.
@@ -140,7 +155,7 @@ pub enum TruthSource {
     Rewind,
     /// The user sent the prompt again to a stronger model
     RetryStronger,
-    /// The user picked between two runs of `/compare`
+    /// The user picked between two runs of `/compare`, in older logs
     Picked,
 }
 
@@ -152,7 +167,6 @@ impl TruthSource {
         match signal {
             OutcomeSignal::Rewind => Some(Self::Rewind),
             OutcomeSignal::RetryStronger => Some(Self::RetryStronger),
-            OutcomeSignal::Good | OutcomeSignal::Bad => Some(Self::Picked),
             _ => None,
         }
     }
@@ -1304,7 +1318,11 @@ mod tests {
             )),
             Line::Truth(truth("p3", TruthSource::TaskCheck, true)),
             // Nothing to judge by, wrong.
-            Line::Attempt(attempt("p4", OutcomeSignal::None, Evidence::default())),
+            Line::Attempt(attempt(
+                "p4",
+                OutcomeSignal::Unavailable,
+                Evidence::default(),
+            )),
             Line::Truth(truth("p4", TruthSource::Rewind, false)),
             // Counted as failed (and moved up): not what flags are for.
             Line::Attempt(attempt("p5", OutcomeSignal::ChecksFailed, clean())),
@@ -1362,7 +1380,7 @@ mod tests {
         rebuilt.backfilled = true;
         let lines = [
             Line::Attempt(rebuilt.clone()),
-            Line::Attempt(attempt("p1", OutcomeSignal::None, clean())),
+            Line::Attempt(attempt("p1", OutcomeSignal::Unavailable, clean())),
             Line::Attempt(attempt("p1", OutcomeSignal::ChecksPassed, masked())),
             Line::Attempt(rebuilt),
             Line::Truth(truth("p1", TruthSource::TaskCheck, false)),
@@ -1422,7 +1440,7 @@ mod tests {
         let mut unjudged = lines.to_vec();
         unjudged.push(Line::Attempt(attempt(
             "p4",
-            OutcomeSignal::None,
+            OutcomeSignal::Unavailable,
             Evidence::default(),
         )));
         unjudged.push(Line::Truth(truth("p4", TruthSource::Rewind, false)));
@@ -1675,10 +1693,29 @@ mod tests {
             Some(TruthSource::Rewind)
         );
         assert_eq!(
-            TruthSource::of_user(OutcomeSignal::Good),
-            Some(TruthSource::Picked)
+            TruthSource::of_user(OutcomeSignal::RetryStronger),
+            Some(TruthSource::RetryStronger)
         );
         assert_eq!(TruthSource::of_user(OutcomeSignal::ChecksPassed), None);
         assert_eq!(TruthSource::of_user(OutcomeSignal::JudgedFail), None);
+    }
+
+    #[test]
+    fn older_lines_still_read() {
+        let mut line = serde_json::to_value(Line::Attempt(attempt(
+            "p1",
+            OutcomeSignal::ChecksPassed,
+            clean(),
+        )))
+        .unwrap();
+        line["signal"] = "none".into();
+        let Line::Attempt(read) = serde_json::from_value(line).unwrap() else {
+            panic!("an attempt");
+        };
+        assert_eq!(read.signal, OutcomeSignal::Unavailable);
+        let mut picked =
+            serde_json::to_value(Line::Truth(truth("p1", TruthSource::Rewind, true))).unwrap();
+        picked["source"] = "picked".into();
+        assert!(serde_json::from_value::<Line>(picked).is_ok());
     }
 }

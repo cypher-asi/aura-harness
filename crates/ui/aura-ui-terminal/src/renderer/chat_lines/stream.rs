@@ -2,11 +2,15 @@
 //!
 //! Laying the whole reply out again for every chunk makes a frame cost
 //! more the longer the reply gets. A reply is laid out a line at a time,
-//! though, and nothing in it reaches across a blank line or out of a
-//! closed code block. So what comes before the last such break is laid out
-//! once and kept, and only the rest, the paragraph, list, table or code
-//! block still being written, is laid out again.
+//! though, and little in it reaches across a blank line, and nothing out
+//! of a closed code block. Fields do: the blank lines between two list
+//! items that start with a label are not drawn, and where a record starts
+//! depends on the fields above. So what comes before the last break that
+//! no field reaches across is laid out once and kept, and only the rest,
+//! the paragraph, list, table or code block still being written, is laid
+//! out again.
 
+use super::super::markdown::{may_continue_list, may_join_list};
 use crate::components::{Message, MessageRole};
 use ratatui::text::Line;
 
@@ -86,18 +90,23 @@ struct Ending {
     at: usize,
     /// Whether the line closes a code block
     fence: bool,
+    /// Whether the line may be part of a list, which a gap after it may
+    /// not end before a field
+    list: bool,
     /// Empty lines after it so far
     blank: usize,
 }
 
 /// The last break in `text`, if it has one. `text` starts at a line
 /// outside any code block. A break goes before a whole line of text that
-/// follows either the end of a code block or empty lines after other text.
+/// follows either the end of a code block or empty lines after other text,
+/// unless the line before may be in a list that the line after may join.
 ///
 /// The line has to be whole because until then it may yet turn out to
 /// open a code block. Text has to be parted from text by an empty line
 /// because a table's rows and the gap before a heading depend on the line
-/// before them. Empty lines after a code block are not drawn, so none go
+/// before them. Fields depend on the list items above them, across empty
+/// lines. Empty lines after a code block are not drawn, so none go
 /// between the parts there.
 fn last_break(text: &str) -> Option<Break> {
     let mut found = None;
@@ -122,7 +131,9 @@ fn last_break(text: &str) -> Option<Break> {
                 ending.blank += 1;
             }
         } else {
-            if let Some(last) = ending.filter(|last| last.fence || last.blank > 0) {
+            let joins = may_join_list(line);
+            let parted = |last: &Ending| last.fence || (last.blank > 0 && !(last.list && joins));
+            if let Some(last) = ending.filter(parted) {
                 found = Some(Break {
                     before: last.at,
                     blank: if last.fence { 0 } else { last.blank },
@@ -132,6 +143,7 @@ fn last_break(text: &str) -> Option<Break> {
             ending = Some(Ending {
                 at,
                 fence,
+                list: may_continue_list(line),
                 blank: 0,
             });
         }
@@ -160,6 +172,17 @@ the frontends is for and how a session is started from either of them:\n\n\
 # A heading right after a list\n\
 > quoted\n\n---\n\n1. first\n2. second\r\n\r\nA line after a CRLF gap\n  \n\
 ```\nunclosed code\n";
+
+    /// A loose list of fields in two records, then a paragraph.
+    const FIELDS: &str = "## New Interfaces\n\
+- Path: `lib/ansible/modules/mount_facts.py`\n\n\
+- Name: `get_udevadm_device_uuid`\n\n\
+- Type: function\n\n\
+- Description: Returns the device's UUID, or None when udevadm is missing\n\n\
+- Path: `lib/ansible/modules/mount_facts.py`\n\n\
+- Name: `MountInfo`\n\n\
+- Type: class\n\n\
+Both are new in this change.\n";
 
     fn at_once(content: &str, width: usize, theme: &Theme) -> Laid {
         content_lines(
@@ -219,7 +242,7 @@ the frontends is for and how a session is started from either of them:\n\n\
 
     /// A reply of lines of every kind in an order no one would write.
     fn jumble(dice: &mut Dice) -> String {
-        const LINES: [&str; 26] = [
+        const LINES: [&str; 29] = [
             "plain text that goes on for long enough to wrap in a narrow pane",
             "short",
             "",
@@ -246,6 +269,9 @@ the frontends is for and how a session is started from either of them:\n\n\
             "   ```",
             "text with `code` and **bold**",
             "``` not closed `",
+            "- Path: `x`",
+            "- Name: y",
+            "  continued",
         ];
         let crlf = dice.roll(4) == 0;
         let mut reply = String::new();
@@ -317,11 +343,52 @@ the frontends is for and how a session is started from either of them:\n\n\
     }
 
     #[test]
+    fn a_gap_before_a_field_or_an_indented_line_in_a_list_is_not_a_break() {
+        for text in [
+            "- A: 1\n\n- B: 2\n",
+            "- a\n\n- B: 2\n",
+            "- a\n\n  more\n",
+            "  indented\n\n- A: 1\n",
+        ] {
+            assert_eq!(last_break(text), None, "{text:?}");
+        }
+        for (text, before) in [
+            ("- a\n\n- b\n", 4),
+            ("- a\n\nafter\n", 4),
+            ("text\n\n- A: 1\n", 5),
+        ] {
+            assert_eq!(
+                last_break(text),
+                Some(Break {
+                    before,
+                    blank: 1,
+                    after: before + 1
+                }),
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_reply_streamed_is_laid_out_as_it_would_be_at_once() {
         for width in [28, 80] {
             stream(REPLY, std::iter::repeat(1), width);
             stream(REPLY, std::iter::repeat(7), width);
             stream(REPLY, [REPLY.len()].into_iter(), width);
+        }
+    }
+
+    #[test]
+    fn a_list_of_fields_streamed_is_laid_out_as_it_would_be_at_once() {
+        let (lines, _) = at_once(FIELDS, 80, &Theme::cyber());
+        let blank = lines.iter().filter(|line| line.width() == 0).count();
+        assert_eq!(
+            blank, 3,
+            "under the heading, between records, above the text"
+        );
+        for width in [28, 80] {
+            stream(FIELDS, std::iter::repeat(1), width);
+            stream(FIELDS, std::iter::repeat(7), width);
         }
     }
 

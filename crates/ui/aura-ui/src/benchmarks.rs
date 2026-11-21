@@ -15,8 +15,6 @@ pub enum BenchStatus {
     Done,
     /// The user stopped it.
     Cancelled,
-    /// The user picked arm 0 (A) or 1 (B).
-    Picked(usize),
     /// The named run's changes went into the user's workspace.
     Applied(String),
     /// The copies were removed.
@@ -24,20 +22,19 @@ pub enum BenchStatus {
 }
 
 impl BenchStatus {
-    /// `running`, `done`, `picked B`, ...
+    /// `running`, `done`, `applied a-2`, ...
     #[must_use]
     pub fn label(&self) -> String {
         match self {
             Self::Running => "running".to_string(),
             Self::Done => "done".to_string(),
             Self::Cancelled => "stopped".to_string(),
-            Self::Picked(arm) => format!("picked {}", arm_letter(*arm)),
             Self::Applied(run) => format!("applied {run}"),
             Self::Dismissed => "dismissed".to_string(),
         }
     }
 
-    /// Whether the runs' copies still exist, to diff, pick or apply.
+    /// Whether the runs' copies still exist, to diff or apply.
     #[must_use]
     pub const fn has_copies(&self) -> bool {
         !matches!(self, Self::Applied(_) | Self::Dismissed)
@@ -478,9 +475,6 @@ pub enum BenchRequest {
     Start,
     /// Drop the one set up, or stop the one running
     Cancel,
-    /// Rate every run of `arm` (0 or 1) of benchmark `id` good and the
-    /// other arm's bad
-    Pick { id: String, arm: usize },
     /// Put run `run`'s changes in the user's workspace
     Apply { id: String, run: String },
     /// Show what run `run` changed, or the first run of each arm
@@ -546,7 +540,7 @@ mod tests {
         view.live.clear();
         view.runs = vec![BenchRun::default(); 8];
         assert_eq!(view.progress().phase, BenchPhase::Judging);
-        view.status = BenchStatus::Picked(0);
+        view.status = BenchStatus::Applied("a-1".into());
         assert_eq!(view.progress().phase, BenchPhase::Done);
         assert!(!BenchPhase::Done.under_way());
         view.status = BenchStatus::Cancelled;
@@ -555,7 +549,6 @@ mod tests {
 
     #[test]
     fn statuses_read_naturally_and_know_their_copies() {
-        assert_eq!(BenchStatus::Picked(1).label(), "picked B");
         assert_eq!(BenchStatus::Applied("a-2".into()).label(), "applied a-2");
         assert!(BenchStatus::Done.has_copies());
         assert!(!BenchStatus::Dismissed.has_copies());

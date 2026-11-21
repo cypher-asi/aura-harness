@@ -1,6 +1,7 @@
 //! How Gate judges a prompt's work from the signals recorded about it.
 //!
-//! - [`turn_signal`]: the signal written when a turn ends.
+//! - [`turn_signal`]: the signal a turn's own messages give it when it
+//!   ends; one that ran no check gets none, and its judge's verdict.
 //! - [`calls_for_stronger`]: whether that signal sends the work on to a
 //!   stronger model.
 //! - [`is_retry_stronger`]: whether the next prompt is the same request
@@ -20,13 +21,15 @@ const MAX_COMPARED_CHARS: usize = 2_000;
 
 /// The signal for a turn that ended: `errored` when it ended in an error,
 /// else what its last check said (see [`crate::checks::last_check`]).
+/// `None` when it ran no check: nothing it did says how it went, so the
+/// judge has to.
 #[must_use]
-pub const fn turn_signal(errored: bool, last_check: Option<bool>) -> OutcomeSignal {
+pub const fn turn_signal(errored: bool, last_check: Option<bool>) -> Option<OutcomeSignal> {
     match (errored, last_check) {
-        (true, _) => OutcomeSignal::Error,
-        (false, Some(false)) => OutcomeSignal::ChecksFailed,
-        (false, Some(true)) => OutcomeSignal::ChecksPassed,
-        (false, None) => OutcomeSignal::None,
+        (true, _) => Some(OutcomeSignal::Error),
+        (false, Some(false)) => Some(OutcomeSignal::ChecksFailed),
+        (false, Some(true)) => Some(OutcomeSignal::ChecksPassed),
+        (false, None) => None,
     }
 }
 
@@ -42,19 +45,11 @@ pub const fn calls_for_stronger(signal: OutcomeSignal) -> bool {
 }
 
 /// The outcome that counts among those recorded for one prompt, oldest
-/// first: the user's latest rating if there is one, else the latest.
+/// first: the latest.
 pub fn effective<'a>(
     outcomes: impl IntoIterator<Item = &'a OutcomePayload>,
 ) -> Option<&'a OutcomePayload> {
-    let mut latest = None;
-    let mut rating = None;
-    for outcome in outcomes {
-        if outcome.signal.is_rating() {
-            rating = Some(outcome);
-        }
-        latest = Some(outcome);
-    }
-    rating.or(latest)
+    outcomes.into_iter().last()
 }
 
 /// Whether `next`, sent on `next_model`, repeats `previous`, which ran on
@@ -132,10 +127,16 @@ mod tests {
 
     #[test]
     fn turn_end_signals() {
-        assert_eq!(turn_signal(true, Some(true)), OutcomeSignal::Error);
-        assert_eq!(turn_signal(false, Some(false)), OutcomeSignal::ChecksFailed);
-        assert_eq!(turn_signal(false, Some(true)), OutcomeSignal::ChecksPassed);
-        assert_eq!(turn_signal(false, None), OutcomeSignal::None);
+        assert_eq!(turn_signal(true, Some(true)), Some(OutcomeSignal::Error));
+        assert_eq!(
+            turn_signal(false, Some(false)),
+            Some(OutcomeSignal::ChecksFailed)
+        );
+        assert_eq!(
+            turn_signal(false, Some(true)),
+            Some(OutcomeSignal::ChecksPassed)
+        );
+        assert_eq!(turn_signal(false, None), None, "the judge has to say");
     }
 
     #[test]
@@ -149,24 +150,6 @@ mod tests {
             Some(OutcomeSignal::Rewind)
         );
         assert_eq!(effective(&[]), None);
-    }
-
-    #[test]
-    fn a_rating_overrides_automatic_signals_before_and_after_it() {
-        let recorded = [
-            outcome(OutcomeSignal::ChecksFailed),
-            outcome(OutcomeSignal::Good),
-            outcome(OutcomeSignal::RetryStronger),
-        ];
-        let counted = effective(&recorded).unwrap();
-        assert_eq!(counted.signal, OutcomeSignal::Good);
-        assert_eq!(counted.success, Some(true));
-
-        let changed_mind = [outcome(OutcomeSignal::Good), outcome(OutcomeSignal::Bad)];
-        assert_eq!(
-            effective(&changed_mind).map(|o| o.signal),
-            Some(OutcomeSignal::Bad)
-        );
     }
 
     #[test]

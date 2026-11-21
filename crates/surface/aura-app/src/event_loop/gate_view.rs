@@ -298,7 +298,6 @@ impl GateView<'_> {
     fn render_level(&self, out: &mut String, level: RouteLevel) {
         let categories: Vec<(PromptCategory, Vec<Line>)> = PromptCategory::CLASSES
             .into_iter()
-            .chain([PromptCategory::Unclassified])
             .map(|category| (category, self.lines(level, category)))
             .filter(|(_, lines)| {
                 level == RouteLevel::Turn || lines.iter().any(|line| line.row.is_some())
@@ -485,7 +484,7 @@ mod tests {
         for &(category, model, ok, failed) in rows {
             for n in 0..ok + failed {
                 let mut prompt = PromptPayload::new(format!("{category} {model} {n}"));
-                prompt.category = category;
+                prompt.category = Some(category);
                 prompt.route = Route::turn(model, RouteReason::Default);
                 let tx = Transaction::user_prompt_with(agent, &prompt);
                 let prompt_tx = tx.hash;

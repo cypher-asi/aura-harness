@@ -262,7 +262,6 @@ fn status(status: &CompareStatus) -> String {
         CompareStatus::Running => "running".to_string(),
         CompareStatus::Done => "done".to_string(),
         CompareStatus::Cancelled => "stopped".to_string(),
-        CompareStatus::Picked(arm) => format!("you picked {}", arm.as_str().to_uppercase()),
         CompareStatus::Applied(run) => format!("applied {run}"),
         CompareStatus::Dismissed => "dismissed".to_string(),
     }
@@ -505,9 +504,9 @@ pub(super) fn render(name: &str, payload: &ComparePayload) -> String {
     }
     if payload.status.has_copies() && payload.status != CompareStatus::Running {
         out.push_str(if examples.is_empty() {
-            "\n\n  /compare diff [run] · /compare pick a|b · /compare apply <run> · /compare dismiss"
+            "\n\n  /compare diff [run] · /compare apply <run> · /compare dismiss"
         } else {
-            "\n\n  /compare diff [run] · /compare pick a|b · /compare dismiss"
+            "\n\n  /compare diff [run] · /compare dismiss"
         });
     }
     out
@@ -833,7 +832,7 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("Note: the budget stopped 2 runs"));
-        assert!(text.contains("/compare pick a|b"));
+        assert!(text.contains("/compare diff [run] · "));
         assert!(!text.contains("Per prompt"), "{text}");
         assert!(!text.contains("vs yours"), "{text}");
         let a_3 = line(&text, "a-3");
@@ -866,7 +865,7 @@ mod tests {
             RunTurn {
                 category: Some(PromptCategory::Question),
                 led: Some(false),
-                ..RunTurn::new("m", 0.03, 1, OutcomeSignal::None)
+                ..RunTurn::new("m", 0.03, 1, OutcomeSignal::JudgedPass)
             },
         ];
         let text = render("Compare #1", &payload);

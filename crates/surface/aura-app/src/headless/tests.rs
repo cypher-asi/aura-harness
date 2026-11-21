@@ -641,7 +641,7 @@ async fn gate_routes_headless_turns_and_records_how_they_went() {
     let permissions = super::permissions(aura_core_modes::AgentMode::Agent, None);
     let (mut h, requests) = harness(
         &dirs,
-        MockProvider::simple_response("question"),
+        MockProvider::simple_response("question medium"),
         ToolFilter::default(),
         permissions,
         gate,
@@ -687,7 +687,7 @@ async fn gate_routes_headless_turns_and_records_how_they_went() {
         .filter_map(|e| e.tx.prompt_payload())
         .collect();
     assert_eq!(prompts.len(), 1);
-    assert_eq!(prompts[0].category, PromptCategory::Question);
+    assert_eq!(prompts[0].category, Some(PromptCategory::Question));
     assert_eq!(prompts[0].classifier, HAIKU);
     assert_eq!(prompts[0].route, Route::turn(SONNET, RouteReason::Default),);
     let outcomes: Vec<_> = entries
@@ -696,7 +696,7 @@ async fn gate_routes_headless_turns_and_records_how_they_went() {
         .collect();
     assert_eq!(outcomes.len(), 1);
     assert_eq!(outcomes[0].model, SONNET);
-    assert_eq!(outcomes[0].signal, OutcomeSignal::None);
+    assert_eq!(outcomes[0].signal, OutcomeSignal::Unavailable);
     assert_eq!(h.hub.gate.recent().len(), 1);
 }
 
@@ -720,7 +720,7 @@ async fn a_headless_turn_changing_several_files_is_led() {
     let permissions = super::permissions(aura_core_modes::AgentMode::Agent, None);
     let (mut h, requests) = harness(
         &dirs,
-        MockProvider::simple_response("multi_file_change"),
+        MockProvider::simple_response("multi_file_change medium"),
         ToolFilter::default(),
         permissions,
         gate,
@@ -782,7 +782,7 @@ async fn an_eval_run_under_gate_is_routed_and_its_verdict_feeds_the_table() {
     let permissions = super::permissions(aura_core_modes::AgentMode::Agent, None);
     let (h, requests) = harness(
         &dirs,
-        MockProvider::new().with_default_response(MockResponse::text("question")),
+        MockProvider::new().with_default_response(MockResponse::text("question medium")),
         ToolFilter::default(),
         permissions,
         gate,
@@ -871,14 +871,19 @@ async fn an_eval_run_under_gate_is_routed_and_its_verdict_feeds_the_table() {
             .filter_map(|e| e.tx.prompt_payload())
             .collect();
         assert_eq!(prompts.len(), 1, "{}", agent.name);
-        assert_eq!(prompts[0].category, PromptCategory::Question);
+        assert_eq!(prompts[0].category, Some(PromptCategory::Question));
         assert_eq!(prompts[0].route, Route::turn(SONNET, RouteReason::Default));
         let signals: Vec<OutcomeSignal> = entries
             .iter()
             .filter_map(|e| e.tx.outcome_payload())
             .map(|o| o.signal)
             .collect();
-        assert_eq!(signals, [OutcomeSignal::None, verdict], "{}", agent.name);
+        assert_eq!(
+            signals,
+            [OutcomeSignal::Unavailable, verdict],
+            "{}",
+            agent.name
+        );
         let verify = entries
             .iter()
             .filter(|e| e.tx.tx_type == TransactionType::ToolProposal)
@@ -908,7 +913,10 @@ struct FailedCheckRun {
     /// Model of each model call, in order
     models: Vec<String>,
     requests: Arc<Mutex<Vec<ModelRequest>>>,
-    routes: Vec<(aura_core_types::PromptCategory, aura_core_types::Route)>,
+    routes: Vec<(
+        Option<aura_core_types::PromptCategory>,
+        aura_core_types::Route,
+    )>,
     outcomes: Vec<(String, aura_core_types::OutcomeSignal)>,
     /// Tries and successes of the debugging rows of Sonnet and Opus
     rows: [Option<(u32, u32)>; 2],
@@ -945,7 +953,7 @@ fn sonnet_and_opus() -> GateBase {
 /// `then`, in order.
 fn failing_check_provider(then: &[&str]) -> MockProvider {
     let mut provider = MockProvider::new()
-        .with_response(MockResponse::text("debugging"))
+        .with_response(MockResponse::text("debugging medium"))
         .with_response(MockResponse::tool_use(
             "c0",
             "write_file",
@@ -1085,11 +1093,11 @@ async fn a_failed_turn_the_judge_blames_on_the_model_goes_on_with_a_stronger_one
         run.routes,
         [
             (
-                PromptCategory::Debugging,
+                Some(PromptCategory::Debugging),
                 Route::turn(GATE_SONNET, RouteReason::Default)
             ),
             (
-                PromptCategory::Debugging,
+                Some(PromptCategory::Debugging),
                 Route::turn(GATE_OPUS, RouteReason::Escalate)
             ),
         ]
@@ -1099,7 +1107,7 @@ async fn a_failed_turn_the_judge_blames_on_the_model_goes_on_with_a_stronger_one
         [
             (GATE_SONNET.to_string(), OutcomeSignal::ChecksFailed),
             (GATE_SONNET.to_string(), OutcomeSignal::JudgedFail),
-            (GATE_OPUS.to_string(), OutcomeSignal::None),
+            (GATE_OPUS.to_string(), OutcomeSignal::Unavailable),
         ]
     );
     assert_eq!(
@@ -1200,7 +1208,7 @@ async fn an_eval_verdict_after_a_move_up_lands_on_the_uncounted_attempt() {
         [
             (GATE_SONNET.to_string(), OutcomeSignal::ChecksFailed),
             (GATE_SONNET.to_string(), OutcomeSignal::JudgedFail),
-            (GATE_OPUS.to_string(), OutcomeSignal::None),
+            (GATE_OPUS.to_string(), OutcomeSignal::Unavailable),
             (GATE_OPUS.to_string(), OutcomeSignal::ChecksPassed),
         ],
         "the hidden check's verdict is recorded for the model that finished the work"
@@ -1250,7 +1258,7 @@ async fn a_failed_turn_the_judge_excuses_stays_put_and_counts_for_nothing() {
     assert_eq!(
         run.routes,
         [(
-            PromptCategory::Debugging,
+            Some(PromptCategory::Debugging),
             Route::turn(GATE_SONNET, RouteReason::Default)
         )]
     );
@@ -1280,7 +1288,7 @@ async fn a_failed_turn_the_judge_says_nothing_clear_about_still_moves_up() {
         run.outcomes,
         [
             (GATE_SONNET.to_string(), OutcomeSignal::ChecksFailed),
-            (GATE_OPUS.to_string(), OutcomeSignal::None),
+            (GATE_OPUS.to_string(), OutcomeSignal::Unavailable),
         ],
         "the turn's own signal stands"
     );
@@ -1336,7 +1344,7 @@ async fn run_routed(
 async fn a_change_made_without_a_check_is_checked_before_the_turn_ends() {
     use aura_core_types::OutcomeSignal;
     let provider = MockProvider::new()
-        .with_response(MockResponse::text("debugging"))
+        .with_response(MockResponse::text("debugging medium"))
         .with_response(MockResponse::tool_use(
             "c0",
             "write_file",
@@ -1398,10 +1406,10 @@ async fn a_change_made_without_a_check_is_checked_before_the_turn_ends() {
     assert_eq!(
         signals,
         [
-            (GATE_SONNET, OutcomeSignal::None),
+            (GATE_SONNET, OutcomeSignal::Unavailable),
             (GATE_SONNET, OutcomeSignal::ChecksFailed),
             (GATE_SONNET, OutcomeSignal::JudgedFail),
-            (GATE_OPUS, OutcomeSignal::None),
+            (GATE_OPUS, OutcomeSignal::Unavailable),
         ]
     );
     assert_eq!(
@@ -1418,7 +1426,7 @@ async fn a_change_made_without_a_check_is_checked_before_the_turn_ends() {
 async fn unchecked_work_that_looks_unfinished_goes_to_the_judge_then_moves_up() {
     use aura_core_types::OutcomeSignal;
     let provider = MockProvider::new()
-        .with_response(MockResponse::text("debugging"))
+        .with_response(MockResponse::text("debugging medium"))
         .with_response(MockResponse::text(
             "I could not find where the parser drops the token.",
         ))
@@ -1456,9 +1464,9 @@ async fn unchecked_work_that_looks_unfinished_goes_to_the_judge_then_moves_up() 
     assert_eq!(
         signals,
         [
-            (GATE_SONNET, OutcomeSignal::None),
+            (GATE_SONNET, OutcomeSignal::Unavailable),
             (GATE_SONNET, OutcomeSignal::JudgedFail),
-            (GATE_OPUS, OutcomeSignal::None),
+            (GATE_OPUS, OutcomeSignal::Unavailable),
         ]
     );
 }

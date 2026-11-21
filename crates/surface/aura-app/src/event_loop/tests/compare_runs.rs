@@ -216,7 +216,7 @@ async fn both_arms_run_repeatedly_in_separate_copies_and_their_checks_feed_gate(
         };
         assert_eq!(
             signals_of(&state, run.agent_id),
-            [OutcomeSignal::None, checked],
+            [OutcomeSignal::Unavailable, checked],
             "the turn's outcome, then the check's"
         );
         let log = entries(&state, run.agent_id);
@@ -297,7 +297,7 @@ async fn both_arms_run_repeatedly_in_separate_copies_and_their_checks_feed_gate(
 }
 
 #[tokio::test]
-async fn pick_rates_both_arms_and_apply_brings_the_chosen_run_home() {
+async fn apply_brings_the_chosen_run_home() {
     if !git_available() {
         return;
     }
@@ -332,21 +332,6 @@ async fn pick_rates_both_arms_and_apply_brings_the_chosen_run_home() {
         "uncommitted work is carried into the copy"
     );
     assert_eq!(gate.files_changed, 1, "only the run's own change counts");
-
-    compare(&mut state, &links, "pick gate").await;
-    assert!(system_texts(&drain(&mut commands))
-        .contains("picked A (gate:nodelegate). Rated 1 A run good and 1 B run bad"));
-    assert_eq!(
-        signals_of(&state, gate.agent_id).last(),
-        Some(&OutcomeSignal::Good)
-    );
-    assert_eq!(
-        signals_of(&state, other.agent_id).last(),
-        Some(&OutcomeSignal::Bad)
-    );
-    assert_eq!(turn_row(&state, SONNET), Some((1, 1)));
-    assert_eq!(turn_row(&state, OPUS), Some((1, 0)));
-    assert_eq!(latest(&state).status, CompareStatus::Picked(CompareArm::A));
 
     compare(&mut state, &links, "diff a-1").await;
     let diffs: Vec<String> = drain(&mut commands)
@@ -935,25 +920,6 @@ async fn two_models_replay_a_session_from_its_start_prompt_by_prompt() {
     state.active = first;
 
     let id = listed[0].id.clone();
-    bench(
-        &mut state,
-        &links,
-        BenchRequest::Pick {
-            id: id.clone(),
-            arm: 1,
-        },
-    )
-    .await;
-    let notice = drain(&mut commands)
-        .into_iter()
-        .find_map(|(_, c)| match c {
-            UiCommand::BenchNotice(notice) => Some(notice),
-            _ => None,
-        })
-        .unwrap()
-        .unwrap();
-    assert!(notice.contains(&format!("picked B ({OPUS})")), "{notice}");
-    assert_eq!(latest(&state).status, CompareStatus::Picked(CompareArm::B));
     bench(&mut state, &links, BenchRequest::Dismiss { id }).await;
     assert_eq!(latest(&state).status, CompareStatus::Dismissed);
 }

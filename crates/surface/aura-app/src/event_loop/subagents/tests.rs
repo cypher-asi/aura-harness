@@ -566,7 +566,7 @@ async fn a_subtask_redone_while_still_running_fails_once_it_ends() {
         category: PromptCategory::Research,
         model: "m".to_string(),
         success: None,
-        signal: OutcomeSignal::None,
+        signal: OutcomeSignal::Unavailable,
         cost_usd: 0.0,
         subtask_cost_usd: 0.0,
         latency_ms: 1,

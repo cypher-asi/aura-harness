@@ -327,7 +327,9 @@ impl FlowBuilder {
         if let Some(prompt) = &payload {
             subtask = prompt.route.level == RouteLevel::Subtask;
             node.detail = short(&prompt.route.model, MAX_DETAIL_CHARS);
-            set_meta(&mut node, "category", prompt.category.to_string());
+            if let Some(category) = prompt.category {
+                set_meta(&mut node, "category", category.to_string());
+            }
             if !prompt.route.model.is_empty() {
                 set_meta(
                     &mut node,

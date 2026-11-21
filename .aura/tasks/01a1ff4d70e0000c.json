@@ -1,0 +1,30 @@
+{
+  "id": "01a1ff4d70e0000c",
+  "title": "You are improving how chat messages written in markdown are displayed in the AURA terminal UI (Rust, ratatui). The desk…",
+  "state": "running",
+  "agent_id": "760cbb6eb2db5a8656ad5415dd068ae150d00d3ba667c7797332793bb9f85095",
+  "agent_name": "rust-engineer #24",
+  "assignee": "rust-engineer",
+  "parent": "01a1ff434fdf000b",
+  "items": [
+    {
+      "content": "Review existing fields.rs / markdown.rs / stream.rs work against the spec",
+      "state": "completed"
+    },
+    {
+      "content": "Add the 12 renderer tests to markdown/tests.rs",
+      "state": "completed"
+    },
+    {
+      "content": "STYLEGUIDE.md Chat Column bullet and CHANGELOG.md entry",
+      "state": "completed"
+    },
+    {
+      "content": "cargo fmt, clippy -D warnings, tests for aura-ui-terminal",
+      "state": "completed"
+    }
+  ],
+  "updated_ms": 1795285735011,
+  "created_ms": 1795284627680,
+  "tool_use_id": "toolu_01NfFc7tfWBbBS3ve4kKT1cX"
+}

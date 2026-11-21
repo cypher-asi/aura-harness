@@ -303,7 +303,7 @@ impl GateLive {
         for i in 0..n {
             let agent = AgentId::generate();
             let mut prompt = PromptPayload::new(format!("learned {i}"));
-            prompt.category = category;
+            prompt.category = Some(category);
             prompt.route = match level {
                 RouteLevel::Turn => Route::turn(model, RouteReason::Default),
                 RouteLevel::Subtask => Route::subtask(model, RouteReason::Default),

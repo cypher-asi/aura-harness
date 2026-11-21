@@ -100,7 +100,7 @@ async fn a_task_under_gate_runs_on_the_model_gate_picks_for_it() {
     assert_eq!(
         prompts,
         [PromptPayload {
-            category: PromptCategory::Debugging,
+            category: Some(PromptCategory::Debugging),
             classifier: state.models.classifier_model(),
             route: Route::subtask(HAIKU, RouteReason::Default),
             kind: Some("reviewer".to_string()),
@@ -110,7 +110,7 @@ async fn a_task_under_gate_runs_on_the_model_gate_picks_for_it() {
     );
     assert_eq!(outcomes.len(), 1);
     assert_eq!(outcomes[0].model, HAIKU);
-    assert_eq!(outcomes[0].signal, OutcomeSignal::None);
+    assert_eq!(outcomes[0].signal, OutcomeSignal::Unavailable);
     assert!(
         prompts_of(&state, first).is_empty(),
         "the subtask is recorded on the child"
@@ -217,13 +217,13 @@ async fn a_subtask_dispatched_again_in_the_same_turn_failed_the_first_time() {
 
     assert_eq!(
         signals(&fixture, first_try),
-        [OutcomeSignal::None, OutcomeSignal::Redone]
+        [OutcomeSignal::Unavailable, OutcomeSignal::Redone]
     );
     let (_, outcomes) = record(&fixture, first_try);
     assert_eq!(outcomes[1].success, Some(false));
     assert_eq!(outcomes[1].prompt_tx, outcomes[0].prompt_tx);
     for other in [other_kind, unrelated, second_try] {
-        assert_eq!(signals(&fixture, other), [OutcomeSignal::None]);
+        assert_eq!(signals(&fixture, other), [OutcomeSignal::Unavailable]);
     }
     assert_eq!(
         subtask_row(&fixture, SONNET),
@@ -236,14 +236,14 @@ async fn a_subtask_dispatched_again_in_the_same_turn_failed_the_first_time() {
     spawned(&fixture, task(first, "explorer", prompt)).await;
     assert_eq!(
         signals(&fixture, second_try),
-        [OutcomeSignal::None],
+        [OutcomeSignal::Unavailable],
         "a later turn may ask again"
     );
     fixture.hub.stop_running(first);
 }
 
 #[tokio::test]
-async fn pinned_subtasks_keep_their_model_and_are_still_recorded() {
+async fn pinned_subtasks_keep_their_model_and_gate_records_no_outcome() {
     let (fixture, _commands) = fixture();
     let mut b = borrowed(&fixture);
     let first = fixture.first;
@@ -273,9 +273,9 @@ async fn pinned_subtasks_keep_their_model_and_are_still_recorded() {
             Route::subtask(model, RouteReason::Pinned),
             "{kind}"
         );
-        assert_eq!(prompts[0].category, PromptCategory::Question, "{kind}");
+        assert_eq!(prompts[0].category, None, "{kind}");
         assert_eq!(prompts[0].kind.as_deref(), Some(kind.as_str()));
-        assert_eq!(outcomes[0].model, model, "{kind}");
+        assert!(outcomes.is_empty(), "{kind}");
     }
     assert!(fixture.hub.gate.recent().is_empty(), "Gate decided nothing");
 }
@@ -295,8 +295,8 @@ async fn every_subtask_keeps_the_main_model_the_user_pinned() {
         prompts[0].route,
         Route::subtask("mock-model", RouteReason::Pinned)
     );
-    assert_eq!(prompts[0].category, PromptCategory::Debugging);
-    assert_eq!(prompts[0].classifier, state.models.classifier_model());
-    assert_eq!(outcomes[0].model, "mock-model");
+    assert_eq!(prompts[0].category, None);
+    assert!(prompts[0].classifier.is_empty());
+    assert!(outcomes.is_empty());
     assert!(fixture.hub.gate.recent().is_empty());
 }

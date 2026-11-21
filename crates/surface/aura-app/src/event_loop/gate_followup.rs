@@ -6,8 +6,9 @@
 //! the step out: a nudge goes on in the same conversation on the same
 //! model, told [`nudge_prompt`]; the harness check runs here
 //! ([`harness_check`]); and so does the judge of unchecked work
-//! ([`judge_unchecked`]). What either finds wrong sends the work on to a
-//! stronger model as a failed check of the turn's own does.
+//! ([`judge_unchecked`]), whose verdict is the outcome of work nothing
+//! else checked. What either finds wrong sends the work on to a stronger
+//! model as a failed check of the turn's own does.
 //!
 //! Work that is about to stand may be reviewed first
 //! ([`FollowUp::review`]): the judge goes through the request against
@@ -200,7 +201,7 @@ impl Before {
 /// before it starts.
 pub(crate) fn may_review(live: &GateLive, candidates: &[Candidate], model: &str) -> bool {
     live.settings().review != ReviewMode::Off
-        && gate_record::unverified_judge_for(live, candidates, model).is_some()
+        && gate_record::reviewer_for(live, candidates, model).is_some()
 }
 
 /// How an attempt ended, for [`FollowUp::next`].
@@ -209,7 +210,8 @@ pub(crate) struct At {
     pub category: PromptCategory,
     /// How hard the classifier judged the work
     pub difficulty: Option<Difficulty>,
-    pub signal: OutcomeSignal,
+    /// Its signal so far; `None` while nothing says how it went
+    pub signal: Option<OutcomeSignal>,
     /// Where the attempt's own messages start in its result
     pub turn_start: usize,
 }
@@ -221,8 +223,10 @@ pub(crate) struct FollowUp {
     taken: Taken,
     /// Test command the harness runs
     check: Option<String>,
-    /// Model that judges unchecked work
+    /// Model that gives the verdict on unchecked work
     judge: Option<String>,
+    /// Model that reviews work about to stand
+    reviewer: Option<String>,
     /// Files changed before the attempt was last sent on (asked to check
     /// its change, or sent back), as its file tools reported them
     changed_before: usize,
@@ -255,6 +259,12 @@ impl Reviewed {
     /// Whether the work goes back to its model or on to a stronger one.
     pub(crate) fn unfinished(&self) -> bool {
         self.act && self.answer == Answer::Model
+    }
+
+    /// The verdict a review Gate acts on gives work no check vouched
+    /// for, standing in for the judge's; `None` when it is only logged.
+    pub(crate) fn verdict(&self) -> Option<OutcomeSignal> {
+        self.act.then(|| self.answer.verdict())
     }
 
     /// One line saying what the reviewer found.
@@ -312,36 +322,50 @@ pub(crate) struct Reviewing<'a> {
 
 impl FollowUp {
     /// The steps for an attempt on `model`, routed among `candidates`,
-    /// working in `workspace`: none when no candidate is stronger, as
-    /// there is nowhere for the work to go, else those Gate's settings
-    /// allow.
+    /// working in `workspace`: the judge's verdict on unchecked work
+    /// always, and when a candidate is stronger, so the work has
+    /// somewhere to go, the others Gate's settings allow.
     pub(crate) fn new(
         live: &GateLive,
         candidates: &[Candidate],
         model: &str,
         workspace: &Path,
     ) -> Self {
+        let judge = gate_record::verdict_judge_for(candidates);
         let stronger =
             aura_agent_gate::escalate(&live.stats(), RouteLevel::Turn, model, candidates).is_some();
         if !stronger {
-            return Self::default();
+            return Self {
+                allowed: Allowed {
+                    judge: judge.is_some(),
+                    ..Allowed::default()
+                },
+                judge,
+                tiers: live.tiers(),
+                ..Self::default()
+            };
         }
         let settings = live.settings();
         let check = settings
             .harness_check
             .then(|| check_command(workspace))
             .flatten();
-        let judge = gate_record::unverified_judge_for(live, candidates, model);
+        let reviewer = gate_record::reviewer_for(live, candidates, model);
         Self {
             allowed: Allowed {
                 nudge: settings.nudge,
                 harness_check: check.is_some(),
                 judge: judge.is_some(),
-                review: settings.review,
+                review: if reviewer.is_some() {
+                    settings.review
+                } else {
+                    ReviewMode::Off
+                },
             },
             taken: Taken::default(),
             check,
             judge,
+            reviewer,
             changed_before: 0,
             before: None,
             tiers: live.tiers(),
@@ -362,11 +386,6 @@ impl FollowUp {
     pub(crate) fn after(mut self, earlier: &Self) -> Self {
         self.taken.repaired = earlier.taken.repaired;
         self
-    }
-
-    /// Whether any step may be taken at all.
-    fn follows(&self) -> bool {
-        self.allowed.nudge || self.allowed.harness_check || self.allowed.judge
     }
 
     /// What the attempt changed as of `result`, read once per run of the
@@ -419,9 +438,10 @@ impl FollowUp {
     /// The next step for an attempt that ended with `result` as `at`
     /// says; the step counts as taken.
     pub(crate) async fn next(&mut self, result: &AgentLoopResult, at: At) -> Step {
-        let follows = self.follows()
-            && matches!(at.signal, OutcomeSignal::None | OutcomeSignal::ChecksPassed);
-        if !follows {
+        if at
+            .signal
+            .is_some_and(|signal| signal != OutcomeSignal::ChecksPassed)
+        {
             return Step::Stop;
         }
         let reported = self.changed_before + result.file_changes.len();
@@ -485,7 +505,7 @@ impl FollowUp {
         shown: &Reviewing<'_>,
         auth_token: Option<String>,
     ) -> Option<Reviewed> {
-        let judge = self.judge.as_deref()?;
+        let judge = self.reviewer.as_deref()?;
         let messages = shown
             .result
             .messages
@@ -550,7 +570,7 @@ impl FollowUp {
         self.check.as_deref()
     }
 
-    /// The model that judges unchecked work, when one may.
+    /// The model that gives the verdict on unchecked work.
     pub(crate) fn judge(&self) -> Option<&str> {
         self.judge.as_deref()
     }
@@ -722,24 +742,22 @@ pub(crate) struct Unchecked<'a> {
 }
 
 /// Ask `judge` through `session`'s kernel whether the work of `ended`,
-/// shown as `unchecked`, is done (see [`gate_record::judge_unverified`]).
+/// shown as `unchecked`, is done; returns the verdict as the attempt's
+/// signal (see [`gate_record::judge_unverified`]).
 pub(crate) async fn judge_unchecked(
     session: &AgentSession,
     judge: &str,
     ended: &OutcomePayload,
     unchecked: &Unchecked<'_>,
     auth_token: Option<String>,
-) -> Option<Judged> {
+) -> Option<(OutcomeSignal, Judged)> {
     let reply = final_reply(unchecked.result);
     let messages = unchecked
         .result
         .messages
         .get(unchecked.turn_start..)
         .unwrap_or_default();
-    let commands = commands_run(messages, SHOWN_COMMANDS);
-    let last_check = last_check_seen(messages)
-        .map(|check| check_shown(&check))
-        .unwrap_or_default();
+    let (commands, last_check) = shown_to_judge(messages);
     let shown = Unverified {
         task: unchecked.task,
         diff: unchecked.diff,
@@ -749,6 +767,17 @@ pub(crate) async fn judge_unchecked(
         suspicions: unchecked.suspicions,
     };
     gate_record::judge_unverified(&session.kernel, judge, ended, &shown, auth_token).await
+}
+
+/// What the judge of unchecked work is shown of the commands in
+/// `messages`: the last of those they ran, one per line, and their last
+/// test or build (empty when they ran none).
+pub(crate) fn shown_to_judge(messages: &[Message]) -> (String, String) {
+    let commands = commands_run(messages, SHOWN_COMMANDS);
+    let last_check = last_check_seen(messages)
+        .map(|check| check_shown(&check))
+        .unwrap_or_default();
+    (commands, last_check)
 }
 
 /// What the stronger model is told of a harness check that failed.

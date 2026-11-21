@@ -30,13 +30,10 @@ pub enum PromptCategory {
     Writing,
     /// Anything else.
     Other,
-    /// The classifier failed or gave no usable answer.
-    Unclassified,
 }
 
 impl PromptCategory {
-    /// The categories the classifier picks from, without
-    /// [`Self::Unclassified`].
+    /// Every category, the ones the classifier picks from.
     pub const CLASSES: [Self; 8] = [
         Self::Question,
         Self::SmallChange,
@@ -60,17 +57,28 @@ impl PromptCategory {
             Self::Planning => "planning",
             Self::Writing => "writing",
             Self::Other => "other",
-            Self::Unclassified => "unclassified",
         }
     }
 
     /// The category named `name` (as [`Self::as_str`] spells it).
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
-        Self::CLASSES
-            .into_iter()
-            .chain([Self::Unclassified])
-            .find(|c| c.as_str() == name)
+        Self::CLASSES.into_iter().find(|c| c.as_str() == name)
+    }
+}
+
+/// A stored category: `None` for a prompt nothing classified, which is
+/// stored without one, or as `unclassified` by older records.
+fn stored_category<'de, D>(deserializer: D) -> Result<Option<PromptCategory>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let name: Option<String> = Option::deserialize(deserializer)?;
+    match name.as_deref() {
+        None | Some("unclassified") => Ok(None),
+        Some(name) => PromptCategory::from_name(name)
+            .map(Some)
+            .ok_or_else(|| serde::de::Error::unknown_variant(name, &[])),
     }
 }
 
@@ -242,8 +250,14 @@ impl Default for Route {
 pub struct PromptPayload {
     /// The prompt as typed (or as the harness wrote it).
     pub text: String,
-    /// What the prompt asks for.
-    pub category: PromptCategory,
+    /// What the prompt asks for; `None` when Gate does not route its
+    /// work (a pinned model, a message sent into a running turn).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "stored_category"
+    )]
+    pub category: Option<PromptCategory>,
     /// Model that classified the prompt; empty when nothing did.
     pub classifier: String,
     /// Where the prompt's work runs.
@@ -269,7 +283,7 @@ impl PromptPayload {
     pub fn new(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
-            category: PromptCategory::Unclassified,
+            category: None,
             classifier: String::new(),
             route: Route::default(),
             kind: None,
@@ -303,30 +317,30 @@ pub enum OutcomeSignal {
     ChecksFailed,
     /// The last test or build command of the turn passed.
     ChecksPassed,
-    /// The turn ended with nothing to judge it by.
-    None,
+    /// The user stopped the work, or their sign-in was refused, before
+    /// it ended. It says nothing about the model's work.
+    Cancelled,
     /// The user rewound the turn.
     Rewind,
     /// The user sent the same prompt again on a stronger model.
     RetryStronger,
-    /// The user picked this run's arm in `/compare pick`.
-    Good,
-    /// The user picked the other arm in `/compare pick`.
-    Bad,
     /// The parent dispatched the same subtask again in the same turn.
     Redone,
-    /// The judge model reviewed the failed work and found the model at
-    /// fault: its work was wrong or incomplete.
+    /// The judge model reviewed work that ran no check and found it done.
+    JudgedPass,
+    /// The judge model reviewed the work and found the model at fault:
+    /// its work was wrong or incomplete.
     JudgedFail,
     /// The judge model reviewed the failed work and found the failure was
     /// not the model's doing (the environment, a check that already
     /// failed, a request that can't be done). The work then counts neither
     /// for nor against the model.
     JudgedExcused,
-    /// The turn ended because the model could not be reached or refused
-    /// the request: the provider was overloaded or rate-limiting, the
-    /// connection failed, the stream went silent, or the sign-in was
-    /// refused. It says nothing about the model's work, so like
+    /// The work ended because a model it needed could not be reached or
+    /// refused the request: the provider was overloaded or rate-limiting,
+    /// the connection failed, the stream went silent, or the sign-in was
+    /// refused; or the judge that gives work with no check its verdict
+    /// gave none. It says nothing about the model's work, so like
     /// [`Self::JudgedExcused`] it counts neither way.
     Unavailable,
 }
@@ -337,23 +351,15 @@ impl OutcomeSignal {
     #[must_use]
     pub const fn success(self) -> Option<bool> {
         match self {
-            Self::ChecksPassed | Self::Good => Some(true),
+            Self::ChecksPassed | Self::JudgedPass => Some(true),
             Self::Error
             | Self::ChecksFailed
             | Self::Rewind
             | Self::RetryStronger
-            | Self::Bad
             | Self::Redone
             | Self::JudgedFail => Some(false),
-            Self::None | Self::JudgedExcused | Self::Unavailable => None,
+            Self::Cancelled | Self::JudgedExcused | Self::Unavailable => None,
         }
-    }
-
-    /// Whether this is the user's own rating, which overrides every
-    /// automatic signal.
-    #[must_use]
-    pub const fn is_rating(self) -> bool {
-        matches!(self, Self::Good | Self::Bad)
     }
 
     /// Whether the signal takes back what earlier signals said about the
@@ -368,7 +374,13 @@ impl OutcomeSignal {
     pub const fn is_turn_end(self) -> bool {
         matches!(
             self,
-            Self::Error | Self::ChecksFailed | Self::ChecksPassed | Self::None | Self::Unavailable
+            Self::Error
+                | Self::ChecksFailed
+                | Self::ChecksPassed
+                | Self::Cancelled
+                | Self::JudgedPass
+                | Self::JudgedFail
+                | Self::Unavailable
         )
     }
 
@@ -379,12 +391,11 @@ impl OutcomeSignal {
             Self::Error => "error",
             Self::ChecksFailed => "checks_failed",
             Self::ChecksPassed => "checks_passed",
-            Self::None => "none",
+            Self::Cancelled => "cancelled",
             Self::Rewind => "rewind",
             Self::RetryStronger => "retry_stronger",
-            Self::Good => "good",
-            Self::Bad => "bad",
             Self::Redone => "redone",
+            Self::JudgedPass => "judged_pass",
             Self::JudgedFail => "judged_fail",
             Self::JudgedExcused => "judged_excused",
             Self::Unavailable => "unavailable",
@@ -469,7 +480,7 @@ mod tests {
     fn prompt_payload_round_trips_with_string_forms() {
         let payload = PromptPayload {
             text: "fix the failing test".to_string(),
-            category: PromptCategory::Debugging,
+            category: Some(PromptCategory::Debugging),
             classifier: "claude/claude-haiku-4-5".to_string(),
             route: Route::turn("claude/claude-sonnet-4-6", RouteReason::Default),
             kind: None,
@@ -489,12 +500,19 @@ mod tests {
         let older = br#"{"text":"fix it","category":"debugging","classifier":"","route":{"level":"turn","model":"m","reason":"default","explored":false,"propensity":1.0}}"#;
         let older = PromptPayload::from_bytes(older).unwrap();
         assert_eq!((older.led, older.difficulty), (None, None));
+        let unrouted = String::from_utf8(PromptPayload::new("hi").to_bytes()).unwrap();
         assert!(
-            !String::from_utf8(PromptPayload::new("hi").to_bytes())
-                .unwrap()
-                .contains("difficulty"),
-            "an unrated prompt is stored as before"
+            !unrouted.contains("difficulty") && !unrouted.contains("category"),
+            "a prompt Gate does not route is stored without a label: {unrouted}"
         );
+        let unclassified = br#"{"text":"hi","category":"unclassified","classifier":"","route":{"level":"turn","model":"m","reason":"pinned","explored":false,"propensity":1.0}}"#;
+        assert_eq!(
+            PromptPayload::from_bytes(unclassified).unwrap().category,
+            None,
+            "older records stored unclassified prompts by name"
+        );
+        let unknown = br#"{"text":"hi","category":"bugfix","classifier":"","route":{"level":"turn","model":"m","reason":"pinned","explored":false,"propensity":1.0}}"#;
+        assert!(PromptPayload::from_bytes(unknown).is_err());
     }
 
     #[test]
@@ -508,7 +526,7 @@ mod tests {
     #[test]
     fn subtask_prompt_payload_records_its_kind_and_level() {
         let payload = PromptPayload {
-            category: PromptCategory::Research,
+            category: Some(PromptCategory::Research),
             route: Route::subtask("claude/claude-haiku-4-5", RouteReason::Proven),
             kind: Some("explorer".to_string()),
             ..PromptPayload::new("find the parser")
@@ -547,7 +565,8 @@ mod tests {
     #[test]
     fn signals_say_success_failure_or_nothing() {
         assert_eq!(OutcomeSignal::ChecksPassed.success(), Some(true));
-        assert_eq!(OutcomeSignal::Good.success(), Some(true));
+        assert_eq!(OutcomeSignal::JudgedPass.success(), Some(true));
+        assert!(OutcomeSignal::JudgedPass.is_turn_end());
         assert_eq!(OutcomeSignal::JudgedExcused.success(), None);
         assert!(OutcomeSignal::JudgedExcused.voids());
         assert!(!OutcomeSignal::JudgedFail.voids());
@@ -559,14 +578,18 @@ mod tests {
             OutcomeSignal::ChecksFailed,
             OutcomeSignal::Rewind,
             OutcomeSignal::RetryStronger,
-            OutcomeSignal::Bad,
             OutcomeSignal::Redone,
             OutcomeSignal::JudgedFail,
         ] {
             assert_eq!(failure.success(), Some(false), "{failure}");
         }
-        assert_eq!(OutcomeSignal::None.success(), None);
+        assert_eq!(OutcomeSignal::Cancelled.success(), None);
+        assert!(OutcomeSignal::Cancelled.is_turn_end() && !OutcomeSignal::Cancelled.voids());
         assert!(!OutcomeSignal::Redone.is_turn_end());
+        assert!(
+            serde_json::from_value::<OutcomeSignal>(serde_json::json!("none")).is_err(),
+            "every outcome says how the work went"
+        );
         assert_eq!(
             serde_json::to_value(OutcomeSignal::Redone).unwrap(),
             OutcomeSignal::Redone.as_str()
@@ -580,28 +603,26 @@ mod tests {
             category: PromptCategory::Question,
             model: "m".to_string(),
             success: None,
-            signal: OutcomeSignal::None,
+            signal: OutcomeSignal::Cancelled,
             cost_usd: 0.5,
             subtask_cost_usd: 0.0,
             latency_ms: 10,
         };
-        let good = outcome.with_signal(OutcomeSignal::Good);
-        assert_eq!(good.success, Some(true));
-        assert_eq!(good.signal, OutcomeSignal::Good);
-        assert_eq!((good.cost_usd, good.latency_ms), (0.5, 10));
+        let passed = outcome.with_signal(OutcomeSignal::JudgedPass);
+        assert_eq!(passed.success, Some(true));
+        assert_eq!(passed.signal, OutcomeSignal::JudgedPass);
+        assert_eq!((passed.cost_usd, passed.latency_ms), (0.5, 10));
     }
 
     #[test]
     fn category_names_parse_back() {
-        for category in PromptCategory::CLASSES
-            .into_iter()
-            .chain([PromptCategory::Unclassified])
-        {
+        for category in PromptCategory::CLASSES {
             assert_eq!(PromptCategory::from_name(category.as_str()), Some(category));
             let json = serde_json::to_value(category).unwrap();
             assert_eq!(json, category.as_str());
         }
         assert_eq!(PromptCategory::from_name("bugfix"), None);
+        assert_eq!(PromptCategory::from_name("unclassified"), None);
     }
 
     #[test]

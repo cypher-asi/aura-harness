@@ -148,6 +148,35 @@ async fn test_agent_loop_full_integration() {
 }
 
 #[tokio::test]
+async fn final_text_is_the_last_reply_without_remarks_between_tools() {
+    let executor = MockExecutor {
+        results: vec![ToolCallResult::success("placeholder", "file contents here")],
+    };
+    let provider = MockProvider::new()
+        .with_response(MockResponse::text_and_tool(
+            "Let me read the file first.",
+            "tool_1",
+            "read_file",
+            serde_json::json!({"path": "test.txt"}),
+        ))
+        .with_response(MockResponse::text("The file says hello."));
+
+    let agent = AgentLoop::new(AgentLoopConfig::for_agent("claude-test-model"));
+    let tools = vec![ToolDefinition::new(
+        "read_file",
+        "Read a file",
+        serde_json::json!({"type": "object"}),
+    )];
+    let result = agent
+        .run(&provider, &executor, vec![Message::user("Read test.txt")], tools)
+        .await
+        .unwrap();
+
+    assert!(result.total_text.contains("Let me read the file first."));
+    assert_eq!(result.final_text, "The file says hello.");
+}
+
+#[tokio::test]
 async fn test_agent_loop_402_insufficient_credits() {
     let executor = MockExecutor { results: vec![] };
     let provider = MockProvider::new().with_failure();

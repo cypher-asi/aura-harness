@@ -302,8 +302,18 @@ fn render_chat_lines(
     let content = message_rows + tail_gap + tail.lines.len();
     let height = padded.height as usize;
     // Blank rows after the end, enough that scrolling to the bottom can
-    // bring the latest prompt to the top with the reply filling in below.
-    let padding = last_prompt_row.map_or(0, |row| (row + height).saturating_sub(content));
+    // bring the latest prompt to the top with the reply filling in below,
+    // and never fewer than the conversation's breathing room, so a reply
+    // that reaches the bottom scrolls up with space left under it. The
+    // terminal's output runs to the bottom row, as a terminal's does.
+    let room = if app.terminal_pane() {
+        0
+    } else {
+        breathing_room(height)
+    };
+    let padding = last_prompt_row
+        .map_or(0, |row| (row + height).saturating_sub(content))
+        .max(room);
     let total = content + padding;
     let start = app.sync_chat_scroll(total, height, reflowed);
     app.set_chat_layout(toggle_rows, start);
@@ -757,6 +767,18 @@ const CHAT_NARROW_PERCENT: u32 = 17;
 fn narrowed(width: u16) -> u16 {
     let kept = (u32::from(width) * (100 - CHAT_NARROW_PERCENT) + 50) / 100;
     u16::try_from(kept).unwrap_or(width)
+}
+
+/// Share of the chat's height, in percent, kept blank below the
+/// conversation once it reaches the bottom.
+const CHAT_ROOM_PERCENT: usize = 25;
+
+/// Blank rows kept below the conversation's last line in a chat `height`
+/// rows tall: [`CHAT_ROOM_PERCENT`] of them, rounded down, so the newest
+/// text stops short of the bottom border and the input box below it, and
+/// a short panel keeps its few rows for text.
+pub(super) const fn breathing_room(height: usize) -> usize {
+    height * CHAT_ROOM_PERCENT / 100
 }
 
 /// Columns of blank space on each side of the chat: two, or one on narrow

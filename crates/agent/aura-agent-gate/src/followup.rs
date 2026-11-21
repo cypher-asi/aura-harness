@@ -2,16 +2,18 @@
 //! it by: no test or build of its own, and no error; or with a check
 //! that passed while its own reply says the work was not verified.
 //!
-//! A turn with no check may have failed without anyone noticing, so
-//! before it counts as done Gate looks for evidence, cheapest first:
+//! Every routed turn ends with a verdict. One with no check gets it here,
+//! cheapest first:
 //!
-//! 1. [`Step::Nudge`]: a turn that changed files is asked once, on the
+//! 1. [`Step::Nudge`]: code work that changed files is asked once, on the
 //!    same model, to run the tests that cover its change. Its own check
 //!    then says how it went.
 //! 2. [`Step::HarnessCheck`]: when it still ran none, the harness runs
 //!    the project's tests itself.
-//! 3. [`Step::JudgeUnverified`]: when nothing could be run and the turn
-//!    looks wrong ([`suspicions`]), the judge reviews it without a check.
+//! 3. [`Step::JudgeUnverified`]: when nothing could be run, the judge
+//!    reviews the work without a check and its verdict is the outcome,
+//!    whatever the work asked for. What looks wrong ([`suspicions`]) is
+//!    pointed out to it.
 //!
 //! A turn whose check passed is not thereby right: the check may cover
 //! little of what was asked. On the benchmark runs in Gate's attempt log
@@ -33,15 +35,17 @@
 //! 5. [`Step::Repair`]: a sign that has proven itself outright in the
 //!    log skips the review and sends the work back at once.
 //!
-//! The review is governed by [`ReviewMode`]: `on` as above; `off` does
-//! not ask, which leaves steps 1 to 3 and the one case the judge always
+//! The review is governed by [`ReviewMode`]: `on` as above, and for work
+//! with no check its verdict stands in for the judge's; `off` does not
+//! ask, which leaves steps 1 to 3 and the one case the judge always
 //! took, a passed check the reply disowns; `log` is `off` plus a review
-//! whose verdict is only logged, of the work the judge would not see.
+//! whose verdict is only logged, of passed work the judge would not see.
 //!
 //! A failure any of them turns up goes on to a stronger model as a failed
 //! check or a judged failure does. Each step runs at most once per
-//! attempt, the review twice when the work was sent back between; the
-//! caller only asks while a stronger model is left.
+//! attempt, the review twice when the work was sent back between. Only
+//! the judge's verdict is asked on the strongest tier, where there is no
+//! stronger model to go on to; the other steps are offered only below it.
 
 use aura_config::ReviewMode;
 use aura_core_types::{Difficulty, OutcomeSignal, PromptCategory};
@@ -52,8 +56,9 @@ use crate::router::verifiable;
 /// How a turn that Gate routed ended, as the steps need it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ended<'a> {
-    /// Its signal (see [`crate::outcome::turn_signal`]).
-    pub signal: OutcomeSignal,
+    /// Its signal so far (see [`crate::outcome::turn_signal`]); `None`
+    /// while nothing has said how it went.
+    pub signal: Option<OutcomeSignal>,
     pub category: PromptCategory,
     /// Files its tools changed.
     pub files_changed: usize,
@@ -91,6 +96,7 @@ pub struct Allowed {
     pub nudge: bool,
     /// A test command the harness can run is known.
     pub harness_check: bool,
+    /// A model can judge the work.
     pub judge: bool,
     /// Whether work about to stand is reviewed; needs `judge`.
     pub review: ReviewMode,
@@ -251,19 +257,10 @@ pub fn says_unverified(reply: &str) -> bool {
     UNVERIFIED.iter().any(|phrase| reply.contains(phrase))
 }
 
-/// Whether the steps apply to work asking for `category`: code changes,
-/// debugging, and work nothing classified.
-const fn checkable(category: PromptCategory) -> bool {
-    verifiable(category) || matches!(category, PromptCategory::Unclassified)
-}
-
 /// Why `ended`, a turn with no check, looks wrong; empty when nothing
 /// does.
 #[must_use]
 pub fn suspicions(ended: &Ended<'_>) -> Vec<Suspicion> {
-    if !checkable(ended.category) {
-        return Vec::new();
-    }
     let mut found = Vec::new();
     if verifiable(ended.category) && ended.files_changed == 0 {
         found.push(Suspicion::NoChanges);
@@ -275,21 +272,6 @@ pub fn suspicions(ended: &Ended<'_>) -> Vec<Suspicion> {
         found.push(Suspicion::HitLimit);
     }
     found
-}
-
-/// Why `ended`, whose check did not fail, looks wrong without a review:
-/// a passed check its reply disowns (unless the harness ran the check),
-/// or, with no check, its [`suspicions`].
-fn looks_wrong(ended: &Ended<'_>, taken: Taken) -> Vec<Suspicion> {
-    if ended.signal == OutcomeSignal::ChecksPassed {
-        if !taken.checked && says_unverified(ended.reply) {
-            vec![Suspicion::Unverified]
-        } else {
-            Vec::new()
-        }
-    } else {
-        suspicions(ended)
-    }
 }
 
 /// Why `ended` is reviewed before it stands; empty when nothing calls
@@ -313,56 +295,77 @@ fn reasons(ended: &Ended<'_>, looks: &[Suspicion]) -> Vec<Why> {
     why
 }
 
+/// With [`ReviewMode::On`], the review or repair `ended` is due, if any:
+/// work that is hard, shows a sign or looks wrong is reviewed, twice at
+/// most and the second time only after it was sent back.
+fn acted_review(ended: &Ended<'_>, taken: Taken, looks: &[Suspicion]) -> Option<Step> {
+    let fresh = taken.reviews == 0 && !taken.repaired;
+    if fresh && !ended.hit_limit && !ended.acting_signs.is_empty() {
+        return Some(Step::Repair(ended.acting_signs.to_vec()));
+    }
+    if taken.reviews == 0 || (taken.reviews == 1 && taken.repaired) {
+        let why = reasons(ended, looks);
+        if !why.is_empty() {
+            return Some(Step::Review { why, act: true });
+        }
+    }
+    None
+}
+
 /// The next step for `ended`, given the steps `taken` and those
-/// `allowed`. Only a turn that ended with [`OutcomeSignal::None`] or
-/// [`OutcomeSignal::ChecksPassed`] gets any: other signals already say
-/// how it went. One with no check is nudged, then checked by the
-/// harness. Then, where [`Allowed::review`] is on, work that is hard,
-/// shows a sign or looks wrong is reviewed, twice at most and the second
-/// time only after it was sent back. Otherwise a turn that looks wrong
-/// goes to the judge: with no check, for its [`suspicions`]; with a
-/// passed check of its own, when its reply says the work was not
-/// verified.
+/// `allowed`. A turn with no signal yet is nudged and checked by the
+/// harness when it changed code, may be reviewed, and is then judged:
+/// whatever it asked for, it ends with a verdict. Code work whose own
+/// check passed may be reviewed, and goes to the judge when its reply
+/// says the work was not verified. Any other signal already says how the
+/// turn went.
 #[must_use]
 pub fn next(ended: &Ended<'_>, taken: Taken, allowed: Allowed) -> Step {
-    if !checkable(ended.category) {
-        return Step::Stop;
-    }
-    if !matches!(
-        ended.signal,
-        OutcomeSignal::None | OutcomeSignal::ChecksPassed
-    ) {
-        return Step::Stop;
-    }
-    if ended.signal == OutcomeSignal::None {
-        let changed = ended.files_changed > 0;
-        if changed && allowed.nudge && !taken.nudged && !ended.hit_limit {
-            return Step::Nudge;
+    match ended.signal {
+        None => unchecked(ended, taken, allowed),
+        Some(OutcomeSignal::ChecksPassed) if verifiable(ended.category) => {
+            passed(ended, taken, allowed)
         }
-        if changed && allowed.harness_check && !taken.checked {
-            return Step::HarnessCheck;
-        }
+        Some(_) => Step::Stop,
+    }
+}
+
+fn unchecked(ended: &Ended<'_>, taken: Taken, allowed: Allowed) -> Step {
+    let code = verifiable(ended.category);
+    let changed = code && ended.files_changed > 0;
+    if changed && allowed.nudge && !taken.nudged && !ended.hit_limit {
+        return Step::Nudge;
+    }
+    if changed && allowed.harness_check && !taken.checked {
+        return Step::HarnessCheck;
     }
     if !allowed.judge {
         return Step::Stop;
     }
-    let looks = looks_wrong(ended, taken);
-    match allowed.review {
-        ReviewMode::On => {
-            let fresh = taken.reviews == 0 && !taken.repaired;
-            if fresh && !ended.hit_limit && !ended.acting_signs.is_empty() {
-                return Step::Repair(ended.acting_signs.to_vec());
-            }
-            if taken.reviews == 0 || (taken.reviews == 1 && taken.repaired) {
-                let why = reasons(ended, &looks);
-                if !why.is_empty() {
-                    return Step::Review { why, act: true };
-                }
-            }
-            // The review stands in for the judge of work that looks
-            // wrong.
-            return Step::Stop;
+    let looks = suspicions(ended);
+    if code && allowed.review == ReviewMode::On {
+        if let Some(step) = acted_review(ended, taken, &looks) {
+            return step;
         }
+    }
+    if taken.judged {
+        return Step::Stop;
+    }
+    Step::JudgeUnverified(looks)
+}
+
+fn passed(ended: &Ended<'_>, taken: Taken, allowed: Allowed) -> Step {
+    if !allowed.judge {
+        return Step::Stop;
+    }
+    let looks = if !taken.checked && says_unverified(ended.reply) {
+        vec![Suspicion::Unverified]
+    } else {
+        Vec::new()
+    };
+    match allowed.review {
+        // The review stands in for the judge of work that looks wrong.
+        ReviewMode::On => return acted_review(ended, taken, &looks).unwrap_or(Step::Stop),
         // Work that looks wrong goes to the judge below; the rest is
         // reviewed for the log.
         ReviewMode::Log if looks.is_empty() && taken.reviews == 0 => {
@@ -442,7 +445,7 @@ mod tests {
 
     fn ended(files_changed: usize, reply: &str) -> Ended<'_> {
         Ended {
-            signal: OutcomeSignal::None,
+            signal: None,
             category: PromptCategory::MultiFileChange,
             files_changed,
             reply,
@@ -455,7 +458,7 @@ mod tests {
 
     fn passed(reply: &str) -> Ended<'_> {
         Ended {
-            signal: OutcomeSignal::ChecksPassed,
+            signal: Some(OutcomeSignal::ChecksPassed),
             ..ended(2, reply)
         }
     }
@@ -509,7 +512,7 @@ mod tests {
         };
         assert_eq!(next(&hard, Taken::default(), no_judge), Step::Stop);
         let failed = Ended {
-            signal: OutcomeSignal::ChecksFailed,
+            signal: Some(OutcomeSignal::ChecksFailed),
             ..hard
         };
         assert_eq!(next(&failed, Taken::default(), REVIEWING), Step::Stop);
@@ -537,10 +540,7 @@ mod tests {
             next(&disowned, Taken::default(), REVIEWING),
             review(&[Why::Hard, Why::Sign(Flag::ReplyUnverified)], true)
         );
-        let gave_up = Ended {
-            signal: OutcomeSignal::None,
-            ..ended(0, "I was unable to find the cause.")
-        };
+        let gave_up = ended(0, "I was unable to find the cause.");
         assert_eq!(
             next(&gave_up, Taken::default(), REVIEWING),
             review(&[Why::Sign(Flag::NoChanges), Why::Sign(Flag::GaveUp)], true)
@@ -551,8 +551,8 @@ mod tests {
         };
         assert_eq!(
             next(&gave_up, reviewed, REVIEWING),
-            Step::Stop,
-            "the review stands in for the judge of unchecked work"
+            Step::JudgeUnverified(vec![Suspicion::NoChanges, Suspicion::GaveUp]),
+            "a review that gave no verdict leaves it to the judge"
         );
     }
 
@@ -676,9 +676,14 @@ mod tests {
         };
         assert_eq!(
             next(&changed, checked, ALL),
-            Step::Stop,
-            "nothing looks wrong"
+            Step::JudgeUnverified(Vec::new()),
+            "nothing looks wrong, but it still needs a verdict"
         );
+        let judged = Taken {
+            judged: true,
+            ..checked
+        };
+        assert_eq!(next(&changed, judged, ALL), Step::Stop);
     }
 
     #[test]
@@ -744,7 +749,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_turn_without_a_signal_gets_steps() {
+    fn a_turn_with_a_signal_gets_no_steps() {
         for signal in [
             OutcomeSignal::ChecksPassed,
             OutcomeSignal::ChecksFailed,
@@ -752,7 +757,8 @@ mod tests {
             OutcomeSignal::Unavailable,
         ] {
             let with_signal = Ended {
-                signal,
+                signal: Some(signal),
+                category: PromptCategory::Question,
                 ..ended(0, "")
             };
             assert_eq!(
@@ -766,7 +772,7 @@ mod tests {
     #[test]
     fn a_passed_check_the_reply_disowns_goes_to_the_judge() {
         let disowned = Ended {
-            signal: OutcomeSignal::ChecksPassed,
+            signal: Some(OutcomeSignal::ChecksPassed),
             ..ended(
                 2,
                 "I rewrote `ensure_type()`, but it isn't verified. The only test run was cut short.",
@@ -797,12 +803,12 @@ mod tests {
         );
 
         let vouched = Ended {
-            signal: OutcomeSignal::ChecksPassed,
+            signal: Some(OutcomeSignal::ChecksPassed),
             ..ended(2, "Fixed the parser; `cargo test` passes.")
         };
         assert_eq!(next(&vouched, Taken::default(), ALL), Step::Stop);
         let failed = Ended {
-            signal: OutcomeSignal::ChecksFailed,
+            signal: Some(OutcomeSignal::ChecksFailed),
             ..disowned
         };
         assert_eq!(
@@ -828,7 +834,7 @@ mod tests {
     }
 
     #[test]
-    fn answers_and_writing_get_no_steps() {
+    fn answers_and_writing_go_straight_to_the_judge() {
         for category in [
             PromptCategory::Question,
             PromptCategory::Research,
@@ -838,24 +844,23 @@ mod tests {
         ] {
             let answer = Ended {
                 category,
-                ..ended(0, "I couldn't find it.")
+                ..ended(2, "I couldn't find it.")
             };
             assert_eq!(
-                next(&answer, Taken::default(), ALL),
-                Step::Stop,
+                next(&answer, Taken::default(), REVIEWING),
+                Step::JudgeUnverified(vec![Suspicion::GaveUp]),
                 "{category:?}"
             );
-            assert!(suspicions(&answer).is_empty());
+            let plain = Ended {
+                category,
+                ..ended(0, "Here you go.")
+            };
+            assert_eq!(
+                next(&plain, Taken::default(), ALL),
+                Step::JudgeUnverified(Vec::new()),
+                "{category:?}"
+            );
         }
-        let unclassified = Ended {
-            category: PromptCategory::Unclassified,
-            ..ended(0, "Here you go.")
-        };
-        assert_eq!(
-            next(&unclassified, Taken::default(), ALL),
-            Step::Stop,
-            "unclassified work that changed nothing may be an answer"
-        );
     }
 
     #[test]

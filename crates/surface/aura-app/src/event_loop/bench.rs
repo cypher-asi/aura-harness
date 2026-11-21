@@ -68,13 +68,6 @@ pub(super) async fn handle(state: &mut LoopState<'_>, agent_id: AgentId, request
         }
         BenchRequest::Start => compare::start(state).await,
         BenchRequest::Cancel => Ok(compare::cancel(state)),
-        BenchRequest::Pick { id, arm } => match host(&id) {
-            Ok(host) => {
-                let arm = CompareArm::BOTH[arm.min(1)].as_str();
-                compare::pick(state, Some(host), arm).await
-            }
-            Err(problem) => Err(problem),
-        },
         BenchRequest::Apply { id, run } => match host(&id) {
             Ok(host) => compare::apply(state, Some(host), &run).await,
             Err(problem) => Err(problem),
@@ -142,7 +135,6 @@ fn status(status: &CompareStatus) -> BenchStatus {
         CompareStatus::Running => BenchStatus::Running,
         CompareStatus::Done => BenchStatus::Done,
         CompareStatus::Cancelled => BenchStatus::Cancelled,
-        CompareStatus::Picked(arm) => BenchStatus::Picked(arm.index()),
         CompareStatus::Applied(run) => BenchStatus::Applied(run.clone()),
         CompareStatus::Dismissed => BenchStatus::Dismissed,
     }

@@ -1,12 +1,12 @@
 //! Gate's prompt classifier: one short call to a cheap model that labels
-//! a prompt (a turn's, or later a subtask's) with one of
+//! a prompt (a turn's, or a subtask's) with one of
 //! [`PromptCategory::CLASSES`] and how hard its work looks.
 //!
 //! This module builds the request and reads the reply; the caller sends
 //! the request through its agent's kernel, so the call is recorded like
-//! any other model call. Whatever goes wrong — the call fails, or the
-//! reply names no category — the prompt is
-//! [`PromptCategory::Unclassified`], with no difficulty.
+//! any other model call. A reply that does not name both a category and
+//! a difficulty is no label: Gate does not route work it could not
+//! classify.
 
 use aura_core_types::{Difficulty, PromptCategory};
 use aura_model::model_catalog::ModelTier;
@@ -48,16 +48,8 @@ hard: subtle, ambiguous or wide-reaching work that is easy to get wrong";
 pub struct Label {
     /// What the prompt asks for.
     pub category: PromptCategory,
-    /// How hard its work looks; `None` when the reply did not say.
-    pub difficulty: Option<Difficulty>,
-}
-
-impl Label {
-    /// No usable answer: unclassified, difficulty unknown.
-    pub const UNCLASSIFIED: Self = Self {
-        category: PromptCategory::Unclassified,
-        difficulty: None,
-    };
+    /// How hard its work looks.
+    pub difficulty: Difficulty,
 }
 
 /// The model that classifies prompts: the cheapest fast-tier candidate.
@@ -78,12 +70,8 @@ pub fn request(
     prompt: &str,
     auth_token: Option<String>,
 ) -> Result<ModelRequest, ReasonerError> {
-    let prompt: String = prompt.chars().take(MAX_PROMPT_CHARS).collect();
     ModelRequest::builder(model, SYSTEM_PROMPT)
-        .message(Message::user(format!(
-            "Request:\n{prompt}\n\n{}",
-            answer_cue()
-        )))
+        .message(Message::user(message(prompt)))
         .tool_choice(ToolChoice::None)
         .max_tokens(MAX_REPLY_TOKENS)
         .thinking_effort(Some(ThinkingEffort::Off))
@@ -93,14 +81,21 @@ pub fn request(
         .try_build()
 }
 
-/// What the request ends with: the labels and difficulties again. After a
-/// long prompt a cheap model loses track of the list and makes labels up
-/// (`feature`, `implementation`).
-fn answer_cue() -> String {
+/// What the classifier is sent of `prompt`: the question first, with the
+/// labels and difficulties to answer from, then the start of the prompt.
+/// Asked first, the question stays in view however long the prompt is.
+fn message(prompt: &str) -> String {
     let labels = PromptCategory::CLASSES.map(PromptCategory::as_str);
     let difficulties = Difficulty::ALL.map(Difficulty::as_str);
+    let cut: String = prompt.chars().take(MAX_PROMPT_CHARS).collect();
+    let more = if cut.len() < prompt.len() {
+        "\n(the request goes on)"
+    } else {
+        ""
+    };
     format!(
-        "Label ({}) and difficulty ({}):",
+        "Reply with the label ({}) and the difficulty ({}) of this request.\n\n\
+         Request:\n{cut}{more}",
         either(&labels),
         either(&difficulties)
     )
@@ -114,15 +109,21 @@ fn either(words: &[&str]) -> String {
     }
 }
 
-/// What the classifier's `response` says.
+/// What the classifier's `response` says; `None` when it names no
+/// category or no difficulty.
 #[must_use]
-pub fn label_of(response: &ModelResponse) -> Label {
-    let reply = response.message.text_content();
-    let category = parse(&reply);
-    Label {
-        category,
-        difficulty: parse_difficulty(&reply).filter(|_| category != PromptCategory::Unclassified),
-    }
+pub fn label_of(response: &ModelResponse) -> Option<Label> {
+    parse_label(&response.message.text_content())
+}
+
+/// The label in `reply`: its first category and its first difficulty.
+/// `None` when it lacks either.
+#[must_use]
+pub fn parse_label(reply: &str) -> Option<Label> {
+    Some(Label {
+        category: parse(reply)?,
+        difficulty: parse_difficulty(reply)?,
+    })
 }
 
 /// The words of `reply`'s answer, lowercase: what follows a local model's
@@ -139,16 +140,12 @@ fn answer_words(reply: &str) -> Vec<String> {
         .collect()
 }
 
-/// The first category named in `reply`, [`PromptCategory::Unclassified`]
-/// when it names none.
+/// The first category named in `reply`, if any.
 #[must_use]
-pub fn parse(reply: &str) -> PromptCategory {
+pub fn parse(reply: &str) -> Option<PromptCategory> {
     answer_words(reply)
         .iter()
-        .find_map(|word| {
-            PromptCategory::from_name(word).filter(|c| *c != PromptCategory::Unclassified)
-        })
-        .unwrap_or(PromptCategory::Unclassified)
+        .find_map(|word| PromptCategory::from_name(word))
 }
 
 /// The first difficulty named in `reply`, if any.
@@ -171,35 +168,34 @@ mod tests {
     #[test]
     fn plain_labels_parse() {
         for category in PromptCategory::CLASSES {
-            assert_eq!(parse(category.as_str()), category);
+            assert_eq!(parse(category.as_str()), Some(category));
         }
-        assert_eq!(parse("  Debugging\n"), PromptCategory::Debugging);
-        assert_eq!(parse("multi-file_change"), PromptCategory::MultiFileChange);
+        assert_eq!(parse("  Debugging\n"), Some(PromptCategory::Debugging));
+        assert_eq!(
+            parse("multi-file_change"),
+            Some(PromptCategory::MultiFileChange)
+        );
     }
 
     #[test]
     fn labels_inside_a_sentence_or_after_thinking_parse() {
         assert_eq!(
             parse("Label: small_change."),
-            PromptCategory::SmallChange,
+            Some(PromptCategory::SmallChange),
             "the first label wins"
         );
         assert_eq!(
             parse("<think>maybe question, or research</think>\nplanning"),
-            PromptCategory::Planning
+            Some(PromptCategory::Planning)
         );
     }
 
     #[test]
-    fn replies_without_a_label_are_unclassified() {
-        assert_eq!(parse(""), PromptCategory::Unclassified);
-        assert_eq!(parse("I can't tell"), PromptCategory::Unclassified);
-        assert_eq!(parse("unclassified"), PromptCategory::Unclassified);
-        assert_eq!(
-            parse("smallchange"),
-            PromptCategory::Unclassified,
-            "near misses are not guessed"
-        );
+    fn replies_without_a_label_name_no_category() {
+        assert_eq!(parse(""), None);
+        assert_eq!(parse("I can't tell"), None);
+        assert_eq!(parse("unclassified"), None);
+        assert_eq!(parse("smallchange"), None, "near misses are not guessed");
     }
 
     #[test]
@@ -211,11 +207,24 @@ mod tests {
             Some(Difficulty::Medium)
         );
         assert_eq!(parse_difficulty("planning"), None);
-        assert_eq!(parse("small_change easy"), PromptCategory::SmallChange);
     }
 
     #[test]
-    fn the_request_is_short_and_has_no_tools() {
+    fn a_label_needs_both_a_category_and_a_difficulty() {
+        assert_eq!(
+            parse_label("small_change easy"),
+            Some(Label {
+                category: PromptCategory::SmallChange,
+                difficulty: Difficulty::Easy,
+            })
+        );
+        assert_eq!(parse_label("planning"), None);
+        assert_eq!(parse_label("hard"), None);
+        assert_eq!(parse_label("feature hard"), None);
+    }
+
+    #[test]
+    fn the_question_comes_before_the_request() {
         let long = "x".repeat(MAX_PROMPT_CHARS * 2);
         let built = request("claude/claude-haiku-4-5", &long, Some("jwt".into())).unwrap();
         assert_eq!(built.model.as_str(), "claude/claude-haiku-4-5");
@@ -224,14 +233,18 @@ mod tests {
         assert_eq!(built.max_tokens.get(), MAX_REPLY_TOKENS);
         assert_eq!(built.auth_token.as_deref(), Some("jwt"));
         let sent = built.messages[0].text_content();
-        assert!(sent.len() < MAX_PROMPT_CHARS + 200, "prompt is cut short");
+        assert!(sent.len() < MAX_PROMPT_CHARS + 300, "prompt is cut short");
         assert!(
-            sent.ends_with(
-                "\n\nLabel (question, small_change, multi_file_change, debugging, research, \
-                 planning, writing or other) and difficulty (easy, medium or hard):"
+            sent.starts_with(
+                "Reply with the label (question, small_change, multi_file_change, debugging, \
+                 research, planning, writing or other) and the difficulty (easy, medium or hard) \
+                 of this request.\n\nRequest:\nxxx"
             ),
-            "the labels come again after the prompt: {sent}"
+            "the question comes first: {sent}"
         );
+        assert!(sent.ends_with("x\n(the request goes on)"), "{sent}");
+        let short = request("claude/claude-haiku-4-5", "hi", None).unwrap();
+        assert!(short.messages[0].text_content().ends_with("Request:\nhi"));
         for category in PromptCategory::CLASSES {
             assert!(built.system.contains(category.as_str()), "{category}");
         }

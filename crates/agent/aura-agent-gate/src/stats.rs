@@ -4,16 +4,13 @@
 //!
 //! [`GateStats`] is built by feeding it record entries
 //! ([`GateStats::observe`]): the log at startup, then every entry the
-//! kernels commit. Each prompt counts once, with its effective outcome
-//! (the user's latest rating, else the latest outcome with a known
-//! result, as [`crate::outcome::effective`] says). An outcome that
-//! replaces an earlier one for the same prompt takes its place in the
-//! table instead of adding to it, and one that takes the earlier ones
-//! back (the judge found the failure was not the model's doing, see
-//! [`aura_core_types::OutcomeSignal::voids`]) leaves the prompt out of
-//! the table. Work that ended with nothing that says how it went still
-//! counts for what it cost: a model's cost is what all of its work cost,
-//! not only the work a check happened to verify.
+//! kernels commit. Each prompt counts once, with its latest outcome that
+//! has a known result. An outcome that replaces an earlier one for the
+//! same prompt takes its place in the table instead of adding to it, and
+//! one that takes the earlier ones back (the judge found the failure was
+//! not the model's doing, see [`aura_core_types::OutcomeSignal::voids`])
+//! leaves the prompt out of the table. Work the user cancelled still
+//! counts for what it cost: a model's cost is what all of its work cost.
 //!
 //! Entries may arrive in any order and more than once (a startup scan
 //! can overlap the live feed): which outcome counts depends only on the
@@ -201,9 +198,6 @@ struct Shape {
 struct Counted {
     /// Record sequence number of the outcome.
     seq: u64,
-    /// Whether it is the user's rating, which wins over later automatic
-    /// outcomes.
-    rating: bool,
     category: PromptCategory,
     model: String,
     /// The outcome takes back what was said before: the prompt then
@@ -222,7 +216,6 @@ impl Counted {
         let void = outcome.signal.voids();
         Self {
             seq,
-            rating: outcome.signal.is_rating(),
             category: outcome.category,
             void,
             success: outcome.success.filter(|_| !void),
@@ -238,15 +231,14 @@ impl Counted {
         self.void || self.success.is_some()
     }
 
-    /// Whether `self` counts instead of `other` for the same prompt: the
-    /// user's rating over automatic outcomes, then one that says how the
-    /// work went over one that does not, else the later one.
+    /// Whether `self` counts instead of `other` for the same prompt: one
+    /// that says how the work went over one that does not, else the later
+    /// one.
     fn supersedes(&self, other: &Self) -> bool {
-        match (self.rating, other.rating) {
-            (true, false) => true,
-            (false, true) => false,
-            _ if self.decides() != other.decides() => self.decides(),
-            _ => self.seq > other.seq,
+        if self.decides() == other.decides() {
+            self.seq > other.seq
+        } else {
+            self.decides()
         }
     }
 
@@ -695,7 +687,7 @@ mod tests {
             led: Option<bool>,
         ) -> Hash {
             let mut payload = PromptPayload::new(text);
-            payload.category = PromptCategory::Debugging;
+            payload.category = Some(PromptCategory::Debugging);
             payload.route = Route {
                 level,
                 ..Route::turn(SONNET, RouteReason::Default)
@@ -743,7 +735,7 @@ mod tests {
         log.outcome(first, SONNET, OutcomeSignal::ChecksPassed);
         log.outcome(first, SONNET, OutcomeSignal::Rewind);
         let second = log.prompt("fix the lexer", RouteLevel::Turn);
-        log.outcome(second, SONNET, OutcomeSignal::None);
+        log.outcome(second, SONNET, OutcomeSignal::Cancelled);
         let third = log.prompt("fix the build", RouteLevel::Turn);
         log.outcome(third, SONNET, OutcomeSignal::ChecksPassed);
 
@@ -757,17 +749,17 @@ mod tests {
         assert_eq!(
             (row.turns, row.latency_ms),
             (3, 3_000),
-            "the turn nothing checked still took its time"
+            "the cancelled turn still took its time"
         );
     }
 
     #[test]
-    fn a_turn_nothing_checked_counts_for_its_cost_only() {
+    fn a_cancelled_turn_counts_for_its_cost_only() {
         let mut log = Log::new();
         let checked = log.prompt("fix the parser", RouteLevel::Turn);
         log.outcome(checked, SONNET, OutcomeSignal::ChecksPassed);
         let unchecked = log.prompt("fix the lexer", RouteLevel::Turn);
-        log.outcome_costing(unchecked, SONNET, OutcomeSignal::None, 0.75);
+        log.outcome_costing(unchecked, SONNET, OutcomeSignal::Cancelled, 0.75);
         for stats in [
             GateStats::from_entries(&log.entries),
             GateStats::from_entries(log.entries.iter().rev()),
@@ -794,7 +786,7 @@ mod tests {
         // the two are seen: the turn is not counted twice, and an
         // outcome that says nothing never replaces one that does.
         log.outcome(unchecked, SONNET, OutcomeSignal::ChecksFailed);
-        log.outcome(checked, SONNET, OutcomeSignal::None);
+        log.outcome(checked, SONNET, OutcomeSignal::Cancelled);
         for stats in [
             GateStats::from_entries(&log.entries),
             GateStats::from_entries(log.entries.iter().rev()),
@@ -809,21 +801,10 @@ mod tests {
         // Alone on a model, it leaves a row with a cost and no tries.
         let mut log = Log::new();
         let only = log.prompt("fix the build", RouteLevel::Turn);
-        log.outcome(only, SONNET, OutcomeSignal::None);
+        log.outcome(only, SONNET, OutcomeSignal::Cancelled);
         let stats = GateStats::from_entries(&log.entries);
         assert_eq!(debugging(&stats, RouteLevel::Turn, SONNET), Some((0, 0)));
         assert!(stats.logged().is_empty(), "replay keeps to known results");
-    }
-
-    #[test]
-    fn a_rating_wins_over_later_automatic_outcomes() {
-        let mut log = Log::new();
-        let prompt = log.prompt("fix it", RouteLevel::Turn);
-        log.outcome(prompt, SONNET, OutcomeSignal::ChecksFailed);
-        log.outcome(prompt, SONNET, OutcomeSignal::Good);
-        log.outcome(prompt, SONNET, OutcomeSignal::RetryStronger);
-        let stats = GateStats::from_entries(&log.entries);
-        assert_eq!(debugging(&stats, RouteLevel::Turn, SONNET), Some((1, 1)));
     }
 
     #[test]
@@ -837,11 +818,11 @@ mod tests {
         }
         assert_eq!(debugging(&stats, RouteLevel::Turn, SONNET), Some((1, 1)));
 
-        log.outcome(prompt, SONNET, OutcomeSignal::Bad);
+        log.outcome(prompt, SONNET, OutcomeSignal::JudgedFail);
         stats.observe(log.entries.last().unwrap());
         assert_eq!(debugging(&stats, RouteLevel::Turn, SONNET), Some((1, 0)));
 
-        log.outcome(prompt, SONNET, OutcomeSignal::Good);
+        log.outcome(prompt, SONNET, OutcomeSignal::JudgedPass);
         stats.observe(log.entries.last().unwrap());
         stats.observe(log.entries.last().unwrap());
         assert_eq!(debugging(&stats, RouteLevel::Turn, SONNET), Some((1, 1)));
@@ -866,7 +847,7 @@ mod tests {
             let prompt = log.prompt(text, RouteLevel::Turn);
             log.outcome(prompt, SONNET, OutcomeSignal::ChecksPassed);
             log.outcome(prompt, SONNET, OutcomeSignal::Rewind);
-            log.outcome(prompt, SONNET, OutcomeSignal::Good);
+            log.outcome(prompt, SONNET, OutcomeSignal::JudgedPass);
         }
         let in_order = GateStats::from_entries(&log.entries);
         let reversed = GateStats::from_entries(log.entries.iter().rev());
@@ -896,7 +877,7 @@ mod tests {
         let first = log.prompt("fix that part", RouteLevel::Subtask);
         log.outcome(first, SONNET, OutcomeSignal::ChecksFailed);
         let mut retry = PromptPayload::new("fix that part, again");
-        retry.category = PromptCategory::Debugging;
+        retry.category = Some(PromptCategory::Debugging);
         retry.route = Route::subtask(HAIKU, RouteReason::Escalate);
         let retry = log.push(Transaction::user_prompt_with(log.agent, &retry));
         log.outcome(retry, HAIKU, OutcomeSignal::ChecksPassed);
@@ -924,7 +905,7 @@ mod tests {
     fn the_replay_log_holds_each_counted_prompt_with_its_propensity() {
         let mut log = Log::new();
         let mut explored = PromptPayload::new("fix the parser");
-        explored.category = PromptCategory::Debugging;
+        explored.category = Some(PromptCategory::Debugging);
         explored.route = Route {
             explored: true,
             propensity: 0.05,
@@ -933,7 +914,7 @@ mod tests {
         let explored = log.push(Transaction::user_prompt_with(log.agent, &explored));
         log.outcome_costing(explored, HAIKU, OutcomeSignal::ChecksPassed, 0.5);
         let unknown = log.prompt("fix the lexer", RouteLevel::Turn);
-        log.outcome(unknown, SONNET, OutcomeSignal::None);
+        log.outcome(unknown, SONNET, OutcomeSignal::Cancelled);
         let mut retry = PromptPayload::new("fix the parser, again");
         retry.route = Route::turn(SONNET, RouteReason::Escalate);
         let retry = log.push(Transaction::user_prompt_with(log.agent, &retry));
@@ -1073,7 +1054,7 @@ mod tests {
         assert_eq!((direct_row.tries, direct_row.successes), (1, 0));
         assert_eq!(direct_row.mean_total_cost_usd(), Some(0.25));
 
-        log.outcome(led, SONNET, OutcomeSignal::Bad);
+        log.outcome(led, SONNET, OutcomeSignal::JudgedFail);
         stats.observe(log.entries.last().unwrap());
         let led_row = stats
             .way_row(PromptCategory::Debugging, SONNET, true)

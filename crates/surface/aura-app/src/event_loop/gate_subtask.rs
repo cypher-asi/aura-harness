@@ -1,12 +1,15 @@
-//! Gate's part in a `task` spawn: the subtask's prompt is classified and,
-//! when the user selected gate and nothing pins the subtask's model, Gate
+//! Gate's part in a `task` spawn: when the user selected gate and nothing
+//! pins the subtask's model, the subtask's prompt is classified and Gate
 //! picks the model from its subtask rows. The child records the prompt at
 //! level `subtask` with its category, route and kind, and the `Outcome`
-//! written when the subtask ends.
+//! written when the subtask ends. A prompt the classifier could not label
+//! fails the subtask.
 //!
-//! The model stays pinned (still classified and recorded) for a permanent
-//! agent that names its own model, a council member, a model given in the
-//! `task` call, and every subtask when the user pinned the main model.
+//! The model stays pinned for a permanent agent that names its own model,
+//! a council member, a model given in the `task` call, and every subtask
+//! when the user pinned the main model. A pinned subtask's prompt is
+//! recorded with its route only: Gate neither classifies it nor records
+//! how it went.
 //!
 //! A subtask dispatched by an agent working on a frontier model is first
 //! routed below that tier ([`aura_agent_gate::below_lead`]), so the most
@@ -25,7 +28,6 @@ use super::gate_record;
 use super::turns::record_prompt;
 use crate::model_selection::{ModelLimits, ModelSelection};
 use aura_agent::AgentLoopConfig;
-use aura_agent_gate::classify::Label;
 use aura_agent_gate::{Candidate, Decision, Work};
 use aura_core_types::{
     Difficulty, Hash, PromptCategory, PromptPayload, Route, RouteLevel, RouteReason,
@@ -40,8 +42,8 @@ use tracing::info;
 /// model stands.
 #[derive(Debug, Clone, Default)]
 pub struct GateBase {
-    /// Model that classifies subtask prompts; empty leaves them
-    /// unclassified.
+    /// Model that classifies subtask prompts; empty when none can, which
+    /// fails the subtasks Gate would route.
     pub classifier: String,
     /// What Gate routes subtasks among when the user selected gate;
     /// `None` when they pinned the main model.
@@ -89,15 +91,18 @@ pub(super) struct SubtaskGate {
 impl SubtaskGate {
     /// The label of the subtask asking `text` of an agent set up with
     /// `config`. When Gate routes it, the prompt is classified now and
-    /// `config` is pointed at Gate's pick; a pinned subtask is classified
-    /// beside its turn.
+    /// `config` is pointed at Gate's pick; a pinned subtask is not
+    /// classified.
+    ///
+    /// # Errors
+    /// Says why when Gate routes the subtask and could not classify it.
     pub(super) async fn label(
         &self,
         session: &AgentSession,
         config: &mut AgentLoopConfig,
         text: &str,
         cancel: &CancellationToken,
-    ) -> SubtaskLabel {
+    ) -> Result<SubtaskLabel, String> {
         let mut label = SubtaskLabel {
             text: text.to_string(),
             kind: self.kind.clone(),
@@ -117,12 +122,12 @@ impl SubtaskGate {
             label.category = Some(*category);
             label.shown = Some(route_line(decision, *category));
             label.route = decision.route(RouteLevel::Subtask);
-            return label;
+            return Ok(label);
         }
         let Some(candidates) = &self.candidates else {
-            return label;
+            return Ok(label);
         };
-        let category = label.classify(session, cancel).await;
+        let category = label.classify(session, cancel).await?;
         label.category = Some(category);
         let among = aura_agent_gate::below_lead(candidates, self.lead_model.as_deref());
         let work =
@@ -134,7 +139,7 @@ impl SubtaskGate {
         };
         let Some(decision) = decision else {
             label.route.reason = RouteReason::Default;
-            return label;
+            return Ok(label);
         };
         info!(
             kind = %self.kind,
@@ -149,7 +154,7 @@ impl SubtaskGate {
         self.live.note_model(session.agent_id(), &decision.model.id);
         label.shown = Some(route_line(&decision, category));
         label.route = decision.route(RouteLevel::Subtask);
-        label
+        Ok(label)
     }
 }
 
@@ -169,7 +174,7 @@ pub(super) struct SubtaskLabel {
     classifier: String,
     auth_token: Option<String>,
     route: Route,
-    /// Known before the turn when Gate routed the subtask
+    /// Set when Gate routed the subtask; `None` when it is pinned
     pub category: Option<PromptCategory>,
     /// How hard the classifier judged the work, once it said
     difficulty: Option<Difficulty>,
@@ -179,15 +184,18 @@ pub(super) struct SubtaskLabel {
 
 impl SubtaskLabel {
     /// The prompt's category, as the classifier says, its difficulty kept
-    /// on `self`; unclassified when nothing classifies prompts or the
-    /// subtask is cancelled first.
+    /// on `self`.
+    ///
+    /// # Errors
+    /// Says why when nothing classifies prompts, the subtask is cancelled
+    /// first, or the classifier gave no category and difficulty.
     async fn classify(
         &mut self,
         session: &AgentSession,
         cancel: &CancellationToken,
-    ) -> PromptCategory {
+    ) -> Result<PromptCategory, String> {
         if self.classifier.is_empty() {
-            return PromptCategory::Unclassified;
+            return Err("Gate has no model to classify the subtask's prompt".to_string());
         }
         let label = tokio::select! {
             label = gate_record::classify_prompt(
@@ -195,40 +203,33 @@ impl SubtaskLabel {
                 &self.classifier,
                 &self.text,
                 self.auth_token.clone(),
-            ) => label,
-            () = cancel.cancelled() => Label::UNCLASSIFIED,
+            ) => label?,
+            () = cancel.cancelled() => return Err("cancelled by the user".to_string()),
         };
-        self.difficulty = label.difficulty;
-        label.category
+        self.difficulty = Some(label.difficulty);
+        Ok(label.category)
     }
 
-    /// Record the prompt on `session` as asking for `category`, returning
-    /// its transaction hash and category.
+    /// Record the prompt on `session`, returning its transaction hash and
+    /// category; a pinned subtask's is recorded with no category, and
+    /// `None` is returned for it as Gate records no outcome of it.
     pub(super) async fn record(
         &self,
         session: &AgentSession,
-        category: PromptCategory,
-    ) -> Result<(Hash, PromptCategory), String> {
+    ) -> Result<Option<(Hash, PromptCategory)>, String> {
         let payload = PromptPayload {
             text: self.text.clone(),
-            category,
-            classifier: self.classifier.clone(),
+            category: self.category,
+            classifier: self
+                .category
+                .map(|_| self.classifier.clone())
+                .unwrap_or_default(),
             route: self.route.clone(),
             kind: Some(self.kind.clone()),
             led: None,
             difficulty: self.difficulty,
         };
         let (tx, _) = record_prompt(session, &payload).await?;
-        Ok((tx.hash, category))
-    }
-
-    /// Classify the prompt and record it on `session`.
-    pub(super) async fn classify_and_record(
-        &mut self,
-        session: &AgentSession,
-        cancel: &CancellationToken,
-    ) -> Result<(Hash, PromptCategory), String> {
-        let category = self.classify(session, cancel).await;
-        self.record(session, category).await
+        Ok(self.category.map(|category| (tx.hash, category)))
     }
 }

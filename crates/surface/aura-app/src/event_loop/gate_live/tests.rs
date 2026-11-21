@@ -17,7 +17,7 @@ fn commit(store: &RocksStore, agent_id: AgentId, tx: Transaction) -> RecordEntry
 
 fn prompt(agent_id: AgentId, text: &str) -> Transaction {
     let mut payload = PromptPayload::new(text);
-    payload.category = PromptCategory::Question;
+    payload.category = Some(PromptCategory::Question);
     payload.route = Route::turn(HAIKU, RouteReason::Default);
     Transaction::user_prompt_with(agent_id, &payload)
 }
@@ -64,7 +64,7 @@ fn rebuilding_from_the_log_matches_the_live_updates() {
                 outcome(agent_id, p.tx.hash, signal),
             ));
             if n % 7 == 0 {
-                let rated = outcome(agent_id, p.tx.hash, OutcomeSignal::Bad);
+                let rated = outcome(agent_id, p.tx.hash, OutcomeSignal::JudgedFail);
                 live.on_entry(&commit(&store, agent_id, rated));
             }
         }
@@ -113,7 +113,7 @@ async fn a_background_rebuild_overlapping_live_entries_counts_each_prompt_once()
     let rated = commit(
         &store,
         agent_id,
-        outcome(agent_id, p.tx.hash, OutcomeSignal::Bad),
+        outcome(agent_id, p.tx.hash, OutcomeSignal::JudgedFail),
     );
     live.on_entry(&rated);
     live.rebuild(store.as_ref(), &[agent_id]);

@@ -3143,17 +3143,19 @@ fn test_smooth_scrolling_draws_the_chat_row_below_the_body() {
     assert_eq!(app.chat_scroll(), None, "only when the front end asks");
 
     app.set_smooth_scroll(true);
-    app.scroll_chat_rows(21);
+    // Up past the blank rows kept below the last line, to a line of text.
+    let up = chat_room(&app) + 21;
+    app.scroll_chat_rows(isize::try_from(up).unwrap());
     render_buffer(&mut app, 120);
     let view = app.chat_scroll().expect("the chat is drawn");
-    assert_eq!(view.below, 21);
+    assert_eq!(view.below, up);
     let (cells, _) = app.chat_row_below();
     let next: String = cells.iter().map(ratatui::buffer::Cell::symbol).collect();
 
     app.scroll_chat_rows(-1);
     let buffer = render_buffer(&mut app, 120);
     let view = app.chat_scroll().expect("the chat is drawn");
-    assert_eq!(view.below, 20);
+    assert_eq!(view.below, up - 1);
     let last = view.body.bottom() - 1;
     let row: String = (view.body.left()..view.body.right())
         .map(|x| buffer[(x, last)].symbol())
@@ -3485,6 +3487,100 @@ fn test_chat_bottom_leaves_room_below_latest_prompt() {
     assert!(!screen.contains("lines below"), "{screen}");
 }
 
+/// Blank rows the chat keeps below its last line, as it was last drawn.
+fn chat_room(app: &crate::App) -> usize {
+    let text = app.areas.chat_text.expect("the chat is drawn");
+    super::panels::breathing_room(usize::from(text.height))
+}
+
+/// The row of `needle` in `rows`, and how many blank rows lie between it
+/// and the chat's bottom border.
+fn rows_under(rows: &[String], needle: &str) -> (usize, usize) {
+    let screen = rows.join("\n");
+    let row = rows
+        .iter()
+        .position(|row| row.contains(needle))
+        .unwrap_or_else(|| panic!("{needle:?} not in:\n{screen}"));
+    let column = rows[row][..rows[row].find(needle).unwrap()].chars().count();
+    let border = (row + 1..rows.len())
+        .find(|&y| rows[y].chars().nth(column) == Some('─'))
+        .unwrap_or_else(|| panic!("no border below {needle:?}:\n{screen}"));
+    let blank = |row: &String| {
+        row.chars()
+            .skip(column)
+            .take(needle.chars().count())
+            .all(|c| c == ' ')
+    };
+    assert!(
+        rows[row + 1..border].iter().all(blank),
+        "only blank rows below {needle:?}:\n{screen}"
+    );
+    (row, border - row - 1)
+}
+
+#[test]
+fn test_chat_keeps_room_below_a_reply_that_reaches_the_bottom() {
+    use crate::components::{Message, MessageRole};
+    use crate::events::UiCommand;
+
+    let mut app = crate::App::new();
+    app.add_message(Message::new(MessageRole::User, "fix the login bug"));
+    app.process_command(UiCommand::StartStreaming);
+    app.process_command(UiCommand::AppendText("line 00".to_string()));
+    let rows = render_rows(&mut app, 100);
+    let height = app.areas.chat_text.expect("the chat is drawn").height;
+    let room = usize::from(height) / 4;
+    assert!(room > 1, "a quarter of {height} rows");
+    let (_, under) = rows_under(&rows, "line 00");
+    assert!(under > room, "a short reply leaves the rest blank");
+
+    let mut scrolled = false;
+    for i in 1..40 {
+        app.process_command(UiCommand::AppendText(format!("\n\nline {i:02}")));
+        let rows = render_rows(&mut app, 100);
+        let screen = rows.join("\n");
+        let (_, under) = rows_under(&rows, &format!("line {i:02}"));
+        assert!(
+            under >= room,
+            "line {i:02} too close to the bottom:\n{screen}"
+        );
+        assert!(!screen.contains("lines below"), "{screen}");
+        if !screen.contains("fix the login bug") {
+            // The reply pushed the prompt away: it scrolls with the room.
+            assert_eq!(under, room, "{screen}");
+            scrolled = true;
+        }
+    }
+    assert!(scrolled, "the reply outgrew the chat");
+
+    // The rows under the last line are blank, not lines left to read.
+    app.scroll_up(room);
+    let rows = render_rows(&mut app, 100);
+    let screen = rows.join("\n");
+    assert_eq!(rows_under(&rows, "line 39").1, 0, "{screen}");
+    assert!(!screen.contains("lines below"), "{screen}");
+    app.scroll_up(1);
+    let screen = render_rows(&mut app, 100).join("\n");
+    assert!(screen.contains(" ↓ 1 line below "), "{screen}");
+}
+
+#[test]
+fn test_terminal_output_runs_to_the_bottom_row() {
+    use crate::events::UiCommand;
+
+    let mut app = app_with_model(None);
+    submit_message(&mut app, "$seq");
+    let output: String = (0..60).map(|n| format!("line {n:02}\n")).collect();
+    app.process_command(UiCommand::CommandFinished {
+        output,
+        exit_code: None,
+    });
+    app.process_command(UiCommand::Complete);
+    assert_eq!(app.chat_tab(), crate::app::ChatTab::Terminal);
+    let rows = render_rows(&mut app, 120);
+    assert_eq!(rows_under(&rows, "line 59").1, 0, "{}", rows.join("\n"));
+}
+
 #[test]
 fn test_chat_runs_from_the_top_border_to_the_bottom_one() {
     use crate::components::{Message, MessageRole};
@@ -3493,6 +3589,9 @@ fn test_chat_runs_from_the_top_border_to_the_bottom_one() {
     app.add_message(Message::new(MessageRole::User, "prompt"));
     let reply: Vec<String> = (0..60).map(|i| format!("line {i:02}")).collect();
     app.add_message(Message::new(MessageRole::Assistant, &reply.join("\n\n")));
+    render_rows(&mut app, 100);
+    // Up past the blank rows kept below the last line.
+    app.scroll_up(chat_room(&app));
     let rows = render_rows(&mut app, 100);
     let screen = rows.join("\n");
     let last = rows

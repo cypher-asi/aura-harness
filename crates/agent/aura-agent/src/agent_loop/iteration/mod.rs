@@ -255,14 +255,21 @@ pub(super) fn accumulate_response(
         warn!("Scrubbed leaked tool-call markup from assistant text before adding to history");
     }
 
+    let mut response_text = String::new();
     for block in &sanitized_message.content {
         match block {
-            ContentBlock::Text { text } => append_paragraph(&mut state.result.total_text, text),
+            ContentBlock::Text { text } => {
+                append_paragraph(&mut state.result.total_text, text);
+                append_paragraph(&mut response_text, text);
+            }
             ContentBlock::Thinking { thinking, .. } => {
                 state.result.total_thinking.push_str(thinking);
             }
             _ => {}
         }
+    }
+    if !response_text.is_empty() {
+        state.result.final_text = response_text;
     }
 
     state.messages.push(sanitized_message);

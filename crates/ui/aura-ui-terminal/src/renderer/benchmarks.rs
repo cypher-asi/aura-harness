@@ -1174,9 +1174,9 @@ fn detail_lines(
     lines.push(rule(width, theme));
     let running = view.status == BenchStatus::Running;
     let keys = if view.status.has_copies() && !running && !view.tasks.is_empty() {
-        "←/→ run · d diff · a/b better arm · x remove copies · Esc back"
+        "←/→ run · d diff · x remove copies · Esc back"
     } else if view.status.has_copies() && !running {
-        "←/→ run · d diff · y apply · a/b better arm · x remove copies · Esc back"
+        "←/→ run · d diff · y apply · x remove copies · Esc back"
     } else if running {
         "↑/↓ scroll · c stop · Esc back"
     } else {

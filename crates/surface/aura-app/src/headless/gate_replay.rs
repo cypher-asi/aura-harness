@@ -450,7 +450,10 @@ fn tally(asked: &[Asked]) -> String {
             })
             .count()
     };
-    let cost: f64 = answered.iter().map(|(_, _, cost_usd)| cost_usd).sum::<f64>()
+    let cost: f64 = answered
+        .iter()
+        .map(|(_, _, cost_usd)| cost_usd)
+        .sum::<f64>()
         + asked.iter().map(|asked| asked.wasted_usd).sum::<f64>();
     format!(
         "{} reviews answered, {} not, ${cost:.2} at list price\n\

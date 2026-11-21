@@ -77,10 +77,6 @@ pub const AURA_GATE_DELEGATE: &str = "AURA_GATE_DELEGATE";
 /// failed; a failed test, build or run then always counts against the
 /// model. Consumed by [`crate::GateConfig::judge`].
 pub const AURA_GATE_JUDGE: &str = "AURA_GATE_JUDGE";
-/// `off` makes Gate route work a check verifies like any other work, by
-/// success rate, instead of by the expected cost of starting cheap and
-/// moving up on a failure. Consumed by [`crate::GateConfig::cascade`].
-pub const AURA_GATE_CASCADE: &str = "AURA_GATE_CASCADE";
 /// `off` stops Gate asking a routed turn that changed files without
 /// running a test or build to verify its change. Consumed by
 /// [`crate::GateConfig::nudge`].
@@ -89,9 +85,6 @@ pub const AURA_GATE_NUDGE: &str = "AURA_GATE_NUDGE";
 /// turn that changed files and ran none. Consumed by
 /// [`crate::GateConfig::harness_check`].
 pub const AURA_GATE_CHECK: &str = "AURA_GATE_CHECK";
-/// `off` stops Gate's judge reviewing routed turns that ran no check but
-/// look wrong. Consumed by [`crate::GateConfig::suspect_judge`].
-pub const AURA_GATE_SUSPECT: &str = "AURA_GATE_SUSPECT";
 /// Whether Gate's judge reviews work a routed turn is about to let stand:
 /// `on`, `log` (ask and log the verdict without acting on it) or `off`.
 /// Consumed by [`crate::GateConfig::review`].
@@ -132,10 +125,8 @@ pub const ENV_VAR_NAMES: &[&str] = &[
     AURA_GATE_EXPLORE,
     AURA_GATE_DELEGATE,
     AURA_GATE_JUDGE,
-    AURA_GATE_CASCADE,
     AURA_GATE_NUDGE,
     AURA_GATE_CHECK,
-    AURA_GATE_SUSPECT,
     AURA_GATE_REVIEW,
 ];
 

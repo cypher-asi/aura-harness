@@ -9,14 +9,15 @@
 //! Sonnet 5, an older model it had never tried on such work, because it
 //! lists at half of Opus's price per token. It then used several times
 //! the tokens: 2.6 times Opus's cost on one task and 1.9 times over the
-//! three it ran. And Gate would not start such work on Claude Sonnet 5.5,
-//! which had done these tasks for about a third of Opus's cost and
-//! passed nine of ten, because of two failed turns on an easy task.
-//! Sent to Opus instead, Gate costs what Opus costs.
+//! three it ran. Gate no longer sends work to a model a later version
+//! supersedes.
 //!
 //! The test replays the benchmark's tasks on what Gate has recorded, and
-//! holds Gate to what it is for: the result of the strongest model, for
-//! less.
+//! holds Gate to the result of the strongest model at no more than its
+//! cost. Claude Sonnet 5.5, which had done these tasks for about a third
+//! of Opus's cost and passed nine of ten, stays ruled out of hard
+//! multi-file work by two failed turns on an easy task until exploring
+//! tries it again, so the replay does every task on Opus.
 
 use aura_agent_gate::router::{candidates, current, escalate, pick, Candidate, Work};
 use aura_agent_gate::GateStats;
@@ -34,7 +35,8 @@ const OLD_SONNET: &str = "claude/claude-sonnet-5";
 const OPUS: &str = "claude/claude-opus-5-5";
 
 /// How a run's prompt was classified: not at all (the classifier failed
-/// on long prompts at first), or as hard work of a category.
+/// on long prompts at first, and such outcomes no longer count), or as
+/// hard work of a category.
 #[derive(Clone, Copy)]
 enum Kind {
     U,
@@ -44,11 +46,11 @@ enum Kind {
 use Kind::{DH, MH, U};
 
 impl Kind {
-    const fn work(self) -> (PromptCategory, Option<Difficulty>) {
+    const fn work(self) -> Option<(PromptCategory, Option<Difficulty>)> {
         match self {
-            U => (PromptCategory::Unclassified, None),
-            DH => (PromptCategory::Debugging, Some(Difficulty::Hard)),
-            MH => (PromptCategory::MultiFileChange, Some(Difficulty::Hard)),
+            U => None,
+            DH => Some((PromptCategory::Debugging, Some(Difficulty::Hard))),
+            MH => Some((PromptCategory::MultiFileChange, Some(Difficulty::Hard))),
         }
     }
 }
@@ -205,7 +207,7 @@ impl Log {
     ) {
         let agent = AgentId::generate();
         let mut prompt = PromptPayload::new(format!("task {}", self.entries.len()));
-        prompt.category = category;
+        prompt.category = Some(category);
         prompt.difficulty = difficulty;
         prompt.led = Some(false);
         prompt.route = Route::turn(model, RouteReason::Compare);
@@ -242,7 +244,9 @@ impl Log {
 fn history() -> Log {
     let mut log = Log::default();
     for &(_, _, model, kind, cost_usd, passed) in RUNS.iter().chain(LAST) {
-        log.turn(model, kind.work(), cost_usd, passed);
+        if let Some(work) = kind.work() {
+            log.turn(model, work, cost_usd, passed);
+        }
     }
     for _ in 0..42 {
         log.turn(SONNET, (PromptCategory::Debugging, None), 0.018, true);
@@ -281,10 +285,6 @@ fn settings() -> GateConfig {
 /// the next. A failed attempt goes on with the model Gate moves it up
 /// to, and costs both. Returns the models each task was done on, the
 /// total cost and how many tasks passed.
-///
-/// Moving up needs Gate to see the failure. The one failed attempt this
-/// replays (Sonnet 5.5 on `ansible-d33bedc4`) changed no file, which is
-/// work Gate has the judge review.
 fn replay(log: &mut Log, settings: &GateConfig) -> (Vec<Vec<String>>, f64, usize) {
     let hard = Work::turn(PromptCategory::MultiFileChange).of(Some(Difficulty::Hard));
     let candidates = plan();
@@ -295,7 +295,12 @@ fn replay(log: &mut Log, settings: &GateConfig) -> (Vec<Vec<String>>, f64, usize
         while let Some(decision) = next {
             let model = decision.model.id;
             let (cost_usd, passed) = recorded(task, &model);
-            log.turn(&model, MH.work(), cost_usd, passed);
+            log.turn(
+                &model,
+                (PromptCategory::MultiFileChange, Some(Difficulty::Hard)),
+                cost_usd,
+                passed,
+            );
             cost += cost_usd;
             next = if passed {
                 passes += 1;
@@ -345,7 +350,7 @@ fn the_fixture_is_the_recorded_benchmark() {
 }
 
 #[test]
-fn gate_does_the_recorded_tasks_as_well_as_the_strongest_model_for_less() {
+fn gate_does_the_recorded_tasks_as_well_as_the_strongest_model_for_no_more() {
     let mut log = history();
     let (models, cost, passes) = replay(&mut log, &settings());
     let (opus_cost, opus_passes) = on_opus();
@@ -359,15 +364,15 @@ fn gate_does_the_recorded_tasks_as_well_as_the_strongest_model_for_less() {
     assert_eq!(
         models,
         [
-            vec![SONNET.to_string()],
-            vec![SONNET.to_string()],
-            vec![SONNET.to_string(), OPUS.to_string()],
+            vec![OPUS.to_string()],
+            vec![OPUS.to_string()],
+            vec![OPUS.to_string()],
         ],
-        "hard work starts on the standard model and moves up where it failed"
+        "the standard model's failures on multi-file work rule it out"
     );
     assert_eq!(passes, opus_passes, "on {models:?}");
     assert!(
-        cost < 0.6 * opus_cost,
+        cost <= opus_cost + 1e-9,
         "gate spent {cost} on {models:?}, opus {opus_cost}"
     );
 }

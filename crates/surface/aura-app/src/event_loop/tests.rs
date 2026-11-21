@@ -287,7 +287,7 @@ async fn answer(request: ModelRequest, last: Option<&str>) -> Result<ModelRespon
 /// that say "across files" are changes across several files, those that
 /// say "plan:" are planning, those that say "fix" are debugging,
 /// "classifier down" fails the call, and the rest are questions. Prompts
-/// that say "(easy)" or "(hard)" get that difficulty; the rest none.
+/// that say "(easy)" or "(hard)" get that difficulty; the rest are medium.
 async fn classify(request: &ModelRequest, prompt: &str) -> Result<ModelResponse, ReasonerError> {
     if prompt.contains("classifier down") {
         return Err(ReasonerError::Internal("classifier offline".to_string()));
@@ -304,8 +304,8 @@ async fn classify(request: &ModelRequest, prompt: &str) -> Result<ModelResponse,
     let difficulty = ["easy", "hard"]
         .into_iter()
         .find(|d| prompt.contains(&format!("({d})")))
-        .map_or(String::new(), |d| format!(" {d}"));
-    MockProvider::simple_response(format!("{label}{difficulty}"))
+        .unwrap_or("medium");
+    MockProvider::simple_response(format!("{label} {difficulty}"))
         .complete(request.clone())
         .await
 }
@@ -1977,40 +1977,26 @@ async fn turn(
 }
 
 #[tokio::test]
-async fn a_pinned_turn_records_its_category_route_and_outcome() {
+async fn a_pinned_turn_records_its_route_and_nothing_of_gate() {
     let (fixture, _commands) = fixture();
     let mut b = borrowed(&fixture);
     let links = b.links.clone();
     let first = fixture.first;
     let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
     let mut state = loop_state(&fixture, &mut b);
-    let classifier = state.models.classifier_model();
 
     turn(&mut state, &mut done, &links, first, "fix the parser").await;
 
     let prompts = prompts_of(&state, first);
     assert_eq!(prompts.len(), 1);
-    let (prompt_seq, prompt_tx, prompt) = &prompts[0];
+    let (_, _, prompt) = &prompts[0];
     assert_eq!(prompt.text, "fix the parser");
-    assert_eq!(prompt.category, PromptCategory::Debugging);
-    assert_eq!(prompt.classifier, classifier);
+    assert_eq!(prompt.category, None, "a pinned turn is not classified");
+    assert!(prompt.classifier.is_empty());
+    assert_eq!(prompt.difficulty, None);
     assert_eq!(prompt.route, Route::turn("mock-model", RouteReason::Pinned));
-
-    let outcomes = outcomes_of(&state, first);
-    assert_eq!(outcomes.len(), 1);
-    let (outcome_seq, outcome) = &outcomes[0];
-    assert!(outcome_seq > prompt_seq);
-    assert_eq!(outcome.prompt_tx, *prompt_tx);
-    assert_eq!(outcome.category, PromptCategory::Debugging);
-    assert_eq!(outcome.model, "mock-model");
-    assert_eq!(outcome.signal, OutcomeSignal::None);
-    assert_eq!(outcome.success, None);
-    let reply_seq = record_of(&state, first)
-        .iter()
-        .find(|e| e.tx.tx_type == aura_core_types::TransactionType::AgentMsg)
-        .map(|e| e.seq)
-        .unwrap();
-    assert!(*outcome_seq > reply_seq, "the outcome follows the reply");
+    assert!(outcomes_of(&state, first).is_empty());
+    assert!(state.hub.gate.recent().is_empty());
 }
 
 #[tokio::test]
@@ -2033,7 +2019,8 @@ async fn gate_classifies_before_the_turn_and_records_its_default_route() {
     turn(&mut state, &mut done, &links, first, "what does gate do?").await;
 
     let (prompt_seq, _, prompt) = prompts_of(&state, first).remove(0);
-    assert_eq!(prompt.category, PromptCategory::Question);
+    assert_eq!(prompt.category, Some(PromptCategory::Question));
+    assert_eq!(prompt.difficulty, Some(aura_core_types::Difficulty::Medium));
     assert_eq!(prompt.classifier, "aura-claude-haiku-4-5");
     assert_eq!(
         prompt.route,
@@ -2073,21 +2060,34 @@ async fn gate_classifies_before_the_turn_and_records_its_default_route() {
 }
 
 #[tokio::test]
-async fn a_failing_classifier_leaves_the_prompt_unclassified() {
-    let (fixture, _commands) = fixture();
+async fn a_failing_classifier_fails_the_routed_turn() {
+    let (fixture, mut commands) = fixture();
     let mut b = borrowed(&fixture);
     let links = b.links.clone();
     let first = fixture.first;
     let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
     let mut state = loop_state(&fixture, &mut b);
+    state.models = ModelSelection::signed_in(
+        &fixture.config,
+        aura_model::model_catalog::GATE_MODEL_ID,
+        aura_auth::AuthSummary {
+            zos_user: Some("alice".to_string()),
+            ..aura_auth::AuthSummary::default()
+        },
+    );
 
-    let finished = turn(&mut state, &mut done, &links, first, "classifier down?").await;
+    turn(&mut state, &mut done, &links, first, "classifier down?").await;
 
-    assert_eq!(finished.failure, None, "the turn still runs");
-    let (_, _, prompt) = prompts_of(&state, first).remove(0);
-    assert_eq!(prompt.category, PromptCategory::Unclassified);
-    let (_, outcome) = outcomes_of(&state, first).remove(0);
-    assert_eq!(outcome.category, PromptCategory::Unclassified);
+    let shown = drain(&mut commands);
+    assert!(
+        shown.iter().any(|(_, c)| matches!(
+            c,
+            UiCommand::ShowError(problem) if problem.contains("could not classify")
+        )),
+        "the turn fails with why"
+    );
+    assert!(prompts_of(&state, first).is_empty());
+    assert!(outcomes_of(&state, first).is_empty());
 }
 
 /// `agent` mode at `yolo`: nothing asks.
@@ -2240,7 +2240,7 @@ fn learn_questions(live: &GateLive, model: &str, n: usize) {
     let agent = AgentId::generate();
     for i in 0..n {
         let mut prompt = PromptPayload::new(format!("earlier question {i}"));
-        prompt.category = PromptCategory::Question;
+        prompt.category = Some(PromptCategory::Question);
         prompt.route = Route::turn(model, RouteReason::Default);
         let prompt_tx = Transaction::user_prompt_with(agent, &prompt);
         let outcome = OutcomePayload {
@@ -2293,7 +2293,7 @@ async fn gate_routes_each_category_and_records_why() {
         Route::turn("aura-claude-haiku-4-5", RouteReason::Proven),
         "ten passing questions prove haiku on questions"
     );
-    assert_eq!(prompts[1].2.category, PromptCategory::Debugging);
+    assert_eq!(prompts[1].2.category, Some(PromptCategory::Debugging));
     assert_eq!(
         prompts[1].2.route,
         Route::turn("aura-gpt-5-4", RouteReason::Default),
@@ -2347,25 +2347,26 @@ async fn the_classifiers_difficulty_moves_where_a_turn_starts_and_is_recorded() 
     .await;
 
     use aura_core_types::Difficulty;
-    let prompts: Vec<(PromptCategory, Option<Difficulty>, String)> = prompts_of(&state, first)
-        .into_iter()
-        .map(|(_, _, p)| (p.category, p.difficulty, p.route.model))
-        .collect();
+    let prompts: Vec<(Option<PromptCategory>, Option<Difficulty>, String)> =
+        prompts_of(&state, first)
+            .into_iter()
+            .map(|(_, _, p)| (p.category, p.difficulty, p.route.model))
+            .collect();
     assert_eq!(
         prompts,
         [
             (
-                PromptCategory::Question,
+                Some(PromptCategory::Question),
                 Some(Difficulty::Easy),
                 "aura-claude-haiku-4-5".to_string()
             ),
             (
-                PromptCategory::Question,
-                None,
+                Some(PromptCategory::Question),
+                Some(Difficulty::Medium),
                 "aura-claude-sonnet-4-6".to_string()
             ),
             (
-                PromptCategory::Debugging,
+                Some(PromptCategory::Debugging),
                 Some(Difficulty::Hard),
                 "aura-gpt-5-4".to_string()
             ),
@@ -2510,7 +2511,7 @@ async fn a_failed_turn_the_judge_blames_on_the_model_carries_on_on_a_stronger_on
         [
             (HAIKU.to_string(), OutcomeSignal::ChecksFailed),
             (HAIKU.to_string(), OutcomeSignal::JudgedFail),
-            (SONNET.to_string(), OutcomeSignal::None),
+            (SONNET.to_string(), OutcomeSignal::Unavailable),
         ]
     );
     assert!(
@@ -2549,7 +2550,7 @@ async fn a_passed_check_the_reply_disowns_is_reviewed_and_carries_on_on_a_strong
         outcomes,
         [
             (HAIKU.to_string(), OutcomeSignal::JudgedFail),
-            (SONNET.to_string(), OutcomeSignal::None),
+            (SONNET.to_string(), OutcomeSignal::Unavailable),
         ],
         "the check that passed does not count for Haiku"
     );
@@ -2770,7 +2771,7 @@ async fn a_failed_turn_with_no_verdict_carries_on_on_a_stronger_model() {
         outcomes,
         [
             (HAIKU.to_string(), OutcomeSignal::ChecksFailed),
-            (SONNET.to_string(), OutcomeSignal::None),
+            (SONNET.to_string(), OutcomeSignal::Unavailable),
         ],
         "the turn's own signal stands and is recorded once"
     );
@@ -2828,7 +2829,7 @@ async fn the_next_turn_uses_what_the_last_outcome_taught_gate() {
     let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
     let mut state = loop_state(&fixture, &mut b);
     state.models = gate_on_zos(&fixture);
-    // A later signal about the last turn, as `/compare pick` records one.
+    // A later signal about the last turn, as the judge records one.
     async fn rate(state: &LoopState<'_>, agent: AgentId, signal: OutcomeSignal) {
         let kernel = state.kernel_for(agent).unwrap();
         let last = gate_record::last_turn(kernel.store().as_ref(), agent).unwrap();
@@ -2842,11 +2843,11 @@ async fn the_next_turn_uses_what_the_last_outcome_taught_gate() {
     };
 
     turn(&mut state, &mut done, &links, first, "what is a monad?").await;
-    rate(&state, first, OutcomeSignal::Good).await;
+    rate(&state, first, OutcomeSignal::JudgedPass).await;
     turn(&mut state, &mut done, &links, first, "what is a functor?").await;
     assert_eq!(reasons(&state), [RouteReason::Default, RouteReason::Proven]);
 
-    rate(&state, first, OutcomeSignal::Bad).await;
+    rate(&state, first, OutcomeSignal::JudgedFail).await;
     let row = fixture
         .hub
         .gate

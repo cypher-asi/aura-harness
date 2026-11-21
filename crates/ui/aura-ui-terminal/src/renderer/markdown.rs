@@ -4,7 +4,13 @@
 //! between them goes through [`render_markdown`], which handles headings,
 //! rules, blockquotes, lists, task lists, tables, and inline styling, and
 //! wraps the result to the panel width.
+//!
+//! A list item that starts with a label, `- Path: src/lib.rs`, is a field:
+//! its label is muted, the blank lines between two fields are not drawn,
+//! and a blank row sets each record apart where the first label of a run
+//! of fields comes back (see [`fields`]).
 
+mod fields;
 mod inline;
 mod table;
 #[cfg(test)]
@@ -18,6 +24,7 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
+use std::borrow::Cow;
 pub(crate) use wrap::wrap_spans;
 
 /// Bullet glyphs by nesting depth, cycling for deeper lists.
@@ -40,24 +47,29 @@ pub(crate) fn render_markdown_flow(
     theme: &Theme,
     measure: Measure,
 ) -> (Vec<Line<'static>>, Vec<Option<u16>>) {
-    let expanded: Vec<String> = text
-        .lines()
-        .map(|line| line.replace('\t', "    "))
-        .collect();
-    let lines: Vec<&str> = expanded.iter().map(String::as_str).collect();
+    let expanded: Vec<Cow<'_, str>> = text.lines().map(expand_tabs).collect();
+    let lines: Vec<&str> = expanded.iter().map(AsRef::as_ref).collect();
+    let plan = fields::plan(&lines);
 
     let mut out: Vec<Line<'static>> = Vec::new();
     let mut flow = Vec::new();
     let mut previous = None;
     let mut i = 0;
     while i < lines.len() {
+        if plan[i].skip {
+            // As if the line were not there, so the item after it
+            // follows the one before like the next line
+            i += 1;
+            continue;
+        }
         let table = table::starts_at(&lines, i);
         let block = if table {
             Some(Block::Table)
         } else {
             Block::of(lines[i], previous)
         };
-        if Block::parts(previous, block) && out.last().is_some_and(|last| last.width() > 0) {
+        let parted = plan[i].gap || Block::parts(previous, block);
+        if parted && out.last().is_some_and(|last| last.width() > 0) {
             out.push(Line::default());
             flow.push(Some(0));
         }
@@ -259,6 +271,44 @@ struct ListItem<'a> {
     body: &'a str,
 }
 
+/// Whether `trimmed`, a line without its indent, is a list item. `- - -`
+/// is a rule.
+fn is_list_item(trimmed: &str) -> bool {
+    !is_rule(trimmed) && list_item(trimmed).is_some()
+}
+
+/// Whether `line`, the line before a gap, may belong to a list: it is an
+/// item, or it is indented, so it may be part of one.
+pub(crate) fn may_continue_list(line: &str) -> bool {
+    let line = expand_tabs(line);
+    let trimmed = line.trim_start();
+    trimmed.len() < line.len() || is_list_item(trimmed)
+}
+
+/// Whether how `line`, the line after a gap, is drawn may depend on the
+/// list before the gap: it is indented, so it may continue an item, or it
+/// is a field, whose blank lines and record depend on the items above it
+/// (see [`fields`]). A list is laid out as a whole across such gaps.
+pub(crate) fn may_join_list(line: &str) -> bool {
+    let line = expand_tabs(line);
+    let trimmed = line.trim_start();
+    trimmed.len() < line.len() || fields::is_field(trimmed)
+}
+
+/// Columns of indent before a line's text.
+fn indent(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+/// `line` with each tab as four spaces, as it is laid out.
+fn expand_tabs(line: &str) -> Cow<'_, str> {
+    if line.contains('\t') {
+        Cow::Owned(line.replace('\t', "    "))
+    } else {
+        Cow::Borrowed(line)
+    }
+}
+
 fn list_item(line: &str) -> Option<ListItem<'_>> {
     let digits = line.bytes().take_while(u8::is_ascii_digit).count();
     let marker_len =
@@ -318,9 +368,31 @@ fn render_list_item(
     let hang_width: usize = prefix.iter().map(Span::width).sum();
     let hang = vec![Span::raw(" ".repeat(hang_width))];
 
-    let spans = parse_inline(item.body, base, theme);
+    let spans = item_spans(item, base, theme);
     out.extend(wrap_spans(&spans, width, (&prefix, &hang), measure));
     hang_width
+}
+
+/// An item's text. A field's plain label is muted, so the values read
+/// apart from the names; a bold one keeps the emphasis its author gave
+/// it. Whether it is muted depends on the item alone, so a label does not
+/// change color while the items after it stream in.
+fn item_spans(item: &ListItem<'_>, base: Style, theme: &Theme) -> Vec<Span<'static>> {
+    let plain = item
+        .task
+        .is_none()
+        .then(|| fields::label(item.body))
+        .flatten()
+        .filter(|label| !label.bold);
+    let Some(label) = plain else {
+        return parse_inline(item.body, base, theme);
+    };
+    let mut spans = vec![Span::styled(
+        format!("{}:", label.text),
+        base.fg(theme.colors.muted),
+    )];
+    spans.extend(parse_inline(label.rest, base, theme));
+    spans
 }
 
 // ============================================================================

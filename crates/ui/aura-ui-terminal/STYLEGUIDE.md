@@ -127,9 +127,17 @@ under three columns.
 
 - The conversation is inset two columns, starts a row below the border
   and runs at most 110 columns wide.
+- **Room below**: once the conversation reaches the bottom, a quarter of
+  the chat's rows stay blank under its last line, so new text scrolls up
+  with space below it instead of running into the border. The terminal
+  pane's output runs to the bottom row.
 - **User messages**: a `muted` `→ ` prompt, then `foreground` text
 - **Replies**: `text`, list markers `muted`, inline code `secondary` on
   `surface`
+- **Fields**: a list item that starts with a short label (`- Path: …`)
+  has the label `muted`; blank lines between two such items are not
+  drawn, and where the first label of a run of them comes back, a blank
+  row sets the next record apart
 - **Steps**: markers `faint`, the whole line `muted`
 - **Live tail**: while a turn runs, the to-do checklist (`⬢` `faint`,
   `Working` bold `foreground`, the count `secondary`), then the working

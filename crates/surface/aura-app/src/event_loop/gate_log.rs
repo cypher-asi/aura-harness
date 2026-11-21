@@ -29,8 +29,8 @@ use aura_agent_gate::attempt_log::{
 use aura_agent_gate::evidence::Evidence;
 use aura_agent_gate::followup::{NUDGE_PROMPT, REPAIR_OPENING};
 use aura_core_types::{
-    AgentId, ArmSpec, CompareCopy, ComparePayload, CompareRun, Hash, OutcomePayload, OutcomeSignal,
-    RecordEntry, RouteLevel,
+    AgentId, ArmSpec, CompareCopy, ComparePayload, CompareRun, Hash, OutcomePayload, RecordEntry,
+    RouteLevel,
 };
 use aura_model::{ContentBlock, Message, Role};
 use aura_store_db::ReadStore;
@@ -394,10 +394,15 @@ fn rebuilt(
     let last = attempts.last()?;
     let mut lines = Vec::with_capacity(attempts.len() + 1);
     // As when the check ran: a run its provider cut short did not finish
-    // the work the check looks at.
+    // the work the check looks at, and the check left no outcome of it.
+    let outcomes = entries
+        .iter()
+        .filter_map(|entry| entry.tx.outcome_payload())
+        .filter(|outcome| outcome.prompt_tx.to_hex() == last.prompt_tx)
+        .count();
     let truth = run
         .check_passed
-        .filter(|_| last.signal != OutcomeSignal::Unavailable)
+        .filter(|_| outcomes > 1)
         .map(|passed| Truth {
             at_ms: last.at_ms,
             agent: last.agent.clone(),

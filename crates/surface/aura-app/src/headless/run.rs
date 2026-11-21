@@ -27,7 +27,6 @@ use crate::event_loop::{AgentHub, AgentSession};
 use crate::session_checkpoint::SessionUsage;
 use aura_agent::{AgentLoop, AgentLoopConfig, AgentLoopResult};
 use aura_agent_gate::attempt_log::Terms;
-use aura_agent_gate::classify::Label;
 use aura_agent_gate::followup::Step;
 use aura_agent_gate::outcome::calls_for_stronger;
 use aura_agent_gate::turn_judge::Failed;
@@ -149,6 +148,28 @@ struct TurnOutcome {
     turn_start: usize,
     /// What the turn ran under, for Gate's attempt log
     terms: Terms,
+    /// Whether nothing has said yet how the turn went: its `Outcome`
+    /// waits for Gate's follow-up to settle it and is not recorded yet
+    unchecked: bool,
+}
+
+impl TurnOutcome {
+    /// A turn that never ran: `problem` ends the run, with the session's
+    /// messages ending at `turn_start`.
+    fn stopped(problem: String, turn_start: usize) -> Self {
+        Self {
+            ended: None,
+            result: None,
+            usage: SessionUsage::default(),
+            stop: Some((ExitReason::Error, Some(problem))),
+            unseen: Vec::new(),
+            failure: None,
+            can_go_on: false,
+            turn_start,
+            terms: Terms::default(),
+            unchecked: false,
+        }
+    }
 }
 
 /// What a turn carries on from the one before it.
@@ -283,7 +304,6 @@ impl Headless {
         let settings = *self.hub.gate.settings();
         let reviews = settings.review != aura_config::ReviewMode::Off
             && settings.judge
-            && settings.suspect_judge
             && self
                 .hub
                 .gate_candidates(session.definition.as_deref())
@@ -338,6 +358,14 @@ impl Headless {
                 if found.harness.is_some() {
                     outcome.failure.clone_from(&found.harness);
                 }
+            }
+            // Work the follow-up could not settle stands as it is, unless
+            // its model carries on with it.
+            if outcome.unchecked && found.carry_on.is_none() {
+                if let Some(ended) = &outcome.ended {
+                    gate_record::record(&session.kernel, session.agent_id(), ended).await;
+                }
+                outcome.unchecked = false;
             }
             // What the turn's signal said, and what the judge found wrong
             // with it.
@@ -520,6 +548,7 @@ impl Headless {
     ) -> FollowedUp {
         let mut found = FollowedUp::default();
         let terms = turn.terms;
+        let unchecked = &mut turn.unchecked;
         let (Some(ended), Some(result)) = (turn.ended.as_mut(), turn.result.as_ref()) else {
             return found;
         };
@@ -551,7 +580,7 @@ impl Headless {
             let at = At {
                 category: ended.category,
                 difficulty: terms.difficulty,
-                signal: ended.signal,
+                signal: (!*unchecked).then_some(ended.signal),
                 turn_start: since,
             };
             match follow.1.next(result, at).await {
@@ -610,9 +639,15 @@ impl Headless {
                             break;
                         }
                         *ended = ended.with_signal(OutcomeSignal::JudgedFail);
+                        *unchecked = false;
                         relog(&follow.1, ended);
                         gate_record::record(&session.kernel, session.agent_id(), ended).await;
                         found.unchecked = Some(reviewed.findings);
+                    } else if let Some(verdict) = reviewed.verdict().filter(|_| *unchecked) {
+                        *ended = ended.with_signal(verdict);
+                        *unchecked = false;
+                        relog(&follow.1, ended);
+                        gate_record::record(&session.kernel, session.agent_id(), ended).await;
                     }
                 }
                 Step::HarnessCheck => {
@@ -629,6 +664,7 @@ impl Headless {
                     });
                     if let Some(signal) = signal {
                         *ended = ended.with_signal(signal);
+                        *unchecked = false;
                         relog(&follow.1, ended);
                         gate_record::record(&session.kernel, session.agent_id(), ended).await;
                         found.harness =
@@ -648,7 +684,7 @@ impl Headless {
                         suspicions: &suspicions,
                     };
                     let (config, _) = self.hub.turn(session.definition.as_deref(), &workspace);
-                    let Some(judged) =
+                    let Some((verdict, judged)) =
                         judge_unchecked(session, &judge, ended, &shown, config.auth_token).await
                     else {
                         continue;
@@ -660,10 +696,14 @@ impl Headless {
                         reasons: &judged.verdict.reasons,
                         cost_usd: judged.cost_usd,
                     });
-                    if judged.verdict.at_fault {
-                        *ended = ended.with_signal(OutcomeSignal::JudgedFail);
+                    let failed = verdict == OutcomeSignal::JudgedFail;
+                    if failed || *unchecked {
+                        *ended = ended.with_signal(verdict);
+                        *unchecked = false;
                         relog(&follow.1, ended);
                         gate_record::record(&session.kernel, session.agent_id(), ended).await;
+                    }
+                    if failed {
                         found.unchecked = Some(judged.verdict.reasons.clone());
                     }
                     self.judged.push(judged);
@@ -799,22 +839,24 @@ impl Headless {
             Some(Carry::Nudge(ended)) => (None, Some(ended)),
             None => (None, None),
         };
-        let (mut payload, routed) = match &nudged {
+        let routing = match &nudged {
             Some(ended) => {
                 if config.model != ended.model {
                     self.hub.model_limits().configure(&mut config, &ended.model);
                 }
-                (PromptPayload::new(text.clone()), true)
+                Ok((PromptPayload::new(text.clone()), Some(ended.category)))
             }
             None => {
                 self.route_turn(session, &mut config, &text, escalation)
                     .await
             }
         };
-        let category = nudged
-            .as_ref()
-            .map_or(payload.category, |ended| ended.category);
-        if let Some(lead) = lead.filter(|_| routed) {
+        let (mut payload, category) = match routing {
+            Ok(routing) => routing,
+            Err(problem) => return TurnOutcome::stopped(problem, session.messages.len()),
+        };
+        let routed = category.is_some();
+        if let (Some(lead), Some(category)) = (lead, category) {
             let explore = payload.route.reason != RouteReason::Escalate && nudged.is_none();
             let led = self
                 .hub
@@ -832,19 +874,7 @@ impl Headless {
         let started_ms = crate::event_loop::processes::now_ms();
         let prompt_tx = match record_prompt(session, &payload).await {
             Ok((tx, _)) => tx.hash,
-            Err(problem) => {
-                return TurnOutcome {
-                    ended: None,
-                    result: None,
-                    usage: SessionUsage::default(),
-                    stop: Some((ExitReason::Error, Some(problem))),
-                    unseen: Vec::new(),
-                    failure: None,
-                    can_go_on: false,
-                    turn_start: session.messages.len(),
-                    terms: Terms::default(),
-                };
-            }
+            Err(problem) => return TurnOutcome::stopped(problem, session.messages.len()),
         };
         if let Some(trace) = &self.trace {
             config.trace_blobs = trace.blob_store();
@@ -967,15 +997,18 @@ impl Headless {
         let mut unseen: Vec<String> = unseen.into_iter().map(|(_, text)| text).collect();
         unseen.append(&mut late);
         let mut failure = None;
-        let ended = if routed {
+        let mut unchecked = false;
+        let ended = if let Some(category) = category {
             // A run stopped by its own limits says nothing about the model.
-            let signal = match (&result, limit) {
+            let own = match (&result, limit) {
                 (Some(result), None) => {
                     failure = failure_text(result, turn_start);
                     ended_signal(result, turn_start)
                 }
-                _ => OutcomeSignal::None,
+                _ => Some(OutcomeSignal::Cancelled),
             };
+            unchecked = own.is_none();
+            let signal = own.unwrap_or(OutcomeSignal::Unavailable);
             let mut outcome = OutcomePayload {
                 prompt_tx,
                 category,
@@ -999,7 +1032,9 @@ impl Headless {
             self.hub
                 .gate
                 .log_attempt(session.agent_id(), &outcome, terms, left);
-            gate_record::record(&session.kernel, session.agent_id(), &outcome).await;
+            if !unchecked {
+                gate_record::record(&session.kernel, session.agent_id(), &outcome).await;
+            }
             Some(outcome)
         } else {
             None
@@ -1015,6 +1050,7 @@ impl Headless {
             can_go_on: false,
             turn_start,
             terms,
+            unchecked,
         };
         match result {
             Some(Ok(result)) => {
@@ -1040,54 +1076,57 @@ impl Headless {
         outcome
     }
 
-    /// The prompt record of a turn of `session` answering `text`, and
-    /// whether Gate routed it. Gate routes the turn when the user selected
-    /// gate, the agent names no model of its own and there is a model to
-    /// route to: the prompt is classified and `config` pointed at Gate's
-    /// pick, which the subtasks the turn dispatches are routed by.
-    /// Otherwise the prompt is recorded as it is. With `escalation`, the
-    /// turn goes to that model with that category, recorded with route
-    /// reason `escalate`.
+    /// The prompt record of a turn of `session` answering `text`, and the
+    /// category of its work when Gate routed it. Gate routes the turn when
+    /// the user selected gate, the agent names no model of its own and
+    /// there is a model to route to: the prompt is classified and `config`
+    /// pointed at Gate's pick, which the subtasks the turn dispatches are
+    /// routed by. Otherwise the prompt is recorded as it is. With
+    /// `escalation`, the turn goes to that model with that category,
+    /// recorded with route reason `escalate`.
+    ///
+    /// # Errors
+    /// Says why when Gate routes the turn and could not classify it.
     async fn route_turn(
         &mut self,
         session: &AgentSession,
         config: &mut AgentLoopConfig,
         text: &str,
         escalation: Option<(Decision, PromptCategory)>,
-    ) -> (PromptPayload, bool) {
+    ) -> Result<(PromptPayload, Option<PromptCategory>), String> {
         if let Some((decision, category)) = escalation {
             self.point(session, config, &decision);
             let payload = PromptPayload {
-                category,
+                category: Some(category),
                 route: decision.route(RouteLevel::Turn),
                 ..PromptPayload::new(text)
             };
-            return (payload, true);
+            return Ok((payload, Some(category)));
         }
         let Some(candidates) = self
             .hub
             .gate_candidates(session.definition.as_deref())
             .filter(|candidates| !candidates.is_empty())
         else {
-            return (PromptPayload::new(text), false);
+            return Ok((PromptPayload::new(text), None));
         };
         let classifier = self.hub.classifier();
-        let label = if classifier.is_empty() {
-            Label::UNCLASSIFIED
-        } else {
-            gate_record::classify_prompt(
-                &session.kernel,
-                &classifier,
-                text,
-                config.auth_token.clone(),
-            )
-            .await
-        };
+        if classifier.is_empty() {
+            return Err("Gate has no model to classify the prompt".to_string());
+        }
+        let label = gate_record::classify_prompt(
+            &session.kernel,
+            &classifier,
+            text,
+            config.auth_token.clone(),
+        )
+        .await?;
         let category = label.category;
+        let difficulty = Some(label.difficulty);
         let route = match self
             .hub
             .gate
-            .decide(&Work::turn(category).of(label.difficulty), &candidates)
+            .decide(&Work::turn(category).of(difficulty), &candidates)
         {
             Some(decision) => {
                 info!(
@@ -1102,13 +1141,13 @@ impl Headless {
             None => Route::turn(config.model.clone(), RouteReason::Default),
         };
         let payload = PromptPayload {
-            category,
+            category: Some(category),
             classifier,
             route,
-            difficulty: label.difficulty,
+            difficulty,
             ..PromptPayload::new(text)
         };
-        (payload, true)
+        Ok((payload, Some(category)))
     }
 
     /// Point `config`, of a turn of `session`, at `decision`'s model.

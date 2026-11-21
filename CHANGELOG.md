@@ -7,6 +7,35 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### The chat leaves room below its last line
+
+##### Changed
+
+- Once a conversation filled the chat panel, its newest line sat on the
+  panel's last row, against the border and the input box under it, and
+  each new line pushed the text up from there. The chat now keeps a
+  quarter of its rows blank below the last line: a reply that reaches
+  that point scrolls up with the room left under it, in the terminal and
+  in the desktop window. The blank rows are not counted as lines below
+  while scrolled up. The terminal pane's output still runs to the bottom
+  row, as a terminal's does.
+
+### Lists of fields read as records
+
+##### Changed
+
+- A list of fields, such as the `- Path: …`, `- Name: …`, `- Type: …`
+  entries a task prompt lists its new interfaces with, was drawn with a
+  blank row between every item when it was written with blank lines
+  between them, so the fields of one entry ran into the next and labels
+  looked like values. A list item that starts with a short label is now
+  a field: its label is muted, the blank lines between two fields are not
+  drawn, and where the first label of a run of fields comes back a blank
+  row sets the next record apart. Each of these depends only on the item
+  and the items above it, so a reply's lists don't jump as it streams in.
+  Replies, prompts and the messages agents send each other are all drawn
+  this way; blank lines around other items stay as written.
+
 ### BENCH: a running benchmark's numbers count the runs under way
 
 ##### Fixed

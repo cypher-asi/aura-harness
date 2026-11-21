@@ -1,0 +1,33 @@
+{
+  "id": "01a1ff5e9967000e",
+  "title": "When text fills the main chat to the bottom, scroll up so there is more space at the bottom to make it breathe a bit mo…",
+  "state": "completed",
+  "agent_id": "02a8ce4b2ac31979280242a65041d67458fa6fc1b652052cf8859c0906da36c2",
+  "agent_name": "Agent 588",
+  "items": [
+    {
+      "content": "Keep breathing room below the conversation's last line in render_chat_lines (panels.rs), chat only, not the terminal pane",
+      "state": "completed"
+    },
+    {
+      "content": "Update test_chat_runs_from_the_top_border_to_the_bottom_one and add tests for the room (long reply, streaming, scroll hint, terminal pane)",
+      "state": "completed"
+    },
+    {
+      "content": "STYLEGUIDE chat column bullet + CHANGELOG entry",
+      "state": "completed"
+    },
+    {
+      "content": "rustfmt my files, clippy -D warnings and tests for aura-ui-terminal (+ desktop check)",
+      "state": "completed"
+    },
+    {
+      "content": "Reviewer pass on the diff (reviewer timed out; scroll interactions checked by hand instead)",
+      "state": "cancelled",
+      "assignee": "reviewer"
+    }
+  ],
+  "summary": "Now run the chat/terminal tests I touched plus the smooth-scroll one:",
+  "updated_ms": 1795287163322,
+  "created_ms": 1795285752167
+}

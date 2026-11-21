@@ -3,8 +3,8 @@ use aura_agent_gate::attempt_log::evaluate;
 use aura_agent_gate::evidence::{flags, Flag};
 use aura_agent_kernel::RecordObserver;
 use aura_core_types::{
-    BenchSource, CompareArm, CompareCopy, CompareStatus, Difficulty, PromptCategory, PromptPayload,
-    Route, RouteReason, SystemKind, Transaction,
+    BenchSource, CompareArm, CompareCopy, CompareStatus, Difficulty, OutcomeSignal, PromptCategory,
+    PromptPayload, Route, RouteReason, SystemKind, Transaction,
 };
 use aura_model::ToolResultContent;
 use aura_store_db::{RocksStore, WriteStore};
@@ -25,7 +25,7 @@ fn entry(seq: u64, tx: Transaction) -> RecordEntry {
 
 fn prompt(agent: AgentId, text: &str, model: &str, reason: RouteReason) -> Transaction {
     let mut payload = PromptPayload::new(text);
-    payload.category = PromptCategory::MultiFileChange;
+    payload.category = Some(PromptCategory::MultiFileChange);
     payload.route = Route::turn(model, reason);
     if reason == RouteReason::Compare {
         payload.difficulty = Some(Difficulty::Hard);
@@ -203,7 +203,7 @@ fn comparison(run: CompareRun) -> ComparePayload {
         runs: vec![run],
         judgments: Vec::new(),
         notes: Vec::new(),
-        status: CompareStatus::Picked(CompareArm::A),
+        status: CompareStatus::Done,
     }
 }
 

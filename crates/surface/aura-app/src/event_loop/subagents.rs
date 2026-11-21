@@ -30,6 +30,7 @@
 use super::agent_events::AgentUi;
 use super::agents::{AgentSession, KernelFactory};
 use super::approvals::TerminalApprovals;
+use super::gate_followup;
 use super::gate_live::GateLive;
 use super::gate_record;
 use super::gate_subtask::{explicit_model, GateBase, SubtaskGate, SubtaskLabel};
@@ -56,8 +57,8 @@ use crate::record_loader::agent_summaries;
 use async_trait::async_trait;
 use aura_agent::{AgentLoop, AgentLoopConfig};
 use aura_agent_gate::compare::{tally, PlanReading};
-use aura_agent_gate::turn_judge::{Failed, Verdict};
-use aura_agent_gate::{Candidate, Decision};
+use aura_agent_gate::turn_judge::{Failed, Unverified, Verdict};
+use aura_agent_gate::{followup, Candidate, Decision};
 use aura_agent_kernel::Kernel;
 use aura_agent_trace::{RunMeta, RunRecorder, RunSource};
 use aura_context_skills::SkillManager;
@@ -1246,7 +1247,11 @@ impl AgentHub {
             None
         };
         let first = self.finish_task(first).await;
-        let Some(mut why) = first.attempted().failure().filter(|_| !first.cancelled) else {
+        let failure = first
+            .attempted()
+            .failure()
+            .or_else(|| first.unfinished.clone());
+        let Some(mut why) = failure.filter(|_| !first.cancelled) else {
             return TaskReport { first, retry: None };
         };
         match &first.judged {
@@ -1265,7 +1270,9 @@ impl AgentHub {
         let Some(candidates) = candidates else {
             return TaskReport { first, retry: None };
         };
-        let category = first.category.unwrap_or(PromptCategory::Unclassified);
+        let Some(category) = first.category else {
+            return TaskReport { first, retry: None };
+        };
         let escalated =
             self.gate
                 .escalate(RouteLevel::Subtask, category, &first.model, &candidates);
@@ -1557,25 +1564,34 @@ impl AgentHub {
             files.begin_attempt(child_id);
         }
         let agent_loop = AgentLoop::new(config);
-        let mut end = run_task_turn(
-            &mut session,
-            &agent_loop,
-            tools,
-            &prompt,
-            label,
-            &ui,
-            &cancel,
-            self.long_run,
-            recorder,
-        )
-        .await;
+        let mut end = match label {
+            Ok(label) => {
+                run_task_turn(
+                    &mut session,
+                    &agent_loop,
+                    tools,
+                    &prompt,
+                    label,
+                    &ui,
+                    &cancel,
+                    self.long_run,
+                    recorder,
+                )
+                .await
+            }
+            Err(problem) => {
+                ui.send(UiCommand::ShowError(problem.clone())).await;
+                ui.send(UiCommand::Complete).await;
+                TaskEnd::failed(problem)
+            }
+        };
         let cancelled = cancel.is_cancelled();
         let check = match check {
             Some(command) if end.reply.is_ok() && !cancelled => {
                 let run = task_check::run_check(&session, &command).await;
                 ui.send(system_message(run.describe())).await;
                 if let Some(signal) = run.signal() {
-                    end.signal = signal;
+                    end.signal = Some(signal);
                 }
                 Some(run)
             }
@@ -1600,23 +1616,73 @@ impl AgentHub {
         );
         let model = agent_loop.config().model.clone();
         let category = end.prompt.map(|(_, category)| category);
-        let ended = end.prompt.map(|(prompt_tx, category)| OutcomePayload {
+        let mut ended = end.prompt.map(|(prompt_tx, category)| OutcomePayload {
             prompt_tx,
             category,
             model: model.clone(),
-            success: end.signal.success(),
-            signal: end.signal,
+            success: None,
+            signal: end.signal.unwrap_or(OutcomeSignal::Unavailable),
             cost_usd: end.cost_usd,
             subtask_cost_usd: 0.0,
             latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         });
-        if let Some(ended) = &ended {
-            gate_record::record(&session.kernel, child_id, ended).await;
+        let mut judged = None;
+        // Work nothing checked ends with the judge's verdict.
+        let mut unfinished = None;
+        if let (Some(outcome), None, Some(candidates)) =
+            (ended.as_mut(), end.signal, gate.candidates.as_deref())
+        {
+            if let Some(judge) = gate_record::verdict_judge_for(candidates) {
+                let workspace = session.kernel.agent_workspace();
+                let diff = files_before
+                    .as_ref()
+                    .map(|files| files.diff(Some(&workspace)))
+                    .unwrap_or_default();
+                let reply = end.reply.as_deref().unwrap_or_default();
+                let suspicions = followup::suspicions(&followup::Ended {
+                    signal: None,
+                    category: outcome.category,
+                    files_changed: end.files.len(),
+                    reply,
+                    hit_limit: false,
+                    difficulty: None,
+                    review_signs: &[],
+                    acting_signs: &[],
+                });
+                let unverified = Unverified {
+                    task: &prompt,
+                    diff: &diff,
+                    reply,
+                    commands: &end.shown.0,
+                    last_check: &end.shown.1,
+                    suspicions: &suspicions,
+                };
+                let auth_token = agent_loop.config().auth_token.clone();
+                if let Some((verdict, found)) = gate_record::judge_unverified(
+                    &session.kernel,
+                    &judge,
+                    outcome,
+                    &unverified,
+                    auth_token,
+                )
+                .await
+                {
+                    ui.send(system_message(found.describe())).await;
+                    outcome.signal = verdict;
+                    if verdict == OutcomeSignal::JudgedFail {
+                        unfinished =
+                            Some("Gate's judge found its unchecked work unfinished.".to_string());
+                        judged = Some(found.verdict);
+                    }
+                }
+            }
+        }
+        if let Some(outcome) = ended.as_mut() {
+            outcome.success = outcome.signal.success();
+            gate_record::record(&session.kernel, child_id, outcome).await;
         }
         // A first attempt that failed is reviewed before it is retried on
         // a stronger model: was the model at fault?
-        let mut ended = ended;
-        let mut judged = None;
         if let (Some(outcome), Some(failure), Some(candidates), None) = (
             ended.as_mut(),
             &failure,
@@ -1666,6 +1732,7 @@ impl AgentHub {
             files_before,
             cancelled,
             judged,
+            unfinished,
         }
     }
 }
@@ -1720,6 +1787,9 @@ struct TaskDone {
     cancelled: bool,
     /// What Gate's judge found, when the attempt failed and was reviewed
     judged: Option<Verdict>,
+    /// Why the attempt failed when its check and reply did not say so:
+    /// the judge found its unchecked work unfinished
+    unfinished: Option<String>,
 }
 
 impl TaskDone {
@@ -2011,14 +2081,19 @@ fn task_summary(
 struct TaskEnd {
     /// The final reply, or why there is none
     reply: Result<String, String>,
-    /// The recorded prompt and its category, when it was recorded
+    /// The recorded prompt and its category, when Gate routed the
+    /// subtask and recorded it
     prompt: Option<(Hash, PromptCategory)>,
-    /// What the turn's end says about how it went
-    signal: OutcomeSignal,
+    /// What the turn's end says about how it went; `None` when nothing
+    /// does, and the judge has to
+    signal: Option<OutcomeSignal>,
     /// List-price cost of the turn's model calls
     cost_usd: f64,
     /// Files the turn's file tools changed
     files: Vec<String>,
+    /// The commands the turn ran and its last test or build, as the
+    /// judge of unchecked work is shown them
+    shown: (String, String),
 }
 
 impl TaskEnd {
@@ -2026,36 +2101,33 @@ impl TaskEnd {
         Self {
             reply: Err(reason),
             prompt: None,
-            signal: OutcomeSignal::Error,
+            signal: Some(OutcomeSignal::Error),
             cost_usd: 0.0,
             files: Vec::new(),
+            shown: (String::new(), String::new()),
         }
     }
 }
 
 /// Record `prompt` on `session` as `label` says and run one turn of it,
-/// streaming it into `ui`. A subtask Gate routed was classified already;
-/// a pinned one is classified beside its turn.
+/// streaming it into `ui`.
 #[allow(clippy::too_many_arguments)]
 async fn run_task_turn(
     session: &mut AgentSession,
     agent_loop: &AgentLoop,
     tools: Vec<ToolDefinition>,
     prompt: &str,
-    mut label: SubtaskLabel,
+    label: SubtaskLabel,
     ui: &AgentUi,
     cancel: &CancellationToken,
     limits: LongRunSettings,
     recorder: Option<Arc<RunRecorder>>,
 ) -> TaskEnd {
     let turn_start = session.messages.len();
-    let mut recorded = None;
-    if let Some(category) = label.category {
-        match label.record(session, category).await {
-            Ok(prompt) => recorded = Some(prompt),
-            Err(problem) => return TaskEnd::failed(format!("recording prompt: {problem}")),
-        }
-    }
+    let recorded = match label.record(session).await {
+        Ok(recorded) => recorded,
+        Err(problem) => return TaskEnd::failed(format!("recording prompt: {problem}")),
+    };
     session.messages.push(Message::user(prompt));
     ui.send(UiCommand::TurnStarted {
         prompt: Some(prompt.to_string()),
@@ -2070,9 +2142,8 @@ async fn run_task_turn(
     }
     // Nothing sends to a spawn mid-task, so its steering stays empty.
     let steering = Steering::new(cancel);
-    let shared: &AgentSession = session;
-    let turn = run_agent_turn(
-        shared,
+    let (result, forwarded) = run_agent_turn(
+        session,
         agent_loop,
         tools,
         ui,
@@ -2080,24 +2151,15 @@ async fn run_task_turn(
         &steering,
         limits,
         recorder.clone(),
-    );
-    let (result, forwarded) = if recorded.is_some() {
-        turn.await
-    } else {
-        let (late, turn) = tokio::join!(label.classify_and_record(shared, cancel), turn);
-        match late {
-            Ok(prompt) => recorded = Some(prompt),
-            Err(problem) => warn!(%problem, "Failed to record the subtask's prompt"),
-        }
-        turn
-    };
+    )
+    .await;
     steering.finish(&[]);
     if let Some(rec) = &recorder {
         super::trace::end_turn(rec, &result, cancel.is_cancelled());
     }
     let cancelled = cancel.is_cancelled();
     let signal = if cancelled || forwarded.credentials_rejected {
-        OutcomeSignal::None
+        Some(OutcomeSignal::Cancelled)
     } else {
         ended_signal(&result, turn_start)
     };
@@ -2107,6 +2169,7 @@ async fn run_task_turn(
         signal,
         cost_usd: forwarded.usage.cost_usd,
         files: Vec::new(),
+        shown: (String::new(), String::new()),
     };
     let result = match result {
         Ok(result) => result,
@@ -2122,8 +2185,10 @@ async fn run_task_turn(
             return end;
         }
     };
-    let text = result.total_text.clone();
+    let text = result.final_text.clone();
     let llm_error = result.llm_error.as_ref().map(ToString::to_string);
+    end.shown =
+        gate_followup::shown_to_judge(result.messages.get(turn_start..).unwrap_or_default());
     end.files = result
         .file_changes
         .iter()

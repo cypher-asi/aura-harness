@@ -202,7 +202,7 @@ mod tests {
     fn prompt_and_outcome_transactions_carry_their_payloads() {
         let agent_id = AgentId::generate();
         let prompt = PromptPayload {
-            category: PromptCategory::Research,
+            category: Some(PromptCategory::Research),
             ..PromptPayload::new("how does replay work?")
         };
         let prompt_tx = Transaction::user_prompt_with(agent_id, &prompt);
@@ -214,8 +214,8 @@ mod tests {
             prompt_tx: prompt_tx.hash,
             category: PromptCategory::Research,
             model: "aura-claude-haiku-4-5".to_string(),
-            success: None,
-            signal: OutcomeSignal::None,
+            success: Some(true),
+            signal: OutcomeSignal::JudgedPass,
             cost_usd: 0.0,
             subtask_cost_usd: 0.0,
             latency_ms: 900,

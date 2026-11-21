@@ -17,7 +17,7 @@ use aura_store_db::ReadStore;
 use std::time::Duration;
 use tracing::{info, warn};
 
-/// How long the classifier may take before the prompt goes unclassified.
+/// How long the classifier may take before the turn fails.
 const CLASSIFY_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// How long the judge of a failed turn may take before the turn keeps
@@ -110,7 +110,7 @@ pub(crate) async fn judge_failed(
     auth_token: Option<String>,
 ) -> Option<(OutcomePayload, Judged)> {
     let request = turn_judge::request(judge, failed, auth_token);
-    let judged = ask_judge(kernel, judge, ended, request, false).await?;
+    let (_, judged) = ask_judge(kernel, judge, ended, request, false).await?;
     let signal = if judged.verdict.at_fault {
         OutcomeSignal::JudgedFail
     } else {
@@ -122,39 +122,47 @@ pub(crate) async fn judge_failed(
     Some((outcome, judged))
 }
 
-/// The judge of unverified work for `ended`, the outcome of work Gate
-/// routed among `candidates` that ran no check: the same model as
-/// [`judge_for`]'s. `None` when the judge or this review of it is
-/// switched off, or the work ran on a model as strong as the judge.
-pub(crate) fn unverified_judge_for(
+/// The model that gives the verdict on work Gate routed among
+/// `candidates` that no check vouches for: the same model as
+/// [`judge_for`]'s, whatever the work ran on, since every routed turn
+/// ends with a verdict. `None` only when there are no candidates.
+pub(crate) fn verdict_judge_for(candidates: &[Candidate]) -> Option<String> {
+    aura_agent_gate::compare::default_against(candidates).map(|judge| judge.id.clone())
+}
+
+/// The model that reviews work on `model` before it stands, Gate routing
+/// among `candidates`: the same model as [`judge_for`]'s. `None` when the
+/// judge is switched off or the work ran on a model as strong as it.
+pub(crate) fn reviewer_for(
     live: &GateLive,
     candidates: &[Candidate],
     model: &str,
 ) -> Option<String> {
-    let settings = live.settings();
-    if !settings.judge || !settings.suspect_judge {
+    if !live.settings().judge {
         return None;
     }
     let judge = aura_agent_gate::compare::default_against(candidates)?;
     turn_judge::judges(&judge.id, model, candidates).then(|| judge.id.clone())
 }
 
-/// Ask `judge` through `kernel` whether the work of `ended`, which ran no
-/// check and looks wrong as `unverified` says, is done. Nothing is
-/// recorded: work found unfinished fails with `judged_fail` where the
-/// caller records the attempt's outcome, and work found done records
-/// nothing, as no check proved it. `None` when the judge gave no verdict.
+/// Ask `judge` through `kernel` whether the work of `ended`, which no
+/// check vouches for, is done, pointed to what looks wrong as
+/// `unverified` says. Returns the verdict as the attempt's signal
+/// (`judged_pass`, `judged_fail` or `judged_excused`, see
+/// [`Answer::verdict`]) and the finding; the caller records it with the
+/// attempt's outcome. `None` when the judge gave no verdict.
 pub(crate) async fn judge_unverified(
     kernel: &Kernel,
     judge: &str,
     ended: &OutcomePayload,
     unverified: &Unverified<'_>,
     auth_token: Option<String>,
-) -> Option<Judged> {
+) -> Option<(OutcomeSignal, Judged)> {
     let request = turn_judge::unverified_request(judge, unverified, auth_token);
-    let judged = ask_judge(kernel, judge, ended, request, true).await?;
-    info!(%judge, model = %ended.model, at_fault = judged.verdict.at_fault, cost_usd = judged.cost_usd, "The judge reviewed unchecked work");
-    Some(judged)
+    let (answer, judged) = ask_judge(kernel, judge, ended, request, true).await?;
+    let signal = answer.verdict();
+    info!(%judge, model = %ended.model, %signal, cost_usd = judged.cost_usd, "The judge gave its verdict on unchecked work");
+    Some((signal, judged))
 }
 
 /// Send `request` to `judge` through `kernel` and read its verdict on
@@ -166,9 +174,9 @@ async fn ask_judge(
     ended: &OutcomePayload,
     request: Result<aura_model::ModelRequest, aura_model::ReasonerError>,
     unverified: bool,
-) -> Option<Judged> {
+) -> Option<(Answer, Judged)> {
     let (answer, reasons, cost_usd) = ask(kernel, judge, request, JUDGE_TIMEOUT).await?;
-    Some(Judged {
+    let judged = Judged {
         model: ended.model.clone(),
         judge: judge.to_string(),
         verdict: Verdict {
@@ -177,7 +185,8 @@ async fn ask_judge(
         },
         cost_usd,
         unverified,
-    })
+    };
+    Some((answer, judged))
 }
 
 /// Send `request`, a review of work about to stand
@@ -227,35 +236,44 @@ async fn ask(
 }
 
 /// Label `text` with its category and difficulty by asking `model`
-/// through `kernel`, so the call is recorded. Any failure leaves it
-/// unclassified.
+/// through `kernel`, so the call is recorded.
+///
+/// # Errors
+/// Says why when the request could not be built, the call failed or
+/// timed out, or the reply did not give both a category and a
+/// difficulty: Gate does not route work it could not classify.
 pub(crate) async fn classify_prompt(
     kernel: &Kernel,
     model: &str,
     text: &str,
     auth_token: Option<String>,
-) -> classify::Label {
+) -> Result<classify::Label, String> {
+    let failed = |error: String| {
+        warn!(%model, %error, "Could not classify the prompt");
+        Err(format!(
+            "Gate could not classify the prompt with {model}: {error}"
+        ))
+    };
     let request = match classify::request(model, text, auth_token) {
         Ok(request) => request,
-        Err(e) => {
-            warn!(%model, error = %e, "Could not build the classifier request");
-            return classify::Label::UNCLASSIFIED;
-        }
+        Err(e) => return failed(format!("could not build the request ({e})")),
     };
     match tokio::time::timeout(CLASSIFY_TIMEOUT, kernel.reason(request)).await {
-        Ok(Ok(result)) => {
-            let label = classify::label_of(&result.response);
-            info!(%model, category = %label.category, difficulty = ?label.difficulty, "Classified the prompt");
-            label
-        }
-        Ok(Err(e)) => {
-            warn!(%model, error = %e, "Classifier call failed");
-            classify::Label::UNCLASSIFIED
-        }
-        Err(_) => {
-            warn!(%model, "Classifier call timed out");
-            classify::Label::UNCLASSIFIED
-        }
+        Ok(Ok(result)) => match classify::label_of(&result.response) {
+            Some(found) => {
+                info!(%model, category = %found.category, difficulty = %found.difficulty, "Classified the prompt");
+                Ok(found)
+            }
+            None => failed(format!(
+                "its reply gave no category and difficulty ({:?})",
+                result.response.message.text_content().trim()
+            )),
+        },
+        Ok(Err(e)) => failed(format!("the call failed ({e})")),
+        Err(_) => failed(format!(
+            "the call took over {}s",
+            CLASSIFY_TIMEOUT.as_secs()
+        )),
     }
 }
 

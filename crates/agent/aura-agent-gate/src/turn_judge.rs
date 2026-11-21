@@ -9,7 +9,7 @@
 //! down to something else (the environment, a check that was failing
 //! anyway) counts for nothing and the work stays where it is.
 //!
-//! The same judge reviews work that ran no check but looks wrong (see
+//! The same judge gives the verdict on work that ran no check (see
 //! [`crate::followup`]), through [`unverified_request`]: there it may
 //! also find the work done (`OK`). And it reviews work that is about to
 //! stand, through [`review_request`]: hard work, or work that shows a
@@ -20,6 +20,7 @@
 //! sends the request through the agent's kernel, so the call is recorded
 //! like any other model call.
 
+use aura_core_types::OutcomeSignal;
 use aura_model::model_catalog::infer_tier;
 use aura_model::{
     Message, ModelCallPurpose, ModelRequest, ModelRequestKind, ReasonerError, ThinkingEffort,
@@ -61,20 +62,22 @@ enough to help whoever takes the work over. Then end with one line that is exact
 `VERDICT: MODEL` or `VERDICT: OTHER`.";
 
 /// System prompt of every request to the judge of unverified turns:
-/// attempts that look wrong and that no check vouches for, because they
-/// ran none or because their own reply says the work was not verified
-/// (see [`crate::followup`]).
+/// attempts that no check vouches for, because they ran none or because
+/// their own reply says the work was not verified (see
+/// [`crate::followup`]). Its verdict is the attempt's outcome.
 pub const UNVERIFIED_SYSTEM_PROMPT: &str = "\
 You are reviewing an attempt at a task a user gave a coding agent. Nothing shows that its work \
 is right: it ran no test or build that checks the work, or it ran one and its own final reply \
-says the work was not verified. Something about it looks wrong. You see the user's request, the \
-changes the attempt made to files as a unified diff (it may lack changes made through shell \
-commands; the commands it ran are listed), the last test or build it ran with what that \
-printed when it ran one, its final reply, and what looks wrong. Decide whether the work is done:
+says the work was not verified. The task may ask for a code change, an answer, research, a plan \
+or a piece of writing. You see the user's request, the changes the attempt made to files as a \
+unified diff (it may lack changes made through shell commands; the commands it ran are listed), \
+the last test or build it ran with what that printed when it ran one, its final reply, and \
+anything that looks wrong about it. Decide whether the work is done:
 
 - MODEL: the attempt's own work is wrong, incomplete or missing. It misunderstood the request, \
-made a wrong or partial change, changed nothing when a change was needed, or gave up. A more \
-capable model would likely have done better.
+made a wrong or partial change, changed nothing when a change was needed, answered something \
+other than what was asked, got facts wrong, or gave up. A more capable model would likely have \
+done better.
 - OK: the work looks complete and correct for what was asked, or no change was needed and the \
 reply shows why. A reply that only names something beside the point it left untested (another \
 platform, an optional style check, tests the request did not ask for) is no reason to doubt \
@@ -223,7 +226,7 @@ pub fn request(
         .try_build()
 }
 
-/// What the judge sees of a turn that ran no check and looks wrong.
+/// What the judge sees of a turn no check vouches for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Unverified<'a> {
     /// What the user asked.
@@ -238,7 +241,7 @@ pub struct Unverified<'a> {
     /// The last test or build it ran and what that printed; empty when
     /// it ran none.
     pub last_check: &'a str,
-    /// What looks wrong.
+    /// What looks wrong; empty when nothing does.
     pub suspicions: &'a [Suspicion],
 }
 
@@ -258,6 +261,11 @@ pub fn unverified_prompt(unverified: &Unverified<'_>) -> String {
         .iter()
         .map(|s| format!("- {}", s.describe()))
         .collect();
+    let wrong = if wrong.is_empty() {
+        "(nothing in particular)".to_string()
+    } else {
+        wrong.join("\n")
+    };
     format!(
         "## The user's request\n\n{}\n\n\
          ## Changes\n```diff\n{}\n```\n\n\
@@ -286,7 +294,7 @@ pub fn unverified_prompt(unverified: &Unverified<'_>) -> String {
             "(no reply)",
             cut(unverified.reply, MAX_REPLY, "reply")
         ),
-        wrong.join("\n"),
+        wrong,
     )
 }
 
@@ -440,6 +448,19 @@ pub enum Answer {
     Ok,
     /// Something outside the work got in the way.
     Other,
+}
+
+impl Answer {
+    /// The outcome of work no check vouched for that the judge answered
+    /// this of.
+    #[must_use]
+    pub const fn verdict(self) -> OutcomeSignal {
+        match self {
+            Self::Model => OutcomeSignal::JudgedFail,
+            Self::Ok => OutcomeSignal::JudgedPass,
+            Self::Other => OutcomeSignal::JudgedExcused,
+        }
+    }
 }
 
 /// The answer in the judge's `reply`: its last `VERDICT:` line, with the

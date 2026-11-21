@@ -74,10 +74,8 @@
 //! | `AURA_GATE_EXPLORE` | f64 (0..=1) | `0.05` | [`GateConfig::explore_rate`] |
 //! | `AURA_GATE_DELEGATE` | `on` / `off` | `on` | [`GateConfig::delegate`] |
 //! | `AURA_GATE_JUDGE` | `on` / `off` | `on` | [`GateConfig::judge`] |
-//! | `AURA_GATE_CASCADE` | `on` / `off` | `on` | [`GateConfig::cascade`] |
 //! | `AURA_GATE_NUDGE` | `on` / `off` | `on` | [`GateConfig::nudge`] |
 //! | `AURA_GATE_CHECK` | `on` / `off` | `on` | [`GateConfig::harness_check`] |
-//! | `AURA_GATE_SUSPECT` | `on` / `off` | `on` | [`GateConfig::suspect_judge`] |
 //! | `AURA_GATE_REVIEW` | `on` / `log` / `off` | `log` | [`GateConfig::review`] |
 //! | `AURA_HOME` | path | `~/.aura` | [`AuraHome::resolve`] (read-only `CODEX_HOME` compat alias also honoured during V1 transition) |
 //!

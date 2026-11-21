@@ -119,8 +119,6 @@ pub enum CompareCommand {
     Go,
     /// `/compare cancel`: drop the one waiting, or stop the one running.
     Cancel,
-    /// `/compare pick <arm>`: the user's verdict.
-    Pick(String),
     /// `/compare apply <run>`: put that run's changes in the workspace.
     Apply(String),
     /// `/compare diff [run]`: show a run's changes, or the first of each
@@ -133,7 +131,7 @@ pub enum CompareCommand {
 /// How `/compare` is used, for error messages.
 pub const USAGE: &str = "Usage: /compare [prompt | --plan <file> | --session current|<started_ms> | --examples N | --suite <name>] \
 [--a <model|gate>] [--against <model|gate|gate:nodelegate>] [--repeats N] [--check <cmd>] [--budget $] [--learn] · \
-/compare go | cancel | show [n] | diff [run] | pick <a|b> | apply <run> | dismiss";
+/compare go | cancel | show [n] | diff [run] | apply <run> | dismiss";
 
 /// One word of the arguments: its text with quotes removed, and where it
 /// sits in the raw arguments.
@@ -201,7 +199,7 @@ fn words(args: &str) -> Result<Vec<Word>, String> {
 
 /// Read the arguments of `/compare`.
 ///
-/// Subcommands (`go`, `pick gate`, ...) are recognised only when the
+/// Subcommands (`go`, `apply a-1`, ...) are recognised only when the
 /// arguments are exactly that, so a prompt that happens to start with
 /// one of their names is still a prompt; `--` makes the rest a prompt
 /// whatever it says. The prompt keeps its text as typed.
@@ -286,11 +284,10 @@ fn subcommand(words: &[Word]) -> Option<Result<CompareCommand, String>> {
         (Some("go" | "start" | "yes" | "run"), 1) => CompareCommand::Go,
         (Some("cancel" | "stop"), 1) => CompareCommand::Cancel,
         (Some("dismiss"), 1) => CompareCommand::Dismiss,
-        (Some("pick"), 2) => CompareCommand::Pick(second?.to_ascii_lowercase()),
         (Some("apply"), 2) => CompareCommand::Apply(second?.to_ascii_lowercase()),
         (Some("diff"), 1) => CompareCommand::Diff(None),
         (Some("diff"), 2) => CompareCommand::Diff(Some(second?.to_ascii_lowercase())),
-        (Some("pick" | "apply"), 1) => {
+        (Some("apply"), 1) => {
             return Some(Err(format!(
                 "/compare {} needs a name. {USAGE}",
                 words[0].text
@@ -1077,7 +1074,6 @@ mod tests {
         assert_eq!(parse("dismiss"), Ok(CompareCommand::Dismiss));
         assert_eq!(parse("show"), Ok(CompareCommand::Show(None)));
         assert_eq!(parse("show 2"), Ok(CompareCommand::Show(Some(2))));
-        assert_eq!(parse("pick Gate"), Ok(CompareCommand::Pick("gate".into())));
         assert_eq!(
             parse("apply other-2"),
             Ok(CompareCommand::Apply("other-2".into()))
@@ -1087,7 +1083,7 @@ mod tests {
             parse("diff gate-1"),
             Ok(CompareCommand::Diff(Some("gate-1".into())))
         );
-        assert!(parse("pick").is_err());
+        assert!(parse("apply").is_err());
         assert_eq!(
             start("pick the fastest sort").prompt.as_deref(),
             Some("pick the fastest sort")
@@ -1678,7 +1674,7 @@ mod tests {
             turn(0.2, OutcomeSignal::Error),
         ];
         let mut b1 = run(CompareArm::B, 1, 1, 0.9, None);
-        b1.turns = vec![turn(0.9, OutcomeSignal::None)];
+        b1.turns = vec![turn(0.9, OutcomeSignal::Unavailable)];
         let mut first = judged("a-1", Some(CompareArm::A), true);
         first.a_vs_reference = Some(RefVerdict::AsGood);
         first.b_vs_reference = Some(RefVerdict::Worse);

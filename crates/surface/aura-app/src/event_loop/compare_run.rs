@@ -54,7 +54,6 @@ use crate::isolation::{
 };
 use aura_agent::AgentLoop;
 use aura_agent_gate::attempt_log::Terms;
-use aura_agent_gate::classify::Label;
 use aura_agent_gate::compare::{list_price, plan_shares, run_name, PlanReading, Schedule};
 use aura_agent_gate::followup::Step;
 use aura_agent_gate::outcome::calls_for_stronger;
@@ -942,6 +941,9 @@ struct Turned {
     wall_ms: u64,
     /// Its outcome as recorded, for the check's verdict to follow
     ended: Option<OutcomePayload>,
+    /// Whether the model's provider cut its last attempt short, so the
+    /// work the check looks at was never finished
+    cut_short: bool,
     /// How it was routed and what its subtasks cost, for the run's
     /// record; its model, cost, time and signal are filled in there
     routed: RunTurn,
@@ -1035,7 +1037,7 @@ async fn run_turn(
         });
         first.get_or_insert_with(|| (turned.prompt_tx, turned.model.clone()));
         reply = turned.reply;
-        last = turned.ended;
+        last = turned.ended.filter(|_| !turned.cut_short);
         if turned.error.is_some() {
             error = turned.error;
             break;
@@ -1063,10 +1065,7 @@ async fn run_turn(
                     ui.send(system_message(run.describe())).await;
                     // A run its provider cut short did not finish the work
                     // the check looks at.
-                    let finished = last
-                        .as_ref()
-                        .filter(|ended| ended.signal != OutcomeSignal::Unavailable);
-                    if let (Some(signal), Some(ended)) = (run.signal(), finished) {
+                    if let (Some(signal), Some(ended)) = (run.signal(), &last) {
                         checked = Some((Arc::clone(&session.kernel), ended.with_signal(signal)));
                     }
                     run.passed
@@ -1157,8 +1156,8 @@ async fn run_prompt(
     let (mut config, mut tools, lead) = hub.user_turn(session);
     config.observers.clear();
     config.initial_todos.clone_from(&session.todos);
-    let label = if plan.classifier.is_empty() {
-        Label::UNCLASSIFIED
+    let classified = if plan.classifier.is_empty() {
+        Err("Gate has no model to classify the prompt".to_string())
     } else {
         gate_record::classify_prompt(
             &session.kernel,
@@ -1168,8 +1167,28 @@ async fn run_prompt(
         )
         .await
     };
+    let label = match classified {
+        Ok(label) => label,
+        Err(problem) => {
+            ui.send(UiCommand::ShowWarning(problem.clone())).await;
+            ui.send(UiCommand::Complete).await;
+            let model = config.model.clone();
+            return Turned {
+                prompt_tx: None,
+                model: model.clone(),
+                signal: OutcomeSignal::Error,
+                reply: String::new(),
+                error: Some(problem),
+                wall_ms: 0,
+                ended: None,
+                cut_short: false,
+                routed: RunTurn::new(model, 0.0, 0, OutcomeSignal::Error),
+            };
+        }
+    };
     let category = label.category;
-    let work = Work::turn(category).of(label.difficulty);
+    let difficulty = Some(label.difficulty);
+    let work = Work::turn(category).of(difficulty);
     let decision = match routing {
         ArmRouting::Gate { .. } if plan.learn => hub.gate.decide(&work, &plan.candidates),
         ArmRouting::Gate { .. } => hub.gate.redecide(&work, &plan.candidates),
@@ -1185,15 +1204,12 @@ async fn run_prompt(
     let model = config.model.clone();
     let led = lead.is_some_and(|lead| {
         hub.gate.note_model(agent_id, &model);
-        let led = hub
-            .gate
-            .way((category, label.difficulty), &model, false)
-            .led;
+        let led = hub.gate.way((category, difficulty), &model, false).led;
         session.lead = lead.apply(led, &mut config, &mut tools);
         led
     });
     let prompt = PromptPayload {
-        category,
+        category: Some(category),
         classifier: plan.classifier.clone(),
         route: Route {
             explored: decision.as_ref().is_some_and(|d| d.explored),
@@ -1201,7 +1217,7 @@ async fn run_prompt(
             ..Route::turn(model.clone(), RouteReason::Compare)
         },
         led: Some(led),
-        difficulty: label.difficulty,
+        difficulty,
         ..PromptPayload::new(text.to_string())
     };
 
@@ -1259,11 +1275,12 @@ async fn run_prompt(
     let mut nudged_cost_usd = 0.0;
     // What the attempt left, for Gate's attempt log.
     let terms = Terms {
-        difficulty: label.difficulty,
+        difficulty,
         led: Some(led),
         routed: gate_arm,
     };
     let mut left;
+    let mut cut_short;
     let edits = || {
         files
             .as_ref()
@@ -1287,10 +1304,11 @@ async fn run_prompt(
         steering.finish(&[]);
         let stopped = cancel.is_cancelled() || forwarded.credentials_rejected;
         let mut signal = if stopped {
-            OutcomeSignal::None
+            Some(OutcomeSignal::Cancelled)
         } else {
             ended_signal(&result, turn_start)
         };
+        cut_short = signal == Some(OutcomeSignal::Unavailable);
         let outcome = |signal: OutcomeSignal, model: &str| {
             prompt_tx.map(|prompt_tx| OutcomePayload {
                 prompt_tx,
@@ -1320,7 +1338,7 @@ async fn run_prompt(
             loop {
                 let at = At {
                     category,
-                    difficulty: label.difficulty,
+                    difficulty,
                     signal,
                     turn_start,
                 };
@@ -1346,7 +1364,8 @@ async fn run_prompt(
                         break;
                     }
                     Step::Review { why, act } => {
-                        let Some(ended) = outcome(signal, &model) else {
+                        let pending = signal.unwrap_or(OutcomeSignal::Unavailable);
+                        let Some(ended) = outcome(pending, &model) else {
                             continue;
                         };
                         let edits = edits();
@@ -1382,8 +1401,10 @@ async fn run_prompt(
                                 ));
                                 break;
                             }
-                            signal = OutcomeSignal::JudgedFail;
+                            signal = Some(OutcomeSignal::JudgedFail);
                             unchecked = Some(reviewed.findings);
+                        } else if signal.is_none() {
+                            signal = reviewed.verdict();
                         }
                     }
                     Step::HarnessCheck => {
@@ -1397,7 +1418,7 @@ async fn run_prompt(
                         let check = harness_check(session, &command).await;
                         ui.send(system_message(check.describe())).await;
                         if let Some(checked) = check_signal(&check) {
-                            signal = checked;
+                            signal = Some(checked);
                             harness = (checked == OutcomeSignal::ChecksFailed)
                                 .then(|| check_review(&check));
                         }
@@ -1405,7 +1426,7 @@ async fn run_prompt(
                     Step::JudgeUnverified(suspicions) => {
                         let (Some(judge), Some(ended)) = (
                             follow.1.judge().map(str::to_string),
-                            outcome(signal, &model),
+                            outcome(signal.unwrap_or(OutcomeSignal::Unavailable), &model),
                         ) else {
                             continue;
                         };
@@ -1425,10 +1446,12 @@ async fn run_prompt(
                             config.auth_token.clone(),
                         )
                         .await;
-                        if let Some(judged) = judged {
+                        if let Some((verdict, judged)) = judged {
                             ui.send(system_message(judged.describe())).await;
-                            if judged.verdict.at_fault {
-                                signal = OutcomeSignal::JudgedFail;
+                            if verdict == OutcomeSignal::JudgedFail || signal.is_none() {
+                                signal = Some(verdict);
+                            }
+                            if verdict == OutcomeSignal::JudgedFail {
                                 unchecked = Some(judged.verdict.reasons);
                             }
                         }
@@ -1436,6 +1459,7 @@ async fn run_prompt(
                 }
             }
         }
+        let signal = signal.unwrap_or(OutcomeSignal::Unavailable);
         let failure = harness
             .clone()
             .or_else(|| failure_text(&result, turn_start))
@@ -1532,7 +1556,7 @@ async fn run_prompt(
             )
         );
         let escalated = PromptPayload {
-            category,
+            category: Some(category),
             classifier: plan.classifier.clone(),
             route: next.route(RouteLevel::Turn),
             ..PromptPayload::new(takeover.clone())
@@ -1574,7 +1598,7 @@ async fn run_prompt(
     }
     let routed = RunTurn {
         category: Some(category),
-        difficulty: label.difficulty,
+        difficulty,
         led: Some(led),
         escalations,
         first_model: (model != first_model).then_some(first_model),
@@ -1591,6 +1615,7 @@ async fn run_prompt(
         error,
         wall_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         ended,
+        cut_short,
         routed,
     }
 }

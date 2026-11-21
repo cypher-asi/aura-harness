@@ -1478,7 +1478,7 @@ fn finished(
 ) -> (SubagentResult, Option<Vec<Message>>) {
     let outcome = SubagentResult {
         child_agent_id: Some(agent_id),
-        final_message: result.total_text,
+        final_message: result.final_text,
         total_input_tokens: result.total_input_tokens,
         total_output_tokens: result.total_output_tokens,
         files_changed: result

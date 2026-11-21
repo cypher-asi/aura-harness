@@ -381,7 +381,7 @@ mod tests {
             for _ in 0..n {
                 let agent = AgentId::generate();
                 let mut prompt = PromptPayload::new(format!("turn {}", entries.len()));
-                prompt.category = category;
+                prompt.category = Some(category);
                 prompt.route = Route::turn(SONNET, RouteReason::Default);
                 prompt.led = Some(led);
                 prompt.difficulty = difficulty;

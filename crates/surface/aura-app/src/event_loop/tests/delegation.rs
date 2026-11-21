@@ -511,7 +511,7 @@ async fn a_failed_check_undoes_the_attempt_and_retries_once_on_a_stronger_model(
     assert_eq!(outcomes[0].signal, OutcomeSignal::ChecksFailed);
     let (prompts, outcomes) = record(&fixture, attempts[1]);
     assert_eq!(prompts[0].route, Route::subtask(GPT, RouteReason::Escalate));
-    assert_eq!(prompts[0].category, PromptCategory::Question);
+    assert_eq!(prompts[0].category, Some(PromptCategory::Question));
     assert!(prompts[0]
         .text
         .starts_with("write a note\n\n---\nA first attempt"));
@@ -668,7 +668,7 @@ async fn a_frontier_leads_subtasks_start_below_its_tier_and_may_escalate_to_it()
     let attempts = children(&fixture, first, "implement");
     assert_eq!(attempts.len(), 2, "{}", result.final_message);
     let (prompts, outcomes) = record(&fixture, attempts[0]);
-    assert_eq!(prompts[0].category, PromptCategory::Planning);
+    assert_eq!(prompts[0].category, Some(PromptCategory::Planning));
     assert_eq!(
         prompts[0].route,
         Route::subtask(SONNET, RouteReason::Default),

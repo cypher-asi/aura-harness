@@ -1,0 +1,26 @@
+{
+  "id": "01a1ff6478540011",
+  "title": "Harness notice:",
+  "state": "completed",
+  "agent_id": "1b0bc47ff8d68153754bc29714a0b6c239b10e7a4f1216e87c59a3240de1e542",
+  "agent_name": "Agent 585",
+  "items": [
+    {
+      "content": "Markdown renderer: draw lists of `Label: value` items tight, part records where the first label repeats, mute plain labels; keep streaming layout identical to at-once layout; tests + docs",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Independent review of the renderer + streaming change for regressions and missing tests",
+      "state": "completed",
+      "assignee": "reviewer"
+    },
+    {
+      "content": "Run fmt, clippy (-D warnings) and the aura-ui-terminal tests; check the screenshot case renders as intended",
+      "state": "completed"
+    }
+  ],
+  "summary": "The reviewer did report back, but its message was cut off at 4000 characters, so I only have the first two of its six risks. It found no correctness bugs.",
+  "updated_ms": 1795286626657,
+  "created_ms": 1795286136916
+}

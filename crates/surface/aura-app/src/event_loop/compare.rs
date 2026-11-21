@@ -1,6 +1,6 @@
 //! `/compare`: run the user's own task (a prompt, a plan, or a session
 //! replayed prompt by prompt) on two arms side by side, each Gate or a
-//! pinned model, then pick or apply the better run. The BENCH tab drives
+//! pinned model, then apply the better run. The BENCH tab drives
 //! the same actions (see [`super::bench`]).
 //!
 //! `/compare [prompt]` prepares a comparison and shows what it should
@@ -27,10 +27,9 @@ use aura_agent_kernel::Kernel;
 use aura_config::GateConfig;
 use aura_context_prompts::model_messages::build_plan::build_plan_prompt;
 use aura_core_types::{
-    AgentId, ArmSpec, BenchSource, CompareArm, ComparePayload, CompareStatus, OutcomeSignal,
-    PromptCategory, RouteLevel,
+    AgentId, ArmSpec, BenchSource, CompareArm, ComparePayload, CompareStatus, RouteLevel,
 };
-use aura_model::model_catalog::{model_key, route_label};
+use aura_model::model_catalog::route_label;
 use aura_store_db::ReadStore;
 use aura_ui_terminal::UiCommand;
 use std::path::PathBuf;
@@ -114,7 +113,6 @@ pub(super) async fn handle(state: &mut LoopState<'_>, agent_id: AgentId, args: &
             .map(|text| format!("{text}\n  /compare go starts it · /compare cancel drops it")),
         CompareCommand::Go => start(state).await,
         CompareCommand::Cancel => Ok(cancel(state)),
-        CompareCommand::Pick(arm) => pick(state, None, &arm).await,
         CompareCommand::Apply(run) => apply(state, None, &run).await,
         CompareCommand::Diff(run) => diff(state, &ui, None, run.as_deref()).await,
         CompareCommand::Dismiss => dismiss(state, None).await,
@@ -182,7 +180,7 @@ fn show(state: &LoopState<'_>, n: Option<usize>) -> Result<String, String> {
 }
 
 /// The comparison `host` holds, else the latest, once it has ended, for
-/// pick, apply, diff and dismiss.
+/// apply, diff and dismiss.
 fn ended(
     state: &LoopState<'_>,
     host: Option<AgentId>,
@@ -270,7 +268,7 @@ pub(super) async fn prepare(
     let workspace = kernel.agent_workspace();
     let workspace = workspace.canonicalize().unwrap_or(workspace);
     let last = super::gate_record::last_turn(kernel.store().as_ref(), agent_id);
-    let mut category = PromptCategory::Unclassified;
+    let mut category = None;
     let mut replay = None;
     let examples = match (request.examples, request.suite.as_deref()) {
         (None, None) => Vec::new(),
@@ -294,7 +292,7 @@ pub(super) async fn prepare(
         (None, None, None) => {
             let prompt = last
                 .and_then(|turn| {
-                    category = turn.outcome.category;
+                    category = Some(turn.outcome.category);
                     turn.prompt
                 })
                 .ok_or_else(|| {
@@ -341,14 +339,17 @@ pub(super) async fn prepare(
         explore_rate: 0.0,
         ..*state.hub.gate.settings()
     };
-    let expected = aura_agent_gate::pick(
-        &state.hub.gate.stats(),
-        &aura_agent_gate::Work::new(RouteLevel::Turn, category, None),
-        &candidates,
-        &no_exploring,
-        &mut || 1.0,
-    )
-    .map(|decision| decision.model.id);
+    let expected = match category {
+        Some(category) => aura_agent_gate::pick(
+            &state.hub.gate.stats(),
+            &aura_agent_gate::Work::new(RouteLevel::Turn, category, None),
+            &candidates,
+            &no_exploring,
+            &mut || 1.0,
+        )
+        .map(|decision| decision.model.id),
+        None => aura_agent_gate::fixed_pick(&candidates).map(|c| c.id.clone()),
+    };
     let model_of = |spec: &ArmSpec| match spec {
         ArmSpec::Gate { .. } => expected.clone().unwrap_or_else(|| judge.clone()),
         ArmSpec::Model { model } => model.clone(),
@@ -524,91 +525,6 @@ pub(super) fn cancel(state: &mut LoopState<'_>) -> String {
     "No comparison to cancel".to_string()
 }
 
-/// The arm `name` means in `payload`: `a` or `b`, what the arm runs on
-/// (`gate`, a model or part of its name) when only one arm does, or
-/// `other` for arm B as older comparisons called it.
-fn arm_named(payload: &ComparePayload, name: &str) -> Option<CompareArm> {
-    let name = name.trim().to_ascii_lowercase();
-    match name.as_str() {
-        "a" => return Some(CompareArm::A),
-        "b" | "other" => return Some(CompareArm::B),
-        _ => {}
-    }
-    let runs_on = |arm: &CompareArm| {
-        let spec = payload.spec(*arm);
-        let label = spec.label().to_ascii_lowercase();
-        label == name
-            || (spec.is_gate() && name == "gate")
-            || model_key(&label) == name
-            || (!spec.is_gate() && label.contains(&name))
-    };
-    let mut hits = CompareArm::BOTH.iter().copied().filter(runs_on);
-    match (hits.next(), hits.next()) {
-        (Some(arm), None) => Some(arm),
-        _ => None,
-    }
-}
-
-/// `/compare pick <arm>`: every run of the arm is rated good, every run of the
-/// other's.
-pub(super) async fn pick(
-    state: &mut LoopState<'_>,
-    host: Option<AgentId>,
-    name: &str,
-) -> Result<String, String> {
-    let (host, compare, mut payload) = ended(state, host)?;
-    let winner = arm_named(&payload, name).ok_or_else(|| {
-        format!(
-            "Pick a or b (A ran {}, B ran {})",
-            payload.arm_a.label(),
-            payload.arm_b.label()
-        )
-    })?;
-    let mut rated = [0_usize; 2];
-    for run in payload.runs.clone() {
-        if run.agent_id == host {
-            continue;
-        }
-        let kernel = kernel_of(state, run.agent_id)?;
-        let Some(last) = super::gate_record::last_turn(kernel.store().as_ref(), run.agent_id)
-        else {
-            continue;
-        };
-        let signal = if run.arm == winner {
-            OutcomeSignal::Good
-        } else {
-            OutcomeSignal::Bad
-        };
-        if super::gate_record::record(&kernel, run.agent_id, &last.outcome.with_signal(signal))
-            .await
-        {
-            rated[run.arm.index()] += 1;
-        }
-    }
-    payload.status = CompareStatus::Picked(winner);
-    let kernel = kernel_of(state, host)?;
-    save(
-        &state.hub,
-        &kernel,
-        state.commands,
-        (host, &compare),
-        &payload,
-    )
-    .await;
-    let (good, bad) = (rated[winner.index()], rated[winner.opposite().index()]);
-    let letter = |arm: CompareArm| arm.as_str().to_uppercase();
-    Ok(format!(
-        "{compare}: picked {} ({}). Rated {good} {} run{} good and {bad} {} run{} bad; \
-         Gate's table counts them.",
-        letter(winner),
-        payload.spec(winner).label(),
-        letter(winner),
-        if good == 1 { "" } else { "s" },
-        letter(winner.opposite()),
-        if bad == 1 { "" } else { "s" },
-    ))
-}
-
 /// `/compare apply <run>`: put the run's changes in the user's
 /// workspace, then remove the copies.
 pub(super) async fn apply(
@@ -763,51 +679,4 @@ pub(super) async fn diff(
         }
     }
     Ok(String::new())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn arms_are_named_by_letter_or_by_what_they_run_on() {
-        let mut payload = ComparePayload {
-            system_kind: aura_core_types::SystemKind::Compare,
-            task: String::new(),
-            plan: None,
-            arm_a: ArmSpec::Gate { delegate: true },
-            arm_b: ArmSpec::Model {
-                model: "claude/claude-opus-4-7".to_string(),
-            },
-            against: "claude/claude-opus-4-7".to_string(),
-            prompts: vec![String::new()],
-            source: BenchSource::Prompt,
-            repeats: 1,
-            check: None,
-            budget_usd: None,
-            requested_by: AgentId::generate(),
-            apply_root: PathBuf::new(),
-            started_ms: 0,
-            runs: Vec::new(),
-            judgments: Vec::new(),
-            notes: Vec::new(),
-            status: CompareStatus::Done,
-        };
-        assert_eq!(arm_named(&payload, "a"), Some(CompareArm::A));
-        assert_eq!(arm_named(&payload, "B"), Some(CompareArm::B));
-        assert_eq!(arm_named(&payload, "gate"), Some(CompareArm::A));
-        assert_eq!(arm_named(&payload, "other"), Some(CompareArm::B));
-        assert_eq!(arm_named(&payload, "opus"), Some(CompareArm::B));
-        assert_eq!(arm_named(&payload, "claude-opus-4-7"), Some(CompareArm::B));
-        assert_eq!(arm_named(&payload, "sonnet"), None);
-        payload.arm_a = ArmSpec::Gate { delegate: false };
-        assert_eq!(arm_named(&payload, "gate"), Some(CompareArm::A));
-
-        payload.arm_a = ArmSpec::Model {
-            model: "claude/claude-sonnet-4-6".to_string(),
-        };
-        assert_eq!(arm_named(&payload, "sonnet"), Some(CompareArm::A));
-        assert_eq!(arm_named(&payload, "claude"), None);
-        assert_eq!(arm_named(&payload, "gate"), None);
-    }
 }

@@ -433,7 +433,12 @@ impl BenchSource {
 
 /// Where a comparison stands.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "state", content = "detail")]
+#[serde(
+    rename_all = "snake_case",
+    tag = "state",
+    content = "detail",
+    from = "StoredStatus"
+)]
 pub enum CompareStatus {
     /// Runs are under way.
     Running,
@@ -441,13 +446,36 @@ pub enum CompareStatus {
     Done,
     /// The user stopped it; copies are kept.
     Cancelled,
-    /// The user picked the better arm; copies are kept.
-    Picked(CompareArm),
     /// The named run's changes went into the user's workspace and the
     /// copies were removed.
     Applied(String),
     /// The copies were removed without applying anything.
     Dismissed,
+}
+
+/// A [`CompareStatus`] as stored, older records' included: those once
+/// said which arm the user picked, which leaves a comparison done.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", tag = "state", content = "detail")]
+enum StoredStatus {
+    Running,
+    Done,
+    Cancelled,
+    Picked(serde::de::IgnoredAny),
+    Applied(String),
+    Dismissed,
+}
+
+impl From<StoredStatus> for CompareStatus {
+    fn from(stored: StoredStatus) -> Self {
+        match stored {
+            StoredStatus::Running => Self::Running,
+            StoredStatus::Done | StoredStatus::Picked(_) => Self::Done,
+            StoredStatus::Cancelled => Self::Cancelled,
+            StoredStatus::Applied(run) => Self::Applied(run),
+            StoredStatus::Dismissed => Self::Dismissed,
+        }
+    }
 }
 
 impl CompareStatus {
@@ -652,7 +680,7 @@ mod tests {
                 reasoning: "Both are fine.".to_string(),
             }],
             notes: Vec::new(),
-            status: CompareStatus::Picked(CompareArm::A),
+            status: CompareStatus::Applied("a-1".to_string()),
         }
     }
 
@@ -662,8 +690,8 @@ mod tests {
         let bytes = payload.to_bytes();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(json["system_kind"], "compare");
-        assert_eq!(json["status"]["state"], "picked");
-        assert_eq!(json["status"]["detail"], "a");
+        assert_eq!(json["status"]["state"], "applied");
+        assert_eq!(json["status"]["detail"], "a-1");
         assert_eq!(json["runs"][0]["arm"], "a");
         assert_eq!(json["arm_a"]["kind"], "gate");
         assert_eq!(json["arm_b"]["model"], "claude/claude-opus-4-7");
@@ -763,7 +791,11 @@ mod tests {
         );
         assert!(judgment.a_first);
         assert_eq!(judgment.winner, Some(CompareArm::B));
-        assert_eq!(payload.status, CompareStatus::Picked(CompareArm::A));
+        assert_eq!(
+            payload.status,
+            CompareStatus::Done,
+            "a comparison the user once picked an arm of is done"
+        );
     }
 
     #[test]
@@ -840,7 +872,6 @@ mod tests {
     #[test]
     fn copies_exist_until_applied_or_dismissed() {
         assert!(CompareStatus::Done.has_copies());
-        assert!(CompareStatus::Picked(CompareArm::B).has_copies());
         assert!(!CompareStatus::Applied("a-1".to_string()).has_copies());
         assert!(!CompareStatus::Dismissed.has_copies());
         assert_eq!(CompareArm::A.opposite(), CompareArm::B);

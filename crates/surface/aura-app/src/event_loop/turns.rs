@@ -364,10 +364,13 @@ pub(crate) async fn record_prompt(
 }
 
 /// Record `prompt` as typed and run a turn answering it. The model gets
-/// the files it mentions as well. The prompt is recorded with its
-/// category and route, and the turn ends with an `Outcome` saying how it
-/// went. When Gate routes the turn, it picks the model once the prompt is
-/// classified; when that model's route refuses the user's sign-in, the
+/// the files it mentions as well. A turn on a model the user pinned is
+/// recorded with its route only: Gate neither classifies it nor records
+/// how it went. Otherwise the prompt is recorded with its category and
+/// route, and the turn ends with an `Outcome` saying how it went; a
+/// prompt the classifier could not label fails the turn. When Gate
+/// routes the turn, it picks the model once the prompt is classified;
+/// when that model's route refuses the user's sign-in, the
 /// turn carries on from where it stopped on Gate's next choice, and when
 /// the turn fails through the model's own doing it carries on on the
 /// next stronger model (see [`run_attempts`]).
@@ -408,33 +411,31 @@ async fn run_prompt(
     let (process_result, forwarded, attempts, recorded) =
         if turn.routing.reason == RouteReason::Pinned {
             begin_files(session, &prompt.text);
+            if let Err(problem) = label.record(session, None).await {
+                ui.send(UiCommand::ShowError(problem)).await;
+            }
             session.messages.push(model_message(session, prompt).await);
-            // The prompt is recorded once classified, which is normally
-            // before the turn's first model call ends; a classifier slower
-            // than that call records it after the call's entry.
-            let (recorded, (result, forwarded)) = tokio::join!(
-                label.classify_and_record(session),
-                run_agent_turn(
-                    session,
-                    &turn.agent_loop,
-                    turn.tools.clone(),
-                    ui,
-                    cancel,
-                    turn.steering,
-                    turn.limits,
-                    turn.recorder.clone(),
-                )
-            );
-            let recorded = match recorded {
-                Ok(recorded) => Some(recorded),
+            let (result, forwarded) = run_agent_turn(
+                session,
+                &turn.agent_loop,
+                turn.tools.clone(),
+                ui,
+                cancel,
+                turn.steering,
+                turn.limits,
+                turn.recorder.clone(),
+            )
+            .await;
+            (result, forwarded, Attempts::default(), None)
+        } else {
+            let category = match label.classify(session).await {
+                Ok(category) => category,
                 Err(problem) => {
                     ui.send(UiCommand::ShowError(problem)).await;
-                    None
+                    ui.send(UiCommand::Complete).await;
+                    return Outcome::default();
                 }
             };
-            (result, forwarded, Attempts::default(), recorded)
-        } else {
-            let category = label.classify(session).await;
             if let Some(gate) = turn.gate.as_deref() {
                 let agent = session.agent_id();
                 if route_turn(gate, agent, &mut turn.agent_loop, &mut label, category, ui).await {
@@ -447,8 +448,8 @@ async fn run_prompt(
                     session.lead = enforced;
                 }
             }
-            let recorded = match label.record(session, category).await {
-                Ok(recorded) => recorded,
+            let recorded = match label.record(session, Some(category)).await {
+                Ok(recorded) => (recorded, category),
                 Err(problem) => {
                     ui.send(UiCommand::ShowError(problem)).await;
                     ui.send(UiCommand::Complete).await;
@@ -506,11 +507,12 @@ async fn run_prompt(
             .await;
     }
     let signal = if cancelled || forwarded.credentials_rejected {
-        OutcomeSignal::None
+        OutcomeSignal::Cancelled
     } else {
         attempts
             .signal
-            .unwrap_or_else(|| ended_signal(&process_result, turn_start))
+            .or_else(|| ended_signal(&process_result, turn_start))
+            .unwrap_or(OutcomeSignal::Unavailable)
     };
 
     let summary = process_result
@@ -564,7 +566,7 @@ async fn run_prompt(
             let terms = Terms {
                 difficulty: label.difficulty,
                 led: label.led,
-                routed: label.route.reason != RouteReason::Pinned,
+                routed: true,
             };
             hub.gate
                 .log_attempt(session.agent_id(), &outcome, terms, left);
@@ -621,39 +623,34 @@ struct Label {
 impl Label {
     /// The prompt's category, as the classifier says; its difficulty is
     /// kept on `self`.
-    async fn classify(&mut self, session: &AgentSession) -> PromptCategory {
+    ///
+    /// # Errors
+    /// Says why when the classifier gave no category and difficulty.
+    async fn classify(&mut self, session: &AgentSession) -> Result<PromptCategory, String> {
         let label = gate_record::classify_prompt(
             &session.kernel,
             &self.classifier,
             &self.text,
             self.auth_token.clone(),
         )
-        .await;
-        self.difficulty = label.difficulty;
-        label.category
+        .await?;
+        self.difficulty = Some(label.difficulty);
+        Ok(label.category)
     }
 
-    /// Classify the prompt and record it on `session`, returning its
-    /// transaction hash and category.
-    async fn classify_and_record(
-        &mut self,
-        session: &AgentSession,
-    ) -> Result<(Hash, PromptCategory), String> {
-        let category = self.classify(session).await;
-        self.record(session, category).await
-    }
-
-    /// Record the prompt on `session` as asking for `category`, returning
-    /// its transaction hash and category.
+    /// Record the prompt on `session` as asking for `category`, `None`
+    /// when nothing classified it, returning its transaction hash.
     async fn record(
         &self,
         session: &AgentSession,
-        category: PromptCategory,
-    ) -> Result<(Hash, PromptCategory), String> {
+        category: Option<PromptCategory>,
+    ) -> Result<Hash, String> {
         let payload = PromptPayload {
             text: self.text.clone(),
             category,
-            classifier: self.classifier.clone(),
+            classifier: category
+                .map(|_| self.classifier.clone())
+                .unwrap_or_default(),
             route: self.route.clone(),
             kind: None,
             led: self.led,
@@ -663,7 +660,7 @@ impl Label {
         if let Some(files) = &session.file_checkpoints {
             files.note_prompt_tx(session.agent_id(), tx.hash);
         }
-        Ok((tx.hash, category))
+        Ok(tx.hash)
     }
 }
 
@@ -680,18 +677,19 @@ fn begin_files(session: &AgentSession, text: &str) {
 }
 
 /// The signal of a turn that ran to its end with `result`, whose messages
-/// from `turn_start` on are the turn's own. A turn the model's provider
-/// cut short is [`OutcomeSignal::Unavailable`] whatever it did before,
-/// since its work stopped where the model did not choose to stop it.
+/// from `turn_start` on are the turn's own; `None` when nothing says how
+/// it went, and the judge has to. A turn the model's provider cut short
+/// is [`OutcomeSignal::Unavailable`] whatever it did before, since its
+/// work stopped where the model did not choose to stop it.
 pub(crate) fn ended_signal(
     result: &Result<aura_agent::AgentLoopResult, aura_agent::AgentError>,
     turn_start: usize,
-) -> OutcomeSignal {
+) -> Option<OutcomeSignal> {
     match result {
-        Err(e) if e.is_unavailable() => OutcomeSignal::Unavailable,
-        Err(_) => OutcomeSignal::Error,
+        Err(e) if e.is_unavailable() => Some(OutcomeSignal::Unavailable),
+        Err(_) => Some(OutcomeSignal::Error),
         Ok(result) if result.llm_error.is_some() && result.llm_unavailable => {
-            OutcomeSignal::Unavailable
+            Some(OutcomeSignal::Unavailable)
         }
         Ok(result) => {
             let errored = result.llm_error.is_some() && result.total_text.trim().is_empty();
@@ -744,9 +742,9 @@ struct Attempts {
     moved: Option<(Hash, usize, Instant)>,
     /// Whether the last attempt's outcome is already recorded
     settled: bool,
-    /// What the last attempt ended with when Gate's follow-up found out
-    /// more than its messages say: a harness check's result, or the
-    /// judge finding unchecked work unfinished
+    /// What the last attempt ended with once Gate's follow-up had its
+    /// say: a harness check's result, or the judge's verdict on unchecked
+    /// work. `None` when Gate did not follow it up
     signal: Option<OutcomeSignal>,
     /// The files the last attempt changed by any means, when the harness
     /// compared the workspace before and after
@@ -775,8 +773,8 @@ struct Asked<'a> {
 /// again while a route refuses the user's sign-in. An attempt that ran
 /// no check of its own gets Gate's follow-up first (see
 /// [`gate_followup`]): when it changed files it is asked once to check
-/// them, then the harness runs the project's tests, and work that still
-/// looks wrong goes to the judge. Work that is hard or shows a sign of
+/// them, then the harness runs the project's tests, and work still
+/// unchecked gets the judge's verdict. Work that is hard or shows a sign of
 /// failure is reviewed against the request before it stands; what the
 /// review finds unfinished goes back to the same model once. An attempt
 /// that fails (a model error, its last check or the harness's failing,
@@ -872,8 +870,7 @@ async fn run_attempts(
             continue;
         }
 
-        let own = ended_signal(&result, turn_start);
-        let mut signal = own;
+        let mut signal = ended_signal(&result, turn_start);
         // What the harness's check printed when it failed, and what the
         // judge found wrong with unchecked work.
         let (mut harness, mut unchecked) = (None, None);
@@ -927,7 +924,7 @@ async fn run_attempts(
                             category,
                             model: model.clone(),
                             success: None,
-                            signal,
+                            signal: signal.unwrap_or(OutcomeSignal::Unavailable),
                             cost_usd: attempts.cost_usd + forwarded.usage.cost_usd,
                             subtask_cost_usd: gate.hub.subtask_cost_usd(agent, asked.started_ms),
                             latency_ms: u64::try_from(started.elapsed().as_millis())
@@ -960,8 +957,10 @@ async fn run_attempts(
                                 ));
                                 break;
                             }
-                            signal = OutcomeSignal::JudgedFail;
+                            signal = Some(OutcomeSignal::JudgedFail);
                             unchecked = Some(reviewed.findings);
+                        } else if signal.is_none() {
+                            signal = reviewed.verdict();
                         }
                     }
                     Step::HarnessCheck => {
@@ -975,7 +974,7 @@ async fn run_attempts(
                         let check = harness_check(session, &command).await;
                         ui.send(system_message(check.describe())).await;
                         if let Some(checked) = check_signal(&check) {
-                            signal = checked;
+                            signal = Some(checked);
                             harness = (checked == OutcomeSignal::ChecksFailed)
                                 .then(|| check_review(&check));
                         }
@@ -989,7 +988,7 @@ async fn run_attempts(
                             category,
                             model: model.clone(),
                             success: None,
-                            signal,
+                            signal: signal.unwrap_or(OutcomeSignal::Unavailable),
                             cost_usd: attempts.cost_usd + forwarded.usage.cost_usd,
                             subtask_cost_usd: gate.hub.subtask_cost_usd(agent, asked.started_ms),
                             latency_ms: u64::try_from(started.elapsed().as_millis())
@@ -1006,10 +1005,12 @@ async fn run_attempts(
                         let auth_token = turn.agent_loop.config().auth_token.clone();
                         let judged =
                             judge_unchecked(session, &judge, &ended, &shown, auth_token).await;
-                        if let Some(judged) = judged {
+                        if let Some((verdict, judged)) = judged {
                             ui.send(system_message(judged.describe())).await;
-                            if judged.verdict.at_fault {
-                                signal = OutcomeSignal::JudgedFail;
+                            if verdict == OutcomeSignal::JudgedFail || signal.is_none() {
+                                signal = Some(verdict);
+                            }
+                            if verdict == OutcomeSignal::JudgedFail {
                                 unchecked = Some(judged.verdict.reasons);
                             }
                         }
@@ -1035,7 +1036,8 @@ async fn run_attempts(
                 continue 'attempts;
             }
         }
-        attempts.signal = (signal != own).then_some(signal);
+        let signal = signal.unwrap_or(OutcomeSignal::Unavailable);
+        attempts.signal = Some(signal);
         if !calls_for_stronger(signal) {
             break (result, forwarded);
         }
@@ -1126,7 +1128,7 @@ async fn run_attempts(
             )
         );
         let payload = PromptPayload {
-            category,
+            category: Some(category),
             route: next.route(RouteLevel::Turn),
             ..PromptPayload::new(takeover.clone())
         };
