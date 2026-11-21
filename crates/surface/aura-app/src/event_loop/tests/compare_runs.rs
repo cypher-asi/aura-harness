@@ -773,6 +773,14 @@ async fn a_gate_run_that_fails_its_checks_carries_on_on_a_stronger_model() {
         "and the model it started on"
     );
     assert_eq!(
+        (
+            gate.turns[0].effort.as_deref(),
+            gate.turns[0].first_effort.as_deref()
+        ),
+        (Some("medium"), None),
+        "and the effort it ran at, which a move to a stronger model keeps"
+    );
+    assert_eq!(
         signals_of(&state, gate.agent_id)[0],
         OutcomeSignal::ChecksFailed,
         "the failed attempt is recorded on its own"

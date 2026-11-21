@@ -192,9 +192,10 @@ fn arm(payload: &ComparePayload, arm: CompareArm) -> BenchArm {
     }
 }
 
-/// The model `run`'s first turn was sent to, and the one a failed
-/// attempt last moved its work to.
-fn models(run: &CompareRun) -> (String, Option<String>) {
+/// The model `run`'s first turn was sent to, the one a failed attempt
+/// last moved its work to (the same model, when the move only raised
+/// its effort), and that effort when the move raised it.
+fn models(run: &CompareRun) -> (String, Option<String>, Option<String>) {
     let first = run.turns.first().map_or_else(
         || run.model.clone(),
         |turn| {
@@ -203,14 +204,16 @@ fn models(run: &CompareRun) -> (String, Option<String>) {
                 .unwrap_or_else(|| turn.model.clone())
         },
     );
-    let moved = run
-        .turns
-        .iter()
-        .rev()
-        .find(|turn| turn.escalations > 0)
-        .map(|turn| turn.model.clone())
-        .filter(|model| *model != first);
-    (first, moved)
+    let Some(moved) = run.turns.iter().rev().find(|turn| turn.escalations > 0) else {
+        return (first, None, None);
+    };
+    let effort = moved
+        .first_effort
+        .is_some()
+        .then(|| moved.effort.clone())
+        .flatten();
+    let model = (moved.model != first || effort.is_some()).then(|| moved.model.clone());
+    (first, model, effort)
 }
 
 fn verdict(verdict: Option<RefVerdict>) -> Option<String> {
@@ -302,13 +305,14 @@ pub(super) fn view(
             .runs
             .iter()
             .map(|run| {
-                let (model, escalated_to) = models(run);
+                let (model, escalated_to, escalated_effort) = models(run);
                 let first = run.turns.first();
                 BenchRun {
                     name: run.name.clone(),
                     arm: run.arm.index(),
                     model,
                     escalated_to,
+                    escalated_effort,
                     category: first
                         .and_then(|turn| turn.category)
                         .map(|category| category.as_str().to_string()),

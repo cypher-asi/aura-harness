@@ -36,6 +36,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on to a stronger one. The call is shown as `gate:` in the turn's
   footer.
 
+### Gate trusts passed tests when only a lint step could not run
+
+##### Fixed
+
+- A reply whose tests passed but that says a lint or format step could
+  not run (`I couldn't run a lint check because pyflakes isn't
+  installed`) no longer counts as unverified work or as giving up. Such
+  a turn went to the judge, and on Opus a judged failure is retried at
+  max effort: in Compare #30 that retried a correct run for 24 minutes
+  and $1.84. A sentence that also names tests or a build still counts.
+- The BENCH runs table shows a move that only raised the effort on the
+  same model as moved up (`to opus-5-5 max`); it said `no` while the
+  summary row counted it. Each run's turns now record the effort Gate
+  ran them at and, when a move raised it, the one they started at.
+
 ### BENCH runs table shows difficulty and wastes less room
 
 ##### Changed

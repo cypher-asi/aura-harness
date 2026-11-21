@@ -91,11 +91,15 @@ fn category(run: &BenchRun) -> String {
 }
 
 /// `to opus-4-7` for a run a failed attempt moved to a stronger model,
-/// else `no`.
+/// `to opus-5-5 max` for one it moved to a higher effort, else `no`.
 fn moved_up(run: &BenchRun) -> String {
-    run.escalated_to
-        .as_deref()
-        .map_or_else(|| "no".to_string(), |to| format!("to {}", short_model(to)))
+    let Some(to) = run.escalated_to.as_deref() else {
+        return "no".to_string();
+    };
+    match &run.escalated_effort {
+        Some(effort) => format!("to {} {effort}", short_model(to)),
+        None => format!("to {}", short_model(to)),
+    }
 }
 
 /// `yes, $0.26 in subtasks` for a run whose model led a turn, handing
@@ -1672,6 +1676,22 @@ mod tests {
         };
         assert!(row("moved up").contains("1/"), "{shown}");
         assert!(row("nudged").contains("1/"), "{shown}");
+    }
+
+    #[test]
+    fn a_move_that_only_raised_the_effort_shows_as_moved_up() {
+        let theme = Theme::default();
+        let mut view = view();
+        view.runs[0].model = "claude/claude-opus-5-5".to_string();
+        view.runs[0].escalated_to = Some("claude/claude-opus-5-5".to_string());
+        view.runs[0].escalated_effort = Some("max".to_string());
+        let shown = text(&detail_lines(&view, None, &theme, 160, None));
+        let moved = shown
+            .lines()
+            .skip_while(|l| !l.contains("── runs"))
+            .find(|l| l.split_whitespace().next() == Some("a-1"))
+            .unwrap_or_else(|| panic!("no a-1 run in\n{shown}"));
+        assert!(moved.contains("to opus-5-5 max"), "{shown}");
     }
 
     #[test]

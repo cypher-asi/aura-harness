@@ -171,8 +171,11 @@ pub struct BenchRun {
     pub arm: usize,
     /// Model its first turn was sent to
     pub model: String,
-    /// The stronger model a failed attempt last moved its work to
+    /// The stronger model a failed attempt last moved its work to, or
+    /// the same model when the move only raised its effort
     pub escalated_to: Option<String>,
+    /// The effort that move raised it to (`max`), when it raised one
+    pub escalated_effort: Option<String>,
     /// What the classifier said its first prompt asks for, as stored
     /// (`multi_file_change`); `None` in older records
     pub category: Option<String>,

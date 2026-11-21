@@ -53,7 +53,7 @@ use crate::isolation::{
     CopyIsolation, IsolatedWorkspace, Isolation, IsolationStrategy, WorktreeIsolation,
 };
 use crate::model_selection::routed_effort;
-use aura_agent::AgentLoop;
+use aura_agent::{AgentLoop, AgentLoopConfig};
 use aura_agent_gate::attempt_log::Terms;
 use aura_agent_gate::compare::{list_price, plan_shares, run_name, PlanReading, Schedule};
 use aura_agent_gate::followup::Step;
@@ -1355,6 +1355,10 @@ async fn run_prompt(
     };
     let first_tx = prompt_tx;
     let first_model = model.clone();
+    let effort_of = |config: &AgentLoopConfig| {
+        routed_effort(config).and_then(|e| e.reasoning_effort_wire().map(str::to_string))
+    };
+    let first_effort = effort_of(&config);
     let (mut model, mut prompt_tx) = (model, prompt_tx);
     let (mut attempt_started, mut attempt_ms) = (started, started_ms);
     let (mut escalations, mut nudges, mut sent_back) = (0, 0, 0);
@@ -1710,12 +1714,15 @@ async fn run_prompt(
         hub.gate.log_attempt(agent_id, ended, terms, left);
         gate_record::record(&session.kernel, agent_id, ended).await;
     }
+    let effort = effort_of(&config);
     let routed = RunTurn {
         category: Some(category),
         difficulty,
         led: Some(led),
         escalations,
         first_model: (model != first_model).then_some(first_model),
+        first_effort: first_effort.filter(|first| effort.as_ref() != Some(first)),
+        effort,
         nudges,
         sent_back,
         subtask_cost_usd: hub.subtask_cost_usd(agent_id, started_ms),

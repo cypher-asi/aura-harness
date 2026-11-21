@@ -179,6 +179,14 @@ pub struct RunTurn {
     /// from there to `model`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_model: Option<String>,
+    /// Reasoning effort Gate ran `model` at (`high`, `max`, ...); `None`
+    /// when it chose none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    /// The effort it was first run at, when a failed attempt raised it
+    /// from there to `effort`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_effort: Option<String>,
     /// Times Gate asked the model to check a change it had not checked.
     #[serde(default)]
     pub nudges: u32,
@@ -211,6 +219,8 @@ impl RunTurn {
             led: None,
             escalations: 0,
             first_model: None,
+            effort: None,
+            first_effort: None,
             nudges: 0,
             sent_back: 0,
             subtask_cost_usd: 0.0,
@@ -646,6 +656,8 @@ mod tests {
                     led: Some(false),
                     escalations: 1,
                     first_model: Some("claude/claude-haiku-4-5".to_string()),
+                    effort: Some("max".to_string()),
+                    first_effort: Some("high".to_string()),
                     nudges: 1,
                     sent_back: 1,
                     ..RunTurn::new(
@@ -702,6 +714,8 @@ mod tests {
             json["runs"][0]["turns"][0]["first_model"],
             "claude/claude-haiku-4-5"
         );
+        assert_eq!(json["runs"][0]["turns"][0]["effort"], "max");
+        assert_eq!(json["runs"][0]["turns"][0]["first_effort"], "high");
         assert_eq!(json["runs"][0]["turns"][0]["nudges"], 1);
         assert_eq!(json["runs"][0]["turns"][0]["sent_back"], 1);
         assert!(json["runs"][0].get("error").is_none());
@@ -719,6 +733,8 @@ mod tests {
             "led",
             "escalations",
             "first_model",
+            "effort",
+            "first_effort",
             "nudges",
             "sent_back",
             "subtask_cost_usd",

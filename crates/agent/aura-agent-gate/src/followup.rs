@@ -263,8 +263,44 @@ const GAVE_UP: &[&str] = &[
 /// Whether `reply` says the work could not be done.
 #[must_use]
 pub fn gave_up(reply: &str) -> bool {
+    says_any(reply, GAVE_UP)
+}
+
+/// Words that mark a sentence of a reply as about linting or formatting,
+/// lowercase.
+const LINTING: &[&str] = &[
+    "lint",
+    "pyflakes",
+    "pycodestyle",
+    "flake8",
+    "ruff",
+    "rustfmt",
+    "clippy",
+    "isort",
+    "formatter",
+    "format check",
+    "style check",
+];
+
+/// Words that mark a sentence of a reply as about the work's tests or
+/// build too, lowercase.
+const TESTING: &[&str] = &["test", "build", "compile", "type check", "typecheck"];
+
+/// Whether a sentence of `reply`, lowercase, holds one of `phrases`. A
+/// sentence about linting or formatting alone does not count: that such
+/// a step could not run says nothing of whether the work does what was
+/// asked (`I couldn't run a lint check because pyflakes isn't installed`
+/// after the tests passed).
+fn says_any(reply: &str, phrases: &[&str]) -> bool {
     let reply = reply.to_lowercase().replace('’', "'");
-    GAVE_UP.iter().any(|phrase| reply.contains(phrase))
+    reply
+        .split(['\n', '!', '?', ';'])
+        .flat_map(|line| line.split(". "))
+        .filter(|sentence| {
+            !LINTING.iter().any(|word| sentence.contains(word))
+                || TESTING.iter().any(|word| sentence.contains(word))
+        })
+        .any(|sentence| phrases.iter().any(|phrase| sentence.contains(phrase)))
 }
 
 /// Phrases of a reply that says the work was not verified, lowercase.
@@ -302,8 +338,7 @@ const UNVERIFIED: &[&str] = &[
 /// Whether `reply` says the work, or part of it, was not verified.
 #[must_use]
 pub fn says_unverified(reply: &str) -> bool {
-    let reply = reply.to_lowercase().replace('’', "'");
-    UNVERIFIED.iter().any(|phrase| reply.contains(phrase))
+    says_any(reply, UNVERIFIED)
 }
 
 /// Why `ended`, a turn with no check, looks wrong; empty when nothing
@@ -1154,6 +1189,24 @@ mod tests {
         assert!(says_unverified("It builds; the Python 2 path is UNTESTED."));
         assert!(!says_unverified("All 286 tests passed."));
         assert!(!says_unverified(""));
+    }
+
+    #[test]
+    fn a_lint_step_that_could_not_run_leaves_the_tests_standing() {
+        let reply = "All 39 unit tests pass. I couldn't run a lint check because pyflakes and \
+                     pycodestyle aren't installed in the container.\n\nThe sample data is \
+                     written by hand.";
+        assert!(!says_unverified(reply));
+        assert!(!gave_up(reply));
+        assert!(!says_unverified("Couldn't run clippy; rustfmt is clean."));
+        for reply in [
+            "I couldn't run the tests or the linter.",
+            "The linter is clean, but the new parser is untested.",
+            "Lint passes. I couldn't run the build.",
+        ] {
+            assert!(says_unverified(reply), "{reply}");
+        }
+        assert!(gave_up("Lint passes. I could not reproduce the failure."));
     }
 
     #[test]
