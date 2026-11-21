@@ -158,7 +158,6 @@ fn identity(config: &AgentLoopConfig) -> AgentIdentity {
         prompt_cache_key: None,
         prompt_cache_retention: None,
         request_kind: ModelRequestKind::Chat,
-        max_tokens: config.max_tokens,
         max_context_tokens: config
             .max_context_tokens
             .and_then(|tokens| usize::try_from(tokens).ok())

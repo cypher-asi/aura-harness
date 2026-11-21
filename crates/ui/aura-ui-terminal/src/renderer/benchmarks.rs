@@ -5,8 +5,8 @@ use super::panels::body_block;
 use super::text::display_width;
 use crate::app::benchmarks::{BenchMode, BenchState, FormField, WorkChoice};
 use crate::events::{
-    arm_letter, cost_per_fix, BenchArm, BenchLiveRun, BenchRun, BenchStatus, BenchTaskCell,
-    BenchTaskSetup, BenchTokens, BenchTurn, BenchVerdict, BenchView,
+    arm_letter, cost_per_fix, run_order, BenchArm, BenchLiveRun, BenchRun, BenchStatus,
+    BenchTaskCell, BenchTaskSetup, BenchTokens, BenchTurn, BenchVerdict, BenchView,
 };
 use crate::{App, Theme};
 use ratatui::{
@@ -1068,7 +1068,38 @@ fn detail_lines(
     let picked = Style::default()
         .bg(theme.colors.selection)
         .fg(theme.colors.on_selection);
-    for (i, r) in view.runs.iter().enumerate() {
+    enum Entry {
+        Ended(usize),
+        Live(usize),
+    }
+    let mut entries: Vec<((u32, usize), Entry)> = view
+        .runs
+        .iter()
+        .enumerate()
+        .map(|(i, r)| (run_order(&r.name, r.arm), Entry::Ended(i)))
+        .chain(
+            view.live
+                .iter()
+                .enumerate()
+                .map(|(i, live)| (run_order(&live.name, live.arm), Entry::Live(i))),
+        )
+        .collect();
+    entries.sort_by_key(|(order, _)| *order);
+    let pending = Style::default().fg(theme.colors.pending);
+    let mut number = None;
+    for ((n, _), entry) in entries {
+        if number.is_some_and(|last| last != n) {
+            rows.push(Row::Rule);
+        }
+        number = Some(n);
+        let i = match entry {
+            Entry::Ended(i) => i,
+            Entry::Live(i) => {
+                rows.push(live_row(&view.live[i], view, prefix, frame, text, pending));
+                continue;
+            }
+        };
+        let r = &view.runs[i];
         let selected = run == Some(i);
         let base = if r.error.is_some() { warning } else { text };
         let check = match r.check_passed {
@@ -1105,42 +1136,6 @@ fn detail_lines(
             Row::Picked(cells, picked)
         } else {
             Row::Cells(cells)
-        });
-    }
-    let pending = Style::default().fg(theme.colors.pending);
-    for live in &view.live {
-        let arm = &view.arms[live.arm.min(1)];
-        let cells = vec![
-            (" ".to_string(), text),
-            (live.name.clone(), text),
-            (short_model(&arm.label).to_string(), text),
-            (String::new(), text),
-            (String::new(), text),
-            (String::new(), text),
-            (
-                live.task
-                    .as_deref()
-                    .map_or("", |t| task_name(t, prefix))
-                    .to_string(),
-                text,
-            ),
-            (live.wall_ms.map_or_else(String::new, duration), text),
-            (money(live.cost_usd), text),
-            (String::new(), text),
-            (String::new(), text),
-            (
-                if live.wall_ms.is_some() {
-                    "working"
-                } else {
-                    "waiting for its task's files"
-                }
-                .to_string(),
-                pending,
-            ),
-        ];
-        rows.push(match frame.filter(|_| live.wall_ms.is_some()) {
-            Some(frame) => Row::Lit(cells, frame),
-            None => Row::Cells(cells),
         });
     }
     lines.push(Line::default());
@@ -1184,6 +1179,51 @@ fn detail_lines(
     };
     lines.push(muted_line(fit(keys, width), theme));
     lines
+}
+
+/// The row of `live`, a run of `view` under way, lit by `frame` while it
+/// works.
+fn live_row(
+    live: &BenchLiveRun,
+    view: &BenchView,
+    prefix: Option<&str>,
+    frame: Option<usize>,
+    text: Style,
+    pending: Style,
+) -> Row {
+    let arm = &view.arms[live.arm.min(1)];
+    let cells = vec![
+        (" ".to_string(), text),
+        (live.name.clone(), text),
+        (short_model(&arm.label).to_string(), text),
+        (String::new(), text),
+        (String::new(), text),
+        (String::new(), text),
+        (
+            live.task
+                .as_deref()
+                .map_or("", |t| task_name(t, prefix))
+                .to_string(),
+            text,
+        ),
+        (live.wall_ms.map_or_else(String::new, duration), text),
+        (money(live.cost_usd), text),
+        (String::new(), text),
+        (String::new(), text),
+        (
+            if live.wall_ms.is_some() {
+                "working"
+            } else {
+                "waiting for its task's files"
+            }
+            .to_string(),
+            pending,
+        ),
+    ];
+    match frame.filter(|_| live.wall_ms.is_some()) {
+        Some(frame) => Row::Lit(cells, frame),
+        None => Row::Cells(cells),
+    }
 }
 
 /// How an arm's value reads in the form.
@@ -1734,6 +1774,52 @@ mod tests {
         assert!(finished.ends_with("2/8"), "{finished}");
         assert!(row("cost ").contains("$0.16"), "spent so far: {shown}");
         assert!(row("A  sonnet-4-6 ").contains("42k"), "{shown}");
+    }
+
+    #[test]
+    fn runs_show_in_number_order_with_a_rule_between_numbers() {
+        let theme = Theme::default();
+        let mut view = view();
+        view.status = BenchStatus::Running;
+        view.runs[0].name = "b-1".to_string();
+        view.runs[0].arm = 1;
+        let live = |name: &str, arm| BenchLiveRun {
+            name: name.to_string(),
+            arm,
+            wall_ms: Some(1_000),
+            ..BenchLiveRun::default()
+        };
+        view.live = vec![live("b-2", 1), live("a-1", 0), live("a-2", 0)];
+        let shown = text(&detail_lines(&view, None, &theme, 140, None));
+        let runs: Vec<&str> = shown
+            .lines()
+            .skip_while(|l| !l.starts_with("── runs"))
+            .skip(1)
+            .take_while(|l| !l.starts_with("note:"))
+            .collect();
+        let named: Vec<&str> = runs
+            .iter()
+            .filter_map(|l| {
+                ["a-1", "b-1", "a-2", "b-2"]
+                    .into_iter()
+                    .find(|name| l.contains(&format!(" {name} ")))
+            })
+            .collect();
+        assert_eq!(named, ["a-1", "b-1", "a-2", "b-2"], "{shown}");
+        let at = |name: &str| {
+            runs.iter()
+                .position(|l| l.contains(&format!(" {name} ")))
+                .unwrap()
+        };
+        let between = |from: &str, to: &str| {
+            runs[at(from) + 1..at(to)]
+                .iter()
+                .filter(|l| l.trim().chars().all(|c| c == '─') && !l.trim().is_empty())
+                .count()
+        };
+        assert_eq!(between("a-1", "b-1"), 0, "{shown}");
+        assert_eq!(between("b-1", "a-2"), 1, "{shown}");
+        assert_eq!(between("a-2", "b-2"), 0, "{shown}");
     }
 
     #[test]

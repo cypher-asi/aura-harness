@@ -295,13 +295,54 @@ impl Traces {
         )
     }
 
-    /// The log of `agent`'s open run, else of its latest stored one, with
-    /// the runs of every agent below it, written to the run's `log.json`.
-    /// Returns the log and where it was written.
-    pub(crate) fn run_log(&self, agent: AgentId) -> Result<(RunLog, PathBuf), String> {
+    /// The log of `agent` (named `name`): its open run, else its latest
+    /// stored one, with the runs of every agent it spawned and those of
+    /// the agents in `also` (a benchmark's runs), written to the run's
+    /// `log.json`. An agent with no run of its own but runs in `also` gets
+    /// a log of those, in `AURA_HOME/logs/<agent>/`. Returns the log and
+    /// where it was written.
+    pub(crate) fn run_log(
+        &self,
+        agent: AgentId,
+        name: &str,
+        also: &[AgentId],
+    ) -> Result<(RunLog, PathBuf), String> {
         let Some(home) = self.home.as_deref() else {
             return Err("Run logs are off: AURA_HOME could not be found".to_string());
         };
+        let own = self.log_of(home, agent)?;
+        let mut others = Vec::new();
+        for &other in also {
+            match self.log_of(home, other) {
+                Ok(Some((log, _))) => others.push(log),
+                Ok(None) => {}
+                Err(e) => {
+                    warn!(agent = %other.to_hex(), error = %e, "Could not read a run for the log")
+                }
+            }
+        }
+        let (mut log, dir) = match own {
+            Some(found) => found,
+            None if !others.is_empty() => {
+                let hex = agent.to_hex();
+                let dir = home.join("logs").join(&hex);
+                (run_log::group(&hex, name, &dir, Vec::new()), dir)
+            }
+            None if aura_config::trace().level == aura_config::TraceLevel::Off => {
+                return Err("Run logs are off: AURA_TRACE is off".to_string());
+            }
+            None => return Err("This agent has no run log yet; send it a prompt".to_string()),
+        };
+        run_log::adopt(&mut log, others);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = run_log::write(&dir, &log).map_err(|e| e.to_string())?;
+        Ok((log, path))
+    }
+
+    /// The log of `agent`'s open run, else of its latest stored one, with
+    /// the runs it spawned, and the bundle it is in. `None` when it has
+    /// no run.
+    fn log_of(&self, home: &Path, agent: AgentId) -> Result<Option<(RunLog, PathBuf)>, String> {
         let trace = match self.recorder(agent) {
             Some(rec) => {
                 rec.flush();
@@ -309,10 +350,7 @@ impl Traces {
             }
             None => match self.latest(agent) {
                 Some(trace) => trace,
-                None if aura_config::trace().level == aura_config::TraceLevel::Off => {
-                    return Err("Run logs are off: AURA_TRACE is off".to_string());
-                }
-                None => return Err("This agent has no run log yet; send it a prompt".to_string()),
+                None => return Ok(None),
             },
         };
         let dir = self.dir_of(home, &trace.meta.run_id);
@@ -320,10 +358,7 @@ impl Traces {
             let trace = self.load(run_id).ok()?;
             Some((trace, self.dir_of(home, run_id)))
         };
-        let log = run_log::build(Some(home), &trace, &dir, &load);
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let path = run_log::write(&dir, &log).map_err(|e| e.to_string())?;
-        Ok((log, path))
+        Ok(Some((run_log::build(Some(home), &trace, &dir, &load), dir)))
     }
 }
 

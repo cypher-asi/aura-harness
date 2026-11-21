@@ -123,8 +123,6 @@ pub struct AgentIdentity {
     /// land `DevLoopBootstrap` (and the loop self-promotes to
     /// `DevLoopContinuation` after the first iteration).
     pub request_kind: ModelRequestKind,
-    /// Max output tokens per response. Defaults to 16_384 when unset.
-    pub max_tokens: u32,
     /// Maximum context window in tokens, used for compaction.
     pub max_context_tokens: usize,
     /// JWT auth token forwarded onto outbound model requests.
@@ -143,7 +141,6 @@ impl AgentIdentity {
             user_thinking_effort: self.reasoning_effort,
             upstream_provider_family: self.upstream_provider_family,
             system_prompt: self.system_prompt,
-            max_tokens: self.max_tokens,
             max_context_tokens: Some(self.max_context_tokens as u64),
             auth_token: self.auth_token,
             aura_project_id: self.aura_project_id,
@@ -632,7 +629,6 @@ mod tests {
             prompt_cache_key: None,
             prompt_cache_retention: None,
             request_kind: ModelRequestKind::Chat,
-            max_tokens: 1024,
             max_context_tokens: 200_000,
             auth_token: None,
         }

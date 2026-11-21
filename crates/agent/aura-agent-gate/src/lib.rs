@@ -29,6 +29,8 @@
 //! - [`attempt_log`]: the local log of attempts and what later proved
 //!   them right or wrong, and the report that scores Gate and each sign
 //!   against it
+//! - [`coverage`]: what a change adds, to tell whether the tests that
+//!   passed could have checked it
 //!
 //! Gate never calls a model itself: it chooses which model a turn runs
 //! on and builds the classifier's and judge's requests, and the calls go
@@ -38,6 +40,7 @@ pub mod attempt_log;
 pub mod checks;
 pub mod classify;
 pub mod compare;
+pub mod coverage;
 pub mod delegation;
 pub mod evidence;
 pub mod followup;

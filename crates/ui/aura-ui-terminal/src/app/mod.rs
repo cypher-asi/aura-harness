@@ -373,7 +373,8 @@ pub struct App {
     pub(super) selection_scrolls: bool,
     /// When the chat last scrolled for a selection dragged past its edge
     pub(super) selection_scrolled: Option<Instant>,
-    /// Whether the selection should be copied after the next frame
+    /// Whether the selection should be copied after the next frame.
+    /// Dropping the selection drops this, not `copy_pending_text`.
     pub(super) copy_requested: bool,
     /// Which list the agents panel shows
     pub(super) agents_tab: AgentsTab,
@@ -2203,7 +2204,7 @@ impl App {
     /// Whether a copy is waiting for the next frame to be drawn.
     #[must_use]
     pub const fn copy_pending(&self) -> bool {
-        self.copy_requested
+        self.copy_requested || self.copy_pending_text.is_some()
     }
 
     /// Ask for the current selection to be copied after the next frame.
@@ -2213,15 +2214,17 @@ impl App {
         self.copy_requested
     }
 
-    /// The selected text in `buffer` (the frame just drawn), once per
-    /// copy request.
+    /// The text to copy once per copy request: text asked for outright,
+    /// else the selected text in `buffer` (the frame just drawn).
     pub fn take_copy_text(&mut self, buffer: &Buffer) -> Option<String> {
-        if !std::mem::take(&mut self.copy_requested) {
-            return None;
-        }
+        let selection = std::mem::take(&mut self.copy_requested);
         if let Some(text) = self.copy_pending_text.take() {
             return Some(text);
         }
+        if !selection {
+            return None;
+        }
+        self.copy_label = None;
         let text = self.selection.as_ref()?.text(buffer);
         (!text.is_empty()).then_some(text)
     }
@@ -2230,6 +2233,7 @@ impl App {
     ///
     pub fn notify_copied(&mut self, chars: usize, result: &std::io::Result<()>) {
         let what = self.copy_label.take();
+        self.log.copy_finished(result.is_ok());
         self.notification = Some(match result {
             Ok(()) => (
                 match what {

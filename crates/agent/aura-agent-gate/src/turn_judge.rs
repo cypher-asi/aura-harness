@@ -39,9 +39,6 @@ const MAX_TASK: usize = 8_000;
 /// end of a test run says what failed.
 pub const MAX_FAILURE: usize = 3_000;
 
-/// Room for a few sentences and the verdict line.
-const MAX_REPLY_TOKENS: u32 = 512;
-
 /// System prompt of every request to the judge of failed turns; tells
 /// them apart from the agent's own calls.
 pub const SYSTEM_PROMPT: &str = "\
@@ -92,15 +89,6 @@ concretely enough to help whoever takes the work over. Then end with one line th
 /// Longest diff shown to the reviewer of work about to stand, in
 /// characters: it has to see the whole change to say what is missing.
 pub const MAX_REVIEW_DIFF: usize = 60_000;
-
-/// Room for the reviewer's findings and the verdict line. On real
-/// multi-file changes 1,500 tokens cut two replies in three off before
-/// the verdict.
-const MAX_REVIEW_TOKENS: u32 = 4_000;
-
-/// Room for the reviewer's reasoning, findings and verdict when it
-/// thinks first.
-const MAX_THINKING_REVIEW_TOKENS: u32 = 12_000;
 
 /// System prompt of every review of work about to stand (see
 /// [`crate::followup`]).
@@ -218,7 +206,6 @@ pub fn request(
     ModelRequest::builder(model, SYSTEM_PROMPT)
         .message(Message::user(prompt(failed)))
         .tool_choice(ToolChoice::None)
-        .max_tokens(MAX_REPLY_TOKENS)
         .thinking_effort(Some(ThinkingEffort::Off))
         .auth_token(auth_token)
         .request_kind(ModelRequestKind::Auxiliary)
@@ -311,7 +298,6 @@ pub fn unverified_request(
     ModelRequest::builder(model, UNVERIFIED_SYSTEM_PROMPT)
         .message(Message::user(unverified_prompt(unverified)))
         .tool_choice(ToolChoice::None)
-        .max_tokens(MAX_REPLY_TOKENS)
         .thinking_effort(Some(ThinkingEffort::Off))
         .auth_token(auth_token)
         .request_kind(ModelRequestKind::Auxiliary)
@@ -423,14 +409,13 @@ pub fn review_request(
     variant: ReviewVariant,
     auth_token: Option<String>,
 ) -> Result<ModelRequest, ReasonerError> {
-    let (effort, max_tokens) = match variant {
-        ReviewVariant::Plain => (ThinkingEffort::Off, MAX_REVIEW_TOKENS),
-        ReviewVariant::Thinking => (ThinkingEffort::High, MAX_THINKING_REVIEW_TOKENS),
+    let effort = match variant {
+        ReviewVariant::Plain => ThinkingEffort::Off,
+        ReviewVariant::Thinking => ThinkingEffort::High,
     };
     ModelRequest::builder(model, REVIEW_SYSTEM_PROMPT)
         .message(Message::user(review_prompt(standing)))
         .tool_choice(ToolChoice::None)
-        .max_tokens(max_tokens)
         .thinking_effort(Some(effort))
         .auth_token(auth_token)
         .request_kind(ModelRequestKind::Auxiliary)

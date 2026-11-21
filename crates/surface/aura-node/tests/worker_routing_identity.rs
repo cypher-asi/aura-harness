@@ -125,7 +125,6 @@ fn opus_4_7_identity() -> AgentIdentity {
         prompt_cache_key: None,
         prompt_cache_retention: None,
         request_kind: ModelRequestKind::Chat,
-        max_tokens: 1024,
         max_context_tokens: 200_000,
         auth_token: None,
     }

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::checks::{checks_placed, command_line, exit_status_masked};
-use crate::followup::{gave_up, says_unverified, NUDGE_PROMPT};
+use crate::followup::{gave_up, is_nudge, says_unverified};
 use crate::router::verifiable;
 
 /// Checks kept with their output, latest last.
@@ -129,7 +129,7 @@ impl Evidence {
         for message in messages {
             match message.role {
                 Role::Assistant => calls += 1,
-                Role::User if message.text_content().contains(NUDGE_PROMPT) => nudges += 1,
+                Role::User if is_nudge(&message.text_content()) => nudges += 1,
                 Role::User => {}
             }
             for block in &message.content {
@@ -252,7 +252,8 @@ fn same_file(a: &str, b: &str) -> bool {
 }
 
 /// Whether `path` looks like a test or its data.
-fn is_test_path(path: &str) -> bool {
+#[must_use]
+pub fn is_test_path(path: &str) -> bool {
     let path = path.to_lowercase();
     path.contains("test") || path.contains("spec")
 }

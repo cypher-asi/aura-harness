@@ -6,13 +6,10 @@ use aura_core_types::{AgentToolPermissions, UserToolDefaults};
 
 /// Per-spawn budget passed through to the agent loop / agent host.
 ///
-/// Phase 6a treats the budget as a flat triple of caps; the wire
-/// shape and richer surface (per-tool token caps, hierarchical
-/// budgets) land in Phase 7+.
+/// Phase 6a treats the budget as a flat pair of caps; the wire
+/// shape and richer surface (hierarchical budgets) land in Phase 7+.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubagentBudget {
-    /// Hard cap on total tokens the child may consume.
-    pub max_tokens: u32,
     /// Hard cap on agent-loop iterations the child may run.
     pub max_iterations: u32,
     /// Wall-clock timeout in milliseconds.
@@ -21,11 +18,10 @@ pub struct SubagentBudget {
 
 impl SubagentBudget {
     /// Default budget used when the spawn omits an explicit override:
-    /// 64K tokens, 50 iterations, 5-minute timeout.
+    /// 50 iterations, 5-minute timeout.
     #[must_use]
     pub fn default_for_phase_6a() -> Self {
         Self {
-            max_tokens: 64_000,
             max_iterations: 50,
             timeout_ms: 300_000,
         }
@@ -47,8 +43,6 @@ pub struct SubagentOverrides {
     pub model_id: Option<String>,
     /// Provider-neutral effort override; absent inherits parent runtime identity.
     pub reasoning_effort: Option<String>,
-    /// Explicit per-response allowance, distinct from the total child quota.
-    pub response_max_tokens: Option<u32>,
     /// Override the child's kind tag (a free-form role label —
     /// `"task"`, `"reviewer"`, `"explorer"`, etc.).
     pub kind: Option<String>,

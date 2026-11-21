@@ -11,10 +11,6 @@ export type ModelSelection = {
  */
 id: string | null, 
 /**
- * Maximum tokens per model response.
- */
-max_tokens: number | null, 
-/**
  * Maximum agentic steps per turn.
  */
 max_turns: number | null, 

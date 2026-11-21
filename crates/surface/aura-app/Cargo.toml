@@ -51,6 +51,7 @@ toml = { workspace = true }
 reqwest = { workspace = true }
 flate2 = { workspace = true }
 tar = { workspace = true }
+walkdir = { workspace = true }
 
 [build-dependencies]
 walkdir = { workspace = true }

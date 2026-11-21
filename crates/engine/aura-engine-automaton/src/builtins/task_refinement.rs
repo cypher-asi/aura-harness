@@ -106,7 +106,6 @@ pub(crate) async fn refine_task_description(
         model,
         system_prompt: REFINEMENT_SYSTEM_PROMPT,
         user_body: build_refinement_user_body(spec, task),
-        max_tokens: aura_config::agent().automaton.refinement_max_tokens,
         task_scope: Some(task.id.clone()),
     };
     let response = match run_auxiliary_model_call(provider, call).await {
@@ -182,8 +181,8 @@ pub(crate) async fn refine_task_description(
 /// shape used by `aura_engine_automaton::builtins::spec_gen` so the
 /// auxiliary-call template in
 /// [`super::common::run_auxiliary_model_call`] stays the single seam
-/// where the `ModelRequest::builder(...)` knobs (`max_tokens`,
-/// `tool_choice`, etc.) are picked.
+/// where the `ModelRequest::builder(...)` knobs (`tool_choice`,
+/// etc.) are picked.
 fn build_refinement_user_body(spec: &SpecDescriptor, task: &TaskDescriptor) -> String {
     format!(
         "# Spec: {spec_title}\n\n{spec_content}\n\n\

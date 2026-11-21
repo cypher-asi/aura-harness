@@ -27,7 +27,7 @@ use aura_agent_gate::attempt_log::{
     self, Attempt, AttemptLog, CopyAt, Kind, Line, Review, Terms, Truth, TruthSource,
 };
 use aura_agent_gate::evidence::Evidence;
-use aura_agent_gate::followup::{NUDGE_PROMPT, REPAIR_OPENING};
+use aura_agent_gate::followup::{is_nudge, REPAIR_OPENING};
 use aura_core_types::{
     AgentId, ArmSpec, CompareCopy, ComparePayload, CompareRun, Hash, OutcomePayload, RecordEntry,
     RouteLevel,
@@ -462,7 +462,7 @@ fn attempts_of(
             cursor = at + 1;
             // Gate's own messages to the model carry on the attempt they
             // are sent in.
-            if prompt.text.contains(NUDGE_PROMPT) || prompt.text.contains(REPAIR_OPENING) {
+            if is_nudge(&prompt.text) || prompt.text.contains(REPAIR_OPENING) {
                 continue;
             }
             // A prompt recorded for a move to a stronger model carries no

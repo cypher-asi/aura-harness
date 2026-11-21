@@ -177,7 +177,6 @@ impl SpecGenAutomaton {
                 model: &model,
                 system_prompt: SPEC_GENERATION_SYSTEM_PROMPT,
                 user_body: requirements.to_string(),
-                max_tokens: aura_config::agent().automaton.spec_gen_max_tokens,
                 task_scope: None,
             },
         )

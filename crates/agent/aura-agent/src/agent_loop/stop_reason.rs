@@ -22,7 +22,6 @@
 //! ladder against the active transport rather than resurrect the
 //! buffered helper.
 
-use aura_config::CHARS_PER_TOKEN;
 use aura_context_compaction as compaction;
 use aura_model::{
     ContentBlock, Message, ModelProvider, ModelRequest, ModelRequestKind, ThinkingEffort,
@@ -143,11 +142,6 @@ impl AgentLoop {
                 &aura_context_prompts::auxiliary::compaction::compact_summary_focus(focus),
             );
         }
-        let max_tokens = (input.max_summary_chars / CHARS_PER_TOKEN)
-            .clamp(256, 4_096)
-            .try_into()
-            .unwrap_or(4_096);
-
         ModelRequest::builder(
             &self.config.model,
             aura_context_prompts::auxiliary::compaction::COMPACTION_SUMMARY_SYSTEM_PROMPT,
@@ -155,12 +149,11 @@ impl AgentLoop {
         .messages(vec![Message::user(prompt)])
         .tools(Vec::new())
         .tool_choice(ToolChoice::None)
-        .max_tokens(max_tokens)
         // Force extended thinking *off* on the compaction-summary
         // call. The earlier `Medium` pin (added so the console row
         // didn't render `thinking off` for parity with the dev-loop
-        // policy) interacts badly with the tight `max_tokens` clamp
-        // above (256..=4_096): on Claude 4.x with `adaptive` thinking,
+        // policy) interacted badly with the tight `max_tokens` clamp
+        // the call then had (256..=4_096): on Claude 4.x with `adaptive` thinking,
         // the model consumes the entire budget on a thinking block
         // and returns an empty text body. `apply_summary_compaction`
         // then hits its empty-text early-return, the messages are

@@ -3,9 +3,11 @@
 //! Agents work in parallel, so the chat on screen is only one of several
 //! that are changing. The chat of the active agent lives in the `App`
 //! fields the rest of the UI reads; the chats of the other agents are kept
-//! as [`AgentView`]s and swapped in when their agent becomes active.
+//! as [`AgentView`]s and swapped in when their agent becomes active. Each
+//! view also keeps the chat panel's tab its agent was left on, so the
+//! agent comes back on it; an agent never shown opens on CHAT.
 
-use super::{hud::Hud, App, AppState, NotificationType, PendingApproval};
+use super::{hud::Hud, App, AppState, ChatTab, NotificationType, PendingApproval};
 use crate::{
     components::Message,
     events::UiCommand,
@@ -26,6 +28,8 @@ pub(crate) struct AgentView {
     chat_lines: ChatLineCache,
     pending_approvals: VecDeque<PendingApproval>,
     hud: Hud,
+    /// The chat panel's tab the agent was left on, shown again with it
+    chat_tab: ChatTab,
     /// Whether the agent has a turn in flight
     busy: bool,
 }
@@ -42,6 +46,7 @@ impl Default for AgentView {
             chat_lines: ChatLineCache::default(),
             pending_approvals: VecDeque::new(),
             hud: Hud::default(),
+            chat_tab: ChatTab::Chat,
             busy: false,
         }
     }
@@ -84,16 +89,20 @@ impl App {
         }
     }
 
-    /// Show the chat of `agent_id`, keeping the one on screen for when its
-    /// agent is shown again.
-    pub(super) fn show_agent_chat(&mut self, agent_id: &str) {
+    /// Show the chat of `agent_id`, keeping the one on screen, and the tab
+    /// the chat panel is on, for when its agent is shown again. Returns the
+    /// tab the agent coming on screen was left on, CHAT for one never
+    /// shown, or `None` when no chat was swapped: the agent is already on
+    /// screen, or none was before it.
+    pub(super) fn show_agent_chat(&mut self, agent_id: &str) -> Option<ChatTab> {
         let previous = mem::replace(&mut self.active_agent_id, agent_id.to_string());
         if previous == agent_id || previous.is_empty() {
-            return;
+            return None;
         }
         self.leave_queue_panel();
         let mut view = self.views.remove(agent_id).unwrap_or_default();
         let busy = view.busy;
+        let tab = mem::replace(&mut view.chat_tab, self.chat_tab());
         self.swap_chat(&mut view);
         view.busy = is_busy(self.state);
         self.views.insert(previous, view);
@@ -102,6 +111,7 @@ impl App {
         }
         self.close_detail();
         self.clear_selection();
+        Some(tab)
     }
 
     /// State of the chat swapped in, whose agent is `busy` or not. A turn

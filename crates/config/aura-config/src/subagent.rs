@@ -21,20 +21,18 @@
 //! | --- | --- | --- | --- |
 //! | `AURA_SUBAGENT_MAX_DEPTH` | u32 | `8` | [`SubagentConfig::max_depth`] |
 //! | `AURA_SUBAGENT_MAX_RUNNING` | usize | `32` | [`SubagentConfig::max_running`] |
-//! | `AURA_SUBAGENT_DEFAULT_MAX_TOKENS` | u32 | `64_000` | [`SubagentConfig::default_max_tokens`] |
 //! | `AURA_SUBAGENT_DEFAULT_MAX_ITERATIONS` | u32 | `50` | [`SubagentConfig::default_max_iterations`] |
 //! | `AURA_SUBAGENT_DEFAULT_TIMEOUT_MS` | u64 | `300_000` | [`SubagentConfig::default_timeout_ms`] |
 
 use serde::{Deserialize, Serialize};
 
 use crate::env::{
-    lookup_numeric, AURA_SUBAGENT_DEFAULT_MAX_ITERATIONS, AURA_SUBAGENT_DEFAULT_MAX_TOKENS,
-    AURA_SUBAGENT_DEFAULT_TIMEOUT_MS, AURA_SUBAGENT_MAX_DEPTH, AURA_SUBAGENT_MAX_RUNNING,
+    lookup_numeric, AURA_SUBAGENT_DEFAULT_MAX_ITERATIONS, AURA_SUBAGENT_DEFAULT_TIMEOUT_MS,
+    AURA_SUBAGENT_MAX_DEPTH, AURA_SUBAGENT_MAX_RUNNING,
 };
 
 const DEFAULT_MAX_DEPTH: u32 = 8;
 const DEFAULT_MAX_RUNNING: usize = 32;
-const DEFAULT_MAX_TOKENS: u32 = 64_000;
 const DEFAULT_MAX_ITERATIONS: u32 = 50;
 const DEFAULT_TIMEOUT_MS: u64 = 300_000;
 
@@ -51,8 +49,6 @@ pub struct SubagentConfig {
     /// Most spawned agents that may run a turn at once on one host.
     /// Spawns past this are rejected; messages to existing agents queue.
     pub max_running: usize,
-    /// Default per-subagent token budget.
-    pub default_max_tokens: u32,
     /// Default per-subagent iteration budget.
     pub default_max_iterations: u32,
     /// Default per-subagent wall-clock budget (ms).
@@ -66,7 +62,6 @@ impl SubagentConfig {
         Self {
             max_depth: DEFAULT_MAX_DEPTH,
             max_running: DEFAULT_MAX_RUNNING,
-            default_max_tokens: DEFAULT_MAX_TOKENS,
             default_max_iterations: DEFAULT_MAX_ITERATIONS,
             default_timeout_ms: DEFAULT_TIMEOUT_MS,
         }
@@ -85,9 +80,6 @@ impl SubagentConfig {
         }
         if let Some(v) = lookup_numeric::<usize>(AURA_SUBAGENT_MAX_RUNNING)? {
             cfg.max_running = v;
-        }
-        if let Some(v) = lookup_numeric::<u32>(AURA_SUBAGENT_DEFAULT_MAX_TOKENS)? {
-            cfg.default_max_tokens = v;
         }
         if let Some(v) = lookup_numeric::<u32>(AURA_SUBAGENT_DEFAULT_MAX_ITERATIONS)? {
             cfg.default_max_iterations = v;
@@ -113,7 +105,6 @@ mod tests {
     fn clear_subagent_env() {
         std::env::remove_var(AURA_SUBAGENT_MAX_DEPTH);
         std::env::remove_var(AURA_SUBAGENT_MAX_RUNNING);
-        std::env::remove_var(AURA_SUBAGENT_DEFAULT_MAX_TOKENS);
         std::env::remove_var(AURA_SUBAGENT_DEFAULT_MAX_ITERATIONS);
         std::env::remove_var(AURA_SUBAGENT_DEFAULT_TIMEOUT_MS);
     }
@@ -123,7 +114,6 @@ mod tests {
         let cfg = SubagentConfig::defaults();
         assert_eq!(cfg.max_depth, DEFAULT_MAX_DEPTH);
         assert_eq!(cfg.max_running, DEFAULT_MAX_RUNNING);
-        assert_eq!(cfg.default_max_tokens, DEFAULT_MAX_TOKENS);
         assert_eq!(cfg.default_max_iterations, DEFAULT_MAX_ITERATIONS);
         assert_eq!(cfg.default_timeout_ms, DEFAULT_TIMEOUT_MS);
     }
@@ -148,13 +138,11 @@ mod tests {
         clear_subagent_env();
         std::env::set_var(AURA_SUBAGENT_MAX_DEPTH, "3");
         std::env::set_var(AURA_SUBAGENT_MAX_RUNNING, "4");
-        std::env::set_var(AURA_SUBAGENT_DEFAULT_MAX_TOKENS, "8000");
         std::env::set_var(AURA_SUBAGENT_DEFAULT_MAX_ITERATIONS, "12");
         std::env::set_var(AURA_SUBAGENT_DEFAULT_TIMEOUT_MS, "5000");
         let cfg = SubagentConfig::from_env().expect("overrides must parse");
         assert_eq!(cfg.max_depth, 3);
         assert_eq!(cfg.max_running, 4);
-        assert_eq!(cfg.default_max_tokens, 8000);
         assert_eq!(cfg.default_max_iterations, 12);
         assert_eq!(cfg.default_timeout_ms, 5000);
         clear_subagent_env();

@@ -32,9 +32,9 @@ use super::agents::AgentSession;
 use super::bench_source::{self, StartFile};
 use super::compare_view::{duration, money, render};
 use super::gate_followup::{
-    check_review, check_signal, harness_check, joined, judge_unchecked, nudge_prompt,
-    repair_message, repair_notice, sign_repair_message, sign_repair_notice, At, Before, FollowUp,
-    Reviewing, Unchecked,
+    check_review, check_signal, harness_check, joined, judge_unchecked, nudge_message,
+    nudge_notice, repair_message, repair_notice, sign_repair_message, sign_repair_notice, At,
+    Before, FollowUp, Reviewing, Unchecked,
 };
 use super::gate_log::RunOf;
 use super::gate_record;
@@ -69,7 +69,7 @@ use aura_core_types::{
 };
 use aura_exec_tools::plan_tools::{is_plan_path, todo_items, PlanFile};
 use aura_model::Message;
-use aura_ui_terminal::events::{BenchLiveRun, BenchTaskSetup, ProcessStatus};
+use aura_ui_terminal::events::{run_order, BenchLiveRun, BenchTaskSetup, ProcessStatus};
 use aura_ui_terminal::{ApprovalLevel, PermissionMode, UiCommand};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -408,6 +408,8 @@ async fn show_live(ctx: &Context, payload: &ComparePayload) {
             }
         })
         .collect();
+    view.live
+        .sort_by_key(|live| run_order(&live.name, live.arm));
     let _ = ctx
         .commands
         .send(UiCommand::BenchUpsert(Box::new(view)))
@@ -1396,13 +1398,10 @@ async fn run_prompt(
                 };
                 match follow.1.next(partial, at).await {
                     Step::Stop => break,
-                    Step::Nudge => {
+                    Step::Nudge(uncovered) => {
                         carry_on = Some((
-                            nudge_prompt(),
-                            format!(
-                                "gate: {} changed files without running a test or build; asking it to check its change",
-                                aura_model::model_catalog::route_label(&model)
-                            ),
+                            nudge_message(&uncovered),
+                            nudge_notice(&model, &uncovered),
                             true,
                         ));
                         break;

@@ -7,6 +7,87 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Each agent keeps its chat panel tab
+
+##### Changed
+
+- The chat panel remembers its tab for each agent. Switching to an
+  agent shows the tab it was left on (CHAT, TERMINAL, GRAPH, TIME,
+  BENCH or LOG), and an agent shown for the first time opens on CHAT;
+  the tab used to stay as it was for whichever agent came next. GRAPH,
+  TIME, BENCH and LOG load the agent's own flow, benchmarks or log,
+  and TIME keeps its selection. Opening another agent's log (`L` in a
+  benchmark) still shows it on LOG, and a benchmark's run picked in
+  the agents list while BENCH is open opens on its chat the first
+  time, then on the tab it was left on.
+- With text typed in the input line, an agent's tab comes back only if
+  Enter still does the same with the text: under a typed message an
+  agent left on TERMINAL shows CHAT, and under a typed command the
+  terminal stays.
+
+### Replies are as long as the model's API allows
+
+##### Changed
+
+- Every model request now allows the reply the model's API allows:
+  128k tokens for Claude 4.6 and later and for GPT-5, 64k for Claude 4.5,
+  and so on. Before, agent turns stopped at 16k tokens, subagents at 64k,
+  and the gate's judges, the classifier, titles, memory and the
+  automaton's spec and refinement calls at caps of their own, from 24
+  tokens for a title to 32k for a spec. Models
+  whose API only bounds the reply by the context window get 128k, and
+  models the harness doesn't know get 32k. Local models keep 4k, since
+  their reply shares a 32k window with the conversation. The
+  `max_tokens` field of a runtime request's model selection, the
+  subagent budget's `max_tokens` and `AURA_SUBAGENT_DEFAULT_MAX_TOKENS`
+  are gone; older clients that still send them are ignored.
+
+##### Fixed
+
+- A reply that reached the output-token limit before it made a tool call
+  was retried with the same reasoning effort, so it was cut off the same
+  way again. Opus 5.5, which reasons at max, spent three 16k-token
+  replies in a row planning one new module and ended the turn without
+  writing it. Such a retry now reasons one step lower for the rest of the
+  run and is told nothing it planned was carried out and to act now,
+  writing a large file in parts. The two retries allowed now count
+  cut-offs in a row, not over the whole run.
+
+### BENCH lists runs in number order
+
+##### Changed
+
+- The BENCH tab listed a benchmark's runs in the order they finished,
+  so `b-2` could come before `a-1`. Runs, finished and still running,
+  now show in number order, arm by arm within a number, with a line
+  between one number and the next.
+
+### Passing tests that never ran the new code don't vouch for it
+
+##### Fixed
+
+- Gate took a routed turn's passing tests as proof of its work even
+  when none of them called what the turn added: an attempt that added
+  `prepare_multipart` and ran the module's existing tests stood as
+  `checks_passed`, and its bug surfaced only in the task's hidden test.
+  Now, when the change adds public functions, classes or types and no
+  test file in the workspace names any of them, the turn counts as
+  unchecked. Its model is nudged to test those names, with expected
+  values taken from the request, then the harness check and the judge
+  follow as for work with no check. A change that adds or edits a
+  test is left alone.
+
+### BENCH shows benchmarks that stopped running as stopped
+
+##### Fixed
+
+- A benchmark whose run ended without recording how (Aura quit, or its
+  task failed) stayed `running` in the BENCH tab and `/compare` for
+  good, and diff, apply and dismiss refused it as still running. A
+  record that says running while nothing runs it now reads as stopped,
+  with a note saying why, and a task that fails shows as stopped at
+  once.
+
 ### Gate classifies long task prompts
 
 ##### Fixed
@@ -71,6 +152,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `bench` with their arm, example task and check outcome, so each has a
   `log.json`. `L` in a benchmark opens the picked run's log, or the
   first run under way, live while it works.
+- The log of the agent that asked for a benchmark holds the
+  benchmark's runs after its own turns (the one under way, else the
+  newest), so its LOG tab shows them live instead of saying it has no
+  run log. An agent with no run of its own gets a log of just those
+  runs, written to `AURA_HOME/logs/<agent>/log.json`.
+- Step rows of the LOG tab read at a glance: a model call shows its tool
+  calls with their key argument (`read_file src/x.rs`) or its reply's
+  first line, each tool result sits under its call (`↳`) with a short
+  summary (`12 entries`, `exit 0 · 3 lines`, `no matches`) instead of
+  raw output, tokens, cost and time line up in columns, and only
+  failed, flagged or running steps are marked. A title too long for the
+  header goes on over a second line, and a turn no longer repeats the
+  prompt the run is titled by. `⧉ Copy log` and `c`, `y` and `p` copy
+  in the desktop app and the terminal, and the button flashes
+  `✓ Copied`; clicking it used to copy nothing.
 - Every run bundle has a `log.json` (schema `aura.run_log/v1`),
   rewritten after each turn: one redacted JSON document of the run and
   its subagents, meant to be pasted to a model reviewing where the run

@@ -52,7 +52,7 @@ pub struct RuntimeRequest {
     /// system prompt. See [`AgentIdentity`].
     pub agent_identity: AgentIdentity,
 
-    /// What model to drive the agent with: id, max_tokens, max_turns,
+    /// What model to drive the agent with: id, max_turns,
     /// temperature, provider_overrides.
     pub model: ModelSelection,
 
@@ -341,9 +341,6 @@ pub struct ModelSelection {
     /// Model identifier (e.g. `"claude-opus-4-7"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-    /// Maximum tokens per model response.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<u32>,
     /// Maximum agentic steps per turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<u32>,

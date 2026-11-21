@@ -1,10 +1,39 @@
 {
   "id": "01a1ff9ee3e50001",
   "title": "did this finish?",
-  "state": "running",
+  "state": "cancelled",
   "agent_id": "e3dcd718030418c537859089977dc953f3a0b809e21c1e09b40c20058b55f898",
   "agent_name": "Agent 596",
-  "items": [],
-  "updated_ms": 1795290015576,
+  "items": [
+    {
+      "content": "agent_registry.rs: cache agent ids, O(N) tree/archived_tree/subtree/project counts, set_active no-op when unchanged, equivalence tests vs old algorithms",
+      "state": "pending",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "record_loader.rs + subagents.rs + processes.rs: one-pass list rows, last-activity cache keyed by head seq, store reads outside the registry lock, cheap name_agents",
+      "state": "pending",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "event_loop agents.rs + trace.rs: send agent list first on activation/archive, skip trace history for record-less agents, bundle index; update sequence tests",
+      "state": "pending",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "aura-store-db: hot read-path #[instrument] spans at debug level (no per-read span formatting at the default info filter)",
+      "state": "pending"
+    },
+    {
+      "content": "Replace the data-dependent probe with a synthetic #[ignore = \"benchmark\"] test; measure before/after",
+      "state": "pending"
+    },
+    {
+      "content": "Review, fmt/clippy/tests for aura-app, aura-store-db, aura-desktop, aura-ui-terminal; report",
+      "state": "pending"
+    }
+  ],
+  "summary": "Next I'll check the call sites and invariants the optimizations depend on: whether `zns_id` is ever changed after creation, who calls the summary builders, and how the store reads are traced.",
+  "updated_ms": 1795290711097,
   "created_ms": 1795289965541
 }

@@ -5,7 +5,7 @@ use super::*;
 use aura_core_types::{
     ArmSpec, BenchSource, CompareArm, ComparePayload, CompareStatus, RefVerdict,
 };
-use aura_ui_terminal::events::{BenchRequest, BenchSpec, BenchWork};
+use aura_ui_terminal::events::{BenchRequest, BenchSpec, BenchStatus, BenchWork};
 
 const SONNET: &str = "aura-claude-sonnet-4-6";
 const OPUS: &str = "aura-claude-opus-4-7";
@@ -164,6 +164,7 @@ async fn both_arms_run_repeatedly_in_separate_copies_and_their_checks_feed_gate(
         }
     }
     let mut workdirs = Vec::new();
+    let mut bench_runs = Vec::new();
     for run in &payload.runs {
         assert_eq!(run.error, None, "{}", run.name);
         let model = match run.arm {
@@ -244,9 +245,13 @@ async fn both_arms_run_repeatedly_in_separate_copies_and_their_checks_feed_gate(
         let (trace, path) = state
             .hub
             .traces
-            .run_log(run.agent_id)
+            .run_log(run.agent_id, &run.name, &[])
             .expect("the run is traced");
-        assert!(path.ends_with("log.json") && path.is_file(), "{}", path.display());
+        assert!(
+            path.ends_with("log.json") && path.is_file(),
+            "{}",
+            path.display()
+        );
         assert_eq!(trace.run.source, "bench", "{}", run.name);
         let arm = match run.arm {
             CompareArm::A => "A · ",
@@ -257,14 +262,67 @@ async fn both_arms_run_repeatedly_in_separate_copies_and_their_checks_feed_gate(
             "{:?}",
             trace.run.arm
         );
-        assert!(trace.run.title.ends_with(&format!("{}: write the answer", run.name)));
+        assert!(trace
+            .run
+            .title
+            .ends_with(&format!("{}: write the answer", run.name)));
         assert_eq!(trace.scorecard.turns, 1, "one prompt, one turn");
         assert_eq!(
             trace.scorecard.outcome,
-            Some(if run.check_passed == Some(true) { 1.0 } else { 0.0 }),
+            Some(if run.check_passed == Some(true) {
+                1.0
+            } else {
+                0.0
+            }),
             "its check is its outcome"
         );
+        bench_runs.push(trace.run.run_id.clone());
     }
+    let (requester, also) = {
+        let registry = subagents::lock(&state.hub.registry);
+        let host = registry.compares().last().unwrap().agent_id();
+        let requester = registry.ancestry(host)[1];
+        assert_eq!(
+            requester, state.active,
+            "the comparison sits under the agent that asked"
+        );
+        let also = crate::event_loop::log_view::benchmark_runs(&registry, requester, None);
+        let names: Vec<&str> = also
+            .iter()
+            .map(|&id| registry.find(id).unwrap().name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["a-1", "b-1", "a-2", "b-2"],
+            "the runs, as they started"
+        );
+        (requester, also)
+    };
+    let (trace, path) = state
+        .hub
+        .traces
+        .run_log(requester, "main", &also)
+        .expect("the requester's log holds its benchmark's runs");
+    assert!(path.is_file(), "{}", path.display());
+    for run in &bench_runs {
+        assert!(trace.find(run).is_some(), "{run} is in the requester's log");
+    }
+    let view = crate::event_loop::log_view::view(&requester.to_hex(), &trace, &path);
+    let root = view.root().unwrap();
+    let listed: Vec<&str> = root
+        .runs
+        .iter()
+        .map(|&i| view.runs[i].run_id.as_str())
+        .collect();
+    assert_eq!(
+        listed, bench_runs,
+        "no turn started them: they follow its turns"
+    );
+    assert!(
+        root.runs.iter().all(|&i| view.runs[i].depth == 1),
+        "{:?}",
+        view.runs
+    );
     workdirs.dedup();
     assert_eq!(workdirs.len(), 4);
     assert!(
@@ -426,6 +484,53 @@ async fn the_budget_stops_new_runs_once_spent() {
         .map(|a| a.name.as_str())
         .collect();
     assert_eq!(runs, ["a-1"], "the runs that did not start are dropped");
+}
+
+#[tokio::test]
+async fn a_comparison_recorded_running_that_nothing_runs_is_stopped() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+    state.sync_turn_base();
+    state.compare = compare::CompareState::new(fixture._dirs[0].path().join("compare"), 1);
+    let mut payload = run_comparison(
+        &mut state,
+        &links,
+        &mut commands,
+        "--budget 0.001 write the answer",
+    )
+    .await;
+
+    // As Aura leaves it when it quits mid-run: the last record says running.
+    let host = subagents::lock(&state.hub.registry).compares()[0].clone();
+    payload.status = CompareStatus::Running;
+    let kernel = compare::kernel_of(&mut state, host.agent_id()).unwrap();
+    let ids = (host.agent_id(), host.name.as_str());
+    compare_run::save(&state.hub, &kernel, state.commands, ids, &payload).await;
+    drain(&mut commands);
+
+    bench(&mut state, &links, BenchRequest::List).await;
+    let listed = drain(&mut commands)
+        .into_iter()
+        .find_map(|(_, c)| match c {
+            UiCommand::BenchList { benches, .. } => Some(benches),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(listed[0].status, BenchStatus::Cancelled);
+    assert!(
+        listed[0]
+            .notes
+            .iter()
+            .any(|n| n.contains("stopped before it ended")),
+        "{:?}",
+        listed[0].notes
+    );
+
+    compare(&mut state, &links, "dismiss").await;
+    assert_eq!(latest(&state).status, CompareStatus::Dismissed);
 }
 
 #[tokio::test]

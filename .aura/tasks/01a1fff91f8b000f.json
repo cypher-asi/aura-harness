@@ -1,0 +1,57 @@
+{
+  "id": "01a1fff91f8b000f",
+  "title": "Harness notice:",
+  "state": "completed",
+  "agent_id": "28f986f8e5f32f4d93e3fb51eef9ae5cf115c2b0004eb6d9d8591ebdf2583234",
+  "agent_name": "Agent 625",
+  "items": [
+    {
+      "content": "Add `chat_tab` to `AgentView`; `show_agent_chat` saves the outgoing tab and returns the incoming one",
+      "state": "completed",
+      "assignee": "implement"
+    },
+    {
+      "content": "Split `show_chat_tab` into `set_chat_tab` + `restore_chat_tab` (no scroll, no requests)",
+      "state": "completed"
+    },
+    {
+      "content": "Restore the tab in `cmd_set_active_agent`; keep LOG override; drop bench-run rule; ask once",
+      "state": "completed"
+    },
+    {
+      "content": "Update `picking_a_run_shows_its_chat_once` and `opening_the_tab_asks_for_the_flow_of_the_agent_on_screen`",
+      "state": "completed",
+      "assignee": "tests"
+    },
+    {
+      "content": "Add per-agent tab tests (restore, single ask, scroll kept, background untouched, log override)",
+      "state": "completed"
+    },
+    {
+      "content": "Update doc comments, `docs/cli.md` and CHANGELOG",
+      "state": "completed",
+      "assignee": "engineer"
+    },
+    {
+      "content": "Run fmt, clippy -D warnings, and tests for aura-ui-terminal and aura-desktop",
+      "state": "completed"
+    },
+    {
+      "content": "Review fixes: quiet TIME restore (`FlowState::restore_mode`), no timeline sync on another agent's flow, typed-text guard on restore, make the folds round-trip test exercise `Kept`, add tests",
+      "state": "completed",
+      "assignee": "implement"
+    },
+    {
+      "content": "Amend CHANGELOG/docs with the typed-text rule (after docs agent reports)",
+      "state": "completed"
+    },
+    {
+      "content": "Final compact review of the whole diff",
+      "state": "completed",
+      "assignee": "reviewer"
+    }
+  ],
+  "summary": "The final check passes: - **Formatting:** rustfmt is clean on every file this change touched. - **Lints:** clippy with warnings denied is clean for `aura-ui-terminal` and `aura-desktop`. I ran it with `--no-deps`, because without it an existing lint in `aura-core-types`, a crate this change doesn't touch, fails the run. - **Tests:** `aura-ui-terminal` 889 passed, 0 failed (up from 880 before this…",
+  "updated_ms": 1795295982947,
+  "created_ms": 1795295879051
+}

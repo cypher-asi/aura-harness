@@ -22,7 +22,6 @@ use tracing::{info, warn};
 const TITLE_MODEL_ENV: &str = "AURA_TITLE_MODEL";
 /// How much of the prompt and of the reply the model sees.
 const MAX_SIDE_CHARS: usize = 2_000;
-const MAX_TITLE_TOKENS: u32 = 24;
 /// Longest title kept, in characters.
 const MAX_TITLE_CHARS: usize = 50;
 /// Longest title made from the prompt when the model gives none.
@@ -77,7 +76,6 @@ pub(super) async fn generate(
         ))])
         .tools(Vec::new())
         .tool_choice(ToolChoice::None)
-        .max_tokens(MAX_TITLE_TOKENS)
         .thinking_effort(Some(ThinkingEffort::Off))
         .auth_token(config.auth_token.clone())
         .aura_project_id(config.aura_project_id.clone())

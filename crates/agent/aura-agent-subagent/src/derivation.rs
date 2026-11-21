@@ -278,7 +278,6 @@ impl SubagentDerivation for DefaultDerivation {
             kernel_mode,
             model_id,
             reasoning_effort: overrides.reasoning_effort,
-            response_max_tokens: overrides.response_max_tokens,
             kind,
             spawn_mode,
             replay_mode,

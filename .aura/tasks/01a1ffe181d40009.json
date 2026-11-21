@@ -1,0 +1,43 @@
+{
+  "id": "01a1ffe181d40009",
+  "title": "Harness notice:",
+  "state": "open",
+  "agent_id": "28f986f8e5f32f4d93e3fb51eef9ae5cf115c2b0004eb6d9d8591ebdf2583234",
+  "agent_name": "Agent 625",
+  "items": [
+    {
+      "content": "Add `chat_tab` to `AgentView`; `show_agent_chat` saves the outgoing tab and returns the incoming one",
+      "state": "completed",
+      "assignee": "implement"
+    },
+    {
+      "content": "Split `show_chat_tab` into `set_chat_tab` + `restore_chat_tab` (no scroll, no requests)",
+      "state": "completed"
+    },
+    {
+      "content": "Restore the tab in `cmd_set_active_agent`; keep LOG override; drop bench-run rule; ask once",
+      "state": "completed"
+    },
+    {
+      "content": "Update `picking_a_run_shows_its_chat_once` and `opening_the_tab_asks_for_the_flow_of_the_agent_on_screen`",
+      "state": "completed",
+      "assignee": "tests"
+    },
+    {
+      "content": "Add per-agent tab tests (restore, single ask, scroll kept, background untouched, log override)",
+      "state": "completed"
+    },
+    {
+      "content": "Update doc comments, `docs/cli.md` and CHANGELOG",
+      "state": "pending",
+      "assignee": "engineer"
+    },
+    {
+      "content": "Run fmt, clippy -D warnings, and tests for aura-ui-terminal and aura-desktop",
+      "state": "pending"
+    }
+  ],
+  "summary": "The tests are done: - **Updated:** `picking_a_run_shows_its_chat_once` is now `a_run_picked_from_bench_opens_on_its_own_tab`. In `opening_the_tab_asks_for_the_flow_of_the_agent_on_screen`, only the part after the flow loads changed. - **Added:** five tests in a new test module at the end of `chat_tabs.rs`, all passing on the first run: - Each of the six tabs comes back for the agent left on it, a…",
+  "updated_ms": 1795294369495,
+  "created_ms": 1795294331348
+}

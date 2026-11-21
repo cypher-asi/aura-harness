@@ -1648,6 +1648,7 @@ impl AgentHub {
                     difficulty: None,
                     review_signs: &[],
                     acting_signs: &[],
+                    uncovered: &[],
                 });
                 let unverified = Unverified {
                     task: &prompt,

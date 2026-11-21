@@ -4592,3 +4592,39 @@ fn unfocused_the_folded_agent_over_the_active_one_is_lit() {
     assert_ne!(bg("tester"), selection);
     assert_ne!(bg("Lead"), selection);
 }
+
+#[test]
+fn clicking_copy_log_copies_the_log_and_says_so() {
+    use crate::events::{LogRunView, LogView, UiCommand};
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let mut app = crate::App::new();
+    app.select_pane_tab(crate::PaneTab::Chat(crate::ChatTab::Log));
+    app.process_command(UiCommand::LogView(Box::new(LogView {
+        path: "/runs/r/log.json".into(),
+        json: "{\"whole\":true}".into(),
+        runs: vec![LogRunView {
+            run_id: "r".into(),
+            title: "fix it".into(),
+            ..LogRunView::default()
+        }],
+        ..LogView::default()
+    })));
+    let buffer = render_buffer(&mut app, 120);
+    let row = row_of(&buffer, "Copy log");
+    let (column, _) = find_cell(&buffer, row, "Copy log").unwrap();
+    mouse_at(&mut app, MouseEventKind::Down(MouseButton::Left), (column, row));
+    mouse_at(&mut app, MouseEventKind::Up(MouseButton::Left), (column, row));
+    assert!(app.copy_pending(), "the click asked for a copy");
+    let buffer = render_buffer(&mut app, 120);
+    assert_eq!(
+        app.take_copy_text(&buffer).as_deref(),
+        Some("{\"whole\":true}")
+    );
+    app.notify_copied(14, &Ok(()));
+    assert!(app
+        .notification()
+        .is_some_and(|(message, _)| message.contains("Copied the log")));
+    let buffer = render_buffer(&mut app, 120);
+    assert!(find_cell(&buffer, row, "✓ Copied").is_some(), "the button says so");
+}

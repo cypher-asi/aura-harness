@@ -6,7 +6,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use aura_agent_trace::run_log::{LogEvent, LogStep, LogTurn};
+mod summary;
+
+use aura_agent_trace::run_log::{LogEvent, LogStep, LogToolCall, LogTurn};
 use aura_agent_trace::RunLog;
 use aura_core_types::trace::HarnessAction;
 use aura_core_types::AgentId;
@@ -17,14 +19,25 @@ use aura_ui_terminal::UiCommand;
 use serde::Serialize;
 
 use super::compare_view::{duration, headline, money, tokens};
+use super::subagents::lock;
 use super::LoopState;
+use crate::agent_registry::{AgentRegistry, RegisteredAgent};
 
 /// A request from the LOG tab shown for `agent_id`'s chat.
 pub(super) async fn handle(state: &LoopState<'_>, agent_id: AgentId, request: LogRequest) {
     let LogRequest::Load = request;
     let traces = Arc::clone(&state.hub.traces);
     let hex = agent_id.to_hex();
-    let built = tokio::task::spawn_blocking(move || traces.run_log(agent_id))
+    let (name, also) = {
+        let registry = lock(&state.hub.registry);
+        let name = registry
+            .find(agent_id)
+            .map(|agent| agent.display_name().to_string())
+            .unwrap_or_default();
+        let also = benchmark_runs(&registry, agent_id, state.compare.running_host());
+        (name, also)
+    };
+    let built = tokio::task::spawn_blocking(move || traces.run_log(agent_id, &name, &also))
         .await
         .unwrap_or_else(|e| Err(e.to_string()));
     let command = match built {
@@ -41,6 +54,51 @@ pub(super) async fn handle(state: &LoopState<'_>, agent_id: AgentId, request: Lo
             command: Box::new(command),
         })
         .await;
+}
+
+/// Most benchmark runs a log takes in, newest kept.
+const MAX_BENCH_RUNS: usize = 64;
+
+/// The agents whose runs the log of `agent` takes in beside the runs it
+/// spawned: those of a benchmark below it, which no call of its run
+/// started. On the agent holding a benchmark, or one of its arms, that
+/// benchmark's (or arm's) runs; on the agent that asked for benchmarks,
+/// those of the one `running`, else of its newest.
+pub(super) fn benchmark_runs(
+    registry: &AgentRegistry,
+    agent: AgentId,
+    running: Option<AgentId>,
+) -> Vec<AgentId> {
+    let Some(found) = registry.find(agent) else {
+        return Vec::new();
+    };
+    let held = if found.is_compare() || found.is_compare_arm() {
+        Some(agent)
+    } else {
+        let below: Vec<AgentId> = registry
+            .compares()
+            .iter()
+            .map(|host| host.agent_id())
+            .filter(|&host| registry.ancestry(host).contains(&agent))
+            .collect();
+        running
+            .filter(|host| below.contains(host))
+            .or_else(|| below.last().copied())
+    };
+    let Some(held) = held else {
+        return Vec::new();
+    };
+    let below = registry.descendants(held);
+    let mut runs: Vec<AgentId> = registry
+        .agents()
+        .iter()
+        .filter(|agent| !agent.is_compare_arm())
+        .map(RegisteredAgent::agent_id)
+        .filter(|id| below.contains(id))
+        .collect();
+    let extra = runs.len().saturating_sub(MAX_BENCH_RUNS);
+    runs.drain(..extra);
+    runs
 }
 
 /// `log`, written to `path`, as the LOG tab of agent `agent` shows it.
@@ -68,14 +126,41 @@ fn push_run(runs: &mut Vec<LogRunView>, log: &RunLog, depth: usize) -> usize {
     for child in &log.subagents {
         below.insert(&child.run.run_id, push_run(runs, child, depth + 1));
     }
-    let turns = log.turns.iter().map(|turn| turn_view(turn, &below)).collect();
+    let mut turns: Vec<LogTurnView> = log
+        .turns
+        .iter()
+        .map(|turn| turn_view(turn, &below))
+        .collect();
+    let in_turns: Vec<&str> = log
+        .turns
+        .iter()
+        .flat_map(|t| t.subagents.iter().map(String::as_str))
+        .collect();
+    let others: Vec<usize> = log
+        .subagents
+        .iter()
+        .filter(|child| !in_turns.contains(&child.run.run_id.as_str()))
+        .filter_map(|child| below.get(child.run.run_id.as_str()).copied())
+        .collect();
     let run = &log.run;
     let title = if run.title.is_empty() {
         format!("run {}", run.run_id)
     } else {
         run.title.clone()
     };
-    let status = if log.turns.iter().any(|t| t.error.is_some()) {
+    for turn in &mut turns {
+        if repeats(&title, &turn.prompt) {
+            turn.prompt.clear();
+        }
+    }
+    let grouped = |status: LogStatus| others.iter().any(|&i| runs[i].status == status);
+    let status = if log.turns.is_empty() && !others.is_empty() {
+        // An agent with no run of its own is as its runs are.
+        [LogStatus::Running, LogStatus::Error, LogStatus::Warn]
+            .into_iter()
+            .find(|&status| grouped(status))
+            .unwrap_or(LogStatus::Ok)
+    } else if log.turns.iter().any(|t| t.error.is_some()) {
         LogStatus::Error
     } else if run.ended_at_ms.is_none() || log.turns.last().is_some_and(|t| t.stop_reason.is_none())
     {
@@ -85,8 +170,16 @@ fn push_run(runs: &mut Vec<LogRunView>, log: &RunLog, depth: usize) -> usize {
     } else {
         LogStatus::Warn
     };
-    let mut detail = vec![short_model(&run.model).to_string()];
-    detail.push(count(log.turns.len(), "turn"));
+    let mut detail: Vec<String> = Some(short_model(&run.model))
+        .filter(|model| !model.is_empty())
+        .map(str::to_string)
+        .into_iter()
+        .collect();
+    if log.turns.is_empty() && !others.is_empty() {
+        detail.push(count(others.len(), "run"));
+    } else {
+        detail.push(count(log.turns.len(), "turn"));
+    }
     if let Some(cost) = log.totals.cost_usd_with_subagents {
         detail.push(money(cost));
     }
@@ -106,6 +199,7 @@ fn push_run(runs: &mut Vec<LogRunView>, log: &RunLog, depth: usize) -> usize {
         files: file_fields(log),
         problems: log.health.problems.clone(),
         turns,
+        runs: others,
         json: pretty(log),
     };
     index
@@ -113,6 +207,14 @@ fn push_run(runs: &mut Vec<LogRunView>, log: &RunLog, depth: usize) -> usize {
 
 fn count(n: usize, what: &str) -> String {
     format!("{n} {what}{}", if n == 1 { "" } else { "s" })
+}
+
+/// Whether `prompt` says what the run's `title`, its prompt's start,
+/// already does.
+fn repeats(title: &str, prompt: &str) -> bool {
+    let title = title.trim_end_matches('…');
+    let prompt = prompt.trim_end_matches('…');
+    !title.is_empty() && (prompt.starts_with(title) || title.starts_with(prompt))
 }
 
 /// `sonnet-5-5` for `claude/claude-sonnet-5-5`.
@@ -143,6 +245,14 @@ fn run_fields(log: &RunLog) -> Vec<LogField> {
     let run = &log.run;
     let totals = &log.totals;
     let card = &log.scorecard;
+    if run.source == "agent" {
+        let mut fields = vec![field("agent", run.agent_id.as_deref().unwrap_or_default())];
+        fields.push(field("runs", totals.subagents.to_string()));
+        if let Some(cost) = totals.cost_usd_with_subagents {
+            fields.push(field("cost", money(cost)));
+        }
+        return fields;
+    }
     let mut fields = vec![field("run", &run.run_id)];
     if let Some(agent) = &run.agent_id {
         fields.push(field("agent", agent));
@@ -240,11 +350,26 @@ fn file_fields(log: &RunLog) -> Vec<LogField> {
     if let Some(blobs) = &files.blobs {
         fields.push(field("blobs", blobs));
     }
+    fields.retain(|(_, path)| !path.is_empty());
     fields
 }
 
 fn turn_view(turn: &LogTurn, below: &HashMap<&str, usize>) -> LogTurnView {
-    let steps: Vec<LogStepView> = turn.steps.iter().map(|s| step_view(s, below)).collect();
+    let calls: HashMap<&str, &LogToolCall> = turn
+        .steps
+        .iter()
+        .filter_map(|step| match &step.event {
+            LogEvent::ModelCall { tool_calls, .. } => Some(tool_calls),
+            _ => None,
+        })
+        .flatten()
+        .map(|call| (call.tool_use_id.as_str(), call))
+        .collect();
+    let steps: Vec<LogStepView> = turn
+        .steps
+        .iter()
+        .map(|s| step_view(s, below, &calls))
+        .collect();
     let named: Vec<usize> = steps.iter().flat_map(|s| s.spawned.clone()).collect();
     let spawned = turn
         .subagents
@@ -252,22 +377,12 @@ fn turn_view(turn: &LogTurn, below: &HashMap<&str, usize>) -> LogTurnView {
         .filter_map(|run| below.get(run.as_str()).copied())
         .filter(|i| !named.contains(i))
         .collect();
-    let mut detail = vec![count(turn.model_calls, "call")];
-    detail.push(format!(
-        "{} tok",
-        tokens(turn.usage.input + turn.usage.output + turn.usage.cache_read)
-    ));
-    if let Some(cost) = turn.cost_usd {
-        detail.push(money(cost));
-    }
-    if let Some(ms) = turn.duration_ms {
-        detail.push(duration(ms));
-    }
-    detail.push(
+    let detail = [
+        count(turn.model_calls, "call"),
         turn.stop_reason
             .clone()
             .unwrap_or_else(|| "running".to_string()),
-    );
+    ];
     let status = if turn.error.is_some() {
         LogStatus::Error
     } else if turn.stop_reason.is_none() {
@@ -284,6 +399,12 @@ fn turn_view(turn: &LogTurn, below: &HashMap<&str, usize>) -> LogTurnView {
             .as_deref()
             .map_or_else(String::new, |p| headline(p, 200)),
         detail: detail.join(" · "),
+        tokens: format!(
+            "{} tok",
+            tokens(turn.usage.input + turn.usage.output + turn.usage.cache_read)
+        ),
+        cost: turn.cost_usd.map(money).unwrap_or_default(),
+        took: turn.duration_ms.map(duration).unwrap_or_default(),
         status,
         steps,
         spawned,
@@ -299,8 +420,33 @@ fn section(title: &str, body: impl Into<String>, code: bool) -> LogSection {
     }
 }
 
+/// What a step's row shows beside its number and columns.
+struct Row {
+    kind: &'static str,
+    label: String,
+    summary: String,
+    status: LogStatus,
+}
+
+impl Row {
+    fn new(kind: &'static str, label: String, summary: String, status: LogStatus) -> Self {
+        Self {
+            kind,
+            label,
+            summary,
+            status,
+        }
+    }
+}
+
+/// `step` laid out, its tool results labelled by the call they answer in
+/// `calls`, by tool use id.
 #[allow(clippy::too_many_lines)]
-fn step_view(step: &LogStep, below: &HashMap<&str, usize>) -> LogStepView {
+fn step_view(
+    step: &LogStep,
+    below: &HashMap<&str, usize>,
+    calls: &HashMap<&str, &LogToolCall>,
+) -> LogStepView {
     let mut fields = vec![
         field("seq", step.seq.to_string()),
         field("time", time(step.at_ms)),
@@ -314,15 +460,11 @@ fn step_view(step: &LogStep, below: &HashMap<&str, usize>) -> LogStepView {
     }
     let mut sections = Vec::new();
     let mut spawned = Vec::new();
-    let (kind, label, detail, status) = match &step.event {
+    let (mut tokens_used, mut cost) = (String::new(), String::new());
+    let row = match &step.event {
         LogEvent::UserPrompt { text } => {
             sections.push(section("Prompt", text, false));
-            (
-                "prompt",
-                headline(text, 160),
-                String::new(),
-                LogStatus::Ok,
-            )
+            Row::new("prompt", headline(text, 160), String::new(), LogStatus::Ok)
         }
         LogEvent::ModelCall {
             model,
@@ -371,25 +513,32 @@ fn step_view(step: &LogStep, below: &HashMap<&str, usize>) -> LogStepView {
                 }
                 sections.push(section(&title, input, true));
             }
-            let label = if tool_calls.is_empty() {
+            let label = if !tool_calls.is_empty() {
+                let calls: Vec<String> = tool_calls
+                    .iter()
+                    .map(|call| summary::call_label(&call.name, &call.input))
+                    .collect();
+                calls.join(" · ")
+            } else if text.trim().is_empty() {
+                "no reply".to_string()
+            } else {
                 headline(text, 160)
-            } else {
-                let names: Vec<&str> = tool_calls.iter().map(|c| c.name.as_str()).collect();
-                format!("→ {}", names.join(", "))
             };
-            let mut detail = vec![format!("{} tok", tokens(usage.input + usage.output + usage.cache_read))];
-            if let Some(cost) = cost_usd {
-                detail.push(money(*cost));
-            }
-            if let Some(ms) = step.duration_ms {
-                detail.push(duration(ms));
-            }
-            let status = if stop_reason == "max_tokens" {
-                LogStatus::Warn
+            tokens_used = format!(
+                "{} tok",
+                tokens(usage.input + usage.output + usage.cache_read)
+            );
+            cost = cost_usd.map(money).unwrap_or_default();
+            if stop_reason == "max_tokens" {
+                Row::new(
+                    "model",
+                    label,
+                    "hit its output cap".to_string(),
+                    LogStatus::Warn,
+                )
             } else {
-                LogStatus::Ok
-            };
-            ("model", label, detail.join(" · "), status)
+                Row::new("model", label, String::new(), LogStatus::Ok)
+            }
         }
         LogEvent::ToolResult {
             tool_use_id,
@@ -408,7 +557,10 @@ fn step_view(step: &LogStep, below: &HashMap<&str, usize>) -> LogStepView {
             for file in files {
                 fields.push(field(
                     "file",
-                    format!("{} {} (+{} -{})", file.kind, file.path, file.added, file.removed),
+                    format!(
+                        "{} {} (+{} -{})",
+                        file.kind, file.path, file.added, file.removed
+                    ),
                 ));
             }
             let title = if *output_complete {
@@ -417,22 +569,27 @@ fn step_view(step: &LogStep, below: &HashMap<&str, usize>) -> LogStepView {
                 "Output (start; AURA_TRACE=full keeps it whole)"
             };
             sections.push(section(title, output, true));
-            let mark = if *is_error { "✗" } else { "✓" };
-            let via = if source == "executor" || source.is_empty() {
-                String::new()
+            let label = calls.get(tool_use_id.as_str()).map_or_else(
+                || tool.clone(),
+                |call| summary::call_label(&call.name, &call.input),
+            );
+            let said = summary::result_summary(&summary::Output {
+                tool,
+                text: output,
+                complete: *output_complete,
+                chars: *content_chars,
+                is_error: *is_error,
+                source,
+                files,
+            });
+            let status = if *is_error {
+                LogStatus::Error
+            } else if source == "blocked" {
+                LogStatus::Warn
             } else {
-                format!(" [{source}]")
+                LogStatus::Ok
             };
-            (
-                "tool",
-                format!("{mark} {tool}{via}  {}", headline(output, 120)),
-                step.duration_ms.map(duration).unwrap_or_default(),
-                if *is_error {
-                    LogStatus::Error
-                } else {
-                    LogStatus::Ok
-                },
-            )
+            Row::new("tool", label, said, status)
         }
         LogEvent::Decision {
             source,
@@ -461,13 +618,15 @@ fn step_view(step: &LogStep, below: &HashMap<&str, usize>) -> LogStepView {
             }
             let status = if matches!(
                 action,
-                HarnessAction::Block { .. } | HarnessAction::Stop { .. } | HarnessAction::Retry { .. }
+                HarnessAction::Block { .. }
+                    | HarnessAction::Stop { .. }
+                    | HarnessAction::Retry { .. }
             ) {
                 LogStatus::Warn
             } else {
                 LogStatus::Ok
             };
-            (
+            Row::new(
                 "decision",
                 format!("{source}/{name} {}", action.label()),
                 String::new(),
@@ -486,22 +645,32 @@ fn step_view(step: &LogStep, below: &HashMap<&str, usize>) -> LogStepView {
             fields.push(field("model calls", iterations.to_string()));
             fields.push(field(
                 "tokens",
-                format!("{} in, {} out", tokens(*input_tokens), tokens(*output_tokens)),
+                format!(
+                    "{} in, {} out",
+                    tokens(*input_tokens),
+                    tokens(*output_tokens)
+                ),
             ));
             fields.push(field("files changed", files_changed.to_string()));
             if let Some(error) = error {
                 sections.push(section("Error", error, true));
             }
-            (
-                "end",
-                format!("turn end ({stop_reason})"),
-                String::new(),
-                if error.is_some() {
-                    LogStatus::Error
-                } else {
-                    LogStatus::Ok
-                },
-            )
+            let label = format!("turn ended: {stop_reason}");
+            match error {
+                Some(error) => Row::new(
+                    "end",
+                    label,
+                    format!("error: {}", headline(error, 72)),
+                    LogStatus::Error,
+                ),
+                None if *files_changed > 0 => Row::new(
+                    "end",
+                    label,
+                    count(*files_changed, "file") + " changed",
+                    LogStatus::Ok,
+                ),
+                None => Row::new("end", label, String::new(), LogStatus::Ok),
+            }
         }
     };
     if !step.record_seqs.is_empty() {
@@ -514,10 +683,14 @@ fn step_view(step: &LogStep, below: &HashMap<&str, usize>) -> LogStepView {
     }
     LogStepView {
         seq: step.seq,
-        kind: kind.to_string(),
-        label,
-        detail,
-        status,
+        kind: row.kind.to_string(),
+        label: row.label,
+        summary: row.summary,
+        parent: step.parent.filter(|_| row.kind == "tool"),
+        tokens: tokens_used,
+        cost,
+        took: step.duration_ms.map(duration).unwrap_or_default(),
+        status: row.status,
         fields,
         sections,
         spawned,
@@ -625,5 +798,72 @@ mod tests {
             .any(|s| s.title == "Thinking" && s.body == "a subagent can count"));
         assert_eq!(root.status, LogStatus::Running, "the turn has not ended");
         assert!(view.json.contains("\"schema\": \"aura.run_log/v1\""));
+    }
+
+    #[test]
+    fn a_tool_result_reads_as_the_call_it_answers_and_what_came_of_it() {
+        let home = tempfile::tempdir().unwrap();
+        let mut meta = RunMeta::new("m", RunSource::Test);
+        meta.title = "list the crates".into();
+        let id = meta.run_id.clone();
+        let input = json!({"path": "crates"});
+        let listing = "dir\t4096\tagent\ndir\t4096\tui";
+        let mut result = step(
+            &id,
+            3,
+            Actor::Environment,
+            StepAction::ToolResult {
+                tool_use_id: "t1".into(),
+                tool: "list_files".into(),
+                is_error: false,
+                source: "executor".into(),
+                content_chars: listing.len(),
+                excerpt: listing.into(),
+                content: None,
+                files: Vec::new(),
+            },
+        );
+        result.parent = Some(2);
+        result.duration_ms = Some(19);
+        let mut call = step(
+            &id,
+            2,
+            Actor::Model,
+            StepAction::Model(ModelAction {
+                tool_calls: vec![ToolCallAction {
+                    tool_use_id: "t1".into(),
+                    name: "list_files".into(),
+                    intent: ToolIntent::classify("list_files", &input),
+                    input,
+                }],
+                stop_reason: "tool_use".into(),
+                ..ModelAction::default()
+            }),
+        );
+        call.duration_ms = Some(6_000);
+        let prompt = StepAction::UserPrompt {
+            text: "list the crates".into(),
+        };
+        let bundle = save(
+            home.path(),
+            &meta,
+            &[step(&id, 1, Actor::User, prompt), call, result],
+        );
+
+        let log = run_log::of_bundle(home.path(), &bundle).unwrap();
+        let view = view("ab", &log, &bundle.path(run_log::LOG_FILE));
+        let turn = &view.root().unwrap().turns[0];
+        assert_eq!(turn.prompt, "", "the run's title says it");
+        let (call, result) = (&turn.steps[1], &turn.steps[2]);
+        assert_eq!(call.label, "list_files crates");
+        assert_eq!((call.took.as_str(), call.parent), ("6s", None));
+        assert!(call.tokens.ends_with(" tok"), "{:?}", call.tokens);
+        assert_eq!(result.label, "list_files crates");
+        assert_eq!(result.summary, "2 entries");
+        assert_eq!((result.took.as_str(), result.parent), ("19ms", Some(2)));
+        assert!(
+            result.sections.iter().any(|s| s.body == listing),
+            "kept whole"
+        );
     }
 }

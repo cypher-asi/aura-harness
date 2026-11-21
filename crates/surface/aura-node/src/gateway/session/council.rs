@@ -397,13 +397,13 @@ fn member_execution_profile(
     let effort = model
         .reasoning_effort
         .map(|effort| effort.as_wire().to_string());
-    let budget = (model.max_tokens.is_some() || model.max_turns.is_some()).then(|| {
-        aura_core_types::SubagentBudget {
-            max_tokens: model.max_tokens,
+    let budget = model
+        .max_turns
+        .is_some()
+        .then(|| aura_core_types::SubagentBudget {
             max_iterations: model.max_turns.unwrap_or(aura_core_types::MAX_TURNS),
             ..Default::default()
-        }
-    });
+        });
     (effort, budget)
 }
 
@@ -716,14 +716,12 @@ mod tests {
     fn council_member_preserves_explicit_effort_and_limits() {
         let model = ModelSelection {
             reasoning_effort: Some(aura_core_protocol::ReasoningEffort::XHigh),
-            max_tokens: Some(1024),
             max_turns: Some(7),
             ..Default::default()
         };
         let (effort, budget) = member_execution_profile(&model);
         assert_eq!(effort.as_deref(), Some("xhigh"));
         let budget = budget.unwrap();
-        assert_eq!(budget.max_tokens, Some(1024));
         assert_eq!(budget.max_iterations, 7);
         assert_eq!(
             member_execution_profile(&ModelSelection::default()),

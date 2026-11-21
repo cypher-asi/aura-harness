@@ -8,9 +8,9 @@ use super::output::{ExitReason, Output, RunReport, StreamEvent, UsageReport};
 use super::sink::{CallLimits, HeadlessSink, TurnTally};
 use super::tools::ToolFilter;
 use crate::event_loop::gate_followup::{
-    check_review, check_signal, harness_check, joined, judge_unchecked, nudge_prompt,
-    repair_message, repair_notice, sign_repair_message, sign_repair_notice, At, Before, FollowUp,
-    Reviewing, Unchecked,
+    check_review, check_signal, harness_check, joined, judge_unchecked, nudge_message,
+    nudge_notice, repair_message, repair_notice, sign_repair_message, sign_repair_notice, At,
+    Before, FollowUp, Reviewing, Unchecked,
 };
 use crate::event_loop::gate_log;
 use crate::event_loop::gate_record::{self, Judged};
@@ -585,13 +585,10 @@ impl Headless {
             };
             match follow.1.next(result, at).await {
                 Step::Stop => break,
-                Step::Nudge => {
+                Step::Nudge(uncovered) => {
                     found.carry_on = Some((
-                        nudge_prompt(),
-                        format!(
-                            "gate: {} changed files without running a test or build; asking it to check its change",
-                            aura_model::model_catalog::route_label(&ended.model)
-                        ),
+                        nudge_message(&uncovered),
+                        nudge_notice(&ended.model, &uncovered),
                     ));
                     break;
                 }

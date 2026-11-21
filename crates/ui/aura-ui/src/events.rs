@@ -5,10 +5,10 @@
 //! - `UiCommand`: Commands from the kernel to the UI (state updates)
 
 pub use crate::benchmarks::{
-    arm_letter, cost_per_fix, cost_shares, per_fix_cells, BenchArm, BenchBaseline, BenchExample,
-    BenchJudge, BenchLiveRun, BenchPhase, BenchProgress, BenchRequest, BenchRun, BenchSession,
-    BenchSpec, BenchStatus, BenchTaskCell, BenchTaskRow, BenchTaskSetup, BenchTokens, BenchTurn,
-    BenchVerdict, BenchView, BenchWork,
+    arm_letter, cost_per_fix, cost_shares, per_fix_cells, run_order, BenchArm, BenchBaseline,
+    BenchExample, BenchJudge, BenchLiveRun, BenchPhase, BenchProgress, BenchRequest, BenchRun,
+    BenchSession, BenchSpec, BenchStatus, BenchTaskCell, BenchTaskRow, BenchTaskSetup, BenchTokens,
+    BenchTurn, BenchVerdict, BenchView, BenchWork,
 };
 pub use crate::flow::{FlowBench, FlowKind, FlowLane, FlowNode, FlowUsage};
 pub use crate::run_log::{

@@ -35,7 +35,6 @@ fn chat_effort_survives_worker_and_child_identity() {
     let worker_or_child = session.as_runtime_identity().into_loop_config();
     assert_eq!(direct.user_thinking_effort, Some(ThinkingEffort::XHigh));
     assert_eq!(worker_or_child.model, direct.model);
-    assert_eq!(worker_or_child.max_tokens, direct.max_tokens);
     assert_eq!(
         worker_or_child.user_thinking_effort,
         Some(ThinkingEffort::XHigh)

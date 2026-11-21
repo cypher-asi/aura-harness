@@ -7,7 +7,9 @@
 //! harness decision what triggered it. Runs of agents the run spawned
 //! are nested under `subagents`, each linked to the call that started
 //! it, so a run's log holds every agent below it and a spawned run's log
-//! only itself and what it spawned. Secrets are redacted.
+//! only itself and what it spawned. Runs no call started, such as a
+//! benchmark's, can be [`adopt`]ed into a log, and an agent with no run of
+//! its own gets a [`group`] of them. Secrets are redacted.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -38,7 +40,9 @@ const ABOUT: &str = "Log of one AURA agent run and the runs of the agents it spa
 `turns` holds each user turn in order; each step is a user prompt, a model call (its thinking, \
 visible text and tool calls), a tool result, a harness decision (nudges, blocks, compactions, \
 retries) or the turn's end. `subagents` nests the logs of spawned agents, linked by \
-`run.spawned_by` to the tool call that started them. Times are Unix milliseconds; costs are \
+`run.spawned_by` to the tool call that started them, and the runs of benchmarks the agent \
+holds, which no call started. An agent with no run of its own (`run.source` is `agent`) has \
+no turns, only `subagents`. Times are Unix milliseconds; costs are \
 estimated list prices in USD. Secrets are replaced by [REDACTED].";
 
 /// Waits on an approval longer than this count as problems in `health`.
@@ -351,6 +355,78 @@ pub fn build(
 pub fn of_bundle(home: &Path, bundle: &RunBundle) -> Result<RunLog, TraceError> {
     let trace = RunTrace::load(bundle)?;
     Ok(build(Some(home), &trace, bundle.dir(), &bundle_loader(home)))
+}
+
+/// The log of the agent with hex id `agent`, named `title`, that has no
+/// run of its own, such as the agent holding a benchmark: `runs` (the
+/// logs of runs that belong to it) under `subagents`, the whole stored in
+/// `dir`.
+#[must_use]
+pub fn group(agent: &str, title: &str, dir: &Path, runs: Vec<RunLog>) -> RunLog {
+    let started_at_ms = runs.iter().map(|r| r.run.started_at_ms).min().unwrap_or(0);
+    let mut log = RunLog {
+        schema: LOG_SCHEMA.to_string(),
+        about: ABOUT.to_string(),
+        generated_at_ms: bundle::now_ms(),
+        run: LogRun {
+            run_id: format!("agent-{agent}"),
+            agent_id: Some(agent.to_string()),
+            title: title.to_string(),
+            model: String::new(),
+            mode: String::new(),
+            source: "agent".to_string(),
+            task_id: None,
+            workspace: String::new(),
+            trace_level: String::new(),
+            harness_version: String::new(),
+            started_at_ms,
+            ended_at_ms: None,
+            duration_ms: None,
+            spawned_by: None,
+            parent_run: None,
+            branch_step: None,
+            arm: None,
+            params: Value::Null,
+        },
+        files: LogFiles {
+            bundle: dir.display().to_string(),
+            log: dir.join(LOG_FILE).display().to_string(),
+            meta: String::new(),
+            steps: String::new(),
+            record: String::new(),
+            rewards: String::new(),
+            summary: String::new(),
+            blobs: None,
+        },
+        totals: LogTotals::default(),
+        scorecard: RunScorecard::default(),
+        health: RunHealth::default(),
+        turns: Vec::new(),
+        subagents: Vec::new(),
+        redactions: 0,
+    };
+    adopt(&mut log, runs);
+    log
+}
+
+/// Nest `runs` under `log`, beside the runs it spawned: runs that belong
+/// to the same agent without a call of its run starting them, such as a
+/// benchmark's. Runs already in `log` are skipped.
+pub fn adopt(log: &mut RunLog, runs: Vec<RunLog>) {
+    for mut run in runs {
+        if log.find(&run.run.run_id).is_some() {
+            continue;
+        }
+        run.schema.clear();
+        run.about.clear();
+        log.redactions += std::mem::take(&mut run.redactions);
+        log.totals.subagents += 1 + run.totals.subagents;
+        log.totals.cost_usd_with_subagents = sum(
+            log.totals.cost_usd_with_subagents,
+            run.totals.cost_usd_with_subagents,
+        );
+        log.subagents.push(run);
+    }
 }
 
 /// Write `log` to `log.json` in `dir`, returning its path.
@@ -940,8 +1016,48 @@ mod tests {
         assert!(log.files.log.ends_with(LOG_FILE));
 
         let path = write(bundle.dir(), &log).unwrap();
-        let back: RunLog = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let written = std::fs::read_to_string(path).unwrap();
+        assert!(written.starts_with("{\n  \"schema\""), "pretty-printed");
+        let back: RunLog = serde_json::from_str(&written).unwrap();
         assert_eq!(back, log);
+    }
+
+    #[test]
+    fn an_agent_without_a_run_groups_the_runs_that_belong_to_it() {
+        let home = tempfile::tempdir().unwrap();
+        let logs: Vec<RunLog> = (0..2)
+            .map(|n| {
+                let mut meta = RunMeta::new("m", RunSource::Bench);
+                meta.title = format!("a-{n}");
+                let id = meta.run_id.clone();
+                let bundle = save(
+                    home.path(),
+                    &meta,
+                    &[
+                        prompt(&id, 1, 1, "write it"),
+                        call(&id, 2, 1, "t1", "write_file", json!({"path": "a"})),
+                        end(&id, 3, 1),
+                    ],
+                );
+                of_bundle(home.path(), &bundle).unwrap()
+            })
+            .collect();
+        let again = logs[0].clone();
+        let dir = home.path().join("logs/abc");
+        let mut log = group("abc", "Compare #1", &dir, logs);
+        adopt(&mut log, vec![again]);
+
+        assert_eq!(log.schema, LOG_SCHEMA);
+        assert_eq!(log.run.title, "Compare #1");
+        assert_eq!(log.run.source, "agent");
+        assert!(log.turns.is_empty());
+        assert_eq!(log.files.log, dir.join(LOG_FILE).display().to_string());
+        let titles: Vec<&str> = log.subagents.iter().map(|r| r.run.title.as_str()).collect();
+        assert_eq!(titles, ["a-0", "a-1"], "each run once");
+        assert!(log.subagents.iter().all(|r| r.schema.is_empty()));
+        assert_eq!(log.totals.subagents, 2);
+        let each = log.subagents[0].totals.cost_usd_with_subagents.unwrap();
+        assert!((log.totals.cost_usd_with_subagents.unwrap() - 2.0 * each).abs() < 1e-9);
     }
 
     #[test]

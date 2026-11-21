@@ -3,6 +3,7 @@ use super::{AgentLoop, AgentLoopConfig, LoopState};
 use crate::agent_runner::{configure_loop_config, AgentRunnerConfig};
 use crate::turn_config::TaskComplexity;
 use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
+use aura_model::model_catalog::max_output_tokens;
 use aura_model::{
     ContentBlock, Message, ModelProvider, ModelRequest, ModelResponse, ProviderTrace,
     ReasonerError, Role, StopReason, ThinkingEffort, ToolDefinition, Usage,
@@ -27,7 +28,7 @@ fn request_caps(config: &AgentLoopConfig, n: usize) -> Vec<u32> {
 }
 
 #[test]
-fn task_wire_caps_fit_edits_and_respect_the_ceiling() {
+fn every_task_request_gets_the_models_whole_output_limit() {
     let runner = AgentRunnerConfig::for_agent("claude-opus-4-7");
     for complexity in [
         TaskComplexity::Simple,
@@ -35,12 +36,8 @@ fn task_wire_caps_fit_edits_and_respect_the_ceiling() {
         TaskComplexity::Complex,
     ] {
         let config = configure_loop_config(complexity, &runner, 1, "system".into());
-        let caps = request_caps(&config, 4);
-        eprintln!(
-            "{complexity:?}: nominal={} emitted={caps:?}",
-            config.max_tokens
-        );
-        assert_eq!(caps, vec![config.max_tokens; 4]);
+        let limit = max_output_tokens(&config.model);
+        assert_eq!(request_caps(&config, 4), vec![limit; 4], "{complexity:?}");
     }
 }
 
@@ -48,9 +45,9 @@ fn task_wire_caps_fit_edits_and_respect_the_ceiling() {
 fn chat_preserves_selected_effort_and_output_allowance() {
     let config = AgentLoopConfig {
         user_thinking_effort: Some(ThinkingEffort::XHigh),
-        ..AgentLoopConfig::for_agent("test-model")
+        ..AgentLoopConfig::for_agent("claude-sonnet-4-6")
     };
-    assert_eq!(request_caps(&config, 5), vec![16384; 5]);
+    assert_eq!(request_caps(&config, 5), vec![128_000; 5]);
     let mut state = LoopState::new(&config, vec![]);
     state.had_any_file_write = true;
     for iteration in 0..5 {
@@ -63,17 +60,6 @@ fn chat_preserves_selected_effort_and_output_allowance() {
             Some(ThinkingEffort::XHigh)
         );
     }
-}
-
-#[test]
-fn explicit_maximum_is_never_exceeded() {
-    let config = AgentLoopConfig {
-        max_tokens: 1024,
-        ..AgentLoopConfig::for_agent("test-model")
-    };
-    let caps = request_caps(&config, 4);
-    eprintln!("explicit max=1024 emitted={caps:?}");
-    assert_eq!(caps, vec![1024; 4]);
 }
 
 #[derive(Default)]
@@ -192,7 +178,7 @@ async fn max_tokens_preserves_completed_tools_without_replaying() {
             .iter()
             .map(|r| r.max_tokens.get())
             .collect::<Vec<_>>(),
-        vec![16384, 16384]
+        vec![max_output_tokens("test-model"); 2]
     );
     assert_eq!(executor.0.load(Ordering::SeqCst), 1);
     assert!(requests[1]
@@ -323,14 +309,4 @@ async fn repeated_truncation_is_bounded_and_not_reported_as_success() {
         limit_error |= matches!(event, crate::events::AgentLoopEvent::Error { code, recoverable: false, .. } if code == "output_limit");
     }
     assert!(limit_error, "bounded failure must be visible to the user");
-}
-
-#[test]
-fn explicit_initial_budget_cannot_exceed_response_ceiling() {
-    let config = AgentLoopConfig {
-        max_tokens: 1024,
-        thinking_budget: Some(64_000),
-        ..AgentLoopConfig::for_agent("test-model")
-    };
-    assert_eq!(request_caps(&config, 8), vec![1024; 8]);
 }

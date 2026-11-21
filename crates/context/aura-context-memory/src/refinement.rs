@@ -7,7 +7,7 @@ use crate::error::MemoryError;
 use crate::extraction::ConversationTurn;
 use crate::types::{CandidateType, MemoryCandidate, MemoryScope, RefinedCandidate};
 use crate::DEFAULT_MEMORY_MODEL;
-use aura_model::{Message, ModelProvider, ModelRequest};
+use aura_model::{Message, ModelProvider, ModelRequest, ThinkingEffort};
 use std::fmt::Write;
 use std::sync::Arc;
 
@@ -149,7 +149,7 @@ impl LlmRefiner {
             .or_else(|| self.config.auth_token.clone());
         ModelRequest::builder(&self.config.model, EXTRACTOR_SYSTEM_PROMPT)
             .messages(vec![Message::user(prompt)])
-            .max_tokens(1024)
+            .thinking_effort(Some(ThinkingEffort::Off))
             .auth_token(effective_token)
             .aura_project_id(request_context.aura_project_id)
             .aura_agent_id(request_context.aura_agent_id)

@@ -21,8 +21,7 @@ pub const THINKING_TAPER_FACTOR: f64 = 0.6;
 pub const THINKING_MIN_BUDGET: u32 = 6144;
 
 /// Threshold at which the Anthropic reasoner auto-enables extended
-/// thinking. The agent loop clamps `max_tokens` at this value when it
-/// needs to suppress thinking for one turn (iteration 0 / force-tool).
+/// thinking for requests that leave `thinking_effort` unset.
 pub const THINKING_AUTO_ENABLE_THRESHOLD: u32 = 2048;
 
 /// Budget warning at 30% utilization.

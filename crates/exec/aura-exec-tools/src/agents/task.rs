@@ -125,7 +125,7 @@ impl TaskTool {
                     },
                     "budget": {
                         "type": "object",
-                        "description": "Optional SubagentBudget override (max_iterations, max_tokens, timeout_ms)."
+                        "description": "Optional SubagentBudget override (max_iterations, timeout_ms)."
                     },
                     "isolation": {
                         "type": "string",

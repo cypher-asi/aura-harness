@@ -139,7 +139,6 @@ fn general_purpose() -> SubagentKindSpec {
         default_model: None,
         budget: SubagentBudget {
             max_iterations: aura_core_types::MAX_TURNS,
-            max_tokens: None,
             timeout_ms: 300_000,
         },
     }
@@ -184,7 +183,6 @@ fn implement() -> SubagentKindSpec {
         default_model: None,
         budget: SubagentBudget {
             max_iterations: aura_core_types::MAX_TURNS,
-            max_tokens: None,
             timeout_ms: 300_000,
         },
     }
@@ -202,7 +200,6 @@ fn tests() -> SubagentKindSpec {
         default_model: None,
         budget: SubagentBudget {
             max_iterations: aura_core_types::MAX_TURNS,
-            max_tokens: None,
             timeout_ms: 300_000,
         },
     }
@@ -225,7 +222,6 @@ fn shell() -> SubagentKindSpec {
         default_model: None,
         budget: SubagentBudget {
             max_iterations: aura_core_types::MAX_TURNS,
-            max_tokens: None,
             timeout_ms: 180_000,
         },
     }
@@ -247,7 +243,6 @@ fn readonly_kind(name: &str, description: &str, system_prompt: &str) -> Subagent
         default_model: None,
         budget: SubagentBudget {
             max_iterations: aura_core_types::MAX_TURNS,
-            max_tokens: None,
             timeout_ms: 180_000,
         },
     }

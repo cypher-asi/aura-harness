@@ -16,8 +16,9 @@ use super::bench_source;
 use super::compare_run::{self, patches, remove_copies, save, ComparePlan};
 use super::compare_view::{self, arm_label, split_patch, EstimateView};
 use super::handlers::system_message;
-use super::subagents::lock;
+use super::subagents::{lock, AgentHub};
 use super::LoopState;
+use crate::agent_registry::RegisteredAgent;
 use crate::bench_pack::{self, ExampleTask};
 use aura_agent_gate::compare::{
     default_against, estimate, parse, resolve_arms, CompareCommand, CompareRequest,
@@ -34,6 +35,7 @@ use aura_store_db::ReadStore;
 use aura_ui_terminal::UiCommand;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -85,6 +87,11 @@ impl CompareState {
         self.running.as_ref().filter(|r| !r.task.is_finished())
     }
 
+    /// The agent holding the comparison under way.
+    pub(super) fn running_host(&self) -> Option<AgentId> {
+        self.running().map(|r| r.host)
+    }
+
     /// Wait for the running comparison to end (for tests).
     #[cfg(test)]
     pub(super) async fn finished(&mut self) {
@@ -134,7 +141,18 @@ fn latest_payload(store: &dyn ReadStore, host: AgentId) -> Option<ComparePayload
         .find_map(|entry| entry.tx.compare_payload())
 }
 
-/// Every comparison, oldest first, with its latest state.
+/// Mark `payload`, recorded as running when nothing runs it any more, as
+/// stopped, saying why.
+fn interrupted(payload: &mut ComparePayload, why: &str) {
+    payload.status = CompareStatus::Cancelled;
+    payload.notes.push(format!(
+        "It stopped before it ended ({why}); the runs that ended are kept"
+    ));
+}
+
+/// Every comparison, oldest first, with its latest state. One whose
+/// record says it runs while this process runs none of it is stopped: Aura
+/// quit, or its task failed, before it recorded how it ended.
 pub(super) fn comparisons(state: &LoopState<'_>) -> Vec<(AgentId, String, Option<ComparePayload>)> {
     let hosts: Vec<(AgentId, String)> = lock(&state.hub.registry)
         .compares()
@@ -142,9 +160,19 @@ pub(super) fn comparisons(state: &LoopState<'_>) -> Vec<(AgentId, String, Option
         .map(|agent| (agent.agent_id(), agent.name.clone()))
         .collect();
     let store = state.hub.factory.store.as_ref();
+    let running = state.compare.running_host();
     hosts
         .into_iter()
-        .map(|(id, name)| (id, name, latest_payload(store, id)))
+        .map(|(id, name)| {
+            let mut payload = latest_payload(store, id);
+            if let Some(payload) = payload
+                .as_mut()
+                .filter(|p| p.status == CompareStatus::Running && running != Some(id))
+            {
+                interrupted(payload, "Aura quit or its task failed");
+            }
+            (id, name, payload)
+        })
         .collect()
 }
 
@@ -495,7 +523,7 @@ pub(super) async fn start(state: &mut LoopState<'_>) -> Result<String, String> {
         plan.concurrency,
     );
     let cancel = CancellationToken::new();
-    let task = tokio::spawn(compare_run::run(
+    let task = tokio::spawn(supervise(
         Arc::clone(&state.hub),
         state.commands.clone(),
         plan,
@@ -509,6 +537,38 @@ pub(super) async fn start(state: &mut LoopState<'_>) -> Result<String, String> {
         task,
     });
     Ok(text)
+}
+
+/// Run the comparison `plan` on `host`; when its task fails, which leaves
+/// its record saying it runs, show it stopped.
+async fn supervise(
+    hub: Arc<AgentHub>,
+    commands: mpsc::Sender<UiCommand>,
+    plan: ComparePlan,
+    host: RegisteredAgent,
+    cancel: CancellationToken,
+) {
+    let user = plan.user;
+    let ran = tokio::spawn(compare_run::run(
+        Arc::clone(&hub),
+        commands.clone(),
+        plan,
+        host.clone(),
+        cancel,
+    ))
+    .await;
+    let Err(e) = ran else { return };
+    warn!(compare = %host.name, error = %e, "A comparison's task failed");
+    let id = host.agent_id();
+    if let Some(mut payload) = latest_payload(hub.factory.store.as_ref(), id) {
+        interrupted(&mut payload, "its task failed");
+        let root = lock(&hub.registry).root(id);
+        let view = super::bench::view(id, root, &host.name, &payload);
+        let _ = commands.send(UiCommand::BenchUpsert(Box::new(view))).await;
+    }
+    AgentUi::new(commands, user)
+        .send(UiCommand::ShowError(format!("{} stopped: {e}", host.name)))
+        .await;
 }
 
 pub(super) fn cancel(state: &mut LoopState<'_>) -> String {

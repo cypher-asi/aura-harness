@@ -376,7 +376,10 @@ fn test_model_request_builder_defaults() {
         .try_build()
         .unwrap();
 
-    assert_eq!(request.max_tokens.get(), 4096);
+    assert_eq!(
+        request.max_tokens.get(),
+        crate::model_catalog::max_output_tokens("model")
+    );
     assert!(request.temperature.is_none());
     assert!(matches!(request.tool_choice, ToolChoice::Auto));
     assert!(request.messages.is_empty());

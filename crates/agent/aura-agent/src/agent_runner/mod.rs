@@ -128,8 +128,6 @@ pub struct FollowUpSuggestion {
 pub struct AgentRunnerConfig {
     pub max_agentic_iterations: usize,
     pub max_shell_task_retries: u32,
-    pub task_execution_max_tokens: u32,
-    pub thinking_budget: u32,
     /// Explicit selected effort, independent of the response token allowance.
     pub reasoning_effort: Option<aura_model::ThinkingEffort>,
     pub stream_timeout_secs: u64,
@@ -213,9 +211,6 @@ impl AgentRunnerConfig {
         Self {
             max_agentic_iterations: aura_core_types::MAX_TURNS as usize,
             max_shell_task_retries: 4,
-            task_execution_max_tokens: 16_384,
-            // This is the whole response allowance, not a thinking-only budget.
-            thinking_budget: 16_384,
             reasoning_effort: None,
             // Matches the reasoner's default reqwest request timeout
             // (300s / `AURA_MODEL_TIMEOUT_MS`) so the outer `timeout()`
@@ -602,7 +597,6 @@ impl AgentRunner {
         };
         let config = AgentLoopConfig {
             system_prompt,
-            max_tokens: self.config.task_execution_max_tokens,
             stream_timeout: Duration::from_secs(self.config.stream_timeout_secs),
             billing_reason: "aura_chat".to_string(),
             max_context_tokens: Some(self.config.max_context_tokens),
@@ -710,13 +704,6 @@ pub fn configure_loop_config(
     _member_count: usize,
     system_prompt: String,
 ) -> AgentLoopConfig {
-    // Complexity may narrow a response ceiling, never enlarge an explicit cap.
-    let thinking_budget = config.thinking_budget;
-    let max_tokens = match complexity {
-        TaskComplexity::Simple => config.task_execution_max_tokens.min(8_192),
-        TaskComplexity::Complex => config.task_execution_max_tokens,
-        TaskComplexity::Standard => config.task_execution_max_tokens,
-    };
     let max_iterations = match complexity {
         TaskComplexity::Simple => config.max_agentic_iterations.min(15),
         _ => config.max_agentic_iterations,
@@ -726,9 +713,6 @@ pub fn configure_loop_config(
         _ => config.default_model.clone(),
     };
 
-    // Legacy name: this field controls initial total output, including tool arguments.
-    let initial_thinking_budget = thinking_budget.min(max_tokens);
-
     // Phase 5: the `early_test_oracle` field on the returned
     // `AgentLoopConfig` is populated later inside `execute_task_inner`
     // because that's where `params.project.test_command` is in
@@ -736,8 +720,6 @@ pub fn configure_loop_config(
     AgentLoopConfig {
         max_iterations,
         user_thinking_effort: config.reasoning_effort,
-        max_tokens,
-        thinking_budget: Some(initial_thinking_budget),
         stream_timeout: Duration::from_secs(config.stream_timeout_secs),
         billing_reason: "aura_task".to_string(),
         max_context_tokens: Some(config.max_context_tokens),

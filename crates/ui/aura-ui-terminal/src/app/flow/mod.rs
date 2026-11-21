@@ -655,13 +655,21 @@ impl FlowState {
 
     /// Show the flow as `mode`, as the GRAPH or the TIME tab.
     pub(super) fn set_mode(&mut self, mode: FlowMode) {
-        self.mode = mode;
-        self.drag = None;
-        self.minimap_drag = false;
+        self.restore_mode(mode);
         self.from_timeline = false;
         if mode == FlowMode::Timeline {
             self.timeline_to_selection();
         }
+    }
+
+    /// Show the flow as `mode` without moving the timeline's selection to
+    /// the cards': for an agent coming back on GRAPH or TIME, whose timeline
+    /// and cards are as it left them, and for another agent's flow about to
+    /// be put away.
+    pub(super) fn restore_mode(&mut self, mode: FlowMode) {
+        self.mode = mode;
+        self.drag = None;
+        self.minimap_drag = false;
     }
 
     /// The canvas was opened from the timeline.
@@ -1821,8 +1829,9 @@ impl App {
         self.notification = Some((message, NotificationType::Warning));
     }
 
-    /// Switch to the agent whose lane the selected node is in. The GRAPH
-    /// tab then shows that agent's flow.
+    /// Switch to the agent whose lane the selected node is in. It comes
+    /// back on the chat panel's tab it was left on, CHAT the first time it
+    /// is shown.
     fn open_flow_agent(&mut self) {
         if let Some(agent_id) = self.flow.selected_node().map(|node| node.agent_id.clone()) {
             self.open_agent(agent_id);

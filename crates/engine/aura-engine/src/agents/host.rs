@@ -304,10 +304,8 @@ struct ChildPlan {
     model: String,
     system_prompt: String,
     reasoning_effort: Option<aura_model::ThinkingEffort>,
-    response_max_tokens: Option<u32>,
     kind: Option<aura_core_types::SubagentKindSpec>,
     iteration_cap: Option<u32>,
-    token_cap: Option<u32>,
     timeout: Option<Duration>,
     policy: PolicyConfig,
 }
@@ -544,10 +542,7 @@ impl HostInner {
             Ok(derived) => derived,
             Err(err) => return SubagentResult::rejected(format!("spawn rejected: {err}")),
         };
-        if spec.response_max_tokens == Some(0)
-            || spec.budget.max_tokens == 0
-            || spec.budget.max_iterations == 0
-        {
+        if spec.budget.max_iterations == 0 {
             return SubagentResult::rejected("child execution limits must be positive");
         }
         let reasoning_effort = match spec.reasoning_effort.as_deref() {
@@ -618,9 +613,7 @@ impl HostInner {
             model,
             system_prompt: setup::kind_system_prompt(&kind, spec.system_prompt_addendum.as_deref()),
             reasoning_effort,
-            response_max_tokens: spec.response_max_tokens,
             iteration_cap: Some(spec.budget.max_iterations),
-            token_cap: Some(spec.budget.max_tokens),
             kind: Some(kind),
             timeout: Some(Duration::from_millis(timeout_ms)),
             policy,
@@ -754,10 +747,8 @@ impl HostInner {
             model: parent_entry.model.clone(),
             system_prompt: setup::spawned_agent_prompt(&base_prompt, &child.name, &child.role),
             reasoning_effort: None,
-            response_max_tokens: None,
             kind: None,
             iteration_cap: None,
-            token_cap: None,
             timeout: None,
             policy,
         };
@@ -858,9 +849,6 @@ impl HostInner {
                 if let Some(effort) = plan.reasoning_effort {
                     identity.reasoning_effort = Some(effort);
                 }
-                if let Some(tokens) = plan.response_max_tokens {
-                    identity.max_tokens = tokens;
-                }
                 identity.system_prompt.clone_from(&plan.system_prompt);
                 self.scheduler
                     .identity_registry()
@@ -874,14 +862,8 @@ impl HostInner {
         if let Some(effort) = plan.reasoning_effort {
             loop_config.user_thinking_effort = Some(effort);
         }
-        if let Some(tokens) = plan.response_max_tokens {
-            loop_config.max_tokens = tokens;
-        }
         if let Some(cap) = plan.iteration_cap {
             loop_config.max_iterations = loop_config.max_iterations.min(cap as usize);
-        }
-        if let Some(cap) = plan.token_cap {
-            loop_config.max_tokens = loop_config.max_tokens.min(cap);
         }
 
         let request = ChildKernelRequest {

@@ -10,9 +10,9 @@ use super::agent_events::ForwarderState;
 use super::agents::AgentSession;
 use super::attachments::{expand_mentions_in, mentioned_paths};
 use super::gate_followup::{
-    check_review, check_signal, harness_check, joined, judge_unchecked, may_review, nudge_prompt,
-    repair_message, repair_notice, sign_repair_message, sign_repair_notice, At, Before, FollowUp,
-    Reviewing, Unchecked,
+    check_review, check_signal, harness_check, joined, judge_unchecked, may_review, nudge_message,
+    nudge_notice, repair_message, repair_notice, sign_repair_message, sign_repair_notice, At,
+    Before, FollowUp, Reviewing, Unchecked,
 };
 use super::gate_live::GateLive;
 use super::gate_log;
@@ -901,14 +901,9 @@ async fn run_attempts(
                 };
                 match follow.1.next(partial, at).await {
                     Step::Stop => break,
-                    Step::Nudge => {
-                        carry_on = Some((
-                            nudge_prompt(),
-                            format!(
-                                "gate: {} changed files without running a test or build; asking it to check its change",
-                                aura_model::model_catalog::route_label(&model)
-                            ),
-                        ));
+                    Step::Nudge(uncovered) => {
+                        carry_on =
+                            Some((nudge_message(&uncovered), nudge_notice(&model, &uncovered)));
                         break;
                     }
                     Step::Repair(signs) => {

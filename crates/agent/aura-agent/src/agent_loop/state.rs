@@ -20,12 +20,14 @@ use super::config::{parse_cache_retention, AgentLoopConfig};
 use super::steering::SteeringRegistry;
 use super::{steering, turn_diff};
 
-/// Total response allowance, retained under the legacy internal type name.
-pub(crate) struct ThinkingBudget {
-    /// Output includes reasoning, visible text and tool arguments.
-    pub(crate) budget: u32,
-    /// Restore the caller's response ceiling on a bounded continuation.
-    pub(crate) restore_next_iteration: bool,
+/// `effort` one step lower; the lowest steps stay where they are.
+fn one_lower(effort: ThinkingEffort) -> ThinkingEffort {
+    match effort {
+        ThinkingEffort::Max | ThinkingEffort::XHigh => ThinkingEffort::High,
+        ThinkingEffort::High => ThinkingEffort::Medium,
+        ThinkingEffort::Medium => ThinkingEffort::Low,
+        lowest => lowest,
+    }
 }
 
 /// Mutable state carried across iterations of the agent loop.
@@ -67,7 +69,10 @@ pub(crate) struct LoopState {
     pub(crate) checkpoint_emitted: bool,
     pub(crate) exploration_compaction_done: bool,
     pub(crate) build_cooldown: usize,
-    pub(crate) thinking: ThinkingBudget,
+    /// How many steps below the policy's effort the rest of the run
+    /// reasons at, once replies ran out of room before they acted
+    /// ([`Self::reason_less`]).
+    pub(crate) effort_lowered: u8,
     pub(crate) last_context_tokens_estimate: Option<u64>,
     pub(crate) messages: Vec<Message>,
     pub(crate) build_baseline: Option<BuildBaseline>,
@@ -149,17 +154,7 @@ impl LoopState {
             checkpoint_emitted,
             exploration_compaction_done: false,
             build_cooldown: 0,
-            thinking: ThinkingBudget {
-                // Seed from `thinking_budget` when present so the runner
-                // can request a smaller starting budget than the
-                // per-request `max_tokens` ceiling. Truncation recovery
-                // in `begin_iteration` still restores to `max_tokens`.
-                budget: config
-                    .thinking_budget
-                    .unwrap_or(config.max_tokens)
-                    .min(config.max_tokens),
-                restore_next_iteration: false,
-            },
+            effort_lowered: 0,
             last_context_tokens_estimate: None,
             messages,
             build_baseline: None,
@@ -366,17 +361,13 @@ impl LoopState {
                 }
             }
         }
+    }
 
-        // Restore the full response allowance after truncation, not a thinking-only budget.
-        if self.thinking.restore_next_iteration {
-            self.thinking.budget = config.max_tokens;
-            self.thinking.restore_next_iteration = false;
-            return;
-        }
-
-        // Effort may taper, but output space includes text and tool arguments too.
-        // Do not silently shrink that space (or raise a caller's explicit cap).
-        self.thinking.budget = self.thinking.budget.min(config.max_tokens);
+    /// Reason one step lower for the rest of the run, after a reply spent
+    /// the model's whole output limit before it made a tool call: one at
+    /// the same effort spends it the same way.
+    pub(crate) fn reason_less(&mut self) {
+        self.effort_lowered = self.effort_lowered.saturating_add(1);
     }
 
     /// Reasoning-effort policy applied per iteration.
@@ -452,9 +443,6 @@ impl LoopState {
         // its own next move.
         let tool_choice = aura_model::ToolChoice::Auto;
 
-        // Response space and reasoning effort are independent controls.
-        let effective_max_tokens = self.thinking.budget.min(config.max_tokens);
-
         // Codex parity: emit an explicit `reasoning.effort` on every
         // request. The reasoner's `max_tokens > 2048` auto-enable
         // path stays as a fallback for providers that ignore the
@@ -465,17 +453,23 @@ impl LoopState {
         // the effort across every iteration, overriding the internal
         // `compute_thinking_effort` taper so the operator's explicit
         // choice always wins. When unset, fall back to the heuristic.
-        let thinking_effort = Some(
-            config
-                .user_thinking_effort
-                .unwrap_or_else(|| self.compute_thinking_effort(config, iteration)),
-        );
+        let thinking_effort = Some(config.user_thinking_effort.unwrap_or_else(|| {
+            (0..self.effort_lowered).fold(
+                self.compute_thinking_effort(config, iteration),
+                |effort, _| one_lower(effort),
+            )
+        }));
 
-        ModelRequest::builder(&config.model, &config.system_prompt)
+        let room = super::context::room_left_for_reply(config, self, &effective_tools);
+        let builder = ModelRequest::builder(&config.model, &config.system_prompt);
+        let builder = match room {
+            Some(room) => builder.max_tokens(room),
+            None => builder,
+        };
+        builder
             .messages(self.messages.clone())
             .tools(effective_tools)
             .tool_choice(tool_choice)
-            .max_tokens(effective_max_tokens)
             .thinking_effort(thinking_effort)
             .auth_token(config.auth_token.clone())
             .upstream_provider_family(config.upstream_provider_family.clone())
@@ -832,5 +826,50 @@ mod intent_classifier_tests {
             req.metadata.kind,
             Some(ModelRequestKind::ProjectToolSpecGen)
         );
+    }
+}
+
+#[cfg(test)]
+mod reply_size_tests {
+    use super::*;
+
+    fn next_request(state: &mut LoopState, config: &AgentLoopConfig) -> ModelRequest {
+        state.begin_iteration(config, 1);
+        state.build_request(config, &[], 1).unwrap()
+    }
+
+    #[test]
+    fn replies_get_the_models_whole_output_limit_and_reason_less_after_a_cut_off() {
+        let config = AgentLoopConfig::for_agent("claude/claude-opus-5-5");
+        let mut state = LoopState::new(&config, vec![Message::user("write the module")]);
+        let first = next_request(&mut state, &config);
+        assert_eq!(first.max_tokens.get(), 128_000);
+        assert_eq!(first.thinking_effort, Some(ThinkingEffort::Max));
+
+        state.reason_less();
+        let second = next_request(&mut state, &config);
+        assert_eq!(second.max_tokens.get(), 128_000);
+        assert_eq!(second.thinking_effort, Some(ThinkingEffort::High));
+
+        state.reason_less();
+        let later = next_request(&mut state, &config);
+        assert_eq!(later.thinking_effort, Some(ThinkingEffort::Medium));
+        assert_eq!(
+            next_request(&mut state, &config).thinking_effort,
+            Some(ThinkingEffort::Medium)
+        );
+    }
+
+    #[test]
+    fn a_chosen_effort_stands() {
+        let config = AgentLoopConfig {
+            user_thinking_effort: Some(ThinkingEffort::Max),
+            ..AgentLoopConfig::for_agent("claude/claude-opus-5-5")
+        };
+        let mut state = LoopState::new(&config, vec![Message::user("write the module")]);
+
+        state.reason_less();
+        let request = next_request(&mut state, &config);
+        assert_eq!(request.thinking_effort, Some(ThinkingEffort::Max));
     }
 }

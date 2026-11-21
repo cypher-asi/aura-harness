@@ -375,7 +375,7 @@ pub struct ModelRequestBuilder {
     messages: Vec<Message>,
     tools: Vec<ToolDefinition>,
     tool_choice: ToolChoice,
-    max_tokens: u32,
+    max_tokens: Option<u32>,
     temperature: Option<f32>,
     thinking: Option<ThinkingConfig>,
     thinking_effort: Option<ThinkingEffort>,
@@ -401,7 +401,7 @@ impl ModelRequestBuilder {
             messages: Vec::new(),
             tools: Vec::new(),
             tool_choice: ToolChoice::Auto,
-            max_tokens: 4096,
+            max_tokens: None,
             temperature: None,
             thinking: None,
             thinking_effort: None,
@@ -447,10 +447,12 @@ impl ModelRequestBuilder {
         self
     }
 
-    /// Set max tokens.
+    /// Hold the reply to `max` tokens, below the model's own limit
+    /// ([`crate::model_catalog::max_output_tokens`]) that it is otherwise
+    /// sent with; a larger `max` is lowered to that limit.
     #[must_use]
     pub const fn max_tokens(mut self, max: u32) -> Self {
-        self.max_tokens = max;
+        self.max_tokens = Some(max);
         self
     }
 
@@ -561,8 +563,9 @@ impl ModelRequestBuilder {
     /// fail: empty model name, `max_tokens == 0`, or temperature outside
     /// `0.0..=2.0`.
     pub fn try_build(self) -> Result<ModelRequest, ReasonerError> {
+        let limit = crate::model_catalog::max_output_tokens(&self.model);
+        let max_tokens = MaxTokens::try_new(self.max_tokens.map_or(limit, |max| max.min(limit)))?;
         let model = ModelName::try_new(self.model)?;
-        let max_tokens = MaxTokens::try_new(self.max_tokens)?;
         let temperature = self.temperature.map(Temperature::try_new).transpose()?;
         Ok(ModelRequest {
             model,
@@ -674,6 +677,25 @@ mod newtype_tests {
         assert!(Temperature::try_new(0.0).is_ok());
         assert!(Temperature::try_new(2.0).is_ok());
         assert_eq!(Temperature::default(), Temperature::try_new(1.0).unwrap());
+    }
+
+    #[test]
+    fn replies_get_the_models_output_limit_and_never_more() {
+        let limit = crate::model_catalog::max_output_tokens("aura-claude-haiku-4-5");
+        let unset = ModelRequest::builder("aura-claude-haiku-4-5", "sys")
+            .try_build()
+            .unwrap();
+        assert_eq!(unset.max_tokens.get(), limit);
+        let over = ModelRequest::builder("aura-claude-haiku-4-5", "sys")
+            .max_tokens(limit + 1)
+            .try_build()
+            .unwrap();
+        assert_eq!(over.max_tokens.get(), limit);
+        let under = ModelRequest::builder("aura-claude-haiku-4-5", "sys")
+            .max_tokens(100)
+            .try_build()
+            .unwrap();
+        assert_eq!(under.max_tokens.get(), 100);
     }
 
     #[test]

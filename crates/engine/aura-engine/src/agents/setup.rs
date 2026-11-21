@@ -82,9 +82,6 @@ pub(super) fn loop_config_for(
 /// Apply a `task` kind's budget on top of a loop config.
 pub(super) fn apply_kind_budget(config: &mut AgentLoopConfig, kind: &SubagentKindSpec) {
     config.max_iterations = kind.budget.max_iterations as usize;
-    if let Some(max_tokens) = kind.budget.max_tokens {
-        config.max_tokens = config.max_tokens.min(max_tokens);
-    }
 }
 
 pub(super) fn kind_system_prompt(kind: &SubagentKindSpec, addendum: Option<&str>) -> String {
@@ -183,7 +180,6 @@ mod tests {
             prompt_cache_key: None,
             prompt_cache_retention: None,
             request_kind: aura_model::ModelRequestKind::Chat,
-            max_tokens: 1024,
             max_context_tokens: 200_000,
             auth_token: Some("parent-jwt".to_string()),
         }

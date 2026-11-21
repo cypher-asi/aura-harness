@@ -271,6 +271,55 @@ async fn test_max_tokens_without_tools_breaks() {
     assert!(result.total_text.contains("Should not reach this"));
 }
 
+#[tokio::test]
+async fn responses_cut_off_before_acting_are_told_so_and_only_in_a_row_end_the_run() {
+    let executor = MockExecutor {
+        results: vec![ToolCallResult::success("tool_1", "ok")],
+    };
+    let cut =
+        || MockResponse::text("Let me write the module.").with_stop_reason(StopReason::MaxTokens);
+    let provider = MockProvider::new()
+        .with_response(cut())
+        .with_response(cut())
+        .with_response(MockResponse::tool_use(
+            "tool_1",
+            "read_file",
+            serde_json::json!({"path": "a.py"}),
+        ))
+        .with_response(cut())
+        .with_response(cut())
+        .with_response(cut())
+        .with_response(MockResponse::text("Should not reach this"));
+    let config = AgentLoopConfig {
+        system_prompt: "Test agent".to_string(),
+        ..AgentLoopConfig::for_agent("claude-test-model")
+    };
+    let tools = vec![ToolDefinition::new(
+        "read_file",
+        "Read a file",
+        serde_json::json!({"type": "object"}),
+    )];
+
+    let result = AgentLoop::new(config)
+        .run(&provider, &executor, vec![Message::user("write it")], tools)
+        .await
+        .unwrap();
+
+    assert_eq!(result.iterations, 6);
+    assert!(result.output_truncated);
+    assert!(!result.total_text.contains("Should not reach this"));
+    let told = result
+        .messages
+        .iter()
+        .filter(|msg| {
+            msg.content.iter().any(|block| {
+                matches!(block, ContentBlock::Text { text } if text.contains("before it made a tool call"))
+            })
+        })
+        .count();
+    assert_eq!(told, 4);
+}
+
 #[test]
 fn test_tool_call_result_defaults() {
     let result = ToolCallResult::success("id", "content");
@@ -363,7 +412,6 @@ async fn test_context_estimate_includes_cache_tokens() {
 async fn test_agent_loop_handles_summary_compaction() {
     let config = AgentLoopConfig {
         max_context_tokens: Some(8_000),
-        max_tokens: 1,
         ..AgentLoopConfig::for_agent("claude-test-model")
     };
     let agent = AgentLoop::new(config);
@@ -774,11 +822,7 @@ fn effort_medium_default_after_iteration_zero() {
 fn build_request_always_emits_tool_choice_auto() {
     use aura_model::{Message, ToolChoice};
 
-    let config = AgentLoopConfig {
-        thinking_budget: Some(8_192),
-        max_tokens: 16_384,
-        ..AgentLoopConfig::for_agent("claude-test-model")
-    };
+    let config = AgentLoopConfig::for_agent("claude-test-model");
     let state = super::LoopState::new(&config, vec![Message::user("hi")]);
     let request = state
         .build_request(&config, &[], 5)

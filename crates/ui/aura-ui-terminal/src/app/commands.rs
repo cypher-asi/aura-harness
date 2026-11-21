@@ -1285,23 +1285,24 @@ impl App {
 
     fn cmd_set_active_agent(&mut self, agent_id: &str) {
         let switched = agent_id != self.active_agent_id;
-        self.show_agent_chat(agent_id);
+        let left_on = self.show_agent_chat(agent_id);
         self.refresh_side_scope();
-        let bench_run = self
-            .agents
-            .iter()
-            .any(|agent| agent.id == agent_id && agent.bench_run);
         if self.log_wanted_for(agent_id) {
+            // The switch was asked for to show the agent's log.
             self.show_chat_tab(super::ChatTab::Log);
-        } else if switched && bench_run && self.bench.is_open() {
-            // A benchmark's run is picked to watch it work.
-            self.show_chat_tab(super::ChatTab::Chat);
-        } else if switched && self.log.is_open() {
-            // The LOG tab shows the agent on screen and the agents below it.
-            self.request_log();
+        } else {
+            // Each agent comes back on the tab it was left on, CHAT the
+            // first time it is shown.
+            if let Some(tab) = left_on {
+                self.restore_chat_tab(tab);
+            }
+            if switched && self.log.is_open() {
+                // The LOG tab shows the agent on screen and the agents below it.
+                self.request_log();
+            }
         }
         if self.flow.is_open() {
-            // The GRAPH tab follows the agent on screen.
+            // The GRAPH and TIME tabs show the flow of the agent on screen.
             self.request_flow();
         }
         if self.bench.is_open() {

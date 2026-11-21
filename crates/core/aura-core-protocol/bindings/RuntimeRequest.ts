@@ -29,7 +29,7 @@ type: RuntimeRequestType,
  */
 agent_identity: AgentIdentity, 
 /**
- * What model to drive the agent with: id, max_tokens, max_turns,
+ * What model to drive the agent with: id, max_turns,
  * temperature, provider_overrides.
  */
 model: ModelSelection, 

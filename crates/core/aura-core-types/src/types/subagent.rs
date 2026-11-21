@@ -35,9 +35,6 @@ pub const MAX_TURNS: u32 = 300;
 pub struct SubagentBudget {
     /// Maximum child agent-loop iterations.
     pub max_iterations: u32,
-    /// Optional response token cap for the child loop.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<u32>,
     /// Wall-clock timeout for the foreground task.
     pub timeout_ms: u64,
 }
@@ -46,7 +43,6 @@ impl Default for SubagentBudget {
     fn default() -> Self {
         Self {
             max_iterations: MAX_TURNS,
-            max_tokens: None,
             timeout_ms: DEFAULT_SUBAGENT_TIMEOUT_MS,
         }
     }

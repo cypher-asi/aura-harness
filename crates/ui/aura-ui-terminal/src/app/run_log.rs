@@ -82,7 +82,14 @@ pub struct LogState {
     requested: Option<Instant>,
     /// The agent whose log to show once the switch to it lands
     pending_agent: Option<String>,
+    /// A copy from the tab waits for the next frame
+    copying: bool,
+    /// When a copy from the tab last went through
+    copied_at: Option<Instant>,
 }
+
+/// How long `Copy log` says it copied.
+const COPIED_FLASH: Duration = Duration::from_secs(2);
 
 /// How often an open log is reloaded while steps are being recorded.
 const LIVE_EVERY: Duration = Duration::from_secs(1);
@@ -218,6 +225,9 @@ impl LogState {
             for &child in &turn.spawned {
                 self.push_run(view, child, depth + 2, rows, seen);
             }
+        }
+        for &child in &run.runs {
+            self.push_run(view, child, depth + 1, rows, seen);
         }
     }
 
@@ -397,6 +407,19 @@ impl LogState {
         self.copy_button
     }
 
+    /// A copy from the tab went through (`ok`) or failed.
+    pub(super) fn copy_finished(&mut self, ok: bool) {
+        if std::mem::take(&mut self.copying) && ok {
+            self.copied_at = Some(Instant::now());
+        }
+    }
+
+    /// Whether a copy from the tab went through a moment ago.
+    #[must_use]
+    pub fn just_copied(&self) -> bool {
+        self.copied_at.is_some_and(|at| at.elapsed() < COPIED_FLASH)
+    }
+
     fn panel_at(&self, row: u16) -> Option<LogPanel> {
         self.hits
             .iter()
@@ -486,8 +509,8 @@ impl App {
         match text.filter(|t| !t.is_empty()) {
             Some(text) => {
                 self.copy_pending_text = Some(text);
-                self.copy_requested = true;
                 self.copy_label = Some(what.to_string());
+                self.log.copying = true;
             }
             None => {
                 self.notification = Some((
@@ -690,6 +713,21 @@ mod tests {
         assert!(rows[at + 1].depth > rows[at].depth);
         state.expand_all();
         assert!(panels(&state).contains(&LogPanel::Step("child".into(), 1)));
+    }
+
+    #[test]
+    fn runs_no_turn_started_follow_the_turns() {
+        let mut group = run("agent-a", 0, vec![]);
+        group.runs = vec![1, 2];
+        let mut state = LogState::default();
+        state.load(LogView {
+            runs: vec![group, run("a-1", 1, vec![]), run("b-1", 1, vec![])],
+            ..view()
+        });
+        let rows = state.rows();
+        let listed: Vec<(&LogPanel, usize)> = rows.iter().map(|r| (&r.panel, r.depth)).collect();
+        let (a, b) = (LogPanel::Run("a-1".into()), LogPanel::Run("b-1".into()));
+        assert_eq!(&listed[listed.len() - 2..], [(&a, 1), (&b, 1)]);
     }
 
     #[test]

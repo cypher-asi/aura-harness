@@ -34,8 +34,10 @@ use aura_agent_gate::attempt_log::{CopyAt, Review, Tier, Tiers};
 use aura_agent_gate::checks::{
     checks_seen, command_line, exit_status_masked, last_check_seen, CheckSeen,
 };
-use aura_agent_gate::evidence::{flags, Flag};
+use aura_agent_gate::coverage;
+use aura_agent_gate::evidence::{flags, is_test_path, Flag};
 use aura_agent_gate::followup::{self, Allowed, Ended, Step, Suspicion, Taken, Why, NUDGE_PROMPT};
+use aura_agent_gate::router::verifiable;
 use aura_agent_gate::turn_judge::{self, Answer, ReviewVariant, Standing, Unverified, Verdict};
 use aura_agent_gate::Candidate;
 use aura_config::ReviewMode;
@@ -237,6 +239,12 @@ pub(crate) struct FollowUp {
     /// What the attempt changed as of the run that left this many
     /// messages
     changed: Option<(usize, Option<Changed>)>,
+    /// Where the attempt works, whose tests are searched for what it
+    /// added
+    workspace: PathBuf,
+    /// What the attempt added that no test names, as of the run that
+    /// left this many messages
+    uncovered: Option<(usize, Vec<String>)>,
 }
 
 /// What the reviewer made of work that was about to stand.
@@ -342,6 +350,7 @@ impl FollowUp {
                 },
                 judge,
                 tiers: live.tiers(),
+                workspace: workspace.to_path_buf(),
                 ..Self::default()
             };
         }
@@ -370,6 +379,8 @@ impl FollowUp {
             before: None,
             tiers: live.tiers(),
             changed: None,
+            workspace: workspace.to_path_buf(),
+            uncovered: None,
         }
     }
 
@@ -402,6 +413,29 @@ impl FollowUp {
         self.changed
             .as_ref()
             .and_then(|(_, changed)| changed.as_ref())
+    }
+
+    /// What the attempt added as of `result` that no test in its
+    /// workspace names, read once per run of the attempt; empty when a
+    /// test names any of it, or when what it changed is not known.
+    async fn uncovered_as_of(&mut self, result: &AgentLoopResult) -> Vec<String> {
+        let as_of = result.messages.len();
+        if let Some((at, names)) = &self.uncovered {
+            if *at == as_of {
+                return names.clone();
+            }
+        }
+        let added = match self.changed_as_of(result).await {
+            Some(changed) => coverage::added_names(&changed.diff),
+            None => Vec::new(),
+        };
+        let names = if added.is_empty() {
+            added
+        } else {
+            untested(self.workspace.clone(), added).await
+        };
+        self.uncovered = Some((as_of, names.clone()));
+        names
     }
 
     /// The files the attempt changed by any means as of `result`, when
@@ -452,6 +486,12 @@ impl FollowUp {
         let raised = flags(&self.evidence(result, at.turn_start), at.category);
         let review_signs = self.tiers.in_tier(&raised, Tier::Review);
         let acting_signs = self.tiers.in_tier(&raised, Tier::Act);
+        let uncovered = if at.signal == Some(OutcomeSignal::ChecksPassed) && verifiable(at.category)
+        {
+            self.uncovered_as_of(result).await
+        } else {
+            Vec::new()
+        };
         let reply = final_reply(result);
         let ended = Ended {
             signal: at.signal,
@@ -462,10 +502,11 @@ impl FollowUp {
             difficulty: at.difficulty,
             review_signs: &review_signs,
             acting_signs: &acting_signs,
+            uncovered: &uncovered,
         };
         let step = followup::next(&ended, self.taken, self.allowed);
         match step {
-            Step::Nudge => {
+            Step::Nudge(_) => {
                 self.taken.nudged = true;
                 self.changed_before = reported;
             }
@@ -601,6 +642,104 @@ pub(crate) fn final_reply_in(messages: &[Message]) -> String {
 /// harness's.
 pub(crate) fn nudge_prompt() -> String {
     format!("{}{NUDGE_PROMPT}", SteerSource::Harness.prefix())
+}
+
+/// The message of a [`Step::Nudge`] for `uncovered`, what the change
+/// added that no test names: asked to test that when there is any, else
+/// to check the change at all.
+pub(crate) fn nudge_message(uncovered: &[String]) -> String {
+    if uncovered.is_empty() {
+        return nudge_prompt();
+    }
+    format!(
+        "{}{}",
+        SteerSource::Harness.prefix(),
+        followup::uncovered_prompt(uncovered)
+    )
+}
+
+/// What the user is told when `model`'s change is nudged for
+/// `uncovered`.
+pub(crate) fn nudge_notice(model: &str, uncovered: &[String]) -> String {
+    let model = aura_model::model_catalog::route_label(model);
+    match uncovered {
+        [] => format!(
+            "gate: {model} changed files without running a test or build; asking it to check its change"
+        ),
+        [name, ..] => format!(
+            "gate: {model}'s tests passed but none names `{name}`{}, which it added; asking it to test the new code",
+            if uncovered.len() > 1 {
+                format!(" or {} other", uncovered.len() - 1)
+            } else {
+                String::new()
+            }
+        ),
+    }
+}
+
+/// Files of a workspace [`untested`] reads at most; past them, what the
+/// attempt added counts as named.
+const MAX_SEARCHED: usize = 20_000;
+
+/// Test files bigger than this are not read.
+const MAX_TEST_BYTES: u64 = 1024 * 1024;
+
+/// How long looking through a workspace's tests may take.
+const SEARCH_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// `names` when no test file under `workspace` names any of them, else
+/// none. Hidden folders (Aura's task records among them, which quote the
+/// prompt) and build output are not searched; a search that fails or
+/// takes too long finds them named.
+async fn untested(workspace: PathBuf, names: Vec<String>) -> Vec<String> {
+    let found = tokio::task::spawn_blocking(move || {
+        let named = named_by_a_test(&workspace, &names);
+        (!named).then_some(names)
+    });
+    match tokio::time::timeout(SEARCH_TIMEOUT, found).await {
+        Ok(Ok(Some(names))) => names,
+        Ok(_) => Vec::new(),
+        Err(_) => {
+            warn!("Looking for tests of what the attempt added took too long");
+            Vec::new()
+        }
+    }
+}
+
+/// Whether a test file under `workspace` names any of `names`; also when
+/// there are more files than are searched.
+fn named_by_a_test(workspace: &Path, names: &[String]) -> bool {
+    let searched = walkdir::WalkDir::new(workspace)
+        .into_iter()
+        .filter_entry(|entry| {
+            let skipped = entry.depth() > 0
+                && entry.file_type().is_dir()
+                && entry.file_name().to_str().is_none_or(|name| {
+                    name.starts_with('.') || changes::BUILD_OUTPUT.contains(&name)
+                });
+            !skipped
+        });
+    for (seen, entry) in searched.filter_map(Result::ok).enumerate() {
+        if seen >= MAX_SEARCHED {
+            return true;
+        }
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let relative = entry.path().strip_prefix(workspace).unwrap_or(entry.path());
+        if !is_test_path(&relative.to_string_lossy())
+            || entry.metadata().map_or(true, |m| m.len() > MAX_TEST_BYTES)
+        {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        if names.iter().any(|name| coverage::mentions(&text, name)) {
+            return true;
+        }
+    }
+    false
 }
 
 /// The message that sends work a review found unfinished back to its
@@ -797,6 +936,49 @@ pub(crate) fn joined(first: Option<String>, second: Option<String>) -> Option<St
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn what_no_test_names_is_untested() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let write = |path: &str, text: &str| {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write("lib/urls.py", "def prepare_multipart(fields):\n    pass\n");
+        write("test/units/test_urls.py", "from urls import open_url\n");
+        write(".aura/tasks/1.json", "implement prepare_multipart");
+        write("node_modules/x/test.js", "prepare_multipart()");
+        let names = vec!["prepare_multipart".to_string()];
+
+        let found = untested(root.to_path_buf(), names.clone()).await;
+        assert_eq!(
+            found, names,
+            "the prompt's records and dependencies are not tests"
+        );
+
+        write(
+            "test/units/test_multipart.py",
+            "from urls import prepare_multipart\n",
+        );
+        assert!(untested(root.to_path_buf(), names).await.is_empty());
+    }
+
+    #[test]
+    fn a_nudge_says_what_no_test_names() {
+        let plain = nudge_message(&[]);
+        assert!(plain.ends_with(NUDGE_PROMPT), "{plain}");
+        let names = ["prepare_multipart".to_string(), "Part".to_string()];
+        let told = nudge_message(&names);
+        assert!(told.contains("`prepare_multipart`, `Part`"), "{told}");
+        assert!(followup::is_nudge(&told));
+        let notice = nudge_notice("claude/claude-haiku-5-5", &names);
+        assert!(
+            notice.contains("none names `prepare_multipart` or 1 other"),
+            "{notice}"
+        );
+    }
 
     fn check(passed: Option<bool>, exit_code: Option<i32>, command: &str, tail: &str) -> CheckRun {
         CheckRun {

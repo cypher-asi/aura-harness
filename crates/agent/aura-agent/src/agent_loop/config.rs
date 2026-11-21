@@ -38,18 +38,6 @@ pub struct AgentLoopConfig {
     /// [`crate::budget::should_stop_for_budget`] and
     /// `aura_agent::agent_loop::context::check_budget_warnings`.
     pub max_iterations: usize,
-    /// Maximum tokens per response.
-    pub max_tokens: u32,
-    /// Initial response-token budget seeded into
-    /// `LoopState::thinking` at the start of a turn. When `Some`,
-    /// this overrides the default of `max_tokens` and lets the
-    /// runner cap the loop's *starting* budget below `max_tokens`
-    /// (e.g. derived from the model card's `max_thinking_tokens`)
-    /// while still allowing the on-truncation restore path to lift
-    /// back to the full `max_tokens` ceiling. When `None`, the loop
-    /// falls back to `max_tokens` (preserving the pre-Phase-6
-    /// behavior).
-    pub thinking_budget: Option<u32>,
     /// Streaming timeout per iteration. This is an outer guard around
     /// the provider call; it must be >= the reasoner's reqwest request
     /// timeout (`AURA_MODEL_TIMEOUT_MS`, default 300s) or the agent
@@ -318,8 +306,6 @@ impl AgentLoopConfig {
     pub fn for_agent(model: impl Into<String>) -> Self {
         Self {
             max_iterations: MAX_ITERATIONS,
-            max_tokens: 16_384,
-            thinking_budget: None,
             // Matches the default reasoner reqwest timeout (300s /
             // `AURA_MODEL_TIMEOUT_MS`). The previous 60s caused long
             // streams with extended thinking to hit `timeout()` in

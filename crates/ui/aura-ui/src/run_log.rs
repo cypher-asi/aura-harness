@@ -37,9 +37,21 @@ pub struct LogStepView {
     pub seq: u64,
     /// `prompt`, `model`, `tool`, `decision` or `end`
     pub kind: String,
+    /// What it did: a model call's tool calls with their key argument
+    /// (`read_file src/x.rs`) or the first line of its reply; the call a
+    /// tool result answers
     pub label: String,
-    /// Summary on the right: tokens, cost, time
-    pub detail: String,
+    /// What came of it in a few words: `12 entries`, `exit 0 · 3 lines`,
+    /// `error: …`
+    pub summary: String,
+    /// The model call a tool result answers, by `seq`
+    pub parent: Option<u64>,
+    /// `14k tok`, or empty
+    pub tokens: String,
+    /// `$0.04`, or empty
+    pub cost: String,
+    /// `3s`, or empty
+    pub took: String,
     pub status: LogStatus,
     pub fields: Vec<LogField>,
     pub sections: Vec<LogSection>,
@@ -54,9 +66,13 @@ pub struct LogStepView {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct LogTurnView {
     pub turn: u32,
-    /// First line of the prompt
+    /// First line of the prompt, empty when it is the run's title
     pub prompt: String,
+    /// `32 calls · end_turn`
     pub detail: String,
+    pub tokens: String,
+    pub cost: String,
+    pub took: String,
     pub status: LogStatus,
     pub steps: Vec<LogStepView>,
     /// Runs spawned in the turn that no step names, by index into
@@ -81,6 +97,9 @@ pub struct LogRunView {
     /// What looks wrong with the run (calls that never finished, ...)
     pub problems: Vec<String>,
     pub turns: Vec<LogTurnView>,
+    /// Indices in [`LogView::runs`] of runs below it that none of its
+    /// turns started, such as a benchmark's, listed after its turns
+    pub runs: Vec<usize>,
     /// Its log in `log.json`, its subagents' included, pretty-printed
     pub json: String,
 }

@@ -66,8 +66,6 @@ pub struct Session {
     /// Optional concrete provider override built from
     /// `provider_overrides`.
     pub(crate) provider_override: Option<Arc<dyn ModelProvider + Send + Sync>>,
-    /// Max tokens per response.
-    pub(crate) max_tokens: u32,
     /// Sampling temperature.
     pub(crate) temperature: Option<f32>,
     /// User-selected reasoning-effort tier forwarded from the chat
@@ -172,7 +170,6 @@ impl Session {
             prompt_cache_key: None,
             prompt_cache_retention: None,
             provider_override: None,
-            max_tokens: 16384,
             temperature: None,
             user_thinking_effort: None,
             max_turns: aura_core_types::MAX_TURNS,
@@ -274,9 +271,6 @@ impl Session {
         if let Some(model_id) = model.id {
             self.context_window_tokens = context_window_for_model(&model_id);
             self.model = model_id;
-        }
-        if let Some(max_tokens) = model.max_tokens {
-            self.max_tokens = max_tokens;
         }
         if let Some(temperature) = model.temperature {
             self.temperature = Some(temperature);
@@ -466,7 +460,6 @@ impl Session {
             prompt_cache_key: self.prompt_cache_key.clone(),
             prompt_cache_retention,
             request_kind: ModelRequestKind::Chat,
-            max_tokens: self.max_tokens,
             max_context_tokens: usize::try_from(self.context_window_tokens).unwrap_or(usize::MAX),
             auth_token: self.auth_token.clone(),
         }
@@ -518,7 +511,6 @@ impl Session {
         AgentLoopConfig {
             max_iterations,
             system_prompt,
-            max_tokens: self.max_tokens,
             max_context_tokens: Some(self.context_window_tokens),
             stream_timeout: agent_loop_stream_timeout(),
             auth_token: self.auth_token.clone(),

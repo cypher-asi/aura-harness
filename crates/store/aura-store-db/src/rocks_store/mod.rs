@@ -461,6 +461,9 @@ impl RocksStore {
 // allowed to append to the record log (Invariant §10).
 impl crate::store::sealed::Sealed for RocksStore {}
 
+// Read spans are at debug level: reads run once per agent row every time
+// the agent lists are rebuilt, and an info span (enabled by the apps'
+// default `aura=info` filter) formats its fields on every call.
 impl ReadStore for RocksStore {
     #[instrument(skip(self, tx), fields(agent_id = %tx.agent_id, hash = %tx.hash))]
     fn enqueue_tx(&self, tx: &Transaction) -> Result<(), StoreError> {
@@ -528,13 +531,13 @@ impl ReadStore for RocksStore {
         }
     }
 
-    #[instrument(skip(self), fields(agent_id = %agent_id))]
+    #[instrument(level = "debug", skip(self), fields(agent_id = %agent_id))]
     fn get_head_seq(&self, agent_id: AgentId) -> Result<u64, StoreError> {
         let key = AgentMetaKey::head_seq(agent_id);
         self.read_meta_u64(&key)
     }
 
-    #[instrument(skip(self), fields(agent_id = %agent_id, from_seq, limit))]
+    #[instrument(level = "debug", skip(self), fields(agent_id = %agent_id, from_seq, limit))]
     fn scan_record(
         &self,
         agent_id: AgentId,
@@ -580,7 +583,7 @@ impl ReadStore for RocksStore {
         Ok(entries)
     }
 
-    #[instrument(skip(self), fields(agent_id = %agent_id, from_seq, limit))]
+    #[instrument(level = "debug", skip(self), fields(agent_id = %agent_id, from_seq, limit))]
     fn scan_record_descending(
         &self,
         agent_id: AgentId,
@@ -627,7 +630,7 @@ impl ReadStore for RocksStore {
         Ok(entries)
     }
 
-    #[instrument(skip(self), fields(agent_id = %agent_id, seq))]
+    #[instrument(level = "debug", skip(self), fields(agent_id = %agent_id, seq))]
     fn get_record_entry(&self, agent_id: AgentId, seq: u64) -> Result<RecordEntry, StoreError> {
         let cf = self.cf(cf::RECORD)?;
         let key = RecordKey::new(agent_id, seq);
@@ -643,7 +646,7 @@ impl ReadStore for RocksStore {
         }
     }
 
-    #[instrument(skip(self), fields(agent_id = %agent_id))]
+    #[instrument(level = "debug", skip(self), fields(agent_id = %agent_id))]
     fn get_agent_status(&self, agent_id: AgentId) -> Result<AgentStatus, StoreError> {
         let cf = self.cf(cf::AGENT_META)?;
         let key = AgentMetaKey::status(agent_id);
@@ -690,14 +693,14 @@ impl ReadStore for RocksStore {
         Ok(())
     }
 
-    #[instrument(skip(self), fields(agent_id = %agent_id))]
+    #[instrument(level = "debug", skip(self), fields(agent_id = %agent_id))]
     fn has_pending_tx(&self, agent_id: AgentId) -> Result<bool, StoreError> {
         let head = self.read_meta_u64(&AgentMetaKey::inbox_head(agent_id))?;
         let tail = self.read_meta_u64(&AgentMetaKey::inbox_tail(agent_id))?;
         Ok(tail > head)
     }
 
-    #[instrument(skip(self), fields(agent_id = %agent_id))]
+    #[instrument(level = "debug", skip(self), fields(agent_id = %agent_id))]
     fn get_inbox_depth(&self, agent_id: AgentId) -> Result<u64, StoreError> {
         let head = self.read_meta_u64(&AgentMetaKey::inbox_head(agent_id))?;
         let tail = self.read_meta_u64(&AgentMetaKey::inbox_tail(agent_id))?;
@@ -777,7 +780,7 @@ impl ReadStore for RocksStore {
         Ok(())
     }
 
-    #[instrument(skip(self), fields(agent_id = %agent_id))]
+    #[instrument(level = "debug", skip(self), fields(agent_id = %agent_id))]
     fn is_agent_processing(&self, agent_id: AgentId) -> Result<bool, StoreError> {
         let cf = self.cf(cf::AGENT_META)?;
         let key = Self::processing_claim_key(agent_id);

@@ -1,0 +1,14 @@
+{
+  "id": "01a1ffa8cde70005",
+  "title": "Repo: Rust workspace in the current directory (aura-harness). Follow `.cursor/rules.md` (no unwrap/expect in production…",
+  "state": "failed",
+  "agent_id": "5101daeda92c9c97950a5152bb3e154c256641412f335920a3f905dbaf133f88",
+  "agent_name": "rust-engineer #27",
+  "assignee": "rust-engineer",
+  "parent": "01a1ff9ee3e50001",
+  "items": [],
+  "summary": "cancelled by the user",
+  "updated_ms": 1795290711545,
+  "created_ms": 1795290615271,
+  "tool_use_id": "toolu_01SrLXRpfvjnfKNG8cn71xFb"
+}

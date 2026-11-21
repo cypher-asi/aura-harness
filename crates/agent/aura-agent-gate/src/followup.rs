@@ -15,6 +15,12 @@
 //!    whatever the work asked for. What looks wrong ([`suspicions`]) is
 //!    pointed out to it.
 //!
+//! A turn whose check passed while no test in the workspace names
+//! anything its change added ([`crate::coverage`]) checked none of it,
+//! and takes the steps above as a turn with no check does: its nudge
+//! names what no test calls ([`uncovered_prompt`]), and the judge is told
+//! why it looks.
+//!
 //! A turn whose check passed is not thereby right: the check may cover
 //! little of what was asked. On the benchmark runs in Gate's attempt log
 //! ([`crate::attempt_log`]), a fifth of the hard attempts by models below
@@ -75,6 +81,10 @@ pub struct Ended<'a> {
     /// The signs its evidence raises that act on their own
     /// ([`crate::attempt_log::Tier::Act`]).
     pub acting_signs: &'a [Flag],
+    /// What its change added that no test in the workspace names, when
+    /// its check passed; empty when a test names any of it, or when it
+    /// is not known.
+    pub uncovered: &'a [String],
 }
 
 /// The steps already taken for the attempt.
@@ -114,6 +124,8 @@ pub enum Suspicion {
     /// A check it ran passed, but its reply says the work was not
     /// verified.
     Unverified,
+    /// A check it ran passed, but no test names what its change added.
+    Uncovered,
 }
 
 impl Suspicion {
@@ -125,17 +137,29 @@ impl Suspicion {
             Self::GaveUp => "the final reply says the work could not be done or was left unfinished",
             Self::HitLimit => "the attempt stopped on a limit (iterations, budget or a stall) instead of finishing",
             Self::Unverified => "a test or build it ran exited with success, but the final reply says the work was not verified or not tested",
+            Self::Uncovered => "the tests it ran passed, but no test names anything its change added, so they never ran the new code",
         }
     }
 
-    /// The sign of failure that says the same of an attempt's evidence.
+    /// The sign of failure that says the same of an attempt's evidence;
+    /// `None` for one its evidence does not show.
     #[must_use]
-    pub const fn flag(self) -> Flag {
+    pub const fn flag(self) -> Option<Flag> {
         match self {
-            Self::NoChanges => Flag::NoChanges,
-            Self::GaveUp => Flag::GaveUp,
-            Self::HitLimit => Flag::HitLimit,
-            Self::Unverified => Flag::ReplyUnverified,
+            Self::NoChanges => Some(Flag::NoChanges),
+            Self::GaveUp => Some(Flag::GaveUp),
+            Self::HitLimit => Some(Flag::HitLimit),
+            Self::Unverified => Some(Flag::ReplyUnverified),
+            Self::Uncovered => None,
+        }
+    }
+
+    /// Why work it is raised on is reviewed.
+    #[must_use]
+    pub const fn why(self) -> Why {
+        match self.flag() {
+            Some(flag) => Why::Sign(flag),
+            None => Why::Uncovered,
         }
     }
 }
@@ -147,15 +171,18 @@ pub enum Why {
     Hard,
     /// Its evidence raises this sign.
     Sign(Flag),
+    /// Its check passed, but no test names what its change added.
+    Uncovered,
 }
 
 impl Why {
-    /// The reason's name as logged: `hard`, or the sign's.
+    /// The reason's name as logged: `hard`, `uncovered`, or the sign's.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Hard => "hard",
             Self::Sign(flag) => flag.name(),
+            Self::Uncovered => "uncovered",
         }
     }
 
@@ -167,6 +194,7 @@ impl Why {
                 "the task was rated hard, and hard work is reviewed before it is accepted"
             }
             Self::Sign(flag) => flag.describe(),
+            Self::Uncovered => Suspicion::Uncovered.describe(),
         }
     }
 }
@@ -176,8 +204,9 @@ impl Why {
 pub enum Step {
     /// Nothing more: the turn stands as it ended.
     Stop,
-    /// Ask the same model to verify its change.
-    Nudge,
+    /// Ask the same model to verify its change: to test what it added
+    /// that no test names, when these names are given.
+    Nudge(Vec<String>),
     /// Run the project's tests.
     HarnessCheck,
     /// Have the judge review the work for these reasons.
@@ -271,6 +300,9 @@ pub fn suspicions(ended: &Ended<'_>) -> Vec<Suspicion> {
     if ended.hit_limit {
         found.push(Suspicion::HitLimit);
     }
+    if !ended.uncovered.is_empty() {
+        found.push(Suspicion::Uncovered);
+    }
     found
 }
 
@@ -285,11 +317,11 @@ fn reasons(ended: &Ended<'_>, looks: &[Suspicion]) -> Vec<Why> {
         .acting_signs
         .iter()
         .chain(ended.review_signs)
-        .copied()
-        .chain(looks.iter().map(|suspicion| suspicion.flag()));
+        .map(|sign| Why::Sign(*sign))
+        .chain(looks.iter().map(|suspicion| suspicion.why()));
     for sign in signs {
-        if !why.contains(&Why::Sign(sign)) {
-            why.push(Why::Sign(sign));
+        if !why.contains(&sign) {
+            why.push(sign);
         }
     }
     why
@@ -315,16 +347,21 @@ fn acted_review(ended: &Ended<'_>, taken: Taken, looks: &[Suspicion]) -> Option<
 /// The next step for `ended`, given the steps `taken` and those
 /// `allowed`. A turn with no signal yet is nudged and checked by the
 /// harness when it changed code, may be reviewed, and is then judged:
-/// whatever it asked for, it ends with a verdict. Code work whose own
-/// check passed may be reviewed, and goes to the judge when its reply
-/// says the work was not verified. Any other signal already says how the
-/// turn went.
+/// whatever it asked for, it ends with a verdict. So is code work whose
+/// check passed without a test naming what it added. Other code work
+/// whose own check passed may be reviewed, and goes to the judge when its
+/// reply says the work was not verified. Any other signal already says
+/// how the turn went.
 #[must_use]
 pub fn next(ended: &Ended<'_>, taken: Taken, allowed: Allowed) -> Step {
     match ended.signal {
         None => unchecked(ended, taken, allowed),
         Some(OutcomeSignal::ChecksPassed) if verifiable(ended.category) => {
-            passed(ended, taken, allowed)
+            if ended.uncovered.is_empty() {
+                passed(ended, taken, allowed)
+            } else {
+                unchecked(ended, taken, allowed)
+            }
         }
         Some(_) => Step::Stop,
     }
@@ -334,7 +371,7 @@ fn unchecked(ended: &Ended<'_>, taken: Taken, allowed: Allowed) -> Step {
     let code = verifiable(ended.category);
     let changed = code && ended.files_changed > 0;
     if changed && allowed.nudge && !taken.nudged && !ended.hit_limit {
-        return Step::Nudge;
+        return Step::Nudge(ended.uncovered.to_vec());
     }
     if changed && allowed.harness_check && !taken.checked {
         return Step::HarnessCheck;
@@ -422,6 +459,43 @@ the tests that cover what you changed (run them the way this project or task say
 for example through its own wrapper script), and fix anything that fails. If no test covers it, \
 run the build or type check. Then reply with what you ran and how it went.";
 
+/// How the message starts that asks a model to test what it added that
+/// no test names.
+pub const UNCOVERED_OPENING: &str = "The tests you ran passed, but no test names ";
+
+/// Names [`uncovered_prompt`] lists.
+const UNCOVERED_LISTED: usize = 8;
+
+/// What the model is told when the tests it ran passed while none names
+/// `names`, what its change added.
+#[must_use]
+pub fn uncovered_prompt(names: &[String]) -> String {
+    let mut listed: Vec<String> = names
+        .iter()
+        .take(UNCOVERED_LISTED)
+        .map(|name| format!("`{name}`"))
+        .collect();
+    if names.len() > UNCOVERED_LISTED {
+        listed.push(format!("{} more", names.len() - UNCOVERED_LISTED));
+    }
+    format!(
+        "{UNCOVERED_OPENING}{}, which your change added, so they never ran the new code. Before you \
+         finish, write tests that call it and check what it returns against what the request \
+         asks for, taking the expected values from the request (including the exact format of \
+         any output it specifies) rather than from what your code prints. Run them the way this \
+         project or task says commands run, fix anything that fails, and reply with what you ran \
+         and how it went.",
+        listed.join(", ")
+    )
+}
+
+/// Whether `text`, a message to the model, is one of Gate's asking it to
+/// check its change.
+#[must_use]
+pub fn is_nudge(text: &str) -> bool {
+    text.contains(NUDGE_PROMPT) || text.contains(UNCOVERED_OPENING)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,6 +527,7 @@ mod tests {
             difficulty: None,
             review_signs: &[],
             acting_signs: &[],
+            uncovered: &[],
         }
     }
 
@@ -562,7 +637,10 @@ mod tests {
             difficulty: Some(Difficulty::Hard),
             ..ended(2, "Done.")
         };
-        assert_eq!(next(&hard, Taken::default(), REVIEWING), Step::Nudge);
+        assert_eq!(
+            next(&hard, Taken::default(), REVIEWING),
+            Step::Nudge(Vec::new())
+        );
         let nudged = Taken {
             nudged: true,
             ..Taken::default()
@@ -658,13 +736,57 @@ mod tests {
         assert!(signs.contains(Flag::ShellEdit.describe()), "{signs}");
         assert_eq!(Why::Hard.name(), "hard");
         assert_eq!(Why::Sign(Flag::ShellEdit).name(), "shell_edit");
-        assert_eq!(Suspicion::Unverified.flag(), Flag::ReplyUnverified);
+        assert_eq!(Suspicion::Unverified.flag(), Some(Flag::ReplyUnverified));
+        assert_eq!(Suspicion::Uncovered.why().name(), "uncovered");
+    }
+
+    #[test]
+    fn a_passed_check_no_test_of_which_names_the_change_counts_as_none() {
+        let names = ["prepare_multipart".to_string()];
+        let uncovered = Ended {
+            uncovered: &names,
+            ..passed("Implemented prepare_multipart; the urls tests pass.")
+        };
+        let step = next(&uncovered, Taken::default(), ALL);
+        assert_eq!(step, Step::Nudge(names.to_vec()));
+        let nudged = Taken {
+            nudged: true,
+            ..Taken::default()
+        };
+        assert_eq!(next(&uncovered, nudged, ALL), Step::HarnessCheck);
+        let checked = Taken {
+            checked: true,
+            ..nudged
+        };
+        assert_eq!(
+            next(&uncovered, checked, ALL),
+            Step::JudgeUnverified(vec![Suspicion::Uncovered])
+        );
+        assert_eq!(
+            next(&uncovered, checked, REVIEWING),
+            review(&[Why::Uncovered], true),
+            "with reviews on, the review stands in for the judge"
+        );
+        assert_eq!(
+            next(&passed("Done."), Taken::default(), ALL),
+            Step::Stop,
+            "a test names what it added"
+        );
+
+        let told = uncovered_prompt(&names);
+        assert!(told.starts_with(UNCOVERED_OPENING), "{told}");
+        assert!(told.contains("`prepare_multipart`"), "{told}");
+        assert!(is_nudge(&told) && is_nudge(NUDGE_PROMPT));
+        assert!(!is_nudge(&repair_prompt("1. it is wrong")));
     }
 
     #[test]
     fn a_change_nobody_checked_is_nudged_then_checked_by_the_harness() {
         let changed = ended(2, "Done.");
-        assert_eq!(next(&changed, Taken::default(), ALL), Step::Nudge);
+        assert_eq!(
+            next(&changed, Taken::default(), ALL),
+            Step::Nudge(Vec::new())
+        );
         let nudged = Taken {
             nudged: true,
             ..Taken::default()

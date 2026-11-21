@@ -75,8 +75,33 @@ pub(super) fn effective_compaction_request_kind(
     }
 }
 
+/// Room compaction keeps free in the context window for the next reply.
+/// A reply may run longer: the request asks for all that is left (see
+/// [`room_left_for_reply`]).
+const REPLY_HEADROOM_TOKENS: u64 = 16_384;
+
 fn reserved_output_tokens(config: &AgentLoopConfig, max_ctx: u64) -> u64 {
-    u64::from(config.max_tokens).min(max_ctx)
+    u64::from(aura_model::model_catalog::max_output_tokens(&config.model))
+        .min(REPLY_HEADROOM_TOKENS)
+        .min(max_ctx)
+}
+
+/// The most the next reply may take of the context window, or `None` when
+/// the window is unknown or less than [`REPLY_HEADROOM_TOKENS`] is left.
+/// The API refuses a request whose input and `max_tokens` together exceed
+/// the window. With less than the headroom left the request is sent
+/// anyway: its refusal is an overflow, which compacts the conversation.
+/// The system prompt and tools are counted on top of the estimate, which
+/// may already hold them, so the room errs small.
+pub(super) fn room_left_for_reply(
+    config: &AgentLoopConfig,
+    state: &LoopState,
+    tools: &[ToolDefinition],
+) -> Option<u32> {
+    let window = config.max_context_tokens?;
+    let prompt = chars_to_tokens(config.system_prompt.len() + compaction::tools_chars(tools));
+    let room = window.saturating_sub(current_context_tokens(state).saturating_add(prompt));
+    (room >= REPLY_HEADROOM_TOKENS).then(|| u32::try_from(room).unwrap_or(u32::MAX))
 }
 
 #[cfg(test)]
@@ -435,30 +460,45 @@ mod tests {
     }
 
     #[test]
-    fn reserves_max_tokens_for_output_headroom() {
-        let config = AgentLoopConfig {
-            max_tokens: 16_384,
-            ..AgentLoopConfig::for_agent("claude-test-model")
-        };
+    fn compaction_keeps_headroom_for_the_next_reply() {
+        let config = AgentLoopConfig::for_agent("claude-haiku-4-5");
         assert_eq!(reserved_output_tokens(&config, 200_000), 16_384);
+        let local = AgentLoopConfig::for_agent("local/qwen3:4b");
+        assert_eq!(
+            reserved_output_tokens(&local, 32_000),
+            u64::from(aura_model::model_catalog::DEFAULT_LOCAL_MAX_OUTPUT_TOKENS)
+        );
     }
 
     #[test]
     fn reserve_is_capped_by_context_window() {
-        let config = AgentLoopConfig {
-            max_tokens: 16_384,
-            ..AgentLoopConfig::for_agent("claude-test-model")
-        };
+        let config = AgentLoopConfig::for_agent("claude-haiku-4-5");
         assert_eq!(reserved_output_tokens(&config, 8_000), 8_000);
     }
 
     #[test]
     fn pressure_tokens_include_output_reserve() {
+        let config = AgentLoopConfig::for_agent("claude-haiku-4-5");
+        assert_eq!(compaction_pressure_tokens(&config, 60_000, 200_000), 76_384);
+    }
+
+    #[test]
+    fn a_reply_may_take_what_is_left_of_the_window() {
         let config = AgentLoopConfig {
-            max_tokens: 20_000,
-            ..AgentLoopConfig::for_agent("claude-test-model")
+            max_context_tokens: Some(200_000),
+            ..AgentLoopConfig::for_agent("claude-haiku-4-5")
         };
-        assert_eq!(compaction_pressure_tokens(&config, 60_000, 100_000), 80_000);
+        let request = |conversation_tokens: usize| {
+            let messages = vec![Message::user("R".repeat(conversation_tokens * 4))];
+            LoopState::new(&config, messages)
+                .build_request(&config, &[], 0)
+                .unwrap()
+                .max_tokens
+                .get()
+        };
+        assert_eq!(request(1_000), 64_000);
+        assert_eq!(request(160_000), 40_000);
+        assert_eq!(request(190_000), 64_000, "an overflow compacts instead");
     }
 
     #[test]
@@ -772,7 +812,6 @@ mod tests {
         let config = AgentLoopConfig {
             request_kind: ModelRequestKind::DevLoopBootstrap,
             max_context_tokens: Some(1_000_000),
-            max_tokens: 16_384,
             ..AgentLoopConfig::for_agent("claude-test-model")
         };
         let big_payload = "X".repeat(40_000);

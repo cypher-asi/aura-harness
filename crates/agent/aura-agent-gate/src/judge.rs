@@ -25,9 +25,6 @@ pub const MAX_DIFF: usize = 12_000;
 /// Longest final reply the judge sees per attempt, in characters.
 pub const MAX_REPLY: usize = 4_000;
 
-/// Room for a few sentences and the verdict line.
-const MAX_REPLY_TOKENS: u32 = 1_024;
-
 /// System prompt of every judge request; tells them apart from the
 /// agent's own calls.
 pub const SYSTEM_PROMPT: &str = "\
@@ -265,7 +262,6 @@ pub fn request(
     ModelRequest::builder(model, SYSTEM_PROMPT)
         .message(Message::user(prompt(task, first, second, reference)))
         .tool_choice(ToolChoice::None)
-        .max_tokens(MAX_REPLY_TOKENS)
         .thinking_effort(Some(ThinkingEffort::Off))
         .auth_token(auth_token)
         .request_kind(ModelRequestKind::Auxiliary)

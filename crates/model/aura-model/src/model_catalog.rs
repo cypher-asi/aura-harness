@@ -47,9 +47,62 @@ pub const DEFAULT_LOCAL_URL: &str = "http://127.0.0.1:11434";
 /// `OLLAMA_CONTEXT_LENGTH`; its built-in default is much smaller.
 pub const DEFAULT_LOCAL_CONTEXT_TOKENS: u64 = 32_768;
 
-/// Output budget for local models; the 16K agent default would consume
-/// half of a 32K local context window.
+/// Output budget for local models: a reply shares the local server's
+/// small context window ([`DEFAULT_LOCAL_CONTEXT_TOKENS`]) with the
+/// prompt, and the agent loop keeps this much of it free.
 pub const DEFAULT_LOCAL_MAX_OUTPUT_TOKENS: u32 = 4_096;
+
+/// Output for a model whose API sets no limit of its own beyond its
+/// context window (Grok, the open-weight models served by Fireworks):
+/// the largest limit any API aura calls publishes. Fireworks lowers it to
+/// what the window has left.
+const CONTEXT_BOUND_OUTPUT_TOKENS: u32 = 128_000;
+
+/// Output for a model this table does not know.
+const UNKNOWN_OUTPUT_TOKENS: u32 = 32_000;
+
+/// The most tokens one reply of `model` may hold: the limit its API
+/// publishes, which requests are sent with unless a caller asks for less.
+#[must_use]
+pub fn max_output_tokens(model: &str) -> u32 {
+    if backend_for(model) == ModelBackend::Local {
+        return DEFAULT_LOCAL_MAX_OUTPUT_TOKENS;
+    }
+    let key = model_key(model);
+    let has = |words: &[&str]| words.iter().any(|w| key.contains(w));
+    if key.contains("claude") {
+        return if has(&["opus-4-5", "sonnet-4-5", "haiku-4-5", "3-7-sonnet"]) {
+            64_000
+        } else if has(&["opus-4-1"]) || key.starts_with("claude-opus-4-20") {
+            32_000
+        } else if key.starts_with("claude-sonnet-4-20") {
+            64_000
+        } else if has(&["claude-3-5"]) {
+            8_192
+        } else if has(&["claude-3-"]) {
+            4_096
+        } else {
+            128_000
+        };
+    }
+    if has(&[
+        "oss-120b", "qwen", "deepseek", "kimi", "minimax", "glm", "grok",
+    ]) {
+        CONTEXT_BOUND_OUTPUT_TOKENS
+    } else if has(&["gpt-5", "gpt-6"]) {
+        128_000
+    } else if has(&["gpt-4-1"]) {
+        32_768
+    } else if has(&["gpt-4o"]) {
+        16_384
+    } else if key.starts_with("o1") || key.starts_with("o3") || key.starts_with("o4") {
+        100_000
+    } else if has(&["gemini"]) {
+        65_536
+    } else {
+        UNKNOWN_OUTPUT_TOKENS
+    }
+}
 
 /// Minimum Ollama version exposing the Anthropic-compatible `/v1/messages`.
 const MIN_OLLAMA_VERSION: (u32, u32) = (0, 14);
@@ -721,6 +774,25 @@ mod tests {
         assert_eq!(model_key("aura-claude-opus-4-7"), "claude-opus-4-7");
         assert_eq!(model_key("claude/claude-opus-4-7"), "claude-opus-4-7");
         assert_eq!(model_key("chatgpt/gpt-5.4"), model_key("aura-gpt-5-4"));
+    }
+
+    #[test]
+    fn replies_may_be_as_long_as_each_api_allows() {
+        for (model, limit) in [
+            ("aura-claude-opus-5-5", 128_000),
+            ("claude/claude-sonnet-4-6", 128_000),
+            ("aura-claude-haiku-4-5", 64_000),
+            ("claude-sonnet-4-20250514", 64_000),
+            ("claude-opus-4-1", 32_000),
+            ("chatgpt/gpt-5.4", 128_000),
+            ("aura-gpt-4o", 16_384),
+            ("aura-gemini-3-pro", 65_536),
+            ("aura-kimi-k2", CONTEXT_BOUND_OUTPUT_TOKENS),
+            ("some-new-model", UNKNOWN_OUTPUT_TOKENS),
+            ("local/qwen3:4b", DEFAULT_LOCAL_MAX_OUTPUT_TOKENS),
+        ] {
+            assert_eq!(max_output_tokens(model), limit, "{model}");
+        }
     }
 
     #[test]

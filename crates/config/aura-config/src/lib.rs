@@ -63,7 +63,6 @@
 //! | `AURA_DEFAULT_MODE` (older name `AURA_FLEET_DEFAULT_MODE`) | string | `agent` | [`AgentConfig::default_mode`] |
 //! | `AURA_SUBAGENT_MAX_DEPTH` | u32 | `8` | [`SubagentConfig::max_depth`] |
 //! | `AURA_SUBAGENT_MAX_RUNNING` | usize | `32` | [`SubagentConfig::max_running`] |
-//! | `AURA_SUBAGENT_DEFAULT_MAX_TOKENS` | u32 | `64_000` | [`SubagentConfig::default_max_tokens`] |
 //! | `AURA_SUBAGENT_DEFAULT_MAX_ITERATIONS` | u32 | `50` | [`SubagentConfig::default_max_iterations`] |
 //! | `AURA_SUBAGENT_DEFAULT_TIMEOUT_MS` | u64 | `300_000` | [`SubagentConfig::default_timeout_ms`] |
 //! | `AURA_CONFLICT_ENABLED` | bool | `true` | [`ConflictConfig::enabled`] |
@@ -115,7 +114,6 @@
 //! [`IMPLEMENT_NOW_DEFAULT_THRESHOLD`],
 //! [`IMPLEMENT_NOW_MAX_PATHS_IN_MESSAGE`],
 //! [`PROMPT_COMPACTION_MAX_BLOCK_CHARS`],
-//! [`REFINEMENT_MAX_TOKENS`], [`SPEC_GEN_MAX_TOKENS`],
 //! [`DEV_LOOP_RETRY_NOTE_MAX_BYTES`], [`tool_result_cache_key`].
 //!
 //! All of these are also reachable via the corresponding sub-config
@@ -170,7 +168,7 @@ pub use agent::{
     MAX_WORK_LOG_TASK_CONTEXT, PERVASIVE_ERROR_MIN_CALLS, PERVASIVE_ERROR_THRESHOLD,
     RECENT_OUTCOMES_WINDOW,
 };
-pub use automaton::{DEV_LOOP_RETRY_NOTE_MAX_BYTES, REFINEMENT_MAX_TOKENS, SPEC_GEN_MAX_TOKENS};
+pub use automaton::DEV_LOOP_RETRY_NOTE_MAX_BYTES;
 pub use compaction::{
     COMPACTION_TIER_30, COMPACTION_TIER_60, COMPACTION_TIER_AGGRESSIVE, COMPACTION_TIER_HISTORY,
     COMPACTION_TIER_MICRO, TOOL_RESULT_MAX_BYTES,

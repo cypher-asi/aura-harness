@@ -39,7 +39,6 @@ struct TuiPrefs {
 /// Router-side agent-loop limits, captured before any local model is applied.
 #[derive(Debug, Clone, Copy)]
 struct RouterLimits {
-    max_tokens: u32,
     stream_timeout: Duration,
     stream_event_timeout: Duration,
 }
@@ -89,7 +88,6 @@ impl ModelSelection {
             plan_models: Vec::new(),
             dropped: BTreeSet::new(),
             router_limits: RouterLimits {
-                max_tokens: config.max_tokens,
                 stream_timeout: config.stream_timeout,
                 stream_event_timeout: config.stream_event_timeout,
             },
@@ -119,7 +117,6 @@ impl ModelSelection {
             plan_models: Vec::new(),
             dropped: BTreeSet::new(),
             router_limits: RouterLimits {
-                max_tokens: config.max_tokens,
                 stream_timeout: config.stream_timeout,
                 stream_event_timeout: config.stream_event_timeout,
             },
@@ -488,14 +485,10 @@ impl ModelLimits {
         config.max_context_tokens = Some(aura_engine::model_context::context_window_for_model(id));
         match backend_for(id) {
             ModelBackend::Local => {
-                config.max_tokens = limits
-                    .max_tokens
-                    .min(model_catalog::DEFAULT_LOCAL_MAX_OUTPUT_TOKENS);
                 config.stream_timeout = LOCAL_STREAM_TIMEOUT;
                 config.stream_event_timeout = LOCAL_STREAM_TIMEOUT;
             }
             ModelBackend::Router | ModelBackend::Claude | ModelBackend::Chatgpt => {
-                config.max_tokens = limits.max_tokens;
                 config.stream_timeout = limits.stream_timeout;
                 config.stream_event_timeout = limits.stream_event_timeout;
             }
@@ -506,7 +499,6 @@ impl ModelLimits {
     #[cfg(test)]
     pub(crate) const fn of(config: &AgentLoopConfig) -> Self {
         Self(RouterLimits {
-            max_tokens: config.max_tokens,
             stream_timeout: config.stream_timeout,
             stream_event_timeout: config.stream_event_timeout,
         })
@@ -697,7 +689,6 @@ mod tests {
             plan_models: Vec::new(),
             dropped: BTreeSet::new(),
             router_limits: RouterLimits {
-                max_tokens: config.max_tokens,
                 stream_timeout: config.stream_timeout,
                 stream_event_timeout: config.stream_event_timeout,
             },
@@ -803,10 +794,6 @@ mod tests {
     fn switching_backends_swaps_limits() {
         let (mut selection, mut config) = selection(Some("alice"));
         assert_eq!(
-            config.max_tokens,
-            model_catalog::DEFAULT_LOCAL_MAX_OUTPUT_TOKENS
-        );
-        assert_eq!(
             config.max_context_tokens,
             Some(model_catalog::local_context_tokens())
         );
@@ -815,7 +802,6 @@ mod tests {
             .select(&mut config, "aura-claude-sonnet-4-6")
             .expect("logged-in user may pick cloud models");
         assert_eq!(config.model, "aura-claude-sonnet-4-6");
-        assert_eq!(config.max_tokens, 16_384);
         assert_eq!(config.max_context_tokens, Some(1_000_000));
     }
 
@@ -825,7 +811,6 @@ mod tests {
         assert!(selection.is_gate());
         assert_eq!(selection.current(), GATE_MODEL_ID);
         assert_eq!(config.model, "aura-claude-sonnet-4-6");
-        assert_eq!(config.max_tokens, 16_384);
         assert_eq!(config.max_context_tokens, Some(1_000_000));
         assert_eq!(selection.display(), "Gate → aura-claude-sonnet-4-6 (cloud)");
     }
@@ -907,7 +892,6 @@ mod tests {
         selection
             .select(&mut config, "claude/claude-sonnet-4-6")
             .expect("linked plan");
-        assert_eq!(config.max_tokens, 16_384);
         assert_eq!(config.max_context_tokens, Some(1_000_000));
 
         let options = selection.options();

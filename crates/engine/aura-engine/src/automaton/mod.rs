@@ -205,7 +205,6 @@ impl AutomatonBridge {
             prompt_cache_key: aura_project_id.map(|pid| format!("devloop:{pid}")),
             prompt_cache_retention: None,
             request_kind,
-            max_tokens: 16384,
             // Anthropic context windows top out around 1M tokens; the
             // `u64` → `usize` cast is bounds-safe on every target
             // architecture we ship to (64-bit only).
@@ -299,9 +298,6 @@ impl AutomatonBridge {
             identity.reasoning_effort = profile
                 .reasoning_effort
                 .and_then(|effort| aura_model::ThinkingEffort::from_wire(effort.as_wire()));
-            if let Some(tokens) = profile.max_tokens {
-                identity.max_tokens = tokens;
-            }
             registry.register(agent_id, identity);
         }
     }

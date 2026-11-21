@@ -13,7 +13,7 @@ use crate::types::{
 };
 use crate::DEFAULT_MEMORY_MODEL;
 use aura_core_types::{AgentEventId, AgentId, FactId};
-use aura_model::{Message, ModelProvider, ModelRequest};
+use aura_model::{Message, ModelProvider, ModelRequest, ThinkingEffort};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
@@ -237,7 +237,7 @@ impl MemoryConsolidator {
         let prompt = Self::build_compress_prompt(&oldest.iter().collect::<Vec<_>>());
         let request = ModelRequest::builder(&self.config.model, COMPRESS_SYSTEM_PROMPT)
             .messages(vec![Message::user(prompt)])
-            .max_tokens(2048)
+            .thinking_effort(Some(ThinkingEffort::Off))
             .auth_token(self.config.auth_token.clone())
             .try_build()
             .map_err(|e| MemoryError::Provider(e.to_string()))?;
@@ -360,7 +360,7 @@ impl MemoryConsolidator {
         let prompt = Self::build_evolve_prompt(&facts, &recent_events);
         let request = ModelRequest::builder(&self.config.model, EVOLVE_SYSTEM_PROMPT)
             .messages(vec![Message::user(prompt)])
-            .max_tokens(2048)
+            .thinking_effort(Some(ThinkingEffort::Off))
             .auth_token(self.config.auth_token.clone())
             .try_build()
             .map_err(|e| MemoryError::Provider(e.to_string()))?;

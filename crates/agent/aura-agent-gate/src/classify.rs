@@ -32,9 +32,6 @@ const HEAD_CHARS: usize = 3_000;
 /// acceptance criteria often close it.
 const TAIL_CHARS: usize = 1_000;
 
-/// Room for the label tool's call, or a text label.
-const MAX_REPLY_TOKENS: u32 = 128;
-
 /// The tool the classifier answers with.
 pub const LABEL_TOOL: &str = "label";
 
@@ -144,7 +141,6 @@ pub fn request(
     let answer = Answer::of(model);
     let builder = ModelRequest::builder(model, SYSTEM_PROMPT)
         .message(Message::user(message(prompt, answer)))
-        .max_tokens(MAX_REPLY_TOKENS)
         .thinking_effort(Some(ThinkingEffort::Off))
         .auth_token(auth_token)
         .request_kind(ModelRequestKind::Auxiliary)
@@ -536,7 +532,6 @@ mod tests {
         assert_eq!(built.model.as_str(), HAIKU);
         assert_eq!(built.system, SYSTEM_PROMPT);
         assert_eq!(built.auth_token.as_deref(), Some("jwt"));
-        assert_eq!(built.max_tokens.get(), MAX_REPLY_TOKENS);
         assert!(matches!(&built.tool_choice, ToolChoice::Tool { name } if name == LABEL_TOOL));
         assert_eq!(built.tools.len(), 1);
         let tool = &built.tools[0];

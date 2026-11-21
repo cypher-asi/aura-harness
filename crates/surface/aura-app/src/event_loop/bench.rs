@@ -13,9 +13,9 @@ use aura_core_types::{
     RefVerdict, RunTurn,
 };
 use aura_ui_terminal::events::{
-    BenchArm, BenchBaseline, BenchExample, BenchJudge, BenchRequest, BenchRun, BenchSpec,
-    BenchStatus, BenchTaskCell, BenchTaskRow, BenchTaskSetup, BenchTokens, BenchTurn, BenchVerdict,
-    BenchView, BenchWork,
+    run_order, BenchArm, BenchBaseline, BenchExample, BenchJudge, BenchRequest, BenchRun,
+    BenchSpec, BenchStatus, BenchTaskCell, BenchTaskRow, BenchTaskSetup, BenchTokens, BenchTurn,
+    BenchVerdict, BenchView, BenchWork,
 };
 use aura_ui_terminal::UiCommand;
 
@@ -284,7 +284,7 @@ pub(super) fn view(
             })
             .collect(),
     });
-    BenchView {
+    let mut view = BenchView {
         id: host.to_hex(),
         root: root.to_hex(),
         name: name.to_string(),
@@ -337,5 +337,7 @@ pub(super) fn view(
         has_reference: payload.source.reference().is_some(),
         notes: payload.notes.clone(),
         live: Vec::new(),
-    }
+    };
+    view.runs.sort_by_key(|run| run_order(&run.name, run.arm));
+    view
 }

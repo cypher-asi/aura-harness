@@ -51,6 +51,17 @@ pub const fn arm_letter(arm: usize) -> &'static str {
     }
 }
 
+/// Where run `name` (`a-1`, `b-2`) of arm `arm` goes among a benchmark's
+/// runs: by its number, then A before B. A name with no number goes last.
+#[must_use]
+pub fn run_order(name: &str, arm: usize) -> (u32, usize) {
+    let number = name
+        .rsplit_once('-')
+        .and_then(|(_, n)| n.parse().ok())
+        .unwrap_or(u32::MAX);
+    (number, arm)
+}
+
 /// How two costs compare, for after each: ` · 100%` for the larger and
 /// ` · 33% less` for the other, both ` · 100%` when they are about the
 /// same. Empty when either is unknown or the larger is nothing.
@@ -314,9 +325,9 @@ pub struct BenchView {
     pub prompts: Vec<String>,
     /// Arm A, then arm B
     pub arms: [BenchArm; 2],
-    /// Runs that ended, in the order they ended
+    /// Runs that ended, in [`run_order`]
     pub runs: Vec<BenchRun>,
-    /// Runs under way, in the order they started; only while it runs
+    /// Runs under way, in [`run_order`]; only while it runs
     pub live: Vec<BenchLiveRun>,
     pub judge: Option<BenchJudge>,
     /// What a replayed session cost when it ran

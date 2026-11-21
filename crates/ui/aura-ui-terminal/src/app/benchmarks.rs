@@ -828,7 +828,7 @@ mod tests {
     }
 
     #[test]
-    fn picking_a_run_shows_its_chat_once() {
+    fn a_benchmark_run_opens_on_its_own_tab() {
         use super::super::ChatTab;
         use crate::events::{AgentSummary, UiCommand};
         let agent = |id: &str, bench_run: bool| AgentSummary {
@@ -846,18 +846,37 @@ mod tests {
         app.process_command(UiCommand::SetActiveAgent("user".to_string()));
         app.show_chat_tab(ChatTab::Bench);
 
-        app.process_command(UiCommand::SetActiveAgent("other".to_string()));
-        assert_eq!(app.chat_tab(), ChatTab::Bench, "another agent keeps BENCH");
-
+        // The run is picked in the agents list while BENCH is open.
         app.process_command(UiCommand::SetActiveAgent("a-1".to_string()));
-        assert_eq!(app.chat_tab(), ChatTab::Chat, "a run is picked to watch it");
+        assert_eq!(
+            app.chat_tab(),
+            ChatTab::Chat,
+            "a run never shown opens on its chat"
+        );
 
         app.show_chat_tab(ChatTab::Bench);
         app.process_command(UiCommand::SetActiveAgent("a-1".to_string()));
         assert_eq!(
             app.chat_tab(),
             ChatTab::Bench,
-            "the list refreshing does not take BENCH away again"
+            "the list refreshing does not take BENCH away"
+        );
+
+        app.process_command(UiCommand::SetActiveAgent("other".to_string()));
+        assert_eq!(app.chat_tab(), ChatTab::Chat, "an agent never shown");
+
+        app.process_command(UiCommand::SetActiveAgent("user".to_string()));
+        assert_eq!(
+            app.chat_tab(),
+            ChatTab::Bench,
+            "the agent the run was picked from"
+        );
+
+        app.process_command(UiCommand::SetActiveAgent("a-1".to_string()));
+        assert_eq!(
+            app.chat_tab(),
+            ChatTab::Bench,
+            "a run left on BENCH comes back on it"
         );
     }
 

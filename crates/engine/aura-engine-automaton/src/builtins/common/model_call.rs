@@ -2,20 +2,15 @@
 //! single-shot LLM calls used by [`super::super::spec_gen`] and
 //! [`super::super::task_refinement`].
 //!
-//! Both call sites previously hand-built a `ModelRequest` with
-//! slightly different (and easy-to-drift) `max_tokens` defaults and
-//! tool-policy settings. This helper centralizes the build so the
-//! auxiliary-call shape only changes in one place and so the
-//! `max_tokens` ceiling pulls cleanly from
-//! `aura_config::agent().automaton.*` instead of crate-local
-//! `pub const`s.
+//! This helper centralizes the build so the auxiliary-call shape only
+//! changes in one place. Replies get the model's whole output limit.
 //!
 //! Streaming, mid-stream cancellation, and the `early_test_oracle`
 //! steering path do not apply here — these are one-shot
 //! synchronous-shape calls whose result populates a config string
 //! (spec body / refined task description) rather than driving a tool
 //! loop. The helper therefore deliberately exposes nothing more than
-//! `system_prompt`, `user_body`, `max_tokens`, and the model
+//! `system_prompt`, `user_body`, and the model
 //! identifier.
 
 use aura_model::{Message, ModelProvider, ModelRequest, ModelResponse, ToolChoice};
@@ -33,7 +28,6 @@ pub(crate) struct AuxiliaryModelCall<'a> {
     pub(crate) model: &'a str,
     pub(crate) system_prompt: &'a str,
     pub(crate) user_body: String,
-    pub(crate) max_tokens: u32,
     /// Optional task scope forwarded into any
     /// [`AutomatonError::AgentExecution`] surfaced from this call.
     /// `None` for project-scoped calls (spec generation); `Some(task_id)`
@@ -52,7 +46,6 @@ pub(crate) async fn run_auxiliary_model_call(
         model,
         system_prompt,
         user_body,
-        max_tokens,
         task_scope,
     } = call;
 
@@ -60,7 +53,6 @@ pub(crate) async fn run_auxiliary_model_call(
         .messages(vec![Message::user(user_body)])
         .tools(Vec::new())
         .tool_choice(ToolChoice::None)
-        .max_tokens(max_tokens)
         .try_build()
         .map_err(|e| {
             AutomatonError::agent_execution(task_scope.clone(), aura_agent::AgentError::Reason(e))

@@ -473,13 +473,6 @@ fn apply_execution_profile(
     let Some(profile) = profile else {
         return Ok(());
     };
-    if let Some(tokens) = profile.max_tokens {
-        if tokens == 0 {
-            return Err("max_tokens must be positive".into());
-        }
-        config.task_execution_max_tokens = tokens;
-        config.thinking_budget = tokens;
-    }
     if let Some(turns) = profile.max_turns {
         if turns == 0 {
             return Err("max_turns must be positive".into());
@@ -499,14 +492,11 @@ mod execution_profile_tests {
     fn task_profile_preserves_effort_and_limits() {
         let mut config = AgentRunnerConfig::for_agent("test-model");
         let profile = aura_core_protocol::ModelSelection {
-            max_tokens: Some(1024),
             max_turns: Some(7),
             reasoning_effort: Some(aura_core_protocol::ReasoningEffort::XHigh),
             ..Default::default()
         };
         apply_execution_profile(&mut config, Some(&profile)).unwrap();
-        assert_eq!(config.task_execution_max_tokens, 1024);
-        assert_eq!(config.thinking_budget, 1024);
         assert_eq!(config.max_agentic_iterations, 7);
         assert_eq!(
             config.reasoning_effort,
@@ -515,21 +505,13 @@ mod execution_profile_tests {
     }
     #[test]
     fn zero_execution_limits_are_rejected() {
-        for profile in [
-            aura_core_protocol::ModelSelection {
-                max_tokens: Some(0),
-                ..Default::default()
-            },
-            aura_core_protocol::ModelSelection {
-                max_turns: Some(0),
-                ..Default::default()
-            },
-        ] {
-            assert!(apply_execution_profile(
-                &mut AgentRunnerConfig::for_agent("test"),
-                Some(&profile)
-            )
-            .is_err());
-        }
+        let profile = aura_core_protocol::ModelSelection {
+            max_turns: Some(0),
+            ..Default::default()
+        };
+        assert!(
+            apply_execution_profile(&mut AgentRunnerConfig::for_agent("test"), Some(&profile))
+                .is_err()
+        );
     }
 }

@@ -422,6 +422,8 @@ fn turns_are_open_until_folded_and_stay_folded_as_the_flow_grows() {
 
     // So does showing another agent and coming back to this one.
     app.process_command(UiCommand::SetActiveAgent(CODER.into()));
+    app.show_chat_tab(ChatTab::Graph);
+    assert_eq!(app.flow().agent_id(), CODER, "the flow left the lead");
     app.process_command(UiCommand::SetActiveAgent(LEAD.into()));
     let (lanes, mut nodes) = three_turns();
     nodes.push(node(LEAD, 20, 400, FlowKind::Prompt, "fourth"));
@@ -581,13 +583,24 @@ fn opening_the_tab_asks_for_the_flow_of_the_agent_on_screen() {
     });
     assert!(app.flow().loaded());
 
-    // Switching agents shows the new agent's flow.
+    // Another agent opens on the tab it was left on, CHAT the first time,
+    // and asks for nothing there.
     app.process_command(UiCommand::SetActiveAgent(CODER.into()));
+    assert_eq!(app.chat_tab(), ChatTab::Chat);
+    assert!(rx.try_recv().is_err(), "no flow asked for on CHAT");
+
+    app.show_chat_tab(ChatTab::Graph);
     assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenFlow(id)) if id == CODER));
     assert!(app.flow().nodes().is_empty());
 
     app.handle_key(KeyEvent::from(KeyCode::Esc));
     assert_eq!(app.chat_tab(), ChatTab::Chat);
+
+    // The agent left on GRAPH comes back on it, and asks for its flow again.
+    app.process_command(UiCommand::SetActiveAgent(LEAD.into()));
+    assert_eq!(app.chat_tab(), ChatTab::Graph);
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenFlow(id)) if id == LEAD));
+    assert!(rx.try_recv().is_err(), "asked once");
 }
 
 #[test]
@@ -1371,6 +1384,74 @@ fn graph_and_time_are_tabs_of_the_same_flow() {
             ChatTab::Log,
             ChatTab::Chat
         ]
+    );
+}
+
+/// The timeline's selected row, and its selected turn.
+type TimelinePlace = (Option<usize>, Option<(usize, usize)>);
+
+fn timeline_place(app: &App) -> TimelinePlace {
+    let state = app.flow().timeline();
+    (state.selected_row(), state.selected_span())
+}
+
+/// [`app_with_flow`] on the TIME tab, its timeline moved off the turn of
+/// the card selected; and where the timeline was moved to.
+fn time_moved_off_the_cards() -> (App, TimelinePlace) {
+    let mut app = app_with_flow();
+    app.show_chat_tab(ChatTab::Time);
+    assert_eq!(selected(&app), "aa:10");
+    let synced = timeline_place(&app);
+    assert!(synced.1.is_some(), "TIME opens on the selected card's turn");
+
+    press(&mut app, KeyCode::Char('j'));
+    let moved = timeline_place(&app);
+    assert_ne!(moved.0, synced.0, "j moved the timeline to another row");
+    assert_ne!(moved.1, synced.1, "and to another turn");
+    assert_eq!(selected(&app), "aa:10", "the cards' selection stays");
+    (app, moved)
+}
+
+#[test]
+fn coming_back_on_time_keeps_where_the_timeline_was() {
+    let (mut app, moved) = time_moved_off_the_cards();
+
+    app.process_command(UiCommand::SetActiveAgent(CODER.into()));
+    assert_eq!(app.chat_tab(), ChatTab::Chat, "the coder was never shown");
+
+    app.process_command(UiCommand::SetActiveAgent(LEAD.into()));
+    assert_eq!(app.chat_tab(), ChatTab::Time);
+    app.flow_mut().ensure_timeline();
+    assert_eq!(
+        timeline_place(&app),
+        moved,
+        "where it was moved to, not back on the selected card"
+    );
+}
+
+#[test]
+fn another_agent_opening_time_leaves_the_last_ones_timeline_alone() {
+    let (mut app, moved) = time_moved_off_the_cards();
+
+    // The lead's flow is still on hand when the coder opens TIME.
+    app.process_command(UiCommand::SetActiveAgent(CODER.into()));
+    app.show_chat_tab(ChatTab::Time);
+    assert_eq!(app.flow().agent_id(), CODER);
+
+    app.process_command(UiCommand::SetActiveAgent(LEAD.into()));
+    assert_eq!(app.chat_tab(), ChatTab::Time);
+    assert_eq!(app.flow().agent_id(), LEAD);
+    let (lanes, nodes) = delegation();
+    app.process_command(UiCommand::FlowLoad {
+        agent_id: LEAD.into(),
+        lanes,
+        nodes,
+    });
+    app.flow_mut().ensure_timeline();
+    assert_eq!(
+        timeline_place(&app),
+        moved,
+        "the lead's timeline was put away where it was moved to"
     );
 }
 

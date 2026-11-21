@@ -685,6 +685,15 @@ fn cap_tool_result(content: String) -> String {
     )
 }
 
+/// What a response that ran out of room before it made a tool call is
+/// told: nothing in it was carried out, and the next one reasons less,
+/// which it is to spend acting.
+pub(crate) const CUT_OFF_BEFORE_ACTING: &str = "Your response reached the output-token limit \
+     before it made a tool call, so none of it was carried out. The next response reasons at a \
+     lower effort. Don't plan again what you already decided: make the next tool call now. \
+     Write a large file in parts: create it with the first part, then add the rest with \
+     further edits.";
+
 /// Unified stop-reason dispatch.
 ///
 /// Phase 4: collapses the buffered-path `AgentLoop::dispatch_stop_reason`
@@ -701,13 +710,17 @@ pub(crate) async fn dispatch(
     use aura_model::StopReason;
     let event_tx = ctx.event_tx;
     state.result.output_truncated = response.stop_reason == StopReason::MaxTokens;
+    if !state.result.output_truncated {
+        state.output_limit_recoveries = 0;
+    }
     match response.stop_reason {
         StopReason::EndTurn | StopReason::StopSequence => true,
         StopReason::MaxTokens => {
             // The pump has already executed complete calls. Commit their real
             // results before continuing; never replace successful writes with
             // synthetic failures or replay the entire sample.
-            if !tool_calls(response).is_empty()
+            let acted = !tool_calls(response).is_empty();
+            if acted
                 && process_tool_results(state, agent, batch, ctx)
                     .await
                     .should_stop
@@ -724,10 +737,14 @@ pub(crate) async fn dispatch(
                 return true;
             }
             state.output_limit_recoveries += 1;
-            state.thinking.restore_next_iteration = true;
-            state.messages.push(Message::user(
-                "Your response reached the output-token limit. Continue from the interruption without repeating prior text or completed tools. Use smaller complete tool calls if needed; finish the requested work and clearly report any remaining limitation."
-            ));
+            if acted {
+                state.messages.push(Message::user(
+                    "Your response reached the output-token limit. Continue from the interruption without repeating prior text or completed tools. Use smaller complete tool calls if needed; finish the requested work and clearly report any remaining limitation."
+                ));
+            } else {
+                state.reason_less();
+                state.messages.push(Message::user(CUT_OFF_BEFORE_ACTING));
+            }
             false
         }
         StopReason::ToolUse => {
