@@ -28,10 +28,14 @@ use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use std::collections::{HashMap, HashSet};
-use timeline::{TimelineState, TIMELINE_LANES};
+use timeline::TimelineState;
 
 /// Nodes kept; the oldest go once a flow grows past this.
 const MAX_NODES: usize = 20_000;
+
+/// Agents a flow has above which it is big: every agent but the one on
+/// screen starts folded to one card. A benchmark is always big.
+pub const BIG_FLOW_LANES: usize = 4;
 
 /// Cells kept clear around the selected card when the view follows it.
 const ROOM: f32 = 2.0;
@@ -57,7 +61,7 @@ impl Default for Zoom {
 /// shown again.
 const MAX_KEPT: usize = 32;
 
-/// How the GRAPH tab shows a flow.
+/// How a flow is shown: by the GRAPH tab or the TIME tab.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum FlowMode {
     /// Turns as cards wired together on a canvas
@@ -72,14 +76,13 @@ pub enum FlowMode {
 struct Kept {
     turn_folded: HashSet<String>,
     call_folded: HashSet<String>,
-    lane_folded: HashSet<String>,
+    lane_toggled: HashSet<String>,
+    big: bool,
     selected: Option<String>,
     follow_tail: bool,
     pan: (f32, f32),
     zoom: Zoom,
     detached: bool,
-    mode: FlowMode,
-    mode_chosen: bool,
     timeline: TimelineState,
 }
 
@@ -128,13 +131,13 @@ pub struct FlowState {
     turn_folded: HashSet<String>,
     /// Model calls whose rows are folded away, by node id
     call_folded: HashSet<String>,
-    /// Agents shown as one card, by hex id
-    lane_folded: HashSet<String>,
-    /// Canvas or timeline
+    /// Agents folded to one card, or unfolded, against what they start
+    /// as, by hex id
+    lane_toggled: HashSet<String>,
+    /// Whether the flow is big, so its agents start folded
+    big: bool,
+    /// Canvas or timeline: which of the two tabs shows the flow
     mode: FlowMode,
-    /// Whether the user picked the mode; until then it follows how
-    /// many agents the flow has
-    mode_chosen: bool,
     /// The canvas was opened from the timeline, so Esc goes back to it
     from_timeline: bool,
     timeline: TimelineState,
@@ -168,6 +171,60 @@ pub struct FlowState {
     drag: Option<(u16, u16)>,
     /// Id of the head of the card whose fold button the pointer is over
     fold_hover: Option<String>,
+    /// `m` hid the map of the whole canvas
+    minimap_hidden: bool,
+    /// Where the map was drawn in the last frame, for the mouse
+    minimap: Option<MinimapView>,
+    /// The button went down on the map and is still down
+    minimap_drag: bool,
+}
+
+/// Where the map of the whole canvas was drawn: which screen cells, and
+/// how many canvas cells each of them stands for.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MinimapView {
+    /// The map's box, its border included
+    pub area: Rect,
+    /// Canvas columns, and rows, a cell of the map stands for
+    pub scale: (f32, f32),
+}
+
+impl MinimapView {
+    /// The inside of the box, where the canvas is drawn.
+    #[must_use]
+    pub const fn inner(&self) -> Rect {
+        Rect {
+            x: self.area.x + 1,
+            y: self.area.y + 1,
+            width: self.area.width.saturating_sub(2),
+            height: self.area.height.saturating_sub(2),
+        }
+    }
+
+    /// The canvas point screen cell `(column, row)` of the map stands
+    /// for, when it is in the box.
+    #[must_use]
+    pub fn canvas_at(&self, column: u16, row: u16) -> Option<(f32, f32)> {
+        let area = self.area;
+        let inside =
+            column >= area.x && column < area.right() && row >= area.y && row < area.bottom();
+        inside.then(|| self.canvas_near(column, row))
+    }
+
+    /// The canvas point of the map's cell nearest screen cell
+    /// `(column, row)`.
+    #[must_use]
+    pub fn canvas_near(&self, column: u16, row: u16) -> (f32, f32) {
+        let inner = self.inner();
+        let at = |cell: u16, start: u16, end: u16, scale: f32| {
+            let cell = cell.clamp(start, end.saturating_sub(1).max(start));
+            (f32::from(cell - start) + 0.5) * scale
+        };
+        (
+            at(column, inner.x, inner.right(), self.scale.0),
+            at(row, inner.y, inner.bottom(), self.scale.1),
+        )
+    }
 }
 
 impl FlowState {
@@ -480,14 +537,13 @@ impl FlowState {
             let state = Kept {
                 turn_folded: std::mem::take(&mut self.turn_folded),
                 call_folded: std::mem::take(&mut self.call_folded),
-                lane_folded: std::mem::take(&mut self.lane_folded),
+                lane_toggled: std::mem::take(&mut self.lane_toggled),
+                big: self.big,
                 selected: self.selected.take(),
                 follow_tail: self.follow_tail,
                 pan: self.pan,
                 zoom: self.zoom,
                 detached: self.detached,
-                mode: self.mode,
-                mode_chosen: self.mode_chosen,
                 timeline: std::mem::take(&mut self.timeline),
             };
             kept.push((std::mem::take(&mut self.agent_id), state));
@@ -505,14 +561,15 @@ impl FlowState {
             agent_id: agent_id.to_string(),
             turn_folded: state.turn_folded,
             call_folded: state.call_folded,
-            lane_folded: state.lane_folded,
+            lane_toggled: state.lane_toggled,
+            big: state.big,
             selected: state.selected,
             follow_tail: state.follow_tail,
             pan: state.pan,
             zoom: state.zoom,
             detached: state.detached,
-            mode: state.mode,
-            mode_chosen: state.mode_chosen,
+            mode: self.mode,
+            minimap_hidden: self.minimap_hidden,
             timeline: TimelineState {
                 stale: true,
                 ..state.timeline
@@ -550,31 +607,67 @@ impl FlowState {
     pub fn lane_is_folded(&self, lane: usize) -> bool {
         self.lanes
             .get(lane)
-            .is_some_and(|it| self.lane_folded.contains(&it.agent_id))
+            .is_some_and(|it| self.agent_is_folded(&it.agent_id))
     }
 
-    /// Until the user picks, a flow of many agents, or of a benchmark,
-    /// opens on its timeline.
-    fn pick_mode(&mut self) {
-        if self.mode_chosen {
+    /// Whether the flow is big enough that its agents start folded.
+    #[must_use]
+    pub const fn is_big(&self) -> bool {
+        self.big
+    }
+
+    /// What agent `agent` starts as: folded in a big flow, but for the
+    /// agent on screen.
+    fn folds_by_default(&self, agent: &str) -> bool {
+        self.big && agent != self.agent_id
+    }
+
+    fn agent_is_folded(&self, agent: &str) -> bool {
+        self.folds_by_default(agent) != self.lane_toggled.contains(agent)
+    }
+
+    fn set_agent_folded(&mut self, agent: &str, folded: bool) {
+        if folded == self.folds_by_default(agent) {
+            self.lane_toggled.remove(agent);
+        } else {
+            self.lane_toggled.insert(agent.to_string());
+        }
+    }
+
+    /// The flow is big once it has many agents, or is of a benchmark.
+    /// Agents that were on screen when it turned big stay as they were;
+    /// the first `known` lanes are those.
+    fn update_big(&mut self, known: usize) {
+        let big =
+            self.lanes.len() > BIG_FLOW_LANES || self.lanes.iter().any(|lane| lane.bench.is_some());
+        if big == self.big {
             return;
         }
-        let busy =
-            self.lanes.len() > TIMELINE_LANES || self.lanes.iter().any(|lane| lane.bench.is_some());
-        if busy {
-            self.mode = FlowMode::Timeline;
+        let shown: Vec<(String, bool)> = self.lanes[..known.min(self.lanes.len())]
+            .iter()
+            .map(|lane| (lane.agent_id.clone(), self.agent_is_folded(&lane.agent_id)))
+            .collect();
+        self.big = big;
+        for (agent, folded) in shown {
+            self.set_agent_folded(&agent, folded);
         }
     }
 
-    /// Show the flow as `mode`, by the user's choice.
-    fn set_mode(&mut self, mode: FlowMode) {
+    /// Show the flow as `mode`, as the GRAPH or the TIME tab.
+    pub(super) fn set_mode(&mut self, mode: FlowMode) {
         self.mode = mode;
-        self.mode_chosen = true;
         self.drag = None;
+        self.minimap_drag = false;
+        self.from_timeline = false;
         if mode == FlowMode::Timeline {
-            self.from_timeline = false;
             self.timeline_to_selection();
         }
+    }
+
+    /// The canvas was opened from the timeline.
+    #[must_use]
+    pub const fn from_timeline(&self) -> bool {
+        self.from_timeline
     }
 
     /// Select the timeline row of the agent the canvas has selected, and
@@ -607,11 +700,11 @@ impl FlowState {
         self.turn_folded.retain(|id| index.contains_key(id));
         self.call_folded.retain(|id| index.contains_key(id));
         let lanes = &self.lane_index;
-        self.lane_folded.retain(|id| lanes.contains_key(id));
-        self.pick_mode();
+        self.lane_toggled.retain(|id| lanes.contains_key(id));
     }
 
     fn upsert(&mut self, lanes: Vec<FlowLane>, nodes: Vec<FlowNode>) {
+        let known = self.lanes.len();
         for lane in lanes {
             self.add_lane(lane);
         }
@@ -642,11 +735,9 @@ impl FlowState {
                 .map(|(at, node)| (node.id.clone(), at))
                 .collect();
         }
+        self.update_big(known);
         self.stale = true;
         self.timeline.stale = true;
-        if self.loaded {
-            self.pick_mode();
-        }
     }
 
     fn add_lane(&mut self, lane: FlowLane) {
@@ -679,10 +770,17 @@ impl FlowState {
             return;
         }
         self.stale = false;
+        let lanes: HashSet<String> = self
+            .lanes
+            .iter()
+            .map(|lane| &lane.agent_id)
+            .filter(|agent| self.agent_is_folded(agent))
+            .cloned()
+            .collect();
         let folds = Folds {
             turns: &self.turn_folded,
             calls: &self.call_folded,
-            lanes: &self.lane_folded,
+            lanes: &lanes,
         };
         self.layout = build_layout(
             &self.lane_index,
@@ -802,6 +900,45 @@ impl FlowState {
         let most_y = (cells(self.layout.height) - height).max(0.0);
         self.pan.0 = self.pan.0.clamp(0.0, most_x);
         self.pan.1 = self.pan.1.clamp(0.0, most_y);
+    }
+
+    /// Move the view so that canvas point `(x, y)` is in its middle, as
+    /// far as the canvas goes; it leaves the selection where it is.
+    fn center_on(&mut self, (x, y): (f32, f32)) {
+        let Some(area) = self.view.map(|view| view.area) else {
+            return;
+        };
+        let width = f32::from(area.width) / self.zoom();
+        let height = f32::from(area.height) / self.zoom();
+        self.pan = (x - width / 2.0, y - height / 2.0);
+        self.clamp_pan(width, height);
+        self.detached = true;
+        self.move_view();
+    }
+
+    /// Whether the map of the whole canvas is to be drawn: unless `m` hid
+    /// it, when the canvas is twice as wide or as tall as a view `width`
+    /// × `height` screen cells, or more.
+    #[must_use]
+    pub fn shows_minimap(&self, width: u16, height: u16) -> bool {
+        let zoom = self.zoom();
+        !self.minimap_hidden
+            && (cells(self.layout.width) >= 2.0 * f32::from(width) / zoom
+                || cells(self.layout.height) >= 2.0 * f32::from(height) / zoom)
+    }
+
+    /// Where the map of the whole canvas was drawn in the last frame.
+    #[must_use]
+    pub const fn minimap(&self) -> Option<MinimapView> {
+        self.minimap
+    }
+
+    /// Where the map was drawn this frame, if it was.
+    pub(crate) fn set_minimap(&mut self, map: Option<MinimapView>) {
+        self.minimap = map;
+        if map.is_none() {
+            self.minimap_drag = false;
+        }
     }
 
     /// Move the view the mouse maps through to where the view now is.
@@ -1024,7 +1161,7 @@ impl FlowState {
 
     /// Show agent `agent`'s turns again, with node `node` selected.
     fn unfold_lane(&mut self, agent: &str, node: usize) {
-        self.lane_folded.remove(agent);
+        self.set_agent_folded(agent, false);
         self.selected = Some(self.nodes[node].id.clone());
         self.follow_tail = false;
         self.detached = false;
@@ -1034,10 +1171,10 @@ impl FlowState {
     /// Show the agent node `node` is of as one card, or its turns again.
     fn toggle_lane_of(&mut self, node: usize) {
         let agent = self.nodes[node].agent_id.clone();
-        if self.lane_folded.contains(&agent) {
+        if self.agent_is_folded(&agent) {
             return self.unfold_lane(&agent, node);
         }
-        self.lane_folded.insert(agent);
+        self.set_agent_folded(&agent, true);
         self.follow_tail = false;
         self.detached = false;
         self.stale = true;
@@ -1071,12 +1208,15 @@ impl FlowState {
             .lane_index
             .get(agent)
             .and_then(|&lane| self.lanes[lane].parent.clone());
-        self.lane_folded = self
+        let agents: Vec<String> = self
             .lanes
             .iter()
             .map(|lane| lane.agent_id.clone())
-            .filter(|id| id != agent && Some(id) != parent.as_ref())
             .collect();
+        for id in agents {
+            let folded = id != agent && Some(&id) != parent.as_ref();
+            self.set_agent_folded(&id, folded);
+        }
         self.follow_tail = false;
         self.detached = false;
         self.stale = true;
@@ -1084,7 +1224,14 @@ impl FlowState {
 
     /// Show every agent's turns.
     fn unfold_lanes(&mut self) {
-        self.lane_folded.clear();
+        let agents: Vec<String> = self
+            .lanes
+            .iter()
+            .map(|lane| lane.agent_id.clone())
+            .collect();
+        for id in agents {
+            self.set_agent_folded(&id, false);
+        }
         self.follow_tail = false;
         self.detached = false;
         self.stale = true;
@@ -1097,8 +1244,7 @@ impl FlowState {
         self.fold_lanes_but(&agent);
         self.turn_folded.remove(&self.nodes[node].id);
         self.selected = Some(self.nodes[node].id.clone());
-        self.mode = FlowMode::Canvas;
-        self.mode_chosen = true;
+        self.set_mode(FlowMode::Canvas);
         self.from_timeline = true;
         self.came_from = None;
     }
@@ -1106,7 +1252,7 @@ impl FlowState {
     /// Unfold whatever hides node `node`.
     fn unfold_to(&mut self, node: usize) {
         if let Some(agent) = self.nodes.get(node).map(|n| n.agent_id.clone()) {
-            self.lane_folded.remove(&agent);
+            self.set_agent_folded(&agent, false);
         }
         let (turn, call) = self.layout.folds_over(node);
         if let Some(turn) = turn {
@@ -1367,9 +1513,12 @@ impl App {
             f32::from(view.area.height.saturating_sub(2).max(1)) / self.flow.zoom()
         });
         match key.code {
-            KeyCode::Esc if self.flow.from_timeline => self.flow.set_mode(FlowMode::Timeline),
+            KeyCode::Esc if self.flow.from_timeline => self.show_chat_tab(ChatTab::Time),
             KeyCode::Esc => self.show_chat_tab(ChatTab::Chat),
-            KeyCode::Char('v') => self.flow.set_mode(FlowMode::Timeline),
+            KeyCode::Char('m') => {
+                self.flow.minimap_hidden = !self.flow.minimap_hidden;
+                self.flow.minimap_drag = false;
+            }
             KeyCode::Char('c') => {
                 if let Some(node) = self.flow.selected_node_index() {
                     self.flow.toggle_lane_of(node);
@@ -1451,7 +1600,6 @@ impl App {
             KeyCode::Char('-') => timeline.zoom_by(Some(1.0 / timeline::ZOOM_STEP)),
             KeyCode::Char('0') => timeline.zoom_by(None),
             KeyCode::Enter => self.open_timeline_selection(),
-            KeyCode::Char('v') => self.flow.set_mode(FlowMode::Canvas),
             KeyCode::Char('o') => {
                 let lane = timeline
                     .selected_row()
@@ -1514,6 +1662,12 @@ impl App {
             return self.click_timeline(column, row);
         }
         self.flow.ensure_layout();
+        // The map is drawn in cells over a hosted canvas too.
+        if let Some(at) = self.flow.minimap.and_then(|map| map.canvas_at(column, row)) {
+            self.flow.center_on(at);
+            self.flow.minimap_drag = true;
+            return true;
+        }
         if self.flow.hosted {
             // The front end works its own canvas.
             return false;
@@ -1540,6 +1694,12 @@ impl App {
     /// The pointer moved to `(column, row)` with the button down. Returns
     /// whether a drag of the GRAPH tab's view is under way.
     pub(super) fn drag_flow(&mut self, column: u16, row: u16) -> bool {
+        if self.flow.minimap_drag {
+            if let Some(map) = self.flow.minimap {
+                self.flow.center_on(map.canvas_near(column, row));
+            }
+            return true;
+        }
         let Some((from_column, from_row)) = self.flow.drag else {
             return false;
         };
@@ -1553,7 +1713,7 @@ impl App {
     /// The button came up. Returns whether it ended a drag of the GRAPH
     /// tab's view.
     pub(super) fn release_flow(&mut self) -> bool {
-        self.flow.drag.take().is_some()
+        std::mem::take(&mut self.flow.minimap_drag) | self.flow.drag.take().is_some()
     }
 
     /// Show the selected node, with its metadata and links, as JSON over

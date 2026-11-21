@@ -577,6 +577,7 @@ mod tests {
                 PaneTab::Chat(ChatTab::Chat),
                 PaneTab::Chat(ChatTab::Terminal),
                 PaneTab::Chat(ChatTab::Graph),
+                PaneTab::Chat(ChatTab::Time),
                 PaneTab::Chat(ChatTab::Bench)
             ]
         );

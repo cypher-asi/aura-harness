@@ -1,4 +1,4 @@
-//! The GRAPH tab's timeline: what happened, an agent a row, before the
+//! The TIME tab: what happened, an agent a row, before the GRAPH tab's
 //! cards of any one turn.
 //!
 //! Each row is an agent, under the agent that spawned it; its turns are
@@ -19,9 +19,6 @@
 use crate::events::{arm_letter, FlowKind, FlowLane, FlowNode, TraceNodeStatus};
 use ratatui::layout::Rect;
 use std::collections::{HashMap, HashSet};
-
-/// Rows a flow has above which the GRAPH tab opens on its timeline.
-pub const TIMELINE_LANES: usize = 4;
 
 /// What a mark on a bar stands for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

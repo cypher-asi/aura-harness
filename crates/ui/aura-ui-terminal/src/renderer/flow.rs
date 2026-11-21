@@ -18,6 +18,7 @@
 //! more per frame than a short one. A front end that draws the canvas
 //! itself ([`crate::App::set_host_canvas`]) gets the cells left blank.
 
+use super::flow_minimap::render_minimap;
 use super::flow_timeline::render_timeline;
 use super::graph::status_glyph;
 use super::panels::{body_block, render_scrollbar, truncate_record_info, ScrollView};
@@ -60,6 +61,7 @@ pub(super) fn render_flow(
     app.flow_mut().ensure_layout();
     if inner.height < 3 || inner.width < 12 || app.flow().layout().cards.is_empty() {
         app.flow_mut().set_view(None, false);
+        app.flow_mut().set_minimap(None);
         let text = if app.flow().loaded() {
             "Nothing recorded yet. Prompts, model calls, tool calls and the agents \
              they start show up here as the agent works."
@@ -81,6 +83,7 @@ pub(super) fn render_flow(
     if app.flow().mode() == FlowMode::Timeline {
         // Drawn in cells by every front end.
         app.flow_mut().set_view(None, false);
+        app.flow_mut().set_minimap(None);
         render_timeline(frame, area, inner, app, theme, is_focused);
         return;
     }
@@ -115,6 +118,7 @@ pub(super) fn render_flow(
         }
         .draw();
     }
+    render_minimap(frame, inner, app, theme);
 
     let total = app.flow().layout().height;
     let visible = usize::from(inner.height);
@@ -996,6 +1000,66 @@ mod tests {
         assert!(
             !clip.iter().any(|rect| rect.contains(menu.into())),
             "{menu:?}"
+        );
+    }
+
+    #[test]
+    fn a_canvas_larger_than_the_view_has_a_map_that_moves_the_view() {
+        let mut small = app_with_flow();
+        let _ = screen(&mut small, 160, 60);
+        assert_eq!(small.flow().minimap(), None, "it all fits");
+
+        let turns = (0..12).flat_map(|turn| {
+            let at = 200 + turn * 10;
+            [
+                node(LEAD, 7 + 2 * turn, at, FlowKind::Prompt, "and then"),
+                node(LEAD, 8 + 2 * turn, at + 5, FlowKind::Model, "haiku"),
+            ]
+        });
+        let mut app = app_with_flow_and(turns.collect());
+        press(&mut app, KeyCode::Home);
+        let buffer = whole_screen(&mut app);
+        let map = app.flow().minimap().expect("the map is drawn");
+        assert!(find(&buffer, " map ").is_some());
+        let inner = map.inner();
+        let cells = || {
+            (inner.top()..inner.bottom())
+                .flat_map(|y| (inner.left()..inner.right()).map(move |x| (x, y)))
+        };
+        let theme = Theme::cyber();
+        assert!(
+            cells().any(|at| buffer[at].bg == theme.colors.selection),
+            "the view is lit on it"
+        );
+        assert!(cells().any(|at| buffer[at].symbol() != " "), "cards on it");
+
+        // A press on its far end moves the view there; the selection stays.
+        let pan = app.flow().pan();
+        let far = (inner.right() - 1, inner.y);
+        mouse(&mut app, MouseEventKind::Down(MouseButton::Left), far);
+        mouse(&mut app, MouseEventKind::Up(MouseButton::Left), far);
+        assert!(app.flow().pan().0 > pan.0, "{:?}", app.flow().pan());
+        assert_eq!(app.flow().selected_node().unwrap().id, "aa:1");
+
+        press(&mut app, KeyCode::Char('m'));
+        let buffer = whole_screen(&mut app);
+        assert!(find(&buffer, " map ").is_none(), "m hides it");
+        assert_eq!(app.flow().minimap(), None);
+        press(&mut app, KeyCode::Char('m'));
+
+        // Over a canvas the front end draws, the map's cells are left to
+        // the terminal.
+        app.set_host_canvas(true);
+        let _ = whole_screen(&mut app);
+        let map = app.flow().minimap().expect("the map is drawn");
+        assert!(!app.flow_canvas_clip().is_empty());
+        assert!(
+            app.flow_canvas_clip()
+                .iter()
+                .all(|rect| rect.intersection(map.area).is_empty()),
+            "{:?} {:?}",
+            app.flow_canvas_clip(),
+            map.area
         );
     }
 

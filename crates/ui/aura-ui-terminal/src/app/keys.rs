@@ -412,7 +412,7 @@ impl App {
             return KeyResult::continue_running();
         }
         if self.focus == PanelFocus::Chat
-            && self.chat_tab() == ChatTab::Graph
+            && matches!(self.chat_tab(), ChatTab::Graph | ChatTab::Time)
             && self.input.is_empty()
             && self.handle_flow_key(key)
         {

@@ -81,7 +81,7 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
         header::show(frame, app, (Pane::Chat, panel, bar), &header, theme);
     }
 
-    if app.chat_tab() == ChatTab::Graph {
+    if matches!(app.chat_tab(), ChatTab::Graph | ChatTab::Time) {
         super::flow::render_flow(frame, area, app, theme, is_focused);
         return;
     }

@@ -683,6 +683,99 @@ fn graph_canvas() {
     snapshot("graph-menu", &mut h);
 }
 
+/// A lead that ran a benchmark of six tasks on two arms, and kept working.
+fn benchmark_flow(h: &mut Stage) {
+    let node = |agent: &str, seq: u64, at_ms: u64, kind: FlowKind, label: &str| FlowNode {
+        id: format!("{agent}:{seq}"),
+        agent_id: agent.into(),
+        kind,
+        label: label.into(),
+        status: TraceNodeStatus::Ok,
+        seq,
+        at_ms,
+        ..FlowNode::default()
+    };
+    let lane = |id: &str, name: &str, parent: Option<&str>| FlowLane {
+        agent_id: id.into(),
+        name: name.into(),
+        parent: parent.map(Into::into),
+        ..FlowLane::default()
+    };
+    let mut lanes = vec![
+        lane("a1", "Agent01", None),
+        lane("h1", "Compare #1", Some("a1")),
+    ];
+    let mut nodes = Vec::new();
+    for turn in 0..8 {
+        let at = 1_000 * turn;
+        nodes.push(node("a1", 3 * turn + 1, at, FlowKind::Prompt, "next step"));
+        nodes.push(node(
+            "a1",
+            3 * turn + 2,
+            at + 100,
+            FlowKind::Model,
+            "qwen3-coder",
+        ));
+        nodes.push(node("a1", 3 * turn + 3, at + 900, FlowKind::Reply, "done"));
+    }
+    for task in 0..6_u64 {
+        for arm in 0..2_usize {
+            let id = format!("r{task}{arm}");
+            let letter = if arm == 0 { 'a' } else { 'b' };
+            let check = !(arm == 1 && task % 3 == 0);
+            lanes.push(FlowLane {
+                bench: Some(aura_ui::events::FlowBench {
+                    group: format!("coding/task-{task}"),
+                    run: format!("{letter}-{}", task + 1),
+                    arm,
+                    arm_label: if arm == 0 { "gate" } else { "opus" }.into(),
+                    check_passed: Some(check),
+                    cost_usd: 0.12,
+                    wall_ms: 40_000,
+                    error: None,
+                }),
+                ..lane(&id, &format!("{letter}-{}", task + 1), Some("h1"))
+            });
+            for turn in 0..2 {
+                let at = 1_000 * task + 400 * turn;
+                nodes.push(node(&id, 3 * turn + 1, at, FlowKind::Prompt, "fix it"));
+                let mut model = node(&id, 3 * turn + 2, at + 50, FlowKind::Model, "opus");
+                if !check {
+                    model.status = TraceNodeStatus::Error;
+                }
+                nodes.push(model);
+                nodes.push(node(&id, 3 * turn + 3, at + 300, FlowKind::Reply, "fixed"));
+            }
+        }
+    }
+    h.apply([UiCommand::FlowLoad {
+        agent_id: "a1".into(),
+        lanes,
+        nodes,
+    }]);
+}
+
+#[test]
+fn graph_of_a_benchmark() {
+    let mut h = stage();
+    seed(&mut h);
+    let graph = PaneTab::Chat(ChatTab::Graph);
+    let tab = h.shell.chrome.spot(graph).expect("the tab is drawn");
+    h.drag(tab, tab);
+    benchmark_flow(&mut h);
+    h.shell.frame(h.now);
+    let tui = &h.shell.tabs.front().tui;
+    assert!(tui.flow().is_big());
+    assert!(tui.flow().minimap().is_some(), "the map is drawn");
+    snapshot("graph-benchmark", &mut h);
+
+    let time = PaneTab::Chat(ChatTab::Time);
+    let tab = h.shell.chrome.spot(time).expect("the tab is drawn");
+    h.drag(tab, tab);
+    assert_eq!(h.shell.tabs.front().tui.chat_tab(), ChatTab::Time);
+    snapshot("time-benchmark", &mut h);
+}
+
 #[test]
 fn approval_request() {
     let mut h = stage();

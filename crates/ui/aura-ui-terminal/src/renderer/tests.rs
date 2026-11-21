@@ -1627,10 +1627,10 @@ fn render_rows(app: &mut crate::App, width: u16) -> Vec<String> {
 fn chat_panel(rows: &[String]) -> (usize, usize, usize) {
     let tabs = rows
         .iter()
-        .position(|r| r.contains(" CHAT ") && r.contains(" TERMINAL "))
+        .position(|r| r.contains("CHAT") && r.contains("TERMINAL"))
         .unwrap_or_else(|| panic!("no chat header bar in:\n{}", rows.join("\n")));
     let row: Vec<char> = rows[tabs].chars().collect();
-    let chat = rows[tabs][..rows[tabs].find(" CHAT ").unwrap()]
+    let chat = rows[tabs][..rows[tabs].find("CHAT").unwrap()]
         .chars()
         .count();
     let left = row[..=chat].iter().rposition(|&c| c == '│').unwrap();

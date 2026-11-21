@@ -1,8 +1,9 @@
 //! The chat panel's tabs: the conversation, the terminal that runs the
 //! session's shell commands, the graph of what the agent and the agents
-//! it spawned did, or the benchmarks that compare two arms on the same
-//! work.
+//! it spawned did, the same work over time, or the benchmarks that
+//! compare two arms on the same work.
 
+use super::flow::FlowMode;
 use super::{tab_at, tab_bar::TabLayout, App, HoverTarget};
 use ratatui::layout::Rect;
 
@@ -17,13 +18,21 @@ pub enum ChatTab {
     /// The flow between the active agent and the agents it spawned, from
     /// the kernel record.
     Graph,
+    /// The same flow as a timeline: an agent a row, its turns as bars.
+    Time,
     /// Benchmarks: the same work on two arms (Gate or a model), their
     /// cost and how well they did.
     Bench,
 }
 
 impl ChatTab {
-    pub const ALL: [Self; 4] = [Self::Chat, Self::Terminal, Self::Graph, Self::Bench];
+    pub const ALL: [Self; 5] = [
+        Self::Chat,
+        Self::Terminal,
+        Self::Graph,
+        Self::Time,
+        Self::Bench,
+    ];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
@@ -31,6 +40,7 @@ impl ChatTab {
             Self::Chat => "CHAT",
             Self::Terminal => "TERMINAL",
             Self::Graph => "GRAPH",
+            Self::Time => "TIME",
             Self::Bench => "BENCH",
         }
     }
@@ -42,6 +52,7 @@ impl ChatTab {
             Self::Chat => "CHT",
             Self::Terminal => "TRM",
             Self::Graph => "GRP",
+            Self::Time => "TIM",
             Self::Bench => "BEN",
         }
     }
@@ -50,7 +61,8 @@ impl ChatTab {
         match self {
             Self::Chat => Self::Terminal,
             Self::Terminal => Self::Graph,
-            Self::Graph => Self::Bench,
+            Self::Graph => Self::Time,
+            Self::Time => Self::Bench,
             Self::Bench => Self::Chat,
         }
     }
@@ -60,7 +72,8 @@ impl ChatTab {
             Self::Chat => Self::Bench,
             Self::Terminal => Self::Chat,
             Self::Graph => Self::Terminal,
-            Self::Bench => Self::Graph,
+            Self::Time => Self::Graph,
+            Self::Bench => Self::Time,
         }
     }
 
@@ -77,7 +90,10 @@ impl App {
     #[must_use]
     pub const fn chat_tab(&self) -> ChatTab {
         if self.flow.is_open() {
-            ChatTab::Graph
+            match self.flow.mode() {
+                FlowMode::Canvas => ChatTab::Graph,
+                FlowMode::Timeline => ChatTab::Time,
+            }
         } else if self.bench.is_open() {
             ChatTab::Bench
         } else if self.terminal_mode {
@@ -93,17 +109,29 @@ impl App {
     }
 
     /// Show `tab`. The conversation and the terminal open at their bottom
-    /// with their own input history; the graph asks for the flow of the
-    /// agent on screen, and the benchmarks for the latest of them.
+    /// with their own input history; the graph and the timeline ask for
+    /// the flow of the agent on screen, unless the other has it, and the
+    /// benchmarks for the latest of them.
     pub(super) fn show_chat_tab(&mut self, tab: ChatTab) {
+        let flow_was_open = self.flow.is_open();
         self.terminal_mode = tab == ChatTab::Terminal;
-        self.flow.set_open(tab == ChatTab::Graph);
+        self.flow
+            .set_open(matches!(tab, ChatTab::Graph | ChatTab::Time));
         self.bench.set_open(tab == ChatTab::Bench);
         self.history().reset();
         self.clear_selection();
         self.scroll_chat_to_bottom();
         match tab {
-            ChatTab::Graph => self.request_flow(),
+            ChatTab::Graph | ChatTab::Time => {
+                self.flow.set_mode(if tab == ChatTab::Time {
+                    FlowMode::Timeline
+                } else {
+                    FlowMode::Canvas
+                });
+                if !flow_was_open {
+                    self.request_flow();
+                }
+            }
             ChatTab::Bench => self.request_benchmarks(),
             ChatTab::Chat | ChatTab::Terminal => {}
         }

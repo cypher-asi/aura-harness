@@ -1,4 +1,4 @@
-//! The GRAPH tab's timeline: an agent a row, its turns as bars over the
+//! The TIME tab: an agent a row, its turns as bars over the
 //! run's time, with what each row did against the right edge and what the
 //! selection is under the rows.
 //!
@@ -187,7 +187,7 @@ fn footer_lines(app: &App) -> (String, String) {
                 ""
             };
             format!(
-                "{issues}j/k agents · h/l turns · Space folds · Enter opens · v cards · \
+                "{issues}j/k agents · h/l turns · Space folds · Enter opens its cards · \
                  +/- zoom · e issues"
             )
         }

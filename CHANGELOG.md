@@ -7,22 +7,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### GRAPH — a timeline of the agents, and folded agents
+### TIME tab, and a GRAPH that stays readable on big flows
 
 ##### Added
 
-- The GRAPH tab has a timeline view (`v` switches to it and back): a
-  row per agent, indented under the agent that spawned it, with its
-  turns as bars over the run's time, Gate, judge and error marks, and
-  its cost, time and check result. A flow of more than four agents, or
-  of a benchmark, opens on it. A benchmark's runs are listed by task,
-  arm A next to arm B, under a row that says how many of each arm's
-  runs passed. Rows fold (Space, `z`), `e` keeps only the rows that
-  failed, and `+`/`-`/`0` zoom the time. Enter opens the selected turn's
-  cards with every other agent folded; Esc goes back to the timeline.
-- Agents fold on the canvas: `c`, or the `▾` before an agent's name,
-  puts all its turns on one `agent` card; `C` folds every agent but the
-  selected one and the one that spawned it, and `x` opens them all.
+- A TIME tab in the chat panel, between GRAPH and BENCH: the same flow
+  as a timeline, a row per agent, indented under the agent that spawned
+  it, with its turns as bars over the run's time, Gate, judge and error
+  marks, and its cost, time and check result. A benchmark's runs are
+  listed by task, arm A next to arm B, under a row that says how many
+  of each arm's runs passed. Rows fold (Space, `z`), `e` keeps only the
+  rows that failed, and `+`/`-`/`0` zoom the time. Enter opens the
+  selected turn's cards in GRAPH with every other agent folded; Esc
+  there goes back to TIME.
+- Agents fold on the GRAPH canvas: `c`, or the `▾` before an agent's
+  name, puts all its turns on one `agent` card; `C` folds every agent
+  but the selected one and the one that spawned it, and `x` opens them
+  all. A flow of more than four agents, or of a benchmark, opens with
+  every agent but the one on screen folded.
+- A map of the whole GRAPH canvas in its top right corner when the
+  canvas is twice the view or more: cards as blocks coloured by how
+  they went, the part on screen lit. A click or drag on it moves the
+  view; `m` hides it.
 - The flow keeps up to 160 agents and 16,000 steps (was 48 and 4,000),
   so a whole benchmark fits.
 

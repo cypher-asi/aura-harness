@@ -1220,10 +1220,28 @@ fn rows(app: &mut App) -> Vec<(String, usize, String)> {
         .collect()
 }
 
-#[test]
-fn a_benchmark_opens_on_its_timeline_with_its_runs_by_task() {
-    let (lanes, nodes) = benchmark();
+/// [`app_with`], on the TIME tab.
+fn time_with(lanes: Vec<FlowLane>, nodes: Vec<FlowNode>) -> App {
     let mut app = app_with(lanes, nodes);
+    app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+    assert_eq!(app.chat_tab(), ChatTab::Time);
+    app
+}
+
+fn open_lanes(app: &App) -> Vec<&str> {
+    let flow = app.flow();
+    flow.lanes()
+        .iter()
+        .enumerate()
+        .filter(|(lane, _)| !flow.lane_is_folded(*lane))
+        .map(|(_, lane)| lane.name.as_str())
+        .collect()
+}
+
+#[test]
+fn the_time_tab_lists_a_benchmarks_runs_by_task() {
+    let (lanes, nodes) = benchmark();
+    let mut app = time_with(lanes, nodes);
     assert_eq!(app.flow().mode(), FlowMode::Timeline);
     let row = |name: &str, depth: usize, note: &str| (name.to_string(), depth, note.to_string());
     assert_eq!(
@@ -1286,7 +1304,7 @@ fn a_benchmark_opens_on_its_timeline_with_its_runs_by_task() {
 #[test]
 fn enter_on_a_turn_opens_its_cards_with_the_other_agents_folded() {
     let (lanes, nodes) = benchmark();
-    let mut app = app_with(lanes, nodes);
+    let mut app = time_with(lanes, nodes);
     app.flow_mut().ensure_timeline();
     for _ in 0..4 {
         press(&mut app, KeyCode::Char('j'));
@@ -1298,24 +1316,20 @@ fn enter_on_a_turn_opens_its_cards_with_the_other_agents_folded() {
     assert_eq!(span, 0);
 
     press(&mut app, KeyCode::Enter);
-    assert_eq!(app.flow().mode(), FlowMode::Canvas);
+    assert_eq!(app.chat_tab(), ChatTab::Graph);
     assert_eq!(selected(&app), "b1:1");
+    assert_eq!(
+        open_lanes(&app),
+        ["B · opus", "b-1"],
+        "the run and the arm that ran it"
+    );
     let flow = app.flow();
-    let open: Vec<&str> = flow
-        .lanes()
-        .iter()
-        .enumerate()
-        .filter(|(lane, _)| !flow.lane_is_folded(*lane))
-        .map(|(_, lane)| lane.name.as_str())
-        .collect();
-    assert_eq!(open, ["B · opus", "b-1"], "the run and the arm that ran it");
     let card = flow.selected_card().unwrap();
     assert_eq!(flow.layout().cards[card].kind, CardKind::Turn);
 
     // Esc goes back to the timeline, on the same turn.
     press(&mut app, KeyCode::Esc);
-    assert_eq!(app.flow().mode(), FlowMode::Timeline);
-    assert_eq!(app.chat_tab(), ChatTab::Graph);
+    assert_eq!(app.chat_tab(), ChatTab::Time);
     let state = app.flow().timeline();
     assert_eq!(state.selected_span().map(|(row, _)| row), Some(row));
     press(&mut app, KeyCode::Esc);
@@ -1323,37 +1337,94 @@ fn enter_on_a_turn_opens_its_cards_with_the_other_agents_folded() {
 }
 
 #[test]
-fn v_switches_between_the_cards_and_the_timeline() {
+fn graph_and_time_are_tabs_of_the_same_flow() {
     let mut app = app_with_flow();
-    assert_eq!(
-        app.flow().mode(),
-        FlowMode::Canvas,
-        "three agents open on cards"
-    );
+    assert_eq!(app.flow().mode(), FlowMode::Canvas);
     select(&mut app, "bb:2");
-    press(&mut app, KeyCode::Char('v'));
-    assert_eq!(app.flow().mode(), FlowMode::Timeline);
+    let shift = |app: &mut App, code| app.handle_key(KeyEvent::new(code, KeyModifiers::SHIFT));
+    shift(&mut app, KeyCode::Right);
+    assert_eq!(app.chat_tab(), ChatTab::Time);
     let state = app.flow().timeline();
     let row = state.selected_row().unwrap();
     assert_eq!(state.timeline().rows[row].name, "coder #1");
     assert_eq!(state.selected_span(), Some((row, 0)));
-    press(&mut app, KeyCode::Char('v'));
-    assert_eq!(app.flow().mode(), FlowMode::Canvas);
 
-    // A flow that grows busy while open stays on what the user picked.
-    let more = (0..6).map(|n| lane(&format!("e{n}"), &format!("tester #{n}"), Some(LEAD)));
+    shift(&mut app, KeyCode::Left);
+    assert_eq!(app.chat_tab(), ChatTab::Graph);
+    assert_eq!(selected(&app), "bb:2", "the same flow, still selected");
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.chat_tab(), ChatTab::Chat, "not opened from TIME");
+
+    let tabs: Vec<ChatTab> = (0..5)
+        .map(|_| {
+            shift(&mut app, KeyCode::Right);
+            app.chat_tab()
+        })
+        .collect();
+    assert_eq!(
+        tabs,
+        [
+            ChatTab::Terminal,
+            ChatTab::Graph,
+            ChatTab::Time,
+            ChatTab::Bench,
+            ChatTab::Chat
+        ]
+    );
+}
+
+#[test]
+fn a_big_flow_opens_with_every_agent_but_the_one_on_screen_folded() {
+    let (lanes, nodes) = benchmark();
+    let mut app = app_with(lanes, nodes);
+    assert_eq!(app.chat_tab(), ChatTab::Graph, "a benchmark opens on cards");
+    assert!(app.flow().is_big());
+    assert_eq!(open_lanes(&app), ["Lead"]);
+    let layout = app.flow().layout();
+    let agents = layout
+        .cards
+        .iter()
+        .filter(|card| card.kind == CardKind::Agent)
+        .count();
+    assert_eq!(agents, 5, "a card for each agent that worked");
+
+    // One opens on its own; x opens them all.
+    select(&mut app, "a1:2");
+    press(&mut app, KeyCode::Char('c'));
+    assert_eq!(open_lanes(&app), ["Lead", "a-1"]);
+    press(&mut app, KeyCode::Char('x'));
+    assert_eq!(open_lanes(&app).len(), 9);
+    press(&mut app, KeyCode::Char('C'));
+    assert_eq!(open_lanes(&app), ["A · gate", "a-1"]);
+}
+
+#[test]
+fn a_flow_that_grows_big_folds_only_the_agents_that_come_after() {
+    let mut app = app_with_flow();
+    assert!(!app.flow().is_big());
+    select(&mut app, "bb:1");
+    press(&mut app, KeyCode::Char('c'));
+    assert_eq!(open_lanes(&app), ["Lead", "tester #1"]);
+
+    let more = (0..3).map(|n| lane(&format!("e{n}"), &format!("tester #{}", n + 2), Some(LEAD)));
     app.process_command(UiCommand::FlowUpsert {
         agent_id: LEAD.into(),
         lanes: more.collect(),
-        nodes: Vec::new(),
+        nodes: vec![node("e0", 1, 300, FlowKind::Prompt, "test more")],
     });
-    assert_eq!(app.flow().mode(), FlowMode::Canvas);
+    app.flow_mut().ensure_layout();
+    assert!(app.flow().is_big());
+    assert_eq!(
+        open_lanes(&app),
+        ["Lead", "tester #1"],
+        "the agents on screen stay as they were"
+    );
 }
 
 #[test]
 fn the_timeline_draws_a_row_an_agent_with_its_turns_as_bars() {
     let (lanes, nodes) = benchmark();
-    let mut app = app_with(lanes, nodes);
+    let mut app = time_with(lanes, nodes);
     app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 30)).unwrap();
     let theme = crate::Theme::cyber();
@@ -1389,6 +1460,6 @@ fn the_timeline_draws_a_row_an_agent_with_its_turns_as_bars() {
         "status, bar and check: {b_1}"
     );
     find("Lead · 1 turn · 0 calls");
-    find("j/k agents · h/l turns");
+    find("Enter opens its cards");
     assert_eq!(app.flow_canvas(), None, "every front end draws it in cells");
 }
