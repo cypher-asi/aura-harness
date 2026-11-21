@@ -965,3 +965,102 @@ fn an_unstarted_spawn_left_active_is_archived_and_not_opened() {
     let mut reloaded = reloaded;
     assert!(archive_unstarted_spawns(&mut reloaded, &store).is_empty());
 }
+
+#[test]
+fn last_activity_is_reused_until_the_head_moves() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RocksStore::open(dir.path(), false).unwrap();
+    let agent = AgentId::generate();
+    let mut cache = LastActive::default();
+    assert_eq!(cache.of(&store, agent), (0, None));
+
+    let mut first = text_tx(agent, TransactionType::AgentMsg, "one");
+    first.ts_ms = 1_000;
+    append(&store, 1, first);
+    assert_eq!(cache.of(&store, agent), (1, Some(1_000)));
+    // Same head: answered from the cache, not the entry.
+    cache.0.insert(agent, (1, Some(7)));
+    assert_eq!(cache.of(&store, agent), (1, Some(7)));
+
+    let mut second = text_tx(agent, TransactionType::AgentMsg, "two");
+    second.ts_ms = 2_000;
+    append(&store, 2, second);
+    assert_eq!(cache.of(&store, agent), (2, Some(2_000)));
+}
+
+#[test]
+fn list_rows_match_the_registry_for_compares_and_the_archive() {
+    use crate::agent_registry::AgentRegistry;
+    let data = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let store_dir = tempfile::tempdir().unwrap();
+    let store = RocksStore::open(store_dir.path(), false).unwrap();
+    let mut registry = AgentRegistry::load_or_init_in(data.path(), folder.path()).unwrap();
+    let lead = registry.active().clone();
+    let compare = registry.create_compare(&lead.zns_id).unwrap();
+    let arm = registry
+        .create_compare_arm("gate", &compare.zns_id)
+        .unwrap();
+    let run = registry.create_child("gate-2", &arm.zns_id, None).unwrap();
+    let run_b = registry.create_child("gate-1", &arm.zns_id, None).unwrap();
+    let sub = registry.create_child("Sub", &run.zns_id, None).unwrap();
+    let archived_run = registry.create_child("gate-3", &arm.zns_id, None).unwrap();
+    let (elsewhere, _) = registry.open_project(other.path()).unwrap();
+    let spawn = registry
+        .create_child("Spawn", &elsewhere.zns_id, None)
+        .unwrap();
+    registry.archive(archived_run.agent_id()).unwrap();
+    registry.archive(spawn.agent_id()).unwrap();
+    append(
+        &store,
+        1,
+        text_tx(sub.agent_id(), TransactionType::AgentMsg, "hi"),
+    );
+
+    let running = HashSet::from([run_b.agent_id()]);
+    let mut rows = ListRows::build(&registry, &running);
+    rows.read_activity(&store, &mut LastActive::default());
+    let active = registry.active().agent_id();
+    assert_eq!(rows.active, active);
+    let check = |rows: &[(AgentId, AgentSummary)],
+                 tree: Vec<(&crate::agent_registry::RegisteredAgent, usize)>,
+                 active: AgentId| {
+        assert_eq!(rows.len(), tree.len());
+        for ((id, row), (agent, depth)) in rows.iter().zip(tree) {
+            assert_eq!(*id, agent.agent_id());
+            assert_eq!(row.id, id.to_hex());
+            assert_eq!(row.depth, depth);
+            assert_eq!(row.bench_run, registry.under_compare(*id), "{}", agent.name);
+            assert_eq!(
+                row.project,
+                registry
+                    .project_of(*id)
+                    .map(crate::agent_registry::Project::name)
+            );
+            assert_eq!(row.is_active, *id == active);
+            assert_eq!(row.record_count, store.get_head_seq(*id).unwrap());
+        }
+    };
+    check(&rows.listed, registry.tree(), active);
+    check(
+        &rows.archived,
+        registry.archived_tree(),
+        AgentId::new([0; 32]),
+    );
+    assert!(rows
+        .listed
+        .iter()
+        .any(|(id, r)| *id == run_b.agent_id() && r.running));
+    assert!(rows
+        .archived
+        .iter()
+        .any(|(id, r)| *id == archived_run.agent_id() && r.bench_run));
+    assert_eq!(rows.projects, project_summaries(&registry));
+    for project in &rows.projects {
+        assert_eq!(
+            (project.listed_agents, project.archived_agents),
+            registry.project_counts(&project.id)
+        );
+    }
+}

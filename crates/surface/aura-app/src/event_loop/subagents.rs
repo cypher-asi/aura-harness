@@ -343,6 +343,8 @@ pub struct AgentHub {
     write_locks: Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
     /// Agents doing a write subtask while holding their workspace's lock
     writing: Mutex<HashSet<AgentId>>,
+    /// When each agent was last active, for the agent lists
+    last_active: Mutex<crate::record_loader::LastActive>,
 }
 
 /// Parts of an [`AgentHub`] other than the kernel factory.
@@ -426,6 +428,7 @@ impl AgentHub {
                 compare_arms: Mutex::new(HashMap::new()),
                 write_locks: Mutex::new(HashMap::new()),
                 writing: Mutex::new(HashSet::new()),
+                last_active: Mutex::default(),
             }
         })
     }
@@ -751,26 +754,40 @@ impl AgentHub {
 
     /// The projects, the Agents panel rows and the Archive, in the order
     /// the UI takes them: the projects first, so one with every agent
+    /// archived is known when the rows arrive. Also returns the agent the
+    /// rows mark active.
+    ///
+    /// The registry is held only while the rows are laid out; the store is
+    /// read after it is released, so the event loop and the spawns don't
+    /// wait on the reads.
+    fn agent_lists_with_active(&self) -> ([UiCommand; 3], AgentId) {
+        let running: HashSet<AgentId> = lock(&self.running).keys().copied().collect();
+        let mut rows = {
+            let registry = lock(&self.registry);
+            self.processes.name_agents(
+                registry
+                    .agents()
+                    .iter()
+                    .map(|agent| (agent.agent_id(), agent.display_name())),
+            );
+            crate::record_loader::ListRows::build(&registry, &running)
+        };
+        rows.read_activity(self.factory.store.as_ref(), &mut lock(&self.last_active));
+        let active = rows.active;
+        (rows.into_commands(), active)
+    }
+
+    /// The projects, the Agents panel rows and the Archive, in the order
+    /// the UI takes them: the projects first, so one with every agent
     /// archived is known when the rows arrive.
     pub fn agent_lists(&self) -> [UiCommand; 3] {
-        self.name_agents();
-        let summaries = self.agent_summaries();
-        let registry = lock(&self.registry);
-        [
-            UiCommand::SetProjects(crate::record_loader::project_summaries(&registry)),
-            UiCommand::SetAgents(summaries),
-            UiCommand::SetArchivedAgents(crate::record_loader::archived_summaries(
-                &registry,
-                self.factory.store.as_ref(),
-            )),
-        ]
+        self.agent_lists_with_active().0
     }
 
     /// Send the projects, the Agents panel rows, the Archive and the
     /// active agent to the UI.
     pub async fn send_agent_list(&self) {
-        let lists = self.agent_lists();
-        let active = lock(&self.registry).active().agent_id();
+        let (lists, active) = self.agent_lists_with_active();
         for list in lists {
             let _ = self.commands.send(list).await;
         }
@@ -807,10 +824,13 @@ impl AgentHub {
 
     /// Tell the Processes tab what every agent is called.
     pub(crate) fn name_agents(&self) {
-        for agent in lock(&self.registry).agents() {
-            self.processes
-                .name_agent(agent.agent_id(), agent.display_name());
-        }
+        let registry = lock(&self.registry);
+        self.processes.name_agents(
+            registry
+                .agents()
+                .iter()
+                .map(|agent| (agent.agent_id(), agent.display_name())),
+        );
     }
 
     /// Send the roster rows to the UI.

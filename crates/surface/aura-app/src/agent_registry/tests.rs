@@ -102,6 +102,77 @@ fn loads_registry_written_before_definitions_existed() {
 }
 
 #[test]
+fn cached_agent_id_is_the_identitys() {
+    let dir = tempfile::tempdir().unwrap();
+    let launch = tempfile::tempdir().unwrap();
+    let mut registry = open(dir.path(), launch.path());
+    let agent = registry.create(Some("Named".to_string())).unwrap();
+    assert_eq!(agent.agent_id(), agent.identity().agent_id);
+    // A clone with another ZNS id must not keep the first one's id.
+    let mut other = agent.clone();
+    other.zns_id = "0://terminal/other".to_string();
+    assert_eq!(
+        other.agent_id(),
+        Identity::new("0://terminal/other", "x").agent_id
+    );
+    assert_eq!(agent.agent_id(), agent.identity().agent_id);
+}
+
+#[test]
+fn set_active_to_the_active_agent_does_not_rewrite_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let launch = tempfile::tempdir().unwrap();
+    let mut registry = open(dir.path(), launch.path());
+    let agent = registry.create(None).unwrap();
+    registry.set_active(agent.agent_id()).unwrap();
+    let path = dir.path().join(REGISTRY_FILE);
+    fs::remove_file(&path).unwrap();
+    registry.set_active(agent.agent_id()).unwrap();
+    assert!(!path.exists(), "nothing changed, so nothing is written");
+    let first = registry.agents()[0].agent_id();
+    registry.set_active(first).unwrap();
+    assert!(path.exists());
+}
+
+#[test]
+fn a_parent_cycle_lists_each_agent_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let launch = tempfile::tempdir().unwrap();
+    let agent = |zns: &str, parent: Option<&str>, archived: bool| {
+        serde_json::json!({
+            "zns_id": zns, "name": zns, "created_at": "2026-10-31T01:48:50Z",
+            "parent": parent, "project_id": "p", "archived": archived,
+        })
+    };
+    let file = serde_json::json!({
+        "version": REGISTRY_VERSION,
+        "projects": [{"id": "p", "folder": launch.path(), "created_at": "2026-10-31T01:48:50Z"}],
+        "agents": [
+            agent("0://a", Some("0://b"), true),
+            agent("0://b", Some("0://a"), true),
+            agent("0://c", None, false),
+            agent("0://d", Some("0://c"), false),
+        ],
+    });
+    fs::write(dir.path().join(REGISTRY_FILE), file.to_string()).unwrap();
+    let registry = open(dir.path(), launch.path());
+
+    assert_eq!(
+        names(registry.tree()),
+        [("0://c".to_string(), 0), ("0://d".to_string(), 1)]
+    );
+    // Both cycle members have an archived spawner, so neither heads the
+    // Archive; the walk ends instead of looping.
+    assert!(registry.archived_tree().len() <= registry.agents().len());
+    let c = registry.agents()[2].agent_id();
+    assert_eq!(registry.subtree(c).len(), 2);
+    let a = registry.agents()[0].agent_id();
+    assert_eq!(registry.subtree(a).len(), 2);
+    assert_eq!(registry.project_counts("p").0, 2);
+    assert_eq!(registry.project_counts_all().get("p").map(|c| c.0), Some(2));
+}
+
+#[test]
 fn instances_are_numbered_per_definition_and_nested_under_parents() {
     let dir = tempfile::tempdir().unwrap();
     let launch = tempfile::tempdir().unwrap();

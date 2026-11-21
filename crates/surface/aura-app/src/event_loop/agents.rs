@@ -524,11 +524,12 @@ async fn stop_busy(state: &mut LoopState<'_>, agents: &[AgentId]) -> Vec<String>
 /// After agents left the list, show the one the registry opens now if the
 /// active agent was among them; otherwise just refresh the list.
 async fn after_list_shrank(state: &mut LoopState<'_>, gone: &[AgentId]) {
+    // The agents leave the list at once; opening the next one can take a
+    // while when it has a long record.
+    state.hub.send_agent_list().await;
     if gone.contains(&state.active) {
         let next = lock(&state.hub.registry).active().agent_id();
         activate_agent(state, next, Chat::Reload).await;
-    } else {
-        state.hub.send_agent_list().await;
     }
 }
 
@@ -826,12 +827,16 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
         .commands
         .send(UiCommand::SetActiveAgent(agent_id.to_hex()))
         .await;
+    // The lists go first: a new or restored agent shows up in them, and an
+    // archived one leaves them, before its history has been read.
+    state.hub.send_agent_list().await;
     // One replace-all command: clears the previous agent's records even
     // when this agent's history can't be read.
     let (records, problem) = match recent_record_summaries(store, agent_id) {
         Ok(summaries) => (summaries, None),
         Err(e) => (Vec::new(), Some(e)),
     };
+    let has_records = store.get_head_seq(agent_id).map_or(true, |head| head > 0);
     let _ = state.commands.send(UiCommand::SetRecords(records)).await;
     if let Some(e) = problem {
         let _ = state
@@ -841,7 +846,12 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
             )))
             .await;
     }
-    state.hub.traces.send_history(agent_id).await;
+    // An agent with nothing recorded has never run, so it has no stored
+    // run to look for, and looking finds none only after reading every
+    // run's metadata.
+    if has_records || state.hub.is_running(agent_id) {
+        state.hub.traces.send_history(agent_id).await;
+    }
 
     if chat == Chat::Reload && !state.hub.is_running(agent_id) {
         let history = conversation_history(store, agent_id).unwrap_or_else(|e| {
@@ -864,7 +874,6 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
     }
 
     send_sandbox_root(state).await;
-    state.hub.send_agent_list().await;
 }
 
 /// Point the Sandbox panel at the active agent's workspace, creating it

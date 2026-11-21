@@ -15,6 +15,7 @@ use anyhow::Context;
 use aura_core_types::{AgentId, Identity};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -75,9 +76,40 @@ pub enum Opened {
     Revived,
 }
 
+/// [`RegisteredAgent::agent_id`], worked out once. Deriving an id hashes
+/// the ZNS id, and the agent lists look ids up for every agent on every
+/// change, so recomputing them made those lists quadratic in cost.
+///
+/// A clone starts empty, so it never carries an id its `zns_id` might
+/// not match; equality ignores it.
+#[derive(Default)]
+struct IdCache(std::sync::OnceLock<AgentId>);
+
+impl Clone for IdCache {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for IdCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for IdCache {}
+
+impl std::fmt::Debug for IdCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("IdCache")
+    }
+}
+
 /// One agent known to the terminal UI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RegisteredAgent {
+    /// Never changed once the agent is registered: its id is derived from
+    /// it and cached.
     pub zns_id: String,
     pub name: String,
     pub created_at: DateTime<Utc>,
@@ -111,6 +143,8 @@ pub struct RegisteredAgent {
     /// added to.
     #[serde(default, rename = "member_of", skip_serializing)]
     legacy_member_of: Option<String>,
+    #[serde(skip)]
+    id: IdCache,
 }
 
 impl RegisteredAgent {
@@ -119,9 +153,13 @@ impl RegisteredAgent {
         Identity::new(&self.zns_id, &self.name)
     }
 
+    /// The id [`Self::identity`] has, without building the identity.
     #[must_use]
     pub fn agent_id(&self) -> AgentId {
-        self.identity().agent_id
+        *self
+            .id
+            .0
+            .get_or_init(|| AgentId::new(*blake3::hash(self.zns_id.as_bytes()).as_bytes()))
     }
 
     /// Whether this agent holds a `/compare` (its record and runs).
@@ -459,6 +497,9 @@ impl AgentRegistry {
     /// Returns an error if the registry cannot be written.
     pub fn set_active(&mut self, agent_id: AgentId) -> anyhow::Result<()> {
         if let Some(agent) = self.find(agent_id) {
+            if self.file.active.as_deref() == Some(agent.zns_id.as_str()) {
+                return Ok(());
+            }
             self.file.active = Some(agent.zns_id.clone());
             self.save()?;
         }
@@ -883,6 +924,7 @@ impl AgentRegistry {
             removed: false,
             title: None,
             legacy_member_of: None,
+            id: IdCache::default(),
         }
     }
 
@@ -898,26 +940,37 @@ impl AgentRegistry {
     /// under them are left out (see [`Self::archived_tree`]).
     #[must_use]
     pub fn tree(&self) -> Vec<(&RegisteredAgent, usize)> {
-        let mut out = Vec::with_capacity(self.file.agents.len());
+        let index = self.index();
+        let mut walk = Walk::new(self.file.agents.len());
         for project in self.file.projects.iter().filter(|p| !p.removed) {
-            for agent in self.top_level_of(&project.id) {
+            for agent in self.file.agents.iter().filter(|a| {
+                a.project_id.as_deref() == Some(project.id.as_str()) && index.is_top_level(a)
+            }) {
                 if !agent.archived && !agent.removed {
-                    self.visit(agent, 0, false, &mut out);
+                    self.visit(&index, agent, 0, false, &mut walk);
                 }
             }
         }
-        out
+        walk.out
     }
 
-    /// The top-level agents of project `project_id`, in order.
-    fn top_level_of<'a>(
-        &'a self,
-        project_id: &'a str,
-    ) -> impl Iterator<Item = &'a RegisteredAgent> {
-        self.file
-            .agents
-            .iter()
-            .filter(move |a| a.project_id.as_deref() == Some(project_id) && self.is_top_level(a))
+    /// One pass over the agents: where each ZNS id is, and the agents each
+    /// one spawned, in registry order.
+    fn index(&self) -> Index<'_> {
+        let agents = &self.file.agents;
+        let mut by_zns = HashMap::with_capacity(agents.len());
+        let mut children: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (i, agent) in agents.iter().enumerate() {
+            by_zns.entry(agent.zns_id.as_str()).or_insert(i);
+            if let Some(parent) = agent.parent.as_deref() {
+                children.entry(parent).or_default().push(i);
+            }
+        }
+        Index {
+            agents,
+            by_zns,
+            children,
+        }
     }
 
     /// The Archive: each archived agent no archived agent spawned, project
@@ -925,10 +978,10 @@ impl AgentRegistry {
     /// from it.
     #[must_use]
     pub fn archived_tree(&self) -> Vec<(&RegisteredAgent, usize)> {
-        let mut out = Vec::new();
-        let heads = |agent: &&RegisteredAgent| {
-            agent.archived && !self.spawners(agent).iter().any(|p| p.archived)
-        };
+        let index = self.index();
+        let mut walk = Walk::new(self.file.agents.len());
+        let heads =
+            |agent: &&RegisteredAgent| agent.archived && !index.spawners(agent).any(|p| p.archived);
         for project in &self.file.projects {
             for agent in self
                 .file
@@ -937,7 +990,7 @@ impl AgentRegistry {
                 .filter(|a| a.project_id.as_deref() == Some(project.id.as_str()))
                 .filter(heads)
             {
-                self.visit(agent, 0, true, &mut out);
+                self.visit(&index, agent, 0, true, &mut walk);
             }
         }
         for agent in self
@@ -951,29 +1004,31 @@ impl AgentRegistry {
             })
             .filter(heads)
         {
-            self.visit(agent, 0, true, &mut out);
+            self.visit(&index, agent, 0, true, &mut walk);
         }
-        out
+        walk.out
     }
 
     fn visit<'a>(
         &'a self,
+        index: &Index<'a>,
         agent: &'a RegisteredAgent,
         depth: usize,
         with_archived: bool,
-        out: &mut Vec<(&'a RegisteredAgent, usize)>,
+        walk: &mut Walk<'a>,
     ) {
         // A parent cycle would loop forever; registries never form one, but
         // a hand-edited file could.
-        if out.len() > self.file.agents.len() || out.iter().any(|(a, _)| a.zns_id == agent.zns_id) {
+        if walk.out.len() > self.file.agents.len() || !walk.seen.insert(agent.zns_id.as_str()) {
             return;
         }
-        out.push((agent, depth));
-        let mut spawned: Vec<&RegisteredAgent> = self
-            .file
-            .agents
-            .iter()
-            .filter(|a| a.parent.as_deref() == Some(agent.zns_id.as_str()))
+        walk.out.push((agent, depth));
+        let mut spawned: Vec<&RegisteredAgent> = index
+            .children
+            .get(agent.zns_id.as_str())
+            .into_iter()
+            .flatten()
+            .map(|&i| &self.file.agents[i])
             .filter(|a| with_archived || !(a.archived || a.removed))
             .collect();
         if agent.is_compare() || agent.is_compare_arm() {
@@ -981,7 +1036,7 @@ impl AgentRegistry {
             spawned.sort_by(|x, y| run_order(&x.name).cmp(&run_order(&y.name)));
         }
         for child in spawned {
-            self.visit(child, depth + 1, with_archived, out);
+            self.visit(index, child, depth + 1, with_archived, walk);
         }
     }
 
@@ -1036,15 +1091,34 @@ impl AgentRegistry {
         (count(self.tree()), count(self.archived_tree()))
     }
 
+    /// [`Self::project_counts`] of every project, from one walk of each
+    /// list.
+    #[must_use]
+    pub fn project_counts_all(&self) -> HashMap<String, (usize, usize)> {
+        let mut counts: HashMap<String, (usize, usize)> = HashMap::new();
+        for (agent, _) in self.tree() {
+            if let Some(id) = &agent.project_id {
+                counts.entry(id.clone()).or_default().0 += 1;
+            }
+        }
+        for (agent, _) in self.archived_tree() {
+            if let Some(id) = &agent.project_id {
+                counts.entry(id.clone()).or_default().1 += 1;
+            }
+        }
+        counts
+    }
+
     /// `agent_id` and every agent under it.
     #[must_use]
     pub fn subtree(&self, agent_id: AgentId) -> Vec<AgentId> {
         let Some(agent) = self.find(agent_id) else {
             return Vec::new();
         };
-        let mut out = Vec::new();
-        self.visit(agent, 0, true, &mut out);
-        out.into_iter().map(|(a, _)| a.agent_id()).collect()
+        let index = self.index();
+        let mut walk = Walk::new(self.file.agents.len());
+        self.visit(&index, agent, 0, true, &mut walk);
+        walk.out.into_iter().map(|(a, _)| a.agent_id()).collect()
     }
 
     /// Move `agent_id`, and the agents it spawned, to the Archive. The
@@ -1057,7 +1131,7 @@ impl AgentRegistry {
         let Some(index) = self.position(agent_id) else {
             anyhow::bail!("no such agent");
         };
-        let hiding = self.subtree(agent_id);
+        let hiding: HashSet<AgentId> = self.subtree(agent_id).into_iter().collect();
         if self
             .tree()
             .iter()
@@ -1225,6 +1299,65 @@ impl AgentRegistry {
         fs::rename(&tmp, &self.path)
             .with_context(|| format!("renaming {} -> {}", tmp.display(), self.path.display()))?;
         Ok(())
+    }
+}
+
+/// Lookups built in one pass over the registry's agents, so a walk of the
+/// lists finds parents and children without scanning every agent.
+struct Index<'a> {
+    agents: &'a [RegisteredAgent],
+    /// Position of the first agent with each ZNS id
+    by_zns: HashMap<&'a str, usize>,
+    /// Positions of the agents naming each ZNS id as parent, in order
+    children: HashMap<&'a str, Vec<usize>>,
+}
+
+impl<'a> Index<'a> {
+    fn parent_of(&self, agent: &RegisteredAgent) -> Option<&'a RegisteredAgent> {
+        let parent = agent.parent.as_deref()?;
+        self.by_zns.get(parent).map(|&i| &self.agents[i])
+    }
+
+    /// As [`AgentRegistry::is_top_level`].
+    fn is_top_level(&self, agent: &RegisteredAgent) -> bool {
+        self.parent_of(agent).is_none()
+    }
+
+    /// The agents that spawned `agent`, nearest first. Stops after as many
+    /// steps as there are agents, in case of a parent cycle.
+    fn spawners<'s>(
+        &'s self,
+        agent: &'a RegisteredAgent,
+    ) -> impl Iterator<Item = &'a RegisteredAgent> + 's
+    where
+        'a: 's,
+    {
+        let mut current = agent;
+        let mut left = self.agents.len();
+        std::iter::from_fn(move || {
+            if left == 0 {
+                return None;
+            }
+            left -= 1;
+            let parent = self.parent_of(current)?;
+            current = parent;
+            Some(parent)
+        })
+    }
+}
+
+/// Rows of one walk of the lists, and the agents it has listed.
+struct Walk<'a> {
+    out: Vec<(&'a RegisteredAgent, usize)>,
+    seen: HashSet<&'a str>,
+}
+
+impl Walk<'_> {
+    fn new(capacity: usize) -> Self {
+        Self {
+            out: Vec::with_capacity(capacity),
+            seen: HashSet::with_capacity(capacity),
+        }
     }
 }
 

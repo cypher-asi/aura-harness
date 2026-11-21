@@ -3,7 +3,7 @@
 //! `AURA_PERF_DATA=<copy of aura_data> cargo test -p aura-app --test agent_list_perf -- --ignored --nocapture`.
 
 use aura_app::agent_registry::AgentRegistry;
-use aura_app::record_loader::{agent_summaries, archived_summaries, project_summaries};
+use aura_app::record_loader::{agent_summaries, archived_summaries, project_summaries, LastActive};
 use aura_store_db::RocksStore;
 use aura_store_record::ReadStore;
 use std::collections::HashSet;
@@ -27,7 +27,7 @@ fn time_agent_list() {
         return;
     };
     let dir = std::path::PathBuf::from(dir);
-    let launch = std::path::PathBuf::from("/home/n3o/code/aura-harness");
+    let launch = std::env::current_dir().unwrap();
     let mut registry = time("load registry", 3, || {
         AgentRegistry::load_or_init_in(&dir, &launch).unwrap()
     });
@@ -53,10 +53,16 @@ fn time_agent_list() {
     });
     let listed: Vec<_> = registry.tree().iter().map(|(a, _)| a.agent_id()).collect();
     time("find of every listed agent", 2, || {
-        listed.iter().filter(|&&id| registry.find(id).is_some()).count()
+        listed
+            .iter()
+            .filter(|&&id| registry.find(id).is_some())
+            .count()
     });
     time("under_compare of every listed agent", 2, || {
-        listed.iter().filter(|&&id| registry.under_compare(id)).count()
+        listed
+            .iter()
+            .filter(|&&id| registry.under_compare(id))
+            .count()
     });
     time("project_of of every listed agent", 2, || {
         listed
@@ -85,12 +91,25 @@ fn time_agent_list() {
 
     let active = registry.active().agent_id();
     let running = HashSet::new();
-    time("project_summaries", 3, || project_summaries(&registry).len());
+    time("project_summaries", 3, || {
+        project_summaries(&registry).len()
+    });
     time("agent_summaries", 2, || {
         agent_summaries(&registry, &store, active, &running).len()
     });
     time("archived_summaries", 2, || {
         archived_summaries(&registry, &store).len()
+    });
+
+    let mut cache = LastActive::default();
+    let ids: Vec<_> = registry
+        .tree()
+        .iter()
+        .chain(registry.archived_tree().iter())
+        .map(|(a, _)| a.agent_id())
+        .collect();
+    time("last activity, every row, warm cache", 3, || {
+        ids.iter().map(|&id| cache.of(&store, id).0).sum::<u64>()
     });
 
     let mut save = Duration::ZERO;

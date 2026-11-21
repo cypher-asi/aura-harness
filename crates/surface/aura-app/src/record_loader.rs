@@ -499,6 +499,113 @@ pub fn archive_unstarted_spawns(
     archived
 }
 
+/// Rows of the agents column, the Archive and the projects list, with the
+/// store not read yet: built under the registry lock, which
+/// [`ListRows::read_activity`] does not need.
+pub(crate) struct ListRows {
+    pub(crate) projects: Vec<ProjectSummary>,
+    pub(crate) listed: Vec<(AgentId, AgentSummary)>,
+    pub(crate) archived: Vec<(AgentId, AgentSummary)>,
+    /// The agent the rows mark active
+    pub(crate) active: AgentId,
+}
+
+impl ListRows {
+    /// The rows of every list, in one walk of each. `running` holds the
+    /// agents currently working on a task for their parent.
+    pub(crate) fn build(registry: &AgentRegistry, running: &HashSet<AgentId>) -> Self {
+        let active = registry.active().agent_id();
+        let mut names = ProjectNames::default();
+        let listed = rows(registry, registry.tree(), active, running, &mut names);
+        let none = HashSet::new();
+        let unknown = AgentId::new([0; 32]);
+        let archived = rows(
+            registry,
+            registry.archived_tree(),
+            unknown,
+            &none,
+            &mut names,
+        );
+        let count = |rows: &[(AgentId, AgentSummary)], project: &str| {
+            rows.iter()
+                .filter(|(_, row)| row.project_id.as_deref() == Some(project))
+                .count()
+        };
+        let projects = registry
+            .listed_projects()
+            .into_iter()
+            .map(|project| {
+                project_summary(
+                    project,
+                    count(&listed, &project.id),
+                    count(&archived, &project.id),
+                )
+            })
+            .collect();
+        Self {
+            projects,
+            listed,
+            archived,
+            active,
+        }
+    }
+
+    /// Fill in each row's record count and last activity from `store`,
+    /// reusing what `cache` saw for agents with no new entries.
+    pub(crate) fn read_activity(&mut self, store: &dyn ReadStore, cache: &mut LastActive) {
+        for (agent_id, row) in self.listed.iter_mut().chain(self.archived.iter_mut()) {
+            set_activity(row, cache.of(store, *agent_id));
+        }
+    }
+
+    /// The commands that send the lists, in the order the UI takes them:
+    /// the projects first, so one with every agent archived is known when
+    /// the rows arrive.
+    pub(crate) fn into_commands(self) -> [UiCommand; 3] {
+        let strip = |rows: Vec<(AgentId, AgentSummary)>| -> Vec<AgentSummary> {
+            rows.into_iter().map(|(_, row)| row).collect()
+        };
+        [
+            UiCommand::SetProjects(self.projects),
+            UiCommand::SetAgents(strip(self.listed)),
+            UiCommand::SetArchivedAgents(strip(self.archived)),
+        ]
+    }
+}
+
+fn set_activity(row: &mut AgentSummary, (record_count, last_active_ms): (u64, Option<u64>)) {
+    row.record_count = record_count;
+    row.last_active_ms = last_active_ms;
+    row.last_active = last_active_ms.map_or_else(|| "-".to_string(), format_local_time);
+}
+
+/// When each agent was last active, by the head of its record: the latest
+/// entry, which is decoded whole, is only read again once the head moves.
+#[derive(Debug, Default)]
+pub struct LastActive(HashMap<AgentId, (u64, Option<u64>)>);
+
+impl LastActive {
+    /// `agent_id`'s record count and the time of its latest entry.
+    pub fn of(&mut self, store: &dyn ReadStore, agent_id: AgentId) -> (u64, Option<u64>) {
+        let head = store.get_head_seq(agent_id).unwrap_or(0);
+        if head == 0 {
+            self.0.remove(&agent_id);
+            return (0, None);
+        }
+        if let Some(&(seen, ts)) = self.0.get(&agent_id) {
+            if seen == head {
+                return (head, ts);
+            }
+        }
+        let ts = store
+            .get_record_entry(agent_id, head)
+            .ok()
+            .map(|entry| entry.tx.ts_ms);
+        self.0.insert(agent_id, (head, ts));
+        (head, ts)
+    }
+}
+
 /// Build the agents-column rows for every registered agent in the order of
 /// [`AgentRegistry::tree`]. `running` holds the agents currently working
 /// on a task for their parent.
@@ -509,11 +616,9 @@ pub fn agent_summaries(
     active: AgentId,
     running: &HashSet<AgentId>,
 ) -> Vec<AgentSummary> {
-    registry
-        .tree()
-        .into_iter()
-        .map(|(agent, depth)| summarize(registry, agent, depth, store, active, running))
-        .collect()
+    let mut names = ProjectNames::default();
+    let rows = rows(registry, registry.tree(), active, running, &mut names);
+    with_activity(rows, store)
 }
 
 /// Rows for the Archive. Each archived agent's `project` names the project
@@ -522,69 +627,126 @@ pub fn agent_summaries(
 pub fn archived_summaries(registry: &AgentRegistry, store: &dyn ReadStore) -> Vec<AgentSummary> {
     let none = HashSet::new();
     let unknown = AgentId::new([0; 32]);
-    registry
-        .archived_tree()
-        .into_iter()
-        .map(|(agent, depth)| summarize(registry, agent, depth, store, unknown, &none))
+    let mut names = ProjectNames::default();
+    let rows = rows(
+        registry,
+        registry.archived_tree(),
+        unknown,
+        &none,
+        &mut names,
+    );
+    with_activity(rows, store)
+}
+
+fn with_activity(rows: Vec<(AgentId, AgentSummary)>, store: &dyn ReadStore) -> Vec<AgentSummary> {
+    let mut cache = LastActive::default();
+    rows.into_iter()
+        .map(|(agent_id, mut row)| {
+            set_activity(&mut row, cache.of(store, agent_id));
+            row
+        })
         .collect()
 }
 
 /// Rows of the listed projects, in list order.
 #[must_use]
 pub fn project_summaries(registry: &AgentRegistry) -> Vec<ProjectSummary> {
+    let counts = registry.project_counts_all();
     registry
         .listed_projects()
         .into_iter()
         .map(|project| {
-            let (listed_agents, archived_agents) = registry.project_counts(&project.id);
-            ProjectSummary {
-                id: project.id.clone(),
-                name: project.name(),
-                folder: project.folder.display().to_string(),
-                folder_exists: project.folder.is_dir(),
-                created: project
-                    .created_at
-                    .with_timezone(&chrono::Local)
-                    .format("%Y-%m-%d %H:%M")
-                    .to_string(),
-                listed_agents,
-                archived_agents,
-            }
+            let (listed, archived) = counts.get(&project.id).copied().unwrap_or_default();
+            project_summary(project, listed, archived)
         })
         .collect()
 }
 
-fn summarize(
+fn project_summary(
+    project: &crate::agent_registry::Project,
+    listed_agents: usize,
+    archived_agents: usize,
+) -> ProjectSummary {
+    ProjectSummary {
+        id: project.id.clone(),
+        name: project.name(),
+        folder: project.folder.display().to_string(),
+        folder_exists: project.folder.is_dir(),
+        created: project
+            .created_at
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M")
+            .to_string(),
+        listed_agents,
+        archived_agents,
+    }
+}
+
+/// Names of projects by id, each worked out once per list.
+#[derive(Default)]
+struct ProjectNames(HashMap<String, Option<String>>);
+
+impl ProjectNames {
+    fn of(&mut self, registry: &AgentRegistry, project_id: Option<&str>) -> Option<String> {
+        let id = project_id?;
+        if let Some(name) = self.0.get(id) {
+            return name.clone();
+        }
+        let name = registry
+            .project(id)
+            .map(crate::agent_registry::Project::name);
+        self.0.insert(id.to_string(), name.clone());
+        name
+    }
+}
+
+/// Rows for `tree`, a walk of [`AgentRegistry::tree`] or
+/// [`AgentRegistry::archived_tree`], without the store's fields.
+///
+/// A row below the top has as parent the nearest row above it one level
+/// up, so whether a `/compare` holds it carries down the walk instead of
+/// being looked up for each agent; rows at the top look it up.
+fn rows(
     registry: &AgentRegistry,
-    agent: &crate::agent_registry::RegisteredAgent,
-    depth: usize,
-    store: &dyn ReadStore,
+    tree: Vec<(&crate::agent_registry::RegisteredAgent, usize)>,
     active: AgentId,
     running: &HashSet<AgentId>,
-) -> AgentSummary {
-    let agent_id = agent.agent_id();
-    let record_count = store.get_head_seq(agent_id).unwrap_or(0);
-    let last_active_ms = (record_count > 0)
-        .then(|| store.get_record_entry(agent_id, record_count).ok())
-        .flatten()
-        .map(|entry| entry.tx.ts_ms);
-    AgentSummary {
-        id: agent_id.to_hex(),
-        name: agent.display_name().to_string(),
-        zns_id: agent.zns_id.clone(),
-        is_active: agent_id == active,
-        record_count,
-        last_active: last_active_ms.map_or_else(|| "-".to_string(), format_local_time),
-        last_active_ms,
-        definition: agent.definition.clone(),
-        depth,
-        running: running.contains(&agent_id),
-        bench_run: registry.under_compare(agent_id),
-        project_id: agent.project_id.clone(),
-        project: registry
-            .project_of(agent_id)
-            .map(crate::agent_registry::Project::name),
-    }
+    names: &mut ProjectNames,
+) -> Vec<(AgentId, AgentSummary)> {
+    // Per depth: whether the agents below the row there are under a
+    // comparison.
+    let mut below_compare: Vec<bool> = Vec::new();
+    tree.into_iter()
+        .map(|(agent, depth)| {
+            let agent_id = agent.agent_id();
+            let above = match depth.checked_sub(1) {
+                Some(up) => below_compare.get(up).copied().unwrap_or(false),
+                None => registry
+                    .ancestry(agent_id)
+                    .into_iter()
+                    .skip(1)
+                    .any(|id| registry.find(id).is_some_and(|a| a.is_compare())),
+            };
+            below_compare.truncate(depth);
+            below_compare.push(above || agent.is_compare());
+            let row = AgentSummary {
+                id: agent_id.to_hex(),
+                name: agent.display_name().to_string(),
+                zns_id: agent.zns_id.clone(),
+                is_active: agent_id == active,
+                record_count: 0,
+                last_active: "-".to_string(),
+                last_active_ms: None,
+                definition: agent.definition.clone(),
+                depth,
+                running: running.contains(&agent_id),
+                bench_run: above && !agent.is_compare_arm(),
+                project_id: agent.project_id.clone(),
+                project: names.of(registry, agent.project_id.as_deref()),
+            };
+            (agent_id, row)
+        })
+        .collect()
 }
 
 pub(crate) fn scan_tail(

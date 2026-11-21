@@ -230,6 +230,18 @@ impl ProcessTable {
             .insert(agent.to_hex(), name.to_string());
     }
 
+    /// [`Self::name_agent`] for each of `agents`, under one lock, leaving
+    /// names that haven't changed as they are.
+    pub fn name_agents<'a>(&self, agents: impl IntoIterator<Item = (AgentId, &'a str)>) {
+        let mut inner = lock(&self.inner);
+        for (agent, name) in agents {
+            let hex = agent.to_hex();
+            if inner.names.get(&hex).map(String::as_str) != Some(name) {
+                inner.names.insert(hex, name.to_string());
+            }
+        }
+    }
+
     /// List the background agents under `root`.
     pub fn add_root(&self, root: AgentId) {
         let mut inner = lock(&self.inner);

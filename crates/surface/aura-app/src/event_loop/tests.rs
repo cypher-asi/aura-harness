@@ -1189,6 +1189,76 @@ async fn archiving_a_busy_agent_stops_its_turn() {
     assert!(!state.hub.is_running(first), "the stopped turn ended");
 }
 
+/// Index of the first command `pick` matches.
+fn position_of(
+    commands: &[(Option<String>, UiCommand)],
+    pick: impl Fn(&UiCommand) -> bool,
+) -> Option<usize> {
+    commands.iter().position(|(_, c)| pick(c))
+}
+
+/// A new agent is in the list the UI gets before its chat and records,
+/// so it shows up without waiting on its history.
+#[tokio::test]
+async fn a_created_agent_is_listed_before_its_history_is_sent() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut state = loop_state(&fixture, &mut b);
+    let _ = drain(&mut commands);
+
+    handle_ui_event(
+        &mut state,
+        UiEvent::CreateAgent(Some("Fresh".into())),
+        &links,
+    )
+    .await;
+    let created = state.active.to_hex();
+    let sent = drain(&mut commands);
+    let listed = position_of(
+        &sent,
+        |c| matches!(c, UiCommand::SetAgents(agents) if agents.iter().any(|a| a.id == created)),
+    )
+    .expect("the new agent is listed");
+    let history = position_of(&sent, |c| matches!(c, UiCommand::LoadConversation(_)))
+        .expect("its chat is sent");
+    let records = position_of(&sent, |c| matches!(c, UiCommand::SetRecords(_)))
+        .expect("its records are sent");
+    assert!(listed < history && listed < records, "{sent:?}");
+    assert!(
+        !sent
+            .iter()
+            .any(|(_, c)| matches!(c, UiCommand::GraphUpsert { .. })),
+        "an agent with no record has no stored run to show"
+    );
+}
+
+/// Archiving the agent on screen takes it off the list before the next
+/// agent's chat is read.
+#[tokio::test]
+async fn archiving_the_active_agent_lists_it_gone_before_opening_the_next() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut state = loop_state(&fixture, &mut b);
+    assert_eq!(state.active, first);
+    let _ = drain(&mut commands);
+
+    handle_ui_event(&mut state, UiEvent::ArchiveAgent(first.to_hex()), &links).await;
+    assert_ne!(state.active, first);
+    let gone = first.to_hex();
+    let sent = drain(&mut commands);
+    let listed = position_of(
+        &sent,
+        |c| matches!(c, UiCommand::SetAgents(agents) if agents.iter().all(|a| a.id != gone)),
+    )
+    .expect("the list without it is sent");
+    let history = position_of(&sent, |c| matches!(c, UiCommand::LoadConversation(_)))
+        .expect("the next agent's chat is sent");
+    assert!(listed < history, "{sent:?}");
+}
+
 #[tokio::test]
 async fn switching_to_a_busy_agent_keeps_its_live_chat() {
     let (fixture, mut commands) = fixture();
