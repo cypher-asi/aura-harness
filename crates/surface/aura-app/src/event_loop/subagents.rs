@@ -222,6 +222,10 @@ pub(crate) enum ArmRouting {
     },
     /// Every subtask nothing else pins runs on this model.
     Pinned(String),
+    /// Every turn and subtask nothing else pins is classified and runs on
+    /// the model its difficulty is given, with no exploring and no
+    /// escalation.
+    ByDifficulty(aura_agent_gate::DifficultyRoutes),
 }
 
 /// How a turn of one of the user's agents leads under Gate once its
@@ -565,7 +569,7 @@ impl AgentHub {
         }
         match self.compare_routing(agent_id) {
             Some(ArmRouting::Gate { delegate, .. }) => Some(delegate),
-            Some(ArmRouting::Pinned(_)) => None,
+            Some(ArmRouting::Pinned(_) | ArmRouting::ByDifficulty(_)) => None,
             None => lock(&self.base)
                 .gate
                 .candidates
@@ -1606,6 +1610,7 @@ impl AgentHub {
             explicit.is_some() || request.council_index.is_some() || definition.model.is_some();
         let mut candidates = base.gate.candidates.clone();
         let mut explore = true;
+        let mut table = None;
         match arm {
             Some(ArmRouting::Pinned(model)) => {
                 if !pinned {
@@ -1620,6 +1625,13 @@ impl AgentHub {
                 candidates = Some(arm_candidates);
                 explore = false;
             }
+            Some(ArmRouting::ByDifficulty(routes)) => {
+                // The arm's table routes the subtask, so Gate neither
+                // picks among candidates nor retries a failed attempt.
+                candidates = None;
+                explore = false;
+                table = (!pinned).then_some(routes);
+            }
             None => {}
         }
         SubtaskGate {
@@ -1631,6 +1643,7 @@ impl AgentHub {
             live: Arc::clone(&self.gate),
             explore,
             escalation: None,
+            table,
         }
     }
 

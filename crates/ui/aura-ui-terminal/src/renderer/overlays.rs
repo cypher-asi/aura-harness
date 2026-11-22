@@ -490,7 +490,7 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "/archive /remove-project  Hide agent, project",
         "/agents /kernel /files  Toggle those panels",
         "/graph [id] /runs /status  Run graphs, scores",
-        "/model /thinking [level]  Model, thinking level",
+        "/model [opus] /thinking [level]  Model, thinking",
         "/mode [name] /approval [level]  Work, what asks",
         "/plan /build [path]  Plan mode, implement plan",
         "/login /whoami  Login for cloud models, status",

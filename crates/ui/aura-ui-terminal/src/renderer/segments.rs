@@ -11,7 +11,7 @@ use ratatui::{
     text::{Line, Span},
 };
 
-/// `[claude-sonnet-5-5 ×2 · gate: claude-haiku-5-5 · 27.9k tok · $0.040]`
+/// `[claude-sonnet-5-5 ×2 · 27.9k tok · $0.040 · via Claude plan]`
 /// — the dim line closing a turn. `meta` (see [`reply_meta`]) loses its
 /// trailing parts when it doesn't fit in `width`.
 pub(super) fn reply_footer(meta: &[String], width: usize, theme: &Theme) -> Option<Line<'static>> {
@@ -73,26 +73,38 @@ fn fit_meta(meta: &[String], room: usize) -> Option<String> {
     Some(cut)
 }
 
-/// Parts of a reply's footer, most important first: the turn's models,
-/// then the tokens and cost of its calls when known.
-pub(super) fn reply_meta(model: Option<&str>, usage: Option<CallUsage>) -> Vec<String> {
+/// Parts of a reply's one-line footer, most important first: the turn's
+/// models, then its tokens and cost, then who paid for them.
+///
+/// With a single sign-in its totals are the turn's, so only its name is
+/// added: `m · 1.6M tok · $0.998 · via Claude plan`. With several, each
+/// sign-in's share replaces the totals:
+/// `m · via Claude plan 25.1k tok · OpenRouter 2.8k tok $0.004`.
+pub(super) fn reply_meta(
+    model: Option<&str>,
+    usage: Option<CallUsage>,
+    sources: &[SourceUsage],
+) -> Vec<String> {
     let mut parts: Vec<String> = model.map(str::to_string).into_iter().collect();
-    if let Some(usage) = usage {
-        parts.push(format!("{} tok", format_tokens(usage.tokens)));
-        parts.extend(usage.cost_usd.map(format_cost));
-    }
-    parts
-}
-
-/// Parts of a reply's second footer line, who paid for the turn's
-/// tokens: `via Claude plan 25.1k tok`, then `OpenRouter 2.8k tok $0.004`
-/// for each other sign-in. Each sign-in's cost is shown when its calls
-/// were priced. Empty when no call reported its usage.
-pub(super) fn source_meta(sources: &[SourceUsage]) -> Vec<String> {
-    sources
-        .iter()
-        .enumerate()
-        .map(|(i, source)| {
+    match sources {
+        [] | [_] => {
+            let usage = usage.or_else(|| {
+                sources.first().map(|source| CallUsage {
+                    tokens: source.tokens,
+                    cost_usd: source.cost_usd,
+                })
+            });
+            if let Some(usage) = usage {
+                parts.push(format!("{} tok", format_tokens(usage.tokens)));
+                parts.extend(usage.cost_usd.map(format_cost));
+            }
+            parts.extend(
+                sources
+                    .first()
+                    .map(|source| format!("via {}", source.label)),
+            );
+        }
+        _ => parts.extend(sources.iter().enumerate().map(|(i, source)| {
             let mut part = format!(
                 "{}{} {} tok",
                 if i == 0 { "via " } else { "" },
@@ -104,8 +116,9 @@ pub(super) fn source_meta(sources: &[SourceUsage]) -> Vec<String> {
                 part.push_str(&format_cost(cost));
             }
             part
-        })
-        .collect()
+        })),
+    }
+    parts
 }
 
 /// The prompt before a message's first row, its color, and the color of

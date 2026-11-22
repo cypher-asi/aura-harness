@@ -1,0 +1,14 @@
+{
+  "id": "01a205290b8b0031",
+  "title": "Add host-level tests for inter-agent mail in `crates/engine/aura-engine` of /home/n3o/code/aura-harness. Don't commit; …",
+  "state": "completed",
+  "agent_id": "13af4f6c4f6bca8106aa72528756bf51e2ef79d339e223059ae15602784a7eb8",
+  "agent_name": "tests #9",
+  "assignee": "tests",
+  "parent": "01a204f82e9c0028",
+  "items": [],
+  "summary": "I added three host-level mail tests to `crates/engine/aura-engine/src/agents/tests.rs`, and all of them pass. Test 1 runs through the existing mock turn, so I didn't need the `HostInner::deliver_message` fallback. That is the only file I changed, it is formatted with `rustfmt --edition 2021`, and nothing is committed.",
+  "updated_ms": 1795383092948,
+  "created_ms": 1795382905739,
+  "tool_use_id": "toolu_01UavxXhKDCt8K1LAqgvx111"
+}

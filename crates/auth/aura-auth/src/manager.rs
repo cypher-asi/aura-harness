@@ -88,6 +88,16 @@ impl AuthSummary {
     }
 }
 
+/// Short plan label for the UI badge. OpenRouter's tier (`free`,
+/// `credits`, `$N left`) is billing detail rather than a plan, so the
+/// badge shows just the provider name.
+fn badge_name(link: &LinkedAccount) -> String {
+    match link.provider {
+        ProviderKind::OpenRouter => link.provider.label().to_string(),
+        _ => link.plan_name(),
+    }
+}
+
 /// Registry of auth providers plus persistent state.
 ///
 /// Implements [`CredentialResolver`] so model providers can fetch
@@ -229,7 +239,7 @@ impl AuthManager {
         AuthSummary {
             zos_user: identity.display_name().map(str::to_owned),
             subscriptions: usable.iter().map(|l| l.provider).collect(),
-            plan_names: usable.iter().map(LinkedAccount::plan_name).collect(),
+            plan_names: usable.iter().map(badge_name).collect(),
         }
     }
 

@@ -1,0 +1,12 @@
+{
+  "id": "01a204e733a1001f",
+  "title": "for benchmarking, let's create another option when creating a new benchmark to select the different models at each cate…",
+  "state": "completed",
+  "agent_id": "3368940924675b173207a46516aefe1b8ea82a4877f9b8ec4c11ae6f513f9b71",
+  "agent_name": "Agent 956",
+  "plan": ".aura/plans/benchmark-arm-with-a-model-per-difficulty_4f1701cc.plan.md",
+  "items": [],
+  "summary": "I've written the plan for a new \"by difficulty\" benchmark arm. You pick one model each for easy, medium and hard work, and each can come from a different provider or subscription. For example: easy on DeepSeek via OpenRouter, medium on Sonnet through your Claude plan, hard on GPT-5.4 through your ChatGPT plan.",
+  "updated_ms": 1795378834899,
+  "created_ms": 1795378590625
+}

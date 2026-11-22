@@ -106,12 +106,10 @@ impl App {
                 if arg.is_empty() {
                     self.open_model_selector();
                 } else {
-                    let id = self
-                        .models
-                        .iter()
-                        .find(|m| {
-                            m.id.eq_ignore_ascii_case(arg) || m.label.eq_ignore_ascii_case(arg)
-                        })
+                    // An exact id or label maps to its id here; any other
+                    // name (`opus`, `deepseek`) goes as typed and the event
+                    // loop resolves it as an alias.
+                    let id = super::model_picker::exact_match(&self.models, arg)
                         .map_or_else(|| arg.to_string(), |m| m.id.clone());
                     self.choose_model(&id);
                 }

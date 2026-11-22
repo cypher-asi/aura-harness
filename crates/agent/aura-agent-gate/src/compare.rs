@@ -12,15 +12,15 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use aura_core_types::{
-    ArmSpec, CompareArm, ComparePayload, ModelTokens, OutcomeSignal, Plan, PlanShare, PlanUsage,
-    RefVerdict,
+    ArmSpec, CompareArm, ComparePayload, Difficulty, ModelTokens, OutcomeSignal, Plan, PlanShare,
+    PlanUsage, RefVerdict, RouteReason,
 };
 use aura_model::model_catalog::{
     backend_for, billed_tokens, estimate_cost_usd, model_key, ModelBackend, ModelTier,
 };
 use aura_model::Usage;
 
-use crate::router::Candidate;
+use crate::router::{effort_on, Candidate, Decision, Work};
 
 /// Runs per arm when the command names no number.
 pub const DEFAULT_REPEATS: u32 = 3;
@@ -130,7 +130,9 @@ pub enum CompareCommand {
 
 /// How `/compare` is used, for error messages.
 pub const USAGE: &str = "Usage: /compare [prompt | --plan <file> | --session current|<started_ms> | --examples N | --suite <name>] \
-[--a <model|gate>] [--against <model|gate|gate:nodelegate>] [--repeats N] [--check <cmd>] [--budget $] [--learn] · \
+[--a <model|gate|difficulty:easy=<model>,medium=<model>,hard=<model>>] \
+[--against <model|gate|gate:nodelegate|difficulty:easy=<model>,medium=<model>,hard=<model>>] \
+[--repeats N] [--check <cmd>] [--budget $] [--learn] · \
 /compare go | cancel | show [n] | diff [run] | apply <run> | dismiss";
 
 /// One word of the arguments: its text with quotes removed, and where it
@@ -419,21 +421,78 @@ pub fn resolve_against<'a>(
     if let Some(candidate) = exact {
         return Ok(candidate);
     }
-    strongest(candidates.iter().filter(|c| {
-        c.id.to_ascii_lowercase().contains(&query) || c.label.to_ascii_lowercase().contains(&query)
+    containing(&query, candidates).ok_or_else(|| no_match(&query, candidates, usize::MAX))
+}
+
+/// Most model ids an error from [`resolve_model`] lists.
+const LISTED_MODELS: usize = 20;
+
+/// The strongest of `models` whose id or label contains `query`, which
+/// is lowercase.
+fn containing<'a>(query: &str, models: &'a [Candidate]) -> Option<&'a Candidate> {
+    strongest(models.iter().filter(|c| {
+        c.id.to_ascii_lowercase().contains(query) || c.label.to_ascii_lowercase().contains(query)
     }))
-    .ok_or_else(|| {
-        let available: Vec<&str> = candidates.iter().map(|c| c.id.as_str()).collect();
-        format!(
-            "No available model matches `{query}`; available: {}",
-            if available.is_empty() {
-                "none (sign in or link a plan)".to_string()
-            } else {
-                available.join(", ")
-            }
-        )
+}
+
+/// That no model matches `query`, with up to `limit` of the ids of
+/// `models`.
+fn no_match(query: &str, models: &[Candidate], limit: usize) -> String {
+    let available = if models.is_empty() {
+        "none (sign in or link a plan)".to_string()
+    } else {
+        let listed: Vec<&str> = models.iter().take(limit).map(|c| c.id.as_str()).collect();
+        let more = if models.len() > limit { ", …" } else { "" };
+        format!("{}{more}", listed.join(", "))
+    };
+    format!("No available model matches `{query}`; available: {available}")
+}
+
+/// The model `query` names for an arm pinned to one: a model of
+/// `runnable` whose id (else label) is `query` in any case, else one of
+/// `candidates` as [`resolve_against`] finds it, else the strongest of
+/// `runnable` whose id or label contains `query`. `runnable` holds every
+/// model the user can run ([`crate::router::runnable`]), `candidates`
+/// those Gate routes to.
+///
+/// # Errors
+/// Says which models are available when none matches, or when `query`
+/// names Gate itself.
+pub fn resolve_model<'a>(
+    query: &str,
+    runnable: &'a [Candidate],
+    candidates: &'a [Candidate],
+) -> Result<&'a Candidate, String> {
+    let lower = query.trim().to_ascii_lowercase();
+    let exact = runnable
+        .iter()
+        .find(|c| c.id.to_ascii_lowercase() == lower)
+        .or_else(|| {
+            runnable
+                .iter()
+                .find(|c| c.label.to_ascii_lowercase() == lower)
+        });
+    if let Some(candidate) = exact {
+        return Ok(candidate);
+    }
+    match resolve_against(query, candidates) {
+        Ok(candidate) => return Ok(candidate),
+        Err(error) if lower == "gate" => return Err(error),
+        Err(_) => {}
+    }
+    containing(&lower, runnable).ok_or_else(|| {
+        let listed = if runnable.is_empty() {
+            candidates
+        } else {
+            runnable
+        };
+        no_match(&lower, listed, LISTED_MODELS)
     })
 }
+
+/// What `--a` and `--against` take for an arm that runs work on a model
+/// chosen by its difficulty.
+const BY_DIFFICULTY_USAGE: &str = "difficulty:easy=<model>,medium=<model>,hard=<model>";
 
 /// What `--against` takes to compare Gate with Gate whose lead does not
 /// have to delegate (as with `AURA_GATE_DELEGATE=off`).
@@ -443,14 +502,18 @@ pub const NO_DELEGATE: &str = ArmSpec::NO_DELEGATE;
 /// `AURA_GATE_DELEGATE` says.
 pub const DELEGATE: &str = "gate:delegate";
 
-/// The arm `query` (an `--a` or `--against` value) names among
-/// `candidates`: Gate (whose lead delegates as `delegate` says, unless
-/// the query says), else a model as [`resolve_against`] finds it.
+/// The arm `query` (an `--a` or `--against` value) names: Gate (whose
+/// lead delegates as `delegate` says, unless the query says), a
+/// by-difficulty arm (`difficulty:easy=<model>,medium=<model>,hard=<model>`)
+/// whose models [`resolve_model`] finds, else a model as
+/// [`resolve_model`] finds it.
 ///
 /// # Errors
-/// As [`resolve_against`].
+/// As [`resolve_model`], prefixed with the difficulty for a
+/// by-difficulty arm, or what is wrong with a by-difficulty query.
 pub fn resolve_arm(
     query: &str,
+    runnable: &[Candidate],
     candidates: &[Candidate],
     delegate: bool,
 ) -> Result<ArmSpec, String> {
@@ -459,10 +522,34 @@ pub fn resolve_arm(
         "gate" => Ok(ArmSpec::Gate { delegate }),
         NO_DELEGATE => Ok(ArmSpec::Gate { delegate: false }),
         DELEGATE => Ok(ArmSpec::Gate { delegate: true }),
-        _ => resolve_against(query, candidates).map(|c| ArmSpec::Model {
-            model: c.id.clone(),
-        }),
+        _ => match ArmSpec::parse_by_difficulty(query) {
+            Some(Ok(models)) => resolve_by_difficulty(&models, runnable, candidates),
+            Some(Err(error)) => Err(format!("{error}; give {BY_DIFFICULTY_USAGE}")),
+            None => resolve_model(query, runnable, candidates).map(|c| ArmSpec::Model {
+                model: c.id.clone(),
+            }),
+        },
     }
+}
+
+/// The by-difficulty arm whose easy, medium and hard `queries` each name
+/// a model as [`resolve_model`] finds it.
+fn resolve_by_difficulty(
+    queries: &[String; 3],
+    runnable: &[Candidate],
+    candidates: &[Candidate],
+) -> Result<ArmSpec, String> {
+    let [easy, medium, hard] = queries;
+    let resolve = |query: &str, name: &str| {
+        resolve_model(query, runnable, candidates)
+            .map(|c| c.id.clone())
+            .map_err(|error| format!("{name} model: {error}"))
+    };
+    Ok(ArmSpec::ByDifficulty {
+        easy: resolve(easy, "Easy")?,
+        medium: resolve(medium, "Medium")?,
+        hard: resolve(hard, "Hard")?,
+    })
 }
 
 /// Both arms of a comparison from their queries. Plain `gate` delegates
@@ -473,12 +560,13 @@ pub fn resolve_arm(
 /// As [`resolve_arm`], or when both arms run on the same thing.
 pub fn resolve_arms(
     (a, b): (&str, &str),
+    runnable: &[Candidate],
     candidates: &[Candidate],
     delegate: bool,
 ) -> Result<(ArmSpec, ArmSpec), String> {
     let off = |query: &str| query.trim().eq_ignore_ascii_case(NO_DELEGATE);
-    let a_spec = resolve_arm(a, candidates, delegate || off(b))?;
-    let b_spec = resolve_arm(b, candidates, delegate || off(a))?;
+    let a_spec = resolve_arm(a, runnable, candidates, delegate || off(b))?;
+    let b_spec = resolve_arm(b, runnable, candidates, delegate || off(a))?;
     if a_spec == b_spec {
         return Err(format!(
             "Both arms run on {}; pick two different ones",
@@ -486,6 +574,66 @@ pub fn resolve_arms(
         ));
     }
     Ok((a_spec, b_spec))
+}
+
+/// The models a by-difficulty arm runs easy, medium and hard work on.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DifficultyRoutes {
+    /// The model easy work runs on.
+    pub easy: Candidate,
+    /// The model medium work, and work of unknown difficulty, runs on.
+    pub medium: Candidate,
+    /// The model hard work runs on.
+    pub hard: Candidate,
+}
+
+impl DifficultyRoutes {
+    /// The models of `spec` when it is a by-difficulty arm, as listed in
+    /// `runnable`; a model `runnable` lacks gets its tier, route and
+    /// price from its id. `None` for any other arm.
+    #[must_use]
+    pub fn of(spec: &ArmSpec, runnable: &[Candidate]) -> Option<Self> {
+        let ArmSpec::ByDifficulty { easy, medium, hard } = spec else {
+            return None;
+        };
+        let route = |id: &str| {
+            runnable
+                .iter()
+                .find(|c| c.id == id)
+                .cloned()
+                .unwrap_or_else(|| Candidate::from_id(id))
+        };
+        Some(Self {
+            easy: route(easy),
+            medium: route(medium),
+            hard: route(hard),
+        })
+    }
+
+    /// The model work of `difficulty` runs on; medium when unknown.
+    #[must_use]
+    pub const fn model(&self, difficulty: Option<Difficulty>) -> &Candidate {
+        match difficulty {
+            Some(Difficulty::Easy) => &self.easy,
+            Some(Difficulty::Hard) => &self.hard,
+            Some(Difficulty::Medium) | None => &self.medium,
+        }
+    }
+
+    /// Where `work` goes: the model of its difficulty, at the effort its
+    /// difficulty starts at there ([`effort_on`]), recorded as a run of
+    /// `/compare`.
+    #[must_use]
+    pub fn decide(&self, work: &Work<'_>) -> Decision {
+        let model = self.model(work.difficulty).clone();
+        Decision {
+            effort: effort_on(work, &model),
+            model,
+            reason: RouteReason::Compare,
+            explored: false,
+            propensity: 1.0,
+        }
+    }
 }
 
 /// List price of `usage` on `model`: 0 for local models, `None` when the
@@ -983,7 +1131,8 @@ mod tests {
     use crate::router::candidates;
     use aura_core_auth::ProviderKind;
     use aura_core_types::{
-        AgentId, CompareCopy, CompareJudgment, CompareRun, CompareStatus, RunTurn, SystemKind,
+        AgentId, CompareCopy, CompareJudgment, CompareRun, CompareStatus, PromptCategory, RunTurn,
+        SystemKind,
     };
     use aura_model::model_catalog::catalog;
     use std::path::PathBuf;
@@ -1201,27 +1350,27 @@ mod tests {
         );
         for query in [NO_DELEGATE, " Gate:NoDelegate "] {
             assert_eq!(
-                resolve_arm(query, &all, true),
+                resolve_arm(query, &all, &all, true),
                 Ok(ArmSpec::Gate { delegate: false }),
                 "{query}"
             );
         }
         assert_eq!(
-            resolve_arm("gate", &all, false),
+            resolve_arm("gate", &all, &all, false),
             Ok(ArmSpec::Gate { delegate: false }),
             "plain gate follows the setting"
         );
         assert_eq!(
-            resolve_arm(DELEGATE, &all, false),
+            resolve_arm(DELEGATE, &all, &all, false),
             Ok(ArmSpec::Gate { delegate: true })
         );
         assert_eq!(
-            resolve_arm("opus", &all, true),
+            resolve_arm("opus", &all, &all, true),
             Ok(ArmSpec::Model {
                 model: "claude/claude-opus-5-5".to_string()
             })
         );
-        assert!(resolve_arm("llama", &all, true).is_err());
+        assert!(resolve_arm("llama", &all, &all, true).is_err());
     }
 
     #[test]
@@ -1229,15 +1378,15 @@ mod tests {
         let all = with_claude_plan();
         let nodelegate = ArmSpec::Gate { delegate: false };
         assert_eq!(
-            resolve_arms(("gate", NO_DELEGATE), &all, false),
+            resolve_arms(("gate", NO_DELEGATE), &all, &all, false),
             Ok((ArmSpec::Gate { delegate: true }, nodelegate.clone()))
         );
         assert_eq!(
-            resolve_arms((NO_DELEGATE, "gate"), &all, false),
+            resolve_arms((NO_DELEGATE, "gate"), &all, &all, false),
             Ok((nodelegate.clone(), ArmSpec::Gate { delegate: true }))
         );
         assert_eq!(
-            resolve_arms(("gate", "opus"), &all, false),
+            resolve_arms(("gate", "opus"), &all, &all, false),
             Ok((
                 nodelegate,
                 ArmSpec::Model {
@@ -1245,10 +1394,147 @@ mod tests {
                 }
             ))
         );
-        assert!(resolve_arms(("opus", "opus"), &all, true)
+        assert!(resolve_arms(("opus", "opus"), &all, &all, true)
             .unwrap_err()
             .contains("Both arms run on claude/claude-opus-5-5"));
-        assert!(resolve_arms(("gate", "gate"), &all, true).is_err());
+        assert!(resolve_arms(("gate", "gate"), &all, &all, true).is_err());
+    }
+
+    const DEEPSEEK: &str = "openrouter/deepseek/deepseek-v3.2";
+
+    /// What Gate routes to with Claude and ChatGPT plans and an
+    /// OpenRouter key, and every model those can run, DeepSeek (which
+    /// has no curated price) included.
+    fn plans_and_openrouter() -> (Vec<Candidate>, Vec<Candidate>) {
+        let options = catalog("local/qwen3:4b", &[]);
+        let can_use = |p| matches!(p, ProviderKind::Claude | ProviderKind::Chatgpt);
+        let routed = candidates(&options, can_use, |_| false);
+        let mut all = crate::router::runnable(&options, can_use, |_| false);
+        all.push(Candidate::from_id(DEEPSEEK));
+        (all, routed)
+    }
+
+    #[test]
+    fn a_model_gate_does_not_route_to_is_named_by_its_id() {
+        let (all, routed) = plans_and_openrouter();
+        assert!(resolve_against(DEEPSEEK, &routed).is_err());
+        let model = ArmSpec::Model {
+            model: DEEPSEEK.to_string(),
+        };
+        assert_eq!(
+            resolve_arm(DEEPSEEK, &all, &routed, true),
+            Ok(model.clone())
+        );
+        assert_eq!(
+            resolve_arm("DeepSeek-V3.2", &all, &routed, true),
+            Ok(model),
+            "by part of its name when Gate's models have none"
+        );
+        assert_eq!(
+            resolve_model("sonnet", &all, &routed).map(|c| c.id.as_str()),
+            Ok("claude/claude-sonnet-4-6"),
+            "Gate's models come first for part of a name"
+        );
+        assert!(resolve_model("gate", &all, &routed)
+            .unwrap_err()
+            .contains("another model"));
+    }
+
+    #[test]
+    fn an_unknown_model_lists_at_most_twenty_ids() {
+        let many: Vec<Candidate> = (0..30)
+            .map(|i| Candidate::from_id(&format!("openrouter/acme/model-{i}")))
+            .collect();
+        let error = resolve_model("llama", &many, &[]).unwrap_err();
+        assert!(
+            error.starts_with("No available model matches `llama`"),
+            "{error}"
+        );
+        assert!(error.contains("openrouter/acme/model-19"), "{error}");
+        assert!(!error.contains("openrouter/acme/model-20"), "{error}");
+        assert!(error.ends_with(", …"), "{error}");
+        assert!(resolve_model("llama", &[], &[])
+            .unwrap_err()
+            .contains("sign in"));
+    }
+
+    fn difficulty_arm() -> ArmSpec {
+        ArmSpec::ByDifficulty {
+            easy: "claude/claude-sonnet-4-6".to_string(),
+            medium: DEEPSEEK.to_string(),
+            hard: "chatgpt/gpt-5.4".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_difficulty_arm_resolves_each_of_its_models() {
+        let (all, routed) = plans_and_openrouter();
+        assert_eq!(
+            resolve_arm(
+                "Difficulty:hard=chatgpt/gpt-5.4, easy=sonnet, medium=deepseek-v3.2",
+                &all,
+                &routed,
+                true
+            ),
+            Ok(difficulty_arm())
+        );
+        let missing =
+            resolve_arm("difficulty:easy=sonnet,medium=sonnet", &all, &routed, true).unwrap_err();
+        assert!(missing.contains("hard"), "{missing}");
+        assert!(missing.contains("difficulty:easy=<model>"), "{missing}");
+        let unknown = resolve_arm(
+            "difficulty:easy=sonnet,medium=sonnet,hard=llama",
+            &all,
+            &routed,
+            true,
+        )
+        .unwrap_err();
+        assert!(
+            unknown.starts_with("Hard model: No available model matches `llama`"),
+            "{unknown}"
+        );
+        let label = difficulty_arm().label().into_owned();
+        assert!(resolve_arms((&label, &label), &all, &routed, true)
+            .unwrap_err()
+            .contains("Both arms run on difficulty:easy=claude/claude-sonnet-4-6"));
+        assert_eq!(
+            resolve_arms((&label, "gate"), &all, &routed, true),
+            Ok((difficulty_arm(), ArmSpec::Gate { delegate: true }))
+        );
+    }
+
+    #[test]
+    fn a_difficulty_arm_sends_work_to_the_model_of_its_difficulty() {
+        let (all, _) = plans_and_openrouter();
+        let routes = DifficultyRoutes::of(&difficulty_arm(), &all).unwrap();
+        let work = Work::turn(PromptCategory::Debugging);
+        for (difficulty, id) in [
+            (Some(Difficulty::Easy), "claude/claude-sonnet-4-6"),
+            (Some(Difficulty::Medium), DEEPSEEK),
+            (Some(Difficulty::Hard), "chatgpt/gpt-5.4"),
+            (None, DEEPSEEK),
+        ] {
+            let work = work.of(difficulty);
+            let decision = routes.decide(&work);
+            assert_eq!(decision.model.id, id, "{difficulty:?}");
+            assert_eq!(decision.model, *routes.model(difficulty));
+            assert_eq!(decision.effort, effort_on(&work, &decision.model));
+            assert_eq!(decision.reason, RouteReason::Compare);
+            assert!(!decision.explored);
+            assert!((decision.propensity - 1.0).abs() < f64::EPSILON);
+        }
+        assert_eq!(
+            routes.easy.backend,
+            ModelBackend::Claude,
+            "listed models keep their route"
+        );
+        assert_eq!(
+            DifficultyRoutes::of(&ArmSpec::Gate { delegate: true }, &all),
+            None
+        );
+        let unlisted = DifficultyRoutes::of(&difficulty_arm(), &[]).unwrap();
+        assert_eq!(unlisted.medium.id, DEEPSEEK);
+        assert_eq!(unlisted.medium.backend, ModelBackend::OpenRouter);
     }
 
     #[test]

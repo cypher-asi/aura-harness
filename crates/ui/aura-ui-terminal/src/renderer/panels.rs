@@ -9,6 +9,7 @@ use crate::{
     app::{
         agent_code_width,
         scrollbar::{ScrollTarget, ScrollbarArea},
+        shown_agent_code,
         tab_bar::TabLayout,
         AgentButton, AgentRowEnd, AgentsTab, AppState, ChatScroll, ChatTab, HoverTarget, ImageHit,
         MenuTarget, Pane, PanelFocus, ProjectListRow, ProseRow, RecordsTab, ToggleRow,
@@ -1289,7 +1290,7 @@ fn build_swarm_lines<'a>(
                     width,
                     agent.depth,
                     ago.as_deref(),
-                    (agent.code.as_deref(), code_width),
+                    (shown_agent_code(agent), code_width),
                 );
                 lines.push(tree_row(
                     width,

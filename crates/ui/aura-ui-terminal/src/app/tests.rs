@@ -1493,6 +1493,22 @@ fn test_agent_code_width_is_the_widest_code() {
 }
 
 #[test]
+fn test_subtask_rows_show_no_code_and_leave_the_column_to_top_level_rows() {
+    let row = |id: &str, code: &str, depth| crate::events::AgentSummary {
+        code: Some(code.to_string()),
+        depth,
+        ..agent(id, id)
+    };
+    let top = row("aa", "AG1", 0);
+    let subtask = row("bb", "RUS70", 1);
+    assert_eq!(shown_agent_code(&top), Some("AG1"));
+    assert_eq!(shown_agent_code(&subtask), None);
+    // Only the top-level code sizes the column.
+    assert_eq!(agent_code_width(&[top, subtask.clone()]), 3);
+    assert_eq!(agent_code_width(&[subtask]), 0);
+}
+
+#[test]
 fn test_agent_row_end_drops_the_code_when_the_name_gets_too_narrow() {
     use crate::animation::AURA_WIDTH;
     // Lead, the button (` ✕`) and ` 5m RE36 `, beside a name of 4.

@@ -29,7 +29,15 @@ pub enum FormField {
     Prompt,
     Tasks,
     A,
+    /// The models of arm A's easy, medium and hard work, when it runs work
+    /// by its difficulty
+    AEasy,
+    AMedium,
+    AHard,
     B,
+    BEasy,
+    BMedium,
+    BHard,
     Repeats,
     Check,
     Budget,
@@ -37,12 +45,18 @@ pub enum FormField {
 }
 
 impl FormField {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 15] = [
         Self::Work,
         Self::Prompt,
         Self::Tasks,
         Self::A,
+        Self::AEasy,
+        Self::AMedium,
+        Self::AHard,
         Self::B,
+        Self::BEasy,
+        Self::BMedium,
+        Self::BHard,
         Self::Repeats,
         Self::Check,
         Self::Budget,
@@ -57,6 +71,9 @@ impl FormField {
             Self::Tasks => "Tasks",
             Self::A => "Arm A",
             Self::B => "Arm B",
+            Self::AEasy | Self::BEasy => "  Easy",
+            Self::AMedium | Self::BMedium => "  Medium",
+            Self::AHard | Self::BHard => "  Hard",
             Self::Repeats => "Runs per arm",
             Self::Check => "Check",
             Self::Budget => "Budget (USD)",
@@ -67,12 +84,61 @@ impl FormField {
     /// Whether its value is typed in the input line.
     #[must_use]
     pub const fn is_text(self) -> bool {
-        matches!(self, Self::Prompt | Self::Check | Self::Budget)
+        matches!(self, Self::Prompt | Self::Check | Self::Budget) || self.difficulty().is_some()
+    }
+
+    /// The arm (0 for A, 1 for B) and difficulty (0 easy, 1 medium, 2
+    /// hard) of a row naming the model of one difficulty.
+    #[must_use]
+    pub const fn difficulty(self) -> Option<(usize, usize)> {
+        match self {
+            Self::AEasy => Some((0, 0)),
+            Self::AMedium => Some((0, 1)),
+            Self::AHard => Some((0, 2)),
+            Self::BEasy => Some((1, 0)),
+            Self::BMedium => Some((1, 1)),
+            Self::BHard => Some((1, 2)),
+            _ => None,
+        }
+    }
+
+    /// The row naming the model of `difficulty` (0 easy, 1 medium, 2 hard)
+    /// of `arm`.
+    const fn of_difficulty(arm: usize, difficulty: usize) -> Self {
+        match (arm, difficulty) {
+            (0, 0) => Self::AEasy,
+            (0, 1) => Self::AMedium,
+            (0, _) => Self::AHard,
+            (_, 0) => Self::BEasy,
+            (_, 1) => Self::BMedium,
+            _ => Self::BHard,
+        }
     }
 
     fn index(self) -> usize {
         Self::ALL.iter().position(|f| *f == self).unwrap_or(0)
     }
+}
+
+/// The arm value that runs each piece of work on the model the form gives
+/// its difficulty.
+pub const BY_DIFFICULTY: &str = "by difficulty";
+
+/// The names of the difficulties, easiest first, as the arm string has
+/// them.
+pub const DIFFICULTIES: [&str; 3] = ["easy", "medium", "hard"];
+
+/// The arm string of a by-difficulty arm whose easy, medium and hard work
+/// runs on `models`: `difficulty:easy=<id>,medium=<id>,hard=<id>`, as
+/// `/compare --a` takes it.
+#[must_use]
+pub fn difficulty_arm(models: &[String; 3]) -> String {
+    let entries: Vec<String> = DIFFICULTIES
+        .iter()
+        .zip(models)
+        .map(|(difficulty, model)| format!("{difficulty}={}", model.trim()))
+        .collect();
+    format!("difficulty:{}", entries.join(","))
 }
 
 /// What a new benchmark's runs work on, as the form offers it.
@@ -104,6 +170,11 @@ pub struct BenchForm {
     pub a: String,
     /// As `a`; empty for the strongest Opus
     pub b: String,
+    /// The models of arm A's easy, medium and hard work when `a` is
+    /// [`BY_DIFFICULTY`]; empty until chosen
+    pub a_models: [String; 3],
+    /// As `a_models`, for arm B
+    pub b_models: [String; 3],
     pub repeats: u32,
     /// Empty for the project's check
     pub check: String,
@@ -123,6 +194,8 @@ impl Default for BenchForm {
             tasks: DEFAULT_TASKS,
             a: "gate".to_string(),
             b: String::new(),
+            a_models: Default::default(),
+            b_models: Default::default(),
             repeats: 3,
             check: String::new(),
             budget: String::new(),
@@ -137,6 +210,68 @@ impl BenchForm {
     #[must_use]
     pub const fn ready(&self) -> bool {
         matches!(self.estimate, Some(Ok(_)))
+    }
+
+    /// What arm `arm` (0 for A, 1 for B) runs on.
+    #[must_use]
+    pub fn arm(&self, arm: usize) -> &str {
+        if arm == 0 {
+            &self.a
+        } else {
+            &self.b
+        }
+    }
+
+    /// The models of arm `arm`'s easy, medium and hard work.
+    #[must_use]
+    pub const fn models(&self, arm: usize) -> &[String; 3] {
+        if arm == 0 {
+            &self.a_models
+        } else {
+            &self.b_models
+        }
+    }
+
+    fn models_mut(&mut self, arm: usize) -> &mut [String; 3] {
+        if arm == 0 {
+            &mut self.a_models
+        } else {
+            &mut self.b_models
+        }
+    }
+
+    /// Whether `field` is on the form: a difficulty's row only while its
+    /// arm runs work by difficulty.
+    #[must_use]
+    pub fn shown(&self, field: FormField) -> bool {
+        field
+            .difficulty()
+            .is_none_or(|(arm, _)| self.arm(arm) == BY_DIFFICULTY)
+    }
+
+    /// The model of the difficulty row `field`, when it is one.
+    #[must_use]
+    pub fn difficulty_model(&self, field: FormField) -> Option<&str> {
+        let (arm, difficulty) = field.difficulty()?;
+        Some(self.models(arm)[difficulty].as_str())
+    }
+
+    /// What arm `arm` is sent as: its value, or the arm string of its
+    /// models when it runs work by difficulty. A by-difficulty arm missing
+    /// a model gives the row that lacks it.
+    ///
+    /// # Errors
+    /// The difficulty row with no model yet.
+    pub fn arm_value(&self, arm: usize) -> Result<String, FormField> {
+        let value = self.arm(arm);
+        if value != BY_DIFFICULTY {
+            return Ok(value.to_string());
+        }
+        let models = self.models(arm);
+        match models.iter().position(|m| m.trim().is_empty()) {
+            Some(missing) => Err(FormField::of_difficulty(arm, missing)),
+            None => Ok(difficulty_arm(models)),
+        }
     }
 }
 
@@ -368,8 +503,9 @@ impl App {
         self.send_bench(BenchRequest::Sessions);
     }
 
-    /// What the form's arm rows cycle through: Gate both ways, then every
-    /// model that can run. Arm B also offers its default.
+    /// What the form's arm rows cycle through: Gate both ways, a model
+    /// per difficulty, then every model that can run. Arm B also offers
+    /// its default.
     #[must_use]
     pub fn bench_arm_choices(&self, arm_b: bool) -> Vec<String> {
         let mut choices = Vec::new();
@@ -378,13 +514,44 @@ impl App {
         }
         choices.push("gate".to_string());
         choices.push("gate:nodelegate".to_string());
-        choices.extend(
+        choices.push(BY_DIFFICULTY.to_string());
+        choices.extend(self.bench_model_choices());
+        choices
+    }
+
+    /// Every model that can run, on any route: what a difficulty's row
+    /// cycles through.
+    #[must_use]
+    pub fn bench_model_choices(&self) -> Vec<String> {
+        self.models
+            .iter()
+            .filter(|m| m.available && m.id != "gate" && (!m.local || m.installed))
+            .map(|m| m.id.clone())
+            .collect()
+    }
+
+    /// The model that can run which `text` names: its id or label
+    /// exactly, else the first whose id or label contains it, ignoring
+    /// case.
+    #[must_use]
+    pub fn find_bench_model(&self, text: &str) -> Option<String> {
+        let wanted = text.trim().to_lowercase();
+        if wanted.is_empty() {
+            return None;
+        }
+        let usable = || {
             self.models
                 .iter()
                 .filter(|m| m.available && m.id != "gate" && (!m.local || m.installed))
-                .map(|m| m.id.clone()),
-        );
-        choices
+        };
+        let lower = |s: &str| s.to_lowercase();
+        usable()
+            .find(|m| lower(&m.id) == wanted || lower(&m.label) == wanted)
+            .or_else(|| {
+                usable()
+                    .find(|m| lower(&m.id).contains(&wanted) || lower(&m.label).contains(&wanted))
+            })
+            .map(|m| m.id.clone())
     }
 
     /// Whether a running benchmark is on screen, in the BENCH tab or the
@@ -459,12 +626,28 @@ impl App {
     /// Enter with text in the input line while the form's focused row is
     /// typed: the text becomes its value. Returns whether it did.
     pub(super) fn bench_fill_field(&mut self) -> bool {
-        let form = &mut self.bench.form;
-        if self.bench.mode != BenchMode::Form || !form.field.is_text() || self.input.is_empty() {
+        let field = self.bench.form.field;
+        if self.bench.mode != BenchMode::Form || !field.is_text() || self.input.is_empty() {
             return false;
         }
         let text = std::mem::take(&mut self.input);
         self.cursor_pos = 0;
+        if let Some((arm, difficulty)) = field.difficulty() {
+            match self.find_bench_model(&text) {
+                Some(model) => {
+                    self.bench.form.models_mut(arm)[difficulty] = model;
+                    self.bench.form.estimate = None;
+                }
+                None => {
+                    self.notification = Some((
+                        format!("No available model matches \"{}\"", text.trim()),
+                        NotificationType::Warning,
+                    ));
+                }
+            }
+            return true;
+        }
+        let form = &mut self.bench.form;
         match form.field {
             FormField::Prompt => {
                 form.prompt = text;
@@ -611,7 +794,11 @@ impl App {
                     FormField::Prompt => form.prompt.clear(),
                     FormField::Check => form.check.clear(),
                     FormField::Budget => form.budget.clear(),
-                    _ => {}
+                    _ => {
+                        if let Some((arm, difficulty)) = field.difficulty() {
+                            form.models_mut(arm)[difficulty].clear();
+                        }
+                    }
                 }
                 form.estimate = None;
             }
@@ -622,19 +809,36 @@ impl App {
         true
     }
 
+    /// Move to the next row on the form, down or up, past those not shown.
     fn move_form_field(&mut self, down: bool) {
         let form = &mut self.bench.form;
-        let at = form.field.index();
-        let next = if down {
-            (at + 1).min(FormField::ALL.len() - 1)
-        } else {
-            at.saturating_sub(1)
-        };
-        form.field = FormField::ALL[next];
+        let mut at = form.field.index();
+        loop {
+            let next = if down {
+                (at + 1).min(FormField::ALL.len() - 1)
+            } else {
+                at.saturating_sub(1)
+            };
+            if next == at {
+                return;
+            }
+            at = next;
+            if form.shown(FormField::ALL[at]) {
+                form.field = FormField::ALL[at];
+                return;
+            }
+        }
     }
 
     fn change_form_value(&mut self, forward: bool) {
         let field = self.bench.form.field;
+        if let Some((arm, difficulty)) = field.difficulty() {
+            let choices = self.bench_model_choices();
+            let value = &mut self.bench.form.models_mut(arm)[difficulty];
+            *value = cycle(&choices, value, forward);
+            self.bench.form.estimate = None;
+            return;
+        }
         match field {
             FormField::Work => {
                 let count = self.bench.work_choices().len();
@@ -727,10 +931,31 @@ impl App {
                 }
             },
         };
+        let mut arms = [String::new(), String::new()];
+        for (arm, value) in arms.iter_mut().enumerate() {
+            match form.arm_value(arm) {
+                Ok(arm_value) => *value = arm_value,
+                Err(missing) => {
+                    let difficulty = missing
+                        .difficulty()
+                        .map_or("", |(_, difficulty)| DIFFICULTIES[difficulty]);
+                    self.bench.form.field = missing;
+                    self.notification = Some((
+                        format!(
+                            "Pick a model for {difficulty} work of arm {}",
+                            if arm == 0 { "A" } else { "B" }
+                        ),
+                        NotificationType::Warning,
+                    ));
+                    return;
+                }
+            }
+        }
+        let [a, b] = arms;
         let spec = BenchSpec {
             work,
-            a: form.a.clone(),
-            b: form.b.clone(),
+            a,
+            b,
             repeats: form.repeats,
             check: Some(form.check.clone()).filter(|c| !c.is_empty()),
             budget_usd,
@@ -956,6 +1181,121 @@ mod tests {
                 suite: Some("gate_hard".to_string()),
                 tasks: 3,
             })
+        );
+    }
+
+    /// An app offering `ids`, each available, from the provider its prefix
+    /// names.
+    fn app_with_models(ids: &[(&str, &str)]) -> App {
+        let mut app = App::new();
+        app.models = ids
+            .iter()
+            .map(|(id, label)| crate::events::ModelOptionView {
+                id: (*id).to_string(),
+                label: (*label).to_string(),
+                local: false,
+                installed: true,
+                group: id.split('/').next().unwrap_or_default().to_string(),
+                provider: None,
+                available: true,
+                context_window: None,
+            })
+            .collect();
+        app
+    }
+
+    const DEEPSEEK: &str = "openrouter/deepseek/deepseek-v3.2";
+
+    fn three_models() -> App {
+        app_with_models(&[
+            ("gate", "Gate"),
+            ("claude/claude-sonnet-4-6", "Claude Sonnet 4.6"),
+            (DEEPSEEK, "DeepSeek V3.2"),
+            ("chatgpt/gpt-5.4", "GPT-5.4"),
+        ])
+    }
+
+    #[test]
+    fn difficulty_rows_show_only_for_a_by_difficulty_arm() {
+        let mut app = three_models();
+        assert!(app
+            .bench_arm_choices(true)
+            .contains(&BY_DIFFICULTY.to_string()));
+        app.bench.form.field = FormField::B;
+        app.move_form_field(true);
+        assert_eq!(
+            app.bench.form.field,
+            FormField::Repeats,
+            "skips hidden rows"
+        );
+
+        app.bench.form.b = BY_DIFFICULTY.to_string();
+        app.bench.form.field = FormField::B;
+        app.move_form_field(true);
+        assert_eq!(app.bench.form.field, FormField::BEasy);
+        app.bench.form.field = FormField::Repeats;
+        app.move_form_field(false);
+        assert_eq!(app.bench.form.field, FormField::BHard);
+        assert!(!app.bench.form.shown(FormField::AEasy));
+    }
+
+    #[test]
+    fn a_difficulty_row_cycles_models_and_takes_part_of_a_name() {
+        let mut app = three_models();
+        app.bench.mode = BenchMode::Form;
+        app.bench.form.a = BY_DIFFICULTY.to_string();
+        app.bench.form.field = FormField::AEasy;
+        app.change_form_value(true);
+        assert_eq!(app.bench.form.a_models[0], "claude/claude-sonnet-4-6");
+        app.change_form_value(false);
+        assert_eq!(
+            app.bench.form.a_models[0], "chatgpt/gpt-5.4",
+            "only models, no Gate"
+        );
+
+        app.input = "deepseek".to_string();
+        assert!(app.bench_fill_field());
+        assert_eq!(app.bench.form.a_models[0], DEEPSEEK);
+        app.input = "no such model".to_string();
+        assert!(app.bench_fill_field());
+        assert_eq!(app.bench.form.a_models[0], DEEPSEEK, "kept");
+        assert!(app
+            .notification
+            .as_ref()
+            .is_some_and(|(text, _)| text.contains("No available model matches")));
+    }
+
+    #[test]
+    fn a_by_difficulty_arm_needs_all_three_models_and_is_sent_as_one_string() {
+        let mut app = three_models();
+        app.bench.form.b = BY_DIFFICULTY.to_string();
+        app.bench.form.b_models = [DEEPSEEK.to_string(), String::new(), String::new()];
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        app.event_tx = Some(tx);
+        app.bench.form.field = FormField::Go;
+        app.submit_bench_form();
+        assert_eq!(app.bench.form.field, FormField::BMedium);
+        assert!(app
+            .notification
+            .as_ref()
+            .is_some_and(|(text, _)| text == "Pick a model for medium work of arm B"));
+
+        app.bench.form.b_models[1] = "claude/claude-sonnet-4-6".to_string();
+        app.bench.form.b_models[2] = "chatgpt/gpt-5.4".to_string();
+        app.submit_bench_form();
+        let sent = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| match event {
+            UiEvent::Bench {
+                request: BenchRequest::Prepare(spec),
+                ..
+            } => Some(spec.b),
+            _ => None,
+        });
+        assert_eq!(
+            sent.as_deref(),
+            Some(
+                "difficulty:easy=openrouter/deepseek/deepseek-v3.2,\
+                 medium=claude/claude-sonnet-4-6,hard=chatgpt/gpt-5.4"
+            )
         );
     }
 }

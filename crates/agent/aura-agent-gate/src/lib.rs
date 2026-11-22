@@ -58,9 +58,10 @@ pub mod router;
 pub mod stats;
 pub mod turn_judge;
 
+pub use compare::DifficultyRoutes;
 pub use lead::{choose_way, Way};
 pub use router::{
     below_lead, candidates, effort_on, escalate, fixed_pick, has_stronger_model, judged, pick,
-    raise_effort, start_effort, Candidate, Decision, Random, SplitMix64, Work,
+    raise_effort, runnable, start_effort, Candidate, Decision, Random, SplitMix64, Work,
 };
 pub use stats::GateStats;

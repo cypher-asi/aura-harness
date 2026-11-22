@@ -777,15 +777,27 @@ impl AgentButton {
 /// drop the code instead.
 const MIN_NAME_BESIDE_CODE: usize = 4;
 
-/// Columns of the widest code among `agents`: the width of the code column
-/// in the projects list, 0 when no agent has a code and there is none.
+/// Columns of the widest code shown among `agents`: the width of the code
+/// column in the projects list, 0 when no row shows a code and there is
+/// none.
 pub(crate) fn agent_code_width(agents: &[AgentSummary]) -> usize {
     agents
         .iter()
-        .filter_map(|agent| agent.code.as_deref())
+        .filter_map(shown_agent_code)
         .map(text_width)
         .max()
         .unwrap_or(0)
+}
+
+/// The code `agent`'s projects-list row shows in its code column. Spawned
+/// subtasks (any agent below the top of its tree) show none: their name
+/// already starts with the code (`RE36: Fix parser`), so the column would
+/// only repeat it. Their cell stays blank, so times still line up.
+pub(crate) fn shown_agent_code(agent: &AgentSummary) -> Option<&str> {
+    if agent.depth > 0 {
+        return None;
+    }
+    agent.code.as_deref()
 }
 
 /// Columns before the name on the row of an agent at `depth`: one leading
@@ -2333,7 +2345,7 @@ impl App {
             usize::from(list.width),
             agent.depth,
             ago.as_deref(),
-            (agent.code.as_deref(), agent_code_width(&self.agents)),
+            (shown_agent_code(agent), agent_code_width(&self.agents)),
         );
         let offset = column.checked_sub(list.x)?;
         let button = agent_button_at(list.width, &end, offset)?;

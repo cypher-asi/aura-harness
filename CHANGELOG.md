@@ -7,6 +7,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Benchmark arms with a model per difficulty
+
+##### Added
+
+- A benchmark arm can run work on a model chosen by its difficulty: in
+  the BENCH tab's new-benchmark form, set an arm to `by difficulty` and
+  pick a model for its Easy, Medium and Hard rows (←/→ cycles every
+  model you can run, or type part of a name such as `deepseek` and
+  press Enter). Each model may come from any route: a linked Claude or
+  ChatGPT plan, the cloud router, OpenRouter or a local model.
+- `/compare --a` and `--against` take the same arm as
+  `difficulty:easy=<model>,medium=<model>,hard=<model>`.
+- Gate's classifier rates each prompt and subtask of such an arm's runs,
+  and the work runs on its difficulty's model (the medium one when it is
+  unrated) at the effort Gate would give that difficulty. It is not
+  followed up, reviewed or moved to a stronger model, so the results
+  show what the chosen models do on their own.
+
+##### Fixed
+
+- A benchmark arm pinned to a model Gate does not route to, such as an
+  OpenRouter model without a curated price or a second route of a model
+  linked on a plan, is no longer rejected when the benchmark is set up.
+
 ### INBOX tab in the Kernel panel
 
 ##### Added
@@ -26,6 +50,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   one, `e`/`c` unfold or fold them all, and Esc closes the view.
   Opening a thread marks it read.
 - `/inbox` (also `/mail`) opens the tab.
+
+### Model aliases
+
+##### Added
+
+- `/model <name>` and `--model <name>` (`aura -p`, `aura runs`,
+  `aura eval run`) accept short names and pick the best match you can
+  run: `opus` the newest Opus, `deepseek` the best DeepSeek, `sonnet
+  4.5` that version, `openrouter opus` that route. Models your
+  sign-ins allow come first, then releases over previews, the stronger
+  tier, the newer version and the current model's route. Exact ids
+  (`claude/claude-opus-4-7`) and full model names (`claude-opus-4-6`,
+  `aura-claude-opus-4-7`, `gpt-5.4`) are used as given. The success
+  message names the alias, as in `Model: claude/claude-opus-4-7
+  (claude plan) — matched "opus"`; a match that needs a sign-in says
+  which `/login` to use.
 
 ### OpenRouter sign-in
 
@@ -47,8 +87,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `AURA_OPENROUTER_URL` (default `https://openrouter.ai/api`) sets the
   API base. Values that are not HTTPS and not loopback are ignored.
 - New crate `aura-auth-openrouter` with `OpenRouterProvider`.
-- The reply footer has a second line saying who paid for the turn's
-  tokens, such as `[via Claude plan 25.1k tok · OpenRouter 2.8k tok
+- The reply footer says who paid for the turn's tokens on the same
+  line as the model: `[claude-opus-4-7 · 1.6M tok · $0.998 · via Claude
+  plan]`, or each sign-in's share in place of the totals when several
+  paid, such as `[m · via Claude plan 25.1k tok · OpenRouter 2.8k tok
   $0.004]`. `/cost` adds a "By sign-in" breakdown.
 - Each model call's record entry has `route`, the requested model id
   with its route prefix.

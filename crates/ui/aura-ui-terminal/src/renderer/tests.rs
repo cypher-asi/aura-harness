@@ -3245,7 +3245,7 @@ fn test_reply_footer_drops_cost_then_tokens_when_narrow() {
         tokens: 1_250_000,
         cost_usd: Some(3.5),
     };
-    let meta = reply_meta(Some("claude-opus-4-7"), Some(usage));
+    let meta = reply_meta(Some("claude-opus-4-7"), Some(usage), &[]);
     let footer = |width| {
         reply_footer(&meta, width, &test_theme()).map(|line| {
             line.spans
@@ -3266,13 +3266,14 @@ fn test_reply_footer_drops_cost_then_tokens_when_narrow() {
 fn test_reply_meta_formats_tokens_and_cost() {
     use super::segments::reply_meta;
 
-    let meta =
-        |tokens, cost_usd| reply_meta(Some("m"), Some(CallUsage { tokens, cost_usd })).join(" · ");
+    let meta = |tokens, cost_usd| {
+        reply_meta(Some("m"), Some(CallUsage { tokens, cost_usd }), &[]).join(" · ")
+    };
     assert_eq!(meta(842, Some(0.004)), "m · 842 tok · <$0.01");
     assert_eq!(meta(12_449, Some(0.0418)), "m · 12.4k tok · $0.042");
     assert_eq!(meta(240_000, Some(1.234)), "m · 240k tok · $1.23");
     assert_eq!(meta(3_400_000, None), "m · 3.4M tok");
-    assert_eq!(reply_meta(None, None), Vec::<String>::new());
+    assert_eq!(reply_meta(None, None, &[]), Vec::<String>::new());
 }
 
 #[test]
@@ -4830,6 +4831,10 @@ fn test_help_lists_mode_command_and_shift_tab() {
         })
         .collect();
     assert!(screen.contains("/mode [name]"), "{screen}");
+    assert!(
+        screen.contains("/model [opus] /thinking [level]  Model, thinking"),
+        "fits the help box on one line: {screen}"
+    );
     assert!(screen.contains("Shift+Tab"), "{screen}");
     assert!(screen.contains("Press any key to close"), "{screen}");
 }
@@ -5832,24 +5837,56 @@ fn test_reply_footer_says_who_paid_for_the_tokens() {
         .position(|r| r.contains("[claude-sonnet-4-6 · claude-haiku-4.5"))
         .expect("the model footer");
     assert!(
-        rows[footer + 1].contains("[via Claude plan 25.1k tok"),
-        "the sign-ins go on the line under the models: {:?}",
-        &rows[footer..=footer + 1]
+        !rows[footer].contains("27.9k tok"),
+        "the sign-ins' shares replace the totals: {:?}",
+        &rows[footer]
+    );
+    assert!(
+        rows.get(footer + 1).is_none_or(|r| !r.contains('[')),
+        "the footer is one line: {:?}",
+        &rows[footer..]
+    );
+    let sources = [
+        SourceUsage {
+            label: "Claude plan".to_string(),
+            tokens: 25_100,
+            cost_usd: None,
+        },
+        SourceUsage {
+            label: "OpenRouter".to_string(),
+            tokens: 2_800,
+            cost_usd: Some(0.004),
+        },
+    ];
+    let usage = CallUsage {
+        tokens: 27_900,
+        cost_usd: Some(0.004),
+    };
+    assert_eq!(
+        super::segments::reply_meta(Some("m"), Some(usage), &sources).join(" · "),
+        "m · via Claude plan 25.1k tok · OpenRouter 2.8k tok <$0.01"
+    );
+}
+
+#[test]
+fn test_reply_footer_names_a_lone_sign_in_without_repeating_its_totals() {
+    use super::segments::reply_meta;
+    use crate::events::SourceUsage;
+
+    let meta = reply_meta(
+        Some("claude-opus-5-5 ×28 · high thinking"),
+        Some(CallUsage {
+            tokens: 1_600_000,
+            cost_usd: Some(0.998),
+        }),
+        &[SourceUsage {
+            label: "Claude plan".to_string(),
+            tokens: 1_600_000,
+            cost_usd: Some(0.998),
+        }],
     );
     assert_eq!(
-        super::segments::source_meta(&[
-            SourceUsage {
-                label: "Claude plan".to_string(),
-                tokens: 25_100,
-                cost_usd: None,
-            },
-            SourceUsage {
-                label: "OpenRouter".to_string(),
-                tokens: 2_800,
-                cost_usd: Some(0.004),
-            },
-        ])
-        .join(" · "),
-        "via Claude plan 25.1k tok · OpenRouter 2.8k tok <$0.01"
+        meta.join(" · "),
+        "claude-opus-5-5 ×28 · high thinking · 1.6M tok · $0.998 · via Claude plan"
     );
 }

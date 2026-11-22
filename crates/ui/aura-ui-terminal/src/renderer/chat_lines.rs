@@ -10,7 +10,7 @@ use super::diff::diff_message_lines;
 use super::markdown::{parse_content_segments, ContentSegment};
 use super::segments::{
     message_style, prefixed_lines, render_code_segment, render_text_segment, reply_footer,
-    reply_meta, source_meta,
+    reply_meta,
 };
 use super::text::Measure;
 use crate::app::{ImageHit, ToggleRow, ToggleTarget};
@@ -36,12 +36,9 @@ pub(crate) struct GroupState<'a> {
 /// Where a block falls in its turn: everything from one prompt to the next.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct TurnPlace {
-    /// Model, tokens and cost of the turn's latest reply, drawn after the
-    /// block when it is the turn's last from the agent
+    /// Model, tokens, cost and who paid for the turn's latest reply, drawn
+    /// as one line after the block when it is the turn's last from the agent
     footer: Vec<String>,
-    /// Who paid for the turn's tokens, drawn as a second footer line:
-    /// `via Claude plan 25.1k tok · OpenRouter 2.8k tok $0.004`
-    sources: Vec<String>,
     /// Number of the block's first step, counted from 1 across the turn
     first_step: usize,
     /// When the turn's prompt was sent, in Unix milliseconds
@@ -53,7 +50,6 @@ impl TurnPlace {
     const fn alone() -> Self {
         Self {
             footer: Vec::new(),
-            sources: Vec::new(),
             first_step: 1,
             started_ms: 0,
         }
@@ -245,7 +241,6 @@ impl ChatLineCache {
                         lines.push(Line::from(""));
                     }
                     lines.push(footer);
-                    lines.extend(reply_footer(&place.sources, width, theme));
                 }
                 let user =
                     !self.terminal && members.len() == 1 && members[0].role() == MessageRole::User;
@@ -344,7 +339,7 @@ fn is_notice(message: &Message) -> bool {
 fn turn_places(shown: &[&Message], runs: &[Range<usize>]) -> Vec<TurnPlace> {
     let mut places: Vec<TurnPlace> = Vec::with_capacity(runs.len());
     let mut last_agent: Option<usize> = None;
-    let mut meta: (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+    let mut meta: Vec<String> = Vec::new();
     let mut steps = 0;
     let mut started_ms = shown.first().map_or(0, |m| m.timestamp_ms());
     for run in runs {
@@ -360,7 +355,6 @@ fn turn_places(shown: &[&Message], runs: &[Range<usize>]) -> Vec<TurnPlace> {
         }
         places.push(TurnPlace {
             footer: Vec::new(),
-            sources: Vec::new(),
             first_step: steps + 1,
             started_ms,
         });
@@ -369,26 +363,18 @@ fn turn_places(shown: &[&Message], runs: &[Range<usize>]) -> Vec<TurnPlace> {
             .filter(|m| m.activity_step().is_some())
             .count();
         if agent && first.activity_step().is_none() && first.model().is_some() {
-            meta = (
-                reply_meta(first.model(), first.usage()),
-                source_meta(first.sources()),
-            );
+            meta = reply_meta(first.model(), first.usage(), first.sources());
         }
     }
     close_turn(&mut places, last_agent, meta);
     places
 }
 
-/// Put a turn's `meta` (its footer and who paid for it) under its last
-/// block from the agent, at `last`.
-fn close_turn(
-    places: &mut [TurnPlace],
-    last: Option<usize>,
-    (footer, sources): (Vec<String>, Vec<String>),
-) {
+/// Put a turn's footer `meta` under its last block from the agent, at
+/// `last`.
+fn close_turn(places: &mut [TurnPlace], last: Option<usize>, meta: Vec<String>) {
     if let Some(place) = last.and_then(|at| places.get_mut(at)) {
-        place.footer = footer;
-        place.sources = sources;
+        place.footer = meta;
     }
 }
 

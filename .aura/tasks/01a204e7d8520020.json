@@ -1,0 +1,11 @@
+{
+  "id": "01a204e7d8520020",
+  "title": "change openrotuer free top right to just say open router for htat sub",
+  "state": "completed",
+  "agent_id": "eda5c452426e8857e193c402f997fa2d2a7ad70ce69073dbdb6beaabfb6de205",
+  "agent_name": "Agent 957",
+  "items": [],
+  "summary": "Small change, I'll do it directly: the top-right badge comes from `AuthSummary::plan_names`, so I'll drop the tier for OpenRouter there only (the `/login` status lines keep the tier detail).",
+  "updated_ms": 1795378715571,
+  "created_ms": 1795378632786
+}

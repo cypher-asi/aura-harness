@@ -16,9 +16,10 @@ use std::time::Duration;
 use aura_agent::AgentLoopConfig;
 use aura_agent_gate::Candidate;
 use aura_auth::{AuthSummary, CredentialResolver, ProviderKind};
+use aura_model::model_alias::{resolve_alias, resolve_exact, AliasCandidate};
 use aura_model::model_catalog::{
     self, backend_for, infer_tier, local_model_name, LiveModelInfo, LivePrice, LocalServerStatus,
-    ModelBackend, ModelOption, GATE_MODEL_ID, OPENROUTER_PREFIX,
+    ModelBackend, ModelOption, ModelTier, GATE_MODEL_ID, OPENROUTER_PREFIX,
 };
 use aura_model::ThinkingEffort;
 use aura_ui_terminal::events::ModelOptionView;
@@ -151,6 +152,23 @@ impl ModelSelection {
             &self.plan_models,
         );
         aura_agent_gate::candidates(
+            &catalog,
+            |provider| self.auth.can_use(provider),
+            |id| self.dropped.contains(id),
+        )
+    }
+
+    /// Every model the user can run now on any route, cheapest first:
+    /// unlike [`Self::gate_candidates`], each route of a model is kept and
+    /// OpenRouter models without a curated price are too, so a benchmark
+    /// arm can name any of them.
+    pub fn runnable_models(&self) -> Vec<Candidate> {
+        let catalog = model_catalog::catalog_with_plans(
+            &self.default_local,
+            self.installed_local(),
+            &self.plan_models,
+        );
+        aura_agent_gate::runnable(
             &catalog,
             |provider| self.auth.can_use(provider),
             |id| self.dropped.contains(id),
@@ -458,17 +476,64 @@ impl ModelSelection {
     }
 
     /// Switch to `id` for this process only, leaving the saved choice
-    /// alone. Returns a user-facing problem when the switch is refused.
+    /// alone. `id` may be a short alias (`opus`, `deepseek`), which picks
+    /// the model [`Self::resolve`] names; a full model name (see
+    /// [`may_be_alias`]) is used as given unless it is a listed label.
+    /// Returns a user-facing problem when the switch is refused.
     pub fn use_for_run(&mut self, config: &mut AgentLoopConfig, id: &str) -> Result<(), String> {
-        let id = id.trim();
-        if id.is_empty() {
+        let typed = id.trim();
+        if typed.is_empty() {
             return Err("Model id is empty".to_string());
         }
-        if !self.usable(id) {
-            return Err(unusable_reason(id));
+        let id = self.resolve(typed).unwrap_or_else(|| typed.to_string());
+        if !self.usable(&id) {
+            let reason = unusable_reason(&id);
+            return Err(if id.eq_ignore_ascii_case(typed) {
+                reason
+            } else {
+                format!("\"{typed}\" matches {id}: {reason}")
+            });
         }
-        self.apply(config, id);
+        self.apply(config, &id);
         Ok(())
+    }
+
+    /// The model id `query` names among Gate and the listed models: an
+    /// exact id, else the best-ranked model with that exact label, else,
+    /// when [`may_be_alias`] holds, the best match for a short alias
+    /// (`opus`, `sonnet 4.5`, `openrouter opus`), preferring models the
+    /// current sign-ins can run. `None` when nothing matches that way
+    /// (an unlisted explicit id, a full model name such as
+    /// `claude-opus-4-6`, a name that matches nothing); callers then use
+    /// `query` as the id.
+    pub fn resolve(&self, query: &str) -> Option<String> {
+        let catalog = model_catalog::catalog_with_plans(
+            &self.default_local,
+            self.installed_local(),
+            &self.plan_models,
+        );
+        // Gate first, so its id and label match exactly; the resolver
+        // never picks it for a fuzzy query, so its tier does not matter.
+        let gate = AliasCandidate {
+            id: GATE_MODEL_ID,
+            label: GATE_LABEL,
+            tier: ModelTier::Frontier,
+            available: true,
+        };
+        let candidates: Vec<AliasCandidate<'_>> = std::iter::once(gate)
+            .chain(catalog.iter().map(|option| AliasCandidate {
+                id: &option.id,
+                label: &option.label,
+                tier: option.tier,
+                available: self.usable(&option.id),
+            }))
+            .collect();
+        let resolved = if may_be_alias(query) {
+            resolve_alias(query, &candidates, &self.current)
+        } else {
+            resolve_exact(query, &candidates, &self.current)
+        };
+        resolved.map(str::to_string)
     }
 
     /// Switch to Gate when the current model needs a sign-in the user no
@@ -640,6 +705,33 @@ fn resolve_startup_model(
         }
     }
     GATE_MODEL_ID.to_string()
+}
+
+/// Whether `model`, as typed for `--model` or `/model`, may be a short
+/// alias that [`ModelSelection::resolve`] matches against the listed
+/// models. Not for `gate`, an explicit routed id (one with `/`), or a
+/// full model name, which is used as given: one word starting with
+/// `aura-`, `claude-` or `gpt-` (any case) and holding a digit
+/// (`claude-opus-4-6`, `aura-claude-opus-4-7`, `gpt-5.4`). Callers load
+/// the live model lists before resolving an alias.
+pub fn may_be_alias(model: &str) -> bool {
+    let model = model.trim();
+    !model.is_empty()
+        && !model.contains('/')
+        && !model.eq_ignore_ascii_case(GATE_MODEL_ID)
+        && !is_full_model_name(model)
+}
+
+/// Whether `model` is a full model name rather than an alias: see
+/// [`may_be_alias`].
+fn is_full_model_name(model: &str) -> bool {
+    const FULL_NAME_PREFIXES: [&str; 3] = ["aura-", "claude-", "gpt-"];
+    let has_prefix = FULL_NAME_PREFIXES.iter().any(|prefix| {
+        model
+            .get(..prefix.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+    });
+    has_prefix && !model.contains(char::is_whitespace) && model.bytes().any(|b| b.is_ascii_digit())
 }
 
 fn usable(auth: &AuthSummary, id: &str) -> bool {
@@ -1312,5 +1404,153 @@ mod tests {
             .expect("current model listed");
         assert!(entry.local);
         assert!(!entry.installed);
+    }
+
+    #[test]
+    fn opus_alias_selects_the_claude_plan_opus_and_saves_that_id() {
+        let home = tempfile::tempdir().unwrap();
+        let (mut selection, mut config) =
+            selection_on(signed_in(None, &[ProviderKind::Claude]), GATE_MODEL_ID);
+        selection.prefs_path = Some(home.path().join("tui.json"));
+
+        selection
+            .select(&mut config, "opus")
+            .expect("Claude plan Opus");
+
+        assert_eq!(selection.current(), "claude/claude-opus-4-7");
+        assert_eq!(config.model, "claude/claude-opus-4-7");
+        let prefs = load_prefs(&home.path().join("tui.json")).expect("saved");
+        assert_eq!(prefs.model.as_deref(), Some("claude/claude-opus-4-7"));
+    }
+
+    #[test]
+    fn sonnet_alias_selects_the_router_sonnet_when_signed_in_to_zos_only() {
+        let (mut selection, mut config) = selection(Some("alice"));
+        selection
+            .select(&mut config, "sonnet")
+            .expect("router Sonnet");
+        assert_eq!(selection.current(), "aura-claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn guest_alias_for_a_cloud_model_is_refused_with_its_sign_in() {
+        let (mut selection, mut config) = selection(None);
+        let err = selection.select(&mut config, "opus").unwrap_err();
+        assert!(err.contains("/login"), "{err}");
+        assert!(err.contains("\"opus\""), "{err}");
+        // One `/login` unlocks the router's Opus, so the hint names it
+        // rather than a plan's.
+        assert!(
+            err.starts_with("\"opus\" matches aura-claude-opus-4-7: "),
+            "{err}"
+        );
+        assert_eq!(selection.current(), LOCAL);
+        assert_eq!(config.model, LOCAL);
+    }
+
+    #[test]
+    fn a_full_model_name_is_selected_as_given() {
+        for typed in [
+            "claude-opus-4-6",
+            "aura-claude-opus-4-6",
+            "Claude-Sonnet-4-5-20250929",
+        ] {
+            let (mut selection, mut config) = selection(Some("alice"));
+            assert_eq!(selection.resolve(typed), None, "{typed}");
+            selection
+                .select(&mut config, typed)
+                .expect("router ids need only the zOS login");
+            assert_eq!(selection.current(), typed);
+            assert_eq!(config.model, typed);
+        }
+    }
+
+    #[test]
+    fn a_listed_full_model_name_resolves_to_itself() {
+        let (selection, _config) = selection(Some("alice"));
+        assert_eq!(
+            selection.resolve("AURA-CLAUDE-OPUS-4-7").as_deref(),
+            Some("aura-claude-opus-4-7")
+        );
+    }
+
+    #[test]
+    fn an_explicit_unlisted_id_is_selected_as_given() {
+        let (mut selection, mut config) =
+            selection_on(signed_in(None, &[ProviderKind::Claude]), GATE_MODEL_ID);
+        selection
+            .select(&mut config, "claude/claude-opus-4-1")
+            .expect("any Claude plan model");
+        assert_eq!(selection.current(), "claude/claude-opus-4-1");
+    }
+
+    #[test]
+    fn gate_is_selected_by_its_id_and_label() {
+        for typed in ["gate", "Gate"] {
+            let (mut selection, mut config) = selection(Some("alice"));
+            selection.select(&mut config, typed).expect("gate");
+            assert!(selection.is_gate(), "{typed}");
+        }
+    }
+
+    #[test]
+    fn unknown_short_name_is_kept_as_a_router_id() {
+        let (mut selection, mut config) = selection(Some("alice"));
+        assert_eq!(selection.resolve("zzz-unknown"), None);
+        selection
+            .select(&mut config, "zzz-unknown")
+            .expect("router ids need only the zOS login");
+        assert_eq!(selection.current(), "zzz-unknown");
+    }
+
+    #[test]
+    fn only_short_names_other_than_gate_may_be_aliases() {
+        for (typed, alias) in [
+            ("opus", true),
+            ("sonnet 4.5", true),
+            ("claude opus", true),
+            ("opus-4.6", true),
+            ("gpt", true),
+            ("claude-opus", true),
+            ("aura-claude-opus-4-7", false),
+            ("claude-opus-4-6", false),
+            ("gpt-5.4", false),
+            ("GPT-5.4", false),
+            ("gate", false),
+            (" Gate ", false),
+            ("claude/claude-opus-4-7", false),
+            ("local/qwen3:4b", false),
+            ("  ", false),
+        ] {
+            assert_eq!(may_be_alias(typed), alias, "{typed:?}");
+        }
+    }
+
+    #[test]
+    fn deepseek_alias_picks_the_best_live_openrouter_deepseek() {
+        let (mut selection, mut config) =
+            selection_on(signed_in(None, &[ProviderKind::OpenRouter]), GATE_MODEL_ID);
+        let live = [
+            "openrouter/deepseek/deepseek-chat-v3.1",
+            "openrouter/deepseek/deepseek-v3.2",
+            "openrouter/deepseek/deepseek-v3.2-exp",
+            "openrouter/deepseek/deepseek-r1",
+            "openrouter/anthropic/claude-opus-4.7",
+        ]
+        .map(|id| ModelOption {
+            id: id.to_string(),
+            label: id.to_string(),
+            backend: ModelBackend::OpenRouter,
+            installed: true,
+            tier: infer_tier(id),
+        });
+        // Set directly rather than through `openrouter_listed`, which
+        // publishes process-wide limits other tests read.
+        selection.set_backend_models(ModelBackend::OpenRouter, live.to_vec());
+
+        selection
+            .select(&mut config, "deepseek")
+            .expect("OpenRouter DeepSeek");
+        assert_eq!(selection.current(), "openrouter/deepseek/deepseek-v3.2");
     }
 }

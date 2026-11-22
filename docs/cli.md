@@ -50,6 +50,8 @@ One chat can switch providers from turn to turn. Each provider receives only the
 
 `/model` has two tabs: "Ready" (Gate and every model you can run now) and "Sign in" (models that need a sign-in; picking one starts it and switches once it succeeds). Tab or ←/→ switches tabs, typing filters by id or label, Backspace edits the filter, Esc clears the filter and then closes, and the list scrolls. j/k/q do not navigate; they go into the filter.
 
+`/model <name>` switches directly. A short name picks the best match you can run: `/model opus` the newest Opus, `/model deepseek` the best DeepSeek, `/model sonnet 4.5` that version, `/model openrouter opus` that route. Models you can run come first, then releases over previews, the stronger tier, the newer version, and the current model's route. Exact ids (`claude/claude-opus-4-7`) and full model names (`claude-opus-4-6`, `aura-claude-opus-4-7`, `gpt-5.4`) are used as given. `--model` (`aura -p`, `aura runs`, `aura eval run`) takes the same names.
+
 The OpenRouter model list is the account's tool-capable models from `GET /v1/models`, cached in `AURA_HOME/openrouter_models.json` and used from there when the list can't load. Their context windows, output limits and prices come from that list.
 
 Plan and OpenRouter links belong to the identity that made them: this machine's local profile while signed out, otherwise the zOS user. Tokens are stored in the OS keyring, or in `~/.aura/auth/secrets/` (mode 0600) when no keyring is available. Link metadata is in `~/.aura/auth/index.json`.
@@ -213,7 +215,7 @@ The panels fold open and closed: the run (model, mode, trace level, totals, prob
 - **Background commands.** `run_command` with `background: true` starts a job and returns at once. The agent checks it with `job_output` and stops it with `job_kill`. When a job exits, the agent that started it is told: inside its running turn, or in a new turn if it is idle. Quitting the terminal stops every job.
 - **Foreground commands** time out after 2 minutes unless the call sets `timeout_ms`, up to 10 minutes.
 - **Status line.** The row under the input shows the agent on screen: context use (`ctx 62% ▰▰▰▰▱ 124k/200k`, yellow from 75%, red from 90%), prompt cache hits, estimated cost at API list prices, model calls, running background jobs (`2 bg`), queued work, and how often the history was summarized. Parts that don't fit are dropped from the right. The Chat panel's bottom border shows todo progress, e.g. `[3/7] ▸ Write the parser`.
-- **Reply footer.** Under each reply, a second line says who paid for the turn's tokens, such as `[via Claude plan 25.1k tok · OpenRouter 2.8k tok $0.004]`. The labels are `local`, `aura-router`, `Claude plan`, `ChatGPT plan` and `OpenRouter`.
+- **Reply footer.** Each reply ends with one dim line showing the models, tokens, cost and who paid, such as `[claude-opus-4-7 · 1.6M tok · $0.998 · via Claude plan]`. When more than one sign-in paid, each one's share replaces the totals: `[claude-sonnet-4-6 · via Claude plan 25.1k tok · OpenRouter 2.8k tok $0.004]`. Parts that don't fit are dropped from the right. The labels are `local`, `aura-router`, `Claude plan`, `ChatGPT plan` and `OpenRouter`.
 - **`/context`** shows how full the context window is and what fills it (system prompt, tools, skills, conversation) as of the last turn.
 - **`/cost`** lists the session's model calls, tokens (new input, cache reads and writes, output) and estimated cost, and a "By sign-in" breakdown of tokens and cost per payer summed over the chat's turns.
 - **`/todos`** opens or closes the agent's full todo list above the input.
@@ -336,7 +338,7 @@ Each requires `-p`.
 | `--max-time <DURATION>` | `AURA_TUI_TURN_TIMEOUT` | Stop after this long: `90s`, `45m`, `2h`, or a bare number of minutes. |
 | `--max-cost-usd <USD>` | `AURA_TUI_MAX_TURN_COST_USD` | Stop once the agent's model calls cost more than this at API list prices. Gate's own calls are not counted. |
 | `-d, --cwd <DIR>` | current directory | Work in this directory. |
-| `--model <MODEL>` | the terminal's choice | Model for this run only; the `/model` choice is not changed. A local model whose server is not ready fails the run at once. |
+| `--model <MODEL>` | the terminal's choice | Model for this run only; the `/model` choice is not changed. Takes an exact id or full model name (`claude/claude-opus-4-7`, `claude-opus-4-6`, used as given) or a short name that picks the best match you can run (`opus`, `deepseek`, `sonnet 4.5`, `openrouter opus`). A local model whose server is not ready fails the run at once. |
 | `--provider <anthropic\|mock>` | `anthropic` | `mock` answers without a model, for tests. |
 | `--verbose` | off | Debug logging to stderr. |
 | `--mode <agent\|plan\|ask\|debug>` | `AURA_DEFAULT_MODE`, else `agent` | Global flag; the session mode. |

@@ -13,6 +13,7 @@
 //! arm, what they measured, how the judge saw them, and where their
 //! workspace copies are.
 
+use std::borrow::Cow;
 use std::path::PathBuf;
 
 use super::gate::{Difficulty, OutcomeSignal, PromptCategory};
@@ -80,31 +81,91 @@ pub enum ArmSpec {
     Gate { delegate: bool },
     /// Every turn and subtask runs on `model`.
     Model { model: String },
+    /// Every turn and subtask is classified and runs on the model given
+    /// for its difficulty.
+    ByDifficulty {
+        /// The model easy work runs on.
+        easy: String,
+        /// The model medium work, and work of unknown difficulty, runs on.
+        medium: String,
+        /// The model hard work runs on.
+        hard: String,
+    },
 }
 
 impl ArmSpec {
     /// How [`ArmSpec::label`] names Gate whose lead need not delegate.
     pub const NO_DELEGATE: &'static str = "gate:nodelegate";
 
-    /// `gate`, [`Self::NO_DELEGATE`], or the model.
+    /// What [`ArmSpec::label`] starts a by-difficulty arm with, as in
+    /// `difficulty:easy=<id>,medium=<id>,hard=<id>`.
+    pub const BY_DIFFICULTY_PREFIX: &'static str = "difficulty:";
+
+    /// `gate`, [`Self::NO_DELEGATE`], the model, or
+    /// `difficulty:easy=<id>,medium=<id>,hard=<id>`.
     #[must_use]
-    pub fn label(&self) -> &str {
+    pub fn label(&self) -> Cow<'_, str> {
         match self {
-            Self::Gate { delegate: true } => "gate",
-            Self::Gate { delegate: false } => Self::NO_DELEGATE,
-            Self::Model { model } => model,
+            Self::Gate { delegate: true } => Cow::Borrowed("gate"),
+            Self::Gate { delegate: false } => Cow::Borrowed(Self::NO_DELEGATE),
+            Self::Model { model } => Cow::Borrowed(model),
+            Self::ByDifficulty { easy, medium, hard } => Cow::Owned(format!(
+                "{}easy={easy},medium={medium},hard={hard}",
+                Self::BY_DIFFICULTY_PREFIX
+            )),
         }
     }
 
-    /// The arm a label from [`Self::label`] names.
+    /// The arm a label from [`Self::label`] names. A label that is
+    /// neither Gate nor a well-formed by-difficulty label names a model.
     #[must_use]
     pub fn from_label(label: &str) -> Self {
         match label {
             "gate" => Self::Gate { delegate: true },
             Self::NO_DELEGATE => Self::Gate { delegate: false },
-            model => Self::Model {
-                model: model.to_string(),
+            model => match Self::parse_by_difficulty(model) {
+                Some(Ok([easy, medium, hard])) => Self::ByDifficulty { easy, medium, hard },
+                _ => Self::Model {
+                    model: model.to_string(),
+                },
             },
+        }
+    }
+
+    /// The easy, medium and hard models of a by-difficulty label:
+    /// `None` when `label` does not start with
+    /// [`Self::BY_DIFFICULTY_PREFIX`] (in any case). The keys come in any
+    /// order, as `key=value` separated by commas.
+    ///
+    /// # Errors
+    /// Says which key is missing, given twice or unknown, or which entry
+    /// is not `key=value`.
+    pub fn parse_by_difficulty(label: &str) -> Option<Result<[String; 3], String>> {
+        let prefix = Self::BY_DIFFICULTY_PREFIX;
+        let head = label.trim_start();
+        if !head
+            .get(..prefix.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+        {
+            return None;
+        }
+        let body = head.get(prefix.len()..).unwrap_or_default();
+        Some(parse_difficulty_models(body))
+    }
+
+    /// The model work of `difficulty` runs on: that of its difficulty
+    /// (medium when unknown) for a by-difficulty arm, the model of a
+    /// model arm, and `None` for Gate.
+    #[must_use]
+    pub fn model_for(&self, difficulty: Option<Difficulty>) -> Option<&str> {
+        match self {
+            Self::Gate { .. } => None,
+            Self::Model { model } => Some(model),
+            Self::ByDifficulty { easy, medium, hard } => Some(match difficulty {
+                Some(Difficulty::Easy) => easy,
+                Some(Difficulty::Hard) => hard,
+                Some(Difficulty::Medium) | None => medium,
+            }),
         }
     }
 
@@ -113,6 +174,47 @@ impl ArmSpec {
     pub const fn is_gate(&self) -> bool {
         matches!(self, Self::Gate { .. })
     }
+
+    /// Whether the arm picks its model by the difficulty of the work.
+    #[must_use]
+    pub const fn is_by_difficulty(&self) -> bool {
+        matches!(self, Self::ByDifficulty { .. })
+    }
+}
+
+/// The easy, medium and hard models of `body`, the part of a
+/// by-difficulty label after its prefix.
+fn parse_difficulty_models(body: &str) -> Result<[String; 3], String> {
+    let (mut easy, mut medium, mut hard) = (None, None, None);
+    for entry in body.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+        let Some((key, value)) = entry.split_once('=') else {
+            return Err(format!("`{entry}` is not difficulty=model"));
+        };
+        let key = key.trim().to_ascii_lowercase();
+        let difficulty = Difficulty::from_name(&key)
+            .ok_or_else(|| format!("Unknown difficulty `{key}`; give easy, medium and hard"))?;
+        let value = value.trim();
+        if value.is_empty() {
+            return Err(format!("No model given for {difficulty}"));
+        }
+        let slot = match difficulty {
+            Difficulty::Easy => &mut easy,
+            Difficulty::Medium => &mut medium,
+            Difficulty::Hard => &mut hard,
+        };
+        if slot.is_some() {
+            return Err(format!("{difficulty} is given twice"));
+        }
+        *slot = Some(value.to_string());
+    }
+    let given = |model: Option<String>, difficulty: Difficulty| {
+        model.ok_or_else(|| format!("No model given for {difficulty}"))
+    };
+    Ok([
+        given(easy, Difficulty::Easy)?,
+        given(medium, Difficulty::Medium)?,
+        given(hard, Difficulty::Hard)?,
+    ])
 }
 
 /// Tokens and list-price cost one model used in a run.
@@ -914,9 +1016,96 @@ mod tests {
             ArmSpec::Model {
                 model: "aura-claude-opus-4-7".to_string(),
             },
+            by_difficulty(),
         ] {
-            assert_eq!(ArmSpec::from_label(spec.label()), spec);
+            assert_eq!(ArmSpec::from_label(&spec.label()), spec);
         }
         assert!(ArmSpec::Gate { delegate: false }.is_gate());
+        assert!(!by_difficulty().is_gate());
+        assert!(by_difficulty().is_by_difficulty());
+        assert_eq!(
+            by_difficulty().label(),
+            "difficulty:easy=claude/claude-haiku-4-5,medium=openrouter/deepseek/deepseek-v3.2,\
+             hard=chatgpt/gpt-5.4"
+        );
+    }
+
+    fn by_difficulty() -> ArmSpec {
+        ArmSpec::ByDifficulty {
+            easy: "claude/claude-haiku-4-5".to_string(),
+            medium: "openrouter/deepseek/deepseek-v3.2".to_string(),
+            hard: "chatgpt/gpt-5.4".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_by_difficulty_arm_round_trips_as_by_difficulty() {
+        let mut payload = payload();
+        payload.arm_b = by_difficulty();
+        let bytes = payload.to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["arm_b"]["kind"], "by_difficulty");
+        assert_eq!(json["arm_b"]["hard"], "chatgpt/gpt-5.4");
+        assert_eq!(ComparePayload::from_bytes(&bytes), Some(payload));
+    }
+
+    #[test]
+    fn by_difficulty_labels_take_their_keys_in_any_order() {
+        let parsed = ArmSpec::parse_by_difficulty(" Difficulty: hard = c , easy=a,medium= b ");
+        assert_eq!(
+            parsed,
+            Some(Ok(["a".to_string(), "b".to_string(), "c".to_string()]))
+        );
+        assert_eq!(ArmSpec::parse_by_difficulty("claude/claude-opus-4-7"), None);
+        assert_eq!(ArmSpec::parse_by_difficulty("gate"), None);
+    }
+
+    #[test]
+    fn malformed_by_difficulty_labels_say_what_is_wrong() {
+        let error = |label: &str| match ArmSpec::parse_by_difficulty(label) {
+            Some(Err(error)) => error,
+            other => panic!("{label:?} gave {other:?}"),
+        };
+        assert!(error("difficulty:easy=a,medium=b").contains("hard"));
+        assert!(error("difficulty:easy=a,easy=b,medium=c,hard=d").contains("easy is given twice"));
+        assert!(error("difficulty:easy=a,medium=b,hard=c,extreme=d").contains("`extreme`"));
+        assert!(error("difficulty:easy=a,medium,hard=c").contains("`medium`"));
+        assert!(error("difficulty:easy=,medium=b,hard=c").contains("easy"));
+        assert!(error("difficulty:").contains("easy"));
+        let malformed = "difficulty:easy=a,medium=b";
+        assert_eq!(
+            ArmSpec::from_label(malformed),
+            ArmSpec::Model {
+                model: malformed.to_string()
+            },
+            "from_label never fails"
+        );
+    }
+
+    #[test]
+    fn each_arm_names_the_model_for_a_difficulty() {
+        let spec = by_difficulty();
+        assert_eq!(
+            spec.model_for(Some(Difficulty::Easy)),
+            Some("claude/claude-haiku-4-5")
+        );
+        assert_eq!(
+            spec.model_for(Some(Difficulty::Medium)),
+            Some("openrouter/deepseek/deepseek-v3.2")
+        );
+        assert_eq!(
+            spec.model_for(Some(Difficulty::Hard)),
+            Some("chatgpt/gpt-5.4")
+        );
+        assert_eq!(
+            spec.model_for(None),
+            Some("openrouter/deepseek/deepseek-v3.2"),
+            "unknown difficulty runs on the medium model"
+        );
+        let model = ArmSpec::Model {
+            model: "m".to_string(),
+        };
+        assert_eq!(model.model_for(Some(Difficulty::Hard)), Some("m"));
+        assert_eq!(ArmSpec::Gate { delegate: true }.model_for(None), None);
     }
 }

@@ -1,0 +1,14 @@
+{
+  "id": "01a2053233760036",
+  "title": "Fix review findings in the INBOX (inter-agent mail) change in /home/n3o/code/aura-harness. Don't commit; `rustfmt --edi…",
+  "state": "failed",
+  "agent_id": "97efffb8f48650d09f98854ffdb3b53d34f37dad6721ec8f29db8e44d99a2e86",
+  "agent_name": "rust-engineer #76",
+  "assignee": "rust-engineer",
+  "parent": "01a204f82e9c0028",
+  "items": [],
+  "summary": "ran out of time: it stopped after 9 minutes without a reply",
+  "updated_ms": 1795384073701,
+  "created_ms": 1795383505782,
+  "tool_use_id": "toolu_015ZmbdT6K1hWyTv5uUBQEc1"
+}

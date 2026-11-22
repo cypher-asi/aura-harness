@@ -570,6 +570,11 @@ async fn openrouter_pasted_key_links_and_persists() {
         .summary()
         .subscriptions
         .contains(&ProviderKind::OpenRouter));
+    assert_eq!(
+        reopened.summary().plan_names,
+        ["OpenRouter"],
+        "the badge omits the OpenRouter tier"
+    );
     let credential = reopened
         .inference_credential(ProviderKind::OpenRouter)
         .await

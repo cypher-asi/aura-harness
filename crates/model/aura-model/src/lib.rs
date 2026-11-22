@@ -29,6 +29,7 @@ mod credentialed;
 mod error;
 mod kernel_propose;
 mod mock;
+pub mod model_alias;
 pub mod model_catalog;
 pub mod openai_responses;
 pub mod plan_models;

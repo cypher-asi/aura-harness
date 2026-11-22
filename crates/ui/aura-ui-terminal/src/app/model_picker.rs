@@ -173,6 +173,25 @@ impl ModelPicker {
     }
 }
 
+/// The model `/model <query>` names exactly: the one with that id, else
+/// one with that label the user can run now (labels such as `Claude Opus
+/// 4.7` are shared across routes), else any with that label. Case is
+/// ignored. Other names go to the event loop, which resolves aliases.
+#[must_use]
+pub fn exact_match<'a>(models: &'a [ModelOptionView], query: &str) -> Option<&'a ModelOptionView> {
+    let query = query.trim();
+    let labelled = || {
+        models
+            .iter()
+            .filter(|m| m.label.eq_ignore_ascii_case(query))
+    };
+    models
+        .iter()
+        .find(|m| m.id.eq_ignore_ascii_case(query))
+        .or_else(|| labelled().find(|m| m.available))
+        .or_else(|| labelled().next())
+}
+
 /// Case-insensitive substring match on id or label; `query` is lowercase.
 fn matches_query(model: &ModelOptionView, query: &str) -> bool {
     query.is_empty()
@@ -336,6 +355,30 @@ mod tests {
         assert_eq!(picker.cursor(), 1);
         picker.home();
         assert_eq!(picker.cursor(), 0);
+    }
+
+    #[test]
+    fn exact_match_prefers_the_id_then_a_runnable_label() {
+        let models = models();
+        let id = |m: Option<&ModelOptionView>| m.map(|m| m.id.clone());
+        assert_eq!(
+            id(exact_match(&models, "CLAUDE/claude-sonnet-4-6")),
+            Some("claude/claude-sonnet-4-6".to_string())
+        );
+        // Both Sonnet routes share the label; the runnable one wins even
+        // when it is listed second.
+        let mut reordered = models.clone();
+        reordered.swap(2, 3);
+        assert_eq!(
+            id(exact_match(&reordered, "claude sonnet 4.6")),
+            Some("aura-claude-sonnet-4-6".to_string())
+        );
+        // With no runnable route the label still names one.
+        assert_eq!(
+            id(exact_match(&models, "gpt-5")),
+            Some("chatgpt/gpt-5".to_string())
+        );
+        assert_eq!(id(exact_match(&models, "opus")), None);
     }
 
     #[test]

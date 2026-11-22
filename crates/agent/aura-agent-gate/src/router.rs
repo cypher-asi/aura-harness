@@ -30,7 +30,7 @@ use aura_config::GateConfig;
 use aura_core_auth::ProviderKind;
 use aura_core_types::{Difficulty, OutcomeSignal, PromptCategory, Route, RouteLevel, RouteReason};
 use aura_model::model_catalog::{
-    estimate_cost_usd, has_max_effort, infer_tier, model_key, route_label, supersedes,
+    backend_for, estimate_cost_usd, has_max_effort, infer_tier, model_key, route_label, supersedes,
     ModelBackend, ModelOption, ModelTier,
 };
 use aura_model::{ThinkingEffort, Usage};
@@ -73,6 +73,25 @@ impl Candidate {
             label: option.label.clone(),
             backend: option.backend,
             tier: option.tier,
+            cost_usd,
+        }
+    }
+
+    /// A candidate for a model `id` the catalog did not list, such as an
+    /// arm model a recorded comparison names: its tier, route and price
+    /// inferred from the id, labelled with the id itself.
+    pub(crate) fn from_id(id: &str) -> Self {
+        let backend = backend_for(id);
+        let cost_usd = if backend == ModelBackend::Local {
+            Some(0.0)
+        } else {
+            estimate_cost_usd(id, &REFERENCE_TURN)
+        };
+        Self {
+            id: id.to_string(),
+            label: id.to_string(),
+            backend,
+            tier: infer_tier(id),
             cost_usd,
         }
     }
@@ -124,10 +143,7 @@ pub fn candidates(
 ) -> Vec<Candidate> {
     let mut out: Vec<Candidate> = Vec::new();
     let mut by_key: HashMap<String, usize> = HashMap::new();
-    let usable = catalog.iter().filter(|o| match o.required_provider() {
-        None => o.installed,
-        Some(provider) => can_use(provider),
-    });
+    let usable = usable(catalog, can_use);
     for option in usable.filter(|o| is_routable(o) && !dropped(&o.id)) {
         let candidate = Candidate::from_option(option);
         match by_key.get(&model_key(&option.id)) {
@@ -144,13 +160,50 @@ pub fn candidates(
             }
         }
     }
-    out.sort_by(|a, b| match (a.cost_usd, b.cost_usd) {
+    sort_cheapest_first(&mut out);
+    out
+}
+
+/// Every model an arm of `/compare` may be pinned to, cheapest first:
+/// the `catalog` options that are installed (local) or whose provider
+/// `can_use` allows, leaving out those `dropped` says to. Unlike
+/// [`candidates`], every route of a model is kept, and OpenRouter
+/// models without a curated price are kept too, unpriced.
+#[must_use]
+pub fn runnable(
+    catalog: &[ModelOption],
+    can_use: impl Fn(ProviderKind) -> bool,
+    dropped: impl Fn(&str) -> bool,
+) -> Vec<Candidate> {
+    let mut out: Vec<Candidate> = usable(catalog, can_use)
+        .filter(|o| !dropped(&o.id))
+        .map(Candidate::from_option)
+        .collect();
+    sort_cheapest_first(&mut out);
+    out
+}
+
+/// The `catalog` options the user can run: local ones when installed,
+/// others when `can_use` allows their provider.
+fn usable(
+    catalog: &[ModelOption],
+    can_use: impl Fn(ProviderKind) -> bool,
+) -> impl Iterator<Item = &ModelOption> {
+    catalog.iter().filter(move |o| match o.required_provider() {
+        None => o.installed,
+        Some(provider) => can_use(provider),
+    })
+}
+
+/// Order `candidates` by the list price of a typical turn, unpriced
+/// ones last, keeping the order of equal ones.
+fn sort_cheapest_first(candidates: &mut [Candidate]) {
+    candidates.sort_by(|a, b| match (a.cost_usd, b.cost_usd) {
         (Some(a), Some(b)) => a.total_cmp(&b),
         (Some(_), None) => std::cmp::Ordering::Less,
         (None, Some(_)) => std::cmp::Ordering::Greater,
         (None, None) => std::cmp::Ordering::Equal,
     });
-    out
 }
 
 /// Whether none of `candidates` supersedes `candidate`: none is a later
@@ -949,6 +1002,34 @@ mod tests {
         let openrouter = candidates(&options, signed_in(&[ProviderKind::OpenRouter]), |_| false);
         assert_eq!(ids(&openrouter), [OPENROUTER_SONNET]);
         assert!(openrouter[0].cost_usd.is_some());
+    }
+
+    #[test]
+    fn runnable_keeps_every_route_and_unpriced_openrouter_models() {
+        const DEEPSEEK: &str = "openrouter/deepseek/deepseek-v3.2";
+        let mut options = sonnet_on_every_route();
+        options.push(option(
+            DEEPSEEK,
+            ModelBackend::OpenRouter,
+            ModelTier::Standard,
+        ));
+        let can_use = signed_in(&[ProviderKind::Claude, ProviderKind::OpenRouter]);
+        let all = runnable(&options, &can_use, |_| false);
+        let all_ids = ids(&all);
+        for id in ["claude/claude-sonnet-4-6", OPENROUTER_SONNET, DEEPSEEK] {
+            assert!(all_ids.contains(&id), "{id} in {all_ids:?}");
+        }
+        assert!(
+            !all_ids.contains(&"aura-claude-sonnet-4-6"),
+            "not signed in to the router"
+        );
+        assert_eq!(all_ids.last(), Some(&DEEPSEEK), "unpriced last");
+        assert_eq!(all.last().map(|c| c.tier), Some(ModelTier::Standard));
+
+        let routed = candidates(&options, &can_use, |_| false);
+        assert_eq!(ids(&routed), ["claude/claude-sonnet-4-6"]);
+        let kept = runnable(&options, &can_use, |id| id == DEEPSEEK);
+        assert!(!ids(&kept).contains(&DEEPSEEK), "dropped stays dropped");
     }
 
     #[test]
