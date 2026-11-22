@@ -6,6 +6,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+# What Gate's crates offer other crates' tests, e.g. `live::GateLive::learn`.
+test-support = ["aura-gate-live/test-support"]
+
 [dependencies]
 aura-gate-attempts = { path = "../aura-gate-attempts" }
 aura-gate-compare = { path = "../aura-gate-compare" }
@@ -13,6 +17,7 @@ aura-gate-evidence = { path = "../aura-gate-evidence" }
 aura-gate-followup = { path = "../aura-gate-followup" }
 aura-gate-judge = { path = "../aura-gate-judge" }
 aura-gate-lead = { path = "../aura-gate-lead" }
+aura-gate-live = { path = "../aura-gate-live" }
 aura-gate-route = { path = "../aura-gate-route" }
 
 [lints]

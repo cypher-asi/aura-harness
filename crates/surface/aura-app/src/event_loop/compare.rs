@@ -295,7 +295,7 @@ pub(super) async fn prepare(
     let kernel = kernel_of(state, agent_id)?;
     let workspace = kernel.agent_workspace();
     let workspace = workspace.canonicalize().unwrap_or(workspace);
-    let last = super::gate_record::last_turn(kernel.store().as_ref(), agent_id);
+    let last = aura_gate::live::last_turn(kernel.store().as_ref(), agent_id);
     let mut category = None;
     let mut replay = None;
     let examples = match (request.examples, request.suite.as_deref()) {

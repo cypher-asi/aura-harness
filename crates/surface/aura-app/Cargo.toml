@@ -57,6 +57,8 @@ walkdir = { workspace = true }
 walkdir = { workspace = true }
 
 [dev-dependencies]
+# `test-support` lets the app's tests fill Gate's table by hand.
+aura-gate = { path = "../../gate/aura-gate", features = ["test-support"] }
 tower = { workspace = true }
 which = { workspace = true }
 # `test-util` enables tokio's paused-clock test helpers

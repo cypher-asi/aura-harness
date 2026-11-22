@@ -17,10 +17,12 @@
 //! - [`compare`]: `/compare`'s arguments, schedule, estimate and summary
 //! - [`lead`]: what the lead agent may do itself while delegation is
 //!   enforced, and how much of its work went to subtasks
+//! - [`live`]: Gate while the app runs: the table every agent's turns
+//!   share, the attempt log as attempts end, and Gate's own calls
 //!
-//! Gate never calls a model itself: it chooses which model a turn runs
-//! on and builds the classifier's and judge's requests, and the calls go
-//! through the agent's kernel as usual.
+//! Gate never calls a provider itself: it chooses which model a turn
+//! runs on and builds the classifier's and judge's requests, and the
+//! calls go through the agent's kernel, which records them as usual.
 
 pub use aura_gate_attempts as attempts;
 pub use aura_gate_compare as compare;
@@ -28,4 +30,5 @@ pub use aura_gate_evidence as evidence;
 pub use aura_gate_followup as followup;
 pub use aura_gate_judge as judge;
 pub use aura_gate_lead as lead;
+pub use aura_gate_live as live;
 pub use aura_gate_route as route;

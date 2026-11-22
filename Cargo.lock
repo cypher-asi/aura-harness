@@ -867,6 +867,7 @@ dependencies = [
  "aura-gate-followup",
  "aura-gate-judge",
  "aura-gate-lead",
+ "aura-gate-live",
  "aura-gate-route",
 ]
 
@@ -934,6 +935,30 @@ dependencies = [
  "aura-gate-route",
  "aura-model",
  "serde_json",
+]
+
+[[package]]
+name = "aura-gate-live"
+version = "0.1.0"
+dependencies = [
+ "aura-agent",
+ "aura-agent-kernel",
+ "aura-config",
+ "aura-core-auth",
+ "aura-core-types",
+ "aura-gate-attempts",
+ "aura-gate-compare",
+ "aura-gate-evidence",
+ "aura-gate-followup",
+ "aura-gate-judge",
+ "aura-gate-lead",
+ "aura-gate-route",
+ "aura-model",
+ "aura-store-db",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

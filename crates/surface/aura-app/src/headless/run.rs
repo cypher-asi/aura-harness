@@ -12,8 +12,6 @@ use crate::event_loop::gate_followup::{
     nudge_notice, repair_message, repair_notice, sign_repair_message, sign_repair_notice, At,
     Before, FollowUp, Reviewing, Unchecked,
 };
-use crate::event_loop::gate_log;
-use crate::event_loop::gate_record::{self, Judged};
 use crate::event_loop::handlers::{
     drive_turn, mark_session_start, record_response, resume_checkpoint,
 };
@@ -40,6 +38,7 @@ use aura_gate::evidence::outcome::calls_for_stronger;
 use aura_gate::followup::Step;
 use aura_gate::judge::criteria::Criteria;
 use aura_gate::judge::turn::Failed;
+use aura_gate::live::{self, Judged};
 use aura_gate::route::{Decision, Work};
 use aura_model::{Message, Role, ThinkingEffort};
 use std::path::PathBuf;
@@ -382,7 +381,7 @@ impl Headless {
             // its model carries on with it.
             if outcome.unchecked && found.carry_on.is_none() {
                 if let Some(ended) = &outcome.ended {
-                    gate_record::record(&session.kernel, session.agent_id(), ended).await;
+                    live::record(&session.kernel, session.agent_id(), ended).await;
                 }
                 outcome.unchecked = false;
             }
@@ -547,7 +546,7 @@ impl Headless {
             reply: turn.result.as_ref().map_or("", |r| r.total_text.as_str()),
             failure: turn.failure.as_deref().unwrap_or_default(),
         };
-        gate_record::judge_failed(&session.kernel, &judge, ended, &failed, config.auth_token).await
+        live::judge_failed(&session.kernel, &judge, ended, &failed, config.auth_token).await
     }
 
     /// Follow up `turn`, a turn of `session` answering `task` that Gate
@@ -665,13 +664,13 @@ impl Headless {
                         *ended = ended.with_signal(OutcomeSignal::JudgedFail);
                         *unchecked = false;
                         relog(&follow.1, ended);
-                        gate_record::record(&session.kernel, session.agent_id(), ended).await;
+                        live::record(&session.kernel, session.agent_id(), ended).await;
                         found.unchecked = Some(reviewed.findings);
                     } else if let Some(verdict) = reviewed.verdict().filter(|_| *unchecked) {
                         *ended = ended.with_signal(verdict);
                         *unchecked = false;
                         relog(&follow.1, ended);
-                        gate_record::record(&session.kernel, session.agent_id(), ended).await;
+                        live::record(&session.kernel, session.agent_id(), ended).await;
                     }
                 }
                 Step::HarnessCheck => {
@@ -690,7 +689,7 @@ impl Headless {
                         *ended = ended.with_signal(signal);
                         *unchecked = false;
                         relog(&follow.1, ended);
-                        gate_record::record(&session.kernel, session.agent_id(), ended).await;
+                        live::record(&session.kernel, session.agent_id(), ended).await;
                         found.harness =
                             (signal == OutcomeSignal::ChecksFailed).then(|| check_review(&check));
                     }
@@ -725,7 +724,7 @@ impl Headless {
                         *ended = ended.with_signal(verdict);
                         *unchecked = false;
                         relog(&follow.1, ended);
-                        gate_record::record(&session.kernel, session.agent_id(), ended).await;
+                        live::record(&session.kernel, session.agent_id(), ended).await;
                     }
                     if failed {
                         found.unchecked = Some(judged.verdict.reasons.clone());
@@ -1072,12 +1071,12 @@ impl Headless {
             let left = result
                 .as_ref()
                 .and_then(|result| result.as_ref().ok())
-                .map(|result| gate_log::evidence(result, turn_start));
+                .map(|result| live::evidence(result, turn_start));
             self.hub
                 .gate
                 .log_attempt(session.agent_id(), &outcome, terms, left);
             if !unchecked {
-                gate_record::record(&session.kernel, session.agent_id(), &outcome).await;
+                live::record(&session.kernel, session.agent_id(), &outcome).await;
             }
             Some(outcome)
         } else {
@@ -1158,7 +1157,7 @@ impl Headless {
         if classifier.is_empty() {
             return Err("Gate has no model to classify the prompt".to_string());
         }
-        let label = gate_record::classify_prompt(
+        let label = live::classify_prompt(
             &session.kernel,
             &classifier,
             text,
@@ -1169,7 +1168,7 @@ impl Headless {
         let mut difficulty = Some(label.difficulty);
         let mut told = None;
         if std::mem::take(&mut self.criteria_due) {
-            self.criteria = gate_record::hold_to_criteria(
+            self.criteria = live::hold_to_criteria(
                 &session.kernel,
                 (&self.hub.gate, &candidates),
                 category,
@@ -1180,7 +1179,7 @@ impl Headless {
             .await
             .ok()
             .flatten();
-            told = gate_record::worker_note_for(self.criteria.as_deref());
+            told = live::worker_note_for(self.criteria.as_deref());
         }
         let route = match self
             .hub

@@ -1,6 +1,17 @@
-use super::*;
-use aura_core_types::{OutcomePayload, OutcomeSignal, PromptPayload, Route, Transaction};
-use aura_store_db::RocksStore;
+use super::{GateLive, RECENT_DECISIONS};
+use crate::record::SCAN_BATCH;
+use aura_agent_kernel::RecordObserver;
+use aura_config::GateConfig;
+use aura_core_auth::ProviderKind;
+use aura_core_types::{
+    AgentId, Hash, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, RecordEntry,
+    Route, RouteLevel, RouteReason, Transaction,
+};
+use aura_gate_route::stats::GateStats;
+use aura_gate_route::{candidates, SplitMix64, Work};
+use aura_model::model_catalog::catalog;
+use aura_store_db::{ReadStore, RocksStore, WriteStore};
+use std::sync::Arc;
 use tempfile::TempDir;
 
 const HAIKU: &str = "claude/claude-haiku-4-5";
@@ -8,7 +19,6 @@ const HAIKU: &str = "claude/claude-haiku-4-5";
 /// Commit `tx` to `agent_id`'s record in `store`, as a kernel would,
 /// returning the entry.
 fn commit(store: &RocksStore, agent_id: AgentId, tx: Transaction) -> RecordEntry {
-    use aura_store_db::WriteStore;
     let seq = store.get_head_seq(agent_id).unwrap() + 1;
     let entry = RecordEntry::builder(seq, tx).build();
     store.append_entry_direct(agent_id, seq, &entry).unwrap();
@@ -22,11 +32,7 @@ fn prompt(agent_id: AgentId, text: &str) -> Transaction {
     Transaction::user_prompt_with(agent_id, &payload)
 }
 
-fn outcome(
-    agent_id: AgentId,
-    prompt_tx: aura_core_types::Hash,
-    signal: OutcomeSignal,
-) -> Transaction {
+fn outcome(agent_id: AgentId, prompt_tx: Hash, signal: OutcomeSignal) -> Transaction {
     Transaction::outcome(
         agent_id,
         &OutcomePayload {
@@ -128,17 +134,14 @@ async fn a_background_rebuild_overlapping_live_entries_counts_each_prompt_once()
 #[test]
 fn decisions_are_remembered_up_to_the_limit() {
     let live = GateLive::with_rng(GateConfig::defaults(), SplitMix64::seeded(1));
-    let candidates = aura_gate::route::candidates(
-        &aura_model::model_catalog::catalog("local/qwen3:4b", &[]),
-        |p| p == aura_auth::ProviderKind::Claude,
+    let candidates = candidates(
+        &catalog("local/qwen3:4b", &[]),
+        |p| p == ProviderKind::Claude,
         |_| false,
     );
     for _ in 0..RECENT_DECISIONS + 5 {
-        live.decide(
-            &aura_gate::route::Work::turn(PromptCategory::Debugging),
-            &candidates,
-        )
-        .unwrap();
+        live.decide(&Work::turn(PromptCategory::Debugging), &candidates)
+            .unwrap();
     }
     let recent = live.recent();
     assert_eq!(recent.len(), RECENT_DECISIONS);
@@ -146,10 +149,7 @@ fn decisions_are_remembered_up_to_the_limit() {
         .iter()
         .all(|r| r.category == PromptCategory::Debugging && r.level == RouteLevel::Turn));
     assert!(live
-        .decide(
-            &aura_gate::route::Work::turn(PromptCategory::Debugging),
-            &[]
-        )
+        .decide(&Work::turn(PromptCategory::Debugging), &[])
         .is_none());
     assert_eq!(live.recent().len(), RECENT_DECISIONS);
 }

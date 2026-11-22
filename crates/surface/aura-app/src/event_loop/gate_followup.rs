@@ -21,9 +21,6 @@
 //! ([`repair_message`]) and on to a stronger model after that.
 
 use super::agents::AgentSession;
-use super::gate_live::GateLive;
-use super::gate_log;
-use super::gate_record::{self, Judged};
 use super::processes::now_ms;
 use super::steering::SteerSource;
 use super::task_check::{run_script_within, CheckRun};
@@ -43,6 +40,7 @@ use aura_gate::evidence::{flags, is_test_path, Flag};
 use aura_gate::followup::{self, Allowed, Ended, Step, Suspicion, Taken, Why, NUDGE_PROMPT};
 use aura_gate::judge::criteria::{checked, Checked, Criteria, Status};
 use aura_gate::judge::turn::{self, Answer, ReviewVariant, Standing, Unverified, Verdict};
+use aura_gate::live::{self, GateLive, Judged};
 use aura_gate::route::Candidate;
 use aura_model::{ContentBlock, Message, Role, ThinkingEffort};
 use std::path::{Path, PathBuf};
@@ -121,13 +119,13 @@ pub(crate) struct Changed {
 impl Before {
     /// The copy a `/compare` run works in, as it was before the run.
     pub(crate) fn of_copy(copy: &CompareCopy) -> Self {
-        Self::Copy(gate_log::copy_at(copy))
+        Self::Copy(live::copy_at(copy))
     }
 
     /// The copy `copy` as it is now, part of the way through its run.
     /// `None` when git could not record it.
     pub(crate) async fn of_copy_now(copy: &CompareCopy) -> Option<Self> {
-        let mut at = gate_log::copy_at(copy);
+        let mut at = live::copy_at(copy);
         let (root, git_dir) = (at.root.clone(), at.git_dir.clone());
         let tree =
             tokio::task::spawn_blocking(move || changes::baseline(&root, git_dir.as_deref()));
@@ -204,7 +202,7 @@ impl Before {
 pub(crate) fn may_review(live: &GateLive, candidates: &[Candidate], model: &str) -> bool {
     let settings = live.settings();
     (settings.review != ReviewMode::Off || settings.criteria != ReviewMode::Off)
-        && gate_record::reviewer_for(live, candidates, model).is_some()
+        && live::reviewer_for(live, candidates, model).is_some()
 }
 
 /// How an attempt ended, for [`FollowUp::next`].
@@ -369,7 +367,7 @@ impl FollowUp {
         ran: (&str, Option<ThinkingEffort>),
         workspace: &Path,
     ) -> Self {
-        let judge = gate_record::verdict_judge_for(candidates, ran.0);
+        let judge = live::verdict_judge_for(candidates, ran.0);
         let stronger =
             aura_gate::route::has_stronger_model(&live.stats(), RouteLevel::Turn, ran, candidates);
         if !stronger {
@@ -391,7 +389,7 @@ impl FollowUp {
             .harness_check
             .then(|| check_command(workspace))
             .flatten();
-        let reviewer = gate_record::reviewer_for(live, candidates, ran.0);
+        let reviewer = live::reviewer_for(live, candidates, ran.0);
         let logs = [settings.review, settings.criteria].contains(&ReviewMode::Log);
         let logged = reviewer.is_some() && logs && live.sampled(settings.review_sample);
         // `log` differs from `off` only by the review it logs.
@@ -511,7 +509,7 @@ impl FollowUp {
         result: &AgentLoopResult,
         turn_start: usize,
     ) -> aura_gate::evidence::Evidence {
-        gate_log::evidence_of(result, turn_start, self.changed_paths(result))
+        live::evidence_of(result, turn_start, self.changed_paths(result))
     }
 
     /// The next step for an attempt that ended with `result` as `at`
@@ -630,7 +628,7 @@ impl FollowUp {
         };
         let request = turn::review_request(judge, &standing, LIVE_REVIEW, auth_token);
         let (answer, findings, cost_usd) =
-            gate_record::ask_review(&session.kernel, judge, request).await?;
+            live::ask_review(&session.kernel, judge, request).await?;
         info!(%judge, model = %ended.model, ?answer, cost_usd, act = shown.act, "The judge reviewed work about to stand");
         let signs: Vec<Flag> = flags(
             &self.evidence(shown.result, shown.turn_start),
@@ -944,7 +942,7 @@ pub(crate) struct Unchecked<'a> {
 
 /// Ask `judge` through `session`'s kernel whether the work of `ended`,
 /// shown as `unchecked`, is done; returns the verdict as the attempt's
-/// signal (see [`gate_record::judge_unverified`]).
+/// signal (see [`live::judge_unverified`]).
 pub(crate) async fn judge_unchecked(
     session: &AgentSession,
     judge: &str,
@@ -967,7 +965,7 @@ pub(crate) async fn judge_unchecked(
         last_check: &last_check,
         suspicions: unchecked.suspicions,
     };
-    gate_record::judge_unverified(&session.kernel, judge, ended, &shown, auth_token).await
+    live::judge_unverified(&session.kernel, judge, ended, &shown, auth_token).await
 }
 
 /// What the judge of unchecked work is shown of the commands in
@@ -1163,7 +1161,7 @@ mod tests {
             latency_ms: 10,
         };
         assert_eq!(
-            gate_record::judge_for(&live, &candidates, &failed).as_deref(),
+            live::judge_for(&live, &candidates, &failed).as_deref(),
             Some(OPUS),
             "whether a failure was the model's fault is still the strongest model's call"
         );

@@ -536,10 +536,12 @@ early-drop termination paths.
 covers the sync (`reason_sync_error_records_failed`) and handshake-error
 (`reason_streaming_handshake_error_records_failed`) paths.
 
-Gate ([`aura-gate`](../crates/gate/aura-gate)) never calls a model
-and never holds a `ModelProvider`; it depends only on the core, config and
-model layers. It builds the classifier's and the `/compare` judge's
-requests, and the surface sends them through an agent's `Kernel::reason`.
+Gate ([`aura-gate`](../crates/gate/aura-gate)) never calls a provider
+and never holds a `ModelProvider`. Its crates build the classifier's,
+the judge's and the `/compare` judge's requests, and every one goes
+through an agent's `Kernel::reason`: Gate's own calls from
+[`aura-gate-live`](../crates/gate/aura-gate-live), the `/compare`
+judge's from the surface.
 A classifier call is an `Auxiliary` `Reasoning` record in the classified
 agent's log, and a judge call is one in the comparison agent's log. Gate's
 pick only sets the model of the turn's or subtask's own kernel-mediated

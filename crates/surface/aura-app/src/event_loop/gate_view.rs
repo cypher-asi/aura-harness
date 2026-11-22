@@ -3,7 +3,6 @@
 //! would have done on the recorded ones, how much of the active agent's
 //! work went to subtasks, and Gate's latest decisions.
 
-use super::gate_live::RecentRoute;
 use super::handlers::show_system_message;
 use super::subagents::{lock, AgentHub};
 use super::LoopState;
@@ -12,6 +11,7 @@ use aura_config::GateConfig;
 use aura_core_types::{AgentId, Difficulty, PromptCategory, RouteLevel, RouteReason};
 use aura_gate::compare::list_price;
 use aura_gate::lead::delegation::{self, Call, Delegation, Share, Subtask};
+use aura_gate::live::RecentRoute;
 use aura_gate::route::by_expected_cost;
 use aura_gate::route::replay::{self, Estimate, Logged};
 use aura_gate::route::stats::GateStats;

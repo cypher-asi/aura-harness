@@ -12,6 +12,7 @@ use aura_core_types::{
     Hash, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, Route, RouteLevel,
 };
 use aura_exec_tools::ToolConfig;
+use aura_gate::live::GateLive;
 use aura_model::{
     MockProvider, MockResponse, ModelProvider, ModelRequest, ModelResponse, ReasonerError,
 };
@@ -3075,8 +3076,8 @@ async fn the_next_turn_uses_what_the_last_outcome_taught_gate() {
     // A later signal about the last turn, as the judge records one.
     async fn rate(state: &LoopState<'_>, agent: AgentId, signal: OutcomeSignal) {
         let kernel = state.kernel_for(agent).unwrap();
-        let last = gate_record::last_turn(kernel.store().as_ref(), agent).unwrap();
-        assert!(gate_record::record(&kernel, agent, &last.outcome.with_signal(signal)).await);
+        let last = aura_gate::live::last_turn(kernel.store().as_ref(), agent).unwrap();
+        assert!(aura_gate::live::record(&kernel, agent, &last.outcome.with_signal(signal)).await);
     }
     let reasons = |state: &LoopState<'_>| -> Vec<RouteReason> {
         prompts_of(state, first)

@@ -61,6 +61,7 @@ members = [
     "crates/gate/aura-gate-attempts",
     "crates/gate/aura-gate-compare",
     "crates/gate/aura-gate-lead",
+    "crates/gate/aura-gate-live",
     "crates/gate/aura-gate",
     "crates/auth/aura-auth-kit",
     "crates/auth/aura-auth-zos",

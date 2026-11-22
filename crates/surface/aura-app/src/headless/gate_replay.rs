@@ -47,11 +47,11 @@ use tokio::task::JoinSet;
 use crate::event_loop::gate_followup::{
     checks_shown, commands_run, final_reply_in, tally as criteria_tally,
 };
-use crate::event_loop::gate_log::sent_text;
 use crate::event_loop::processes::now_ms;
 use crate::event_loop::tasks::TASKS_DIR;
 use crate::isolation::changes;
 use crate::session_checkpoint::Checkpoints;
+use aura_gate::live::sent_text;
 
 /// Commands shown to the reviewer, latest last.
 const SHOWN_COMMANDS: usize = 40;

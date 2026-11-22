@@ -1,23 +1,41 @@
-use super::*;
+use super::catch_up::{attempts_of, catch_up, CaughtUp};
+use super::{RunOf, SavedSessions};
+use crate::table::GateLive;
 use aura_agent_kernel::RecordObserver;
 use aura_core_types::{
-    BenchSource, CompareArm, CompareCopy, CompareStatus, Difficulty, OutcomeSignal, PromptCategory,
-    PromptPayload, Route, RouteReason, SystemKind, Transaction,
+    AgentId, ArmSpec, BenchSource, CompareArm, CompareCopy, ComparePayload, CompareRun,
+    CompareStatus, Difficulty, Hash, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload,
+    RecordEntry, Route, RouteReason, SystemKind, Transaction,
 };
-use aura_gate::attempts::evaluate;
-use aura_gate::evidence::{flags, Flag};
-use aura_model::ToolResultContent;
+use aura_gate_attempts::{evaluate, AttemptLog, Line, Terms, TruthSource};
+use aura_gate_evidence::{flags, Evidence, Flag};
+use aura_gate_followup::NUDGE_PROMPT;
+use aura_model::{ContentBlock, Message, Role, ToolResultContent};
 use aura_store_db::{RocksStore, WriteStore};
 use serde_json::json;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tempfile::TempDir;
-
-use crate::session_checkpoint::SessionCheckpoint;
 
 const SONNET: &str = "claude/claude-sonnet-5-5";
 const OPUS: &str = "claude/claude-opus-5-5";
 const TASK: &str = "Make ensure_type() follow the PR.";
 const TAKEOVER: &str = "Harness notice:\nThe work above was done on Claude Sonnet 5.5 and ended with its tests failing.";
+
+/// The harness asking the model to check its change, as the model sees it.
+fn nudge() -> String {
+    format!("Harness notice:\n{NUDGE_PROMPT}")
+}
+
+/// Sessions saved in memory.
+#[derive(Default)]
+struct Saved(HashMap<AgentId, Vec<Message>>);
+
+impl SavedSessions for Saved {
+    fn messages(&self, agent: AgentId) -> Option<Vec<Message>> {
+        self.0.get(&agent).cloned()
+    }
+}
 
 fn entry(seq: u64, tx: Transaction) -> RecordEntry {
     RecordEntry::builder(seq, tx).build()
@@ -78,17 +96,14 @@ fn ran(id: &str, command: &str, output: &str, is_error: bool) -> [Message; 2] {
 fn run(agent: AgentId) -> (Vec<RecordEntry>, Vec<Message>) {
     let first = prompt(agent, TASK, SONNET, RouteReason::Compare);
     let moved = prompt(agent, TAKEOVER, OPUS, RouteReason::Escalate);
-    let nudge = Transaction::user_prompt_with(
-        agent,
-        &PromptPayload::new(super::super::gate_followup::nudge_prompt()),
-    );
+    let nudged = Transaction::user_prompt_with(agent, &PromptPayload::new(nudge()));
     let (p1, p2) = (first.hash, moved.hash);
     let entries = vec![
         entry(1, first),
         entry(2, outcome(agent, p1, SONNET, OutcomeSignal::ChecksFailed)),
         entry(3, outcome(agent, p1, SONNET, OutcomeSignal::JudgedFail)),
         entry(4, moved),
-        entry(5, nudge),
+        entry(5, nudged),
         entry(6, outcome(agent, p2, OPUS, OutcomeSignal::ChecksPassed)),
         // The task's own check, recorded for the same prompt.
         entry(7, outcome(agent, p2, OPUS, OutcomeSignal::ChecksFailed)),
@@ -116,7 +131,7 @@ fn run(agent: AgentId) -> (Vec<RecordEntry>, Vec<Message>) {
         false,
     )]));
     messages.push(Message::assistant("Rewrote ensure_type()."));
-    messages.push(Message::user(super::super::gate_followup::nudge_prompt()));
+    messages.push(Message::user(nudge()));
     messages.extend(ran(
         "3",
         "pytest -q 2>&1 | grep -E 'passed|failed|Error' | head -20",
@@ -238,22 +253,36 @@ fn compare_run(agent: AgentId, prompt_tx: Hash) -> CompareRun {
     }
 }
 
-#[tokio::test]
-async fn recorded_comparisons_are_caught_up_on_once() {
-    let dir = TempDir::new().unwrap();
-    let store = RocksStore::open(dir.path().join("db"), false).unwrap();
-    let (host, agent) = (AgentId::generate(), AgentId::generate());
+/// Run `a-4` of `Compare #22`, its copy not kept.
+const A4: RunOf<'static> = RunOf {
+    compare: "Compare #22",
+    run: "a-4",
+    task: Some("ansible-d33bedc4"),
+    copy: None,
+};
+
+/// Commit to `store` the record of `run(agent)`, and the comparison
+/// holding it as entry `seq` of `host`'s record. Returns the run's
+/// messages.
+fn store_run(store: &RocksStore, host: AgentId, seq: u64, agent: AgentId) -> Vec<Message> {
     let (entries, messages) = run(agent);
     for e in &entries {
         store.append_entry_direct(agent, e.seq, e).unwrap();
     }
     let payload = comparison(compare_run(agent, entries[0].tx.hash));
     store
-        .append_entry_direct(host, 1, &entry(1, Transaction::compare(host, &payload)))
+        .append_entry_direct(host, seq, &entry(seq, Transaction::compare(host, &payload)))
         .unwrap();
-    let sessions = Checkpoints::new(dir.path());
-    let saved = SessionCheckpoint::new(5, 7, messages, Vec::new(), Default::default());
-    sessions.save(agent, &saved).await.unwrap();
+    messages
+}
+
+#[test]
+fn recorded_comparisons_are_caught_up_on_once() {
+    let dir = TempDir::new().unwrap();
+    let store = RocksStore::open(dir.path().join("db"), false).unwrap();
+    let (host, agent) = (AgentId::generate(), AgentId::generate());
+    let messages = store_run(&store, host, 1, agent);
+    let sessions = Saved(HashMap::from([(agent, messages)]));
 
     let log = AttemptLog::in_data_dir(dir.path());
     let hosts = [(host, "Compare #22".to_string())];
@@ -291,21 +320,13 @@ async fn recorded_comparisons_are_caught_up_on_once() {
     assert_eq!(missed.model, OPUS);
 
     // A run with no saved session is left out, and said so.
-    let other = AgentId::generate();
-    let (entries, _) = run(other);
-    for e in &entries {
-        store.append_entry_direct(other, e.seq, e).unwrap();
-    }
-    let payload = comparison(compare_run(other, entries[0].tx.hash));
-    store
-        .append_entry_direct(host, 2, &entry(2, Transaction::compare(host, &payload)))
-        .unwrap();
+    store_run(&store, host, 2, AgentId::generate());
     let caught = catch_up(&store, &hosts, &sessions, &log);
     assert_eq!((caught.runs, caught.attempts, caught.skipped), (1, 0, 1));
 }
 
-#[tokio::test]
-async fn a_check_result_logged_without_its_copy_gets_the_copys_place() {
+#[test]
+fn a_check_result_logged_without_its_copy_gets_the_copys_place() {
     let dir = TempDir::new().unwrap();
     let store = RocksStore::open(dir.path().join("db"), false).unwrap();
     let (host, agent) = (AgentId::generate(), AgentId::generate());
@@ -317,16 +338,10 @@ async fn a_check_result_logged_without_its_copy_gets_the_copys_place() {
     let log = AttemptLog::in_data_dir(dir.path());
     let live = GateLive::default();
     live.log_attempts_to(AttemptLog::in_data_dir(dir.path()));
-    let of = RunOf {
-        compare: "Compare #22",
-        run: "a-4",
-        task: Some("ansible-d33bedc4"),
-        copy: None,
-    };
-    live.log_truth(agent, entries[0].tx.hash, false, of);
+    live.log_truth(agent, entries[0].tx.hash, false, A4);
 
     let hosts = [(host, "Compare #22".to_string())];
-    let sessions = Checkpoints::new(dir.path());
+    let sessions = Saved::default();
     let caught = catch_up(&store, &hosts, &sessions, &log);
     assert_eq!((caught.placed, caught.truths, caught.runs), (1, 0, 0));
     let lines = log.read().unwrap().lines;
@@ -370,17 +385,7 @@ fn attempts_and_the_users_verdicts_are_logged_as_they_happen() {
     live.log_attempt(agent, &done, terms, Some(Evidence::of(&messages[4..])));
     live.on_entry(&entry(2, Transaction::outcome(agent, &done)));
     live.on_entry(&rewound);
-    live.log_truth(
-        agent,
-        asked.hash,
-        false,
-        RunOf {
-            compare: "Compare #22",
-            run: "a-4",
-            task: Some("ansible-d33bedc4"),
-            copy: None,
-        },
-    );
+    live.log_truth(agent, asked.hash, false, A4);
 
     let lines = live.attempt_log().unwrap().read().unwrap().lines;
     assert_eq!(lines.len(), 3, "the attempt's own outcome is not a truth");

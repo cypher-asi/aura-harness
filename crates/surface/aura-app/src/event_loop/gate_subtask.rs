@@ -23,8 +23,6 @@
 //! the model is not retried and counts for nothing.
 
 use super::agents::AgentSession;
-use super::gate_live::GateLive;
-use super::gate_record;
 use super::turns::record_prompt;
 use crate::model_selection::{ModelLimits, ModelSelection};
 use aura_agent::AgentLoopConfig;
@@ -32,6 +30,7 @@ use aura_core_types::{
     Difficulty, Hash, PromptCategory, PromptPayload, Route, RouteLevel, RouteReason,
     SubagentDispatchRequest,
 };
+use aura_gate::live::{self, GateLive};
 use aura_gate::route::{Candidate, Decision, Work};
 use aura_model::model_catalog::GATE_MODEL_ID;
 use std::sync::Arc;
@@ -194,7 +193,7 @@ impl SubtaskLabel {
             return Err("Gate has no model to classify the subtask's prompt".to_string());
         }
         let label = tokio::select! {
-            label = gate_record::classify_prompt(
+            label = live::classify_prompt(
                 &session.kernel,
                 &self.classifier,
                 &self.text,

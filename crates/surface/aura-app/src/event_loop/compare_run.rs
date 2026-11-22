@@ -36,8 +36,6 @@ use super::gate_followup::{
     nudge_notice, repair_message, repair_notice, sign_repair_message, sign_repair_notice, At,
     Before, FollowUp, Reviewing, Unchecked,
 };
-use super::gate_log::RunOf;
-use super::gate_record;
 use super::handlers::{handle_agent_success, run_agent_turn, system_message, turn_summary};
 use super::modes::Permissions;
 use super::processes::{now_ms, turn_id};
@@ -69,6 +67,7 @@ use aura_gate::evidence::outcome::calls_for_stronger;
 use aura_gate::followup::Step;
 use aura_gate::judge::blind;
 use aura_gate::judge::turn::Failed;
+use aura_gate::live::{self, RunOf};
 use aura_gate::route::{Candidate, Work};
 use aura_model::Message;
 use aura_ui_terminal::events::{
@@ -665,7 +664,7 @@ pub(super) async fn run(
                 hub.gate
                     .log_truth(r.run.agent_id, ended.prompt_tx, passed, of);
             }
-            gate_record::record(&kernel, r.run.agent_id, &ended).await;
+            live::record(&kernel, r.run.agent_id, &ended).await;
         }
     }
     // What the checks proved may change which signs have work reviewed.
@@ -1281,7 +1280,7 @@ async fn run_prompt(
     let classified = if plan.classifier.is_empty() {
         Err("Gate has no model to classify the prompt".to_string())
     } else {
-        gate_record::classify_prompt(
+        live::classify_prompt(
             &session.kernel,
             &plan.classifier,
             text,
@@ -1311,7 +1310,7 @@ async fn run_prompt(
     let category = label.category;
     let mut difficulty = Some(label.difficulty);
     let criteria = match routing {
-        ArmRouting::Gate { .. } => match gate_record::hold_to_criteria(
+        ArmRouting::Gate { .. } => match live::hold_to_criteria(
             &session.kernel,
             (&hub.gate, &plan.candidates),
             category,
@@ -1413,7 +1412,7 @@ async fn run_prompt(
     let (mut attempt_started, mut attempt_ms) = (started, started_ms);
     let (mut escalations, mut nudges, mut sent_back) = (0, 0, 0);
     let mut turn_start = session.messages.len();
-    let note = gate_record::worker_note_for(criteria.as_deref());
+    let note = live::worker_note_for(criteria.as_deref());
     session
         .messages
         .push(Message::user(format!("{text}{}", note.unwrap_or_default())));
@@ -1678,12 +1677,12 @@ async fn run_prompt(
         }
         if let Some(failed) = &ended {
             hub.gate.log_attempt(agent_id, failed, terms, left.take());
-            gate_record::record(&session.kernel, agent_id, failed).await;
+            live::record(&session.kernel, agent_id, failed).await;
         }
         let mut review = unchecked;
         let judge = ended
             .as_ref()
-            .and_then(|failed| gate_record::judge_for(&hub.gate, &plan.candidates, failed));
+            .and_then(|failed| live::judge_for(&hub.gate, &plan.candidates, failed));
         if let (Some(judge), Some(failed)) = (judge, &ended) {
             let shown = Failed {
                 task: text,
@@ -1691,7 +1690,7 @@ async fn run_prompt(
                 reply: &reply,
                 failure: &failure,
             };
-            let judged = gate_record::judge_failed(
+            let judged = live::judge_failed(
                 &session.kernel,
                 &judge,
                 failed,
@@ -1771,7 +1770,7 @@ async fn run_prompt(
     }
     if let (false, Some(ended)) = (recorded, &ended) {
         hub.gate.log_attempt(agent_id, ended, terms, left);
-        gate_record::record(&session.kernel, agent_id, ended).await;
+        live::record(&session.kernel, agent_id, ended).await;
     }
     let effort = effort_of(&config);
     let routed = RunTurn {

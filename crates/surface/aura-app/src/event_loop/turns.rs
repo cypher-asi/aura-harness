@@ -14,9 +14,6 @@ use super::gate_followup::{
     nudge_notice, repair_message, repair_notice, sign_repair_message, sign_repair_notice, At,
     Before, FollowUp, Reviewing, Unchecked,
 };
-use super::gate_live::GateLive;
-use super::gate_log;
-use super::gate_record;
 use super::handlers::{handle_agent_success, record_response, run_agent_turn, system_message};
 use super::run_command::run_user_command;
 use super::steering::{SteerSource, Steering};
@@ -37,6 +34,7 @@ use aura_gate::evidence::outcome::{calls_for_stronger, turn_signal};
 use aura_gate::followup::Step;
 use aura_gate::judge::criteria::Criteria;
 use aura_gate::judge::turn::Failed;
+use aura_gate::live::{self, GateLive};
 use aura_gate::route::{Candidate, Decision, Work as GateWork};
 use aura_model::{ContentBlock, ImageSource, Message, Role, ToolDefinition};
 use aura_ui_terminal::events::ImageAttachment;
@@ -400,7 +398,7 @@ async fn run_prompt(
     );
     let started = Instant::now();
     let model = turn.agent_loop.config().model.clone();
-    gate_record::note_retry(session, &prompt.text, &model).await;
+    live::note_retry(&session.kernel, session.agent_id(), &prompt.text, &model).await;
     let mut label = Label {
         text: prompt.text.clone(),
         classifier: turn.routing.classifier.clone(),
@@ -444,7 +442,7 @@ async fn run_prompt(
             };
             let mut criteria = None;
             if let Some(gate) = turn.gate.as_deref() {
-                criteria = match gate_record::hold_to_criteria(
+                criteria = match live::hold_to_criteria(
                     &session.kernel,
                     (&gate.live, &gate.candidates),
                     category,
@@ -460,7 +458,7 @@ async fn run_prompt(
                         None
                     }
                 };
-                if let Some(note) = gate_record::worker_note_for(criteria.as_deref()) {
+                if let Some(note) = live::worker_note_for(criteria.as_deref()) {
                     prompt.text.push_str(&note);
                 }
                 let agent = session.agent_id();
@@ -552,7 +550,7 @@ async fn run_prompt(
         .as_ref()
         .ok()
         .filter(|_| hub.is_some())
-        .map(|result| gate_log::evidence_of(result, turn_start, attempts.changed.as_deref()));
+        .map(|result| live::evidence_of(result, turn_start, attempts.changed.as_deref()));
     session
         .tasks
         .end_request(
@@ -598,7 +596,7 @@ async fn run_prompt(
             hub.gate
                 .log_attempt(session.agent_id(), &outcome, terms, left);
         }
-        gate_record::record(&session.kernel, session.agent_id(), &outcome).await;
+        live::record(&session.kernel, session.agent_id(), &outcome).await;
     }
     Outcome {
         failure,
@@ -654,7 +652,7 @@ impl Label {
     /// # Errors
     /// Says why when the classifier gave no category and difficulty.
     async fn classify(&mut self, session: &AgentSession) -> Result<PromptCategory, String> {
-        let label = gate_record::classify_prompt(
+        let label = live::classify_prompt(
             &session.kernel,
             &self.classifier,
             &self.text,
@@ -811,7 +809,7 @@ struct Asked<'a> {
 ///
 /// 1. its `Outcome` is recorded and, for a failed check or an error,
 ///    Gate's judge says whether the model was at fault
-///    ([`gate_record::judge_failed`]);
+///    ([`live::judge_failed`]);
 /// 2. a failure the judge excuses ends the turn where it is;
 /// 3. otherwise the turn carries on in the same conversation on the
 ///    next stronger model, told what the judge found, under a prompt of
@@ -1097,7 +1095,7 @@ async fn run_attempts(
                 })
                 .flatten()
         };
-        let judge = gate_record::judge_for(&gate.live, &gate.candidates, &failed);
+        let judge = live::judge_for(&gate.live, &gate.candidates, &failed);
         let mut next = None;
         if judge.is_none() {
             next = stronger(&gate.live);
@@ -1115,7 +1113,7 @@ async fn run_attempts(
             .ok()
             .map(|result| follow.1.evidence(result, turn_start));
         gate.live.log_attempt(agent, &failed, terms, left);
-        gate_record::record(&session.kernel, agent, &failed).await;
+        live::record(&session.kernel, agent, &failed).await;
         attempts.settled = true;
         let mut review = unchecked;
         if let Some(judge) = judge {
@@ -1140,8 +1138,7 @@ async fn run_attempts(
             };
             let auth_token = turn.agent_loop.config().auth_token.clone();
             let judged =
-                gate_record::judge_failed(&session.kernel, &judge, &failed, &shown, auth_token)
-                    .await;
+                live::judge_failed(&session.kernel, &judge, &failed, &shown, auth_token).await;
             if let Some((_, judged)) = judged {
                 ui.send(system_message(judged.describe())).await;
                 if !judged.verdict.at_fault {

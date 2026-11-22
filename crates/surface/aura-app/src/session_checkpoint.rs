@@ -226,6 +226,14 @@ impl Checkpoints {
     }
 }
 
+/// Gate's attempt log reads a `/compare` run's messages from the session
+/// saved for its agent.
+impl aura_gate::live::SavedSessions for Checkpoints {
+    fn messages(&self, agent: AgentId) -> Option<Vec<Message>> {
+        self.load_current(agent).map(|saved| saved.messages)
+    }
+}
+
 /// Write `bytes` to `path` through a temporary file, so readers never see
 /// half a file.
 async fn replace(path: &Path, bytes: &[u8]) -> std::io::Result<()> {

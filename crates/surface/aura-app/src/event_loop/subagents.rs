@@ -31,8 +31,6 @@ use super::agent_events::AgentUi;
 use super::agents::{AgentSession, KernelFactory};
 use super::approvals::TerminalApprovals;
 use super::gate_followup;
-use super::gate_live::GateLive;
-use super::gate_record;
 use super::gate_subtask::{explicit_model, GateBase, SubtaskGate, SubtaskLabel};
 use super::handlers::{handle_agent_success, run_agent_turn, system_message};
 use super::host::{agent_tool_definitions, TerminalAgents};
@@ -71,6 +69,7 @@ use aura_exec_tools::SubagentDispatchHook;
 use aura_gate::compare::{tally, PlanReading};
 use aura_gate::followup;
 use aura_gate::judge::turn::{Failed, Unverified, Verdict};
+use aura_gate::live::{self, GateLive};
 use aura_gate::route::{Candidate, Decision};
 use aura_model::{Message, ThinkingEffort, ToolDefinition};
 use aura_ui_terminal::events::{
@@ -200,7 +199,7 @@ struct Redo {
 impl Redo {
     async fn record(self) {
         info!(child = %self.child, "Subtask dispatched again; its first attempt failed");
-        gate_record::record(
+        live::record(
             &self.kernel,
             self.child,
             &self.ended.with_signal(OutcomeSignal::Redone),
@@ -1485,14 +1484,14 @@ impl AgentHub {
 
     /// The model that judges `ended`, the outcome of work Gate routed for
     /// an agent running the permanent agent `definition` (see
-    /// [`gate_record::judge_for`]).
+    /// [`live::judge_for`]).
     pub(crate) fn judge_of(
         &self,
         definition: Option<&str>,
         ended: &OutcomePayload,
     ) -> Option<String> {
         let candidates = self.gate_candidates(definition)?;
-        gate_record::judge_for(&self.gate, &candidates, ended)
+        live::judge_for(&self.gate, &candidates, ended)
     }
 
     /// The model that classifies prompts; empty when nothing does.
@@ -1730,7 +1729,7 @@ impl AgentHub {
         if let (Some(outcome), None, Some(candidates)) =
             (ended.as_mut(), end.signal, gate.candidates.as_deref())
         {
-            if let Some(judge) = gate_record::verdict_judge_for(candidates, &model) {
+            if let Some(judge) = live::verdict_judge_for(candidates, &model) {
                 let workspace = session.kernel.agent_workspace();
                 let diff = files_before
                     .as_ref()
@@ -1759,7 +1758,7 @@ impl AgentHub {
                     suspicions: &suspicions,
                 };
                 let auth_token = agent_loop.config().auth_token.clone();
-                if let Some((verdict, found)) = gate_record::judge_unverified(
+                if let Some((verdict, found)) = live::judge_unverified(
                     &session.kernel,
                     &judge,
                     outcome,
@@ -1780,7 +1779,7 @@ impl AgentHub {
         }
         if let Some(outcome) = ended.as_mut() {
             outcome.success = outcome.signal.success();
-            gate_record::record(&session.kernel, child_id, outcome).await;
+            live::record(&session.kernel, child_id, outcome).await;
         }
         // A first attempt that failed is reviewed before it is retried on
         // a stronger model: was the model at fault?
@@ -1790,7 +1789,7 @@ impl AgentHub {
             gate.candidates.as_deref(),
             &gate.escalation,
         ) {
-            if let Some(judge) = gate_record::judge_for(&self.gate, candidates, outcome) {
+            if let Some(judge) = live::judge_for(&self.gate, candidates, outcome) {
                 let workspace = session.kernel.agent_workspace();
                 let diff = files_before
                     .as_ref()
@@ -1804,8 +1803,7 @@ impl AgentHub {
                 };
                 let auth_token = agent_loop.config().auth_token.clone();
                 if let Some((judged_as, found)) =
-                    gate_record::judge_failed(&session.kernel, &judge, outcome, &failed, auth_token)
-                        .await
+                    live::judge_failed(&session.kernel, &judge, outcome, &failed, auth_token).await
                 {
                     ui.send(system_message(found.describe())).await;
                     *outcome = judged_as;

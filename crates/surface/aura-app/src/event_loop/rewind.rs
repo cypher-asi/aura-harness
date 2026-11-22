@@ -110,7 +110,7 @@ pub(super) async fn handle_rewind(
         .filter_map(|turn| turn.manifest.prompt_tx.as_deref())
         .filter_map(|hex| Hash::from_hex(hex).ok())
         .collect();
-    super::gate_record::note_rewind(session, &prompts).await;
+    aura_gate::live::note_rewind(&session.kernel, session.agent_id(), &prompts).await;
     if cut.is_some() {
         session.save_checkpoint().await;
         ui.send(UiCommand::LoadConversation(chat_from_messages(

@@ -209,7 +209,7 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
         post_edit_check,
         trace_snapshots,
     } = setup;
-    let gate = Arc::new(event_loop::GateLive::new(gate));
+    let gate = Arc::new(aura_gate::live::GateLive::new(gate));
     gate.rebuild_in_background(
         store.clone() as Arc<dyn aura_store_db::ReadStore>,
         registry.agents().iter().map(|a| a.agent_id()).collect(),
