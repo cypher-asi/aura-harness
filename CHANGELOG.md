@@ -7,6 +7,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Exacting acceptance criteria make work hard by default
+
+##### Changed
+
+- With `AURA_GATE_CRITERIA=log`, the default, criteria that ask for
+  output to match a format or a reference exactly now rate the work
+  `hard`, as they did with `on`, so it starts at `high` effort and
+  never below the standard tier. The worker is shown the criteria, and
+  the review acts on them, only with `on`.
+
 ### Gate's acceptance criteria get written on Sonnet 5.5
 
 ##### Fixed

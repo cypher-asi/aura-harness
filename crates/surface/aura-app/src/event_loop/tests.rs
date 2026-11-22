@@ -83,6 +83,30 @@ impl ModelProvider for GatedProvider {
                     .to_string(),
             });
         }
+        if request.system == aura_agent_gate::criteria::SYSTEM_PROMPT {
+            let asked = last.as_deref().unwrap_or_default();
+            let kind = if asked.contains("(exacting criteria)") {
+                Some("exact_output")
+            } else if asked.contains("(plain criteria)") {
+                Some("behaviour")
+            } else {
+                None
+            };
+            if let Some(kind) = kind {
+                let input = serde_json::json!({
+                    "items": [{"text": "prints the parse tree", "kind": kind}],
+                    "strict": kind == "exact_output",
+                });
+                return MockProvider::new()
+                    .with_response(MockResponse::tool_use(
+                        "toolu_criteria",
+                        aura_agent_gate::criteria::CRITERIA_TOOL,
+                        input,
+                    ))
+                    .complete(request)
+                    .await;
+            }
+        }
         if request.system == aura_agent_gate::turn_judge::SYSTEM_PROMPT {
             let asked = last.as_deref().unwrap_or_default();
             let reply = if asked.contains("judge: blame") {
@@ -3067,6 +3091,53 @@ async fn a_criteria_writer_that_fails_says_so_and_the_turn_goes_on() {
         "the turn is routed all the same:\n{text}"
     );
     assert_eq!(outcomes_of(&state, first).len(), 1, "and runs to its end");
+}
+
+/// The difficulty the prompt of a turn answering `text` is recorded with,
+/// under Gate with acceptance criteria `criteria`.
+async fn recorded_difficulty(
+    criteria: aura_config::ReviewMode,
+    text: &str,
+) -> Option<aura_core_types::Difficulty> {
+    let (fixture, _commands) = fixture_with_gate(GateLive::new(aura_config::GateConfig {
+        explore_rate: 0.0,
+        criteria,
+        ..aura_config::GateConfig::defaults()
+    }));
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+    turn(&mut state, &mut done, &links, first, text).await;
+    prompts_of(&state, first)[0].2.difficulty
+}
+
+#[tokio::test]
+async fn exacting_criteria_rate_the_work_hard_unless_criteria_are_off() {
+    use aura_config::ReviewMode;
+    use aura_core_types::Difficulty;
+    let exacting = "fix the parser (exacting criteria)";
+    assert_eq!(
+        recorded_difficulty(ReviewMode::Log, exacting).await,
+        Some(Difficulty::Hard),
+        "logged criteria route the work as acting ones do"
+    );
+    assert_eq!(
+        recorded_difficulty(ReviewMode::On, exacting).await,
+        Some(Difficulty::Hard)
+    );
+    assert_eq!(
+        recorded_difficulty(ReviewMode::Off, exacting).await,
+        Some(Difficulty::Medium),
+        "no criteria are written"
+    );
+    assert_eq!(
+        recorded_difficulty(ReviewMode::Log, "fix the parser (plain criteria)").await,
+        Some(Difficulty::Medium),
+        "criteria that are not exacting leave the classifier's difficulty"
+    );
 }
 
 #[tokio::test]

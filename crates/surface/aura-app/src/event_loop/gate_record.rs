@@ -357,10 +357,10 @@ pub(crate) async fn write_criteria(
 
 /// The acceptance criteria of `text`, a prompt asking for `category` that
 /// Gate routes among `candidates`, written through `kernel` when Gate's
-/// settings call for them ([`criteria_writer_for`]). With criteria `on`,
-/// work they find exacting is rated hard in `difficulty`, so it starts
-/// on a model that can meet them. `Ok(None)` when none are due or the
-/// writer gave none.
+/// settings call for them ([`criteria_writer_for`]). Work they find
+/// exacting is rated hard in `difficulty`, with criteria `log` as with
+/// `on`, so it starts on a model that can meet them. `Ok(None)` when none
+/// are due or the writer gave none.
 ///
 /// # Errors
 /// Says why, as a line for the chat, when the writer could not be asked
@@ -379,8 +379,7 @@ pub(crate) async fn hold_to_criteria(
     let Some(found) = write_criteria(kernel, &writer, text, auth_token).await? else {
         return Ok(None);
     };
-    let acted = live.settings().criteria == ReviewMode::On;
-    if acted && found.exacting() && *difficulty != Some(Difficulty::Hard) {
+    if found.exacting() && *difficulty != Some(Difficulty::Hard) {
         info!(was = ?difficulty, "The acceptance criteria rate the work hard");
         *difficulty = Some(Difficulty::Hard);
     }

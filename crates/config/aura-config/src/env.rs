@@ -90,8 +90,9 @@ pub const AURA_GATE_CHECK: &str = "AURA_GATE_CHECK";
 pub const AURA_GATE_REVIEW: &str = "AURA_GATE_REVIEW";
 /// Whether Gate writes down a routed code turn's acceptance criteria
 /// before the work starts and reviews the work against them: `on`, `log`
-/// (write them and log the review's verdict without acting on it) or
-/// `off`. Consumed by [`crate::GateConfig::criteria`].
+/// (write them, let exacting ones rate the work hard, and log the
+/// review's verdict without acting on it) or `off`. Consumed by
+/// [`crate::GateConfig::criteria`].
 pub const AURA_GATE_CRITERIA: &str = "AURA_GATE_CRITERIA";
 
 /// The full list of env-var names this crate owns. Boundary tests use

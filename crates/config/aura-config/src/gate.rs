@@ -128,11 +128,11 @@ pub struct GateConfig {
     /// Whether a routed code turn's acceptance criteria are written down,
     /// by a model other than the one doing the work, before the work
     /// starts, and the work is reviewed against them before it stands.
-    /// With `on`, the worker is shown them, strict criteria make the work
-    /// hard, and work the review finds short of them goes back to the
-    /// model once, then on to a stronger one. With `log` they are written
-    /// and the review's verdict only goes to the attempt log. Needs
-    /// [`Self::judge`] on for the review.
+    /// Criteria that ask for output to match exactly make the work hard
+    /// with `on` and `log` alike. With `on`, the worker is also shown
+    /// them, and work the review finds short of them goes back to the
+    /// model once, then on to a stronger one. With `log` the review's
+    /// verdict only goes to the attempt log. Needs [`Self::judge`] on.
     ///
     /// env: `AURA_GATE_CRITERIA` (default: `log`)
     pub criteria: ReviewMode,
