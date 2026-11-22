@@ -1,0 +1,18 @@
+[package]
+name = "aura-gate-lead"
+description = "Gate: what the lead agent may do itself while delegation is enforced, and how much of its work went to subtasks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aura-config = { path = "../../config/aura-config" }
+aura-core-types = { path = "../../core/aura-core-types" }
+aura-gate-evidence = { path = "../aura-gate-evidence" }
+aura-gate-route = { path = "../aura-gate-route" }
+aura-model = { path = "../../model/aura-model" }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

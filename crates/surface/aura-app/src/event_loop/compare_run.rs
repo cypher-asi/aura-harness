@@ -54,12 +54,6 @@ use crate::isolation::{
 };
 use crate::model_selection::routed_effort;
 use aura_agent::{AgentLoop, AgentLoopConfig};
-use aura_agent_gate::attempt_log::Terms;
-use aura_agent_gate::compare::{list_price, plan_shares, run_name, PlanReading, Schedule};
-use aura_agent_gate::followup::Step;
-use aura_agent_gate::outcome::calls_for_stronger;
-use aura_agent_gate::turn_judge::Failed;
-use aura_agent_gate::{judge, Candidate, Work};
 use aura_agent_kernel::Kernel;
 use aura_agent_trace::{Activity, Doing, RunMeta, RunRecorder, RunSource};
 use aura_core_types::trace::{Reward, RewardKind, RewardTarget};
@@ -69,6 +63,13 @@ use aura_core_types::{
     PromptPayload, Route, RouteLevel, RouteReason, RunTurn, SystemKind, Transaction,
 };
 use aura_exec_tools::plan_tools::{is_plan_path, todo_items, PlanFile};
+use aura_gate::attempts::Terms;
+use aura_gate::compare::{list_price, plan_shares, run_name, PlanReading, Schedule};
+use aura_gate::evidence::outcome::calls_for_stronger;
+use aura_gate::followup::Step;
+use aura_gate::judge::blind;
+use aura_gate::judge::turn::Failed;
+use aura_gate::route::{Candidate, Work};
 use aura_model::Message;
 use aura_ui_terminal::events::{
     run_order, BenchDoing, BenchLiveRun, BenchTaskSetup, ProcessStatus,
@@ -1852,11 +1853,11 @@ async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<Co
     let auth_token = ctx.hub.turn(None, &ctx.plan.workspace).0.auth_token;
     let seed = seed(ctx.host.agent_id());
     let shared_task = judge_task(&ctx.plan.prompts);
-    let reference = ctx.plan.source.reference().map(|r| judge::Attempt {
+    let reference = ctx.plan.source.reference().map(|r| blind::Attempt {
         diff: r.diff.clone(),
         reply: r.reply.clone(),
     });
-    let attempt = |r: &Ran| judge::Attempt {
+    let attempt = |r: &Ran| blind::Attempt {
         diff: r.patch.clone(),
         reply: r.reply.clone(),
     };
@@ -1865,7 +1866,7 @@ async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<Co
         if ctx.cancel.is_cancelled() {
             break;
         }
-        let a_first = judge::a_first(seed, i);
+        let a_first = blind::a_first(seed, i);
         let mut judgment = CompareJudgment {
             a_run: a.run.name.clone(),
             b_run: b.run.name.clone(),
@@ -1882,7 +1883,7 @@ async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<Co
             .plan
             .example(a.order.0)
             .map_or_else(|| shared_task.clone(), |task| judge_task(&task.prompts));
-        let request = judge::request(
+        let request = blind::request(
             &ctx.plan.judge,
             &task,
             (&attempt(a), &attempt(b)),
@@ -1896,7 +1897,7 @@ async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<Co
                     Ok(Ok(result)) => {
                         judgment.cost_usd =
                             list_price(&ctx.plan.judge, &result.response.usage).unwrap_or(0.0);
-                        Ok(judge::reply_text(&result.response))
+                        Ok(blind::reply_text(&result.response))
                     }
                     Ok(Err(e)) => Err(format!("judge call failed: {e}")),
                     Err(_) => Err("judge call timed out".to_string()),
@@ -1906,15 +1907,15 @@ async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<Co
         };
         match reply {
             Ok(text) => {
-                if let Some(verdict) = judge::parse(&text) {
+                if let Some(verdict) = blind::parse(&text) {
                     judgment.parsed = true;
-                    judgment.winner = judge::winner(verdict, a_first);
+                    judgment.winner = blind::winner(verdict, a_first);
                 }
                 if reference.is_some() {
                     (judgment.a_vs_reference, judgment.b_vs_reference) =
-                        judge::reference_verdicts(&text, a_first);
+                        blind::reference_verdicts(&text, a_first);
                 }
-                let named = judge::unblind(&text, a_first, (&a.run.name, &b.run.name));
+                let named = blind::unblind(&text, a_first, (&a.run.name, &b.run.name));
                 judgment.reasoning = named.chars().take(MAX_REASONING).collect();
             }
             Err(problem) => {

@@ -1,3 +1,5 @@
+//! Layer: gate
+//!
 //! What the lead agent under Gate may do itself.
 //!
 //! Under Gate the main agent is a lead: it reads enough to decide, hands
@@ -8,15 +10,18 @@
 //! subtask, and `run_command` only runs checks, linters in check mode and
 //! inspection commands ([`allows_command`]). Subagents are never
 //! restricted this way.
+//!
+//! [`delegation`] says how much of a lead's work went to subtasks.
+
+pub mod delegation;
 
 use aura_config::GateConfig;
 use aura_core_types::{Difficulty, PromptCategory};
+use aura_gate_evidence::checks::{command_line, is_check_part};
+use aura_gate_route::stats::{GateStats, Row};
+use aura_gate_route::Random;
 use aura_model::model_catalog::{infer_tier, ModelTier};
 use serde_json::Value;
-
-use crate::checks::is_check_part;
-use crate::router::Random;
-use crate::stats::{GateStats, Row};
 
 /// Whether a turn asking for `category` may be led at all: work that can
 /// be handed to subtasks. A question, a small change or prose is always
@@ -294,7 +299,7 @@ pub fn refused_tool(tool: &str) -> String {
 /// The command line of a `run_command` call with arguments `input`.
 #[must_use]
 pub fn command_of(input: &Value) -> String {
-    crate::checks::command_line(input)
+    command_line(input)
 }
 
 /// `content` cut to its first `limit` lines, with a note naming what was

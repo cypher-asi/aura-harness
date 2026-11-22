@@ -1,5 +1,5 @@
 //! What a turn Gate routed does when it ends with no check of its own
-//! (see [`aura_agent_gate::followup`]), shared by the terminal's turns,
+//! (see [`aura_gate::followup`]), shared by the terminal's turns,
 //! `/compare` runs and `aura -p`.
 //!
 //! Each of them asks [`FollowUp::next`] once an attempt ends and carries
@@ -30,20 +30,20 @@ use super::task_check::{run_script_within, CheckRun};
 use super::tasks::TASKS_DIR;
 use crate::isolation::changes;
 use aura_agent::AgentLoopResult;
-use aura_agent_gate::attempt_log::{CopyAt, Review, Tier, Tiers};
-use aura_agent_gate::checks::{checks_seen, command_line, last_check_seen, CheckSeen};
-use aura_agent_gate::coverage;
-use aura_agent_gate::criteria::{checked, Checked, Criteria, Status};
-use aura_agent_gate::evidence::{flags, is_test_path, Flag};
-use aura_agent_gate::followup::{self, Allowed, Ended, Step, Suspicion, Taken, Why, NUDGE_PROMPT};
-use aura_agent_gate::own_check;
-use aura_agent_gate::router::verifiable;
-use aura_agent_gate::turn_judge::{self, Answer, ReviewVariant, Standing, Unverified, Verdict};
-use aura_agent_gate::Candidate;
 use aura_config::ReviewMode;
 use aura_core_types::{
     CompareCopy, Difficulty, OutcomePayload, OutcomeSignal, PromptCategory, RouteLevel,
 };
+use aura_gate::attempts::{CopyAt, Review, Tier, Tiers};
+use aura_gate::evidence::checks::{checks_seen, command_line, last_check_seen, CheckSeen};
+use aura_gate::evidence::coverage;
+use aura_gate::evidence::own_check;
+use aura_gate::evidence::verifiable;
+use aura_gate::evidence::{flags, is_test_path, Flag};
+use aura_gate::followup::{self, Allowed, Ended, Step, Suspicion, Taken, Why, NUDGE_PROMPT};
+use aura_gate::judge::criteria::{checked, Checked, Criteria, Status};
+use aura_gate::judge::turn::{self, Answer, ReviewVariant, Standing, Unverified, Verdict};
+use aura_gate::route::Candidate;
 use aura_model::{ContentBlock, Message, Role, ThinkingEffort};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -371,7 +371,7 @@ impl FollowUp {
     ) -> Self {
         let judge = gate_record::verdict_judge_for(candidates, ran.0);
         let stronger =
-            aura_agent_gate::has_stronger_model(&live.stats(), RouteLevel::Turn, ran, candidates);
+            aura_gate::route::has_stronger_model(&live.stats(), RouteLevel::Turn, ran, candidates);
         if !stronger {
             return Self {
                 allowed: Allowed {
@@ -510,7 +510,7 @@ impl FollowUp {
         &self,
         result: &AgentLoopResult,
         turn_start: usize,
-    ) -> aura_agent_gate::evidence::Evidence {
+    ) -> aura_gate::evidence::Evidence {
         gate_log::evidence_of(result, turn_start, self.changed_paths(result))
     }
 
@@ -628,7 +628,7 @@ impl FollowUp {
             why: &why,
             criteria,
         };
-        let request = turn_judge::review_request(judge, &standing, LIVE_REVIEW, auth_token);
+        let request = turn::review_request(judge, &standing, LIVE_REVIEW, auth_token);
         let (answer, findings, cost_usd) =
             gate_record::ask_review(&session.kernel, judge, request).await?;
         info!(%judge, model = %ended.model, ?answer, cost_usd, act = shown.act, "The judge reviewed work about to stand");
@@ -997,7 +997,7 @@ pub(crate) fn joined(first: Option<String>, second: Option<String>) -> Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_agent_gate::criteria::{Criterion, Kind};
+    use aura_gate::judge::criteria::{Criterion, Kind};
     use serde_json::json;
 
     #[test]
@@ -1071,7 +1071,7 @@ mod tests {
 
     #[test]
     fn work_with_no_stronger_model_to_go_to_gets_only_the_judge() {
-        use aura_agent_gate::Candidate;
+        use aura_gate::route::Candidate;
         use aura_model::model_catalog::{ModelBackend, ModelTier};
         const SONNET: &str = "claude/claude-sonnet-4-6";
         const OPUS: &str = "claude/claude-opus-4-7";
@@ -1115,8 +1115,8 @@ mod tests {
 
     #[test]
     fn work_is_judged_and_reviewed_on_its_own_model_from_the_standard_tier_up() {
-        use aura_agent_gate::Candidate;
         use aura_core_types::{Hash, OutcomePayload};
+        use aura_gate::route::Candidate;
         use aura_model::model_catalog::{ModelBackend, ModelTier};
         const HAIKU: &str = "claude/claude-haiku-5-5";
         const SONNET: &str = "claude/claude-sonnet-5-5";
@@ -1171,7 +1171,7 @@ mod tests {
 
     #[test]
     fn a_review_that_is_only_logged_is_asked_on_a_sample_of_attempts() {
-        use aura_agent_gate::Candidate;
+        use aura_gate::route::Candidate;
         use aura_model::model_catalog::{ModelBackend, ModelTier};
         const SONNET: &str = "claude/claude-sonnet-5-5";
         const OPUS: &str = "claude/claude-opus-5-5";
@@ -1195,7 +1195,7 @@ mod tests {
                 review_sample,
                 ..aura_config::GateConfig::defaults()
             };
-            GateLive::with_rng(settings, aura_agent_gate::SplitMix64::seeded(7))
+            GateLive::with_rng(settings, aura_gate::route::SplitMix64::seeded(7))
         };
         let allowed = |live: &GateLive| {
             let allowed =
@@ -1222,7 +1222,7 @@ mod tests {
         let names = ["prepare_multipart".to_string(), "Part".to_string()];
         let told = nudge_message(&names);
         assert!(told.contains("`prepare_multipart`, `Part`"), "{told}");
-        assert!(followup::is_nudge(&told));
+        assert!(aura_gate::evidence::transcript::said::is_nudge(&told));
         let notice = nudge_notice("claude/claude-haiku-5-5", &names);
         assert!(
             notice.contains("none names `prepare_multipart` or 1 other"),

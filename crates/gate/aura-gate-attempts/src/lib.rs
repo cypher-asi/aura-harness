@@ -1,3 +1,5 @@
+//! Layer: gate
+//!
 //! Gate's attempt log: a local file of what each attempt at a prompt
 //! left behind and of what later proved it right or wrong, kept so Gate's
 //! verdicts, and any new way of reaching one, can be scored against what
@@ -16,7 +18,7 @@
 //!   rewinding it, sending it again to a stronger model, or picking
 //!   between runs
 //! - `review` ([`Review`]): what Gate's judge made of an attempt that was
-//!   about to stand (see [`crate::followup`]), asked as the attempt ended
+//!   about to stand (see `aura-gate-followup`), asked as the attempt ended
 //!   or later by `aura gate replay`
 //!
 //! A truth or a review belongs to the attempt with the same `agent` and
@@ -38,12 +40,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
 use aura_core_types::{Difficulty, OutcomePayload, OutcomeSignal, PromptCategory};
+use aura_gate_evidence::{flags, Evidence, Flag};
+use aura_gate_judge::criteria::Checked;
+use aura_gate_judge::turn::Answer;
 use aura_model::model_catalog::{infer_tier, ModelTier};
 use serde::{Deserialize, Serialize};
-
-use crate::criteria::Checked;
-use crate::evidence::{flags, Evidence, Flag};
-use crate::turn_judge::Answer;
 
 /// The log's path under the data directory.
 pub const FILE: &str = "gate/attempts.jsonl";
@@ -1181,7 +1182,7 @@ impl Report {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::evidence::CheckEvidence;
+    use aura_gate_evidence::CheckEvidence;
 
     fn evidence(command: &str, output: &str, reply: &str) -> Evidence {
         Evidence {

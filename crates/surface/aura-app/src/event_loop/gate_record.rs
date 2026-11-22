@@ -3,20 +3,22 @@
 //! judge it again — the judge's finding on a turn that failed, a rewind,
 //! the same prompt sent again on a stronger model. Each later signal
 //! appends another `Outcome` for the same prompt;
-//! [`aura_agent_gate::outcome::effective`] says which one counts.
+//! [`aura_gate::evidence::outcome::effective`] says which one counts.
 
 use super::agents::AgentSession;
 use super::gate_live::GateLive;
-use aura_agent_gate::criteria::{self, Criteria};
-use aura_agent_gate::router::verifiable;
-use aura_agent_gate::turn_judge::{self, Answer, Failed, Unverified, Verdict};
-use aura_agent_gate::{classify, outcome::is_retry_stronger, Candidate};
 use aura_agent_kernel::Kernel;
 use aura_config::ReviewMode;
 use aura_core_types::{
     AgentId, Difficulty, Hash, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload,
     Transaction, TransactionType,
 };
+use aura_gate::evidence::outcome::is_retry_stronger;
+use aura_gate::evidence::verifiable;
+use aura_gate::judge::classify;
+use aura_gate::judge::criteria::{self, Criteria};
+use aura_gate::judge::turn::{self, Answer, Failed, Unverified, Verdict};
+use aura_gate::route::Candidate;
 use aura_model::model_catalog::{infer_tier, ModelTier};
 use aura_store_db::ReadStore;
 use std::sync::Arc;
@@ -89,7 +91,7 @@ impl Judged {
 
 /// The model that judges `ended`, the outcome of work Gate routed among
 /// `candidates`: the strongest Opus among them (see
-/// [`aura_agent_gate::compare::default_against`]). `None` when the work
+/// [`aura_gate::compare::default_against`]). `None` when the work
 /// did not fail, the judge is switched off, or the work ran on a model
 /// as strong as the judge.
 pub(crate) fn judge_for(
@@ -105,8 +107,8 @@ pub(crate) fn judge_for(
     {
         return None;
     }
-    let judge = aura_agent_gate::compare::default_against(candidates)?;
-    turn_judge::judges(&judge.id, &ended.model, candidates).then(|| judge.id.clone())
+    let judge = aura_gate::compare::default_against(candidates)?;
+    turn::judges(&judge.id, &ended.model, candidates).then(|| judge.id.clone())
 }
 
 /// Ask `judge` through `kernel` whether the model was at fault in
@@ -122,7 +124,7 @@ pub(crate) async fn judge_failed(
     failed: &Failed<'_>,
     auth_token: Option<String>,
 ) -> Option<(OutcomePayload, Judged)> {
-    let request = turn_judge::request(judge, failed, auth_token);
+    let request = turn::request(judge, failed, auth_token);
     let (_, judged) = ask_judge(kernel, judge, ended, request, false).await?;
     let signal = if judged.verdict.at_fault {
         OutcomeSignal::JudgedFail
@@ -140,14 +142,14 @@ pub(crate) async fn judge_failed(
 /// ends with a verdict: `model` itself when it is a standard model or
 /// stronger, so Sonnet judges Sonnet's work at Sonnet's price, and for a
 /// weaker model's work the cheapest standard model, else the strongest
-/// ([`aura_agent_gate::router::fixed_pick`]). Whether a failure was the
+/// ([`aura_gate::route::fixed_pick`]). Whether a failure was the
 /// model's fault is still [`judge_for`]'s to say. `None` only when a weak
 /// model's work has no candidates to be judged by.
 pub(crate) fn verdict_judge_for(candidates: &[Candidate], model: &str) -> Option<String> {
     if tier_of(model, candidates) >= ModelTier::Standard {
         return Some(model.to_string());
     }
-    aura_agent_gate::router::fixed_pick(candidates).map(|judge| judge.id.clone())
+    aura_gate::route::fixed_pick(candidates).map(|judge| judge.id.clone())
 }
 
 /// The model that reviews work on `model` before it stands, Gate routing
@@ -162,8 +164,8 @@ pub(crate) fn reviewer_for(
     if !live.settings().judge {
         return None;
     }
-    let strongest = aura_agent_gate::compare::default_against(candidates)?;
-    if !turn_judge::judges(&strongest.id, model, candidates) {
+    let strongest = aura_gate::compare::default_against(candidates)?;
+    if !turn::judges(&strongest.id, model, candidates) {
         return None;
     }
     verdict_judge_for(candidates, model)
@@ -190,7 +192,7 @@ pub(crate) async fn judge_unverified(
     unverified: &Unverified<'_>,
     auth_token: Option<String>,
 ) -> Option<(OutcomeSignal, Judged)> {
-    let request = turn_judge::unverified_request(judge, unverified, auth_token);
+    let request = turn::unverified_request(judge, unverified, auth_token);
     let (answer, judged) = ask_judge(kernel, judge, ended, request, true).await?;
     let signal = answer.verdict();
     info!(%judge, model = %ended.model, %signal, cost_usd = judged.cost_usd, "The judge gave its verdict on unchecked work");
@@ -222,7 +224,7 @@ async fn ask_judge(
 }
 
 /// Send `request`, a review of work about to stand
-/// ([`turn_judge::review_request`]), to `judge` through `kernel`. Returns
+/// ([`turn::review_request`]), to `judge` through `kernel`. Returns
 /// its answer, what it found and the list-price cost of the call; `None`
 /// when the request could not be built, the call failed or timed out, or
 /// the reply held no verdict. Nothing is recorded.
@@ -258,7 +260,7 @@ async fn ask(
             return None;
         }
     };
-    let Some((answer, reasons)) = turn_judge::parse_answer(&response.message.text_content()) else {
+    let Some((answer, reasons)) = turn::parse_answer(&response.message.text_content()) else {
         warn!(%judge, "The judge gave no verdict");
         return None;
     };
@@ -328,7 +330,7 @@ pub(crate) fn criteria_writer_for(
     if settings.criteria == ReviewMode::Off || !settings.judge || !verifiable(category) {
         return None;
     }
-    aura_agent_gate::compare::default_against(candidates)?;
+    aura_gate::compare::default_against(candidates)?;
     criteria::writer(candidates).map(|writer| writer.id.clone())
 }
 

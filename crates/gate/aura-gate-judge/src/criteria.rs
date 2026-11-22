@@ -7,15 +7,16 @@
 //! a reference implementation to match, the error a bad input raises) can
 //! go unchecked while every test passes. One call reads the whole request
 //! and lists those demands; the review of work about to stand
-//! ([`crate::followup`], [`crate::turn_judge::review_prompt`]) goes
-//! through them one at a time, and finds out which are met, which are not
-//! and which nothing the attempt ran shows. The worker cannot change the
+//! ([`aura_gate_followup`], [`crate::turn::review_prompt`]) goes through
+//! them one at a time, and finds out which are met, which are not and
+//! which nothing the attempt ran shows. The worker cannot change the
 //! list: it is kept by the harness, not in the workspace.
 //!
 //! This module builds the request and reads the reply; the caller sends
 //! the request through its agent's kernel, so the call is recorded like
 //! any other model call.
 
+use aura_gate_route::{fixed_pick, Candidate};
 use aura_model::model_catalog::{takes_forced_tool_choice, LOCAL_PREFIX};
 use aura_model::{
     ContentBlock, Message, ModelCallPurpose, ModelRequest, ModelRequestKind, ModelResponse,
@@ -25,7 +26,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::classify::prepare_within;
-use crate::router::{fixed_pick, Candidate};
 
 /// The tool the writer answers with.
 pub const CRITERIA_TOOL: &str = "criteria";

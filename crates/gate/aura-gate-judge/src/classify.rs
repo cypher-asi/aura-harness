@@ -15,14 +15,13 @@
 //! could not classify.
 
 use aura_core_types::{Difficulty, PromptCategory};
+use aura_gate_route::Candidate;
 use aura_model::model_catalog::{ModelTier, LOCAL_PREFIX};
 use aura_model::{
     ContentBlock, Message, ModelCallPurpose, ModelRequest, ModelRequestKind, ModelResponse,
     ReasonerError, ThinkingEffort, ToolChoice, ToolDefinition,
 };
 use serde_json::json;
-
-use crate::router::Candidate;
 
 /// Characters kept from the start of a long prompt: it says what the
 /// prompt asks for, and what makes the work hard (an exact output format,
@@ -104,7 +103,8 @@ pub struct Label {
 
 /// The model that classifies prompts: the cheapest fast-tier candidate.
 /// `None` when there is none; then the caller uses its local default.
-/// `candidates` must be ordered as [`crate::candidates`] returns them.
+/// `candidates` must be ordered as [`aura_gate_route::candidates`]
+/// returns them.
 #[must_use]
 pub fn classifier(candidates: &[Candidate]) -> Option<&Candidate> {
     candidates.iter().find(|c| c.tier == ModelTier::Fast)
@@ -397,8 +397,8 @@ pub fn parse_difficulty(reply: &str) -> Option<Difficulty> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::router::candidates;
     use aura_core_auth::ProviderKind;
+    use aura_gate_route::candidates;
     use aura_model::model_catalog::catalog;
     use aura_model::Role;
 

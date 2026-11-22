@@ -1,7 +1,9 @@
+//! Layer: gate
+//!
 //! `/compare` and the BENCH tab: running the same work on two arms, each
 //! Gate or a pinned model, side by side, and reading the result.
 //!
-//! This module holds the parts that need no I/O: reading the command's
+//! This crate holds the parts that need no I/O: reading the command's
 //! arguments, choosing what each arm runs on, the cost estimate shown
 //! before anything runs, the order runs start in and when the budget
 //! stops them, the tokens and cost per model of a run, the share of each
@@ -15,12 +17,11 @@ use aura_core_types::{
     ArmSpec, CompareArm, ComparePayload, ModelTokens, OutcomeSignal, Plan, PlanShare, PlanUsage,
     RefVerdict,
 };
+use aura_gate_route::Candidate;
 use aura_model::model_catalog::{
     backend_for, billed_tokens, estimate_cost_usd, model_key, ModelBackend, ModelTier,
 };
 use aura_model::Usage;
-
-use crate::router::Candidate;
 
 /// Runs per arm when the command names no number.
 pub const DEFAULT_REPEATS: u32 = 3;
@@ -980,11 +981,11 @@ pub const fn too_close(a: usize, b: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::router::candidates;
     use aura_core_auth::ProviderKind;
     use aura_core_types::{
         AgentId, CompareCopy, CompareJudgment, CompareRun, CompareStatus, RunTurn, SystemKind,
     };
+    use aura_gate_route::candidates;
     use aura_model::model_catalog::catalog;
     use std::path::PathBuf;
 

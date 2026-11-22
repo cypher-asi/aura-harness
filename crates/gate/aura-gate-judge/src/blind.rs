@@ -12,12 +12,11 @@
 //! the call is recorded like any other model call.
 
 use aura_core_types::{CompareArm, RefVerdict};
+use aura_gate_route::{Random, SplitMix64};
 use aura_model::{
     Message, ModelCallPurpose, ModelRequest, ModelRequestKind, ModelResponse, ReasonerError,
     ThinkingEffort, ToolChoice,
 };
-
-use crate::router::{Random, SplitMix64};
 
 /// Longest diff the judge sees per attempt, in characters.
 pub const MAX_DIFF: usize = 12_000;

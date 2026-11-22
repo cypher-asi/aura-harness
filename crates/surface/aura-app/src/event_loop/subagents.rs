@@ -56,9 +56,6 @@ use crate::project_instructions::ProjectInstructions;
 use crate::record_loader::agent_summaries;
 use async_trait::async_trait;
 use aura_agent::{AgentLoop, AgentLoopConfig};
-use aura_agent_gate::compare::{tally, PlanReading};
-use aura_agent_gate::turn_judge::{Failed, Unverified, Verdict};
-use aura_agent_gate::{followup, Candidate, Decision};
 use aura_agent_kernel::Kernel;
 use aura_agent_trace::{RunMeta, RunRecorder, RunSource};
 use aura_context_skills::SkillManager;
@@ -71,6 +68,10 @@ use aura_exec_tools::agents::task::TASK_TOOL_NAME;
 use aura_exec_tools::jobs::{JOB_KILL_TOOL_NAME, JOB_OUTPUT_TOOL_NAME};
 use aura_exec_tools::todo::{task_report_line, TODO_WRITE_TOOL_NAME};
 use aura_exec_tools::SubagentDispatchHook;
+use aura_gate::compare::{tally, PlanReading};
+use aura_gate::followup;
+use aura_gate::judge::turn::{Failed, Unverified, Verdict};
+use aura_gate::route::{Candidate, Decision};
 use aura_model::{Message, ThinkingEffort, ToolDefinition};
 use aura_ui_terminal::events::{
     AgentDefinitionSummary, AgentSummary, ProcessKind, ProcessStatus, ProcessSummary,
@@ -233,7 +234,7 @@ pub(crate) struct LeadProfile {
 
 impl LeadProfile {
     /// Make the turn set up with `config` and `tools` a lead's when it is
-    /// `led` (as Gate decides, [`aura_agent_gate::choose_way`]): the
+    /// `led` (as Gate decides, [`aura_gate::lead::choose_way`]): the
     /// prompt says how to lead and, with delegation enforced, the lead's
     /// tools replace the file tools. Any other turn is left as it is, for
     /// the model Gate routes it to to do the work itself. Returns whether
@@ -547,7 +548,7 @@ impl AgentHub {
 
     /// Whether the agent `agent_id`, an instance of the permanent agent
     /// `definition` if any, leads under Gate the turns that call for a
-    /// lead ([`aura_agent_gate::choose_way`]): `Some(true)` with
+    /// lead ([`aura_gate::lead::choose_way`]): `Some(true)` with
     /// delegation enforced, `Some(false)` with it only recommended
     /// (`AURA_GATE_DELEGATE=off`, or the `gate:nodelegate` arm of
     /// `/compare`), `None` when it never leads. Only the user's own
@@ -910,7 +911,7 @@ impl AgentHub {
         for earlier in &mut work.subtasks {
             if earlier.redone
                 || earlier.kind != attempt.kind
-                || !aura_agent_gate::outcome::is_repeat(&earlier.prompt, &attempt.prompt)
+                || !aura_gate::evidence::outcome::is_repeat(&earlier.prompt, &attempt.prompt)
             {
                 continue;
             }
@@ -1555,7 +1556,7 @@ impl AgentHub {
                 return;
             }
             if let Some((model, usage)) = crate::record_loader::model_call(&entry.tx) {
-                cost_usd += aura_agent_gate::compare::list_price(&model, &usage).unwrap_or(0.0);
+                cost_usd += aura_gate::compare::list_price(&model, &usage).unwrap_or(0.0);
             }
         });
         cost_usd
@@ -2036,11 +2037,10 @@ impl Drop for WriteSlot<'_> {
 /// none of them changes files. They run side by side; the others run one
 /// at a time per workspace.
 fn reads_only(definition: &AgentDefinition) -> bool {
-    definition.tools.as_ref().is_some_and(|tools| {
-        tools
-            .iter()
-            .all(|tool| aura_agent_gate::lead::keeps_tool(tool))
-    })
+    definition
+        .tools
+        .as_ref()
+        .is_some_and(|tools| tools.iter().all(|tool| aura_gate::lead::keeps_tool(tool)))
 }
 
 /// What a subtask is told `left` before its time is up.

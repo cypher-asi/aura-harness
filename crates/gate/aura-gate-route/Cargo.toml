@@ -1,0 +1,17 @@
+[package]
+name = "aura-gate-route"
+description = "Gate: the candidates the user's sign-ins allow, the model each turn and subtask goes to, and what Gate has learned"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aura-config = { path = "../../config/aura-config" }
+aura-core-auth = { path = "../../core/aura-core-auth" }
+aura-core-types = { path = "../../core/aura-core-types" }
+aura-gate-evidence = { path = "../aura-gate-evidence" }
+aura-model = { path = "../../model/aura-model" }
+
+[lints]
+workspace = true

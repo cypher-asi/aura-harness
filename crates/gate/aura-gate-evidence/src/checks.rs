@@ -475,7 +475,8 @@ fn runs_after_check(command: &str) -> bool {
 /// assignments and wrappers (`env`, `time`, `timeout 600`, `npx`, ...)
 /// are skipped. A shell handed a check is not one: the script it runs
 /// may do anything.
-pub(crate) fn is_check_part(words: Vec<&str>) -> bool {
+#[must_use]
+pub fn is_check_part(words: Vec<&str>) -> bool {
     is_check_words(words, false)
 }
 

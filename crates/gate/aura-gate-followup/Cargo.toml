@@ -1,0 +1,15 @@
+[package]
+name = "aura-gate-followup"
+description = "Gate: what it does about a routed turn that ran no check: nudge, check, review or judge it"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aura-config = { path = "../../config/aura-config" }
+aura-core-types = { path = "../../core/aura-core-types" }
+aura-gate-evidence = { path = "../aura-gate-evidence" }
+
+[lints]
+workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "aura-gate-compare"
+description = "Gate: /compare's arguments, schedule, estimate and the per-arm summary it shows"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aura-core-types = { path = "../../core/aura-core-types" }
+aura-gate-route = { path = "../aura-gate-route" }
+aura-model = { path = "../../model/aura-model" }
+
+[dev-dependencies]
+aura-core-auth = { path = "../../core/aura-core-auth" }
+
+[lints]
+workspace = true

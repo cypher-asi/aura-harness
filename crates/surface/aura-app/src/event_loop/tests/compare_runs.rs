@@ -804,7 +804,7 @@ async fn gate_arms_explore_only_in_learn_mode() {
                 explore_rate: 1.0,
                 ..aura_config::GateConfig::defaults()
             },
-            aura_agent_gate::SplitMix64::seeded(3),
+            aura_gate::route::SplitMix64::seeded(3),
         );
         let (fixture, mut commands) = fixture_with_gate(gate);
         let mut b = borrowed(&fixture);

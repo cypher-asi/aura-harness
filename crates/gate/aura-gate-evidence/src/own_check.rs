@@ -9,7 +9,7 @@
 //! ([`crate::checks`]) and does not say whether the work is right. It is
 //! what Gate's nudge asks for when no test covers a change, though, so
 //! work that ran one after its last change, and saw it succeed, is not
-//! nudged ([`crate::followup`]). One run that succeeds is enough: a model
+//! nudged (`aura-gate-followup`). One run that succeeds is enough: a model
 //! that tries its change also tries the inputs it should refuse.
 
 use aura_model::{ContentBlock, Message};

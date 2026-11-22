@@ -4,13 +4,13 @@
 //! The turn's tool list drops the file-changing tools ([`lead_tools`]),
 //! and every call goes through [`LeadExecutor`], which refuses those
 //! tools and the commands the lead may not run, and caps what reads and
-//! searches return (see [`aura_agent_gate::lead`]). A refused call is
+//! searches return (see [`aura_gate::lead`]). A refused call is
 //! still recorded, with the refusal as its result, so the record shows
 //! what the lead tried. Subagents get neither.
 
 use async_trait::async_trait;
 use aura_agent::{AgentToolExecutor, AutoBuildResult, BuildBaseline, ToolCallInfo, ToolCallResult};
-use aura_agent_gate::lead;
+use aura_gate::lead;
 use aura_model::ToolDefinition;
 use std::future::Future;
 use std::pin::Pin;

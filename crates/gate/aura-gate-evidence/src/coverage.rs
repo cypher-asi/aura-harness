@@ -5,7 +5,7 @@
 //! which name it, has a passing check that says nothing about the new
 //! function. [`added_names`] reads what a change adds from its diff; the
 //! harness looks for those names in the workspace's tests, and work whose
-//! additions no test names counts as unchecked (see [`crate::followup`]).
+//! additions no test names counts as unchecked (see `aura-gate-followup`).
 
 use crate::evidence::is_test_path;
 

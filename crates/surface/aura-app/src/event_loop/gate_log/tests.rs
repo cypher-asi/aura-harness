@@ -1,11 +1,11 @@
 use super::*;
-use aura_agent_gate::attempt_log::evaluate;
-use aura_agent_gate::evidence::{flags, Flag};
 use aura_agent_kernel::RecordObserver;
 use aura_core_types::{
     BenchSource, CompareArm, CompareCopy, CompareStatus, Difficulty, OutcomeSignal, PromptCategory,
     PromptPayload, Route, RouteReason, SystemKind, Transaction,
 };
+use aura_gate::attempts::evaluate;
+use aura_gate::evidence::{flags, Flag};
 use aura_model::ToolResultContent;
 use aura_store_db::{RocksStore, WriteStore};
 use serde_json::json;

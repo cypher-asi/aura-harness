@@ -5,12 +5,12 @@ use super::agent_events::AgentUi;
 use super::compare;
 use super::subagents::lock;
 use super::LoopState;
-use aura_agent_gate::compare::{
-    judge_cost_usd, summarize, task_cells, turn_cells, CompareRequest, SessionPick,
-};
 use aura_core_types::{
     AgentId, BenchSource, CompareArm, ComparePayload, CompareRun, CompareStatus, ModelTokens,
     RefVerdict, RunTurn,
+};
+use aura_gate::compare::{
+    judge_cost_usd, summarize, task_cells, turn_cells, CompareRequest, SessionPick,
 };
 use aura_ui_terminal::events::{
     run_order, BenchArm, BenchBaseline, BenchExample, BenchJudge, BenchRequest, BenchRun,

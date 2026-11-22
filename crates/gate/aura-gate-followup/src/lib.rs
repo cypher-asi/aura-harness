@@ -1,3 +1,5 @@
+//! Layer: gate
+//!
 //! What Gate does about a turn it routed that ended with nothing to judge
 //! it by: no test or build of its own, and no error; or with a check
 //! that passed while its own reply says the work was not verified.
@@ -8,8 +10,8 @@
 //! 1. [`Step::Nudge`]: code work that changed files is asked once, on the
 //!    same model, to run the tests that cover its change. Its own check
 //!    then says how it went. Work that already ran the changed code
-//!    itself ([`crate::own_check`]), as the nudge asks where no test
-//!    covers it, is not asked.
+//!    itself ([`aura_gate_evidence::own_check`]), as the nudge asks where
+//!    no test covers it, is not asked.
 //! 2. [`Step::HarnessCheck`]: when it still ran none, the harness runs
 //!    the project's tests itself.
 //! 3. [`Step::JudgeUnverified`]: when nothing could be run, the judge
@@ -18,14 +20,14 @@
 //!    pointed out to it.
 //!
 //! A turn whose check passed while no test in the workspace names
-//! anything its change added ([`crate::coverage`]) checked none of it,
-//! and takes the steps above as a turn with no check does: its nudge
-//! names what no test calls ([`uncovered_prompt`]), and the judge is told
-//! why it looks.
+//! anything its change added ([`aura_gate_evidence::coverage`]) checked
+//! none of it, and takes the steps above as a turn with no check does:
+//! its nudge names what no test calls ([`uncovered_prompt`]), and the
+//! judge is told why it looks.
 //!
 //! A turn whose check passed is not thereby right: the check may cover
 //! little of what was asked. On the benchmark runs in Gate's attempt log
-//! ([`crate::attempt_log`]), a fifth of the hard attempts by models below
+//! (`aura-gate-attempts`), a fifth of the hard attempts by models below
 //! the strongest tier that Gate let stand had failed the task's own
 //! check, most of them after a check of their own had passed. So before
 //! such work stands it may be reviewed:
@@ -33,7 +35,7 @@
 //! 4. [`Step::Review`]: the judge goes through the request against
 //!    everything the attempt changed. It is asked when the work was
 //!    classified hard, when its evidence raises a sign the attempt log
-//!    backs ([`crate::attempt_log::tiers`]), or when it looks wrong as in
+//!    backs (`aura_gate_attempts::tiers`), or when it looks wrong as in
 //!    step 3 or its reply says the work was not verified
 //!    ([`says_unverified`]). Work it finds unfinished goes back to the
 //!    same model once with the findings ([`repair_prompt`]) and is
@@ -50,10 +52,11 @@
 //! whose verdict is only logged, of passed work the judge would not see.
 //!
 //! Code work whose acceptance criteria were written down before it
-//! started ([`crate::criteria`]) is also reviewed against them, as its
-//! own [`ReviewMode`] says: with `on`, every such attempt is reviewed as
-//! above and its review stands in for the judge's; with `log`, work about
-//! to stand gets a logged review against them if it gets no other review.
+//! started (`aura_gate_judge::criteria`) is also reviewed against them,
+//! as its own [`ReviewMode`] says: with `on`, every such attempt is
+//! reviewed as above and its review stands in for the judge's; with
+//! `log`, work about to stand gets a logged review against them if it
+//! gets no other review.
 //!
 //! A failure any of them turns up goes on to a stronger model as a failed
 //! check or a judged failure does. Each step runs at most once per
@@ -63,15 +66,16 @@
 
 use aura_config::ReviewMode;
 use aura_core_types::{Difficulty, OutcomeSignal, PromptCategory};
-
-use crate::evidence::Flag;
-use crate::router::verifiable;
+use aura_gate_evidence::transcript::reply::{gave_up, says_unverified};
+use aura_gate_evidence::transcript::said::UNCOVERED_OPENING;
+use aura_gate_evidence::{verifiable, Flag};
 
 /// How a turn that Gate routed ended, as the steps need it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ended<'a> {
-    /// Its signal so far (see [`crate::outcome::turn_signal`]); `None`
-    /// while nothing has said how it went.
+    /// Its signal so far (see
+    /// [`aura_gate_evidence::outcome::turn_signal`]); `None` while
+    /// nothing has said how it went.
     pub signal: Option<OutcomeSignal>,
     pub category: PromptCategory,
     /// Files its tools changed.
@@ -84,17 +88,17 @@ pub struct Ended<'a> {
     /// How hard the classifier judged the work.
     pub difficulty: Option<Difficulty>,
     /// The signs its evidence raises that have earned a review of the
-    /// attempts they are raised on ([`crate::attempt_log::Tier::Review`]).
+    /// attempts they are raised on (`aura_gate_attempts::Tier::Review`).
     pub review_signs: &'a [Flag],
     /// The signs its evidence raises that act on their own
-    /// ([`crate::attempt_log::Tier::Act`]).
+    /// (`aura_gate_attempts::Tier::Act`).
     pub acting_signs: &'a [Flag],
     /// What its change added that no test in the workspace names, when
     /// its check passed; empty when a test names any of it, or when it
     /// is not known.
     pub uncovered: &'a [String],
     /// Whether it ran the code it changed itself after its last change,
-    /// and that run succeeded ([`crate::own_check`]).
+    /// and that run succeeded ([`aura_gate_evidence::own_check`]).
     pub ran_own_check: bool,
     /// Whether its acceptance criteria were written down before it
     /// started.
@@ -242,134 +246,6 @@ pub enum Step {
     Review { why: Vec<Why>, act: bool },
     /// Send the work back to the same model, told these signs.
     Repair(Vec<Flag>),
-}
-
-/// Phrases of a reply that gives up, lowercase.
-const GAVE_UP: &[&str] = &[
-    "i was unable to",
-    "i wasn't able to",
-    "i was not able to",
-    "i'm unable to",
-    "i am unable to",
-    "i'm not able to",
-    "i am not able to",
-    "i couldn't",
-    "i could not",
-    "i didn't manage",
-    "i did not manage",
-    "i gave up",
-    "unable to complete",
-    "could not complete",
-    "couldn't complete",
-    "left as a todo",
-    "not yet implemented",
-];
-
-/// Whether `reply` says the work could not be done.
-#[must_use]
-pub fn gave_up(reply: &str) -> bool {
-    says_any(reply, GAVE_UP)
-}
-
-/// Words that mark a sentence of a reply as about linting or formatting,
-/// lowercase.
-const LINTING: &[&str] = &[
-    "lint",
-    "pyflakes",
-    "pycodestyle",
-    "flake8",
-    "ruff",
-    "rustfmt",
-    "clippy",
-    "isort",
-    "formatter",
-    "format check",
-    "style check",
-];
-
-/// Words that mark a sentence of a reply as about the work's tests or
-/// build too, lowercase.
-const TESTING: &[&str] = &["test", "build", "compile", "type check", "typecheck"];
-
-/// Whether a sentence of `reply`, lowercase, holds one of `phrases`. A
-/// sentence about linting or formatting alone does not count: that such
-/// a step could not run says nothing of whether the work does what was
-/// asked (`I couldn't run a lint check because pyflakes isn't installed`
-/// after the tests passed).
-fn says_any(reply: &str, phrases: &[&str]) -> bool {
-    let reply = reply.to_lowercase().replace('’', "'");
-    reply
-        .split(['\n', '!', '?', ';'])
-        .flat_map(|line| line.split(". "))
-        .filter(|sentence| {
-            !LINTING.iter().any(|word| sentence.contains(word))
-                || TESTING.iter().any(|word| sentence.contains(word))
-        })
-        .any(|sentence| phrases.iter().any(|phrase| sentence.contains(phrase)))
-}
-
-/// Phrases of a reply that says the work was not verified, lowercase.
-const UNVERIFIED: &[&str] = &[
-    "isn't verified",
-    "is not verified",
-    "not verified",
-    "unverified",
-    "couldn't verify",
-    "could not verify",
-    "didn't verify",
-    "did not verify",
-    "wasn't able to run",
-    "was not able to run",
-    "unable to run",
-    "couldn't run",
-    "could not run",
-    "haven't run",
-    "have not run",
-    "not been tested",
-    "haven't tested",
-    "have not tested",
-    "didn't test",
-    "did not test",
-    "untested",
-    "cut short",
-    "can't say whether",
-    "cannot say whether",
-    "can't confirm",
-    "cannot confirm",
-    "couldn't confirm",
-    "could not confirm",
-    "still unchecked",
-    "is unchecked",
-    "are unchecked",
-    "remains unchecked",
-    "remain unchecked",
-    "left unchecked",
-    "haven't checked",
-    "have not checked",
-    "not checked against",
-    "did not compare",
-    "didn't compare",
-    "do not compare against",
-    "don't compare against",
-    "does not compare against",
-    "doesn't compare against",
-    "not compared",
-    "not pinned down",
-    "open question",
-    "did not run it",
-    "didn't run it",
-    "did not run them",
-    "didn't run them",
-    "did not run the",
-    "didn't run the",
-    "did not run any",
-    "didn't run any",
-];
-
-/// Whether `reply` says the work, or part of it, was not verified.
-#[must_use]
-pub fn says_unverified(reply: &str) -> bool {
-    says_any(reply, UNVERIFIED)
 }
 
 /// Why `ended`, a turn with no check, looks wrong; empty when nothing
@@ -582,10 +458,6 @@ pub fn sign_repair_prompt(signs: &[Flag]) -> String {
     )
 }
 
-/// How [`NUDGE_PROMPT`] starts, which every version of it has.
-const NUDGE_OPENING: &str =
-    "You changed files but did not run any test or build to check the change.";
-
 /// What the model is told when it ended a turn having changed files
 /// without running a test or build. A project with no tests is checked
 /// by running the changed code: test files there are a change nobody
@@ -598,10 +470,6 @@ run the build or type check, or run the changed code on a few cases from the req
 script; if the project has no tests, do not add test files the request did not ask for. Then \
 write your final answer in full, as the reply the user will read: what you changed and why, and \
 what you ran to check it and how it went.";
-
-/// How the message starts that asks a model to test what it added that
-/// no test names.
-pub const UNCOVERED_OPENING: &str = "The tests you ran passed, but no test names ";
 
 /// Names [`uncovered_prompt`] lists.
 const UNCOVERED_LISTED: usize = 8;
@@ -628,16 +496,10 @@ pub fn uncovered_prompt(names: &[String]) -> String {
     )
 }
 
-/// Whether `text`, a message to the model, is one of Gate's asking it to
-/// check its change, in this version's words or an earlier one's.
-#[must_use]
-pub fn is_nudge(text: &str) -> bool {
-    text.contains(NUDGE_OPENING) || text.contains(UNCOVERED_OPENING)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aura_gate_evidence::transcript::said::{is_nudge, NUDGE_OPENING};
 
     const ALL: Allowed = Allowed {
         nudge: true,
@@ -1100,11 +962,6 @@ mod tests {
             NUDGE_PROMPT.contains("if the project has no tests, do not add test files"),
             "{NUDGE_PROMPT}"
         );
-        let earlier = "[harness] You changed files but did not run any test or build to check \
-                       the change. Before you finish, run the tests that cover what you changed \
-                       (...). If no test covers it, run the build or type check. Then reply \
-                       with what you ran and how it went.";
-        assert!(is_nudge(earlier), "a record from before still reads");
     }
 
     #[test]
@@ -1273,69 +1130,6 @@ mod tests {
     }
 
     #[test]
-    fn not_verifying_is_read_from_the_reply() {
-        assert!(says_unverified(
-            "The change is in place but I couldn’t run the tests."
-        ));
-        assert!(says_unverified("It builds; the Python 2 path is UNTESTED."));
-        assert!(!says_unverified("All 286 tests passed."));
-        assert!(!says_unverified(""));
-    }
-
-    /// The end of the final reply of run a-2 of Compare #32: Claude Haiku
-    /// 5.5 on `ansible-b748edea`, whose own 14 tests passed and which
-    /// Gate let stand. The task's check then failed.
-    const A2_GAPS: &str = "**Gaps that remain:**\n\
-        - The tests do not compare against `email.mime.multipart.MIMEMultipart('form-data')` \
-        serialized with `email.policy.HTTP`, and the `multipart.txt` fixture the request \
-        mentions does not exist in the repo. So byte-identity with that output is still \
-        unchecked.\n\
-        - I quote the boundary in `Content-Type` (`boundary=\"...\"`), which I chose to match \
-        stdlib output. The tests accept both quoted and unquoted forms, so this choice is not \
-        pinned down by a test.\n\
-        - The test file uses `bytes` and `rb''` literals, so it is Python 3 only. I did not \
-        run it under Python 2.\n\nNo code changes were needed after the test run.";
-
-    #[test]
-    fn a_gap_the_reply_owns_up_to_counts_as_unverified() {
-        assert!(says_unverified(A2_GAPS));
-        for gap in A2_GAPS.lines().filter(|line| line.starts_with("- ")) {
-            assert!(says_unverified(gap), "{gap}");
-        }
-        for reply in [
-            "I did not compare the output byte-for-byte, so that comparison is an open question.",
-            "I haven't checked it against Python 2.",
-        ] {
-            assert!(says_unverified(reply), "{reply}");
-        }
-        for reply in [
-            "I did not run into any issues; all 14 tests pass.",
-            "Replaced `get_unchecked` with `get`; cargo test passes.",
-            "The old code did not check for `None`; the new test covers it and passes.",
-        ] {
-            assert!(!says_unverified(reply), "{reply}");
-        }
-    }
-
-    #[test]
-    fn a_lint_step_that_could_not_run_leaves_the_tests_standing() {
-        let reply = "All 39 unit tests pass. I couldn't run a lint check because pyflakes and \
-                     pycodestyle aren't installed in the container.\n\nThe sample data is \
-                     written by hand.";
-        assert!(!says_unverified(reply));
-        assert!(!gave_up(reply));
-        assert!(!says_unverified("Couldn't run clippy; rustfmt is clean."));
-        for reply in [
-            "I couldn't run the tests or the linter.",
-            "The linter is clean, but the new parser is untested.",
-            "Lint passes. I couldn't run the build.",
-        ] {
-            assert!(says_unverified(reply), "{reply}");
-        }
-        assert!(gave_up("Lint passes. I could not reproduce the failure."));
-    }
-
-    #[test]
     fn answers_and_writing_go_straight_to_the_judge() {
         for category in [
             PromptCategory::Question,
@@ -1363,13 +1157,5 @@ mod tests {
                 "{category:?}"
             );
         }
-    }
-
-    #[test]
-    fn giving_up_is_read_from_the_reply() {
-        assert!(gave_up("Sorry, I could not reproduce the failure."));
-        assert!(gave_up("I'M UNABLE TO run the tests here."));
-        assert!(!gave_up("Fixed the parser and added a test."));
-        assert!(!gave_up(""));
     }
 }

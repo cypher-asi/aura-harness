@@ -24,14 +24,14 @@
 //! cost: the tasks start on Sonnet 5.5, and the one whose recorded
 //! Sonnet run failed its check goes on to Opus.
 
-use aura_agent_gate::router::{candidates, current, escalate, pick, Candidate, Work};
-use aura_agent_gate::GateStats;
 use aura_config::GateConfig;
 use aura_core_auth::ProviderKind;
 use aura_core_types::{
     AgentId, Difficulty, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, RecordEntry,
     Route, RouteLevel, RouteReason, Transaction,
 };
+use aura_gate_route::stats::GateStats;
+use aura_gate_route::{candidates, current, escalate, pick, Candidate, Work};
 use aura_model::model_catalog::{infer_tier, ModelBackend, ModelOption};
 
 const HAIKU: &str = "claude/claude-haiku-5-5";

@@ -26,18 +26,18 @@ use super::tasks::{request_state, summary_of};
 use crate::long_run::LongRunSettings;
 use crate::model_selection::{routed_effort, ModelLimits};
 use aura_agent::{AgentLoop, CompactHistoryError};
-use aura_agent_gate::attempt_log::Terms;
-use aura_agent_gate::checks::{last_check, last_check_seen};
-use aura_agent_gate::criteria::Criteria;
-use aura_agent_gate::followup::Step;
-use aura_agent_gate::outcome::{calls_for_stronger, turn_signal};
-use aura_agent_gate::turn_judge::Failed;
-use aura_agent_gate::{Candidate, Decision, Work as GateWork};
 use aura_agent_trace::RunRecorder;
 use aura_core_types::{
     AgentId, Difficulty, Hash, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload,
     RecordEntry, Route, RouteLevel, RouteReason, Transaction,
 };
+use aura_gate::attempts::Terms;
+use aura_gate::evidence::checks::{last_check, last_check_seen};
+use aura_gate::evidence::outcome::{calls_for_stronger, turn_signal};
+use aura_gate::followup::Step;
+use aura_gate::judge::criteria::Criteria;
+use aura_gate::judge::turn::Failed;
+use aura_gate::route::{Candidate, Decision, Work as GateWork};
 use aura_model::{ContentBlock, ImageSource, Message, Role, ToolDefinition};
 use aura_ui_terminal::events::ImageAttachment;
 use aura_ui_terminal::UiCommand;
@@ -845,7 +845,7 @@ async fn run_attempts(
     // changes, by its commands as well as its file tools.
     let before = match gate.as_ref() {
         Some(gate)
-            if aura_agent_gate::router::verifiable(category)
+            if aura_gate::evidence::verifiable(category)
                 && may_review(
                     &gate.live,
                     &gate.candidates,

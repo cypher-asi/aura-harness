@@ -10,16 +10,16 @@ This document is organized in three parts:
 
 ## Part 0 — Layer overview
 
-Crates are grouped into twelve layers, ordered from most to least fundamental. Each layer is a folder under `crates/`, and each crate lives at `crates/<layer>/<crate>`:
+Crates are grouped into thirteen layers, ordered from most to least fundamental. Each layer is a folder under `crates/`, and each crate lives at `crates/<layer>/<crate>`:
 
 ```text
-core  <  config  <  store  <  model  <  context  <  plugin  <
-exec  <  agent  <  auth  <  engine  <  ui  <  surface
+core  <  config  <  store  <  model  <  context  <  plugin  <  exec  <
+agent  <  gate  <  auth  <  engine  <  ui  <  surface
 ```
 
 ### Naming
 
-Every crate below `surface` is named `aura-<layer>` or `aura-<layer>-<part>`. A plain `aura-<layer>` is the layer's main crate (`aura-config`, `aura-model`, `aura-plugin`, `aura-agent`, `aura-auth`, `aura-engine`, `aura-ui`); `aura-<layer>-<part>` crates are its parts. Surface crates are named after what you run: `aura-app`, `aura-cli`, `aura-node`, `aura-desktop`.
+Every crate below `surface` is named `aura-<layer>` or `aura-<layer>-<part>`. A plain `aura-<layer>` is the layer's main crate (`aura-config`, `aura-model`, `aura-plugin`, `aura-agent`, `aura-gate`, `aura-auth`, `aura-engine`, `aura-ui`); `aura-<layer>-<part>` crates are its parts. Surface crates are named after what you run: `aura-app`, `aura-cli`, `aura-node`, `aura-desktop`.
 
 ### Layers, in dependency order
 
@@ -34,7 +34,8 @@ Within a layer, crates are listed leaves first.
 | context  | Read-only context assembly: prompts, compaction, skills, memory. | `aura-context-prompts`, `aura-context-compaction`, `aura-context-skills`, `aura-context-memory` |
 | plugin   | Plugin manifests and install, the in-process API, hooks, MCP, connectors. | `aura-plugin-api`, `aura-plugin-hooks`, `aura-plugin-mcp`, `aura-plugin-connectors`, `aura-plugin` |
 | exec     | Tool seam traits, the HTTP `DomainApi`, the tool catalog and executor. | `aura-exec-traits`, `aura-exec-domain-http`, `aura-exec-tools` |
-| agent    | One agent: kernel, turn loop, steering, subagent derivation, run traces, the Gate router. | `aura-agent-gate`, `aura-agent-subagent`, `aura-agent-steering`, `aura-agent-kernel`, `aura-agent`, `aura-agent-trace` |
+| agent    | One agent: kernel, turn loop, steering, subagent derivation, run traces. | `aura-agent-subagent`, `aura-agent-steering`, `aura-agent-kernel`, `aura-agent`, `aura-agent-trace` |
+| gate     | Gate, the router behind the `gate` model id: routing, evidence, follow-ups, judges, the attempt log, `/compare` arithmetic, the lead's limits. | `aura-gate-evidence`, `aura-gate-route`, `aura-gate-followup`, `aura-gate-judge`, `aura-gate-attempts`, `aura-gate-compare`, `aura-gate-lead`, `aura-gate` |
 | auth     | Sign-in: zOS identity, linked ChatGPT and Claude plans, credential storage. | `aura-auth-kit`, `aura-auth-zos`, `aura-auth-chatgpt`, `aura-auth-claude`, `aura-auth` |
 | engine   | Many agents: scheduler, workers, agent host, automatons. | `aura-engine-automaton`, `aura-engine` |
 | ui       | Renderer-agnostic UI protocol and the ratatui terminal UI. | `aura-ui`, `aura-ui-terminal` |
@@ -70,6 +71,13 @@ Each box is a layer. Arrows point in the only allowed dependency direction: **do
    ┌─────────────────────────────▼──────────────────────────────────┐
    │  auth — zOS identity · linked ChatGPT / Claude plans · vault   │
    │  aura-auth-{kit,zos,chatgpt,claude}, aura-auth                 │
+   └─────────────────────────────┬──────────────────────────────────┘
+                                 │
+   ┌─────────────────────────────▼──────────────────────────────────┐
+   │  gate — routing · evidence · follow-ups · judges · attempt log │
+   │  · /compare arithmetic · the lead's limits                     │
+   │  aura-gate-{evidence,route,followup,judge,attempts,compare,    │
+   │  lead}, aura-gate                                              │
    └─────────────────────────────┬──────────────────────────────────┘
                                  │
    ┌─────────────────────────────▼──────────────────────────────────┐
@@ -184,13 +192,13 @@ The interactive terminal holds its own `AgentHost` ([`event_loop/host.rs`](../cr
 
 ### Gate
 
-`gate` is a model id that the surface resolves to a real model per turn and per subtask ([`aura-agent-gate`](../crates/agent/aura-agent-gate)). The crate holds the pure parts: candidates, routing, the classifier and judge requests, outcome rules, the table, the lead's limits and the `/compare` arithmetic. `aura-app` (`event_loop/` and `headless/`) runs them. Gate never calls a model itself.
+`gate` is a model id that the surface resolves to a real model per turn and per subtask ([`aura-gate`](../crates/gate/aura-gate), see [Gate layer](#gate-layer)). The gate crates hold the pure parts: candidates, routing, the classifier and judge requests, outcome rules, the table, the lead's limits and the `/compare` arithmetic. `aura-app` (`event_loop/` and `headless/`) runs them. Gate never calls a model itself.
 
 - **Candidates.** `ModelSelection::gate_candidates` filters `model_catalog::catalog_with_plans` by `AuthSummary::can_use` and the installed local models. It keeps one route per upstream model (plan before router) and leaves out models whose route refused the user's sign-in until the sign-ins change. `ModelOption::tier` (`local`, `fast`, `standard`, `frontier`) is set in the curated lists and inferred from the name for models fetched live.
 - **A turn** (`event_loop/turns.rs`, `run_prompt`): the prompt is classified by one `Auxiliary` request to the cheapest fast-tier candidate through the agent's `Kernel::reason`. `router::pick` chooses the model from `GateStats`: the cheapest proven model, or the category's start model (`router::start_tier`, moved up a tier by `router::start_index`: a fast model once `Row::can_still_reach` rules it out, a standard or stronger one only when `router::dearer_start` also finds it the dearer start; each model judged by `router::judged` on its turns of the same difficulty) when that is cheaper (candidates ordered by expected cost: the observed mean, or for an untried model its list price scaled by the observed-to-list ratio of the tried models of its tier), and the turn's `AgentLoopConfig` is pointed at it. The `UserPrompt` transaction carries a `PromptPayload` (text, category, classifier, route `{level, model, reason, explored, propensity, effort}`, and for a subtask the permanent agent's name as `kind`). When the turn ends, an `Outcome` transaction refers back to the prompt with its category, model, signal, success, cost and latency. A routed turn that failed (`error` or `checks_failed`) on a model below the judge's tier is reviewed: `gate_record::judge_failed` sends `turn_judge::request` (the request, the `AttemptFiles::diff` of the file checkpoints, the final reply and `turns::failure_text`) to the strongest Opus candidate through the agent's `Kernel::reason` and appends the verdict as a later `Outcome`, `judged_fail` or `judged_excused`. A turn whose signal then `outcome::calls_for_stronger` (the model's fault, or nothing judged it) goes on in the same conversation on `GateLive::escalate`'s model (the next tier's, or on the strongest model the same one at more effort, and that only after `judged_fail`) with `task_check::takeover_prompt`, recorded as a prompt of its own with route reason `escalate`: in `turns::run_attempts` for the terminal, in `Headless::drive` for `aura -p` and evals, and in `compare_run::run_prompt` for a `/compare` Gate arm. Before that, a routed turn that ended with signal `none` while a stronger candidate exists gets `followup::next`'s steps, carried out by `event_loop/gate_followup.rs`: a nudge (`followup::NUDGE_PROMPT`, same model, same conversation, its outcome recorded for the prompt it was working on with both parts' cost), the harness's check (`task_check::run_script_within` with `AURA_DOD_TEST_COMMAND` or `infer_default_test_command`; one that could not run gives no signal), and for work `followup::suspicions` flags, `turn_judge::unverified_request` (`MODEL`, `OK` or `OTHER`), whose `MODEL` becomes `judged_fail`. A routed turn that ended with `checks_passed` goes to the same judge when `followup::says_unverified` finds its final reply disowning the check (`Suspicion::Unverified`); the judge is shown the last check and whether `checks::exit_status_masked` holds for its command. Each attempt's outcome is also appended, with `evidence::Evidence` read from its messages, to `gate/attempts.jsonl` in the data directory (`attempt_log`, written through `GateLive::log_attempt` from `turns.rs`, `compare_run.rs` and `headless/run.rs`), as are a task check's result (`GateLive::log_truth`) and the user's rewinds, retries and picks (`GateLive::log_user_signal`, from the record observer); `gate_log::catch_up` rebuilds the attempts of recorded comparisons at startup, and `attempt_log::evaluate` scores Gate's verdicts and each `evidence::Flag` against the truths for `aura gate eval`. Work about to stand can be reviewed first (`AURA_GATE_REVIEW`): `followup::next` returns `Step::Review` for hard work and for work raising a flag whose `attempt_log::Tier` (learned by `attempt_log::tiers` from the log, held in `GateLive`) is `Review`, and `Step::Repair` for one whose tier is `Act`. `gate_followup::FollowUp::review` sends `turn_judge::review_request` with the whole change (`gate_followup::Before`: a `/compare` copy against its baseline through `changes::readable_diff_since`, else a `changes::Snapshot` of the git working tree taken when the turn started) through `Kernel::reason` and logs a `review` line. With `on`, a `MODEL` verdict sends `followup::repair_prompt` to the same model once per turn, and a second one becomes `judged_fail`. `headless/gate_replay.rs` (`aura gate replay`) asks the same request about logged attempts from their kept copies and saved sessions, through the provider directly and without opening the store. Rewinds, stronger retries, `/compare` checks and `/compare pick` append further `Outcome`s for the same prompt. On a pinned model the classifier runs beside the turn and the route reason is `pinned`.
 - **The table.** `GateLive` ([`event_loop/gate_live.rs`](../crates/surface/aura-app/src/event_loop/gate_live.rs)) rebuilds `GateStats` from the records of the registered agents in the background at startup. It is also the `RecordObserver` of every kernel `harness::build_hub` builds (terminal and `aura -p`), so each committed prompt and `Outcome` updates the table before the next decision. Rows are keyed by level (turn or subtask), category and model. Each prompt counts once, with the user's latest rating, else its latest outcome with a known result, so replayed or duplicated entries change nothing. Escalated retries are not counted.
 - **Subtasks** ([`event_loop/gate_subtask.rs`](../crates/surface/aura-app/src/event_loop/gate_subtask.rs)): the terminal's `SubagentDispatchHook` (shared by `aura -p`) classifies the `task` prompt and routes it unless the call, the permanent agent or a council seat names a model, or the user pinned the main model. The child records the prompt at level `subtask` and its own `Outcome`s. A `task` `check` runs after the child's turn as a `run_command` proposal through the child's kernel ([`event_loop/task_check.rs`](../crates/surface/aura-app/src/event_loop/task_check.rs)). A routed subtask that fails its check or errors is put back from the in-memory attempt checkpoint (`FileCheckpoints::begin_attempt`, the file tools' changes) and retried once with route reason `escalate` (`router::escalate`), unless the judge excused the failure (`AgentHub::finish_task` reviews a failed first attempt the same way as a failed turn). The first routing of a subtask goes through `router::below_lead`, which leaves out the frontier tier when the parent's turn (`GateLive::model_of`) is on a frontier model and a standard-tier candidate exists; the retry escalates among all candidates. When the attempt took its workspace's write lock itself and its caller waits for it, a git workspace is also put back from `aura_app::isolation::changes::snapshot`, taken before the attempt: a tree of its tracked and untracked non-ignored files, staged into a scratch copy of the index (`GIT_INDEX_FILE`). `Snapshot::restore` writes back changed and deleted files (`read-tree` and `checkout-index` on another scratch index) and removes created ones, skipping files ignored at the snapshot, so shell commands' changes are undone too. Instances whose tool lists change no files run concurrently; the rest hold a per-workspace write lock.
-- **The lead.** `AgentHub::user_turn` returns a `LeadProfile` for the user's own agents under Gate. Once the prompt is classified, `LeadProfile::apply` makes the turn a led one when `aura_agent_gate::lead::leads(category)` says so (`multi_file_change` and `planning`); other turns keep their full tools. A led turn gets the `gate_lead` system-prompt section ([`aura-context-prompts`](../crates/context/aura-context-prompts/src/system/sections/gate_lead.rs)). With delegation enforced, it also drops the file-changing tools from the turn's tool list and wraps the executor in `LeadExecutor` ([`event_loop/lead.rs`](../crates/surface/aura-app/src/event_loop/lead.rs)). The wrapper refuses those tools and disallowed `run_command` lines, recording the refusal with source `gate_lead`, and caps `read_file` and search results (`aura_agent_gate::lead`).
+- **The lead.** `AgentHub::user_turn` returns a `LeadProfile` for the user's own agents under Gate. Once the prompt is classified, `LeadProfile::apply` makes the turn a led one when `aura_gate::lead::leads(category)` says so (`multi_file_change` and `planning`); other turns keep their full tools. A led turn gets the `gate_lead` system-prompt section ([`aura-context-prompts`](../crates/context/aura-context-prompts/src/system/sections/gate_lead.rs)). With delegation enforced, it also drops the file-changing tools from the turn's tool list and wraps the executor in `LeadExecutor` ([`event_loop/lead.rs`](../crates/surface/aura-app/src/event_loop/lead.rs)). The wrapper refuses those tools and disallowed `run_command` lines, recording the refusal with source `gate_lead`, and caps `read_file` and search results (`aura_gate::lead`).
 - **`/compare`** ([`event_loop/compare.rs`](../crates/surface/aura-app/src/event_loop/compare.rs), `compare_run.rs`, `compare_view.rs`): each run is an agent registered under a `Compare #n` agent, working in an `aura_app::isolation` copy under `AURA_HOME/compare/` (a `WorktreeIsolation` worktree plus `changes::carry_changes`, or a `CopyIsolation` copy). `AgentHub::begin_compare_run` sets the run's routing: Gate without exploration, or pinned to the other model. After the run's turn its check is a `run_command` proposal through the run's kernel (source `compare_check`, shared with `task_check.rs`). The judge's requests go through the comparison agent's kernel. The comparison's state is a `System` transaction (`SystemKind::Compare`, `ComparePayload`) on that agent's record, which is also where `/compare` lists past comparisons from. Plan usage comes from the same records as tokens. `aura_model::plan_usage` reads the Claude and ChatGPT plan usage headers into `PlanUsage` readings. They travel on `StreamEvent::HttpMeta` and `ProviderTrace::plan_usage`, and the kernel records them as `plan_usage` in the `Reasoning` entry, through either `Kernel::reason` or `ReasonStreamHandle`. Once every run has ended, `compare::plan_shares` attributes each rise of a window to the run whose call saw it and stores it as `CompareRun::plan_usage`.
 
 - **Approval levels.** Gate only narrows what an agent's mode and approval level allow. The lead's `LeadExecutor` limits sit on top of the kernel's policy, which still asks or confines as the level says, and a subtask (with its `check` and its escalated retry) takes its parent's `Permissions` when it is spawned. `/compare` runs and `aura eval run --model gate` runs are unattended in workspaces of their own, so their agents run at `agent`/`yolo`: `compare_run.rs` sets it on each run, and `headless::eval_harness` builds the harness with `--approval yolo`.
@@ -411,10 +419,6 @@ Subagent derivation, inheritance, registry, and the pure-data adapter layer that
 
 The `SubagentDispatchHook` trait lives at the **exec layer** in `aura-exec-traits`; the concrete impl is `AgentHooks` in `aura-engine`. Phase 7a routed the `task` tool through this crate; Phase B widened it to also own the dispatcher's data layer.
 
-#### [`aura-agent-gate`](../crates/agent/aura-agent-gate)
-
-Gate, the router behind the `gate` model id. `router.rs` holds the candidates the user's sign-ins allow (one route per upstream model), `pick` (the cheapest proven model, else the category default, with exploration, none below the standard tier for work that is not easy, at `effort_on`: the `start_effort` of the work's difficulty, except that code work on the fast tier runs at `medium` or above and other work there with thinking off) and `escalate` (a stronger model at the same effort, else the same model at `raise_effort`); the surfaces apply a decision through `ModelLimits::route`, which sets `AgentLoopConfig::routed_thinking_effort` (a user's `user_thinking_effort` wins over it). `stats.rs` holds `GateStats`, the per level, category and model table built from record entries. `classify.rs`, `judge.rs` and `turn_judge.rs` build the requests of the classifier, the `/compare` judge and the judge of failed work, and read their replies. `outcome.rs` decides turn signals, retries on a stronger model and which outcome counts, `checks.rs` finds a turn's last test or build command (through `sh`/`bash` wrappers, but not for the lead's allow-list), and `followup.rs` decides what a turn that checked nothing does next. `lead.rs` holds what the lead may run and read, `delegation.rs` the `/gate` delegation figures, and `compare.rs` the `/compare` arguments, schedule, estimate and per-arm summary. It depends on the core, config and model layers, does no I/O and never calls a model; the surfaces send its requests through an agent's kernel. See [Gate](#gate).
-
 #### [`aura-agent-steering`](../crates/agent/aura-agent-steering)
 
 Stateful per-turn steering evaluators. Built-ins: `RepeatedReadTracker`, `ImplementNow`, `EarlyOracle`. `SteeringRegistry` and `TurnSteering` thread them through each iteration; `inject` renders steering hints into the active system prompt.
@@ -443,6 +447,44 @@ Key types and modules:
 #### [`aura-agent-trace`](../crates/agent/aura-agent-trace)
 
 Normalized run trajectories. Every coding run is recorded as ordered steps plus a reward log in a bundle under `AURA_HOME/runs/<run_id>/`, which feeds `RunScorecard` (efficiency, waste and outcome metrics), `RunGraph` (the run → turn → iteration → tool-call graph the terminal draws), dataset exports and replay against another model. The recorder is a sidecar: it never appends to the kernel record log. See [run-traces.md](run-traces.md).
+
+---
+
+### Gate layer
+
+Gate, the router behind the `gate` model id, in one crate per section. The crates depend on the core, config and model layers, do no I/O and never call a model; the surfaces send their requests through an agent's kernel. See [Gate](#gate).
+
+#### [`aura-gate-evidence`](../crates/gate/aura-gate-evidence)
+
+What an attempt left behind. `transcript` reads what a turn's reply says of the work (giving up, a check it could not run) and finds Gate's own messages among the turn's. `checks` finds a turn's last test or build command, through `sh`/`bash` wrappers, and whether its exit status was masked. `own_check` tells whether a turn ran the code it changed itself, and `coverage` whether the tests that passed could have checked what the change adds. `outcome` decides turn signals, retries on a stronger model and which outcome counts. `Evidence` holds what an attempt's messages show, `flags` the signs of a failed attempt read out of it, and `verifiable` says which kinds of work a check verifies.
+
+#### [`aura-gate-route`](../crates/gate/aura-gate-route)
+
+Where work goes. `candidates` are the models the user's sign-ins allow, one route per upstream model. `pick` chooses the cheapest proven model, else the category default, with exploration and none below the standard tier for work that is not easy. It runs at `effort_on`: the `start_effort` of the work's difficulty, except that code work on the fast tier runs at `medium` or above and other work there with thinking off. `escalate` picks a stronger model at the same effort, else the same model at `raise_effort`. The surfaces apply a decision through `ModelLimits::route`, which sets `AgentLoopConfig::routed_thinking_effort` (a user's `user_thinking_effort` wins over it). `stats` holds `GateStats`, the per level, category and model table built from record entries, and `replay` scores another way of routing on the recorded work.
+
+#### [`aura-gate-followup`](../crates/gate/aura-gate-followup)
+
+What a routed turn does before its work stands (`next`): a nudge, the harness's check or the judge for one that checked nothing, and a review or repair for work that is hard or raises a sign of failure. It also says what looks wrong in the work (`suspicions`) and holds the prompts Gate sends the model.
+
+#### [`aura-gate-judge`](../crates/gate/aura-gate-judge)
+
+Gate's requests to other models and the reading of their replies: `classify` labels a prompt with its category and difficulty, `criteria` writes a code turn's acceptance criteria, `turn` holds the judge of failed work and its reviews of unverified work and of work about to stand, and `blind` is the `/compare` judge.
+
+#### [`aura-gate-attempts`](../crates/gate/aura-gate-attempts)
+
+The attempt log, `gate/attempts.jsonl` in the data directory: each attempt's `Evidence` and what later proved it right or wrong, the tiers each sign of failure has earned, and `evaluate`, which scores Gate's verdicts and each flag against the truths for `aura gate eval`.
+
+#### [`aura-gate-compare`](../crates/gate/aura-gate-compare)
+
+The `/compare` arithmetic: the arguments, what each arm runs on, the estimate, the schedule, tokens and cost per model, plan shares, and the per-arm summary.
+
+#### [`aura-gate-lead`](../crates/gate/aura-gate-lead)
+
+What the lead may run and read while delegation is enforced, and `delegation`, the `/gate` delegation figures.
+
+#### [`aura-gate`](../crates/gate/aura-gate)
+
+The facade the surfaces use: each crate above re-exported under one name (`aura_gate::route`, `aura_gate::evidence`, and so on).
 
 ---
 

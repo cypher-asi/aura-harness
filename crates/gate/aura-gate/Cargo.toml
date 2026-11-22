@@ -1,0 +1,19 @@
+[package]
+name = "aura-gate"
+description = "Gate: picks the model each turn runs on from the models the user's sign-ins allow, and checks the work before it stands"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aura-gate-attempts = { path = "../aura-gate-attempts" }
+aura-gate-compare = { path = "../aura-gate-compare" }
+aura-gate-evidence = { path = "../aura-gate-evidence" }
+aura-gate-followup = { path = "../aura-gate-followup" }
+aura-gate-judge = { path = "../aura-gate-judge" }
+aura-gate-lead = { path = "../aura-gate-lead" }
+aura-gate-route = { path = "../aura-gate-route" }
+
+[lints]
+workspace = true

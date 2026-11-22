@@ -27,6 +27,7 @@ use std::collections::HashMap;
 use aura_config::GateConfig;
 use aura_core_auth::ProviderKind;
 use aura_core_types::{Difficulty, OutcomeSignal, PromptCategory, Route, RouteLevel, RouteReason};
+use aura_gate_evidence::verifiable;
 use aura_model::model_catalog::{
     estimate_cost_usd, has_max_effort, infer_tier, model_key, route_label, supersedes,
     ModelBackend, ModelOption, ModelTier,
@@ -601,7 +602,7 @@ pub fn escalate(
 /// [`escalate`] takes it, has a stronger model to go on to among
 /// `candidates`. One effort higher on the same model is not one: work on
 /// the strongest model that checked nothing gets only the judge's
-/// verdict ([`crate::followup`]).
+/// verdict (`aura-gate-followup`).
 #[must_use]
 pub fn has_stronger_model(
     stats: &GateStats,
@@ -762,18 +763,6 @@ fn dearer_start(row: &Row, cost: f64, next: f64, min_tries: u32) -> bool {
     let counted = row.tries.max(min_tries).max(1);
     let rate = f64::from(row.successes + lacking) / f64::from(counted);
     cost >= rate * next
-}
-
-/// Whether a check verifies work asking for `category`: code changes and
-/// debugging end in a test or build that passes or fails, and a failed
-/// attempt goes on with a stronger model ([`escalate`]). So such work can
-/// start on a cheaper model at little risk to the result.
-#[must_use]
-pub const fn verifiable(category: PromptCategory) -> bool {
-    matches!(
-        category,
-        PromptCategory::SmallChange | PromptCategory::MultiFileChange | PromptCategory::Debugging
-    )
 }
 
 #[cfg(test)]

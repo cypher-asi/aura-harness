@@ -27,12 +27,6 @@ use crate::event_loop::{AgentHub, AgentSession};
 use crate::model_selection::routed_effort;
 use crate::session_checkpoint::SessionUsage;
 use aura_agent::{AgentLoop, AgentLoopConfig, AgentLoopResult};
-use aura_agent_gate::attempt_log::Terms;
-use aura_agent_gate::criteria::Criteria;
-use aura_agent_gate::followup::Step;
-use aura_agent_gate::outcome::calls_for_stronger;
-use aura_agent_gate::turn_judge::Failed;
-use aura_agent_gate::{Decision, Work};
 use aura_agent_kernel::Kernel;
 use aura_agent_trace::RunRecorder;
 use aura_core_modes::AgentMode;
@@ -41,6 +35,12 @@ use aura_core_types::{
     RouteReason, Transaction,
 };
 use aura_exec_tools::BackgroundProcessHook;
+use aura_gate::attempts::Terms;
+use aura_gate::evidence::outcome::calls_for_stronger;
+use aura_gate::followup::Step;
+use aura_gate::judge::criteria::Criteria;
+use aura_gate::judge::turn::Failed;
+use aura_gate::route::{Decision, Work};
 use aura_model::{Message, Role, ThinkingEffort};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -1,0 +1,21 @@
+[package]
+name = "aura-gate-judge"
+description = "Gate: the classifier, criteria, judge and review requests it sends to other models"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aura-core-types = { path = "../../core/aura-core-types" }
+aura-gate-followup = { path = "../aura-gate-followup" }
+aura-gate-route = { path = "../aura-gate-route" }
+aura-model = { path = "../../model/aura-model" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+aura-core-auth = { path = "../../core/aura-core-auth" }
+
+[lints]
+workspace = true

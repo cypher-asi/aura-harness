@@ -128,14 +128,14 @@ async fn a_background_rebuild_overlapping_live_entries_counts_each_prompt_once()
 #[test]
 fn decisions_are_remembered_up_to_the_limit() {
     let live = GateLive::with_rng(GateConfig::defaults(), SplitMix64::seeded(1));
-    let candidates = aura_agent_gate::candidates(
+    let candidates = aura_gate::route::candidates(
         &aura_model::model_catalog::catalog("local/qwen3:4b", &[]),
         |p| p == aura_auth::ProviderKind::Claude,
         |_| false,
     );
     for _ in 0..RECENT_DECISIONS + 5 {
         live.decide(
-            &aura_agent_gate::Work::turn(PromptCategory::Debugging),
+            &aura_gate::route::Work::turn(PromptCategory::Debugging),
             &candidates,
         )
         .unwrap();
@@ -146,7 +146,10 @@ fn decisions_are_remembered_up_to_the_limit() {
         .iter()
         .all(|r| r.category == PromptCategory::Debugging && r.level == RouteLevel::Turn));
     assert!(live
-        .decide(&aura_agent_gate::Work::turn(PromptCategory::Debugging), &[])
+        .decide(
+            &aura_gate::route::Work::turn(PromptCategory::Debugging),
+            &[]
+        )
         .is_none());
     assert_eq!(live.recent().len(), RECENT_DECISIONS);
 }

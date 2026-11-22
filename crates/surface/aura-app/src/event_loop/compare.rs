@@ -20,15 +20,15 @@ use super::subagents::{lock, AgentHub};
 use super::LoopState;
 use crate::agent_registry::RegisteredAgent;
 use crate::bench_pack::{self, ExampleTask};
-use aura_agent_gate::compare::{
-    default_against, estimate, parse, resolve_arms, CompareCommand, CompareRequest,
-    DEFAULT_CONCURRENCY,
-};
 use aura_agent_kernel::Kernel;
 use aura_config::GateConfig;
 use aura_context_prompts::model_messages::build_plan::build_plan_prompt;
 use aura_core_types::{
     AgentId, ArmSpec, BenchSource, CompareArm, ComparePayload, CompareStatus, RouteLevel,
+};
+use aura_gate::compare::{
+    default_against, estimate, parse, resolve_arms, CompareCommand, CompareRequest,
+    DEFAULT_CONCURRENCY,
 };
 use aura_model::model_catalog::route_label;
 use aura_store_db::ReadStore;
@@ -368,15 +368,15 @@ pub(super) async fn prepare(
         ..*state.hub.gate.settings()
     };
     let expected = match category {
-        Some(category) => aura_agent_gate::pick(
+        Some(category) => aura_gate::route::pick(
             &state.hub.gate.stats(),
-            &aura_agent_gate::Work::new(RouteLevel::Turn, category, None),
+            &aura_gate::route::Work::new(RouteLevel::Turn, category, None),
             &candidates,
             &no_exploring,
             &mut || 1.0,
         )
         .map(|decision| decision.model.id),
-        None => aura_agent_gate::fixed_pick(&candidates).map(|c| c.id.clone()),
+        None => aura_gate::route::fixed_pick(&candidates).map(|c| c.id.clone()),
     };
     let model_of = |spec: &ArmSpec| match spec {
         ArmSpec::Gate { .. } => expected.clone().unwrap_or_else(|| judge.clone()),

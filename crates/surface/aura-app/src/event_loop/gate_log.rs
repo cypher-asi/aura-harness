@@ -1,4 +1,4 @@
-//! Writing Gate's attempt log ([`aura_agent_gate::attempt_log`]) while
+//! Writing Gate's attempt log ([`aura_gate::attempts`]) while
 //! the app runs.
 //!
 //! - an `attempt` line is written where a turn's `Outcome` is recorded
@@ -23,15 +23,16 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use aura_agent::AgentLoopResult;
-use aura_agent_gate::attempt_log::{
-    self, Attempt, AttemptLog, CopyAt, Kind, Line, Review, Terms, Truth, TruthSource,
-};
-use aura_agent_gate::evidence::Evidence;
-use aura_agent_gate::followup::{is_nudge, REPAIR_OPENING};
 use aura_core_types::{
     AgentId, ArmSpec, CompareCopy, ComparePayload, CompareRun, Hash, OutcomePayload, RecordEntry,
     RouteLevel,
 };
+use aura_gate::attempts::{
+    self, Attempt, AttemptLog, CopyAt, Kind, Line, Review, Terms, Truth, TruthSource,
+};
+use aura_gate::evidence::transcript::said::is_nudge;
+use aura_gate::evidence::Evidence;
+use aura_gate::followup::REPAIR_OPENING;
 use aura_model::{ContentBlock, Message, Role};
 use aura_store_db::ReadStore;
 use tracing::{info, warn};
@@ -103,7 +104,7 @@ impl GateLive {
     }
 
     /// Read the attempt log and take from it what each sign of failure
-    /// has earned ([`attempt_log::tiers`]). A log that cannot be read
+    /// has earned ([`attempts::tiers`]). A log that cannot be read
     /// leaves the tiers as they are.
     pub(crate) fn learn_tiers(&self) {
         let Some(log) = self.log.get() else {
@@ -111,7 +112,7 @@ impl GateLive {
         };
         match log.read() {
             Ok(read) => {
-                let tiers = attempt_log::tiers(&read.lines);
+                let tiers = attempts::tiers(&read.lines);
                 *self
                     .tiers
                     .lock()

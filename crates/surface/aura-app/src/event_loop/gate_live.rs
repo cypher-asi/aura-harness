@@ -9,7 +9,7 @@
 //!
 //! It also keeps the latest routing decisions for `/gate`, and the model
 //! each agent's routed work is on, which decides what the subtasks it
-//! dispatches are routed among ([`aura_agent_gate::below_lead`]).
+//! dispatches are routed among ([`aura_gate::route::below_lead`]).
 //!
 //! When it is given an attempt log ([`GateLive::log_attempts_to`]), each
 //! attempt and what later proves it right or wrong is appended there; see
@@ -17,13 +17,15 @@
 //! earned ([`GateLive::tiers`]) decides which signs have work reviewed
 //! before it stands.
 
-use aura_agent_gate::attempt_log::{AttemptLog, Tiers};
-use aura_agent_gate::{Candidate, Decision, GateStats, SplitMix64, Way, Work};
 use aura_agent_kernel::RecordObserver;
 use aura_config::GateConfig;
 use aura_core_types::{
     AgentId, Difficulty, OutcomeSignal, PromptCategory, RecordEntry, RouteLevel, RouteReason,
 };
+use aura_gate::attempts::{AttemptLog, Tiers};
+use aura_gate::lead::Way;
+use aura_gate::route::stats::GateStats;
+use aura_gate::route::{Candidate, Decision, SplitMix64, Work};
 use aura_model::ThinkingEffort;
 use aura_store_db::ReadStore;
 use std::collections::{HashMap, VecDeque};
@@ -127,7 +129,7 @@ impl GateLive {
     /// of 0 or 1 takes no draw, which leaves exploration's draws as they
     /// were.
     pub(crate) fn sampled(&self, share: f64) -> bool {
-        use aura_agent_gate::Random;
+        use aura_gate::route::Random;
         if share >= 1.0 {
             return true;
         }
@@ -167,7 +169,7 @@ impl GateLive {
         let decision = {
             let stats = lock(&self.stats);
             let mut rng = lock(&self.rng);
-            aura_agent_gate::pick(&stats, work, candidates, settings, &mut *rng)?
+            aura_gate::route::pick(&stats, work, candidates, settings, &mut *rng)?
         };
         self.remember(RecentRoute {
             ts_ms: super::processes::now_ms(),
@@ -182,7 +184,7 @@ impl GateLive {
     /// Where work at `level` asking for `category`, whose attempt on
     /// `failed` (a model and the effort Gate chose for it) ended with
     /// `signal`, goes next among `candidates` (see
-    /// [`aura_agent_gate::escalate`]), remembered for `/gate`. `None`
+    /// [`aura_gate::route::escalate`]), remembered for `/gate`. `None`
     /// when nothing is left to try.
     pub(crate) fn escalate(
         &self,
@@ -194,7 +196,7 @@ impl GateLive {
     ) -> Option<Decision> {
         let decision = {
             let stats = lock(&self.stats);
-            aura_agent_gate::escalate(&stats, level, failed, signal, candidates)?
+            aura_gate::route::escalate(&stats, level, failed, signal, candidates)?
         };
         self.remember(RecentRoute {
             ts_ms: super::processes::now_ms(),
@@ -207,7 +209,7 @@ impl GateLive {
     }
 
     /// Whether a turn asking for `category` of `difficulty` on `model` is
-    /// led (see [`aura_agent_gate::choose_way`]); it explores the other
+    /// led (see [`aura_gate::lead::choose_way`]); it explores the other
     /// way only when `explore`.
     pub(crate) fn way(
         &self,
@@ -222,7 +224,7 @@ impl GateLive {
         };
         let stats = lock(&self.stats);
         let mut rng = lock(&self.rng);
-        aura_agent_gate::choose_way(&stats, work, model, &settings, &mut *rng)
+        aura_gate::lead::choose_way(&stats, work, model, &settings, &mut *rng)
     }
 
     fn remember(&self, route: RecentRoute) {

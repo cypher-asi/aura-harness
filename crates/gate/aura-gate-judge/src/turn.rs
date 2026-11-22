@@ -10,7 +10,7 @@
 //! anyway) counts for nothing and the work stays where it is.
 //!
 //! The same judge gives the verdict on work that ran no check (see
-//! [`crate::followup`]), through [`unverified_request`]: there it may
+//! [`aura_gate_followup`]), through [`unverified_request`]: there it may
 //! also find the work done (`OK`). And it reviews work that is about to
 //! stand, through [`review_request`]: hard work, or work that shows a
 //! sign of failure the attempt log backs, is gone through against the
@@ -21,6 +21,8 @@
 //! like any other model call.
 
 use aura_core_types::OutcomeSignal;
+use aura_gate_followup::Suspicion;
+use aura_gate_route::Candidate;
 use aura_model::model_catalog::infer_tier;
 use aura_model::{
     Message, ModelCallPurpose, ModelRequest, ModelRequestKind, ReasonerError, ThinkingEffort,
@@ -28,10 +30,8 @@ use aura_model::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::blind::{cut, MAX_DIFF, MAX_REPLY};
 use crate::criteria::{self, Criteria};
-use crate::followup::Suspicion;
-use crate::judge::{cut, MAX_DIFF, MAX_REPLY};
-use crate::router::Candidate;
 
 /// Longest request shown to the judge, in characters.
 const MAX_TASK: usize = 8_000;
@@ -62,7 +62,7 @@ enough to help whoever takes the work over. Then end with one line that is exact
 /// System prompt of every request to the judge of unverified turns:
 /// attempts that no check vouches for, because they ran none or because
 /// their own reply says the work was not verified (see
-/// [`crate::followup`]). Its verdict is the attempt's outcome.
+/// [`aura_gate_followup`]). Its verdict is the attempt's outcome.
 pub const UNVERIFIED_SYSTEM_PROMPT: &str = "\
 You are reviewing an attempt at a task a user gave a coding agent. Nothing shows that its work \
 is right: it ran no test or build that checks the work, or it ran one and its own final reply \
@@ -92,7 +92,7 @@ concretely enough to help whoever takes the work over. Then end with one line th
 pub const MAX_REVIEW_DIFF: usize = 60_000;
 
 /// System prompt of every review of work about to stand (see
-/// [`crate::followup`]).
+/// [`aura_gate_followup`]).
 pub const REVIEW_SYSTEM_PROMPT: &str = "\
 You are reviewing an attempt at a task a user gave a coding agent, before the attempt is accepted. \
 You see the user's request, what the attempt changed as a unified diff, the commands it ran, the \

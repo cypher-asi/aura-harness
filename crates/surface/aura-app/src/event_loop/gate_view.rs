@@ -8,14 +8,15 @@ use super::handlers::show_system_message;
 use super::subagents::{lock, AgentHub};
 use super::LoopState;
 use crate::record_loader::{format_local_time, model_call};
-use aura_agent_gate::compare::list_price;
-use aura_agent_gate::delegation::{self, Call, Delegation, Share, Subtask};
-use aura_agent_gate::replay::{self, Estimate, Logged};
-use aura_agent_gate::router::by_expected_cost;
-use aura_agent_gate::stats::Row;
-use aura_agent_gate::{Candidate, GateStats};
 use aura_config::GateConfig;
 use aura_core_types::{AgentId, Difficulty, PromptCategory, RouteLevel, RouteReason};
+use aura_gate::compare::list_price;
+use aura_gate::lead::delegation::{self, Call, Delegation, Share, Subtask};
+use aura_gate::route::by_expected_cost;
+use aura_gate::route::replay::{self, Estimate, Logged};
+use aura_gate::route::stats::GateStats;
+use aura_gate::route::stats::Row;
+use aura_gate::route::Candidate;
 use aura_model::model_catalog::route_label;
 use aura_store_db::ReadStore;
 use std::collections::HashMap;
@@ -209,7 +210,7 @@ impl GateView<'_> {
             ..*self.settings
         };
         let gate_now = replay::estimate(&logged, |prompt| {
-            aura_agent_gate::pick(
+            aura_gate::route::pick(
                 self.stats,
                 &prompt.work(),
                 self.candidates,
@@ -358,8 +359,8 @@ impl GateView<'_> {
             explore_rate: 0.0,
             ..*self.settings
         };
-        let pick = |work: &aura_agent_gate::Work<'_>| {
-            aura_agent_gate::pick(
+        let pick = |work: &aura_gate::route::Work<'_>| {
+            aura_gate::route::pick(
                 self.stats,
                 work,
                 self.candidates,
@@ -367,7 +368,7 @@ impl GateView<'_> {
                 &mut || 1.0,
             )
         };
-        let work = aura_agent_gate::Work::new(level, category, None);
+        let work = aura_gate::route::Work::new(level, category, None);
         let picked = pick(&work);
         let easy = pick(&work.of(Some(Difficulty::Easy)))
             .filter(|easy| picked.as_ref().is_none_or(|p| p.model.id != easy.model.id));
@@ -483,7 +484,7 @@ mod tests {
     };
 
     fn claude() -> Vec<Candidate> {
-        aura_agent_gate::candidates(
+        aura_gate::route::candidates(
             &aura_model::model_catalog::catalog("local/qwen3:4b", &[]),
             |p| p == aura_auth::ProviderKind::Claude,
             |_| false,

@@ -5,9 +5,9 @@
 use super::LoopState;
 use crate::file_checkpoints::{FileCheckpoints, TurnManifest};
 use crate::session_checkpoint::SessionUsage;
-use aura_agent_gate::compare::SessionPick;
-use aura_agent_gate::judge::MAX_DIFF;
 use aura_core_types::{AgentId, BenchSource, Reference, SessionBaseline};
+use aura_gate::compare::SessionPick;
+use aura_gate::judge::blind::MAX_DIFF;
 use aura_model::{ContentBlock, Message, Role};
 use aura_ui_terminal::events::BenchSession;
 use std::path::{Path, PathBuf};

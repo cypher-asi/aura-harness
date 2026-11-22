@@ -214,9 +214,7 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
         store.clone() as Arc<dyn aura_store_db::ReadStore>,
         registry.agents().iter().map(|a| a.agent_id()).collect(),
     );
-    gate.log_attempts_to(aura_agent_gate::attempt_log::AttemptLog::in_data_dir(
-        &data_dir,
-    ));
+    gate.log_attempts_to(aura_gate::attempts::AttemptLog::in_data_dir(&data_dir));
     gate.catch_up_in_background(
         store.clone() as Arc<dyn aura_store_db::ReadStore>,
         registry

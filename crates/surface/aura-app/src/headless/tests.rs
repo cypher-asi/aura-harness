@@ -633,8 +633,8 @@ fn session_ids_round_trip() {
 
 #[tokio::test]
 async fn gate_routes_headless_turns_and_records_how_they_went() {
-    use aura_agent_gate::Candidate;
     use aura_core_types::{OutcomeSignal, PromptCategory, Route, RouteReason};
+    use aura_gate::route::Candidate;
     use aura_model::model_catalog::{ModelBackend, ModelTier};
     const HAIKU: &str = "aura-claude-haiku-4-5";
     const SONNET: &str = "aura-claude-sonnet-4-6";
@@ -691,7 +691,7 @@ async fn gate_routes_headless_turns_and_records_how_they_went() {
         assert!(!turn.system.contains("<gate_lead>"));
         assert_eq!(
             requests[2].system,
-            aura_agent_gate::turn_judge::UNVERIFIED_SYSTEM_PROMPT
+            aura_gate::judge::turn::UNVERIFIED_SYSTEM_PROMPT
         );
     }
     let price = |model: &str| {
@@ -747,7 +747,7 @@ async fn gate_routes_headless_turns_and_records_how_they_went() {
 
 #[tokio::test]
 async fn a_headless_turn_changing_several_files_is_led() {
-    use aura_agent_gate::Candidate;
+    use aura_gate::route::Candidate;
     use aura_model::model_catalog::{ModelBackend, ModelTier};
     const HAIKU: &str = "aura-claude-haiku-4-5";
     const SONNET: &str = "aura-claude-sonnet-4-6";
@@ -794,7 +794,7 @@ async fn a_headless_turn_changing_several_files_is_led() {
     let requests = requests.lock().unwrap();
     assert_eq!(
         requests[1].system,
-        aura_agent_gate::criteria::SYSTEM_PROMPT,
+        aura_gate::judge::criteria::SYSTEM_PROMPT,
         "what the change is checked against is asked for before it starts"
     );
     let lead = &requests[2];
@@ -811,12 +811,12 @@ async fn a_headless_turn_changing_several_files_is_led() {
 async fn an_eval_run_under_gate_is_routed_and_its_verdict_feeds_the_table() {
     use super::{EvalTurn, EvalTurns};
     use crate::event_loop::subagents::lock;
-    use aura_agent_gate::Candidate;
     use aura_agent_trace::{RunBundle, RunMeta, RunRecorder, RunSource, RunTrace};
     use aura_core_types::{
         OutcomeSignal, PromptCategory, Route, RouteLevel, RouteReason, ToolProposal,
         TransactionType,
     };
+    use aura_gate::route::Candidate;
     use aura_model::model_catalog::{ModelBackend, ModelTier};
     const HAIKU: &str = "aura-claude-haiku-4-5";
     const SONNET: &str = "aura-claude-sonnet-4-6";
@@ -985,7 +985,7 @@ const GATE_OPUS: &str = "aura-claude-opus-4-7";
 /// Gate routing among Sonnet and Opus, classifying with Haiku. Debugging
 /// starts on Sonnet, the cheapest of the two, so runs never explore.
 fn sonnet_and_opus() -> GateBase {
-    use aura_agent_gate::Candidate;
+    use aura_gate::route::Candidate;
     use aura_model::model_catalog::{ModelBackend, ModelTier};
     let candidate = |id: &str, tier, cost_usd| Candidate {
         id: id.to_string(),
@@ -1123,10 +1123,7 @@ async fn a_failed_turn_the_judge_blames_on_the_model_goes_on_with_a_stronger_one
     {
         let requests = run.requests.lock().unwrap();
         let judge = &requests[5];
-        assert_eq!(
-            judge.system.as_str(),
-            aura_agent_gate::turn_judge::SYSTEM_PROMPT
-        );
+        assert_eq!(judge.system.as_str(), aura_gate::judge::turn::SYSTEM_PROMPT);
         assert!(judge.tools.is_empty());
         let shown = judge.messages[0].text_content();
         assert!(shown.contains("fix the parser"), "{shown}");
@@ -1381,9 +1378,9 @@ async fn run_routed(
     Vec<String>,
     Arc<Mutex<Vec<ModelRequest>>>,
     Vec<aura_core_types::OutcomePayload>,
-    Vec<aura_agent_gate::attempt_log::Attempt>,
+    Vec<aura_gate::attempts::Attempt>,
 ) {
-    use aura_agent_gate::attempt_log::{AttemptLog, Line};
+    use aura_gate::attempts::{AttemptLog, Line};
     let dirs = dirs();
     let permissions = super::permissions(aura_core_modes::AgentMode::Agent, None);
     let (mut h, requests) = harness(
@@ -1487,10 +1484,7 @@ async fn a_change_made_without_a_check_is_checked_before_the_turn_ends() {
         .last()
         .unwrap()
         .text_content();
-    assert!(
-        nudge.contains(aura_agent_gate::followup::NUDGE_PROMPT),
-        "{nudge}"
-    );
+    assert!(nudge.contains(aura_gate::followup::NUDGE_PROMPT), "{nudge}");
     let signals: Vec<(&str, OutcomeSignal)> = outcomes
         .iter()
         .map(|o| (o.model.as_str(), o.signal))
@@ -1572,10 +1566,12 @@ async fn a_change_the_model_ran_itself_is_not_nudged_but_still_judged() {
         assert!(requests
             .iter()
             .flat_map(|request| &request.messages)
-            .all(|message| !aura_agent_gate::followup::is_nudge(&message.text_content())));
+            .all(|message| !aura_gate::evidence::transcript::said::is_nudge(
+                &message.text_content()
+            )));
         assert_eq!(
             requests[5].system.as_str(),
-            aura_agent_gate::turn_judge::UNVERIFIED_SYSTEM_PROMPT
+            aura_gate::judge::turn::UNVERIFIED_SYSTEM_PROMPT
         );
     }
     let signals: Vec<(&str, OutcomeSignal)> = outcomes
@@ -1621,7 +1617,7 @@ async fn unchecked_work_that_looks_unfinished_goes_to_the_judge_then_moves_up() 
         let judge = &requests[3];
         assert_eq!(
             judge.system.as_str(),
-            aura_agent_gate::turn_judge::UNVERIFIED_SYSTEM_PROMPT
+            aura_gate::judge::turn::UNVERIFIED_SYSTEM_PROMPT
         );
         let shown = judge.messages[0].text_content();
         assert!(shown.contains("fix the parser"), "{shown}");

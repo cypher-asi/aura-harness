@@ -3,10 +3,9 @@
 //! what it changed, and what it said at the end.
 //!
 //! [`Evidence`] is the raw material, kept in Gate's attempt log
-//! ([`crate::attempt_log`]). [`flags`] reads signs of a failed attempt
-//! out of it. The flags are computed when the log is evaluated, not when
-//! it is written, so a new one is scored on every attempt already
-//! logged.
+//! (`aura-gate-attempts`). [`flags`] reads signs of a failed attempt out
+//! of it. The flags are computed when the log is evaluated, not when it
+//! is written, so a new one is scored on every attempt already logged.
 
 use aura_core_types::PromptCategory;
 use aura_model::{ContentBlock, Message, Role};
@@ -14,8 +13,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::checks::{checks_placed, command_line, exit_status_masked};
-use crate::followup::{gave_up, is_nudge, says_unverified};
-use crate::router::verifiable;
+use crate::transcript::reply::{gave_up, says_unverified};
+use crate::transcript::said::is_nudge;
+use crate::verifiable;
 
 /// Checks kept with their output, latest last.
 const KEPT_CHECKS: usize = 4;
@@ -290,7 +290,7 @@ pub enum Flag {
     MaskedCheckWithFailures,
     /// Its reply says the work was not verified
     /// ([`says_unverified`]). After a check that counted as passed, Gate
-    /// has the judge review such an attempt (see [`crate::followup`]).
+    /// has the judge review such an attempt (see `aura-gate-followup`).
     ReplyUnverified,
     /// Its reply says tests still fail.
     ReplyFailures,
@@ -510,7 +510,7 @@ const FAILURE_MARKS: &[&str] = &[
 /// runner prints for one (`FAILED`, `FAIL`), an exception (`TypeError:`)
 /// or one of [`FAILURE_MARKS`].
 #[must_use]
-pub fn shows_failures(output: &str) -> bool {
+pub(crate) fn shows_failures(output: &str) -> bool {
     if FAILURE_MARKS.iter().any(|mark| output.contains(mark)) {
         return true;
     }
