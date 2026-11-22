@@ -7,6 +7,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Gate's nudge leaves the last reply a full answer
+
+##### Changed
+
+- When Gate asks a model to check a change it ran no test or build
+  for, the model is now asked to end with its whole answer again (what
+  it changed and why, what it ran and how that went), not only with
+  what it ran: that last reply is the one the user reads and the one
+  `/compare`'s judge weighs, and as a test report it lost comparisons
+  the work itself had not. Where no test covers the change, it is
+  asked to run the build or the changed code on a few cases from the
+  request, and not to add test files to a project that has none, a
+  change nobody asked for. Work Gate sends back after a review is
+  asked for the whole answer in the same way.
+
 ### `aura -p` counts Gate's own calls in a run's cost
 
 ##### Fixed

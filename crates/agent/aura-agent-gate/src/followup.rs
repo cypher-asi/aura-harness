@@ -543,14 +543,21 @@ fn passed(ended: &Ended<'_>, taken: Taken, allowed: Allowed) -> Step {
 /// them apart from the user's prompts.
 pub const REPAIR_OPENING: &str = "Before your work was accepted, ";
 
+/// How every message that sends the model back to its work ends. The
+/// reply it then writes is the one the user reads, and the one a judge
+/// weighs, so it has to be the whole answer rather than a report on the
+/// check alone.
+const FULL_ANSWER: &str = "Then write your final answer in full, as the reply the user will \
+read: what you changed and why, and what you ran to check it and how it went.";
+
 /// What the model is told when a review found its work unfinished.
 #[must_use]
 pub fn repair_prompt(findings: &str) -> String {
     format!(
         "{REPAIR_OPENING}a reviewer went through your change against the request and found it \
          unfinished:\n\n{}\n\nFix what it found. If a finding is wrong, say why and leave that \
-         part as it is. Then run the tests that cover the change (the way this project or task \
-         says commands run) and reply with what you changed and how it went.",
+         part as it is. Run the tests that cover the change (the way this project or task says \
+         commands run). {FULL_ANSWER}",
         findings.trim()
     )
 }
@@ -564,20 +571,28 @@ pub fn sign_repair_prompt(signs: &[Flag]) -> String {
         .collect();
     format!(
         "{REPAIR_OPENING}the harness found signs that it is not finished:\n{}\n\nGo back over \
-         the request and your change, and fix what is missing or wrong. Then run the tests that \
-         cover the change (the way this project or task says commands run) and reply with what \
-         you changed and how it went.",
+         the request and your change, and fix what is missing or wrong. Run the tests that cover \
+         the change (the way this project or task says commands run). {FULL_ANSWER}",
         listed.join("\n")
     )
 }
 
+/// How [`NUDGE_PROMPT`] starts, which every version of it has.
+const NUDGE_OPENING: &str =
+    "You changed files but did not run any test or build to check the change.";
+
 /// What the model is told when it ended a turn having changed files
-/// without running a test or build.
+/// without running a test or build. A project with no tests is checked
+/// by running the changed code: test files there are a change nobody
+/// asked for.
 pub const NUDGE_PROMPT: &str = "\
 You changed files but did not run any test or build to check the change. Before you finish, run \
 the tests that cover what you changed (run them the way this project or task says commands run, \
 for example through its own wrapper script), and fix anything that fails. If no test covers it, \
-run the build or type check. Then reply with what you ran and how it went.";
+run the build or type check, or run the changed code on a few cases from the request with a short \
+script; if the project has no tests, do not add test files the request did not ask for. Then \
+write your final answer in full, as the reply the user will read: what you changed and why, and \
+what you ran to check it and how it went.";
 
 /// How the message starts that asks a model to test what it added that
 /// no test names.
@@ -603,17 +618,16 @@ pub fn uncovered_prompt(names: &[String]) -> String {
          finish, write tests that call it and check what it returns against what the request \
          asks for, taking the expected values from the request (including the exact format of \
          any output it specifies) rather than from what your code prints. Run them the way this \
-         project or task says commands run, fix anything that fails, and reply with what you ran \
-         and how it went.",
+         project or task says commands run and fix anything that fails. {FULL_ANSWER}",
         listed.join(", ")
     )
 }
 
 /// Whether `text`, a message to the model, is one of Gate's asking it to
-/// check its change.
+/// check its change, in this version's words or an earlier one's.
 #[must_use]
 pub fn is_nudge(text: &str) -> bool {
-    text.contains(NUDGE_PROMPT) || text.contains(UNCOVERED_OPENING)
+    text.contains(NUDGE_OPENING) || text.contains(UNCOVERED_OPENING)
 }
 
 #[cfg(test)]
@@ -1040,6 +1054,29 @@ mod tests {
         assert!(told.contains("`prepare_multipart`"), "{told}");
         assert!(is_nudge(&told) && is_nudge(NUDGE_PROMPT));
         assert!(!is_nudge(&repair_prompt("1. it is wrong")));
+    }
+
+    #[test]
+    fn whatever_sends_the_model_back_asks_for_its_whole_answer_again() {
+        let names = ["prepare_multipart".to_string()];
+        for told in [
+            NUDGE_PROMPT.to_string(),
+            uncovered_prompt(&names),
+            repair_prompt("1. it is wrong"),
+            sign_repair_prompt(&[Flag::ShellEdit]),
+        ] {
+            assert!(told.ends_with(FULL_ANSWER), "{told}");
+        }
+        assert!(NUDGE_PROMPT.starts_with(NUDGE_OPENING));
+        assert!(
+            NUDGE_PROMPT.contains("if the project has no tests, do not add test files"),
+            "{NUDGE_PROMPT}"
+        );
+        let earlier = "[harness] You changed files but did not run any test or build to check \
+                       the change. Before you finish, run the tests that cover what you changed \
+                       (...). If no test covers it, run the build or type check. Then reply \
+                       with what you ran and how it went.";
+        assert!(is_nudge(earlier), "a record from before still reads");
     }
 
     #[test]
