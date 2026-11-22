@@ -2,13 +2,14 @@
 //! (see [`aura_gate::followup`]), shared by the terminal's turns,
 //! `/compare` runs and `aura -p`.
 //!
-//! Each of them asks [`FollowUp::next`] once an attempt ends and carries
-//! the step out: a nudge goes on in the same conversation on the same
-//! model, told [`nudge_message`]; the harness check runs here
-//! ([`harness_check`]); and so does the judge of unchecked work
-//! ([`judge_unchecked`]), whose verdict is the outcome of work nothing
-//! else checked. What either finds wrong sends the work on to a stronger
-//! model as a failed check of the turn's own does.
+//! Each of them hands an attempt that has ended to [`Following::run`],
+//! which asks [`FollowUp::next`] for each step and carries it out: a
+//! nudge goes on in the same conversation on the same model, told what
+//! [`CarryOn`] says; the harness check runs here; and so does the judge
+//! of unchecked work, whose verdict is the outcome of work nothing else
+//! checked. What either finds wrong sends the work on to a stronger
+//! model as a failed check of the turn's own does. Each surface shows
+//! what the steps find as its [`Report`] says.
 //!
 //! Work that is about to stand may be reviewed first
 //! ([`FollowUp::review`]): the judge goes through the request against
@@ -17,9 +18,11 @@
 //! `/compare` run's copy against its baseline, a git working tree against
 //! a snapshot taken when the turn started. Changes made by the commands
 //! the attempt ran are then in the diff with those its file tools made.
-//! Work the review finds unfinished goes back to its model once
-//! ([`repair_message`]) and on to a stronger model after that.
+//! Work the review finds unfinished goes back to its model once and on
+//! to a stronger model after that.
 //!
+//! - `driver`: one pass of the follow-up over an attempt
+//! - `report`: what a step found, shown as it is found
 //! - `steps`: the steps an attempt may still take, and the next of them
 //! - `review`: the review of work about to stand
 //! - `judge`: the judge of work no check vouches for
@@ -30,8 +33,10 @@
 
 mod before;
 mod check;
+mod driver;
 mod judge;
 mod messages;
+mod report;
 mod review;
 mod steps;
 #[cfg(test)]
@@ -40,13 +45,9 @@ mod untested;
 
 pub(crate) use before::Before;
 use before::Changed;
-pub(crate) use check::{check_review, check_signal, harness_check};
-pub(crate) use judge::{judge_unchecked, Unchecked};
-pub(crate) use messages::{
-    nudge_message, nudge_notice, repair_message, repair_notice, sign_repair_message,
-    sign_repair_notice,
-};
-pub(crate) use review::Reviewing;
+pub(crate) use driver::{Attempt, CarryOn, Followed, Following};
+pub(crate) use messages::{takeover, takeover_message};
+pub(crate) use report::{Found, Report};
 
 use aura_agent::AgentLoopResult;
 use aura_config::ReviewMode;

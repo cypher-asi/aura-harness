@@ -8,9 +8,7 @@ use super::output::{ExitReason, Output, RunReport, StreamEvent, UsageReport};
 use super::sink::{CallLimits, HeadlessSink, TurnTally};
 use super::tools::ToolFilter;
 use crate::event_loop::gate::followup::{
-    check_review, check_signal, harness_check, joined, judge_unchecked, nudge_message,
-    nudge_notice, repair_message, repair_notice, sign_repair_message, sign_repair_notice, At,
-    Before, FollowUp, Reviewing, Unchecked,
+    joined, takeover, At, Attempt, Before, CarryOn, FollowUp, Followed, Following, Found, Report,
 };
 use crate::event_loop::handlers::{
     drive_turn, mark_session_start, record_response, resume_checkpoint,
@@ -34,7 +32,6 @@ use aura_core_types::{
 use aura_exec_tools::BackgroundProcessHook;
 use aura_gate::attempts::Terms;
 use aura_gate::evidence::outcome::calls_for_stronger;
-use aura_gate::followup::{takeover_prompt, Step};
 use aura_gate::judge::criteria::Criteria;
 use aura_gate::judge::turn::Failed;
 use aura_gate::live::{self, Judged};
@@ -196,19 +193,6 @@ enum Carry {
     Nudge(OutcomePayload, Terms),
 }
 
-/// What Gate's follow-up made of a turn.
-#[derive(Default)]
-struct FollowedUp {
-    /// What the same model is told when it carries on (asked to check
-    /// its change, or sent back with what is wrong with it), and what
-    /// the run's output says of that
-    carry_on: Option<(String, String)>,
-    /// What the harness's check printed when it failed
-    harness: Option<String>,
-    /// What the judge found wrong with the unchecked work
-    unchecked: Option<String>,
-}
-
 /// Whether the agent ended `result` on its own: a final reply with no
 /// call left unanswered and no model error.
 fn finished_naturally(result: &AgentLoopResult) -> bool {
@@ -340,9 +324,9 @@ impl Headless {
         // and the stronger models it went on to) rather than a notice.
         let mut answering = true;
         let mut carry = None;
-        // The follow-up steps of the model `follow.0`'s attempt, and where
-        // that attempt's messages start.
-        let mut follow = (String::new(), FollowUp::default());
+        // The follow-up of the attempt so far, and where that attempt's
+        // messages start.
+        let mut follow = Following::default();
         let mut attempt_start = 0;
         loop {
             totals.agent_turns += 1;
@@ -362,7 +346,7 @@ impl Headless {
             if !nudged {
                 attempt_start = outcome.turn_start;
             }
-            let mut found = FollowedUp::default();
+            let mut found = Followed::default();
             if answering && outcome.stop.is_none() {
                 found = self
                     .follow_up(
@@ -383,7 +367,7 @@ impl Headless {
             if found.carry_on.is_none() {
                 if let Some(ended) = &outcome.ended {
                     let left = (outcome.result.as_ref())
-                        .map(|result| follow.1.evidence(result, attempt_start));
+                        .map(|result| follow.steps.evidence(result, attempt_start));
                     let gate = &self.hub.gate;
                     gate.log_attempt(session.agent_id(), ended, outcome.terms, left);
                     live::record(&session.kernel, session.agent_id(), ended).await;
@@ -392,17 +376,13 @@ impl Headless {
             // What the turn's signal said, and what the judge found wrong
             // with it.
             let raw = outcome.ended.as_ref().map(|ended| ended.signal);
-            let mut review = found.unchecked.take();
+            let mut review = found.wrong.take();
             if answering && found.carry_on.is_none() && review.is_none() {
-                let judged = self.judge(session, &task, &outcome, &mut follow.1).await;
+                let judged = self
+                    .judge(session, &task, &outcome, &mut follow.steps)
+                    .await;
                 if let Some((judged_as, judged)) = judged {
-                    output.event(&StreamEvent::Judged {
-                        model: &judged.model,
-                        judge: &judged.judge,
-                        at_fault: judged.verdict.at_fault,
-                        reasons: &judged.verdict.reasons,
-                        cost_usd: judged.cost_usd,
-                    });
+                    output.report(Found::Judged(&judged)).await;
                     outcome.ended = Some(judged_as);
                     review = Some(judged.verdict.reasons.clone());
                     self.judged.push(judged);
@@ -427,8 +407,14 @@ impl Headless {
                 .carry_on
                 .take()
                 .and_then(|carry_on| Some((carry_on, outcome.ended.take()?)));
-            if let Some(((message, text), ended)) = carried {
-                output.event(&StreamEvent::Notice { text: &text });
+            if let Some((
+                CarryOn {
+                    message, notice, ..
+                },
+                ended,
+            )) = carried
+            {
+                output.event(&StreamEvent::Notice { text: &notice });
                 let mut next = message;
                 for unseen in &outcome.unseen {
                     next.push_str("\n\n");
@@ -441,9 +427,9 @@ impl Headless {
             if answering && (outcome.stop.is_none() || outcome.can_go_on) {
                 if let Some((decision, ended)) = self.stronger(session, outcome.ended.as_ref()) {
                     let review = joined(found.harness.take(), review);
-                    let mut next = takeover_prompt(
-                        &aura_model::model_catalog::route_label(&ended.model),
-                        decision.model.id != ended.model,
+                    let mut next = takeover(
+                        &ended.model,
+                        &decision.model.id,
                         raw.unwrap_or(ended.signal),
                         review.as_deref(),
                     );
@@ -562,168 +548,52 @@ impl Headless {
     /// failure is reviewed before it stands, going back to its model once
     /// with what the review finds. What the harness's check, the judge or
     /// the review finds becomes `turn`'s `Outcome`. `follow` holds the
-    /// steps the attempt on `follow.0` has taken, `before` the workspace
-    /// as it was when the run began, and `since` is where that attempt's
-    /// messages start.
+    /// steps the attempt has taken, `before` the workspace as it was when
+    /// the run began, and `since` is where that attempt's messages start.
     async fn follow_up(
         &mut self,
         session: &AgentSession,
         task: &str,
         turn: &mut TurnOutcome,
-        (follow, before): (&mut (String, FollowUp), Option<&Before>),
+        (follow, before): (&mut Following, Option<&Before>),
         since: usize,
         output: &Output,
-    ) -> FollowedUp {
-        let mut found = FollowedUp::default();
-        let terms = turn.terms;
-        let unchecked = &mut turn.unchecked;
+    ) -> Followed {
         let (Some(ended), Some(result)) = (turn.ended.as_mut(), turn.result.as_ref()) else {
-            return found;
+            return Followed::default();
         };
-        let gate = Arc::clone(&self.hub.gate);
         let Some(candidates) = self.hub.gate_candidates(session.definition.as_deref()) else {
-            return found;
+            return Followed::default();
         };
         let workspace = session.kernel.agent_workspace();
-        if follow.0 != ended.model {
-            let ran = (ended.model.as_str(), self.effort);
-            let fresh = FollowUp::new(&self.hub.gate, &candidates, ran, &workspace)
-                .since(before.cloned())
-                .held_to(self.criteria.clone())
-                .after(&follow.1);
-            *follow = (ended.model.clone(), fresh);
-        }
-        let edits = || {
-            session
-                .file_checkpoints
-                .as_ref()
-                .map(|files| files.attempt(session.agent_id()).diff(Some(&workspace)))
-                .unwrap_or_default()
-        };
-        loop {
-            let at = At {
+        let (config, _) = self.hub.turn(session.definition.as_deref(), &workspace);
+        let signal = (!turn.unchecked).then_some(ended.signal);
+        let attempt = Attempt {
+            session,
+            live: &self.hub.gate,
+            candidates: &candidates,
+            task,
+            ran: (ended.model.as_str(), self.effort),
+            result,
+            at: At {
                 category: ended.category,
-                difficulty: terms.difficulty,
-                signal: (!*unchecked).then_some(ended.signal),
+                difficulty: turn.terms.difficulty,
+                signal,
                 turn_start: since,
-            };
-            match follow.1.next(result, at).await {
-                Step::Stop => break,
-                Step::Nudge(uncovered) => {
-                    found.carry_on = Some((
-                        nudge_message(&uncovered),
-                        nudge_notice(&ended.model, &uncovered),
-                    ));
-                    break;
-                }
-                Step::Repair(signs) => {
-                    found.carry_on = Some((
-                        sign_repair_message(&signs),
-                        sign_repair_notice(&ended.model, &signs),
-                    ));
-                    break;
-                }
-                Step::Review { why, act } => {
-                    let edits = edits();
-                    let shown = Reviewing {
-                        task,
-                        result,
-                        turn_start: since,
-                        category: ended.category,
-                        edits: &edits,
-                        why: &why,
-                        act,
-                    };
-                    let (config, _) = self.hub.turn(session.definition.as_deref(), &workspace);
-                    let reviewed = follow
-                        .1
-                        .review(session, &gate, ended, &shown, config.auth_token)
-                        .await;
-                    let Some(reviewed) = reviewed else {
-                        continue;
-                    };
-                    let judged = reviewed.judged();
-                    output.event(&StreamEvent::Judged {
-                        model: &judged.model,
-                        judge: &judged.judge,
-                        at_fault: reviewed.unfinished(),
-                        reasons: &judged.verdict.reasons,
-                        cost_usd: judged.cost_usd,
-                    });
-                    self.judged.push(judged);
-                    if reviewed.unfinished() {
-                        if follow.1.send_back(result) {
-                            found.carry_on = Some((
-                                repair_message(&reviewed.findings),
-                                repair_notice(&ended.model),
-                            ));
-                            break;
-                        }
-                        *ended = ended.with_signal(OutcomeSignal::JudgedFail);
-                        *unchecked = false;
-                        found.unchecked = Some(reviewed.findings);
-                    } else if let Some(verdict) = reviewed.verdict().filter(|_| *unchecked) {
-                        *ended = ended.with_signal(verdict);
-                        *unchecked = false;
-                    }
-                }
-                Step::HarnessCheck => {
-                    let Some(command) = follow.1.check().map(str::to_string) else {
-                        continue;
-                    };
-                    let check = harness_check(session, &command).await;
-                    let signal = check_signal(&check);
-                    output.event(&StreamEvent::Checked {
-                        model: &ended.model,
-                        command: &command,
-                        passed: signal.and_then(|signal| signal.success()),
-                        summary: &check.describe(),
-                    });
-                    if let Some(signal) = signal {
-                        *ended = ended.with_signal(signal);
-                        *unchecked = false;
-                        found.harness =
-                            (signal == OutcomeSignal::ChecksFailed).then(|| check_review(&check));
-                    }
-                }
-                Step::JudgeUnverified(suspicions) => {
-                    let Some(judge) = follow.1.judge().map(str::to_string) else {
-                        continue;
-                    };
-                    let diff = follow.1.diff(result, edits()).await;
-                    let shown = Unchecked {
-                        task,
-                        diff: &diff,
-                        result,
-                        turn_start: since,
-                        suspicions: &suspicions,
-                    };
-                    let (config, _) = self.hub.turn(session.definition.as_deref(), &workspace);
-                    let Some((verdict, judged)) =
-                        judge_unchecked(session, &judge, ended, &shown, config.auth_token).await
-                    else {
-                        continue;
-                    };
-                    output.event(&StreamEvent::Judged {
-                        model: &judged.model,
-                        judge: &judged.judge,
-                        at_fault: judged.verdict.at_fault,
-                        reasons: &judged.verdict.reasons,
-                        cost_usd: judged.cost_usd,
-                    });
-                    let failed = verdict == OutcomeSignal::JudgedFail;
-                    if failed || *unchecked {
-                        *ended = ended.with_signal(verdict);
-                        *unchecked = false;
-                    }
-                    if failed {
-                        found.unchecked = Some(judged.verdict.reasons.clone());
-                    }
-                    self.judged.push(judged);
-                }
-            }
+            },
+            prompt_tx: Some(ended.prompt_tx),
+            workspace: &workspace,
+            before,
+            criteria: self.criteria.as_ref(),
+            auth_token: config.auth_token,
+        };
+        let mut followed = follow.run(&attempt, output).await;
+        if let Some(found) = followed.signal.filter(|found| Some(*found) != signal) {
+            *ended = ended.with_signal(found);
+            turn.unchecked = false;
         }
-        found
+        self.judged.append(&mut followed.judged);
+        followed
     }
 
     /// Where a turn of `session` that Gate routed and that `ended` badly

@@ -42,13 +42,13 @@ pub(super) fn check_command(workspace: &Path) -> Option<String> {
 }
 
 /// Run `command` in `session`'s workspace as the harness's check.
-pub(crate) async fn harness_check(session: &AgentSession, command: &str) -> CheckRun {
+pub(super) async fn harness_check(session: &AgentSession, command: &str) -> CheckRun {
     run_script_within(session, command, CHECK_SOURCE, CHECK_TIMEOUT_SECS).await
 }
 
 /// What `check` says of the change: passed or failed, `None` when it
 /// could not run, ran out of time, or failed for want of its tools.
-pub(crate) fn check_signal(check: &CheckRun) -> Option<OutcomeSignal> {
+pub(super) fn check_signal(check: &CheckRun) -> Option<OutcomeSignal> {
     if could_not_run(check) {
         return None;
     }
@@ -68,6 +68,6 @@ fn could_not_run(check: &CheckRun) -> bool {
 }
 
 /// What the stronger model is told of a harness check that failed.
-pub(crate) fn check_review(check: &CheckRun) -> String {
+pub(super) fn check_review(check: &CheckRun) -> String {
     format!("The harness ran the project's tests. {}", check.describe())
 }

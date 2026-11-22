@@ -4,8 +4,10 @@
 //! stderr.
 
 use super::OutputFormat;
+use crate::event_loop::gate::followup::{Found, Report};
 use crate::session_checkpoint::SessionUsage;
 use aura_exec_tools::todo::TodoItem;
+use aura_gate::live::Judged;
 use serde::Serialize;
 use std::io::Write;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -280,6 +282,41 @@ impl Output {
         if let Err(e) = writer.write_all(bytes).and_then(|()| writer.flush()) {
             debug!(error = %e, "Could not write headless output");
         }
+    }
+}
+
+impl Report for Output {
+    async fn report(&self, found: Found<'_>) {
+        match found {
+            Found::Checking(_) => {}
+            Found::Checked {
+                model,
+                command,
+                check,
+                signal,
+            } => self.event(&StreamEvent::Checked {
+                model,
+                command,
+                passed: signal.and_then(|signal| signal.success()),
+                summary: &check.describe(),
+            }),
+            Found::Judged(judged) => self.event(&judged_event(judged, judged.verdict.at_fault)),
+            Found::Reviewed(reviewed) => {
+                self.event(&judged_event(&reviewed.judged(), reviewed.unfinished()));
+            }
+        }
+    }
+}
+
+/// The event for `judged`, which found the model's work `at_fault` or
+/// not.
+fn judged_event(judged: &Judged, at_fault: bool) -> StreamEvent<'_> {
+    StreamEvent::Judged {
+        model: &judged.model,
+        judge: &judged.judge,
+        at_fault,
+        reasons: &judged.verdict.reasons,
+        cost_usd: judged.cost_usd,
     }
 }
 

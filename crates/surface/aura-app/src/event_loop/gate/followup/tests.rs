@@ -1,6 +1,8 @@
 //! Which steps an attempt may take, what it is told of them, and what the
 //! harness's own check and the review say.
 
+use super::check::check_signal;
+use super::messages::{nudge_message, nudge_notice};
 use super::review::Reviewed;
 use super::untested::untested;
 use super::*;

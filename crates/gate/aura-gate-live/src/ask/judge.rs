@@ -99,7 +99,7 @@ pub async fn judge_failed(
     auth_token: Option<String>,
 ) -> Option<(OutcomePayload, Judged)> {
     let request = turn::request(judge, failed, auth_token);
-    let (_, judged) = ask_judge(kernel, judge, ended, request, false).await?;
+    let (_, judged) = ask_judge(kernel, judge, &ended.model, request, false).await?;
     let signal = if judged.verdict.at_fault {
         OutcomeSignal::JudgedFail
     } else {
@@ -149,7 +149,7 @@ fn tier_of(model: &str, candidates: &[Candidate]) -> ModelTier {
         .map_or_else(|| infer_tier(model), |c| c.tier)
 }
 
-/// Ask `judge` through `kernel` whether the work of `ended`, which no
+/// Ask `judge` through `kernel` whether the work of `model`, which no
 /// check vouches for, is done, pointed to what looks wrong as
 /// `unverified` says. Returns the verdict as the attempt's signal
 /// (`judged_pass`, `judged_fail` or `judged_excused`, see
@@ -158,30 +158,30 @@ fn tier_of(model: &str, candidates: &[Candidate]) -> ModelTier {
 pub async fn judge_unverified(
     kernel: &Kernel,
     judge: &str,
-    ended: &OutcomePayload,
+    model: &str,
     unverified: &Unverified<'_>,
     auth_token: Option<String>,
 ) -> Option<(OutcomeSignal, Judged)> {
     let request = turn::unverified_request(judge, unverified, auth_token);
-    let (answer, judged) = ask_judge(kernel, judge, ended, request, true).await?;
+    let (answer, judged) = ask_judge(kernel, judge, model, request, true).await?;
     let signal = answer.verdict();
-    info!(%judge, model = %ended.model, %signal, cost_usd = judged.cost_usd, "The judge gave its verdict on unchecked work");
+    info!(%judge, %model, %signal, cost_usd = judged.cost_usd, "The judge gave its verdict on unchecked work");
     Some((signal, judged))
 }
 
 /// Send `request` to `judge` through `kernel` and read its verdict on
-/// the work of `ended`. `None` when the request could not be built, the
+/// the work of `model`. `None` when the request could not be built, the
 /// call failed or timed out, or the reply held no verdict.
 async fn ask_judge(
     kernel: &Kernel,
     judge: &str,
-    ended: &OutcomePayload,
+    model: &str,
     request: Result<ModelRequest, ReasonerError>,
     unverified: bool,
 ) -> Option<(Answer, Judged)> {
     let (answer, reasons, cost_usd) = ask(kernel, judge, request, JUDGE_TIMEOUT).await?;
     let judged = Judged {
-        model: ended.model.clone(),
+        model: model.to_string(),
         judge: judge.to_string(),
         verdict: Verdict {
             at_fault: answer == Answer::Model,

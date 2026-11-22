@@ -24,7 +24,7 @@ impl FollowUp {
     /// working in `workspace`: the judge's verdict on unchecked work
     /// always, and when a candidate is a stronger model, so the work has
     /// somewhere to go, the others Gate's settings allow.
-    pub(crate) fn new(
+    pub(super) fn new(
         live: &GateLive,
         candidates: &[Candidate],
         ran: (&str, Option<ThinkingEffort>),
@@ -82,14 +82,14 @@ impl FollowUp {
 
     /// The same steps, reading what the attempt changed against
     /// `before`.
-    pub(crate) fn since(mut self, before: Option<Before>) -> Self {
+    pub(super) fn since(mut self, before: Option<Before>) -> Self {
         self.before = before;
         self
     }
 
     /// The same steps for work held to `criteria`, written down before
     /// it started.
-    pub(crate) fn held_to(mut self, criteria: Option<Arc<Criteria>>) -> Self {
+    pub(super) fn held_to(mut self, criteria: Option<Arc<Criteria>>) -> Self {
         self.criteria = criteria;
         self
     }
@@ -97,7 +97,7 @@ impl FollowUp {
     /// The same steps for an attempt that takes over from the one
     /// `earlier` followed: a turn's work is sent back to its model once,
     /// so if that attempt was, this one is not.
-    pub(crate) fn after(mut self, earlier: &Self) -> Self {
+    pub(super) fn after(mut self, earlier: &Self) -> Self {
         self.taken.repaired = earlier.taken.repaired;
         self
     }
@@ -174,7 +174,7 @@ impl FollowUp {
 
     /// The next step for an attempt that ended with `result` as `at`
     /// says; the step counts as taken.
-    pub(crate) async fn next(&mut self, result: &AgentLoopResult, at: At) -> Step {
+    pub(super) async fn next(&mut self, result: &AgentLoopResult, at: At) -> Step {
         if at
             .signal
             .is_some_and(|signal| signal != OutcomeSignal::ChecksPassed)
@@ -236,7 +236,7 @@ impl FollowUp {
     /// Whether work a review found unfinished, which ended in `result`,
     /// goes back to its model: once per attempt, and not when the
     /// attempt ran out of room. Counts as sent back when it does.
-    pub(crate) fn send_back(&mut self, result: &AgentLoopResult) -> bool {
+    pub(super) fn send_back(&mut self, result: &AgentLoopResult) -> bool {
         if self.taken.repaired || hit_limit(result) {
             return false;
         }
@@ -246,12 +246,12 @@ impl FollowUp {
     }
 
     /// The test command the harness runs, when it may run one.
-    pub(crate) fn check(&self) -> Option<&str> {
+    pub(super) fn check(&self) -> Option<&str> {
         self.check.as_deref()
     }
 
     /// The model that gives the verdict on unchecked work.
-    pub(crate) fn judge(&self) -> Option<&str> {
+    pub(super) fn judge(&self) -> Option<&str> {
         self.judge.as_deref()
     }
 }

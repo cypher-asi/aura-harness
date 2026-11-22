@@ -5,7 +5,7 @@ use super::FollowUp;
 use crate::event_loop::agents::AgentSession;
 use crate::event_loop::processes::now_ms;
 use aura_agent::AgentLoopResult;
-use aura_core_types::{OutcomePayload, OutcomeSignal, PromptCategory};
+use aura_core_types::{Hash, OutcomeSignal, PromptCategory};
 use aura_gate::attempts::Review;
 use aura_gate::evidence::flags;
 use aura_gate::evidence::transcript::reply::final_reply;
@@ -46,12 +46,12 @@ impl Reviewed {
 
     /// The verdict a review Gate acts on gives work no check vouched
     /// for, standing in for the judge's; `None` when it is only logged.
-    pub(crate) fn verdict(&self) -> Option<OutcomeSignal> {
+    pub(super) fn verdict(&self) -> Option<OutcomeSignal> {
         self.act.then(|| self.answer.verdict())
     }
 
     /// One line saying what the reviewer found.
-    pub(crate) fn describe(&self) -> String {
+    pub(super) fn describe(&self) -> String {
         let model = route_label(&self.model);
         let findings = self.findings.trim();
         let setting = if self.checked.is_empty() {
@@ -92,7 +92,7 @@ impl Reviewed {
 }
 
 /// What the reviewer of work about to stand is shown of an attempt.
-pub(crate) struct Reviewing<'a> {
+pub(super) struct Reviewing<'a> {
     /// What the user asked
     pub task: &'a str,
     /// How it ended
@@ -109,15 +109,17 @@ pub(crate) struct Reviewing<'a> {
 }
 
 impl FollowUp {
-    /// Have the judge go through the work of `ended`, shown as `shown`,
-    /// against the request before it stands, through `session`'s kernel,
-    /// and log what it made of it to `live`'s attempt log. `None` when no
-    /// model reviews or it gave no verdict.
-    pub(crate) async fn review(
+    /// Have the judge go through the work of `model` on the prompt
+    /// `prompt_tx`, shown as `shown`, against the request before it
+    /// stands, through `session`'s kernel, and log what it made of it to
+    /// `live`'s attempt log. `None` when no model reviews or it gave no
+    /// verdict.
+    pub(super) async fn review(
         &self,
         session: &AgentSession,
         live: &GateLive,
-        ended: &OutcomePayload,
+        model: &str,
+        prompt_tx: Hash,
         shown: &Reviewing<'_>,
         auth_token: Option<String>,
     ) -> Option<Reviewed> {
@@ -128,9 +130,9 @@ impl FollowUp {
         let request = self.review_request(judge, shown, criteria, auth_token);
         let (answer, findings, cost_usd) =
             live::ask_review(&session.kernel, judge, request).await?;
-        info!(%judge, model = %ended.model, ?answer, cost_usd, act = shown.act, "The judge reviewed work about to stand");
+        info!(%judge, %model, ?answer, cost_usd, act = shown.act, "The judge reviewed work about to stand");
         let reviewed = Reviewed {
-            model: ended.model.clone(),
+            model: model.to_string(),
             judge: judge.to_string(),
             answer,
             checked: criteria.map(|c| checked(c, &findings)).unwrap_or_default(),
@@ -138,7 +140,7 @@ impl FollowUp {
             cost_usd,
             act: shown.act,
         };
-        let line = self.review_line(session, ended, shown, &reviewed, criteria.is_some());
+        let line = self.review_line(session, prompt_tx, shown, &reviewed, criteria.is_some());
         live.log_review(line);
         Some(reviewed)
     }
@@ -174,13 +176,13 @@ impl FollowUp {
         turn::review_request(judge, &standing, LIVE_REVIEW, auth_token)
     }
 
-    /// The attempt log's line for `reviewed`, a review of the attempt
-    /// that ended as `ended`, shown as `shown`, and whether it was held
+    /// The attempt log's line for `reviewed`, a review of the attempt on
+    /// the prompt `prompt_tx`, shown as `shown`, and whether it was held
     /// to criteria.
     fn review_line(
         &self,
         session: &AgentSession,
-        ended: &OutcomePayload,
+        prompt_tx: Hash,
         shown: &Reviewing<'_>,
         reviewed: &Reviewed,
         held: bool,
@@ -193,7 +195,7 @@ impl FollowUp {
         Review {
             at_ms: now_ms(),
             agent: session.agent_id().to_hex(),
-            prompt_tx: ended.prompt_tx.to_hex(),
+            prompt_tx: prompt_tx.to_hex(),
             why: shown.why.iter().map(|why| why.name().to_string()).collect(),
             signs: flags(
                 &self.evidence(shown.result, shown.turn_start),

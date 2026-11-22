@@ -1760,7 +1760,7 @@ impl AgentHub {
                 if let Some((verdict, found)) = live::judge_unverified(
                     &session.kernel,
                     &judge,
-                    outcome,
+                    &outcome.model,
                     &unverified,
                     auth_token,
                 )

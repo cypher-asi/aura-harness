@@ -1364,6 +1364,41 @@ async fn a_failed_turn_the_judge_says_nothing_clear_about_still_moves_up() {
     assert_eq!(run.rows, [Some((1, 0)), None]);
 }
 
+#[tokio::test]
+async fn gates_own_check_streams_what_it_found() {
+    use crate::event_loop::gate::followup::{Found, Report};
+    use crate::event_loop::task_check::CheckRun;
+    let captured = Captured::default();
+    let output = Output::new(OutputFormat::StreamJson, Box::new(captured.clone()));
+    let check = CheckRun {
+        command: "cargo test".to_string(),
+        passed: Some(false),
+        exit_code: Some(101),
+        tail: "test parse ... FAILED".to_string(),
+    };
+
+    output.report(Found::Checking("cargo test")).await;
+    let checked = Found::Checked {
+        model: GATE_SONNET,
+        command: "cargo test",
+        check: &check,
+        signal: check.signal(),
+    };
+    output.report(checked).await;
+
+    assert_eq!(
+        captured.json_lines(),
+        [json!({
+            "type": "checked",
+            "model": GATE_SONNET,
+            "command": "cargo test",
+            "passed": false,
+            "summary": check.describe(),
+        })],
+        "the check is streamed once it has run, not as it starts"
+    );
+}
+
 /// Run "fix the parser" under [`sonnet_and_opus`] on `provider`, which
 /// answers the classifier first. Returns the report, the model of each
 /// call, the requests, each `Outcome`, and the attempts in Gate's

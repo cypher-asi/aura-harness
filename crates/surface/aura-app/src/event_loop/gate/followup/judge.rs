@@ -2,14 +2,14 @@
 
 use crate::event_loop::agents::AgentSession;
 use aura_agent::AgentLoopResult;
-use aura_core_types::{OutcomePayload, OutcomeSignal};
+use aura_core_types::OutcomeSignal;
 use aura_gate::evidence::transcript::reply::final_reply;
 use aura_gate::followup::Suspicion;
 use aura_gate::judge::turn::{shown_to_judge, Unverified};
 use aura_gate::live::{self, Judged};
 
 /// What the judge of unchecked work is shown of an attempt.
-pub(crate) struct Unchecked<'a> {
+pub(super) struct Unchecked<'a> {
     /// What the user asked
     pub task: &'a str,
     /// The attempt's file changes as a unified diff
@@ -21,13 +21,13 @@ pub(crate) struct Unchecked<'a> {
     pub suspicions: &'a [Suspicion],
 }
 
-/// Ask `judge` through `session`'s kernel whether the work of `ended`,
+/// Ask `judge` through `session`'s kernel whether the work of `model`,
 /// shown as `unchecked`, is done; returns the verdict as the attempt's
 /// signal (see [`live::judge_unverified`]).
-pub(crate) async fn judge_unchecked(
+pub(super) async fn judge_unchecked(
     session: &AgentSession,
     judge: &str,
-    ended: &OutcomePayload,
+    model: &str,
     unchecked: &Unchecked<'_>,
     auth_token: Option<String>,
 ) -> Option<(OutcomeSignal, Judged)> {
@@ -43,5 +43,5 @@ pub(crate) async fn judge_unchecked(
         last_check: &last_check,
         suspicions: unchecked.suspicions,
     };
-    live::judge_unverified(&session.kernel, judge, ended, &shown, auth_token).await
+    live::judge_unverified(&session.kernel, judge, model, &shown, auth_token).await
 }
