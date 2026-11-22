@@ -444,7 +444,7 @@ async fn run_prompt(
             };
             let mut criteria = None;
             if let Some(gate) = turn.gate.as_deref() {
-                criteria = gate_record::hold_to_criteria(
+                criteria = match gate_record::hold_to_criteria(
                     &session.kernel,
                     (&gate.live, &gate.candidates),
                     category,
@@ -452,7 +452,14 @@ async fn run_prompt(
                     &label.text,
                     label.auth_token.clone(),
                 )
-                .await;
+                .await
+                {
+                    Ok(criteria) => criteria,
+                    Err(problem) => {
+                        ui.send(system_message(problem)).await;
+                        None
+                    }
+                };
                 if let Some(note) = gate_record::worker_note_for(&gate.live, criteria.as_deref()) {
                     prompt.text.push_str(&note);
                 }

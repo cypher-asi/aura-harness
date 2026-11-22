@@ -7,6 +7,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Gate's acceptance criteria get written on Sonnet 5.5
+
+##### Fixed
+
+- Gate never wrote the acceptance criteria of a code turn when the
+  writer was Claude Sonnet 5.5, the cheapest standard-tier model on a
+  Claude plan: the request forced the `criteria` tool, which Sonnet 5.5
+  rejects (`tool_choice: type "tool" and "any" are not supported for
+  this model`). Every call failed within a quarter of a second and the
+  work was reviewed without criteria. Sonnet 5.5 and Opus 5.5 are now
+  asked with `tool_choice: auto` (criteria in JSON text count too), and
+  the Anthropic provider sends any forced tool choice to them as `auto`.
+- A criteria call that fails says so in the chat, `gate:
+  claude-sonnet-5-5 (claude plan) wrote no acceptance criteria: ...`,
+  instead of only in the log.
+
 ### Gate starts medium and harder work on Sonnet, and Haiku thinks on code
 
 ##### Changed

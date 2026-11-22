@@ -72,6 +72,17 @@ impl ModelProvider for GatedProvider {
         if request.system == aura_agent_gate::classify::SYSTEM_PROMPT {
             return classify(&request, last.as_deref().unwrap_or_default()).await;
         }
+        if request.system == aura_agent_gate::criteria::SYSTEM_PROMPT
+            && last
+                .as_deref()
+                .is_some_and(|text| text.contains("criteria writer down"))
+        {
+            return Err(ReasonerError::Api {
+                status: 400,
+                message: "tool_choice: type \"tool\" and \"any\" are not supported for this model."
+                    .to_string(),
+            });
+        }
         if request.system == aura_agent_gate::turn_judge::SYSTEM_PROMPT {
             let asked = last.as_deref().unwrap_or_default();
             let reply = if asked.contains("judge: blame") {
@@ -3022,6 +3033,40 @@ async fn the_next_turn_uses_what_the_last_outcome_taught_gate() {
         ],
         "one of two is below the target, so sonnet drops back to the default"
     );
+}
+
+#[tokio::test]
+async fn a_criteria_writer_that_fails_says_so_and_the_turn_goes_on() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+
+    turn(
+        &mut state,
+        &mut done,
+        &links,
+        first,
+        "fix the parser (criteria writer down)",
+    )
+    .await;
+
+    let text = system_texts(&drain(&mut commands));
+    assert!(
+        text.contains(
+            "gate: aura-claude-sonnet-4-6 (cloud) wrote no acceptance criteria: the call failed ("
+        ),
+        "{text}"
+    );
+    assert!(text.contains("not supported for this model"), "{text}");
+    assert!(
+        text.contains("gate → "),
+        "the turn is routed all the same:\n{text}"
+    );
+    assert_eq!(outcomes_of(&state, first).len(), 1, "and runs to its end");
 }
 
 #[tokio::test]

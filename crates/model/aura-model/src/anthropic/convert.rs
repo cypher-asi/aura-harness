@@ -698,6 +698,24 @@ pub(super) fn convert_tool_choice(
     }
 }
 
+/// The `tool_choice` `model` is sent for `choice`, as
+/// [`convert_tool_choice`] gives it, except that a forced call goes as
+/// `auto` to a model that takes none
+/// ([`crate::model_catalog::takes_forced_tool_choice`]): the API would
+/// reject the whole request.
+pub(super) fn tool_choice_for(
+    choice: &ToolChoice,
+    parallel_tool_use: bool,
+    model: &str,
+) -> Option<ApiToolChoice> {
+    let forced = matches!(choice, ToolChoice::Required | ToolChoice::Tool { .. });
+    if forced && !crate::model_catalog::takes_forced_tool_choice(model) {
+        tracing::warn!(%model, ?choice, "The model takes no forced tool choice; asking with auto");
+        return convert_tool_choice(&ToolChoice::Auto, parallel_tool_use);
+    }
+    convert_tool_choice(choice, parallel_tool_use)
+}
+
 /// Collapse duplicate `tool_result` blocks so the request honors Anthropic's
 /// invariant that each `tool_use_id` may appear in at most one `tool_result`
 /// block across the entire `messages[]` array.

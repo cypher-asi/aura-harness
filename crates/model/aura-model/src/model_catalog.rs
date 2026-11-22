@@ -411,6 +411,19 @@ pub fn has_max_effort(model: &str) -> bool {
     .any(|family| key.starts_with(family))
 }
 
+/// Whether `model` takes a tool choice that forces a call (any tool, or a
+/// named one). Claude Sonnet 5.5 does not: the API answers `tool_choice:
+/// type "tool" and "any" are not supported for this model`. Nor does Opus
+/// 5.5, which cannot turn thinking off, and forced tool use needs thinking
+/// off. Ask them with `auto` instead.
+#[must_use]
+pub fn takes_forced_tool_choice(model: &str) -> bool {
+    let key = model_key(model);
+    !["claude-sonnet-5-5", "claude-opus-5-5"]
+        .iter()
+        .any(|name| is_snapshot_of(&key, name))
+}
+
 /// Whether `name` is `key` or one of its dated snapshots
 /// (`claude-haiku-4-5-20251001`, `gpt-5-4-2026-03-05`).
 fn is_snapshot_of(name: &str, key: &str) -> bool {
@@ -929,6 +942,28 @@ mod tests {
             "local/qwen3:4b",
         ] {
             assert!(!has_max_effort(model), "{model}");
+        }
+    }
+
+    #[test]
+    fn sonnet_and_opus_5_5_take_no_forced_tool_choice() {
+        for model in [
+            "claude/claude-sonnet-5-5",
+            "claude-sonnet-5-5-20261001",
+            "aura-claude-sonnet-5-5",
+            "claude/claude-opus-5-5",
+        ] {
+            assert!(!takes_forced_tool_choice(model), "{model}");
+        }
+        for model in [
+            "claude/claude-haiku-5-5",
+            "claude/claude-sonnet-5",
+            "claude/claude-sonnet-4-6",
+            "aura-claude-opus-4-8",
+            "chatgpt/gpt-5.4",
+            "local/qwen3:4b",
+        ] {
+            assert!(takes_forced_tool_choice(model), "{model}");
         }
     }
 

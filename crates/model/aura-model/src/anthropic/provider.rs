@@ -1,8 +1,9 @@
 use super::api_types::{ApiRequest, ApiResponse, StreamingApiRequest};
 use super::convert::{
-    build_request_system, convert_messages_to_api, convert_response_to_aura, convert_tool_choice,
+    build_request_system, convert_messages_to_api, convert_response_to_aura,
     convert_tool_entries_to_api, extended_cache_ttl, request_uses_computer_tool,
-    resolve_output_config, resolve_thinking, COMPUTER_USE_BETA, EXTENDED_CACHE_TTL_BETA,
+    resolve_output_config, resolve_thinking, tool_choice_for, COMPUTER_USE_BETA,
+    EXTENDED_CACHE_TTL_BETA,
 };
 use super::sse::SseStream;
 use super::{AnthropicProvider, ApiError};
@@ -1974,7 +1975,7 @@ fn build_api_request(
         tool_choice: if request.tools.is_empty() {
             None
         } else {
-            convert_tool_choice(&request.tool_choice, request.parallel_tool_use)
+            tool_choice_for(&request.tool_choice, request.parallel_tool_use, model)
         },
         max_tokens: request.max_tokens.get(),
         temperature: if thinking.is_some() {
@@ -2697,9 +2698,10 @@ impl ModelProvider for AnthropicProvider {
                     tool_choice: if request_ref.tools.is_empty() {
                         None
                     } else {
-                        convert_tool_choice(
+                        tool_choice_for(
                             &request_ref.tool_choice,
                             request_ref.parallel_tool_use,
+                            &model,
                         )
                     },
                     max_tokens: request_ref.max_tokens.get(),
@@ -4033,6 +4035,41 @@ mod request_diagnostics_tests {
 
         assert!(body.get("tools").is_none());
         assert!(body.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn a_forced_tool_goes_as_auto_to_a_model_that_takes_none() {
+        let tool_choice = |model: &str, choice: crate::ToolChoice| {
+            let request = ModelRequest::builder(model, "system")
+                .tools(vec![crate::ToolDefinition::new(
+                    "criteria",
+                    "List them.",
+                    json!({"type": "object"}),
+                )])
+                .tool_choice(choice)
+                .parallel_tool_use(false)
+                .thinking_effort(Some(crate::ThinkingEffort::Off))
+                .try_build()
+                .unwrap();
+            let api_request = build_api_request(&request, model, None, false, true, None, None);
+            serde_json::to_value(api_request).unwrap()["tool_choice"].clone()
+        };
+        let criteria = || crate::ToolChoice::tool("criteria");
+        let auto = json!({"type": "auto", "disable_parallel_tool_use": true});
+        assert_eq!(tool_choice("claude-sonnet-5-5", criteria()), auto);
+        assert_eq!(tool_choice("aura-claude-opus-5-5", criteria()), auto);
+        assert_eq!(
+            tool_choice("claude-sonnet-5-5", crate::ToolChoice::Required),
+            auto
+        );
+        assert_eq!(
+            tool_choice("claude-haiku-5-5", criteria()),
+            json!({"type": "tool", "name": "criteria", "disable_parallel_tool_use": true})
+        );
+        assert_eq!(
+            tool_choice("claude-sonnet-4-6", crate::ToolChoice::Required),
+            json!({"type": "any", "disable_parallel_tool_use": true})
+        );
     }
 
     #[test]

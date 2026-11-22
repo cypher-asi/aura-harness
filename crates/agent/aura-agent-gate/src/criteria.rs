@@ -16,7 +16,7 @@
 //! the request through its agent's kernel, so the call is recorded like
 //! any other model call.
 
-use aura_model::model_catalog::LOCAL_PREFIX;
+use aura_model::model_catalog::{takes_forced_tool_choice, LOCAL_PREFIX};
 use aura_model::{
     ContentBlock, Message, ModelCallPurpose, ModelRequest, ModelRequestKind, ModelResponse,
     ReasonerError, ThinkingEffort, ToolChoice, ToolDefinition,
@@ -301,6 +301,9 @@ pub fn writer(candidates: &[Candidate]) -> Option<&Candidate> {
 
 /// The request that asks `model` for the acceptance criteria of
 /// `prompt`, sent with the user's `auth_token` when the route needs one.
+/// The [`CRITERIA_TOOL`] call is forced where `model` takes that
+/// ([`takes_forced_tool_choice`]); elsewhere it is asked for, and a reply
+/// in JSON text counts too ([`criteria_in`]).
 ///
 /// # Errors
 /// Returns the builder's error when `model` is empty.
@@ -329,9 +332,14 @@ pub fn request(
     if local {
         builder.tool_choice(ToolChoice::None)
     } else {
+        let choice = if takes_forced_tool_choice(model) {
+            ToolChoice::tool(CRITERIA_TOOL)
+        } else {
+            ToolChoice::Auto
+        };
         builder
             .tools(vec![criteria_tool()])
-            .tool_choice(ToolChoice::tool(CRITERIA_TOOL))
+            .tool_choice(choice)
             .parallel_tool_use(false)
     }
     .try_build()
@@ -533,7 +541,6 @@ mod tests {
         assert!(!sent.contains("characters omitted"), "{sent}");
         assert_eq!(built.system, SYSTEM_PROMPT);
         assert_eq!(built.auth_token.as_deref(), Some("jwt"));
-        assert!(matches!(&built.tool_choice, ToolChoice::Tool { name } if name == CRITERIA_TOOL));
         assert_eq!(built.tools[0].name, CRITERIA_TOOL);
         assert_eq!(
             built.tools[0].input_schema["properties"]["items"]["items"]["properties"]["kind"]
@@ -542,6 +549,36 @@ mod tests {
         );
         assert!(sent.ends_with("Do not carry it out."), "{sent}");
         assert!(request("", "hi", None).is_err());
+    }
+
+    #[test]
+    fn the_tool_is_forced_only_where_the_model_takes_that() {
+        let choice = |model: &str| request(model, "add a flag", None).unwrap().tool_choice;
+        assert!(
+            matches!(choice(SONNET), ToolChoice::Auto),
+            "sonnet 5.5 rejects a forced tool"
+        );
+        assert!(matches!(choice("claude/claude-opus-5-5"), ToolChoice::Auto));
+        for model in ["claude/claude-sonnet-4-6", "chatgpt/gpt-5.4"] {
+            assert!(
+                matches!(choice(model), ToolChoice::Tool { name } if name == CRITERIA_TOOL),
+                "{model}"
+            );
+        }
+        let built = request(SONNET, "add a flag", None).unwrap();
+        assert_eq!(
+            built.tools[0].name, CRITERIA_TOOL,
+            "the tool is still offered"
+        );
+        let prose = Message::assistant(
+            "Here are the criteria:\n{\"items\": [{\"text\": \"adds --dry-run\", \
+             \"kind\": \"interface\"}], \"strict\": false}",
+        );
+        assert_eq!(
+            criteria_in(&prose).map(|c| c.items.len()),
+            Some(1),
+            "an answer in text counts"
+        );
     }
 
     #[test]

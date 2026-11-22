@@ -313,46 +313,58 @@ pub(crate) fn criteria_writer_for(
 }
 
 /// Ask `model` through `kernel`, so the call is recorded, for the
-/// acceptance criteria of `text`. `None` when the call failed or timed
-/// out, or the reply gave none: the work is then reviewed as it would be
-/// without them.
+/// acceptance criteria of `text`. `Ok(None)` when the reply gave none:
+/// the work is then reviewed as it would be without them.
+///
+/// # Errors
+/// Says why, as a line for the chat, when the request could not be built
+/// or the call failed or timed out. The work goes on without criteria
+/// then too.
 pub(crate) async fn write_criteria(
     kernel: &Kernel,
     model: &str,
     text: &str,
     auth_token: Option<String>,
-) -> Option<Arc<Criteria>> {
+) -> Result<Option<Arc<Criteria>>, String> {
+    let failed = |error: String| {
+        warn!(%model, %error, "Could not write the acceptance criteria");
+        Err(format!(
+            "gate: {} wrote no acceptance criteria: {error}",
+            aura_model::model_catalog::route_label(model)
+        ))
+    };
     let request = match criteria::request(model, text, auth_token) {
         Ok(request) => request,
-        Err(e) => {
-            warn!(%model, error = %e, "Could not build the request for acceptance criteria");
-            return None;
-        }
+        Err(e) => return failed(format!("could not build the request ({e})")),
     };
     let response = match tokio::time::timeout(CRITERIA_TIMEOUT, kernel.reason(request)).await {
         Ok(Ok(result)) => result.response,
-        Ok(Err(e)) => {
-            warn!(%model, error = %e, "The call for acceptance criteria failed");
-            return None;
-        }
+        Ok(Err(e)) => return failed(format!("the call failed ({e})")),
         Err(_) => {
-            warn!(%model, "The call for acceptance criteria timed out");
-            return None;
+            return failed(format!(
+                "the call took over {}s",
+                CRITERIA_TIMEOUT.as_secs()
+            ))
         }
     };
     let Some(found) = criteria::criteria_of(&response) else {
         warn!(%model, "The reply gave no acceptance criteria");
-        return None;
+        return Ok(None);
     };
     info!(%model, criteria = found.items.len(), strict = found.strict, "Wrote the acceptance criteria");
-    Some(Arc::new(found))
+    Ok(Some(Arc::new(found)))
 }
 
 /// The acceptance criteria of `text`, a prompt asking for `category` that
 /// Gate routes among `candidates`, written through `kernel` when Gate's
 /// settings call for them ([`criteria_writer_for`]). With criteria `on`,
 /// work they find exacting is rated hard in `difficulty`, so it starts
-/// on a model that can meet them.
+/// on a model that can meet them. `Ok(None)` when none are due or the
+/// writer gave none.
+///
+/// # Errors
+/// Says why, as a line for the chat, when the writer could not be asked
+/// ([`write_criteria`]).
 pub(crate) async fn hold_to_criteria(
     kernel: &Kernel,
     (live, candidates): (&GateLive, &[Candidate]),
@@ -360,15 +372,19 @@ pub(crate) async fn hold_to_criteria(
     difficulty: &mut Option<Difficulty>,
     text: &str,
     auth_token: Option<String>,
-) -> Option<Arc<Criteria>> {
-    let writer = criteria_writer_for(live, candidates, category)?;
-    let found = write_criteria(kernel, &writer, text, auth_token).await?;
+) -> Result<Option<Arc<Criteria>>, String> {
+    let Some(writer) = criteria_writer_for(live, candidates, category) else {
+        return Ok(None);
+    };
+    let Some(found) = write_criteria(kernel, &writer, text, auth_token).await? else {
+        return Ok(None);
+    };
     let acted = live.settings().criteria == ReviewMode::On;
     if acted && found.exacting() && *difficulty != Some(Difficulty::Hard) {
         info!(was = ?difficulty, "The acceptance criteria rate the work hard");
         *difficulty = Some(Difficulty::Hard);
     }
-    Some(found)
+    Ok(Some(found))
 }
 
 /// What the worker is told of `criteria` after its prompt, with criteria

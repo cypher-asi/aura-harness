@@ -1272,17 +1272,22 @@ async fn run_prompt(
     let category = label.category;
     let mut difficulty = Some(label.difficulty);
     let criteria = match routing {
-        ArmRouting::Gate { .. } => {
-            gate_record::hold_to_criteria(
-                &session.kernel,
-                (&hub.gate, &plan.candidates),
-                category,
-                &mut difficulty,
-                text,
-                config.auth_token.clone(),
-            )
-            .await
-        }
+        ArmRouting::Gate { .. } => match gate_record::hold_to_criteria(
+            &session.kernel,
+            (&hub.gate, &plan.candidates),
+            category,
+            &mut difficulty,
+            text,
+            config.auth_token.clone(),
+        )
+        .await
+        {
+            Ok(criteria) => criteria,
+            Err(problem) => {
+                ui.send(system_message(problem)).await;
+                None
+            }
+        },
         ArmRouting::Pinned(_) => None,
     };
     let work = Work::turn(category).of(difficulty);

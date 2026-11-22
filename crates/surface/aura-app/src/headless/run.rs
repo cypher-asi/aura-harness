@@ -1157,7 +1157,9 @@ impl Headless {
                 text,
                 config.auth_token.clone(),
             )
-            .await;
+            .await
+            .ok()
+            .flatten();
             told = gate_record::worker_note_for(&self.hub.gate, self.criteria.as_deref());
         }
         let route = match self
