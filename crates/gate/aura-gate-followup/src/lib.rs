@@ -964,6 +964,143 @@ mod tests {
         );
     }
 
+    /// The names of `n` definitions a change added.
+    fn added(n: usize) -> Vec<String> {
+        (1..=n).map(|at| format!("name_{at}")).collect()
+    }
+
+    /// What the model is told goes to it as it is, so its bytes are
+    /// pinned.
+    #[test]
+    fn the_messages_to_the_model_are_pinned() {
+        assert_eq!(
+            NUDGE_PROMPT,
+            "You changed files but did not run any test or build to check the change. Before \
+             you finish, run the tests that cover what you changed (run them the way this \
+             project or task says commands run, for example through its own wrapper script), \
+             and fix anything that fails. If no test covers it, run the build or type check, or \
+             run the changed code on a few cases from the request with a short script; if the \
+             project has no tests, do not add test files the request did not ask for. Then \
+             write your final answer in full, as the reply the user will read: what you changed \
+             and why, and what you ran to check it and how it went."
+        );
+        assert_eq!(
+            repair_prompt("\n1. `int` accepts `'1.1'`.\n2. The docs are stale.\n\n"),
+            "Before your work was accepted, a reviewer went through your change against the \
+             request and found it unfinished:\n\n1. `int` accepts `'1.1'`.\n2. The docs are \
+             stale.\n\nFix what it found. If a finding is wrong, say why and leave that part as \
+             it is. Run the tests that cover the change (the way this project or task says \
+             commands run). Then write your final answer in full, as the reply the user will \
+             read: what you changed and why, and what you ran to check it and how it went."
+        );
+    }
+
+    /// What the model is told of what no test names, after the names.
+    const UNCOVERED_REST: &str = ", which your change added, so they never ran the new code. \
+        Before you finish, write tests that call it and check what it returns against what the \
+        request asks for, taking the expected values from the request (including the exact \
+        format of any output it specifies) rather than from what your code prints. Run them \
+        the way this project or task says commands run and fix anything that fails. Then write \
+        your final answer in full, as the reply the user will read: what you changed and why, \
+        and what you ran to check it and how it went.";
+
+    #[test]
+    fn the_message_naming_what_no_test_names_is_pinned() {
+        let eight = "`name_1`, `name_2`, `name_3`, `name_4`, `name_5`, `name_6`, `name_7`, \
+                     `name_8`";
+        for (names, listed) in [
+            (1, "`name_1`".to_string()),
+            (8, eight.to_string()),
+            (10, format!("{eight}, 2 more")),
+        ] {
+            assert_eq!(
+                uncovered_prompt(&added(names)),
+                format!("The tests you ran passed, but no test names {listed}{UNCOVERED_REST}")
+            );
+        }
+    }
+
+    /// The signs a repair lists are told the model as they are, so their
+    /// words are pinned.
+    #[test]
+    fn a_repair_for_every_sign_is_pinned() {
+        assert_eq!(
+            sign_repair_prompt(&Flag::ALL),
+            "Before your work was accepted, the harness found signs that it is not finished:\n\
+             - the last test or build ran through a pipe or a chain of commands, so its exit \
+             status is not the check's own\n\
+             - the last test or build exited with success, but what it printed shows failures \
+             or errors\n\
+             - the last test or build printed failures or errors, and its exit status was \
+             another command's\n\
+             - the final reply says the work was not verified or not tested\n\
+             - the final reply says tests still fail\n\
+             - no test or build was run to its end\n\
+             - the request asks for a code change, but no file was changed\n\
+             - the final reply says the work could not be done or was left unfinished\n\
+             - the attempt stopped on a limit (iterations, budget or a stall) instead of \
+             finishing\n\
+             - files were changed by shell commands rather than the file tools\n\
+             - a file was changed after the last test or build ran\n\
+             - the final reply says the tests that were run do not cover the change\n\
+             - no test was added or changed\n\
+             - the last test or build ran only tests in files the attempt wrote itself, so no \
+             test it did not write checked the work\n\n\
+             Go back over the request and your change, and fix what is missing or wrong. Run \
+             the tests that cover the change (the way this project or task says commands run). \
+             Then write your final answer in full, as the reply the user will read: what you \
+             changed and why, and what you ran to check it and how it went."
+        );
+    }
+
+    /// The reasons for a review and the suspicions of unchecked work are
+    /// told the reviewer and the judge as they are, so their words are
+    /// pinned.
+    #[test]
+    fn the_reasons_given_the_reviewer_and_the_judge_are_pinned() {
+        let why = [
+            Why::Hard,
+            Why::Sign(Flag::NoCheck),
+            Why::Uncovered,
+            Why::Criteria,
+        ];
+        assert_eq!(
+            why.map(Why::name),
+            ["hard", "no_check", "uncovered", "criteria"]
+        );
+        assert_eq!(
+            why.map(Why::describe),
+            [
+                "the task was rated hard, and hard work is reviewed before it is accepted",
+                "no test or build was run to its end",
+                "the tests it ran passed, but no test names anything its change added, so they \
+                 never ran the new code",
+                "acceptance criteria were written down before the work started, and the work is \
+                 checked against each before it is accepted",
+            ]
+        );
+        assert_eq!(
+            [
+                Suspicion::NoChanges,
+                Suspicion::GaveUp,
+                Suspicion::HitLimit,
+                Suspicion::Unverified,
+                Suspicion::Uncovered,
+            ]
+            .map(Suspicion::describe),
+            [
+                "the request asks for a code change, but no file was changed",
+                "the final reply says the work could not be done or was left unfinished",
+                "the attempt stopped on a limit (iterations, budget or a stall) instead of \
+                 finishing",
+                "a test or build it ran exited with success, but the final reply says the work \
+                 was not verified or not tested",
+                "the tests it ran passed, but no test names anything its change added, so they \
+                 never ran the new code",
+            ]
+        );
+    }
+
     #[test]
     fn a_change_nobody_checked_is_nudged_then_checked_by_the_harness() {
         let changed = ended(2, "Done.");

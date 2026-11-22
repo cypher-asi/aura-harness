@@ -879,6 +879,119 @@ mod tests {
         }
     }
 
+    /// A turn with every kind of call and message the evidence reads.
+    fn every_kind() -> Vec<Message> {
+        let piped = Message::new(
+            Role::User,
+            vec![ContentBlock::ToolResult {
+                tool_use_id: "5".to_string(),
+                content: ToolResultContent::Json(json!({
+                    "exit_code": 0,
+                    "ok": true,
+                    "stderr": "",
+                    "stdout": "test result: ok. 3 passed; 0 failed"
+                })),
+                is_error: false,
+            }],
+        );
+        let failed = Message::new(
+            Role::User,
+            vec![ContentBlock::ToolResult {
+                tool_use_id: "7".to_string(),
+                content: ToolResultContent::Text(
+                    "exit_code: 101\nerror[E0308]: mismatched types".to_string(),
+                ),
+                is_error: true,
+            }],
+        );
+        vec![
+            Message::user("Make the parser strict."),
+            Message::assistant("I'll read the parser first."),
+            call("1", "read_file", json!({"path": "src/parse.rs"})),
+            result("1", "fn parse() {}"),
+            call("2", "edit_file", json!({"path": "src/parse.rs"})),
+            result("2", "Replaced 1 occurrence(s)"),
+            call("3", "write_file", json!({"path": "tests/strict.rs"})),
+            result("3", "Wrote 120 bytes to tests/strict.rs"),
+            call("4", "edit_file", json!({"path": "src/parse.rs"})),
+            result("4", "Replaced 1 occurrence(s)"),
+            call(
+                "5",
+                "run_command",
+                json!({"command": "cargo test 2>&1 | tail -3"}),
+            ),
+            piped,
+            Message::user(
+                "[harness] You changed files but did not run any test or build to check the \
+                 change.",
+            ),
+            call(
+                "6",
+                "run_command",
+                json!({"command": "sed -i 's/a/b/' src/lex.rs"}),
+            ),
+            result("6", ""),
+            call(
+                "7",
+                "run_command",
+                json!({"program": "cargo", "args": ["build"]}),
+            ),
+            failed,
+            call(
+                "8",
+                "run_command",
+                json!({"command": "cargo test", "background": true}),
+            ),
+            result("8", "started in the background"),
+            call("9", "delete_file", json!({"path": "src/old.rs"})),
+            result("9", "Deleted src/old.rs"),
+            Message::assistant("  The parser is strict now, but the build still fails.\n"),
+        ]
+    }
+
+    /// The evidence is written to Gate's attempt log as it is serialized
+    /// here, so its bytes are pinned.
+    #[test]
+    fn the_evidence_written_to_the_log_is_pinned() {
+        let mut evidence = Evidence::of(&every_kind());
+        evidence.note_changed(&[
+            "src/parse.rs".to_string(),
+            "tests/strict.rs".to_string(),
+            "src/old.rs".to_string(),
+            "src/lex.rs".to_string(),
+        ]);
+        evidence.hit_limit = Some(false);
+        assert_eq!(
+            serde_json::to_string(&evidence).unwrap(),
+            r#"{"calls":11,"commands":4,"checks_run":2,"nudges":1,"checks":[{"command":"cargo test 2>&1 | tail -3","passed":true,"output":"test result: ok. 3 passed; 0 failed"},{"command":"cargo build","passed":false,"output":"exit_code: 101\nerror[E0308]: mismatched types"}],"files_edited":["src/parse.rs","tests/strict.rs","src/old.rs"],"files_written":["tests/strict.rs"],"files_changed":4,"changed_paths":["src/parse.rs","tests/strict.rs","src/old.rs","src/lex.rs"],"changed_after_check":true,"hit_limit":false,"reply":"The parser is strict now, but the build still fails."}"#
+        );
+        assert_eq!(
+            flags(&evidence, PromptCategory::MultiFileChange),
+            [Flag::ReplyFailures, Flag::ShellEdit, Flag::StaleCheck]
+        );
+        assert_eq!(
+            serde_json::to_string(&Flag::ALL).unwrap(),
+            r#"["masked_check","check_output_failures","masked_check_with_failures","reply_unverified","reply_failures","no_check","no_changes","gave_up","hit_limit","shell_edit","stale_check","reply_not_covered","no_test_changed","own_tests_only"]"#
+        );
+        assert_eq!(
+            crate::checks::checks_seen(&every_kind()),
+            [
+                crate::checks::CheckSeen {
+                    command: "cargo test 2>&1 | tail -3".to_string(),
+                    passed: true,
+                    by_output: true,
+                    output: r#"{"exit_code":0,"ok":true,"stderr":"","stdout":"test result: ok. 3 passed; 0 failed"}"#.to_string(),
+                },
+                crate::checks::CheckSeen {
+                    command: "cargo build".to_string(),
+                    passed: false,
+                    by_output: false,
+                    output: "exit_code: 101\nerror[E0308]: mismatched types".to_string(),
+                },
+            ]
+        );
+    }
+
     #[test]
     fn long_output_keeps_its_end_and_a_long_reply_its_start() {
         let long = format!("{}END", "x".repeat(3 * KEPT_TEXT));
