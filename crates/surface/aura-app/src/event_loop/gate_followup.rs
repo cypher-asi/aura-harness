@@ -367,7 +367,7 @@ impl FollowUp {
         ran: (&str, Option<ThinkingEffort>),
         workspace: &Path,
     ) -> Self {
-        let judge = gate_record::verdict_judge_for(candidates);
+        let judge = gate_record::verdict_judge_for(candidates, ran.0);
         let stronger =
             aura_agent_gate::has_stronger_model(&live.stats(), RouteLevel::Turn, ran, candidates);
         if !stronger {
@@ -1107,6 +1107,62 @@ mod tests {
                 ..Allowed::default()
             },
             "max on the same model is not somewhere to go"
+        );
+    }
+
+    #[test]
+    fn work_is_judged_and_reviewed_on_its_own_model_from_the_standard_tier_up() {
+        use aura_agent_gate::Candidate;
+        use aura_core_types::{Hash, OutcomePayload};
+        use aura_model::model_catalog::{ModelBackend, ModelTier};
+        const HAIKU: &str = "claude/claude-haiku-5-5";
+        const SONNET: &str = "claude/claude-sonnet-5-5";
+        const OPUS: &str = "claude/claude-opus-5-5";
+        let candidate = |id: &str, tier, cost_usd| Candidate {
+            id: id.to_string(),
+            label: id.to_string(),
+            backend: ModelBackend::Claude,
+            tier,
+            cost_usd: Some(cost_usd),
+        };
+        let candidates = [
+            candidate(HAIKU, ModelTier::Fast, 0.1),
+            candidate(SONNET, ModelTier::Standard, 2.0),
+            candidate(OPUS, ModelTier::Frontier, 4.0),
+        ];
+        let live = GateLive::new(aura_config::GateConfig {
+            explore_rate: 0.0,
+            ..aura_config::GateConfig::defaults()
+        });
+        let workspace = tempfile::tempdir().unwrap();
+        let on = |model| FollowUp::new(&live, &candidates, (model, None), workspace.path());
+        let closing = |model| {
+            let follow_up = on(model);
+            (follow_up.judge, follow_up.reviewer)
+        };
+        let sonnet = (Some(SONNET.to_string()), Some(SONNET.to_string()));
+        assert_eq!(closing(HAIKU), sonnet, "a fast model's work goes to Sonnet");
+        assert_eq!(closing(SONNET), sonnet);
+        assert_eq!(
+            closing(OPUS),
+            (Some(OPUS.to_string()), None),
+            "the strongest tier's work is judged but not reviewed"
+        );
+
+        let failed = OutcomePayload {
+            prompt_tx: Hash::from_content(b"fix the parser"),
+            category: PromptCategory::Debugging,
+            model: SONNET.to_string(),
+            success: Some(false),
+            signal: OutcomeSignal::ChecksFailed,
+            cost_usd: 0.01,
+            subtask_cost_usd: 0.0,
+            latency_ms: 10,
+        };
+        assert_eq!(
+            gate_record::judge_for(&live, &candidates, &failed).as_deref(),
+            Some(OPUS),
+            "whether a failure was the model's fault is still the strongest model's call"
         );
     }
 

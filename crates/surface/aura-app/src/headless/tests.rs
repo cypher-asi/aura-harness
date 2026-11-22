@@ -1556,10 +1556,11 @@ async fn unchecked_work_that_looks_unfinished_goes_to_the_judge_then_moves_up() 
             GATE_HAIKU,
             GATE_SONNET,
             GATE_SONNET,
-            GATE_OPUS,
+            GATE_SONNET,
             GATE_OPUS,
             GATE_OPUS
-        ]
+        ],
+        "Sonnet's unchecked work is judged by Sonnet, Opus's by Opus"
     );
     {
         let requests = requests.lock().unwrap();

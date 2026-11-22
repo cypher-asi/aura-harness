@@ -1719,7 +1719,7 @@ impl AgentHub {
         if let (Some(outcome), None, Some(candidates)) =
             (ended.as_mut(), end.signal, gate.candidates.as_deref())
         {
-            if let Some(judge) = gate_record::verdict_judge_for(candidates) {
+            if let Some(judge) = gate_record::verdict_judge_for(candidates, &model) {
                 let workspace = session.kernel.agent_workspace();
                 let diff = files_before
                     .as_ref()

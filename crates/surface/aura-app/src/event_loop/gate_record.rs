@@ -17,6 +17,7 @@ use aura_core_types::{
     AgentId, Difficulty, Hash, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload,
     Transaction, TransactionType,
 };
+use aura_model::model_catalog::{infer_tier, ModelTier};
 use aura_store_db::ReadStore;
 use std::sync::Arc;
 use std::time::Duration;
@@ -134,17 +135,25 @@ pub(crate) async fn judge_failed(
     Some((outcome, judged))
 }
 
-/// The model that gives the verdict on work Gate routed among
-/// `candidates` that no check vouches for: the same model as
-/// [`judge_for`]'s, whatever the work ran on, since every routed turn
-/// ends with a verdict. `None` only when there are no candidates.
-pub(crate) fn verdict_judge_for(candidates: &[Candidate]) -> Option<String> {
-    aura_agent_gate::compare::default_against(candidates).map(|judge| judge.id.clone())
+/// The model that gives the verdict on work done on `model`, Gate routing
+/// among `candidates`, that no check vouches for, since every routed turn
+/// ends with a verdict: `model` itself when it is a standard model or
+/// stronger, so Sonnet judges Sonnet's work at Sonnet's price, and for a
+/// weaker model's work the cheapest standard model, else the strongest
+/// ([`aura_agent_gate::router::fixed_pick`]). Whether a failure was the
+/// model's fault is still [`judge_for`]'s to say. `None` only when a weak
+/// model's work has no candidates to be judged by.
+pub(crate) fn verdict_judge_for(candidates: &[Candidate], model: &str) -> Option<String> {
+    if tier_of(model, candidates) >= ModelTier::Standard {
+        return Some(model.to_string());
+    }
+    aura_agent_gate::router::fixed_pick(candidates).map(|judge| judge.id.clone())
 }
 
 /// The model that reviews work on `model` before it stands, Gate routing
-/// among `candidates`: the same model as [`judge_for`]'s. `None` when the
-/// judge is switched off or the work ran on a model as strong as it.
+/// among `candidates`: the one that gives the verdict on its unchecked
+/// work ([`verdict_judge_for`]). `None` when the judge is switched off or
+/// the work ran on the strongest tier, whose work is not reviewed.
 pub(crate) fn reviewer_for(
     live: &GateLive,
     candidates: &[Candidate],
@@ -153,8 +162,19 @@ pub(crate) fn reviewer_for(
     if !live.settings().judge {
         return None;
     }
-    let judge = aura_agent_gate::compare::default_against(candidates)?;
-    turn_judge::judges(&judge.id, model, candidates).then(|| judge.id.clone())
+    let strongest = aura_agent_gate::compare::default_against(candidates)?;
+    if !turn_judge::judges(&strongest.id, model, candidates) {
+        return None;
+    }
+    verdict_judge_for(candidates, model)
+}
+
+/// The tier of `model`: its candidate's, else what its name says.
+fn tier_of(model: &str, candidates: &[Candidate]) -> ModelTier {
+    candidates
+        .iter()
+        .find(|c| c.id == model)
+        .map_or_else(|| infer_tier(model), |c| c.tier)
 }
 
 /// Ask `judge` through `kernel` whether the work of `ended`, which no

@@ -7,6 +7,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Gate's closing verdict on Sonnet's work runs on Sonnet
+
+##### Changed
+
+- Work no check vouches for is now judged by the model that did it,
+  when that is a standard model or stronger, and by the cheapest
+  standard model (Sonnet) when a fast model did it; so is the review
+  of work about to stand. Both ran on the strongest Opus, at twice
+  Sonnet's price, whatever the work ran on: in Compare #34 Gate's
+  checking of Sonnet's work cost more than the work itself and changed
+  no outcome. Opus's unchecked work is judged by Opus as before, and
+  whether a failed check was the model's fault is still the strongest
+  model's call.
+
 ### Gate's nudge leaves the last reply a full answer
 
 ##### Changed
