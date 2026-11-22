@@ -7,6 +7,52 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Scrolling stays smooth while many agents work
+
+##### Fixed
+
+- Agents working in chats that are not on screen no longer redraw the
+  desktop window or the terminal UI. With 30 agents streaming behind a
+  long chat left alone, the desktop window's thread was busy about
+  730 ms of every second drawing frames like the one on screen; it is
+  now busy about 30 ms. Scrolling that chat with a touchpad meanwhile
+  costs about 80 ms of every second, down from 130–160 ms, and each
+  frame takes about half as long.
+- The desktop window shows its frames on the GPU from a thread of its
+  own, so waiting for the display's refresh no longer holds up input or
+  the agents' updates, and it starts no more frames than the display
+  shows. The agents' updates are taken in on a thread of their own,
+  and an editor opened from the window is waited for on another.
+- On Linux, agents run 10 nice levels below the UI: the threads that
+  run them and the builds, tests and tools they start, so a busy
+  machine no longer starves the window or the terminal UI.
+  `AURA_AGENT_NICE` sets how many levels (0 to 19; 0 leaves them as
+  they are).
+- A long chat costs a frame only what is on screen: a turn's footer is
+  formatted only when its block is laid out again, blocks above the
+  screen are stepped over by their height, and drawing stops once the
+  screen is full. A streamed chunk and its frame after 2,000 messages
+  take 1.4 ms in the desktop window, down from 1.8 ms. Lists of agents,
+  projects and processes that arrive unchanged are dropped without a
+  redraw.
+- A long chat is laid out across up to eight cores when the window is
+  resized or the chat is opened. In the desktop window, a chat of
+  2,000 messages takes 60–70 ms to lay out at a new width, down from
+  160–200 ms, and its first frame about 70 ms, down from about 200 ms;
+  in the terminal UI its first frame takes about 70 ms, down from
+  180 ms.
+- Without a GPU, the desktop window paints each frame in bands across
+  up to eight cores.
+- Agents in chats that are not on screen send their streamed text to
+  the UI five times a second rather than thirty, and the UI's queue of
+  updates from agents holds 4,096 rather than 200, so a burst from many
+  agents doesn't hold them up.
+- The desktop window finds the rows and text it draws in its caches
+  with a faster hash.
+- Agents write their record entries without waiting on each other's
+  writes, and an append no longer reads back and decodes the 50
+  entries before it to get their context hashes.
+
 ### Benchmark arms with a model per difficulty
 
 ##### Added
