@@ -121,6 +121,17 @@ impl GateLive {
         &self.settings
     }
 
+    /// Whether a draw falls in a sample of `share` of all draws. A share
+    /// of 0 or 1 takes no draw, which leaves exploration's draws as they
+    /// were.
+    pub(crate) fn sampled(&self, share: f64) -> bool {
+        use aura_agent_gate::Random;
+        if share >= 1.0 {
+            return true;
+        }
+        share > 0.0 && lock(&self.rng).unit() < share
+    }
+
     /// A copy of the table as it is now.
     pub(crate) fn stats(&self) -> GateStats {
         lock(&self.stats).clone()

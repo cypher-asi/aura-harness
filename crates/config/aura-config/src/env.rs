@@ -94,6 +94,10 @@ pub const AURA_GATE_REVIEW: &str = "AURA_GATE_REVIEW";
 /// review's verdict without acting on it) or `off`. Consumed by
 /// [`crate::GateConfig::criteria`].
 pub const AURA_GATE_CRITERIA: &str = "AURA_GATE_CRITERIA";
+/// Share (0..=1) of routed turns whose work gets a review that is only
+/// logged (`AURA_GATE_REVIEW` or `AURA_GATE_CRITERIA` at `log`). Consumed
+/// by [`crate::GateConfig::review_sample`].
+pub const AURA_GATE_REVIEW_SAMPLE: &str = "AURA_GATE_REVIEW_SAMPLE";
 
 /// The full list of env-var names this crate owns. Boundary tests use
 /// this to enforce that no other crate calls `std::env::var(...)` on
@@ -133,6 +137,7 @@ pub const ENV_VAR_NAMES: &[&str] = &[
     AURA_GATE_CHECK,
     AURA_GATE_REVIEW,
     AURA_GATE_CRITERIA,
+    AURA_GATE_REVIEW_SAMPLE,
 ];
 
 // ---------------------------------------------------------------------------

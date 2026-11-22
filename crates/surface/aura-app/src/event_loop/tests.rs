@@ -2577,8 +2577,9 @@ async fn debugging_turn_under_gate(
 }
 
 /// [`steady_gate`] that reviews work about to stand as `review` says,
-/// with an attempt log (in the folder returned) in which checked work
-/// that changed no file has been wrong often enough to be reviewed.
+/// every turn a review it only logs, with an attempt log (in the folder
+/// returned) in which checked work that changed no file has been wrong
+/// often enough to be reviewed.
 fn reviewing_gate(review: aura_config::ReviewMode) -> (GateLive, TempDir) {
     use aura_agent_gate::attempt_log::{Attempt, AttemptLog, Line, Terms, Truth, TruthSource};
     use aura_agent_gate::evidence::Evidence;
@@ -2626,6 +2627,7 @@ fn reviewing_gate(review: aura_config::ReviewMode) -> (GateLive, TempDir) {
     let gate = GateLive::new(aura_config::GateConfig {
         explore_rate: 0.0,
         review,
+        review_sample: 1.0,
         ..aura_config::GateConfig::defaults()
     });
     gate.log_attempts_to(log);

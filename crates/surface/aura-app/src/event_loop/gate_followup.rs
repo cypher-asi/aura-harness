@@ -360,7 +360,8 @@ impl FollowUp {
     /// chose, when it chose one), routed among `candidates`,
     /// working in `workspace`: the judge's verdict on unchecked work
     /// always, and when a candidate is a stronger model, so the work has
-    /// somewhere to go, the others Gate's settings allow.
+    /// somewhere to go, the others Gate's settings allow, a review that
+    /// is only logged on the share of attempts they say.
     pub(crate) fn new(
         live: &GateLive,
         candidates: &[Candidate],
@@ -390,21 +391,21 @@ impl FollowUp {
             .then(|| check_command(workspace))
             .flatten();
         let reviewer = gate_record::reviewer_for(live, candidates, ran.0);
+        let logs = [settings.review, settings.criteria].contains(&ReviewMode::Log);
+        let logged = reviewer.is_some() && logs && live.sampled(settings.review_sample);
+        // `log` differs from `off` only by the review it logs.
+        let mode = |mode: ReviewMode| match mode {
+            _ if reviewer.is_none() => ReviewMode::Off,
+            ReviewMode::Log if !logged => ReviewMode::Off,
+            mode => mode,
+        };
         Self {
             allowed: Allowed {
                 nudge: settings.nudge,
                 harness_check: check.is_some(),
                 judge: judge.is_some(),
-                review: if reviewer.is_some() {
-                    settings.review
-                } else {
-                    ReviewMode::Off
-                },
-                criteria: if reviewer.is_some() {
-                    settings.criteria
-                } else {
-                    ReviewMode::Off
-                },
+                review: mode(settings.review),
+                criteria: mode(settings.criteria),
             },
             taken: Taken::default(),
             check,
@@ -1164,6 +1165,52 @@ mod tests {
             Some(OPUS),
             "whether a failure was the model's fault is still the strongest model's call"
         );
+    }
+
+    #[test]
+    fn a_review_that_is_only_logged_is_asked_on_a_sample_of_attempts() {
+        use aura_agent_gate::Candidate;
+        use aura_model::model_catalog::{ModelBackend, ModelTier};
+        const SONNET: &str = "claude/claude-sonnet-5-5";
+        const OPUS: &str = "claude/claude-opus-5-5";
+        let candidate = |id: &str, tier, cost_usd| Candidate {
+            id: id.to_string(),
+            label: id.to_string(),
+            backend: ModelBackend::Claude,
+            tier,
+            cost_usd: Some(cost_usd),
+        };
+        let candidates = [
+            candidate(SONNET, ModelTier::Standard, 2.0),
+            candidate(OPUS, ModelTier::Frontier, 4.0),
+        ];
+        let workspace = tempfile::tempdir().unwrap();
+        let gate = |review, criteria, review_sample| {
+            let settings = aura_config::GateConfig {
+                explore_rate: 0.0,
+                review,
+                criteria,
+                review_sample,
+                ..aura_config::GateConfig::defaults()
+            };
+            GateLive::with_rng(settings, aura_agent_gate::SplitMix64::seeded(7))
+        };
+        let allowed = |live: &GateLive| {
+            let allowed =
+                FollowUp::new(live, &candidates, (SONNET, None), workspace.path()).allowed;
+            (allowed.review, allowed.criteria)
+        };
+        let (log, on, off) = (ReviewMode::Log, ReviewMode::On, ReviewMode::Off);
+        assert_eq!(allowed(&gate(log, log, 1.0)), (log, log), "every attempt");
+        assert_eq!(allowed(&gate(log, log, 0.0)), (off, off), "none");
+        assert_eq!(
+            allowed(&gate(on, log, 0.0)),
+            (on, off),
+            "a review Gate acts on is asked whatever the share"
+        );
+        let sampled = gate(log, off, 0.25);
+        let asked = (0..200).filter(|_| allowed(&sampled).0 == log).count();
+        assert!((30..=70).contains(&asked), "{asked} of 200");
     }
 
     #[test]

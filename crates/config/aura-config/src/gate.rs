@@ -17,6 +17,7 @@
 //! | `AURA_GATE_CHECK` | `on` / `off` | `on` | [`GateConfig::harness_check`] |
 //! | `AURA_GATE_REVIEW` | `on` / `log` / `off` | `log` | [`GateConfig::review`] |
 //! | `AURA_GATE_CRITERIA` | `on` / `log` / `off` | `log` | [`GateConfig::criteria`] |
+//! | `AURA_GATE_REVIEW_SAMPLE` | f64 (0..=1) | `0.25` | [`GateConfig::review_sample`] |
 //!
 //! A value outside what a variable accepts keeps that setting's default
 //! and logs a warning naming the variable and its accepted values; the
@@ -28,14 +29,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::env::{
     lookup_string, AURA_GATE_CHECK, AURA_GATE_CRITERIA, AURA_GATE_DELEGATE, AURA_GATE_EXPLORE,
-    AURA_GATE_JUDGE, AURA_GATE_MIN_TRIES, AURA_GATE_NUDGE, AURA_GATE_REVIEW, AURA_GATE_TARGET,
-    FALSY_LITERALS, TRUTHY_LITERALS,
+    AURA_GATE_JUDGE, AURA_GATE_MIN_TRIES, AURA_GATE_NUDGE, AURA_GATE_REVIEW,
+    AURA_GATE_REVIEW_SAMPLE, AURA_GATE_TARGET, FALSY_LITERALS, TRUTHY_LITERALS,
 };
 use crate::ConfigError;
 
 const DEFAULT_TARGET: f64 = 0.85;
 const DEFAULT_MIN_TRIES: u32 = 10;
 const DEFAULT_EXPLORE_RATE: f64 = 0.05;
+const DEFAULT_REVIEW_SAMPLE: f64 = 0.25;
 
 const RATE_ACCEPTS: &str = "a number from 0 to 1";
 const MIN_TRIES_ACCEPTS: &str = "a whole number of at least 1";
@@ -136,6 +138,14 @@ pub struct GateConfig {
     ///
     /// env: `AURA_GATE_CRITERIA` (default: `log`)
     pub criteria: ReviewMode,
+    /// Share of routed turns whose work gets a review that is only
+    /// logged, with [`Self::review`] or [`Self::criteria`] at `log`; the
+    /// others skip it. A review Gate acts on is never skipped. A logged
+    /// review changes nothing about the turn it costs a call on, and a
+    /// sample says as much about how often the reviewer is right.
+    ///
+    /// env: `AURA_GATE_REVIEW_SAMPLE` (default: `0.25`)
+    pub review_sample: f64,
 }
 
 impl GateConfig {
@@ -152,6 +162,7 @@ impl GateConfig {
             harness_check: true,
             review: ReviewMode::Log,
             criteria: ReviewMode::Log,
+            review_sample: DEFAULT_REVIEW_SAMPLE,
         }
     }
 
@@ -242,6 +253,15 @@ impl GateConfig {
         ) {
             cfg.criteria = v;
         }
+        if let Some(v) = read(
+            AURA_GATE_REVIEW_SAMPLE,
+            RATE_ACCEPTS,
+            DEFAULT_REVIEW_SAMPLE,
+            parse_rate,
+            &mut rejected,
+        ) {
+            cfg.review_sample = v;
+        }
         (cfg, rejected)
     }
 }
@@ -315,6 +335,7 @@ mod tests {
         std::env::remove_var(AURA_GATE_CHECK);
         std::env::remove_var(AURA_GATE_REVIEW);
         std::env::remove_var(AURA_GATE_CRITERIA);
+        std::env::remove_var(AURA_GATE_REVIEW_SAMPLE);
     }
 
     #[test]
@@ -329,6 +350,7 @@ mod tests {
         assert!(cfg.harness_check);
         assert_eq!(cfg.review, ReviewMode::Log);
         assert_eq!(cfg.criteria, ReviewMode::Log);
+        assert_eq!(cfg.review_sample, 0.25);
     }
 
     #[test]
@@ -387,6 +409,7 @@ mod tests {
         std::env::set_var(AURA_GATE_CHECK, "0");
         std::env::set_var(AURA_GATE_REVIEW, "off");
         std::env::set_var(AURA_GATE_CRITERIA, "on");
+        std::env::set_var(AURA_GATE_REVIEW_SAMPLE, "1");
         let cfg = GateConfig::from_env();
         clear_gate_env();
         assert_eq!(
@@ -401,6 +424,7 @@ mod tests {
                 harness_check: false,
                 review: ReviewMode::Off,
                 criteria: ReviewMode::On,
+                review_sample: 1.0,
             }
         );
     }
@@ -440,6 +464,8 @@ mod tests {
             (AURA_GATE_CHECK, "sometimes", SWITCH_ACCEPTS),
             (AURA_GATE_REVIEW, "sometimes", REVIEW_ACCEPTS),
             (AURA_GATE_CRITERIA, "sometimes", REVIEW_ACCEPTS),
+            (AURA_GATE_REVIEW_SAMPLE, "25%", RATE_ACCEPTS),
+            (AURA_GATE_REVIEW_SAMPLE, "2", RATE_ACCEPTS),
         ] {
             clear_gate_env();
             std::env::set_var(name, raw);

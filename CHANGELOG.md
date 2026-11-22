@@ -7,6 +7,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Gate's logged reviews run on a quarter of turns
+
+##### Changed
+
+- A review whose verdict is only logged (`AURA_GATE_REVIEW` or
+  `AURA_GATE_CRITERIA` at `log`, the default) is now asked on a sample
+  of routed turns, a quarter by default, instead of on every hard turn
+  and every turn with acceptance criteria. Such a review changes
+  nothing about the turn it costs a call on, and a sample still shows
+  how often the reviewer is right. A review Gate acts on (`on`) is
+  asked every time, as before.
+
+##### Added
+
+- `AURA_GATE_REVIEW_SAMPLE` (0 to 1, default `0.25`): the share of
+  routed turns whose work gets a review that is only logged.
+
 ### Gate's closing verdict on Sonnet's work runs on Sonnet
 
 ##### Changed
