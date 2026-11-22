@@ -10,7 +10,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use aura_agent_kernel::RecordObserver;
-use aura_core_types::trace::{Step, StepAction};
+use aura_core_types::trace::{Step, StepAction, TokenUsage};
 use aura_core_types::{AgentId, RecordEntry, TransactionType};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -45,6 +45,53 @@ pub struct RecordRow {
     /// Why a policy decision was made, when it says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// A model call made beside the agent's own work, from a `reasoning`
+    /// entry that names what the call was for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call: Option<CallRow>,
+    /// Where Gate sent a prompt's work, from a `user_prompt` entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<RouteRow>,
+}
+
+/// A model call made beside the agent's own work.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallRow {
+    /// Model asked.
+    pub model: String,
+    /// What the call was for (`classify`, `criteria`, `judge`, `title`).
+    pub purpose: String,
+    /// Provider stop reason, `error` when the call failed.
+    pub stop_reason: String,
+    /// Tokens the call used; `None` when it failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<TokenUsage>,
+    /// Wall time of the call, when it returned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// Why the call failed, when it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Where Gate sent a prompt's work.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteRow {
+    /// What the prompt asks for.
+    pub category: String,
+    /// How hard the classifier judged the work, when it said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub difficulty: Option<String>,
+    /// Model the work went to.
+    pub model: String,
+    /// Reasoning effort Gate chose for it, when it chose one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    /// Why the work went there (`default`, `proven`, `explore`, ...).
+    pub reason: String,
+    /// Whether Gate explored instead of taking its pick.
+    #[serde(default)]
+    pub explored: bool,
 }
 
 impl RecordRow {
@@ -54,15 +101,44 @@ impl RecordRow {
         let payload: Value = serde_json::from_slice(&entry.tx.payload).unwrap_or(Value::Null);
         let field = |name: &str| {
             payload
-                .get(name)
+                .pointer(name)
                 .and_then(Value::as_str)
                 .map(str::to_string)
         };
+        let count = |name: &str| payload.get(name).and_then(Value::as_u64);
         let policy = entry.tx.tx_type == TransactionType::PolicyDecision;
         let rule = payload.get("decided_by").and_then(|by| {
             let part = |key: &str| by.get(key).and_then(Value::as_str).unwrap_or("");
             (!part("rule").is_empty()).then(|| format!("{}.{}", part("source"), part("rule")))
         });
+        let call = field("/purpose")
+            .filter(|_| entry.tx.tx_type == TransactionType::Reasoning)
+            .map(|purpose| CallRow {
+                model: field("/model").unwrap_or_default(),
+                purpose,
+                stop_reason: snake_case(&field("/stop_reason").unwrap_or_default()),
+                usage: count("input_tokens").map(|input| TokenUsage {
+                    input,
+                    output: count("output_tokens").unwrap_or_default(),
+                    cache_write: count("cache_creation_input_tokens").unwrap_or_default(),
+                    cache_read: count("cache_read_input_tokens").unwrap_or_default(),
+                }),
+                duration_ms: count("duration_ms"),
+                error: field("/error"),
+            });
+        let route = field("/category")
+            .filter(|_| entry.tx.tx_type == TransactionType::UserPrompt)
+            .map(|category| RouteRow {
+                category,
+                difficulty: field("/difficulty"),
+                model: field("/route/model").unwrap_or_default(),
+                effort: field("/route/effort"),
+                reason: field("/route/reason").unwrap_or_default(),
+                explored: payload
+                    .pointer("/route/explored")
+                    .and_then(Value::as_bool)
+                    .unwrap_or_default(),
+            });
         Self {
             seq: entry.seq,
             tx_type: serde_json::to_value(entry.tx.tx_type)
@@ -70,15 +146,14 @@ impl RecordRow {
                 .and_then(|v| v.as_str().map(str::to_string))
                 .unwrap_or_default(),
             at_ms: entry.tx.ts_ms,
-            tool_use_id: field("tool_use_id"),
-            tool: field("tool"),
-            verdict: field("verdict"),
-            approver: payload
-                .pointer("/approval/approver/kind")
-                .and_then(Value::as_str)
-                .map(str::to_string),
+            tool_use_id: field("/tool_use_id"),
+            tool: field("/tool"),
+            verdict: field("/verdict"),
+            approver: field("/approval/approver/kind"),
             rule: rule.filter(|_| policy),
-            reason: field("reason").filter(|_| policy),
+            reason: field("/reason").filter(|_| policy),
+            call,
+            route,
         }
     }
 
@@ -87,6 +162,23 @@ impl RecordRow {
             .ok()
             .is_some_and(|v| v.as_str() == Some(self.tx_type.as_str()))
     }
+}
+
+/// `EndTurn` as `end_turn`. The kernel records a stop reason by its
+/// variant name, the agent loop by its wire name.
+fn snake_case(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 4);
+    for (i, c) in name.chars().enumerate() {
+        if c.is_ascii_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Fill `links.record_seqs` on `steps` from `rows`. Returns how many
@@ -197,6 +289,8 @@ mod tests {
             approver: None,
             rule: None,
             reason: None,
+            call: None,
+            route: None,
         }
     }
 
@@ -236,6 +330,109 @@ mod tests {
         assert_eq!(r.approver.as_deref(), Some("user"));
         assert_eq!(r.rule.as_deref(), Some("mode.ask_on_write"));
         assert_eq!(r.reason.as_deref(), Some("asked the user"));
+    }
+
+    #[test]
+    fn rows_reduce_gate_calls_and_routes() {
+        let agent = AgentId::generate();
+        let reduce = |seq: u64, tx_type: TransactionType, payload: Value| {
+            let tx =
+                Transaction::new_chained(agent, tx_type, Bytes::from(payload.to_string()), None);
+            RecordRow::from_entry(&RecordEntry::builder(seq, tx).build())
+        };
+        let classify = reduce(
+            1,
+            TransactionType::Reasoning,
+            json!({
+                "model": "claude-haiku-5-5",
+                "stop_reason": "EndTurn",
+                "input_tokens": 900,
+                "output_tokens": 40,
+                "cache_read_input_tokens": 100,
+                "duration_ms": 700,
+                "purpose": "classify",
+            }),
+        );
+        assert_eq!(
+            classify.call,
+            Some(CallRow {
+                model: "claude-haiku-5-5".into(),
+                purpose: "classify".into(),
+                stop_reason: "end_turn".into(),
+                usage: Some(TokenUsage {
+                    input: 900,
+                    output: 40,
+                    cache_write: 0,
+                    cache_read: 100,
+                }),
+                duration_ms: Some(700),
+                error: None,
+            })
+        );
+        let failed = reduce(
+            2,
+            TransactionType::Reasoning,
+            json!({
+                "model": "claude-sonnet-5-5",
+                "stop_reason": "Error",
+                "stage": "complete",
+                "error": "tool_choice is not supported",
+                "purpose": "criteria",
+            }),
+        )
+        .call
+        .unwrap();
+        assert_eq!(
+            (
+                failed.stop_reason.as_str(),
+                failed.usage,
+                failed.error.as_deref()
+            ),
+            ("error", None, Some("tool_choice is not supported"))
+        );
+        let agents_own = reduce(
+            3,
+            TransactionType::Reasoning,
+            json!({"model": "m", "stop_reason": "ToolUse", "input_tokens": 5, "output_tokens": 5}),
+        );
+        assert_eq!(agents_own.call, None);
+
+        let route = json!({
+            "level": "turn",
+            "model": "claude/claude-sonnet-5-5",
+            "reason": "default",
+            "explored": false,
+            "propensity": 1.0,
+            "effort": "medium",
+        });
+        let routed = reduce(
+            4,
+            TransactionType::UserPrompt,
+            json!({
+                "text": "fix the parser",
+                "category": "small_change",
+                "classifier": "claude-haiku-5-5",
+                "route": route,
+                "difficulty": "medium",
+            }),
+        );
+        assert_eq!(
+            routed.route,
+            Some(RouteRow {
+                category: "small_change".into(),
+                difficulty: Some("medium".into()),
+                model: "claude/claude-sonnet-5-5".into(),
+                effort: Some("medium".into()),
+                reason: "default".into(),
+                explored: false,
+            })
+        );
+        let pinned = reduce(
+            5,
+            TransactionType::UserPrompt,
+            json!({"text": "hi", "classifier": "", "route": route}),
+        );
+        assert_eq!(pinned.route, None);
     }
 
     #[test]

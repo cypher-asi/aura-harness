@@ -1048,6 +1048,9 @@ async fn run_attempts(
                 session.messages.clone_from(&partial.messages);
                 session.todos.clone_from(&partial.todos);
                 record_response(session, &partial.total_text).await;
+                if let Some(rec) = &turn.recorder {
+                    rec.follow_up(&message);
+                }
                 if let Err(problem) = record_user_prompt(session, message.clone()).await {
                     warn!(%problem, "Could not record Gate's message to the model");
                 }
@@ -1170,6 +1173,9 @@ async fn run_attempts(
         session.messages.clone_from(&partial.messages);
         session.todos.clone_from(&partial.todos);
         record_response(session, &partial.total_text).await;
+        if let Some(rec) = &turn.recorder {
+            rec.follow_up(&takeover);
+        }
         let recorded = match record_prompt(session, &payload).await {
             Ok((tx, _)) => tx.hash,
             Err(problem) => {

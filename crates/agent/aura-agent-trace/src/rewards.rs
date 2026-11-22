@@ -256,7 +256,11 @@ pub fn decision_effects(steps: &[Step]) -> Vec<Reward> {
         };
         let window: Vec<&Step> = steps[i + 1..]
             .iter()
-            .filter(|s| matches!(s.action, StepAction::Model(_)) && s.turn == step.turn)
+            .filter(|s| {
+                matches!(s.action, StepAction::Model(_))
+                    && s.actor == Actor::Model
+                    && s.turn == step.turn
+            })
             .take(EFFECT_WINDOW)
             .collect();
         let effective = match (source, name.as_str(), action) {

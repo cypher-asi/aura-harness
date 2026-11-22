@@ -1239,6 +1239,9 @@ async fn run_prompt(
     let (mut config, mut tools, lead) = hub.user_turn(session);
     config.observers.clear();
     config.initial_todos.clone_from(&session.todos);
+    if let Some(rec) = recorder {
+        rec.begin_turn(text);
+    }
     let classified = if plan.classifier.is_empty() {
         Err("Gate has no model to classify the prompt".to_string())
     } else {
@@ -1372,9 +1375,6 @@ async fn run_prompt(
     session
         .messages
         .push(Message::user(format!("{text}{}", note.unwrap_or_default())));
-    if let Some(rec) = recorder {
-        rec.begin_turn(text);
-    }
     // A Gate run's turn is followed up and judged as a routed turn is:
     // an attempt that checked nothing gets Gate's follow-up, work about
     // to stand is reviewed when it is hard or shows a sign of failure,
@@ -1611,6 +1611,9 @@ async fn run_prompt(
             }
         };
         if let Some((message, notice, nudge)) = carry_on {
+            if let Some(rec) = recorder {
+                rec.follow_up(&message);
+            }
             let recorded = record_prompt(session, &PromptPayload::new(message.clone())).await;
             if let Err(problem) = recorded {
                 warn!(%agent_id, %problem, "Failed to record Gate's message to the model");
@@ -1686,6 +1689,9 @@ async fn run_prompt(
             route: next.route(RouteLevel::Turn),
             ..PromptPayload::new(takeover.clone())
         };
+        if let Some(rec) = recorder {
+            rec.follow_up(&takeover);
+        }
         prompt_tx = match record_prompt(session, &escalated).await {
             Ok((tx, _)) => Some(tx.hash),
             Err(problem) => {

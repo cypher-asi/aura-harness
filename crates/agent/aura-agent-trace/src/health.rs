@@ -345,6 +345,8 @@ mod tests {
             approver: None,
             rule: None,
             reason: None,
+            call: None,
+            route: None,
         }
     }
 

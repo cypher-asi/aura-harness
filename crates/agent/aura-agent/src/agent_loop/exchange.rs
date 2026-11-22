@@ -101,6 +101,8 @@ pub(super) fn action(
             .ok()
             .and_then(|v| v.as_str().map(str::to_string))
             .unwrap_or_default(),
+        purpose: None,
+        error: None,
     }
 }
 

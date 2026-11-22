@@ -261,7 +261,7 @@ fn chat(trace: &RunTrace, blobs: Option<&FsSnapshotStore>) -> Vec<Value> {
             StepAction::UserPrompt { text } => {
                 messages.push(json!({"role": "user", "content": text}));
             }
-            StepAction::Model(action) => {
+            StepAction::Model(action) if step.actor == Actor::Model => {
                 let tool_calls: Vec<Value> = action
                     .tool_calls
                     .iter()
@@ -292,7 +292,7 @@ fn chat(trace: &RunTrace, blobs: Option<&FsSnapshotStore>) -> Vec<Value> {
                     "is_error": is_error,
                 }));
             }
-            StepAction::Harness { .. } | StepAction::TurnEnd { .. } => {}
+            StepAction::Model(_) | StepAction::Harness { .. } | StepAction::TurnEnd { .. } => {}
         }
     }
     messages

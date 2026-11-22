@@ -272,6 +272,7 @@ async fn reason_sync_error_records_failed() {
 
     let request = ModelRequest::builder("test-model", "system")
         .message(aura_model::Message::user("hello"))
+        .purpose(aura_model::ModelCallPurpose::Criteria)
         .try_build()
         .unwrap();
     let err = kernel
@@ -297,6 +298,8 @@ async fn reason_sync_error_records_failed() {
         payload.get("error").and_then(|v| v.as_str()).is_some(),
         "payload must carry an error string; got {payload}"
     );
+    assert_eq!(payload["model"], "test-model");
+    assert_eq!(payload["purpose"], "criteria");
 }
 
 /// Invariant §3 strict: the streaming handshake error path must

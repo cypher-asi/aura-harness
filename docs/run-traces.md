@@ -30,7 +30,9 @@ AURA_HOME/
     summary.json    the RunScorecard, rewritten when the run ends or is relabeled
     log.json        the run log (below), rewritten after every turn
     record.jsonl    kernel record rows seen during the run (seq, tx type, time, tool_use_id,
-                    and for policy decisions the verdict, approver, rule and reason)
+                    for policy decisions the verdict, approver, rule and reason, for a
+                    call Gate made its model, purpose, usage and error, and for a
+                    routed prompt its route)
     record/         RocksDB kernel record log (headless runs: eval, branch)
   blobs/            shared zstd-compressed blobs, addressed by the blake3 of the raw bytes
 ```
@@ -55,9 +57,11 @@ Each line of `steps.jsonl` is a `Step`:
 | `links` | Join keys: tool-use ids, files touched, blob ids, and `record_seqs` into the kernel record log. |
 | `usage`, `duration_ms` | Tokens and wall time for model and tool steps. |
 
-Harness decisions name a `DecisionSource`: `steering`, `compaction`, `budget`, `tool_pipeline`, `cache`, `policy`, `retry`, `build`, `self_review`, `thinking` or `stop`. A test in `aura-agent/src/agent_loop/decisions.rs` fails if any source loses its emit site.
+Harness decisions name a `DecisionSource`: `steering`, `compaction`, `budget`, `tool_pipeline`, `cache`, `policy`, `retry`, `build`, `self_review`, `thinking`, `stop` or `gate`. A test in `aura-agent/src/agent_loop/decisions.rs` fails if any source but `gate`, which decides outside the agent loop, loses its emit site.
 
 The model step is written as soon as the model finishes streaming, before its tool calls run, and each tool result is written when that call finishes rather than when the whole batch does. When a call waits for an approval, the recorder adds a `policy` step named `approval_wait` once the answer arrives. Its trigger holds the tool, the wait in milliseconds, the approver and the verdict, and its action is `block` if the call was denied or `warn` if the wait took 30 seconds or more.
+
+Gate's own work is in the run of the agent it routes. Each call it makes to classify a prompt, write down its criteria, or review or judge an attempt is a `model` step by `harness` with source `gate`, naming its `purpose` and, when the call failed, its `error`. These steps are counted and priced like the agent's own calls, so a run's `cost_usd` is what the compare view shows for it; replays and dataset exports leave them out. Where Gate sent the work is a `gate` decision named `route`: its action holds the model and effort, its features the category and difficulty, and its trigger the reason and whether Gate explored. A prompt Gate sends within a turn (a nudge, a send-back, a stronger model's takeover) is a `user_prompt` step by `gate` in that turn. A run whose kernel's records do not reach its trace, as an `aura eval` run's do not, holds none of these.
 
 When a run is loaded, the steps are joined to `record.jsonl`: user prompts match by order, and tool calls and results match by `tool_use_id`. Each matched step gets `record_seqs`, so the graph view can jump from a step to its kernel record row.
 
@@ -84,7 +88,7 @@ Derived rewards are recomputed from the steps every time a run is loaded, so imp
 
 ## Run log
 
-`log.json` (schema `aura.run_log/v1`) is one JSON document meant to be handed to a model reviewing the run. It holds the run's metadata, where its files are, totals, the scorecard and health checks, then each turn and each step in order: the prompt; each model call with its thinking, reply, tool calls, stop reason, usage and cost; each tool result with its output and files; each harness decision with its trigger, alternatives and features; and the turn's end. Each run spawned by a `task` call is nested in `subagents`, in the same shape, and that call names it in `child_run`. Totals count the run's own steps, plus `cost_usd_with_subagents`. Secrets are redacted as in dataset exports. A subagent's own `log.json` holds it and the runs under it only. The log of an agent that asked for a benchmark also holds that benchmark's runs in `subagents`, though no turn of its run names them. An agent with no run of its own then gets a log of its own: run id `agent-<agent>`, source `agent`, no turns, written to `AURA_HOME/logs/<agent>/log.json`. The terminal's LOG tab shows this file (see [The LOG tab](cli.md#the-log-tab)).
+`log.json` (schema `aura.run_log/v1`) is one JSON document meant to be handed to a model reviewing the run. It holds the run's metadata, where its files are, totals, the scorecard and health checks, then each turn and each step in order: the prompt; each model call with its thinking, reply, tool calls, stop reason, usage and cost, and for a call Gate made its `purpose` and any `error`; each tool result with its output and files; each harness decision with its trigger, alternatives and features; and the turn's end. Each run spawned by a `task` call is nested in `subagents`, in the same shape, and that call names it in `child_run`. Totals count the run's own steps, plus `cost_usd_with_subagents`. Secrets are redacted as in dataset exports. A subagent's own `log.json` holds it and the runs under it only. The log of an agent that asked for a benchmark also holds that benchmark's runs in `subagents`, though no turn of its run names them. An agent with no run of its own then gets a log of its own: run id `agent-<agent>`, source `agent`, no turns, written to `AURA_HOME/logs/<agent>/log.json`. The terminal's LOG tab shows this file (see [The LOG tab](cli.md#the-log-tab)).
 
 Thinking text is kept inline in `steps.jsonl` at every capture level. Runs recorded before that, and models that show no thinking, have only its length.
 

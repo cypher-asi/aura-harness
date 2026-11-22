@@ -227,6 +227,10 @@ pub enum LogEvent {
     ModelCall {
         /// Model that served the call.
         model: String,
+        /// What the harness made the call for (`classify`, `criteria`,
+        /// `judge`); `None` for the agent's own calls.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        purpose: Option<String>,
         /// The model's reasoning; `None` when it showed none or the run
         /// did not keep it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -240,6 +244,9 @@ pub enum LogEvent {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         tool_calls: Vec<LogToolCall>,
         stop_reason: String,
+        /// Why the call failed, when it did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
         usage: TokenUsage,
         cost_usd: Option<f64>,
     },
@@ -628,6 +635,7 @@ impl Ctx<'_> {
                 let usage = step.usage.unwrap_or_default();
                 LogEvent::ModelCall {
                     model: step.policy.id.clone(),
+                    purpose: action.purpose.clone(),
                     thinking_omitted: thinking.is_none() && action.thinking_chars > 0,
                     thinking,
                     thinking_chars: action.thinking_chars,
@@ -646,6 +654,7 @@ impl Ctx<'_> {
                         })
                         .collect(),
                     stop_reason: action.stop_reason.clone(),
+                    error: action.error.clone(),
                     usage,
                     cost_usd: step_cost_usd(&step.policy.id, usage),
                 }

@@ -408,6 +408,9 @@ mod tests {
             DecisionSource::Build => &["decisions::auto_build("],
             DecisionSource::Thinking => &["decisions::thinking_effort("],
             DecisionSource::Stop => &["decisions::stop("],
+            // Gate decides outside the loop; the run recorder makes its
+            // steps from the kernel's records.
+            DecisionSource::Gate => &[],
         }
     }
 

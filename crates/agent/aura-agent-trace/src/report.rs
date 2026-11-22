@@ -209,13 +209,24 @@ pub fn health_text(health: &RunHealth) -> String {
 #[must_use]
 pub fn step_line(step: &Step) -> String {
     let what = match &step.action {
-        StepAction::UserPrompt { text } => {
-            format!("user: {}", text.lines().next().unwrap_or_default())
-        }
+        StepAction::UserPrompt { text } => format!(
+            "{}: {}",
+            step.actor.label(),
+            text.lines().next().unwrap_or_default()
+        ),
         StepAction::Model(a) => {
             let calls: Vec<&str> = a.tool_calls.iter().map(|c| c.name.as_str()).collect();
             let text = a.text.lines().next().unwrap_or_default();
-            if calls.is_empty() {
+            if let Some(purpose) = &a.purpose {
+                let failed = a.error.as_deref().map_or_else(String::new, |error| {
+                    format!(" failed: {}", error.chars().take(60).collect::<String>())
+                });
+                format!(
+                    "{} {purpose} ({}){failed}",
+                    step.actor.label(),
+                    step.policy.id
+                )
+            } else if calls.is_empty() {
                 format!("model: {}", text.chars().take(80).collect::<String>())
             } else {
                 format!("model → {}", calls.join(", "))

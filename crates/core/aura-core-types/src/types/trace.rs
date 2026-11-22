@@ -57,11 +57,14 @@ pub enum DecisionSource {
     Thinking,
     /// Loop termination.
     Stop,
+    /// Gate: which model a prompt's work goes to, and the calls it makes
+    /// to classify, write criteria for and judge that work.
+    Gate,
 }
 
 impl DecisionSource {
     /// Every source, in declaration order.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Steering,
         Self::Compaction,
         Self::Budget,
@@ -73,6 +76,7 @@ impl DecisionSource {
         Self::SelfReview,
         Self::Thinking,
         Self::Stop,
+        Self::Gate,
     ];
 
     /// Stable snake-case name.
@@ -90,6 +94,7 @@ impl DecisionSource {
             Self::SelfReview => "self_review",
             Self::Thinking => "thinking",
             Self::Stop => "stop",
+            Self::Gate => "gate",
         }
     }
 }
@@ -157,6 +162,14 @@ pub enum HarnessAction {
         /// Stop reason.
         reason: String,
     },
+    /// Sent the work to a model.
+    Route {
+        /// Model the work went to.
+        model: String,
+        /// Reasoning effort it was given, when one was chosen.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effort: Option<String>,
+    },
 }
 
 impl HarnessAction {
@@ -173,6 +186,7 @@ impl HarnessAction {
             Self::Warn { .. } => "warn",
             Self::Build { .. } => "build",
             Self::Stop { .. } => "stop",
+            Self::Route { .. } => "route",
         }
     }
 }
@@ -396,6 +410,13 @@ pub struct ModelAction {
     /// Provider stop reason.
     #[serde(default)]
     pub stop_reason: String,
+    /// What the harness made the call for (`classify`, `criteria`,
+    /// `judge`); `None` for the agent's own calls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
+    /// Why the call failed, when it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Token accounting for one model call.

@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
-use aura_core_types::trace::{ModelAction, Step, StepAction};
+use aura_core_types::trace::{Actor, ModelAction, Step, StepAction};
 use aura_model::{
     ContentBlock, Message, ModelProvider, ModelRequest, ModelResponse, ProviderTrace,
     ReasonerError, Role, StopReason, Usage,
@@ -68,7 +68,9 @@ impl ReplayProvider {
             .iter()
             .filter(|s| s.seq <= upto)
             .filter_map(|s| match &s.action {
-                StepAction::Model(action) => Some(response_for(s, action, &blobs)),
+                StepAction::Model(action) if s.actor == Actor::Model => {
+                    Some(response_for(s, action, &blobs))
+                }
                 _ => None,
             })
             .collect();

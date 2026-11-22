@@ -468,17 +468,25 @@ fn step_view(
         }
         LogEvent::ModelCall {
             model,
+            purpose,
             thinking,
             thinking_chars,
             thinking_omitted,
             text,
             tool_calls,
             stop_reason,
+            error,
             usage,
             cost_usd,
         } => {
             fields.push(field("model", model));
+            if let Some(purpose) = purpose {
+                fields.push(field("for", purpose));
+            }
             fields.push(field("stop reason", stop_reason));
+            if let Some(error) = error {
+                sections.push(section("Error", error, false));
+            }
             fields.push(field(
                 "tokens",
                 format!(
@@ -513,7 +521,9 @@ fn step_view(
                 }
                 sections.push(section(&title, input, true));
             }
-            let label = if !tool_calls.is_empty() {
+            let label = if let Some(purpose) = purpose {
+                format!("gate {purpose}")
+            } else if !tool_calls.is_empty() {
                 let calls: Vec<String> = tool_calls
                     .iter()
                     .map(|call| summary::call_label(&call.name, &call.input))
@@ -529,7 +539,9 @@ fn step_view(
                 tokens(usage.input + usage.output + usage.cache_read)
             );
             cost = cost_usd.map(money).unwrap_or_default();
-            if stop_reason == "max_tokens" {
+            if let Some(error) = error {
+                Row::new("model", label, headline(error, 160), LogStatus::Error)
+            } else if stop_reason == "max_tokens" {
                 Row::new(
                     "model",
                     label,

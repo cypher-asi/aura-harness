@@ -314,6 +314,24 @@ impl RunGraph {
 
     fn apply_action(&mut self, step: &Step) {
         match &step.action {
+            StepAction::UserPrompt { text } if matches!(step.actor, Actor::Harness { .. }) => {
+                let parent = self.turn_parent(step);
+                let mut meta = Map::new();
+                meta.insert("seq".into(), json!(step.seq));
+                meta.insert("at_ms".into(), json!(step.at_ms));
+                meta.insert("prompt".into(), json!(text));
+                self.insert(GraphNode {
+                    id: format!("s{}", step.seq),
+                    kind: NodeKind::Decision,
+                    parent: Some(parent),
+                    label: "follow_up".into(),
+                    detail: excerpt(first_line(text), 60),
+                    status: NodeStatus::Warn,
+                    seq: Some(step.seq),
+                    meta,
+                    children: Vec::new(),
+                });
+            }
             StepAction::UserPrompt { text } => {
                 let id = format!("t{}", step.turn);
                 let mut meta = Map::new();
@@ -374,21 +392,35 @@ impl RunGraph {
                 if let Some(blob) = &action.message {
                     meta.insert("message_blob".into(), json!(blob));
                 }
+                if let Some(purpose) = &action.purpose {
+                    meta.insert("purpose".into(), json!(purpose));
+                }
+                if let Some(error) = &action.error {
+                    meta.insert("error".into(), json!(error));
+                }
                 let n = step.iteration.map_or(step.seq, |i| u64::from(i) + 1);
                 self.insert(GraphNode {
                     id: id.clone(),
                     kind: NodeKind::Iteration,
                     parent: Some(parent),
-                    label: format!("I{n} model"),
-                    detail: format!(
-                        "{}/{}  {}  {}{}",
-                        tokens(prompt_tokens),
-                        tokens(usage.output),
-                        secs(step.duration_ms.unwrap_or_default()),
-                        intents.first().map_or("answer", |(i, _)| i.as_str()),
-                        if truncated { "  max tokens" } else { "" }
+                    label: action.purpose.as_ref().map_or_else(
+                        || format!("I{n} model"),
+                        |purpose| format!("gate {purpose}"),
                     ),
-                    status: if truncated {
+                    detail: match &action.error {
+                        Some(error) => excerpt(first_line(error), 60),
+                        None => format!(
+                            "{}/{}  {}  {}{}",
+                            tokens(prompt_tokens),
+                            tokens(usage.output),
+                            secs(step.duration_ms.unwrap_or_default()),
+                            intents.first().map_or("answer", |(i, _)| i.as_str()),
+                            if truncated { "  max tokens" } else { "" }
+                        ),
+                    },
+                    status: if action.error.is_some() {
+                        NodeStatus::Error
+                    } else if truncated {
                         NodeStatus::Warn
                     } else {
                         NodeStatus::Ok
@@ -540,7 +572,9 @@ impl RunGraph {
                 }
                 meta.insert("links".into(), json!(step.links));
                 let status = match action {
-                    HarnessAction::Allow | HarnessAction::CacheHit { .. } => NodeStatus::Ok,
+                    HarnessAction::Allow
+                    | HarnessAction::CacheHit { .. }
+                    | HarnessAction::Route { .. } => NodeStatus::Ok,
                     HarnessAction::Build { success: true, .. } => NodeStatus::Ok,
                     HarnessAction::Build { .. } | HarnessAction::Stop { .. } => NodeStatus::Error,
                     _ => NodeStatus::Warn,
@@ -791,7 +825,11 @@ impl RunGraph {
         let calls = self.node(turn).map_or(0, |t| {
             t.children
                 .iter()
-                .filter(|c| self.node(c).is_some_and(|n| n.kind == NodeKind::Iteration))
+                .filter(|c| {
+                    self.node(c).is_some_and(|n| {
+                        n.kind == NodeKind::Iteration && !n.meta.contains_key("purpose")
+                    })
+                })
                 .count()
         });
         let id = format!("s{}:failed", step.seq);
@@ -857,6 +895,10 @@ fn decision_detail(action: &HarnessAction) -> String {
             }
         }
         HarnessAction::Stop { reason } => format!("stop {reason}"),
+        HarnessAction::Route { model, effort } => match effort {
+            Some(effort) => format!("route {model} {effort}"),
+            None => format!("route {model}"),
+        },
     }
 }
 
@@ -1032,6 +1074,8 @@ mod tests {
             approver: Some("user".into()),
             rule: Some("mode.ask".into()),
             reason: None,
+            call: None,
+            route: None,
         }
     }
 

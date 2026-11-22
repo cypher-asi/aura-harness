@@ -7,6 +7,31 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Gate's own calls are in the run log and its cost
+
+##### Fixed
+
+- A run's `summary.json` and `log.json` now hold the calls Gate makes
+  for it: classifying the prompt, writing down its criteria, and
+  reviewing or judging an attempt. Each is a `model` step by
+  `harness/gate` that names its purpose, and a failed one its error.
+  They are priced like the agent's own calls, so a run's `cost_usd` is
+  what `/compare` shows for it. Before, the log left them out, and a
+  criteria writer that failed on every call left no trace in it.
+- A compare run's turn starts in its trace before Gate classifies the
+  prompt, so Gate's calls for the prompt land in its turn, not the one
+  before.
+
+##### Added
+
+- Where Gate sent a prompt's work is a `gate/route` decision in the
+  run: the model and effort, the category and difficulty, the reason,
+  and whether Gate explored. Each prompt Gate sends within a turn (a
+  nudge, a send-back, a stronger model's takeover) is a prompt step of
+  that turn, so the log shows what the model was told between attempts.
+- The record entry of a failed model call names the model and what the
+  call was for, as a successful call's does.
+
 ### A piped test run passes only when its output shows it passed
 
 ##### Fixed

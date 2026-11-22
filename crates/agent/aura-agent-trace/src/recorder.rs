@@ -16,8 +16,9 @@ use std::thread::JoinHandle;
 use aura_agent::{AgentLoopEvent, AgentLoopResult, DebugEvent};
 use aura_config::{HarnessParams, TraceLevel};
 use aura_core_types::trace::{
-    Actor, DecisionSource, FileTouch, HarnessAction, HarnessDecision, ModelExchange, Observation,
-    PolicyKind, PolicyRef, Reward, RewardKind, RewardTarget, Step, StepAction, StepLinks,
+    Actor, DecisionSource, FileTouch, HarnessAction, HarnessDecision, ModelAction, ModelExchange,
+    Observation, PolicyKind, PolicyRef, Reward, RewardKind, RewardTarget, Step, StepAction,
+    StepLinks,
 };
 use aura_store_snapshot::{FsSnapshotStore, SnapshotStore};
 use serde_json::{json, Value};
@@ -25,7 +26,7 @@ use serde_json::{json, Value};
 use crate::activity::Activity;
 use crate::bundle::{self, now_ms, RunBundle, RunMeta, STEPS_FILE};
 use crate::health::{duration, APPROVAL_GUESS_MS, DEFAULT_SLOW_MS};
-use crate::records::RecordRow;
+use crate::records::{CallRow, RecordRow, RouteRow};
 use crate::scorecard::RunScorecard;
 use crate::{RunTrace, TraceError};
 
@@ -130,6 +131,25 @@ impl StepBuilder {
         );
         step.policy.kind = PolicyKind::Human;
         step.policy.id = "user".into();
+        step
+    }
+
+    /// A prompt Gate sent within the turn under way: a follow-up on an
+    /// attempt, or a stronger model's takeover.
+    pub fn follow_up(&mut self, text: &str, at_ms: u64) -> Step {
+        self.iteration = None;
+        self.pending_causes.clear();
+        let mut step = self.step(
+            Actor::Harness {
+                source: DecisionSource::Gate,
+            },
+            StepAction::UserPrompt {
+                text: text.to_string(),
+            },
+            at_ms,
+        );
+        step.policy.kind = PolicyKind::Harness;
+        step.policy.id = DecisionSource::Gate.as_str().into();
         step
     }
 
@@ -386,10 +406,20 @@ impl StepBuilder {
         step
     }
 
-    /// Translate one kernel record row. A policy decision that waited for
-    /// an approval becomes an `approval_wait` step: allowed, flagged when
-    /// the wait was long, or blocked when the call was denied.
+    /// Translate one kernel record row. A call Gate made becomes a model
+    /// step of its own, and where it sent a prompt's work a `route`
+    /// decision. A policy decision that waited for an approval becomes an
+    /// `approval_wait` step: allowed, flagged when the wait was long, or
+    /// blocked when the call was denied.
     pub fn on_record(&mut self, row: &RecordRow) -> Option<Step> {
+        if let Some(call) = &row.call {
+            return GATE_CALLS
+                .contains(&call.purpose.as_str())
+                .then(|| self.gate_call(row.seq, call, row.at_ms));
+        }
+        if let Some(route) = &row.route {
+            return Some(self.route(row.seq, route, row.at_ms));
+        }
         let id = row.tool_use_id.as_deref()?;
         match row.tx_type.as_str() {
             "tool_proposal" => {
@@ -430,7 +460,59 @@ impl StepBuilder {
             _ => None,
         }
     }
+
+    fn gate_call(&mut self, record_seq: u64, call: &CallRow, at_ms: u64) -> Step {
+        let mut step = self.step(
+            Actor::Harness {
+                source: DecisionSource::Gate,
+            },
+            StepAction::Model(ModelAction {
+                stop_reason: call.stop_reason.clone(),
+                purpose: Some(call.purpose.clone()),
+                error: call.error.clone(),
+                ..ModelAction::default()
+            }),
+            at_ms,
+        );
+        step.iteration = None;
+        step.policy = PolicyRef {
+            kind: PolicyKind::Model,
+            id: call.model.clone(),
+            ..PolicyRef::default()
+        };
+        step.links.record_seqs.push(record_seq);
+        step.usage = call.usage;
+        step.duration_ms = call.duration_ms;
+        step
+    }
+
+    fn route(&mut self, record_seq: u64, route: &RouteRow, at_ms: u64) -> Step {
+        let decision = HarnessDecision::new(
+            DecisionSource::Gate,
+            "route",
+            HarnessAction::Route {
+                model: route.model.clone(),
+                effort: route.effort.clone(),
+            },
+        )
+        .with_features(json!({
+            "category": route.category,
+            "difficulty": route.difficulty,
+        }))
+        .with_trigger(json!({
+            "reason": route.reason,
+            "explored": route.explored,
+        }));
+        let mut step = self.harness(&decision, at_ms);
+        step.iteration = None;
+        step.links.record_seqs.push(record_seq);
+        step
+    }
 }
+
+/// Purposes of the calls Gate makes: labelling a prompt, writing down
+/// what its work will be checked against, and reviewing or judging it.
+const GATE_CALLS: &[&str] = &["classify", "criteria", "judge"];
 
 /// Files a tool call read or wrote, derived from its input.
 #[must_use]
@@ -749,6 +831,12 @@ impl RunRecorder {
         }
     }
 
+    /// Record a prompt Gate sent within the turn under way.
+    pub fn follow_up(&self, text: &str) {
+        let step = lock(&self.builder).follow_up(text, now_ms());
+        self.emit(step);
+    }
+
     /// Record the end of a turn.
     pub fn end_turn(&self, result: &AgentLoopResult) {
         let step = lock(&self.builder).turn_end(result, now_ms());
@@ -946,6 +1034,162 @@ mod tests {
         })
     }
 
+    fn gate_row(seq: u64, call: Option<CallRow>, route: Option<RouteRow>) -> RecordRow {
+        RecordRow {
+            seq,
+            tx_type: if call.is_some() {
+                "reasoning"
+            } else {
+                "user_prompt"
+            }
+            .into(),
+            at_ms: seq,
+            tool_use_id: None,
+            tool: None,
+            verdict: None,
+            approver: None,
+            rule: None,
+            reason: None,
+            call,
+            route,
+        }
+    }
+
+    fn gate_call(model: &str, purpose: &str, usage: Option<TokenUsage>) -> CallRow {
+        CallRow {
+            model: model.into(),
+            purpose: purpose.into(),
+            stop_reason: if usage.is_some() { "end_turn" } else { "error" }.into(),
+            usage,
+            duration_ms: usage.map(|_| 900),
+            error: usage
+                .is_none()
+                .then(|| "tool_choice is not supported".into()),
+        }
+    }
+
+    #[test]
+    fn gate_calls_routes_and_follow_ups_are_steps_of_the_turn() {
+        let usage = TokenUsage {
+            input: 1_000,
+            output: 100,
+            ..TokenUsage::default()
+        };
+        let gate = Actor::Harness {
+            source: DecisionSource::Gate,
+        };
+        let mut b = StepBuilder::new("r", &HarnessParams::default(), None);
+        let mut steps = vec![b.user_prompt("fix the parser", 0)];
+
+        let classify = b
+            .on_record(&gate_row(
+                1,
+                Some(gate_call("claude-haiku-5-5", "classify", Some(usage))),
+                None,
+            ))
+            .unwrap();
+        assert_eq!((classify.turn, classify.actor), (1, gate));
+        assert_eq!(classify.policy.id, "claude-haiku-5-5");
+        assert_eq!(
+            (classify.usage, classify.duration_ms),
+            (Some(usage), Some(900))
+        );
+        assert_eq!(classify.links.record_seqs, vec![1]);
+        let StepAction::Model(action) = &classify.action else {
+            panic!("expected a model step, got {:?}", classify.action);
+        };
+        assert_eq!(action.purpose.as_deref(), Some("classify"));
+        steps.push(classify);
+
+        let failed = b
+            .on_record(&gate_row(
+                2,
+                Some(gate_call("claude-sonnet-5-5", "criteria", None)),
+                None,
+            ))
+            .unwrap();
+        let StepAction::Model(action) = &failed.action else {
+            panic!("expected a model step, got {:?}", failed.action);
+        };
+        assert_eq!(
+            action.error.as_deref(),
+            Some("tool_choice is not supported")
+        );
+        assert_eq!(failed.usage, None);
+        steps.push(failed);
+        assert!(
+            b.on_record(&gate_row(
+                3,
+                Some(gate_call("claude-haiku-5-5", "title", Some(usage))),
+                None,
+            ))
+            .is_none(),
+            "naming the chat is not Gate's"
+        );
+
+        let route = b
+            .on_record(&gate_row(
+                4,
+                None,
+                Some(RouteRow {
+                    category: "small_change".into(),
+                    difficulty: Some("medium".into()),
+                    model: "claude/claude-sonnet-5-5".into(),
+                    effort: Some("medium".into()),
+                    reason: "compare".into(),
+                    explored: false,
+                }),
+            ))
+            .unwrap();
+        let StepAction::Harness { name, action, .. } = &route.action else {
+            panic!("expected a harness step, got {:?}", route.action);
+        };
+        assert_eq!((name.as_str(), route.actor), ("route", gate));
+        assert_eq!(
+            action,
+            &HarnessAction::Route {
+                model: "claude/claude-sonnet-5-5".into(),
+                effort: Some("medium".into()),
+            }
+        );
+        let Observation::Harness { features, trigger } = &route.observation else {
+            panic!("expected what Gate saw, got {:?}", route.observation);
+        };
+        assert_eq!(
+            (&features["difficulty"], &trigger["reason"]),
+            (&json!("medium"), &json!("compare"))
+        );
+        let route_seq = route.seq;
+        steps.push(route);
+
+        let model = b.on_event(&exchange(0, &[]), 5).unwrap();
+        assert_eq!(model.links.caused_by, vec![route_seq]);
+        steps.push(model);
+        steps.push(b.turn_end(&AgentLoopResult::default(), 6));
+        let nudge = b.follow_up("Run the tests before you finish.", 7);
+        assert_eq!((nudge.turn, nudge.actor), (1, gate));
+        assert!(matches!(nudge.action, StepAction::UserPrompt { .. }));
+        steps.push(nudge);
+        steps.extend(b.on_record(&gate_row(
+            8,
+            Some(gate_call("claude-opus-5-5", "judge", Some(usage))),
+            None,
+        )));
+        assert_eq!(b.turn(), 1);
+
+        let card = RunScorecard::compute(&RunMeta::new("m", crate::RunSource::Test), &steps, &[]);
+        assert_eq!(card.turns, 1, "a follow-up is part of the turn");
+        assert_eq!(card.model_calls, 4);
+        let priced = crate::scorecard::step_cost_usd("claude-haiku-5-5", usage).unwrap()
+            + crate::scorecard::step_cost_usd("claude-opus-5-5", usage).unwrap();
+        assert!((card.cost_usd - priced).abs() < 1e-12, "{}", card.cost_usd);
+        assert_eq!(
+            card.unpriced_calls, 1,
+            "the agent's own call is to model `m`"
+        );
+        assert_eq!(card.decisions.get("gate/route"), Some(&1));
+    }
+
     #[test]
     fn builder_links_tools_to_model_and_decisions_to_next_model() {
         let mut b = StepBuilder::new("r", &HarnessParams::default(), None);
@@ -1017,6 +1261,8 @@ mod tests {
             approver: None,
             rule: None,
             reason: None,
+            call: None,
+            route: None,
         };
         let mut b = StepBuilder::new("r", &HarnessParams::default(), None);
         b.user_prompt("x", 0);

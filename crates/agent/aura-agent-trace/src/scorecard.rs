@@ -152,9 +152,14 @@ impl RunScorecard {
         card.wall_ms = steps.last().map_or(0, |s| s.at_ms.saturating_sub(start));
         let mut changed: std::collections::HashSet<&str> = std::collections::HashSet::new();
         let mut tokens_so_far = 0u64;
+        let mut prompted = None;
         for step in steps {
             match &step.action {
-                StepAction::UserPrompt { .. } => card.turns += 1,
+                StepAction::UserPrompt { .. } => {
+                    if prompted.replace(step.turn) != Some(step.turn) {
+                        card.turns += 1;
+                    }
+                }
                 StepAction::Model(_) => {
                     card.model_calls += 1;
                     card.model_ms += step.duration_ms.unwrap_or_default();
