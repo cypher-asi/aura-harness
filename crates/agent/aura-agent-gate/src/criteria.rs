@@ -523,8 +523,8 @@ mod tests {
              byte-identical (after boundary substitution) to the multipart body produced by \
              Python's standard-library email.mime.multipart.MIMEMultipart('form-data') \
              serialized with email.policy.HTTP on Python 3.\n{}\n</pr_description>",
-            "- requirement text\n".repeat(160),
-            "Constraints: run commands with sh .swe/run.\n".repeat(25),
+            "- requirement text\n".repeat(700),
+            "Constraints: run commands with sh .swe/run.\n".repeat(100),
         )
     }
 
@@ -532,8 +532,8 @@ mod tests {
     fn the_writer_reads_the_middle_of_a_long_request() {
         let prompt = multipart_prompt();
         assert!(
-            prompt.chars().count() > 4_000,
-            "longer than the classifier reads"
+            !crate::classify::prepare(&prompt).contains("byte-identical"),
+            "the classifier does not read that far"
         );
         let built = request(SONNET, &prompt, Some("jwt".into())).unwrap();
         let sent = built.messages[0].text_content();

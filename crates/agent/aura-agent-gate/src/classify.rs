@@ -25,12 +25,13 @@ use serde_json::json;
 use crate::router::Candidate;
 
 /// Characters kept from the start of a long prompt: it says what the
-/// prompt asks for.
-const HEAD_CHARS: usize = 3_000;
+/// prompt asks for, and what makes the work hard (an exact output format,
+/// a reference to match) often comes well after its first lines.
+const HEAD_CHARS: usize = 12_000;
 
 /// Characters kept from the end of a long prompt: requirements and
 /// acceptance criteria often close it.
-const TAIL_CHARS: usize = 1_000;
+const TAIL_CHARS: usize = 4_000;
 
 /// The tool the classifier answers with.
 pub const LABEL_TOOL: &str = "label";
@@ -129,7 +130,8 @@ impl Answer {
 }
 
 /// The request that asks `model` to classify `prompt`, sent with the
-/// user's `auth_token` when the route needs one.
+/// user's `auth_token` when the route needs one. It sets no temperature:
+/// Claude 5 models reject any but the default.
 ///
 /// # Errors
 /// Returns the builder's error when `model` is empty.
@@ -539,6 +541,7 @@ mod tests {
         assert_eq!(built.model.as_str(), HAIKU);
         assert_eq!(built.system, SYSTEM_PROMPT);
         assert_eq!(built.auth_token.as_deref(), Some("jwt"));
+        assert!(built.temperature.is_none());
         assert!(matches!(&built.tool_choice, ToolChoice::Tool { name } if name == LABEL_TOOL));
         assert_eq!(built.tools.len(), 1);
         let tool = &built.tools[0];

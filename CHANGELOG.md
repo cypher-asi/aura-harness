@@ -7,6 +7,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Gate's classifier reads more of a long prompt
+
+##### Changed
+
+- The classifier reads the first 12,000 and the last 4,000 characters
+  of a long prompt, up from 3,000 and 1,000, so what makes work hard
+  in the middle of a long task (an output that must match a reference
+  byte for byte, say) reaches it. On Haiku 5.5 the longest excerpt
+  costs about $0.0004 more per prompt.
+
 ### Exacting acceptance criteria make work hard by default
 
 ##### Changed
