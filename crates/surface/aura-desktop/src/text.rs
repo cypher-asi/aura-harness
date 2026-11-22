@@ -5,7 +5,8 @@
 //! measured widths are kept in bounded
 //! least-recently-used stores: a run is shaped once however many frames
 //! show it. Each glyph is rasterized once per size and sub-pixel position
-//! into the [`Atlas`], which drawn shapes share.
+//! into the [`Atlas`], which drawn shapes share. Threads that only lay
+//! text out measure it with a [`Measurer`], which has no atlas.
 
 use crate::geom::Point;
 use crate::scene::{Fill, Quad};
@@ -19,7 +20,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 pub use cosmic_text::Shaping;
 
@@ -448,26 +449,100 @@ impl Atlas {
     }
 }
 
+/// The fonts and how wide text measured in them is: all laying text out
+/// needs, without drawing any.
+pub struct Measurer {
+    fonts: FontSystem,
+    widths: Lru<(Box<str>, Face, u32), f32>,
+}
+
+impl Measurer {
+    fn new() -> Self {
+        Self {
+            fonts: font_system(),
+            widths: Lru::new(MAX_WIDTHS),
+        }
+    }
+
+    /// How wide a run of `text` is in `face` at `size`, trailing spaces
+    /// included.
+    pub fn run_width(&mut self, text: &str, face: Face, size: f32) -> f32 {
+        // A closing bar keeps trailing spaces in the measured line.
+        self.line_width(&format!("{text}|"), face, size) - self.line_width("|", face, size)
+    }
+
+    /// How wide `text` is laid out on one line.
+    fn line_width(&mut self, text: &str, face: Face, size: f32) -> f32 {
+        let hash = hash_of(&(text, face, size.to_bits()));
+        let is = |key: &(Box<str>, Face, u32)| {
+            *key.0 == *text && (key.1, key.2) == (face, size.to_bits())
+        };
+        if let Some(width) = self.widths.get(hash, is) {
+            return *width;
+        }
+        let buffer = layout(
+            &mut self.fonts,
+            text,
+            (face, size, size * LINE_EM),
+            Shaping::Advanced,
+            Some(Wrap::None),
+        );
+        let width = buffer
+            .layout_runs()
+            .fold(0.0_f32, |width, line| width.max(line.line_w));
+        self.widths
+            .put(hash, (text.into(), face, size.to_bits()), width);
+        width
+    }
+}
+
+/// The system's fonts and the bundled ones. They are found once, and
+/// every thread's text system or measurer starts from a copy.
+fn font_system() -> FontSystem {
+    static FONTS: OnceLock<(String, fontdb::Database)> = OnceLock::new();
+    let (locale, fonts) = FONTS.get_or_init(|| {
+        let bundled = theme::font_files()
+            .into_iter()
+            .map(|font| fontdb::Source::Binary(Arc::new(font.into_owned())));
+        FontSystem::new_with_fonts(bundled).into_locale_and_db()
+    });
+    FontSystem::new_with_locale_and_db(locale.clone(), fonts.clone())
+}
+
+/// `text` in `face` at `size`, in lines `line_height` tall.
+fn layout(
+    fonts: &mut FontSystem,
+    text: &str,
+    (face, size, line_height): (Face, f32, f32),
+    shaping: Shaping,
+    wrap: Option<Wrap>,
+) -> Buffer {
+    let metrics = Metrics::new(size, line_height.max(f32::MIN_POSITIVE));
+    let mut buffer = Buffer::new(fonts, metrics);
+    buffer.set_size(fonts, Some(f32::INFINITY), Some(f32::INFINITY));
+    if let Some(wrap) = wrap {
+        buffer.set_wrap(fonts, wrap);
+    }
+    buffer.set_text(fonts, text, &face.attrs(), shaping, None);
+    buffer.shape_until_scroll(fonts, false);
+    buffer
+}
+
 /// The fonts, what was shaped and measured with them, and the atlas.
 pub struct TextSystem {
-    fonts: FontSystem,
+    measurer: Measurer,
     swash: SwashCache,
     runs: Lru<RunKey, Arc<Run>>,
-    widths: Lru<(Box<str>, Face, u32), f32>,
     atlas: Atlas,
 }
 
 impl TextSystem {
     /// The system's fonts and the bundled ones.
     pub fn new() -> Self {
-        let bundled = theme::font_files()
-            .into_iter()
-            .map(|font| fontdb::Source::Binary(Arc::new(font.into_owned())));
         Self {
-            fonts: FontSystem::new_with_fonts(bundled),
+            measurer: Measurer::new(),
             swash: SwashCache::new(),
             runs: Lru::new(MAX_RUNS),
-            widths: Lru::new(MAX_WIDTHS),
             atlas: Atlas::new(),
         }
     }
@@ -501,7 +576,13 @@ impl TextSystem {
         if let Some(run) = self.runs.get(hash, is) {
             return Arc::clone(run);
         }
-        let buffer = self.layout(text, face, size, line_height, shaping, None);
+        let buffer = layout(
+            &mut self.measurer.fonts,
+            text,
+            (face, size, line_height),
+            shaping,
+            None,
+        );
         let mut run = Run {
             glyphs: Vec::new(),
             baseline: 0.0,
@@ -531,53 +612,7 @@ impl TextSystem {
     /// How wide a run of `text` is in `face` at `size`, trailing spaces
     /// included.
     pub fn run_width(&mut self, text: &str, face: Face, size: f32) -> f32 {
-        // A closing bar keeps trailing spaces in the measured line.
-        self.line_width(&format!("{text}|"), face, size) - self.line_width("|", face, size)
-    }
-
-    /// How wide `text` is laid out on one line.
-    fn line_width(&mut self, text: &str, face: Face, size: f32) -> f32 {
-        let hash = hash_of(&(text, face, size.to_bits()));
-        let is = |key: &(Box<str>, Face, u32)| {
-            *key.0 == *text && (key.1, key.2) == (face, size.to_bits())
-        };
-        if let Some(width) = self.widths.get(hash, is) {
-            return *width;
-        }
-        let buffer = self.layout(
-            text,
-            face,
-            size,
-            size * LINE_EM,
-            Shaping::Advanced,
-            Some(Wrap::None),
-        );
-        let width = buffer
-            .layout_runs()
-            .fold(0.0_f32, |width, line| width.max(line.line_w));
-        self.widths
-            .put(hash, (text.into(), face, size.to_bits()), width);
-        width
-    }
-
-    fn layout(
-        &mut self,
-        text: &str,
-        face: Face,
-        size: f32,
-        line_height: f32,
-        shaping: Shaping,
-        wrap: Option<Wrap>,
-    ) -> Buffer {
-        let metrics = Metrics::new(size, line_height.max(f32::MIN_POSITIVE));
-        let mut buffer = Buffer::new(&mut self.fonts, metrics);
-        buffer.set_size(&mut self.fonts, Some(f32::INFINITY), Some(f32::INFINITY));
-        if let Some(wrap) = wrap {
-            buffer.set_wrap(&mut self.fonts, wrap);
-        }
-        buffer.set_text(&mut self.fonts, text, &face.attrs(), shaping, None);
-        buffer.shape_until_scroll(&mut self.fonts, false);
-        buffer
+        self.measurer.run_width(text, face, size)
     }
 
     /// The glyphs of `label` as quads, written at `at`.
@@ -638,7 +673,7 @@ impl TextSystem {
         }
         let slot = self
             .swash
-            .get_image_uncached(&mut self.fonts, key)
+            .get_image_uncached(&mut self.measurer.fonts, key)
             .and_then(|image| {
                 let pixels = match image.content {
                     SwashContent::Mask => Pixels::Mask(image.data),
@@ -680,16 +715,21 @@ pub fn with<R>(f: impl FnOnce(&mut TextSystem) -> R) -> R {
 }
 
 /// How many cells `text` takes in the proportional face: what the
-/// terminal UI wraps chat prose to.
+/// terminal UI wraps chat prose to. The chat is laid out on several
+/// threads, so each measures with a measurer of its own, which has no
+/// atlas to keep.
 pub fn prose_cells(text: &str, modifier: Modifier) -> f32 {
     /// Size widths are measured at, large enough that rounding is lost
     const SIZE: f32 = 100.0;
+    thread_local! {
+        static MEASURER: RefCell<Measurer> = RefCell::new(Measurer::new());
+    }
     let face = Face {
         family: Family::Sans,
         bold: modifier.contains(Modifier::BOLD),
         italic: modifier.contains(Modifier::ITALIC),
     };
-    with(|text_system| text_system.run_width(text, face, theme::prose_size(SIZE)))
+    MEASURER.with_borrow_mut(|measurer| measurer.run_width(text, face, theme::prose_size(SIZE)))
         / theme::cell_size(SIZE).width
 }
 
@@ -905,5 +945,33 @@ mod tests {
         let spaced = prose_cells("illicit ", Modifier::empty());
         assert!(spaced > narrow + 0.2, "the space counts: {spaced}");
         assert!(prose_cells("mammoth", Modifier::BOLD) > wide);
+    }
+
+    #[test]
+    fn prose_is_as_wide_on_any_thread_and_as_drawn() {
+        const WORDS: [&str; 5] = ["illicit", "mammoth ", "naïve", "日本語", "Wi-Fi"];
+        let measure = || {
+            WORDS
+                .iter()
+                .map(|word| prose_cells(word, Modifier::ITALIC))
+                .collect::<Vec<f32>>()
+        };
+        let here = measure();
+        let there = std::thread::spawn(measure).join().expect("measured");
+        assert_eq!(here, there);
+
+        let face = Face {
+            family: Family::Sans,
+            bold: false,
+            italic: true,
+        };
+        let mut text = TextSystem::new();
+        let size = theme::prose_size(100.0);
+        let drawn = text.run_width(WORDS[1], face, size) / theme::cell_size(100.0).width;
+        assert!(
+            (drawn - here[1]).abs() < f32::EPSILON,
+            "{drawn} vs {}",
+            here[1]
+        );
     }
 }
