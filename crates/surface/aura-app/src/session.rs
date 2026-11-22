@@ -119,6 +119,12 @@ fn loop_result(joined: Result<anyhow::Result<()>, JoinError>) -> anyhow::Result<
     }
 }
 
+/// Commands the UI may fall behind by before agents wait for it. Every
+/// agent's turn sends through the one channel, a command per 33 ms of
+/// streaming, so a slow frame (a long chat laid out the first time) must
+/// not hold them all up.
+const UI_COMMANDS: usize = 4096;
+
 /// Start an agent session in the current working directory.
 ///
 /// # Errors
@@ -130,7 +136,7 @@ pub async fn start(
     requested_mode: Option<aura_core_modes::AgentMode>,
 ) -> anyhow::Result<UiSession> {
     let (ui_tx, mut ui_rx) = mpsc::channel::<UiEvent>(100);
-    let (cmd_tx, cmd_rx) = mpsc::channel::<UiCommand>(200);
+    let (cmd_tx, cmd_rx) = mpsc::channel::<UiCommand>(UI_COMMANDS);
 
     let data_dir = args
         .dir

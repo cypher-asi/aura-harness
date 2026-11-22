@@ -69,6 +69,14 @@ impl AgentUi {
         }
     }
 
+    /// Whether this agent's chat may be on screen: it is the agent shown,
+    /// or which one is shown isn't known.
+    fn maybe_on_screen(&self) -> bool {
+        self.shown
+            .as_ref()
+            .is_none_or(|shown| shown.shows(self.agent_id))
+    }
+
     /// Send `command` for the whole app (the model selector and status
     /// line), not this agent's chat.
     pub(crate) async fn send_app(&self, command: UiCommand) {
@@ -137,6 +145,11 @@ pub(crate) fn call_usage(model: &str, usage: &Usage) -> Option<CallUsage> {
 /// Every agent shares one command channel to the UI, so one command per
 /// token would crowd it as agents are added.
 const DELTA_FLUSH: Duration = Duration::from_millis(33);
+
+/// How long streamed text of an agent whose chat is not on screen may
+/// wait. Nobody watches it arrive, and every command still costs the UI
+/// its handling.
+const HIDDEN_DELTA_FLUSH: Duration = Duration::from_millis(200);
 
 /// Which streamed block buffered text belongs to.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -221,10 +234,15 @@ impl UiCommandSink {
         match &mut self.pending {
             Some(pending) => pending.text.push_str(&text),
             None => {
+                let wait = if self.ui.maybe_on_screen() {
+                    DELTA_FLUSH
+                } else {
+                    HIDDEN_DELTA_FLUSH
+                };
                 self.pending = Some(PendingDelta {
                     kind,
                     text,
-                    flush_at: Instant::now() + DELTA_FLUSH,
+                    flush_at: Instant::now() + wait,
                 });
             }
         }
