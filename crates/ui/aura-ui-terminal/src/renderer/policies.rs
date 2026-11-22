@@ -421,7 +421,7 @@ mod tests {
     fn the_tab_lists_status_capabilities_and_how_each_tool_resolves() {
         let mut app = app_on_policies();
         app.process_command(UiCommand::SetPolicies(view(ApprovalLevel::Ask)));
-        let rows = render_rows(&mut app, 200, 50);
+        let rows = render_rows(&mut app, 240, 50);
         let screen = rows.join("\n");
         assert!(screen.contains("POLICIES"), "{screen}");
         assert!(screen.contains("AGENT/ASK"), "{screen}");
@@ -448,7 +448,7 @@ mod tests {
         app.handle_key(crossterm::event::KeyEvent::from(
             crossterm::event::KeyCode::End,
         ));
-        let screen = render_rows(&mut app, 200, 50).join("\n");
+        let screen = render_rows(&mut app, 240, 50).join("\n");
         assert!(screen.contains("`cargo test` commands"), "{screen}");
         assert!(screen.contains("INTEGRATIONS"), "{screen}");
     }
@@ -457,12 +457,12 @@ mod tests {
     fn strict_flags_the_always_allow_rules_as_ignored() {
         let mut app = app_on_policies();
         app.process_command(UiCommand::SetPolicies(view(ApprovalLevel::Strict)));
-        let screen = render_rows(&mut app, 200, 50).join("\n");
+        let screen = render_rows(&mut app, 240, 50).join("\n");
         assert!(screen.contains("STRICT │"), "the header names the level");
         app.handle_key(crossterm::event::KeyEvent::from(
             crossterm::event::KeyCode::End,
         ));
-        let screen = render_rows(&mut app, 200, 50).join("\n");
+        let screen = render_rows(&mut app, 240, 50).join("\n");
         assert!(screen.contains("ignored at strict"), "{screen}");
     }
 

@@ -98,6 +98,9 @@ impl App {
             }
             return;
         }
+        if self.handle_thread_key(key) {
+            return;
+        }
         let page = self.detail_page_rows();
         match key.code {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.close_detail(),
@@ -517,6 +520,10 @@ impl App {
                 }
                 RecordsTab::Policies => {
                     self.handle_policies_key(key);
+                    KeyResult::continue_running()
+                }
+                RecordsTab::Inbox => {
+                    self.handle_inbox_key(key);
                     KeyResult::continue_running()
                 }
             },

@@ -4,7 +4,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aura_agent::{AgentLoopConfig, AgentLoopEvent, AgentLoopResult};
 use aura_agent_kernel::{
@@ -32,6 +32,7 @@ use tracing::{info, warn};
 use super::factory::{ChildKernelFactory, ChildKernelRequest};
 use super::hooks::AgentHooks;
 use super::inbox::{InboxMessage, MessageKind, ParentInbox};
+use super::mail::{MailMessage, MailObserver, ThreadId, Threads};
 use super::observer::{HostedTurn, TurnObserver};
 use super::setup;
 use crate::scheduler::{ScheduleOverrides, Scheduler};
@@ -210,12 +211,27 @@ struct Envelope {
     from_name: String,
     kind: MessageKind,
     text: String,
+    /// Conversation the message belongs to; the turn's reply stays in it.
+    thread: ThreadId,
+    /// Subject of `thread`.
+    subject: String,
     /// Receives the turn's result instead of routing it as a reply.
     waiter: Option<oneshot::Sender<SubagentResult>>,
     /// Streams the turn's events to an observer.
     events: Option<mpsc::Sender<AgentLoopEvent>>,
     /// Cancels just this turn.
     cancel: Option<CancellationToken>,
+}
+
+/// Which thread a new message goes in.
+enum ThreadChoice<'a> {
+    /// Join the thread with this subject, or with none, continue the last
+    /// thread between sender and recipient.
+    Resolve(Option<&'a str>),
+    /// Start a new thread named after the message.
+    New,
+    /// Stay in a known thread with its subject.
+    Existing(ThreadId, String),
 }
 
 enum Body {
@@ -248,6 +264,9 @@ struct AgentEntry {
     paused: bool,
     turns: u32,
     last_reply: Option<String>,
+    /// Thread and subject of the last request this agent took from its
+    /// parent. An answer to a child's reply goes up to the parent in it.
+    parent_thread: Option<(ThreadId, String)>,
     body: Body,
 }
 
@@ -331,6 +350,9 @@ pub(super) struct HostInner {
     /// Serialises writes to one parent's record log from parallel spawns.
     parent_locks: DashMap<AgentId, Arc<tokio::sync::Mutex<()>>>,
     observer: Mutex<Option<Arc<dyn TurnObserver>>>,
+    /// Which thread each message between agents goes in.
+    threads: Mutex<Threads>,
+    mail_observer: Mutex<Option<Arc<dyn MailObserver>>>,
 }
 
 impl AgentHost {
@@ -350,6 +372,8 @@ impl AgentHost {
                 agents: Mutex::new(HashMap::new()),
                 parent_locks: DashMap::new(),
                 observer: Mutex::new(None),
+                threads: Mutex::new(Threads::default()),
+                mail_observer: Mutex::new(None),
             }),
         }
     }
@@ -357,6 +381,13 @@ impl AgentHost {
     /// Tell `observer` about every hosted agent's turns from now on.
     pub fn set_turn_observer(&self, observer: Arc<dyn TurnObserver>) {
         *self.inner.observer.lock() = Some(observer);
+    }
+
+    /// Show `observer` every message between agents from now on,
+    /// including the results of `task` children returned to a waiting
+    /// parent. Messages from the user are not mail and are not shown.
+    pub fn set_mail_observer(&self, observer: Arc<dyn MailObserver>) {
+        *self.inner.mail_observer.lock() = Some(observer);
     }
 
     /// Register or refresh a top-level agent. Its existing children are
@@ -386,6 +417,7 @@ impl AgentHost {
                 paused: false,
                 turns,
                 last_reply,
+                parent_thread: None,
                 body: Body::Root { inbox: root.inbox },
             },
         );
@@ -418,7 +450,7 @@ impl AgentHost {
     /// Fails when `to` is unknown or stopped.
     pub fn send(&self, from: Option<AgentId>, to: AgentId, text: String) -> Result<(), String> {
         self.inner
-            .deliver_message(from, to, MessageKind::Request, text)
+            .deliver_message(from, to, MessageKind::Request, text, None)
     }
 
     /// Apply `action` to `target` and its descendants.
@@ -435,7 +467,7 @@ impl AgentHost {
             let mut agents = self.inner.agents.lock();
             self.inner.remove_subtree(&mut agents, root, true)
         };
-        notify_dropped(dropped);
+        self.inner.notify_dropped(dropped);
     }
 }
 
@@ -638,14 +670,14 @@ impl HostInner {
         }
 
         if detached {
-            let envelope = self.envelope(
+            let mut envelope = self.envelope(
                 Some(parent),
+                child_id,
                 MessageKind::Request,
                 request.prompt,
-                None,
-                events,
-                None,
+                ThreadChoice::New,
             );
+            envelope.events = events;
             if let Err(err) = self.enqueue(child_id, envelope) {
                 return SubagentResult::rejected(err);
             }
@@ -659,14 +691,16 @@ impl HostInner {
         }
 
         let (tx, rx) = oneshot::channel();
-        let envelope = self.envelope(
+        let mut envelope = self.envelope(
             Some(parent),
+            child_id,
             MessageKind::Request,
             request.prompt,
-            Some(tx),
-            events,
-            cancel,
+            ThreadChoice::New,
         );
+        envelope.waiter = Some(tx);
+        envelope.events = events;
+        envelope.cancel = cancel;
         if let Err(err) = self.enqueue(child_id, envelope) {
             return SubagentResult::rejected(err);
         }
@@ -757,8 +791,13 @@ impl HostInner {
             .await?;
 
         if let Some(prompt) = initial_prompt.filter(|p| !p.trim().is_empty()) {
-            let envelope =
-                self.envelope(Some(parent), MessageKind::Request, prompt, None, None, None);
+            let envelope = self.envelope(
+                Some(parent),
+                child_id,
+                MessageKind::Request,
+                prompt,
+                ThreadChoice::New,
+            );
             self.enqueue(child_id, envelope)?;
         }
         Ok(SpawnOutcome {
@@ -928,6 +967,7 @@ impl HostInner {
                 paused: false,
                 turns: 0,
                 last_reply: None,
+                parent_thread: None,
                 body: Body::Hosted {
                     setup: Arc::new(setup),
                     history: Vec::new(),
@@ -942,71 +982,147 @@ impl HostInner {
     // messaging
     // ------------------------------------------------------------------
 
+    /// A message from `from` (the user when `None`) to `to`, placed in
+    /// the thread `choice` picks.
     fn envelope(
         &self,
         from: Option<AgentId>,
+        to: AgentId,
         kind: MessageKind,
         text: String,
-        waiter: Option<oneshot::Sender<SubagentResult>>,
-        events: Option<mpsc::Sender<AgentLoopEvent>>,
-        cancel: Option<CancellationToken>,
+        choice: ThreadChoice<'_>,
     ) -> Envelope {
-        let from_name = from
-            .and_then(|id| self.agents.lock().get(&id).map(|e| e.name.clone()))
-            .unwrap_or_else(|| "user".to_string());
+        let (from_name, root) = {
+            let agents = self.agents.lock();
+            let sender = from.and_then(|id| agents.get(&id).map(|e| (e.name.clone(), e.root(id))));
+            sender.unwrap_or_else(|| {
+                let root = agents.get(&to).map_or(to, |e| e.root(to));
+                ("user".to_string(), root)
+            })
+        };
+        let (thread, subject) = match (choice, from) {
+            (ThreadChoice::Existing(thread, subject), _) => (thread, subject),
+            (ThreadChoice::Resolve(subject), Some(from)) => {
+                self.threads.lock().resolve(root, from, to, subject, &text)
+            }
+            (ThreadChoice::Resolve(_) | ThreadChoice::New, _) => {
+                self.threads.lock().new_thread(root, &text)
+            }
+        };
         Envelope {
             from,
             from_name,
             kind,
             text,
-            waiter,
-            events,
-            cancel,
+            thread,
+            subject,
+            waiter: None,
+            events: None,
+            cancel: None,
         }
     }
 
+    /// Send `text` from `from` to `to`. With a `subject` the message
+    /// joins that subject's thread; without one it continues the last
+    /// thread between the two agents.
     pub(super) fn deliver_message(
         self: &Arc<Self>,
         from: Option<AgentId>,
         to: AgentId,
         kind: MessageKind,
         text: String,
+        subject: Option<&str>,
     ) -> Result<(), String> {
-        let envelope = self.envelope(from, kind, text, None, None, None);
+        let envelope = self.envelope(from, to, kind, text, ThreadChoice::Resolve(subject));
         self.enqueue(to, envelope)
     }
 
+    /// Send the request `text` from `from` to `to` in a thread of its
+    /// own, as a delegated task starts one.
+    pub(super) fn deliver_in_new_thread(
+        self: &Arc<Self>,
+        from: AgentId,
+        to: AgentId,
+        text: String,
+    ) -> Result<(), String> {
+        let envelope = self.envelope(
+            Some(from),
+            to,
+            MessageKind::Request,
+            text,
+            ThreadChoice::New,
+        );
+        self.enqueue(to, envelope)
+    }
+
+    /// Give `mail` its id and note its thread as the pair's latest.
+    /// Takes the threads lock, so it may be called with the agents lock
+    /// held: the threads lock is never held while taking the agents lock.
+    fn record_mail(&self, mail: &mut MailMessage) {
+        mail.id = self
+            .threads
+            .lock()
+            .record(mail.from, mail.to, &mail.thread, &mail.subject);
+    }
+
+    /// Show recorded `mail` to the mail observer. Call with no host lock
+    /// held: the observer runs inline.
+    fn show_mail(&self, mail: &MailMessage) {
+        let observer = self.mail_observer.lock().clone();
+        if let Some(observer) = observer {
+            observer.on_mail(mail);
+        }
+    }
+
+    /// Record `mail` and show it. Call with no host lock held.
+    fn post_mail(&self, mut mail: MailMessage) {
+        self.record_mail(&mut mail);
+        self.show_mail(&mail);
+    }
+
     /// Queue `envelope` for a hosted agent and wake it, or hand it to a
-    /// root's inbox.
+    /// root's inbox. A message from an agent is posted as mail once it is
+    /// accepted; its id is given while the envelope is queued, so ids
+    /// follow queue order.
     fn enqueue(self: &Arc<Self>, to: AgentId, envelope: Envelope) -> Result<(), String> {
-        let root_inbox = {
+        let (root_inbox, mail) = {
             let mut agents = self.agents.lock();
             let entry = agents
                 .get_mut(&to)
                 .ok_or_else(|| format!("unknown agent {to}"))?;
+            let mut mail = unsent_mail(&envelope, to, &entry.name);
+            if let Some(mail) = mail.as_mut() {
+                self.record_mail(mail);
+            }
             match &mut entry.body {
-                Body::Root { inbox } => Some((inbox.clone(), envelope)),
+                Body::Root { inbox } => (Some((inbox.clone(), envelope)), mail),
                 Body::Hosted { queue, .. } => {
                     queue.push_back(envelope);
-                    None
+                    (None, mail)
                 }
             }
         };
         match root_inbox {
             None => {
+                if let Some(mail) = mail {
+                    self.show_mail(&mail);
+                }
                 self.pump(to);
                 Ok(())
             }
             Some((inbox, envelope)) => {
-                let Some(from) = envelope.from else {
+                let (Some(from), Some(mail)) = (envelope.from, mail) else {
                     return Err("roots only accept messages from agents".to_string());
                 };
+                self.show_mail(&mail);
                 let message = InboxMessage {
                     to,
                     from,
                     from_name: envelope.from_name,
                     kind: envelope.kind,
                     text: envelope.text,
+                    subject: envelope.subject,
+                    thread: envelope.thread,
                 };
                 let store = self.store.clone();
                 let observer = self.scheduler.record_observer().cloned();
@@ -1047,6 +1163,11 @@ impl HostInner {
             let Some(envelope) = queue.pop_front() else {
                 return;
             };
+            if envelope.kind == MessageKind::Request
+                && envelope.from.is_some_and(|from| Some(from) == parent)
+            {
+                entry.parent_thread = Some((envelope.thread.clone(), envelope.subject.clone()));
+            }
             entry.running = true;
             let prompt = render_for_hosted(&envelope, parent);
             Turn {
@@ -1080,6 +1201,8 @@ impl HostInner {
         let Envelope {
             from,
             kind,
+            thread,
+            subject,
             waiter,
             events,
             cancel,
@@ -1126,9 +1249,9 @@ impl HostInner {
 
         // Stopped while the turn ran: the entry is gone and nobody but a
         // waiter should hear about it.
-        let reply_to = {
+        let replier = {
             let mut agents = self.agents.lock();
-            agents.get_mut(&agent_id).and_then(|entry| {
+            agents.get_mut(&agent_id).map(|entry| {
                 entry.running = false;
                 entry.turns += 1;
                 if !result.final_message.trim().is_empty() {
@@ -1138,23 +1261,44 @@ impl HostInner {
                 {
                     *history = messages;
                 }
-                match kind {
-                    MessageKind::Request => from,
-                    MessageKind::Reply => entry.parent(),
-                }
+                (entry.parent(), entry.parent_thread.clone())
             })
         };
 
         match waiter {
             Some(waiter) => {
+                // A waiting `task` result never goes through `enqueue`, so
+                // it is posted as mail here, before the parent hears it.
+                if let Some(parent) = from {
+                    let to_name = self
+                        .agents
+                        .lock()
+                        .get(&parent)
+                        .map_or_else(|| "user".to_string(), |e| e.name.clone());
+                    self.post_mail(MailMessage {
+                        id: 0,
+                        thread,
+                        subject,
+                        from: agent_id,
+                        from_name: name,
+                        to: parent,
+                        to_name,
+                        kind: MessageKind::Reply,
+                        text: reply_text(&result),
+                        sent_ms: now_ms(),
+                    });
+                }
                 let _ = waiter.send(result);
             }
             None => {
-                if let Some(to) = reply_to {
+                let route = replier.and_then(|(parent, parent_thread)| {
+                    reply_route(kind, from, parent, parent_thread, thread, subject)
+                });
+                if let Some((to, choice)) = route {
                     let text = reply_text(&result);
-                    if let Err(err) =
-                        self.deliver_message(Some(agent_id), to, MessageKind::Reply, text)
-                    {
+                    let envelope =
+                        self.envelope(Some(agent_id), to, MessageKind::Reply, text, choice);
+                    if let Err(err) = self.enqueue(to, envelope) {
                         warn!(agent = %agent_id, %err, "could not deliver reply");
                     }
                 }
@@ -1180,7 +1324,7 @@ impl HostInner {
             }
             self.remove_subtree(&mut agents, agent_id, true)
         };
-        notify_dropped(dropped);
+        self.notify_dropped(dropped);
         true
     }
 
@@ -1191,7 +1335,7 @@ impl HostInner {
         agents: &mut HashMap<AgentId, AgentEntry>,
         target: AgentId,
         include_target: bool,
-    ) -> Vec<(AgentId, Envelope)> {
+    ) -> Vec<Dropped> {
         let ids: Vec<AgentId> = agents
             .iter()
             .filter(|(id, e)| (include_target && **id == target) || e.chain.contains(&target))
@@ -1206,7 +1350,11 @@ impl HostInner {
             entry.stop.cancel();
             self.parent_locks.remove(&id);
             if let Body::Hosted { queue, .. } = entry.body {
-                dropped.extend(queue.into_iter().map(|env| (id, env)));
+                dropped.extend(queue.into_iter().map(|envelope| Dropped {
+                    agent_id: id,
+                    name: entry.name.clone(),
+                    envelope,
+                }));
                 self.scheduler.identity_registry().unregister(id);
                 if let Some(observer) = &observer {
                     observer.agent_removed(id);
@@ -1214,6 +1362,38 @@ impl HostInner {
             }
         }
         dropped
+    }
+
+    /// Tell everyone waiting on a dropped message that it was cancelled,
+    /// and answer each one an agent sent with a `was cancelled` reply in
+    /// its thread. Call with no host lock held: the mail observer runs
+    /// inline.
+    fn notify_dropped(&self, dropped: Vec<Dropped>) {
+        for Dropped {
+            agent_id,
+            name,
+            envelope,
+        } in dropped
+        {
+            let result = cancelled(agent_id);
+            if let Some(sender) = envelope.from {
+                self.post_mail(MailMessage {
+                    id: 0,
+                    thread: envelope.thread,
+                    subject: envelope.subject,
+                    from: agent_id,
+                    from_name: name,
+                    to: sender,
+                    to_name: envelope.from_name,
+                    kind: MessageKind::Reply,
+                    text: reply_text(&result),
+                    sent_ms: now_ms(),
+                });
+            }
+            if let Some(waiter) = envelope.waiter {
+                let _ = waiter.send(result);
+            }
+        }
     }
 
     /// Run one turn of a hosted agent through the scheduler. `Err` is how
@@ -1320,7 +1500,7 @@ impl HostInner {
                 }
             }
         };
-        notify_dropped(dropped);
+        self.notify_dropped(dropped);
         info!(agent = %target, ?action, "agent lifecycle");
         if matches!(action, LifecycleAction::Resume | LifecycleAction::Restart) {
             let ids: Vec<AgentId> = self.agents.lock().keys().copied().collect();
@@ -1362,8 +1542,41 @@ struct Turn {
     parent: Option<AgentId>,
 }
 
+/// A queued message whose recipient was removed before handling it.
+struct Dropped {
+    agent_id: AgentId,
+    /// The recipient's display name.
+    name: String,
+    envelope: Envelope,
+}
+
+/// Where a hosted agent's answer to a turn goes, and in which thread.
+///
+/// The answer to a request goes back to its sender in the request's
+/// thread. The answer to a reply from a child goes up to the agent's
+/// parent, in the thread of the parent's last request
+/// (`parent_thread`), or the pair's latest thread when there was none.
+fn reply_route(
+    kind: MessageKind,
+    from: Option<AgentId>,
+    parent: Option<AgentId>,
+    parent_thread: Option<(ThreadId, String)>,
+    thread: ThreadId,
+    subject: String,
+) -> Option<(AgentId, ThreadChoice<'static>)> {
+    match kind {
+        MessageKind::Request => from.map(|from| (from, ThreadChoice::Existing(thread, subject))),
+        MessageKind::Reply => parent.map(|parent| {
+            let choice = parent_thread.map_or(ThreadChoice::Resolve(None), |(thread, subject)| {
+                ThreadChoice::Existing(thread, subject)
+            });
+            (parent, choice)
+        }),
+    }
+}
+
 /// The prompt a hosted agent sees for `envelope`. Its parent talks to it
-/// directly; anyone else is introduced.
+/// directly; anyone else is introduced, with the thread's subject.
 fn render_for_hosted(envelope: &Envelope, parent: Option<AgentId>) -> String {
     let Some(from) = envelope.from else {
         return envelope.text.clone();
@@ -1371,14 +1584,42 @@ fn render_for_hosted(envelope: &Envelope, parent: Option<AgentId>) -> String {
     match envelope.kind {
         MessageKind::Request if Some(from) == parent => envelope.text.clone(),
         MessageKind::Request => format!(
-            "Message from agent {} ({from}):\n\n{}\n\nYour final answer is sent back to {}.",
-            envelope.from_name, envelope.text, envelope.from_name
+            "Message from agent {} ({from}):\nSubject: {}\n\n{}\n\nYour final answer is sent \
+             back to {}.",
+            envelope.from_name, envelope.subject, envelope.text, envelope.from_name
         ),
         MessageKind::Reply => format!(
-            "Agent {} ({from}) reported back:\n\n{}",
-            envelope.from_name, envelope.text
+            "Agent {} ({from}) reported back:\nSubject: {}\n\n{}",
+            envelope.from_name, envelope.subject, envelope.text
         ),
     }
+}
+
+/// `envelope` as mail to `to`, before [`HostInner::post_mail`] gives it
+/// an id. `None` for a message from the user, which is not mail.
+fn unsent_mail(envelope: &Envelope, to: AgentId, to_name: &str) -> Option<MailMessage> {
+    let from = envelope.from?;
+    Some(MailMessage {
+        id: 0,
+        thread: envelope.thread.clone(),
+        subject: envelope.subject.clone(),
+        from,
+        from_name: envelope.from_name.clone(),
+        to,
+        to_name: to_name.to_string(),
+        kind: envelope.kind,
+        text: envelope.text.clone(),
+        sent_ms: now_ms(),
+    })
+}
+
+/// The wall clock in Unix milliseconds; 0 if it reads before 1970.
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| {
+            u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
+        })
 }
 
 fn reply_text(result: &SubagentResult) -> String {
@@ -1405,6 +1646,8 @@ fn record_message(
         "from_agent_id": message.from,
         "from_name": message.from_name,
         "reply": message.kind == MessageKind::Reply,
+        "subject": message.subject,
+        "thread": message.thread.0,
         "text": message.text,
     });
     let tx = Transaction::new_chained(
@@ -1510,15 +1753,6 @@ fn ended(agent_id: AgentId, exit: SubagentExit) -> SubagentResult {
 
 fn cancelled(agent_id: AgentId) -> SubagentResult {
     ended(agent_id, SubagentExit::Cancelled)
-}
-
-/// Tell anyone waiting on a dropped message that it was cancelled.
-fn notify_dropped(dropped: Vec<(AgentId, Envelope)>) {
-    for (id, envelope) in dropped {
-        if let Some(waiter) = envelope.waiter {
-            let _ = waiter.send(cancelled(id));
-        }
-    }
 }
 
 fn failed(agent_id: AgentId, reason: String) -> SubagentResult {

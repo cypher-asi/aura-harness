@@ -1823,6 +1823,15 @@ pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, 
             Some(HeaderInfo::count(count, unit, theme.colors.muted))
         }
         RecordsTab::Policies => super::policies::header_info(app, theme),
+        RecordsTab::Inbox => {
+            let (unread, threads) = app.inbox_header_counts();
+            Some(if unread > 0 {
+                HeaderInfo::count(unread, "NEW", theme.colors.warning)
+            } else {
+                let unit = if threads == 1 { "THREAD" } else { "THREADS" };
+                HeaderInfo::count(threads, unit, theme.colors.muted)
+            })
+        }
     };
     let header = PanelHeader {
         layout: RecordsTab::layout(bar.width),
@@ -1847,6 +1856,10 @@ pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, 
     }
     if tab == RecordsTab::Policies {
         super::policies::render_policies(frame, area, inner, app, theme);
+        return;
+    }
+    if tab == RecordsTab::Inbox {
+        super::inbox::render_inbox(frame, area, inner, app, theme);
         return;
     }
 

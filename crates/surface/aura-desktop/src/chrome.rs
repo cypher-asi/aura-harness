@@ -577,6 +577,7 @@ mod tests {
             PaneTab::Records(RecordsTab::Kernel),
             PaneTab::Records(RecordsTab::Members),
             PaneTab::Records(RecordsTab::Policies),
+            PaneTab::Records(RecordsTab::Inbox),
         ];
         let mut records = pane(Pane::Records, Rect::new(100, 0, 50, 20), tabs);
         records.active = Some(PaneTab::Records(RecordsTab::Members));
@@ -590,13 +591,15 @@ mod tests {
                 Kind::Tab(PaneTab::Records(RecordsTab::Kernel)),
                 Kind::Tab(PaneTab::Records(RecordsTab::Members)),
                 Kind::Tab(PaneTab::Records(RecordsTab::Policies)),
+                Kind::Tab(PaneTab::Records(RecordsTab::Inbox)),
             ]
         );
         assert_eq!(bar.boxes[1].text, "MEMBERS");
         assert_eq!(bar.boxes[2].text, "POLICIES");
+        assert_eq!(bar.boxes[3].text, "INBOX");
         let info = bar.info.as_ref().expect("room for the count");
         assert_eq!(info.text, "3 AGENTS");
-        assert!(info.end.x > bar.boxes[2].rect.x + bar.boxes[2].rect.width);
+        assert!(info.end.x > bar.boxes[3].rect.x + bar.boxes[3].rect.width);
     }
 
     #[test]

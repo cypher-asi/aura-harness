@@ -62,6 +62,7 @@ impl App {
             }
             "members" | "team" => self.show_members(),
             "policies" | "policy" | "perms" | "permissions" => self.show_policies(),
+            "inbox" | "mail" => self.show_inbox(),
             "agents" | "swarm" | "sw" => {
                 self.swarm_panel_visible = !self.swarm_panel_visible;
                 if !self.swarm_panel_visible && self.focus == PanelFocus::Swarm {
@@ -902,6 +903,7 @@ impl App {
             UiCommand::LoadConversation(history) => self.cmd_load_conversation(history),
             UiCommand::SetSandboxRoot(root) => self.sandbox.set_root(root),
             UiCommand::SetProcesses(processes) => self.set_processes(processes),
+            UiCommand::AddMail(mail) => self.add_mail(mail),
             UiCommand::GraphLoad { run_id, nodes } => self.load_graph(run_id, nodes),
             UiCommand::GraphUpsert { run_id, nodes } => {
                 self.trace_feed.push(&self.active_agent_id, &run_id, &nodes);

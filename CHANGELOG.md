@@ -7,6 +7,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### INBOX tab in the Kernel panel
+
+##### Added
+
+- The Kernel panel (top right) has an INBOX tab after POLICIES. It lists
+  the messages the agents of the run on screen send each other, threaded
+  by subject, the most recently active thread first. A thread row shows
+  an unread dot, a fold arrow, the subject, its message count, who took
+  part and the time of its newest message; ←/→ fold and unfold it to
+  list its messages. The header reads `2 NEW` while threads are unread,
+  otherwise the thread count.
+- `send_to_agent` takes an optional `subject`; messages that share a
+  subject are threaded together.
+- Clicking a thread or a message, or pressing Enter on it, opens the
+  conversation over the chat (`THREAD <subject>`) as a stack of
+  foldable messages: `n`/`p` move between them, Enter or Space folds
+  one, `e`/`c` unfold or fold them all, and Esc closes the view.
+  Opening a thread marks it read.
+- `/inbox` (also `/mail`) opens the tab.
+
 ### OpenRouter sign-in
 
 ##### Added

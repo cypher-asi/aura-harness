@@ -1,6 +1,8 @@
 //! The Kernel panel's tabs: KERNEL lists the kernel's records of the
-//! agent on screen, MEMBERS the agents that agent's run brought in, and
-//! POLICIES the policy its kernel enforces (see [`super::policies`]).
+//! agent on screen, MEMBERS the agents that agent's run brought in,
+//! POLICIES the policy its kernel enforces (see [`super::policies`]), and
+//! INBOX the messages the run's agents sent each other (see
+//! [`super::inbox`]).
 //!
 //! Members come from the process table ([`UiCommand::SetProcesses`]). Every
 //! `task` spawn and background agent it lists is kept here, so an agent
@@ -34,10 +36,12 @@ pub enum RecordsTab {
     Members,
     /// The policy the kernel of the agent on screen enforces.
     Policies,
+    /// The messages the agents of that run sent each other, by thread.
+    Inbox,
 }
 
 impl RecordsTab {
-    pub const ALL: [Self; 3] = [Self::Kernel, Self::Members, Self::Policies];
+    pub const ALL: [Self; 4] = [Self::Kernel, Self::Members, Self::Policies, Self::Inbox];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
@@ -45,6 +49,7 @@ impl RecordsTab {
             Self::Kernel => "KERNEL",
             Self::Members => "MEMBERS",
             Self::Policies => "POLICIES",
+            Self::Inbox => "INBOX",
         }
     }
 
@@ -55,6 +60,7 @@ impl RecordsTab {
             Self::Kernel => "KRN",
             Self::Members => "MEM",
             Self::Policies => "POL",
+            Self::Inbox => "INB",
         }
     }
 
@@ -63,16 +69,18 @@ impl RecordsTab {
         match self {
             Self::Kernel => Self::Members,
             Self::Members => Self::Policies,
-            Self::Policies => Self::Kernel,
+            Self::Policies => Self::Inbox,
+            Self::Inbox => Self::Kernel,
         }
     }
 
     /// The tab before this one, wrapping around, as Shift+Left goes.
     const fn prev(self) -> Self {
         match self {
-            Self::Kernel => Self::Policies,
+            Self::Kernel => Self::Inbox,
             Self::Members => Self::Kernel,
             Self::Policies => Self::Members,
+            Self::Inbox => Self::Policies,
         }
     }
 
@@ -248,6 +256,11 @@ impl Members {
         rows
     }
 
+    /// Rows listed for the agent on screen.
+    pub(super) fn rows(&self) -> &[MemberRow] {
+        &self.rows
+    }
+
     fn select(&mut self, index: usize) {
         self.selected = index.min(self.rows.len().saturating_sub(1));
     }
@@ -349,6 +362,7 @@ impl App {
     pub(super) fn refresh_members(&mut self) {
         let lead = self.lead_member();
         self.members.rebuild(lead);
+        self.refresh_inbox();
     }
 
     /// Start a new run of the agent on screen, as `/new` does: the agents
@@ -429,6 +443,11 @@ impl App {
             }
             // A read-only document: clicks only focus the panel.
             RecordsTab::Policies => {}
+            RecordsTab::Inbox => {
+                if let Some(index) = self.inbox_row_at(column, row) {
+                    self.click_inbox_row(index);
+                }
+            }
         }
     }
 
@@ -461,6 +480,9 @@ impl App {
         }
         if self.records_tab == RecordsTab::Policies {
             return self.handle_policies_shortcut(key);
+        }
+        if self.records_tab == RecordsTab::Inbox {
+            return self.handle_inbox_shortcut(key);
         }
         if self.records_tab != RecordsTab::Members {
             return false;

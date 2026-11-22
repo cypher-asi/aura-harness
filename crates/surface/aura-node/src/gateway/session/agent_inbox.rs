@@ -76,6 +76,8 @@ mod tests {
             from_name: "helper".into(),
             kind: MessageKind::Reply,
             text: text.into(),
+            subject: "test".into(),
+            thread: aura_engine::ThreadId("t1".into()),
         }
     }
 

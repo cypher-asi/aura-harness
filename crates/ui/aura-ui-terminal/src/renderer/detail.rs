@@ -5,6 +5,7 @@
 //! has a vim cursor the view follows.
 
 use super::header::HeaderInfo;
+use super::inbox::thread_lines;
 use super::overlays::{record_detail_lines, record_status};
 use super::panels::{
     body_block, chat_scrollbar, render_scrollbar, truncate_record_info, ScrollView,
@@ -80,6 +81,15 @@ pub(super) fn detail_header(app: &App, theme: &Theme) -> Option<(String, Option<
             };
             Some((view.title.clone(), Some(info)))
         }
+        DetailView::Thread(view) => {
+            let count = app.thread_messages(&view.thread_id).len();
+            let unit = if count == 1 { "MESSAGE" } else { "MESSAGES" };
+            let title = format!("THREAD {}", truncate_record_info(&view.subject, 40));
+            Some((
+                title,
+                Some(HeaderInfo::count(count, unit, theme.colors.muted)),
+            ))
+        }
     }
 }
 
@@ -111,7 +121,10 @@ pub(super) fn render_detail_view(frame: &mut Frame, area: Rect, app: &mut App, t
         Some((file, scroll)) => Some(draw_file(frame, (area, rows, hosted), file, scroll, theme)),
         None => draw_record(frame, (area, rows, hosted), app, theme),
     };
-    if let Some(drawn) = bounds {
+    if let Some(mut drawn) = bounds {
+        if matches!(app.detail_view(), Some(DetailView::Thread(_))) {
+            app.set_thread_header_rows(std::mem::take(&mut drawn.thread_headers));
+        }
         app.set_detail_bounds(drawn.max_scroll, drawn.shown);
         app.set_chat_rows(Some((rows, drawn.top_row)));
         let scrollbar = chat_scrollbar(
@@ -134,6 +147,9 @@ struct Drawn {
     top_row: usize,
     /// What its scrollbar shows
     view: ScrollView,
+    /// For a thread, the wrapped row of each message header, from the
+    /// top of the content, with the message's id
+    thread_headers: Vec<(usize, u64)>,
 }
 
 /// Draw the highlighted record.
@@ -143,6 +159,8 @@ fn draw_record(
     app: &App,
     theme: &Theme,
 ) -> Option<Drawn> {
+    let mut hint = "Esc close  ↑↓ PgUp/PgDn scroll ";
+    let mut headers = Vec::new();
     let lines = match app.detail_view()? {
         DetailView::Record => {
             let record = app.selected_record_data()?;
@@ -151,10 +169,20 @@ fn draw_record(
         DetailView::Process(process) => {
             process_detail_lines(process, rows.width.saturating_add(2), theme)
         }
+        DetailView::Thread(view) => {
+            let (lines, header_lines) = thread_lines(app, view, rows.width, theme);
+            hint = "Esc close  n/p message  ⏎ fold  e/c all  ↑↓ scroll ";
+            headers = header_lines;
+            lines
+        }
         DetailView::File(_) | DetailView::Graph | DetailView::Image(_) => return None,
     };
     let source = Source::Styled(lines);
     let width = usize::from(rows.width).max(1);
+    let thread_headers = headers
+        .into_iter()
+        .map(|(line, id)| (source.rows_before(line, width), id))
+        .collect();
     let visible = usize::from(rows.height);
     let total = source.len();
     let max_scroll = last_page_start(&source, width, visible);
@@ -167,7 +195,7 @@ fn draw_record(
             format!(" {}-{}/{total} ", (first + 1).min(total), first + shown),
             muted,
         ),
-        Span::styled("Esc close  ↑↓ PgUp/PgDn scroll ", muted),
+        Span::styled(hint, muted),
     ]);
     let view = ScrollView {
         total,
@@ -180,6 +208,7 @@ fn draw_record(
         shown,
         top_row: source.rows_before(first, width),
         view,
+        thread_headers,
     })
 }
 
@@ -304,6 +333,7 @@ fn draw_file(
         shown,
         top_row: source.rows_before(first, width),
         view,
+        thread_headers: Vec::new(),
     }
 }
 

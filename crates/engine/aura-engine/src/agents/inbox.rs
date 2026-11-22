@@ -8,6 +8,8 @@
 use async_trait::async_trait;
 use aura_core_types::AgentId;
 
+use super::mail::ThreadId;
+
 /// Whether a message expects an answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageKind {
@@ -32,6 +34,10 @@ pub struct InboxMessage {
     pub kind: MessageKind,
     /// Message body.
     pub text: String,
+    /// Subject of the message's thread.
+    pub subject: String,
+    /// Thread the message belongs to.
+    pub thread: ThreadId,
 }
 
 impl InboxMessage {
@@ -40,12 +46,13 @@ impl InboxMessage {
     pub fn render(&self) -> String {
         match self.kind {
             MessageKind::Request => format!(
-                "Message from agent {} ({}):\n\n{}\n\nTo answer, call send_to_agent with agent_id \"{}\".",
-                self.from_name, self.from, self.text, self.from
+                "Message from agent {} ({}):\nSubject: {}\n\n{}\n\nTo answer, call send_to_agent \
+                 with agent_id \"{}\" and subject \"{}\"; use a new subject for a new topic.",
+                self.from_name, self.from, self.subject, self.text, self.from, self.subject
             ),
             MessageKind::Reply => format!(
-                "Agent {} ({}) reported back:\n\n{}",
-                self.from_name, self.from, self.text
+                "Agent {} ({}) reported back:\nSubject: {}\n\n{}",
+                self.from_name, self.from, self.subject, self.text
             ),
         }
     }
@@ -57,4 +64,49 @@ pub trait ParentInbox: Send + Sync {
     /// Hand `message` to the root's conversation. An error makes the host
     /// append the message to the root's record instead, so it is not lost.
     async fn deliver(&self, message: InboxMessage) -> Result<(), String>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message(kind: MessageKind) -> InboxMessage {
+        InboxMessage {
+            to: AgentId::generate(),
+            from: AgentId::generate(),
+            from_name: "scout".into(),
+            kind,
+            text: "Found two issues".into(),
+            subject: "Parser review".into(),
+            thread: ThreadId("t3".into()),
+        }
+    }
+
+    #[test]
+    fn a_request_says_how_to_keep_the_thread() {
+        let message = message(MessageKind::Request);
+        let text = message.render();
+        assert!(text.starts_with(&format!("Message from agent scout ({}):\n", message.from)));
+        assert!(text.contains("Subject: Parser review\n"), "{text}");
+        assert!(
+            text.ends_with(&format!(
+                "To answer, call send_to_agent with agent_id \"{}\" and subject \"Parser \
+                 review\"; use a new subject for a new topic.",
+                message.from
+            )),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_reply_names_its_subject() {
+        let message = message(MessageKind::Reply);
+        assert_eq!(
+            message.render(),
+            format!(
+                "Agent scout ({}) reported back:\nSubject: Parser review\n\nFound two issues",
+                message.from
+            )
+        );
+    }
 }

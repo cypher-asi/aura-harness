@@ -15,6 +15,7 @@ mod graph;
 mod header;
 mod hud;
 mod images;
+mod inbox;
 mod input;
 mod markdown;
 mod members;

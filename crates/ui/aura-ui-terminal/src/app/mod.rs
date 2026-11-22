@@ -19,6 +19,7 @@ pub mod graph;
 pub mod hud;
 pub mod image_preview;
 pub mod images;
+mod inbox;
 mod input_editor;
 mod keys;
 mod line_edit;
@@ -74,6 +75,7 @@ pub use definitions::AgentsTab;
 use file_view::FileView;
 use folder_picker::FolderPicker;
 use hud::Hud;
+pub use inbox::{InboxRow, ThreadView};
 pub use members::{MemberRow, RecordsTab};
 pub use model_picker::{ModelPicker, ModelTab};
 pub use panes::{Pane, PaneChrome, PaneSplits, PaneTab};
@@ -260,6 +262,8 @@ pub struct App {
     pub(super) records_tab: RecordsTab,
     /// The agents of the run of the agent on screen, for the MEMBERS tab
     pub(super) members: members::Members,
+    /// The threads of mail between agents, for the INBOX tab
+    pub(super) inbox: inbox::Inbox,
     /// First line of the POLICIES tab on screen
     pub(super) policies_scroll: usize,
     /// Record or file shown over the chat panel
@@ -537,6 +541,10 @@ pub struct PanelAreas {
     pub member_rows: Option<Rect>,
     /// Member row shown at the top of `member_rows`
     pub members_scroll: usize,
+    /// Rows of the INBOX tab inside the record panel
+    pub inbox_rows: Option<Rect>,
+    /// Inbox row shown at the top of `inbox_rows`
+    pub inbox_scroll: usize,
     /// Sandbox panel (including border)
     pub sandbox: Option<Rect>,
     /// Rows of the sandbox tree inside the panel
@@ -586,6 +594,9 @@ pub enum DetailView {
     Graph,
     /// A pasted image, as large as the panel allows.
     Image(Box<image_preview::ImageView>),
+    /// A thread of mail between agents, from the INBOX tab, kept up to
+    /// date as its messages arrive.
+    Thread(Box<ThreadView>),
 }
 
 /// Clickable item under the pointer.
@@ -620,6 +631,8 @@ pub(crate) enum HoverTarget {
     RecordTab(RecordsTab),
     /// A row in the Record panel's MEMBERS tab.
     MemberRow(usize),
+    /// A row in the Record panel's INBOX tab.
+    InboxRow(usize),
     /// A label in the side panel's tab bar.
     SideTab(SidePanelTab),
     /// The `*` button at the right end of the side panel's tab bar.
@@ -1038,6 +1051,7 @@ impl App {
             records_scroll: 0,
             records_tab: RecordsTab::default(),
             members: members::Members::default(),
+            inbox: inbox::Inbox::default(),
             policies_scroll: 0,
             detail: None,
             detail_scroll: 0,
@@ -1493,6 +1507,9 @@ impl App {
             PanelFocus::Records if self.records_tab == RecordsTab::Policies => {
                 self.scroll_policies(-isize::try_from(lines).unwrap_or(isize::MAX));
             }
+            PanelFocus::Records if self.records_tab == RecordsTab::Inbox => {
+                self.scroll_inbox(-isize::try_from(lines).unwrap_or(isize::MAX));
+            }
             PanelFocus::Records => {
                 self.selected_record = self.selected_record.saturating_sub(lines);
             }
@@ -1542,6 +1559,9 @@ impl App {
             }
             PanelFocus::Records if self.records_tab == RecordsTab::Policies => {
                 self.scroll_policies(isize::try_from(lines).unwrap_or(isize::MAX));
+            }
+            PanelFocus::Records if self.records_tab == RecordsTab::Inbox => {
+                self.scroll_inbox(isize::try_from(lines).unwrap_or(isize::MAX));
             }
             PanelFocus::Records => {
                 if !self.records.is_empty() {
@@ -2161,10 +2181,12 @@ impl App {
                             self.clear_selection();
                         } else if self.detail == Some(DetailView::Graph) {
                             self.click_graph(mouse.column, mouse.row);
-                        } else if self.detail.is_none()
-                            && ((self.log.is_open() && self.click_log(mouse.column, mouse.row))
-                                || (self.flow.is_open()
-                                    && self.click_flow(mouse.column, mouse.row)))
+                        } else if self.click_thread(mouse.column, mouse.row)
+                            || (self.detail.is_none()
+                                && ((self.log.is_open()
+                                    && self.click_log(mouse.column, mouse.row))
+                                    || (self.flow.is_open()
+                                        && self.click_flow(mouse.column, mouse.row))))
                         {
                             self.clear_selection();
                         }
@@ -2239,6 +2261,9 @@ impl App {
         }
         if let Some(index) = self.member_row_at(column, row) {
             return Some(HoverTarget::MemberRow(index));
+        }
+        if let Some(index) = self.inbox_row_at(column, row) {
+            return Some(HoverTarget::InboxRow(index));
         }
         if let Some(target) = self.hovered_side_panel(column, row) {
             return Some(target);

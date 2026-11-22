@@ -32,6 +32,8 @@ pub(super) const MEMBERS_HINT: &str = "⏎ open  o chat  ⇧←→ tabs";
 /// Hint of the Kernel panel's POLICIES tab, a document with nothing to
 /// open.
 pub(super) const POLICIES_HINT: &str = "↑↓ scroll  ⇧←→ tabs";
+/// Hint of the Kernel panel's INBOX tab, whose threads also fold.
+pub(super) const INBOX_HINT: &str = "↑↓ move  ←→ fold  ⏎ open  ⇧←→ tabs";
 
 /// Whether a side-panel row is still in play. This alone decides white
 /// versus gray text in every tab, so the tabs read the same way:

@@ -94,6 +94,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     command("kernel", "Toggle Kernel panel"),
     command("members", "Show the agents this run brought in"),
     command("policies", "Show the policies and permissions of this agent"),
+    command("inbox", "Show the messages this run's agents sent each other"),
     command("files", "Toggle Sandbox panel"),
     command(
         "expand",

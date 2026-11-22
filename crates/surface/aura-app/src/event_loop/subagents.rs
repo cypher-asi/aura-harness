@@ -37,6 +37,7 @@ use super::gate_subtask::{explicit_model, GateBase, SubtaskGate, SubtaskLabel};
 use super::handlers::{handle_agent_success, run_agent_turn, system_message};
 use super::host::{agent_tool_definitions, TerminalAgents};
 use super::lead::lead_tools;
+use super::mail::{MailSender, Mailbox, TaskMail};
 use super::modes::Permissions;
 use super::notices::{Notice, NoticeSender};
 use super::processes::{now_ms, task_id, ProcessTable};
@@ -73,7 +74,7 @@ use aura_exec_tools::todo::{task_report_line, TODO_WRITE_TOOL_NAME};
 use aura_exec_tools::SubagentDispatchHook;
 use aura_model::{Message, ThinkingEffort, ToolDefinition};
 use aura_ui_terminal::events::{
-    AgentDefinitionSummary, AgentSummary, ProcessKind, ProcessStatus, ProcessSummary,
+    AgentDefinitionSummary, AgentSummary, MailView, ProcessKind, ProcessStatus, ProcessSummary,
 };
 use aura_ui_terminal::{PermissionMode, UiCommand};
 use std::collections::hash_map::Entry;
@@ -330,6 +331,9 @@ pub struct AgentHub {
     /// Messages for agents from work that finishes off the event loop.
     pub(crate) notices: NoticeSender,
     notice_rx: Mutex<Option<mpsc::UnboundedReceiver<Notice>>>,
+    /// Mail for the INBOX tab, once the event loop opened it
+    /// ([`Self::open_mail`]); without it no mail is collected.
+    mail: Mutex<Option<MailSender>>,
     pub(crate) agents: Option<TerminalAgents>,
     /// The agent the RECORD panel follows.
     pub(crate) record_panel: RecordPanelAgent,
@@ -421,6 +425,7 @@ impl AgentHub {
                 processes: parts.processes,
                 notices,
                 notice_rx: Mutex::new(Some(notice_rx)),
+                mail: Mutex::new(None),
                 agents: parts.agents,
                 record_panel: parts.record_panel,
                 traces: parts.traces,
@@ -915,6 +920,31 @@ impl AgentHub {
             .unwrap_or_else(|| mpsc::unbounded_channel().1)
     }
 
+    /// Start collecting mail between agents for the INBOX tab: the host's
+    /// messages and the `task` calls this hub dispatches. Returns where it
+    /// arrives, for the event loop. A later call replaces the earlier
+    /// channel. Surfaces that never call it (`aura -p`) collect none, so
+    /// nothing piles up unread.
+    pub(crate) fn open_mail(&self) -> mpsc::UnboundedReceiver<MailView> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        if let Some(agents) = &self.agents {
+            agents
+                .host()
+                .set_mail_observer(Arc::new(Mailbox::new(tx.clone())));
+        }
+        *lock(&self.mail) = Some(tx);
+        rx
+    }
+
+    /// Show `view` in the INBOX tab, if mail is collected.
+    fn post_mail(&self, view: MailView) {
+        if let Some(mail) = lock(&self.mail).as_ref() {
+            // A closed channel means the event loop ended; nobody is left
+            // to show it.
+            let _ = mail.send(view);
+        }
+    }
+
     /// Tell the Processes tab what every agent is called.
     pub(crate) fn name_agents(&self) {
         let registry = lock(&self.registry);
@@ -1157,6 +1187,8 @@ impl AgentHub {
                 todo_id: request.todo_id.clone(),
             })
             .await;
+        let mail = self.task_mail(parent, child_id, &name, &request.prompt);
+        self.post_mail(mail.request(&request.prompt));
         let todo = request.todo_id.clone();
         let subtask = Subtask {
             request,
@@ -1174,6 +1206,8 @@ impl AgentHub {
                     .tasks
                     .finish_spawn(child_id, report.outcome())
                     .await;
+                let last = report.last();
+                hub.post_mail(mail.reply(last.child, &last.name, report.outcome()));
                 let _ = hub.notices.send(task_notice(
                     parent,
                     &shown,
@@ -1195,10 +1229,27 @@ impl AgentHub {
             .tasks
             .finish_spawn(child_id, report.outcome())
             .await;
-        if let Err(reason) = &report.last().reply {
-            warn!(child = %report.last().name, %reason, "Permanent agent failed");
+        let last = report.last();
+        self.post_mail(mail.reply(last.child, &last.name, report.outcome()));
+        if let Err(reason) = &last.reply {
+            warn!(child = %last.name, %reason, "Permanent agent failed");
         }
         Ok(report.result())
+    }
+
+    /// The INBOX thread of the `task` `parent` gave `child`, shown as
+    /// `child_name`, named after `prompt`.
+    fn task_mail(
+        &self,
+        parent: AgentId,
+        child: AgentId,
+        child_name: &str,
+        prompt: &str,
+    ) -> TaskMail {
+        let parent_name = lock(&self.registry)
+            .find(parent)
+            .map_or_else(|| "agent".to_string(), |a| a.display_name().into_owned());
+        TaskMail::new(parent, parent_name, child, child_name.to_string(), prompt)
     }
 
     /// Write on the parent's record that `request` went to `child`, an

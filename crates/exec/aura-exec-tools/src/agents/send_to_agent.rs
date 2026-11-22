@@ -45,6 +45,11 @@ pub struct SendToAgentInput {
     /// Optional structured attachments to forward along with the message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachments: Option<serde_json::Value>,
+    /// Short subject naming the conversation. The same subject continues
+    /// a thread; a new one starts a thread. `None` continues the last
+    /// thread with the target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -89,7 +94,9 @@ impl SendToAgentTool {
         ToolDefinition::new(
             SEND_TO_AGENT_TOOL_NAME,
             "Send a message to another agent within the caller's scope. \
-             Requires Capability::ControlAgent. Delivery is asynchronous: \
+             Requires Capability::ControlAgent. Give the message a short \
+             subject: reuse the same subject to continue a conversation, and \
+             use a new subject for a new topic. Delivery is asynchronous: \
              the call returns once the message is delivered, and the target \
              agent's reply is delivered back to you automatically as a new \
              message in this conversation when it finishes. Do not poll the \
@@ -100,6 +107,12 @@ impl SendToAgentTool {
                 "properties": {
                     "agent_id": { "type": "string" },
                     "content": { "type": "string" },
+                    "subject": {
+                        "type": "string",
+                        "description": "Short subject of the conversation. Reuse the same \
+                                        subject to continue a conversation; use a new subject \
+                                        for a new topic."
+                    },
                     "attachments": {}
                 },
                 "required": ["agent_id", "content"]
@@ -189,7 +202,7 @@ impl Tool for SendToAgentTool {
 
         let parent = caller_external_id(ctx);
         match hook
-            .deliver_message(
+            .deliver_message_in_thread(
                 &input.agent_id,
                 parent.as_deref(),
                 ctx.originating_user_id.as_deref(),
@@ -197,6 +210,7 @@ impl Tool for SendToAgentTool {
                 &input.content,
                 input.attachments.clone(),
                 ctx.caller_model_id.as_deref(),
+                input.subject.as_deref(),
             )
             .await
         {
@@ -347,6 +361,7 @@ mod tests {
             agent_id: "aa".into(),
             content: "hello".into(),
             attachments: None,
+            subject: None,
         };
         let err = SendToAgentTool::evaluate(&ctx(caller), &input).unwrap_err();
         assert!(err.to_string().contains("permissions:"), "got: {err}");
@@ -366,6 +381,7 @@ mod tests {
             agent_id: "not-allowed".into(),
             content: "hello".into(),
             attachments: None,
+            subject: None,
         };
         let err = SendToAgentTool::evaluate(&ctx(caller), &input).unwrap_err();
         assert!(err.to_string().contains("permissions:"), "got: {err}");
@@ -385,6 +401,7 @@ mod tests {
             agent_id: "target-id".into(),
             content: "hello".into(),
             attachments: None,
+            subject: None,
         };
         let outcome = SendToAgentTool::evaluate(&ctx(caller), &input).unwrap();
         assert_eq!(outcome.target_agent_id, "target-id");
@@ -405,6 +422,7 @@ mod tests {
             agent_id: "anything".into(),
             content: "hi".into(),
             attachments: None,
+            subject: None,
         };
         assert!(SendToAgentTool::evaluate(&ctx(caller), &input).is_ok());
     }
@@ -705,5 +723,153 @@ mod tests {
             16,
             "blank external id must be ignored and the fallback used"
         );
+    }
+
+    /// Hook with threads: records the subject `send_to_agent` passed.
+    #[derive(Default)]
+    struct ThreadedHook {
+        captured: std::sync::Mutex<Option<(String, Option<String>)>>,
+    }
+
+    #[async_trait]
+    impl crate::tool::AgentControlHook for ThreadedHook {
+        async fn deliver_message(
+            &self,
+            _: &str,
+            _: Option<&str>,
+            _: Option<&str>,
+            _: Option<&str>,
+            _: &str,
+            _: Option<serde_json::Value>,
+            _: Option<&str>,
+        ) -> Result<(), String> {
+            Err("send_to_agent must call deliver_message_in_thread".into())
+        }
+
+        async fn deliver_message_in_thread(
+            &self,
+            _target_agent_id: &str,
+            _parent_agent_id: Option<&str>,
+            _originating_user_id: Option<&str>,
+            _project_id: Option<&str>,
+            content: &str,
+            _attachments: Option<serde_json::Value>,
+            _model: Option<&str>,
+            subject: Option<&str>,
+        ) -> Result<(), String> {
+            *self.captured.lock().unwrap() =
+                Some((content.to_string(), subject.map(str::to_string)));
+            Ok(())
+        }
+
+        async fn lifecycle(
+            &self,
+            _: &str,
+            _: Option<&str>,
+            _: Option<&str>,
+            _: &str,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        async fn delegate_task(
+            &self,
+            _: &str,
+            _: Option<&str>,
+            _: Option<&str>,
+            _: &str,
+            _: Option<&serde_json::Value>,
+            _: Option<&str>,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    fn control_ctx() -> ToolContext {
+        ctx(AgentPermissions {
+            scope: AgentScope::default(),
+            capabilities: vec![Capability::ControlAgent],
+        })
+    }
+
+    #[tokio::test]
+    async fn send_to_agent_forwards_the_subject() {
+        let hook = Arc::new(ThreadedHook::default());
+        let mut tctx = control_ctx();
+        tctx.agent_control_hook = Some(hook.clone());
+
+        let result = SendToAgentTool
+            .execute(
+                &tctx,
+                serde_json::json!({
+                    "agent_id": "target-id",
+                    "content": "hi",
+                    "subject": "Parser review",
+                }),
+            )
+            .await
+            .expect("execute");
+
+        assert!(result.ok, "{:?}", String::from_utf8_lossy(&result.stderr));
+        assert_eq!(
+            hook.captured.lock().unwrap().clone(),
+            Some(("hi".to_string(), Some("Parser review".to_string())))
+        );
+    }
+
+    #[tokio::test]
+    async fn send_to_agent_without_a_subject_passes_none() {
+        let hook = Arc::new(ThreadedHook::default());
+        let mut tctx = control_ctx();
+        tctx.agent_control_hook = Some(hook.clone());
+
+        let result = SendToAgentTool
+            .execute(
+                &tctx,
+                serde_json::json!({ "agent_id": "target-id", "content": "hi" }),
+            )
+            .await
+            .expect("execute");
+
+        assert!(result.ok);
+        assert_eq!(
+            hook.captured.lock().unwrap().clone(),
+            Some(("hi".to_string(), None))
+        );
+    }
+
+    /// A hook written before threads, with only `deliver_message`, still
+    /// gets the message when a subject is given.
+    #[tokio::test]
+    async fn send_to_agent_with_a_subject_reaches_a_hook_without_threads() {
+        let hook = CapturingHook::new();
+        let mut tctx = control_ctx();
+        tctx.caller_model_id = Some("model-a".into());
+        tctx.agent_control_hook = Some(hook.clone());
+
+        let result = SendToAgentTool
+            .execute(
+                &tctx,
+                serde_json::json!({
+                    "agent_id": "target-id",
+                    "content": "hi",
+                    "subject": "Parser review",
+                }),
+            )
+            .await
+            .expect("execute");
+
+        assert!(result.ok);
+        assert_eq!(hook.captured_model().as_deref(), Some("model-a"));
+    }
+
+    #[test]
+    fn the_schema_offers_a_subject() {
+        let definition = SendToAgentTool::definition();
+        assert_eq!(
+            definition.input_schema["properties"]["subject"]["type"],
+            "string"
+        );
+        assert!(definition.description.contains("subject"));
     }
 }

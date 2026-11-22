@@ -68,9 +68,14 @@ struct TerminalInbox {
 #[async_trait]
 impl ParentInbox for TerminalInbox {
     async fn deliver(&self, message: InboxMessage) -> Result<(), String> {
+        let shown = if message.subject.is_empty() {
+            format!("Message from {}", message.from_name)
+        } else {
+            format!("Message from {}: {}", message.from_name, message.subject)
+        };
         let notice = Notice {
             to: message.to,
-            shown: format!("Message from {}", message.from_name),
+            shown,
             prompt: message.render(),
         };
         self.notices

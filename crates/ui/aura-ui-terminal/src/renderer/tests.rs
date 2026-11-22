@@ -1187,12 +1187,12 @@ fn test_sandbox_panel_sits_below_record() {
     ));
     let rows = render_rows(&mut app, 150);
 
-    let (record, _) = header_bar(&rows, "KERNEL");
+    let (record, _) = header_bar(&rows, "KRN");
     let (sandbox, _) = header_bar(&rows, "SBX");
     assert!(sandbox > record + 10, "record={record} sandbox={sandbox}");
     let column = |row: &str, title: &str| row[..row.find(title).unwrap()].chars().count();
     // The Kernel panel's left frame: the last border before its first tab.
-    let kernel_border = rows[record][..rows[record].find("KERNEL").unwrap()]
+    let kernel_border = rows[record][..rows[record].find("KRN").unwrap()]
         .chars()
         .collect::<Vec<char>>()
         .iter()
@@ -1240,7 +1240,7 @@ fn test_side_panel_header_matches_the_agents_header() {
     );
     assert_eq!(
         header_bar(&rows, "PROJECTS").0,
-        header_bar(&rows, "KERNEL").0,
+        header_bar(&rows, "KRN").0,
         "top bars line up"
     );
 
@@ -1490,13 +1490,13 @@ fn test_files_command_toggles_sandbox_panel() {
     submit(&mut app, "/kernel");
     submit(&mut app, "/files");
     let screen = render_rows(&mut app, 150).join("\n");
-    assert!(!screen.contains(" KERNEL "));
+    assert!(!screen.contains("KRN"));
     assert!(!screen.contains("PLN"));
 
     submit(&mut app, "/files");
     let screen = render_rows(&mut app, 150).join("\n");
     assert!(screen.contains("PLN"), "{screen}");
-    assert!(!screen.contains(" KERNEL "));
+    assert!(!screen.contains("KRN"));
 }
 
 #[test]
@@ -1803,7 +1803,7 @@ fn test_hosted_panels_leave_their_title_bars_to_the_front_end() {
     let rows = render_rows(&mut app, 150);
     let screen = rows.join("\n");
     assert!(
-        !screen.contains("CHAT") && !screen.contains("KERNEL"),
+        !screen.contains("CHAT") && !screen.contains("KRN"),
         "{screen}"
     );
     let panes: Vec<Pane> = app.pane_chrome().iter().map(|c| c.pane).collect();
@@ -2602,7 +2602,7 @@ fn test_expand_button_fills_the_screen_with_the_chat_panel() {
     let rows = render_rows(&mut app, 120);
     let (tabs, wide_left, wide_right) = chat_panel(&rows);
     assert_eq!((wide_left, wide_right), (1, 118), "{}", rows.join("\n"));
-    assert!(!rows.join("\n").contains("KERNEL"), "the other panels hide");
+    assert!(!rows.join("\n").contains("KRN"), "the other panels hide");
     let end: String = rows[tabs].chars().skip(wide_right - 4).take(5).collect();
     assert_eq!(end, "│ ⤡ │", "the button now restores");
 
@@ -2636,7 +2636,7 @@ fn test_expand_button_maximizes_the_side_panel_over_the_record_panel() {
 
     let mut app = crate::App::new();
     let rows = render_rows(&mut app, 120);
-    let (kernel, _) = header_bar(&rows, "KERNEL");
+    let (kernel, _) = header_bar(&rows, "KRN");
     let (tabs, left, right) = side_panel(&rows);
     assert!(
         tabs > kernel,
@@ -2663,10 +2663,7 @@ fn test_expand_button_maximizes_the_side_panel_over_the_record_panel() {
 
     let rows = render_rows(&mut app, 120);
     let screen = rows.join("\n");
-    assert!(
-        !screen.contains("KERNEL"),
-        "the Record panel hides: {screen}"
-    );
+    assert!(!screen.contains("KRN"), "the Record panel hides: {screen}");
     assert_eq!(
         side_panel(&rows),
         (kernel, left, right),
@@ -2687,7 +2684,7 @@ fn test_expand_button_maximizes_the_side_panel_over_the_record_panel() {
     });
     assert!(!app.side_expanded());
     let rows = render_rows(&mut app, 120);
-    assert_eq!(header_bar(&rows, "KERNEL").0, kernel);
+    assert_eq!(header_bar(&rows, "KRN").0, kernel);
     assert_eq!(side_panel(&rows), (tabs, left, right));
 }
 
@@ -4474,7 +4471,7 @@ fn test_overflowing_panels_show_a_scrollbar() {
         "{chat:?}\n{screen}"
     );
     // Records list oldest first and follow the newest at the bottom.
-    let records = right_border(&rows, "│ KERNEL");
+    let records = right_border(&rows, "│KRN│");
     assert!(
         records.starts_with('│') && records.ends_with('┃'),
         "{records:?}\n{screen}"
