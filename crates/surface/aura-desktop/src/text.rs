@@ -207,6 +207,31 @@ pub struct ShapeKey {
     pub phase: [u8; 2],
 }
 
+/// Rows of an [`Atlas`] copied out for a texture of it on another
+/// thread.
+pub struct AtlasRows {
+    /// The atlas's size when they were copied
+    pub size: (u32, u32),
+    /// The first row copied
+    pub start: u32,
+    /// RGBA rows from `start` down
+    pub pixels: Vec<u8>,
+}
+
+impl AtlasRows {
+    /// The rows copied.
+    pub fn rows(&self) -> Range<u32> {
+        let stride = self.size.0 as usize * 4;
+        let count = self.pixels.len().checked_div(stride).unwrap_or(0);
+        self.start..self.start + u32::try_from(count).unwrap_or(u32::MAX)
+    }
+
+    /// Whether every row of the atlas was copied.
+    pub fn whole(&self) -> bool {
+        self.rows() == (0..self.size.1)
+    }
+}
+
 struct Shelf {
     y: u32,
     height: u32,
@@ -268,6 +293,47 @@ impl Atlas {
     /// The rows written since this was last called.
     pub fn take_dirty(&mut self) -> Option<Range<u32>> {
         self.dirty.take()
+    }
+
+    /// The rows written since the last take, copied out for a texture of
+    /// the atlas that is `known` in size: every row when the atlas is no
+    /// longer that size, since such a texture is made anew.
+    pub fn take_rows(&mut self, known: Option<(u32, u32)>) -> AtlasRows {
+        let dirty = self.take_dirty();
+        let rows = if known == Some(self.size()) {
+            dirty.unwrap_or(0..0)
+        } else {
+            0..self.height
+        };
+        self.copy_rows(rows)
+    }
+
+    /// `newer`, the rows taken for a frame, together with `older`, those
+    /// of a frame it replaces before they reached the texture, both read
+    /// again as the atlas has them now.
+    pub fn merge_rows(&self, newer: AtlasRows, older: &AtlasRows) -> AtlasRows {
+        // The atlas changed size since `older` only if `newer` has every
+        // row.
+        let (a, b) = (newer.rows(), older.rows());
+        if newer.whole() || b.is_empty() {
+            return newer;
+        }
+        let rows = if a.is_empty() {
+            b
+        } else {
+            a.start.min(b.start)..a.end.max(b.end)
+        };
+        self.copy_rows(rows)
+    }
+
+    fn copy_rows(&self, rows: Range<u32>) -> AtlasRows {
+        let (start, end) = (rows.start.min(self.height), rows.end.min(self.height));
+        let stride = self.width as usize * 4;
+        AtlasRows {
+            size: self.size(),
+            start,
+            pixels: self.pixels[start as usize * stride..end.max(start) as usize * stride].to_vec(),
+        }
     }
 
     /// The tallest the atlas may grow: what the GPU takes as a texture.
@@ -718,6 +784,42 @@ mod tests {
         assert_eq!(atlas.generation(), generation + 1);
         assert_eq!(atlas.take_dirty(), Some(0..1024));
         assert!(atlas.shape(key(999), || Some(mask(2000, 4, 1))).is_none());
+    }
+
+    #[test]
+    fn rows_are_copied_out_as_a_texture_of_the_atlas_lacks_them() {
+        let mut atlas = Atlas::new();
+        let stride = Atlas::WIDTH as usize * 4;
+        let all = atlas.take_rows(None);
+        assert_eq!((all.size, all.rows()), ((Atlas::WIDTH, 512), 0..512));
+        assert!(all.whole(), "a new texture gets every row");
+        let size = Some(atlas.size());
+        assert!(atlas.take_rows(size).rows().is_empty(), "nothing new");
+
+        atlas.shape(key(1), || Some(mask(10, 14, 200)));
+        let first = atlas.take_rows(size);
+        assert_eq!(first.rows(), 0..14);
+        assert_eq!(&first.pixels[..4], &[255, 255, 255, 200]);
+        assert_eq!(first.pixels.len(), 14 * stride);
+
+        // The frame with `first` was replaced before the texture took
+        // its rows, so the next one carries both.
+        atlas.shape(key(2), || Some(mask(10, 30, 9)));
+        let second = atlas.take_rows(size);
+        assert_eq!(second.rows(), 16..46);
+        let both = atlas.merge_rows(second, &first);
+        assert_eq!(both.rows(), 0..46);
+        assert_eq!(
+            &both.pixels[16 * stride..16 * stride + 4],
+            &[255, 255, 255, 9]
+        );
+
+        // Grown: every row again, whatever was missed before.
+        atlas.shape(key(3), || Some(mask(10, 600, 1)));
+        let grown = atlas.take_rows(size);
+        assert_eq!(grown.size, (Atlas::WIDTH, 1024));
+        assert!(grown.whole());
+        assert!(atlas.merge_rows(grown, &both).whole());
     }
 
     #[test]

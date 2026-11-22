@@ -8,8 +8,10 @@
 //! (`show`), how many frames were shown and how many came out the same
 //! as the one on screen and were not, how many grid rows were painted
 //! anew, and how much of each second the window's thread was busy in
-//! all. The first frame also reports how long after launch it was shown,
-//! which is the cold-start number to watch.
+//! all (frames shown on the GPU are shown from a thread of their own, so
+//! their `show` is left out of it). The first frame also reports how
+//! long after launch it was shown, which is the cold-start number to
+//! watch.
 
 use std::time::{Duration, Instant};
 
@@ -56,6 +58,8 @@ pub struct Stats {
     same: u32,
     /// Grid rows painted anew
     rows: usize,
+    /// Time in `shows` spent on another thread
+    away: Duration,
 }
 
 impl Stats {
@@ -72,6 +76,7 @@ impl Stats {
             shows: Span::default(),
             same: 0,
             rows: 0,
+            away: Duration::ZERO,
         }
     }
 
@@ -111,6 +116,15 @@ impl Stats {
         }
     }
 
+    /// A frame was drawn and shown in `d` by the thread that shows
+    /// frames, which kept the window's thread free meanwhile.
+    pub fn shown_away(&mut self, d: Duration) {
+        self.shown(Some(d));
+        if self.enabled {
+            self.away += d;
+        }
+    }
+
     /// Log the spans when they are due.
     pub fn report(&mut self, now: Instant) {
         let over = now.saturating_duration_since(self.since);
@@ -118,7 +132,11 @@ impl Stats {
             return;
         }
         let spans = [&self.updates, &self.renders, &self.paints, &self.shows];
-        let busy: Duration = spans.iter().map(|span| span.total).sum();
+        let busy = spans
+            .iter()
+            .map(|span| span.total)
+            .sum::<Duration>()
+            .saturating_sub(self.away);
         if busy > Duration::ZERO {
             tracing::info!(
                 target: "aura_desktop::perf",
@@ -144,6 +162,7 @@ impl Stats {
         self.shows = Span::default();
         self.same = 0;
         self.rows = 0;
+        self.away = Duration::ZERO;
     }
 }
 

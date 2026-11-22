@@ -24,6 +24,7 @@ mod editor;
 mod glide;
 mod keys;
 mod pointer;
+mod present;
 mod screen;
 mod signals;
 #[cfg(test)]
@@ -230,7 +231,7 @@ impl Shell {
             self.tabs.apply(command);
         }
         self.raise_alerts();
-        self.handled(started, marks);
+        self.handled(started, &marks);
     }
 
     /// The session closed its end of the command channel.
@@ -318,7 +319,7 @@ impl Shell {
             if now.saturating_duration_since(self.drawn) >= TICK * IDLE_REDRAW_TICKS {
                 self.dirty = true;
             }
-            self.handled(started, marks);
+            self.handled(started, &marks);
             self.stats.report(now);
         }
         if self.blinking() && self.cursor_on(now) != self.cursor_shown {
@@ -422,10 +423,10 @@ impl Shell {
     /// After what the session sent or a tick was handled: pass on what
     /// the UIs asked of the session, ask for a frame when the tab in front
     /// changed or the tab bar's `marks` did, and count the time it took.
-    fn handled(&mut self, started: Instant, marks: (u64, Vec<bool>)) {
+    fn handled(&mut self, started: Instant, marks: &(u64, Vec<bool>)) {
         self.tabs.forward_events();
         let front = self.tabs.front_mut().tui.take_redraw();
-        if front || self.bar_marks() != marks {
+        if front || self.bar_marks() != *marks {
             self.dirty = true;
         }
         self.stats.update(started.elapsed());

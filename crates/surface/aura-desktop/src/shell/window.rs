@@ -3,15 +3,19 @@
 //! The loop sleeps until the window is told something, the session sends
 //! commands, or the shell's next deadline comes. Whatever happened is
 //! handed to the [`Shell`] at once; when that leaves it looking
-//! different a frame is asked for, and the display hands those out one
-//! per refresh. So a hundred commands and ten keys between two refreshes
+//! different a frame is asked for, at most one per refresh of the
+//! display. So a hundred commands and ten keys between two refreshes
 //! cost one frame, and a window nothing happens in draws nothing.
+//!
+//! On the GPU a frame is shown from a thread of its own, since showing
+//! it waits for the display; the next frame is drawn once that one was
+//! shown. Waiting on the display never holds up input or commands.
 //!
 //! Commands come from the session's thread. They are left in an inbox
 //! and the loop is woken once for however many are waiting.
 
 use super::keys::Press;
-use super::screen::Screen;
+use super::screen::{Screen, Showing};
 use super::signals::quit_on_signal;
 use super::{Effect, Shell};
 use super::{Handles, Options, WINDOW};
@@ -23,7 +27,7 @@ use aura_ui::events::UiCommand;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Notify};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -42,8 +46,13 @@ const INBOX_ROOM: usize = 4 * MAX_BATCH;
 /// The tallest the glyph atlas is let grow.
 const ATLAS_LIMIT: u32 = 4096;
 
+/// The display's refresh rate when it doesn't say, in millihertz.
+const REFRESH: u32 = 60_000;
+
 /// Why the loop was woken from outside the window.
 pub enum Wake {
+    /// The thread that shows frames showed one, or failed to.
+    Presented(anyhow::Result<Showing>),
     /// Commands are waiting in the inbox.
     Commands,
     /// The session closed its end of the command channel.
@@ -128,6 +137,10 @@ struct Handler {
     icon: CursorIcon,
     /// Whether a frame was asked for and has not come
     asked: bool,
+    /// When the last frame was drawn
+    drawn: Option<Instant>,
+    /// The least time between two frames
+    pace: Duration,
     /// Whether the next frame is shown even when it is the one on screen
     /// again: the window's pixels are gone, or never were
     stale: bool,
@@ -164,6 +177,8 @@ pub fn run(handles: Handles, options: &Options, launched: Instant) -> anyhow::Re
         shown: Scene::default(),
         icon: CursorIcon::Default,
         asked: false,
+        drawn: None,
+        pace: pace(REFRESH),
         stale: true,
         failure: None,
     };
@@ -171,6 +186,20 @@ pub fn run(handles: Handles, options: &Options, launched: Instant) -> anyhow::Re
         .run_app(&mut handler)
         .context("running the event loop")?;
     handler.failure.map_or(Ok(()), Err)
+}
+
+/// The least time between two frames on a display that refreshes
+/// `millihertz` / 1000 times a second. A little under a refresh: where
+/// the display holds frames back to its refresh this mustn't make one
+/// miss it, and where nothing does (drawing on the CPU) it keeps the loop
+/// from drawing frames faster than the display shows them.
+fn pace(millihertz: u32) -> Duration {
+    let millihertz = if millihertz >= 1000 {
+        millihertz
+    } else {
+        REFRESH
+    };
+    Duration::from_micros(900_000_000 / u64::from(millihertz))
 }
 
 impl Handler {
@@ -184,7 +213,8 @@ impl Handler {
             .create_window(attributes)
             .context("opening the window")?;
         let window = Arc::new(window);
-        let screen = Screen::new(&window)?;
+        let proxy = self.proxy.clone();
+        let screen = Screen::new(&window, move |wake| proxy.send_event(wake).is_ok())?;
         let limit = screen
             .atlas_limit()
             .map_or(ATLAS_LIMIT, |most| most.min(ATLAS_LIMIT));
@@ -206,9 +236,10 @@ impl Handler {
             // Minimized on some systems: nothing to draw into.
             return;
         }
-        if let Some(screen) = &mut self.screen {
-            screen.resize(size.width, size.height);
-        }
+        let refresh = window
+            .current_monitor()
+            .and_then(|monitor| monitor.refresh_rate_millihertz());
+        self.pace = pace(refresh.unwrap_or(REFRESH));
         self.shell.resized(
             Size::new(size.width as f32, size.height as f32),
             window.scale_factor() as f32,
@@ -222,7 +253,9 @@ impl Handler {
         let (Some(window), Some(screen)) = (&self.window, &mut self.screen) else {
             return;
         };
-        let scene = self.shell.frame(Instant::now());
+        let now = Instant::now();
+        self.drawn = Some(now);
+        let scene = self.shell.frame(now);
         // A frame nobody here asked for is the system's: the window was
         // uncovered, and wants its pixels whatever they are.
         let same = asked && !self.stale && *scene == self.shown;
@@ -231,20 +264,23 @@ impl Handler {
             return;
         }
         self.shown.clone_from(scene);
-        let started = Instant::now();
-        let drawn = text::with(|text| {
+        let showing = text::with(|text| {
             screen.render(&self.shown, text, || {
                 window.pre_present_notify();
             })
         });
-        match drawn {
-            Ok(true) => {
+        self.showing(showing, event_loop);
+    }
+
+    /// Showing a frame went as `showing` says.
+    fn showing(&mut self, showing: anyhow::Result<Showing>, event_loop: &ActiveEventLoop) {
+        match showing {
+            Ok(Showing::Done(took)) => {
                 self.stale = false;
-                self.shell.stats().shown(Some(started.elapsed()));
+                self.shell.stats().shown(Some(took));
             }
-            // The window gave no frame to draw into. The next thing
-            // that changes how it looks tries again.
-            Ok(false) => self.stale = true,
+            Ok(Showing::Missed) => self.stale = true,
+            Ok(Showing::Handed) => {}
             Err(error) => {
                 self.failure = Some(error);
                 event_loop.exit();
@@ -331,6 +367,18 @@ impl ApplicationHandler<Wake> for Handler {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, wake: Wake) {
         match wake {
+            Wake::Presented(showing) => {
+                if let Some(screen) = &mut self.screen {
+                    screen.presented();
+                }
+                match showing {
+                    Ok(Showing::Done(took)) => {
+                        self.stale = false;
+                        self.shell.stats().shown_away(took);
+                    }
+                    other => self.showing(other, event_loop),
+                }
+            }
             Wake::Commands => {
                 let batch = self.inbox.take();
                 self.shell.commands(batch);
@@ -396,18 +444,27 @@ impl ApplicationHandler<Wake> for Handler {
         let now = Instant::now();
         self.shell.advance(now);
         self.act(event_loop);
+        let mut wake_at = self.shell.deadline(now);
         if let Some(window) = &self.window {
             let icon = self.shell.cursor_icon();
             if icon != self.icon {
                 window.set_cursor(icon);
                 self.icon = icon;
             }
-            if self.shell.dirty() && !self.asked {
-                window.request_redraw();
-                self.asked = true;
+            // A frame still being shown says when it is, which wakes the
+            // loop for the next.
+            let ready = self.screen.as_ref().is_some_and(Screen::ready);
+            if self.shell.dirty() && !self.asked && ready {
+                let due = self.drawn.map_or(now, |drawn| drawn + self.pace);
+                if due <= now {
+                    window.request_redraw();
+                    self.asked = true;
+                } else {
+                    wake_at = wake_at.min(due);
+                }
             }
         }
-        event_loop.set_control_flow(ControlFlow::WaitUntil(self.shell.deadline(now)));
+        event_loop.set_control_flow(ControlFlow::WaitUntil(wake_at));
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
@@ -426,6 +483,13 @@ mod tests {
 
     fn status(n: usize) -> UiCommand {
         UiCommand::SetStatus(n.to_string())
+    }
+
+    #[test]
+    fn frames_are_paced_a_little_under_the_refresh() {
+        assert_eq!(pace(60_000), Duration::from_millis(15));
+        assert_eq!(pace(144_000), Duration::from_micros(6250));
+        assert_eq!(pace(0), pace(REFRESH), "a display that says nothing");
     }
 
     #[tokio::test]

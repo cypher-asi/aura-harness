@@ -338,7 +338,7 @@ fn swarm_scroll_timings() {
     const SECOND: Duration = Duration::from_secs(1);
 
     enum Arrival {
-        Command(UiCommand),
+        Command(Box<UiCommand>),
         Scroll,
     }
 
@@ -373,7 +373,7 @@ fn swarm_scroll_timings() {
                     agent_id: format!("b{i:02}"),
                     command: Box::new(command),
                 };
-                arrivals.push((at, Arrival::Command(command)));
+                arrivals.push((at, Arrival::Command(Box::new(command))));
                 at += FLUSH;
                 step += 1;
             }
@@ -410,7 +410,7 @@ fn swarm_scroll_timings() {
             let mut batch = Vec::new();
             while next < arrivals.len() && arrivals[next].0 <= clock {
                 match &arrivals[next].1 {
-                    Arrival::Command(command) => batch.push(command.clone()),
+                    Arrival::Command(command) => batch.push((**command).clone()),
                     Arrival::Scroll => stage.shell.wheel(touchpad, now),
                 }
                 next += 1;
