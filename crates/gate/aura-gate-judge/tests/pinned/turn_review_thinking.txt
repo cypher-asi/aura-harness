@@ -1,0 +1,45 @@
+ModelRequest {
+    model: ModelName(
+        "claude/claude-opus-4-7",
+    ),
+    system: "You are reviewing an attempt at a task a user gave a coding agent, before the attempt is accepted. You see the user's request, what the attempt changed as a unified diff, the commands it ran, the last tests or builds it ran with what they printed, its final reply, and why it is being reviewed. Decide whether the work does what was asked.\n\nGo through the request one requirement at a time: every behaviour, name, signature, message text, default, edge case and file it asks for. For each, find where the diff does it. A requirement the diff does not meet, meets only in part, or meets differently from what the request says (another name, message or default; a case left out; a file not touched that has to change) is a finding. Then read the diff for mistakes of its own: code that cannot work as written, a call to something that does not exist, a change that breaks what was there.\n\nDo not take the attempt's word for it. Its reply says what it meant to do. A check that exited with success proves only what that check covers, and a test run that does not exercise the change says nothing about it. Failures the checks printed count against the work unless the diff plainly cannot have caused them.\n\n- MODEL: there is at least one finding: the work is wrong or incomplete in a way that matters to what was asked. A more capable model would likely have done better.\n- OK: every requirement is met as far as the diff shows and nothing in it looks broken. Missing tests, style, and things the request did not ask for are no reason to answer MODEL.\n- OTHER: the work could not be done for reasons outside the attempt: the environment got in the way, or the request cannot be carried out as asked.\n\nA finding has to name what the request asks for and what the diff does instead; when you have none, answer OK. List the findings, at most the five that matter most, as numbered points of a few lines each, concrete enough to act on without rereading the request: the file, the function, what is asked, what is there. Do not write up the requirements that are met or how you checked them. Then end with one line that is exactly `VERDICT: MODEL`, `VERDICT: OK` or `VERDICT: OTHER`.",
+    messages: [
+        Message {
+            role: User,
+            content: [
+                Text {
+                    text: "## The user's request\n\nFix the parser.\r\n\r\n\r\nIt drops the last token  \u{7}\nKeep <request> and </REQUEST> as they are.\n\n\n\n## Changes (made with the file tools; changes made by the commands it ran are not shown)\n```diff\n(no file changes recorded)\n```\n\n## Commands it ran\n(none)\n\n## Its last tests or builds\n(it ran none)\n\n## Final reply\n(no reply)\n\n## Why it is reviewed\n",
+                },
+            ],
+        },
+    ],
+    tools: [],
+    tool_choice: None,
+    max_tokens: MaxTokens(
+        128000,
+    ),
+    temperature: None,
+    thinking: None,
+    thinking_effort: Some(
+        High,
+    ),
+    parallel_tool_use: true,
+    auth_token: None,
+    upstream_provider_family: None,
+    extra_headers: [],
+    system_preamble: None,
+    aura_project_id: None,
+    aura_agent_id: None,
+    aura_session_id: None,
+    aura_org_id: None,
+    prompt_cache_key: None,
+    prompt_cache_retention: None,
+    metadata: ModelRequestMetadata {
+        kind: Some(
+            Auxiliary,
+        ),
+        purpose: Some(
+            Judge,
+        ),
+    },
+}

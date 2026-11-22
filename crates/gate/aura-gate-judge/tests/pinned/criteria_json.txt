@@ -1,0 +1,5 @@
+{"items":[{"text":"prepare_multipart is importable from ansible.module_utils.urls","kind":"interface"},{"text":"The body is byte-identical to MIMEMultipart's","kind":"reference_match","reference":"email.mime.multipart with email.policy.HTTP"}],"strict":true}
+{"items":[]}
+[{"criterion":{"text":"prepare_multipart is importable from ansible.module_utils.urls","kind":"interface"},"status":"met"},{"criterion":{"text":"The body is byte-identical to MIMEMultipart's","kind":"reference_match","reference":"email.mime.multipart with email.policy.HTTP"},"status":"untested"},{"criterion":{"text":"prepare_multipart is importable from ansible.module_utils.urls","kind":"interface"}}]
+["model","ok","other"]
+["met","unmet","untested"]
