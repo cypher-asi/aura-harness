@@ -62,7 +62,10 @@ use aura_core_types::{
 };
 use aura_exec_tools::plan_tools::{is_plan_path, todo_items, PlanFile};
 use aura_gate::attempts::Terms;
-use aura_gate::compare::{list_price, plan_shares, run_name, PlanReading, Schedule};
+use aura_gate::compare::{
+    judge_pairs, judge_task, list_price, plan_shares, run_name, seed, EndedRun, PlanReading,
+    Schedule,
+};
 use aura_gate::evidence::outcome::calls_for_stronger;
 use aura_gate::followup::Step;
 use aura_gate::judge::blind;
@@ -1799,53 +1802,22 @@ async fn run_prompt(
     }
 }
 
-/// A number from `agent` to seed the judge's order with.
-fn seed(agent: AgentId) -> u64 {
-    let mut bytes = [0u8; 8];
-    bytes.copy_from_slice(&agent.0[..8]);
-    u64::from_le_bytes(bytes)
-}
-
-/// What the judge is told the runs were asked: the prompt, or every
-/// prompt in order.
-fn judge_task(prompts: &[String]) -> String {
-    match prompts {
-        [only] => only.clone(),
-        _ => {
-            let mut task = String::from("The user sent these messages in order:\n");
-            for (i, prompt) in prompts.iter().enumerate() {
-                task.push_str(&format!("\n### Message {}\n{prompt}\n", i + 1));
-            }
-            task
-        }
-    }
-}
-
 /// Have the judge compare each run of arm A with arm B's run of the same
 /// number, through the comparison's own kernel, and rate each against
 /// what the user kept when the work is a replayed session.
 async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<CompareJudgment> {
-    let finished = |arm: CompareArm| -> Vec<&Ran> {
-        ran.iter()
-            .filter(|r| r.run.arm == arm && r.run.error.is_none())
-            .collect()
-    };
-    let pairs: Vec<(&Ran, &Ran)> = if ctx.plan.examples.is_empty() {
-        finished(CompareArm::A)
-            .into_iter()
-            .zip(finished(CompareArm::B))
-            .collect()
-    } else {
-        // Only runs of the same number worked on the same task.
-        let b = finished(CompareArm::B);
-        finished(CompareArm::A)
-            .into_iter()
-            .filter_map(|a| {
-                let n = a.order.0;
-                b.iter().find(|b| b.order.0 == n).map(|b| (a, *b))
-            })
-            .collect()
-    };
+    let ended: Vec<EndedRun> = ran
+        .iter()
+        .map(|r| EndedRun {
+            arm: r.run.arm,
+            n: r.order.0,
+            errored: r.run.error.is_some(),
+        })
+        .collect();
+    let pairs: Vec<(&Ran, &Ran)> = judge_pairs(&ended, !ctx.plan.examples.is_empty())
+        .into_iter()
+        .map(|(a, b)| (&ran[a], &ran[b]))
+        .collect();
     if pairs.is_empty() || ctx.plan.judge.is_empty() {
         return Vec::new();
     }

@@ -6,17 +6,14 @@ use super::LoopState;
 use crate::file_checkpoints::{FileCheckpoints, TurnManifest};
 use crate::session_checkpoint::SessionUsage;
 use aura_core_types::{AgentId, BenchSource, Reference, SessionBaseline};
-use aura_gate::compare::SessionPick;
+use aura_gate::compare::{relative, title, SessionPick};
 use aura_gate::judge::blind::MAX_DIFF;
-use aura_model::{ContentBlock, Message, Role};
+use aura_model::{Message, Role};
 use aura_ui_terminal::events::BenchSession;
 use std::path::{Path, PathBuf};
 
 /// Sessions the BENCH tab offers at most.
 const MAX_SESSIONS: usize = 20;
-
-/// Longest session title, in characters.
-const TITLE_CHARS: usize = 60;
 
 /// A file to put in each copy before a replay, relative to the workspace:
 /// what it held when the session started, or `None` when it did not exist.
@@ -136,37 +133,9 @@ fn manifests(
 /// file checkpoints name when they name any, else every user message that
 /// isn't tool results.
 fn prompts(messages: &[Message], manifests: &[TurnManifest]) -> Vec<String> {
-    let typed: Vec<String> = messages
-        .iter()
-        .filter(|m| m.role == Role::User)
-        .filter(|m| {
-            !m.content
-                .iter()
-                .any(|block| matches!(block, ContentBlock::ToolResult { .. }))
-        })
-        .map(Message::text_content)
-        .filter(|text| !text.trim().is_empty())
-        .collect();
-    let kept: Vec<&TurnManifest> = manifests.iter().filter(|m| !m.rewound).collect();
-    let named: Vec<String> = typed
-        .iter()
-        .filter(|text| kept.iter().any(|m| m.is_prompt(text)))
-        .cloned()
-        .collect();
-    if named.is_empty() {
-        typed
-    } else {
-        named
-    }
-}
-
-fn title(prompt: &str) -> String {
-    let line = prompt.lines().next().unwrap_or_default().trim();
-    let mut title: String = line.chars().take(TITLE_CHARS).collect();
-    if line.chars().count() > TITLE_CHARS {
-        title.push('…');
-    }
-    title
+    aura_gate::compare::prompts(messages, |text| {
+        manifests.iter().any(|m| !m.rewound && m.is_prompt(text))
+    })
 }
 
 /// The session `pick` of `agent_id`, ready to replay in copies of
@@ -278,25 +247,6 @@ fn start_files(
     out
 }
 
-/// `path` relative to `workspace`, when inside it.
-fn relative(path: &Path, workspace: &Path) -> Option<PathBuf> {
-    if path.is_relative() {
-        return Some(path.to_path_buf());
-    }
-    if let Ok(inside) = path.strip_prefix(workspace) {
-        return Some(inside.to_path_buf());
-    }
-    let canonical = path
-        .parent()
-        .and_then(|parent| parent.canonicalize().ok())
-        .zip(path.file_name())
-        .map(|(parent, name)| parent.join(name))?;
-    canonical
-        .strip_prefix(workspace)
-        .ok()
-        .map(Path::to_path_buf)
-}
-
 /// The session's changes to the files as they are now, cut to what the
 /// judge reads.
 fn reference_diff(
@@ -345,29 +295,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prompts_skip_tool_results_and_empty_messages() {
-        let tool_result = Message {
-            role: Role::User,
-            content: vec![ContentBlock::ToolResult {
-                tool_use_id: "t".to_string(),
-                content: "ok".into(),
-                is_error: false,
-            }],
-        };
-        let messages = vec![
-            Message::user("fix the test"),
-            Message::assistant("on it"),
-            tool_result,
-            Message::user("  "),
-            Message::user("now the docs"),
-        ];
-        assert_eq!(
-            prompts(&messages, &[]),
-            vec!["fix the test".to_string(), "now the docs".to_string()]
-        );
-    }
-
-    #[test]
     fn restore_writes_and_removes_files() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("added.txt"), "new").unwrap();
@@ -387,15 +314,5 @@ mod tests {
             std::fs::read_to_string(dir.path().join("sub/gone.txt")).unwrap(),
             "was here"
         );
-    }
-
-    #[test]
-    fn paths_are_made_relative_to_the_workspace() {
-        let ws = Path::new("/work/project");
-        assert_eq!(
-            relative(Path::new("/work/project/src/lib.rs"), ws),
-            Some(PathBuf::from("src/lib.rs"))
-        );
-        assert_eq!(relative(Path::new("/elsewhere/x"), ws), None);
     }
 }
