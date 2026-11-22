@@ -2,7 +2,7 @@
 //! the subtask rows.
 
 use super::*;
-use aura_core_types::{SubagentDispatchRequest, SubagentExit, SubagentResult};
+use aura_core_types::{Difficulty, SubagentDispatchRequest, SubagentExit, SubagentResult};
 
 const SONNET: &str = "aura-claude-sonnet-4-6";
 const GPT: &str = "aura-gpt-5-4";
@@ -102,14 +102,15 @@ async fn a_task_under_gate_runs_on_the_model_gate_picks_for_it() {
         [PromptPayload {
             category: Some(PromptCategory::Debugging),
             classifier: state.models.classifier_model(),
-            route: Route::subtask(HAIKU, RouteReason::Default),
+            route: Route::subtask(SONNET, RouteReason::Default).at_effort("medium"),
             kind: Some("reviewer".to_string()),
+            difficulty: Some(Difficulty::Medium),
             ..PromptPayload::new("fix the flaky parser test")
         }],
-        "debugging starts where it is expected to cost least, as for turns"
+        "medium debugging starts on the standard tier, as for turns"
     );
     assert_eq!(outcomes.len(), 1);
-    assert_eq!(outcomes[0].model, HAIKU);
+    assert_eq!(outcomes[0].model, SONNET);
     assert_eq!(outcomes[0].signal, OutcomeSignal::Unavailable);
     assert!(
         prompts_of(&state, first).is_empty(),
@@ -123,10 +124,10 @@ async fn a_task_under_gate_runs_on_the_model_gate_picks_for_it() {
         .iter()
         .find(|r| r.id == processes::task_id(child))
         .unwrap();
-    assert_eq!(row.model.as_deref(), Some(HAIKU));
+    assert_eq!(row.model.as_deref(), Some(SONNET));
     assert_eq!(
         route_lines(&mut commands),
-        ["gate → aura-claude-haiku-4-5 (cloud) at medium effort · subtask, debugging, default"]
+        ["gate → aura-claude-sonnet-4-6 (cloud) at medium effort · subtask, debugging, default"]
     );
 }
 

@@ -3,7 +3,7 @@
 
 use super::*;
 use aura_core_types::{
-    ArmSpec, BenchSource, CompareArm, ComparePayload, CompareStatus, RefVerdict,
+    ArmSpec, BenchSource, CompareArm, ComparePayload, CompareStatus, Difficulty, RefVerdict,
 };
 use aura_ui_terminal::events::{BenchRequest, BenchSpec, BenchStatus, BenchWork};
 
@@ -667,11 +667,15 @@ async fn gate_is_compared_with_itself_without_enforced_delegation() {
     let mut state = loop_state(&fixture, &mut b);
     state.models = gate_on_zos(&fixture);
     state.sync_turn_base();
-    for (led, outcomes) in [(true, (10, true)), (false, (3, false))] {
+    for (model, led, outcomes) in [
+        (SONNET, false, (3, false)),
+        (GPT, true, (10, true)),
+        (GPT, false, (3, false)),
+    ] {
         state.hub.gate.learn(
             RouteLevel::Turn,
-            PromptCategory::MultiFileChange,
-            GPT,
+            (PromptCategory::MultiFileChange, Some(Difficulty::Medium)),
+            model,
             Some(led),
             outcomes,
         );
@@ -697,8 +701,9 @@ async fn gate_is_compared_with_itself_without_enforced_delegation() {
     assert_eq!(payload.against, "gate:nodelegate");
     let gate = payload.run("a-1").unwrap();
     let other = payload.run("b-1").unwrap();
-    // A change across several files starts where it is expected to cost
-    // least, gpt-5.4, and is led there, where leading is proven.
+    // Sonnet failed at changes across several files itself, so this one
+    // starts on the frontier, at gpt-5.4, and is led there, where leading
+    // is proven.
     for run in [gate, other] {
         assert_eq!(run.error, None, "{}", run.name);
         assert_eq!(run.model, GPT, "both arms are routed by Gate");
@@ -706,7 +711,10 @@ async fn gate_is_compared_with_itself_without_enforced_delegation() {
             .iter()
             .filter_map(|e| e.tx.prompt_payload())
             .collect();
-        assert_eq!(prompts[0].route, Route::turn(GPT, RouteReason::Compare));
+        assert_eq!(
+            prompts[0].route,
+            Route::turn(GPT, RouteReason::Compare).at_effort("medium")
+        );
     }
     assert_eq!(gate.files_changed, 0, "the enforced lead may not write");
     assert!(!gate.copy.workdir.join("answer.txt").exists());
@@ -736,7 +744,7 @@ async fn a_gate_run_that_fails_its_checks_carries_on_on_a_stronger_model() {
         &mut state,
         &links,
         &mut commands,
-        "fix it: run failing check --repeats 1 --against opus",
+        "fix it (easy): run failing check --repeats 1 --against opus",
     )
     .await;
 
@@ -753,8 +761,8 @@ async fn a_gate_run_that_fails_its_checks_carries_on_on_a_stronger_model() {
     assert_eq!(
         routes("a-1"),
         [
-            Route::turn(HAIKU, RouteReason::Compare),
-            Route::turn(SONNET, RouteReason::Escalate),
+            Route::turn(HAIKU, RouteReason::Compare).at_effort("medium"),
+            Route::turn(SONNET, RouteReason::Escalate).at_effort("medium"),
         ]
     );
     assert_eq!(gate.model, SONNET, "the run ends on the model it moved to");

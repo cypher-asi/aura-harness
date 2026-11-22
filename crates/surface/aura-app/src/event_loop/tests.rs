@@ -2147,7 +2147,7 @@ async fn gate_classifies_before_the_turn_and_records_its_default_route() {
     assert_eq!(prompt.classifier, "aura-claude-haiku-4-5");
     assert_eq!(
         prompt.route,
-        Route::turn("aura-claude-sonnet-4-6", RouteReason::Default)
+        Route::turn("aura-claude-sonnet-4-6", RouteReason::Default).at_effort("medium")
     );
     // The title is written in the background while the turn runs, so its
     // call races the turn's own and is told apart by purpose, not by
@@ -2164,8 +2164,9 @@ async fn gate_classifies_before_the_turn_and_records_its_default_route() {
         .collect();
     assert_eq!(
         calls.len(),
-        3,
-        "the classifier, the turn and the chat title"
+        4,
+        "the classifier, the turn, the judge of a turn that checked nothing \
+         and the chat title: {calls:?}"
     );
     let classifier_seq = calls
         .iter()
@@ -2282,13 +2283,20 @@ async fn the_last_check_of_a_turn_decides_its_outcome() {
     let first = fixture.first;
     let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
     let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
     unrestricted(&mut state, &links, first).await;
 
     turn(&mut state, &mut done, &links, first, "run failing check").await;
     turn(&mut state, &mut done, &links, first, "run passing check").await;
 
+    let asked: Vec<Hash> = prompts_of(&state, first)
+        .into_iter()
+        .filter(|(_, _, p)| p.route.reason != RouteReason::Escalate)
+        .map(|(_, hash, _)| hash)
+        .collect();
     let signals: Vec<(OutcomeSignal, Option<bool>)> = outcomes_of(&state, first)
         .into_iter()
+        .filter(|(_, o)| asked.contains(&o.prompt_tx))
         .map(|(_, o)| (o.signal, o.success))
         .collect();
     assert_eq!(
@@ -2296,7 +2304,8 @@ async fn the_last_check_of_a_turn_decides_its_outcome() {
         [
             (OutcomeSignal::ChecksFailed, Some(false)),
             (OutcomeSignal::ChecksPassed, Some(true)),
-        ]
+        ],
+        "the outcomes of the prompts sent, not of the move up the failure made"
     );
 }
 
@@ -2308,6 +2317,7 @@ async fn a_turn_that_fails_records_an_error_outcome() {
     let first = fixture.first;
     let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
     let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
 
     turn(&mut state, &mut done, &links, first, "explode").await;
 
@@ -2324,6 +2334,7 @@ async fn rewinding_turns_fails_them() {
     let first = fixture.first;
     let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
     let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
 
     turn(&mut state, &mut done, &links, first, "first turn").await;
     turn(&mut state, &mut done, &links, first, "second turn").await;
@@ -2360,7 +2371,7 @@ async fn the_same_prompt_on_a_stronger_model_fails_the_earlier_turn() {
     let mut state = loop_state(&fixture, &mut b);
     let ask = "add a --json flag to the status command";
 
-    state.models = ModelSelection::fixed(&fixture.config, "aura-claude-haiku-4-5");
+    state.models = gate_on_zos(&fixture);
     turn(&mut state, &mut done, &links, first, ask).await;
     turn(&mut state, &mut done, &links, first, ask).await;
     assert!(
@@ -2382,7 +2393,7 @@ async fn the_same_prompt_on_a_stronger_model_fails_the_earlier_turn() {
         .collect();
     assert_eq!(retried.len(), 1);
     assert_eq!(retried[0].prompt_tx, prompts[1].1, "the turn just before");
-    assert_eq!(retried[0].model, "aura-claude-haiku-4-5");
+    assert_eq!(retried[0].model, "aura-claude-sonnet-4-6");
     assert_eq!(retried[0].success, Some(false));
     assert_eq!(prompts[2].2.route.model, "aura-claude-opus-4-7");
 }
@@ -2470,21 +2481,21 @@ async fn gate_routes_each_category_and_records_why() {
     assert_eq!(prompts[1].2.category, Some(PromptCategory::Debugging));
     assert_eq!(
         prompts[1].2.route,
-        Route::turn("aura-gpt-5-4", RouteReason::Default).at_effort("medium"),
-        "debugging starts where it is expected to cost least: on gpt-5.4, \
-         stronger than sonnet and cheaper"
+        Route::turn("aura-claude-sonnet-4-6", RouteReason::Default).at_effort("medium"),
+        "debugging starts on the standard tier: gpt-5.4 lists cheaper than \
+         sonnet, but the frontier is reached only by failing"
     );
     let models: Vec<String> = outcomes_of(&state, first)
         .into_iter()
         .map(|(_, o)| o.model)
         .collect();
-    assert_eq!(models, ["aura-claude-haiku-4-5", "aura-gpt-5-4"]);
+    assert_eq!(models, ["aura-claude-haiku-4-5", "aura-claude-sonnet-4-6"]);
     let shown = route_lines(&mut commands);
     assert_eq!(
         shown,
         [
             "gate → aura-claude-haiku-4-5 (cloud) with thinking off · question, proven",
-            "gate → aura-gpt-5-4 (cloud) at medium effort · debugging, default",
+            "gate → aura-claude-sonnet-4-6 (cloud) at medium effort · debugging, default",
         ]
     );
     let recent = fixture.hub.gate.recent();
@@ -2542,18 +2553,18 @@ async fn the_classifiers_difficulty_moves_where_a_turn_starts_and_is_recorded() 
             (
                 Some(PromptCategory::Debugging),
                 Some(Difficulty::Hard),
-                "aura-gpt-5-4".to_string()
+                "aura-claude-sonnet-4-6".to_string()
             ),
         ],
-        "an easy question starts on the fast tier; hard debugging skips it \
-         for gpt-5.4, stronger than sonnet and cheaper"
+        "an easy question starts on the fast tier; medium and hard work on \
+         the standard one, hard debugging too"
     );
 }
 
-/// Run `text` as a debugging turn under Gate, which starts it on Haiku,
-/// and return the routes of its prompts, its outcomes, the chat's system
-/// lines, and the tries and successes of the debugging rows of Haiku and
-/// of Sonnet, the cheapest model of the next tier up.
+/// Run `text`, easy debugging, as a turn under Gate, which starts it on
+/// Haiku, and return the routes of its prompts, its outcomes, the chat's
+/// system lines, and the tries and successes of the debugging rows of
+/// Haiku and of Sonnet, the cheapest model of the next tier up.
 async fn debugging_turn_under_gate(
     text: &str,
 ) -> (
@@ -2671,13 +2682,13 @@ async fn a_failed_turn_the_judge_blames_on_the_model_carries_on_on_a_stronger_on
     const HAIKU: &str = "aura-claude-haiku-4-5";
     const SONNET: &str = "aura-claude-sonnet-4-6";
     let (routes, outcomes, shown, rows) =
-        debugging_turn_under_gate("fix it: run failing check (judge: blame)").await;
+        debugging_turn_under_gate("fix it (easy): run failing check (judge: blame)").await;
 
     assert_eq!(
         routes,
         [
-            Route::turn(HAIKU, RouteReason::Default),
-            Route::turn(SONNET, RouteReason::Escalate),
+            Route::turn(HAIKU, RouteReason::Default).at_effort("medium"),
+            Route::turn(SONNET, RouteReason::Escalate).at_effort("medium"),
         ]
     );
     assert_eq!(
@@ -2710,15 +2721,15 @@ async fn a_passed_check_the_reply_disowns_is_reviewed_and_carries_on_on_a_strong
     const HAIKU: &str = "aura-claude-haiku-4-5";
     const SONNET: &str = "aura-claude-sonnet-4-6";
     let (routes, outcomes, shown, rows) = debugging_turn_under_gate(
-        "fix it: run passing check, then reply unverified (review: blame)",
+        "fix it (easy): run passing check, then reply unverified (review: blame)",
     )
     .await;
 
     assert_eq!(
         routes,
         [
-            Route::turn(HAIKU, RouteReason::Default),
-            Route::turn(SONNET, RouteReason::Escalate),
+            Route::turn(HAIKU, RouteReason::Default).at_effort("medium"),
+            Route::turn(SONNET, RouteReason::Escalate).at_effort("medium"),
         ],
         "{shown}"
     );
@@ -2741,13 +2752,13 @@ async fn a_passed_check_the_reply_disowns_is_reviewed_and_carries_on_on_a_strong
 async fn a_passed_check_the_reply_disowns_stands_when_the_judge_finds_the_work_done() {
     const HAIKU: &str = "aura-claude-haiku-4-5";
     let (routes, outcomes, shown, rows) = debugging_turn_under_gate(
-        "fix it: run passing check, then reply unverified (review: fine)",
+        "fix it (easy): run passing check, then reply unverified (review: fine)",
     )
     .await;
 
     assert_eq!(
         routes,
-        [Route::turn(HAIKU, RouteReason::Default)],
+        [Route::turn(HAIKU, RouteReason::Default).at_effort("medium")],
         "{shown}"
     );
     assert_eq!(outcomes, [(HAIKU.to_string(), OutcomeSignal::ChecksPassed)]);
@@ -2852,7 +2863,7 @@ async fn hard_work_a_review_finds_unfinished_goes_back_to_its_model_once() {
 async fn work_a_review_finds_unfinished_twice_moves_to_a_stronger_model() {
     let (gate, _log_dir) = reviewing_gate(aura_config::ReviewMode::On);
     let (routes, outcomes, shown, _) =
-        debugging_turn_under(gate, "fix it: run passing check (inspect: blame)").await;
+        debugging_turn_under(gate, "fix it (easy): run passing check (inspect: blame)").await;
 
     let first = routes[0].model.clone();
     assert_eq!(
@@ -2912,9 +2923,12 @@ async fn a_logged_review_changes_nothing_about_the_turn() {
 async fn a_failed_turn_the_judge_excuses_ends_where_it_is() {
     const HAIKU: &str = "aura-claude-haiku-4-5";
     let (routes, outcomes, shown, rows) =
-        debugging_turn_under_gate("fix it: run failing check (judge: excuse)").await;
+        debugging_turn_under_gate("fix it (easy): run failing check (judge: excuse)").await;
 
-    assert_eq!(routes, [Route::turn(HAIKU, RouteReason::Default)]);
+    assert_eq!(
+        routes,
+        [Route::turn(HAIKU, RouteReason::Default).at_effort("medium")]
+    );
     assert_eq!(
         outcomes,
         [
@@ -2934,13 +2948,14 @@ async fn a_failed_turn_the_judge_excuses_ends_where_it_is() {
 async fn a_failed_turn_with_no_verdict_carries_on_on_a_stronger_model() {
     const HAIKU: &str = "aura-claude-haiku-4-5";
     const SONNET: &str = "aura-claude-sonnet-4-6";
-    let (routes, outcomes, _, rows) = debugging_turn_under_gate("fix it: run failing check").await;
+    let (routes, outcomes, _, rows) =
+        debugging_turn_under_gate("fix it (easy): run failing check").await;
 
     assert_eq!(
         routes,
         [
-            Route::turn(HAIKU, RouteReason::Default),
-            Route::turn(SONNET, RouteReason::Escalate),
+            Route::turn(HAIKU, RouteReason::Default).at_effort("medium"),
+            Route::turn(SONNET, RouteReason::Escalate).at_effort("medium"),
         ]
     );
     assert_eq!(

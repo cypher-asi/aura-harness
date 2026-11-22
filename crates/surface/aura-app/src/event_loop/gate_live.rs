@@ -284,12 +284,13 @@ impl GateLive {
 #[cfg(test)]
 impl GateLive {
     /// Take in `n` outcomes of work at `level` asking for `category` on
-    /// `model`, each with its own prompt (a turn's `led` as given), that
+    /// `model`, the classifier having judged it of `difficulty` when that
+    /// is given, each with its own prompt (a turn's `led` as given), that
     /// all passed or all failed.
     pub(crate) fn learn(
         &self,
         level: RouteLevel,
-        category: PromptCategory,
+        (category, difficulty): (PromptCategory, Option<Difficulty>),
         model: &str,
         led: Option<bool>,
         (n, ok): (usize, bool),
@@ -310,6 +311,7 @@ impl GateLive {
                 RouteLevel::Subtask => Route::subtask(model, RouteReason::Default),
             };
             prompt.led = led;
+            prompt.difficulty = difficulty;
             let prompt = Transaction::user_prompt_with(agent, &prompt);
             let outcome = OutcomePayload {
                 prompt_tx: prompt.hash,

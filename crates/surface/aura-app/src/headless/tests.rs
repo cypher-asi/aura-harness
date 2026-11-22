@@ -27,7 +27,9 @@ use tempfile::TempDir;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-/// A mock model that also keeps every request it was sent.
+/// A mock model that also keeps every request it was sent. Calls are
+/// billed as the model asked for, so calls to a catalog model have a
+/// list price.
 struct Recording {
     inner: MockProvider,
     requests: Arc<Mutex<Vec<ModelRequest>>>,
@@ -41,7 +43,11 @@ impl ModelProvider for Recording {
 
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ReasonerError> {
         self.requests.lock().unwrap().push(request.clone());
-        self.inner.complete(request).await
+        let model = request.model.as_str().to_string();
+        let mut response = self.inner.complete(request).await?;
+        response.trace.model.clone_from(&model);
+        response.model_used = model;
+        Ok(response)
     }
 
     async fn health_check(&self) -> bool {
@@ -320,11 +326,14 @@ async fn stream_json_streams_events_and_ends_with_the_result() {
     assert_eq!(streamed, "Finished.");
 }
 
-/// User prompts the model was sent in its last request.
+/// User prompts the model was sent in the last request of an agent turn,
+/// not one of Gate's own calls.
 fn last_prompts(requests: &Mutex<Vec<ModelRequest>>) -> Vec<String> {
     let requests = requests.lock().unwrap();
     requests
-        .last()
+        .iter()
+        .rev()
+        .find(|request| request.metadata.purpose.is_none())
         .unwrap()
         .messages
         .iter()
@@ -666,7 +675,11 @@ async fn gate_routes_headless_turns_and_records_how_they_went() {
         .iter()
         .map(|r| r.model.to_string())
         .collect();
-    assert_eq!(models, [HAIKU, SONNET], "classified, then routed");
+    assert_eq!(
+        models,
+        [HAIKU, SONNET, SONNET],
+        "classified, routed, then judged, as the turn ran no check"
+    );
     {
         let requests = requests.lock().unwrap();
         let turn = &requests[1];
@@ -676,6 +689,10 @@ async fn gate_routes_headless_turns_and_records_how_they_went() {
             "a question is answered by the model it is routed to: {tools:?}"
         );
         assert!(!turn.system.contains("<gate_lead>"));
+        assert_eq!(
+            requests[2].system,
+            aura_agent_gate::turn_judge::UNVERIFIED_SYSTEM_PROMPT
+        );
     }
     assert_eq!(
         h.setup_lines(),
@@ -693,7 +710,10 @@ async fn gate_routes_headless_turns_and_records_how_they_went() {
     assert_eq!(prompts.len(), 1);
     assert_eq!(prompts[0].category, Some(PromptCategory::Question));
     assert_eq!(prompts[0].classifier, HAIKU);
-    assert_eq!(prompts[0].route, Route::turn(SONNET, RouteReason::Default),);
+    assert_eq!(
+        prompts[0].route,
+        Route::turn(SONNET, RouteReason::Default).at_effort("medium")
+    );
     let outcomes: Vec<_> = entries
         .iter()
         .filter_map(|e| e.tx.outcome_payload())
@@ -732,7 +752,10 @@ async fn a_headless_turn_changing_several_files_is_led() {
     for (led, outcomes) in [(true, (10, true)), (false, (3, false))] {
         h.hub.gate.learn(
             aura_core_types::RouteLevel::Turn,
-            aura_core_types::PromptCategory::MultiFileChange,
+            (
+                aura_core_types::PromptCategory::MultiFileChange,
+                Some(aura_core_types::Difficulty::Medium),
+            ),
             SONNET,
             Some(led),
             outcomes,
@@ -748,7 +771,12 @@ async fn a_headless_turn_changing_several_files_is_led() {
 
     assert_eq!(report.exit_reason, ExitReason::Success);
     let requests = requests.lock().unwrap();
-    let lead = &requests[1];
+    assert_eq!(
+        requests[1].system,
+        aura_agent_gate::criteria::SYSTEM_PROMPT,
+        "what the change is checked against is asked for before it starts"
+    );
+    let lead = &requests[2];
     let tools: Vec<&str> = lead.tools.iter().map(|t| t.name.as_str()).collect();
     assert!(tools.contains(&"read_file") && tools.contains(&"task"));
     assert!(
@@ -844,13 +872,13 @@ async fn an_eval_run_under_gate_is_routed_and_its_verdict_feeds_the_table() {
         .collect();
     assert_eq!(
         models,
-        [HAIKU, SONNET, HAIKU, SONNET],
-        "each task classified, then routed"
+        [HAIKU, SONNET, SONNET, HAIKU, SONNET, SONNET],
+        "each task classified, routed, then judged, as its turn ran no check"
     );
     for (ran, _, _) in &runs {
         assert_eq!(ran.gate.routed, [SONNET]);
         let calls: u32 = ran.gate.tokens.iter().map(|m| m.calls).sum();
-        assert_eq!(calls, 2, "the classifier call and the turn");
+        assert_eq!(calls, 3, "the classifier call, the turn and the judge's");
         assert!(ran.error.is_none(), "{:?}", ran.error);
     }
 
@@ -876,7 +904,10 @@ async fn an_eval_run_under_gate_is_routed_and_its_verdict_feeds_the_table() {
             .collect();
         assert_eq!(prompts.len(), 1, "{}", agent.name);
         assert_eq!(prompts[0].category, Some(PromptCategory::Question));
-        assert_eq!(prompts[0].route, Route::turn(SONNET, RouteReason::Default));
+        assert_eq!(
+            prompts[0].route,
+            Route::turn(SONNET, RouteReason::Default).at_effort("medium")
+        );
         let signals: Vec<OutcomeSignal> = entries
             .iter()
             .filter_map(|e| e.tx.outcome_payload())
@@ -951,13 +982,21 @@ fn sonnet_and_opus() -> GateBase {
     }
 }
 
-/// A model whose prompt is classified as debugging and whose turn writes
-/// `parser.txt`, then runs `cargo test` (which fails in a workspace with
-/// no crate) and gives up. The model calls after that are answered with
-/// `then`, in order.
+/// The criteria writer's answer when it writes none down. Gate asks for
+/// them right after classifying the prompt of code work, and the work
+/// goes on without them.
+fn no_criteria() -> MockResponse {
+    MockResponse::text("No criteria.")
+}
+
+/// A model whose prompt is classified as debugging, with no criteria to
+/// check it against, and whose turn writes `parser.txt`, then runs
+/// `cargo test` (which fails in a workspace with no crate) and gives up.
+/// The model calls after that are answered with `then`, in order.
 fn failing_check_provider(then: &[&str]) -> MockProvider {
     let mut provider = MockProvider::new()
         .with_response(MockResponse::text("debugging medium"))
+        .with_response(no_criteria())
         .with_response(MockResponse::tool_use(
             "c0",
             "write_file",
@@ -1052,14 +1091,17 @@ async fn a_failed_turn_the_judge_blames_on_the_model_goes_on_with_a_stronger_one
             GATE_SONNET,
             GATE_SONNET,
             GATE_SONNET,
+            GATE_SONNET,
+            GATE_OPUS,
             GATE_OPUS,
             GATE_OPUS
         ],
-        "classified, worked on Sonnet, judged by Opus, then moved up a tier"
+        "classified, its criteria asked for, worked on Sonnet, judged by Opus, moved up a \
+         tier, and the unchecked work there judged"
     );
     {
         let requests = run.requests.lock().unwrap();
-        let judge = &requests[4];
+        let judge = &requests[5];
         assert_eq!(
             judge.system.as_str(),
             aura_agent_gate::turn_judge::SYSTEM_PROMPT
@@ -1098,11 +1140,11 @@ async fn a_failed_turn_the_judge_blames_on_the_model_goes_on_with_a_stronger_one
         [
             (
                 Some(PromptCategory::Debugging),
-                Route::turn(GATE_SONNET, RouteReason::Default)
+                Route::turn(GATE_SONNET, RouteReason::Default).at_effort("medium")
             ),
             (
                 Some(PromptCategory::Debugging),
-                Route::turn(GATE_OPUS, RouteReason::Escalate)
+                Route::turn(GATE_OPUS, RouteReason::Escalate).at_effort("medium")
             ),
         ]
     );
@@ -1188,8 +1230,9 @@ async fn an_eval_verdict_after_a_move_up_lands_on_the_uncounted_attempt() {
     );
     assert_eq!(
         asked.iter().filter(|model| *model == GATE_OPUS).count(),
-        2,
-        "the judge's call and the turn it sent on: {asked:?}"
+        3,
+        "the judge's call, the turn it sent on, and the judge's on that turn's \
+         unchecked work: {asked:?}"
     );
 
     let agent = crate::event_loop::subagents::lock(&hub.registry)
@@ -1248,7 +1291,14 @@ async fn a_failed_turn_the_judge_excuses_stays_put_and_counts_for_nothing() {
     assert_eq!(report.agent_turns, 1, "no stronger model takes over");
     assert_eq!(
         run.models,
-        [GATE_HAIKU, GATE_SONNET, GATE_SONNET, GATE_SONNET, GATE_OPUS],
+        [
+            GATE_HAIKU,
+            GATE_SONNET,
+            GATE_SONNET,
+            GATE_SONNET,
+            GATE_SONNET,
+            GATE_OPUS
+        ],
         "the judge's call is the only one on Opus"
     );
     let judged: Vec<&Value> = run
@@ -1301,7 +1351,8 @@ async fn a_failed_turn_the_judge_says_nothing_clear_about_still_moves_up() {
 
 /// Run "fix the parser" under [`sonnet_and_opus`] on `provider`, which
 /// answers the classifier first. Returns the report, the model of each
-/// call, the requests, and the model and signal of each `Outcome`.
+/// call, the requests, each `Outcome`, and the attempts in Gate's
+/// attempt log.
 async fn run_routed(
     provider: MockProvider,
 ) -> (
@@ -1309,7 +1360,9 @@ async fn run_routed(
     Vec<String>,
     Arc<Mutex<Vec<ModelRequest>>>,
     Vec<aura_core_types::OutcomePayload>,
+    Vec<aura_agent_gate::attempt_log::Attempt>,
 ) {
+    use aura_agent_gate::attempt_log::{AttemptLog, Line};
     let dirs = dirs();
     let permissions = super::permissions(aura_core_modes::AgentMode::Agent, None);
     let (mut h, requests) = harness(
@@ -1341,7 +1394,17 @@ async fn run_routed(
         .iter()
         .filter_map(|e| e.tx.outcome_payload())
         .collect();
-    (report, models, requests, outcomes)
+    let attempts = AttemptLog::in_data_dir(dirs.data.path())
+        .read()
+        .unwrap()
+        .lines
+        .into_iter()
+        .filter_map(|line| match line {
+            Line::Attempt(attempt) => Some(attempt),
+            _ => None,
+        })
+        .collect();
+    (report, models, requests, outcomes, attempts)
 }
 
 #[tokio::test]
@@ -1349,6 +1412,7 @@ async fn a_change_made_without_a_check_is_checked_before_the_turn_ends() {
     use aura_core_types::OutcomeSignal;
     let provider = MockProvider::new()
         .with_response(MockResponse::text("debugging medium"))
+        .with_response(no_criteria())
         .with_response(MockResponse::tool_use(
             "c0",
             "write_file",
@@ -1365,7 +1429,7 @@ async fn a_change_made_without_a_check_is_checked_before_the_turn_ends() {
             "The parser still drops the last token.\nVERDICT: MODEL",
         ))
         .with_response(MockResponse::text("Fixed it."));
-    let (report, models, requests, outcomes) = run_routed(provider).await;
+    let (report, models, requests, outcomes, attempts) = run_routed(provider).await;
 
     assert_eq!(
         report.exit_reason,
@@ -1389,12 +1453,15 @@ async fn a_change_made_without_a_check_is_checked_before_the_turn_ends() {
             GATE_SONNET,
             GATE_SONNET,
             GATE_SONNET,
+            GATE_SONNET,
+            GATE_OPUS,
             GATE_OPUS,
             GATE_OPUS
         ],
-        "Sonnet is asked to check its change, its check fails, the judge blames it, Opus takes over"
+        "Sonnet is asked to check its change, its check fails, the judge blames it, Opus \
+         takes over and its unchecked work is judged"
     );
-    let nudge = requests.lock().unwrap()[3]
+    let nudge = requests.lock().unwrap()[4]
         .messages
         .last()
         .unwrap()
@@ -1410,18 +1477,24 @@ async fn a_change_made_without_a_check_is_checked_before_the_turn_ends() {
     assert_eq!(
         signals,
         [
-            (GATE_SONNET, OutcomeSignal::Unavailable),
             (GATE_SONNET, OutcomeSignal::ChecksFailed),
             (GATE_SONNET, OutcomeSignal::JudgedFail),
             (GATE_OPUS, OutcomeSignal::Unavailable),
-        ]
+        ],
+        "the unchecked turn's outcome waits for the check it is asked for"
+    );
+    let unchecked = &attempts[0];
+    assert_eq!(
+        (unchecked.model.as_str(), unchecked.signal),
+        (GATE_SONNET, OutcomeSignal::Unavailable)
     );
     assert_eq!(
-        outcomes[1].prompt_tx, outcomes[0].prompt_tx,
+        outcomes[0].prompt_tx.to_hex(),
+        unchecked.prompt_tx,
         "the check speaks for the turn that made the change"
     );
     assert!(
-        outcomes[1].cost_usd >= outcomes[0].cost_usd,
+        outcomes[0].cost_usd > unchecked.cost_usd,
         "and its cost includes the turn's"
     );
 }
@@ -1431,6 +1504,7 @@ async fn unchecked_work_that_looks_unfinished_goes_to_the_judge_then_moves_up() 
     use aura_core_types::OutcomeSignal;
     let provider = MockProvider::new()
         .with_response(MockResponse::text("debugging medium"))
+        .with_response(no_criteria())
         .with_response(MockResponse::text(
             "I could not find where the parser drops the token.",
         ))
@@ -1438,16 +1512,26 @@ async fn unchecked_work_that_looks_unfinished_goes_to_the_judge_then_moves_up() 
             "It never opened the parser.\nVERDICT: MODEL",
         ))
         .with_response(MockResponse::text("Fixed it."));
-    let (report, models, requests, outcomes) = run_routed(provider).await;
+    let (report, models, requests, outcomes, _) = run_routed(provider).await;
 
     assert_eq!(
         (report.model.as_str(), report.result.as_str()),
         (GATE_OPUS, "Fixed it.")
     );
-    assert_eq!(models, [GATE_HAIKU, GATE_SONNET, GATE_OPUS, GATE_OPUS]);
+    assert_eq!(
+        models,
+        [
+            GATE_HAIKU,
+            GATE_SONNET,
+            GATE_SONNET,
+            GATE_OPUS,
+            GATE_OPUS,
+            GATE_OPUS
+        ]
+    );
     {
         let requests = requests.lock().unwrap();
-        let judge = &requests[2];
+        let judge = &requests[3];
         assert_eq!(
             judge.system.as_str(),
             aura_agent_gate::turn_judge::UNVERIFIED_SYSTEM_PROMPT
@@ -1468,9 +1552,9 @@ async fn unchecked_work_that_looks_unfinished_goes_to_the_judge_then_moves_up() 
     assert_eq!(
         signals,
         [
-            (GATE_SONNET, OutcomeSignal::Unavailable),
             (GATE_SONNET, OutcomeSignal::JudgedFail),
             (GATE_OPUS, OutcomeSignal::Unavailable),
-        ]
+        ],
+        "the judge's verdict is the unchecked work's outcome"
     );
 }

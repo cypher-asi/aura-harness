@@ -5,7 +5,7 @@
 //! delegation figures.
 
 use super::*;
-use aura_core_types::{SubagentDispatchRequest, SubagentExit, SubagentResult};
+use aura_core_types::{Difficulty, SubagentDispatchRequest, SubagentExit, SubagentResult};
 use aura_model::{ContentBlock, ToolResultContent};
 use aura_ui_terminal::events::{ProcessKind, ProcessStatus};
 use std::path::{Path, PathBuf};
@@ -137,13 +137,14 @@ async fn under_gate_the_lead_has_no_file_tools_and_a_limited_run_command() {
     );
 }
 
-/// Gate has seen leading succeed on `model` for changes across files,
-/// and the model doing that work itself fail.
+/// Gate has seen leading succeed on `model` for changes across files of
+/// medium difficulty, as the test classifier rates them, and the model
+/// doing that work itself fail.
 fn prove_leading(fixture: &Fixture, model: &str) {
     for (led, outcomes) in [(true, (10, true)), (false, (3, false))] {
         fixture.hub.gate.learn(
             RouteLevel::Turn,
-            PromptCategory::MultiFileChange,
+            (PromptCategory::MultiFileChange, Some(Difficulty::Medium)),
             model,
             Some(led),
             outcomes,
@@ -337,10 +338,11 @@ async fn a_check_decides_the_subtask_and_comes_back_in_a_compact_result() {
         passed.final_message,
         "Done.\n\nFiles changed: notes/mock-model.txt\n\nCheck `ls notes`: passed"
     );
-    let child = passed.child_agent_id.unwrap();
-    let (_, outcomes) = record(&fixture, child);
-    assert_eq!(outcomes.len(), 1);
-    assert_eq!(outcomes[0].signal, OutcomeSignal::ChecksPassed);
+    let (_, outcomes) = record(&fixture, passed.child_agent_id.unwrap());
+    assert!(
+        outcomes.is_empty(),
+        "Gate learns nothing from a pinned subtask: {outcomes:?}"
+    );
 
     let failed = dispatch(
         &fixture,
@@ -352,18 +354,11 @@ async fn a_check_decides_the_subtask_and_comes_back_in_a_compact_result() {
         ),
     )
     .await;
-    let child = failed.child_agent_id.unwrap();
-    let (_, outcomes) = record(&fixture, child);
-    assert_eq!(
-        outcomes[0].signal,
-        OutcomeSignal::ChecksFailed,
-        "the task's check overrides the subagent's own passing check"
-    );
     assert!(
         failed
             .final_message
             .contains("Check `ls no-such-dir`: failed with exit code"),
-        "{}",
+        "the task's check, not the subagent's own passing one, is the verdict: {}",
         failed.final_message
     );
     assert!(
@@ -394,8 +389,12 @@ async fn a_check_runs_without_the_task_records_that_quote_the_prompts() {
         ),
     )
     .await;
-    let (_, outcomes) = record(&fixture, done.child_agent_id.unwrap());
-    assert_eq!(outcomes[0].signal, OutcomeSignal::ChecksPassed);
+    assert!(
+        done.final_message
+            .contains("Check `test ! -e .aura/tasks`: passed"),
+        "{}",
+        done.final_message
+    );
     let kept = super::super::tasks::load_all(&fixture.workspace);
     assert_eq!(kept.len(), 1, "the records are back after the check");
     assert_eq!(kept[0].view.title, "rename calc_total");
@@ -715,7 +714,7 @@ async fn a_frontier_leads_subtasks_start_below_its_tier_and_may_escalate_to_it()
 fn sonnet_failed_at_planning(fixture: &Fixture) {
     fixture.hub.gate.learn(
         RouteLevel::Subtask,
-        PromptCategory::Planning,
+        (PromptCategory::Planning, None),
         SONNET,
         None,
         (2, false),
