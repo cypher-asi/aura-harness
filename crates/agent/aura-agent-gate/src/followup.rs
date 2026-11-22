@@ -333,6 +333,32 @@ const UNVERIFIED: &[&str] = &[
     "cannot confirm",
     "couldn't confirm",
     "could not confirm",
+    "still unchecked",
+    "is unchecked",
+    "are unchecked",
+    "remains unchecked",
+    "remain unchecked",
+    "left unchecked",
+    "haven't checked",
+    "have not checked",
+    "not checked against",
+    "did not compare",
+    "didn't compare",
+    "do not compare against",
+    "don't compare against",
+    "does not compare against",
+    "doesn't compare against",
+    "not compared",
+    "not pinned down",
+    "open question",
+    "did not run it",
+    "didn't run it",
+    "did not run them",
+    "didn't run them",
+    "did not run the",
+    "didn't run the",
+    "did not run any",
+    "didn't run any",
 ];
 
 /// Whether `reply` says the work, or part of it, was not verified.
@@ -1189,6 +1215,41 @@ mod tests {
         assert!(says_unverified("It builds; the Python 2 path is UNTESTED."));
         assert!(!says_unverified("All 286 tests passed."));
         assert!(!says_unverified(""));
+    }
+
+    /// The end of the final reply of run a-2 of Compare #32: Claude Haiku
+    /// 5.5 on `ansible-b748edea`, whose own 14 tests passed and which
+    /// Gate let stand. The task's check then failed.
+    const A2_GAPS: &str = "**Gaps that remain:**\n\
+        - The tests do not compare against `email.mime.multipart.MIMEMultipart('form-data')` \
+        serialized with `email.policy.HTTP`, and the `multipart.txt` fixture the request \
+        mentions does not exist in the repo. So byte-identity with that output is still \
+        unchecked.\n\
+        - I quote the boundary in `Content-Type` (`boundary=\"...\"`), which I chose to match \
+        stdlib output. The tests accept both quoted and unquoted forms, so this choice is not \
+        pinned down by a test.\n\
+        - The test file uses `bytes` and `rb''` literals, so it is Python 3 only. I did not \
+        run it under Python 2.\n\nNo code changes were needed after the test run.";
+
+    #[test]
+    fn a_gap_the_reply_owns_up_to_counts_as_unverified() {
+        assert!(says_unverified(A2_GAPS));
+        for gap in A2_GAPS.lines().filter(|line| line.starts_with("- ")) {
+            assert!(says_unverified(gap), "{gap}");
+        }
+        for reply in [
+            "I did not compare the output byte-for-byte, so that comparison is an open question.",
+            "I haven't checked it against Python 2.",
+        ] {
+            assert!(says_unverified(reply), "{reply}");
+        }
+        for reply in [
+            "I did not run into any issues; all 14 tests pass.",
+            "Replaced `get_unchecked` with `get`; cargo test passes.",
+            "The old code did not check for `None`; the new test covers it and passes.",
+        ] {
+            assert!(!says_unverified(reply), "{reply}");
+        }
     }
 
     #[test]

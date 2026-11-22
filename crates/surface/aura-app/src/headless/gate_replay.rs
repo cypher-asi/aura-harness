@@ -13,9 +13,10 @@
 //!
 //! Each answer is appended to the log as a `review` line marked
 //! `replayed`, which `aura gate eval` scores. The attempt's line is
-//! written again with the files the run changed by any means, so the
-//! signs that need them (`shell_edit`, `no_test_changed`) are scored
-//! too. Nothing else is touched: no record, no table, no copy.
+//! written again with the files the run changed by any means and those
+//! it wrote, so the signs that need them (`shell_edit`,
+//! `no_test_changed`, `own_tests_only`) are scored too. Nothing else is
+//! touched: no record, no table, no copy.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;

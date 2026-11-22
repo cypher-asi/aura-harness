@@ -7,6 +7,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Gate notices more admitted gaps and work checked by its own tests
+
+##### Changed
+
+- More ways of admitting a gap in a final reply count as the work not
+  being verified: "still unchecked", "do not compare against", "did not
+  compare", "not pinned down", "an open question", "did not run it" and
+  the like. On a SWE-bench task Claude Haiku 5.5 said all of these after
+  its own 14 tests passed, and Gate let the work stand. Gate now has the
+  judge look at such work.
+
+##### Added
+
+- A new sign of a failed attempt, `own_tests_only`: the last check
+  passed, but ran only tests in files the attempt wrote itself. `aura
+  gate eval` scores it, and like the other signs it starts reviews once
+  the attempt log shows it is worth one. Attempts log the files they
+  wrote from now on, and `aura gate replay` adds them to replayed ones.
+
 ### Gate's classifier reads more of a long prompt
 
 ##### Changed
