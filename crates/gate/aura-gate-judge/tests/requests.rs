@@ -5,8 +5,8 @@
 //! of the same name in `tests/pinned/`. A request whose parts run past
 //! their limits is tens of thousands of characters long, so its file holds
 //! the length and a digest of that output instead. After changing one on
-//! purpose, run these tests with `UPDATE_PINS=1` to write what is built
-//! now over the files, and review the difference.
+//! purpose, run these tests with `UPDATE_PINS=1` to write what they build
+//! over the files, and review the difference.
 
 #![deny(clippy::too_many_lines)]
 
