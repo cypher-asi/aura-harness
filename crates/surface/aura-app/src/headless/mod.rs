@@ -403,6 +403,7 @@ async fn build(
         notices,
         model,
         effort: None,
+        held_effort: None,
         mode,
         workspace_root,
         tool_filter,

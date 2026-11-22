@@ -94,6 +94,9 @@ pub struct Headless {
     pub(crate) model: String,
     /// The effort Gate chose for the turn, while that is Gate's to choose
     pub(crate) effort: Option<ThinkingEffort>,
+    /// The effort the last turn's requests were held at, for a turn that
+    /// carries on from it
+    pub(crate) held_effort: Option<ThinkingEffort>,
     pub(crate) mode: AgentMode,
     pub(crate) workspace_root: PathBuf,
     pub(crate) tool_filter: ToolFilter,
@@ -848,6 +851,7 @@ impl Headless {
         if let Some(max) = limits.max_iterations {
             config.max_iterations = max;
         }
+        let carried = carry.is_some();
         let (escalation, nudged) = match carry {
             Some(Carry::Escalate(decision, category)) => (Some((decision, category)), None),
             Some(Carry::Nudge(ended)) => (None, Some(ended)),
@@ -905,6 +909,10 @@ impl Headless {
             &config,
         );
         config.initial_todos.clone_from(&session.todos);
+        if carried {
+            config.initial_thinking_effort = self.held_effort;
+        }
+        self.held_effort = config.held_thinking_effort();
         let context_limit = config.max_context_tokens;
         let agent_loop = AgentLoop::new(config);
         let tools = self.tool_filter.filter(tools);

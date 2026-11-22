@@ -173,6 +173,7 @@ fn harness(
         notices,
         model: "mock-model".to_string(),
         effort: None,
+        held_effort: None,
         mode: permissions.mode.agent_mode(),
         workspace_root: workspace,
         tool_filter: filter,

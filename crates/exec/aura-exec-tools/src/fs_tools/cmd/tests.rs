@@ -940,6 +940,46 @@ fn test_is_shell_program() {
     assert!(!is_shell_program("cargo"));
 }
 
+#[test]
+fn test_stray_zero_width_characters_are_dropped() {
+    for (typed, meant) in [
+        ("python\u{200b} -m pytest -q", "python -m pytest -q"),
+        (
+            "sh .swe/run 'python\u{200b}\u{200b} -c 1'",
+            "sh .swe/run 'python -c 1'",
+        ),
+        ("\u{feff}echo hi\u{2060}", "echo hi"),
+    ] {
+        assert_eq!(without_stray_zero_width(typed), meant);
+    }
+    for kept in ["echo '👨\u{200d}👩\u{200d}👧'", "printf 'क्\u{200c}ष'"] {
+        assert_eq!(without_stray_zero_width(kept), kept);
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_cmd_run_tool_runs_a_command_with_a_stray_zero_width_space() {
+    let config = command_config(crate::CommandPolicy {
+        enabled: true,
+        allow_shell: true,
+        binary_allowlist: vec!["sh".to_string(), "echo".to_string()],
+        ..Default::default()
+    });
+    let (ctx, _dir) = tool_ctx(config);
+    for args in [
+        serde_json::json!({ "program": "sh", "args": ["-c", "echo\u{200b} zero_width_ok"] }),
+        serde_json::json!({ "shell_script": "echo\u{200b} zero_width_ok" }),
+    ] {
+        let result = CmdRunTool
+            .execute(&ctx, args.clone())
+            .await
+            .unwrap_or_else(|e| panic!("{args}: {e:?}"));
+        assert!(result.ok, "{args}: {result:?}");
+        assert!(String::from_utf8_lossy(&result.stdout).contains("zero_width_ok"));
+    }
+}
+
 #[cfg(not(windows))]
 #[tokio::test]
 async fn test_cmd_run_tool_shell_script_ignores_bare_shell_program() {

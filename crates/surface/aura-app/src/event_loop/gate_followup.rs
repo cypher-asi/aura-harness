@@ -361,7 +361,7 @@ impl FollowUp {
     /// The steps for an attempt that `ran` on a model (at the effort Gate
     /// chose, when it chose one), routed among `candidates`,
     /// working in `workspace`: the judge's verdict on unchecked work
-    /// always, and when a candidate is stronger, so the work has
+    /// always, and when a candidate is a stronger model, so the work has
     /// somewhere to go, the others Gate's settings allow.
     pub(crate) fn new(
         live: &GateLive,
@@ -371,11 +371,13 @@ impl FollowUp {
     ) -> Self {
         let judge = gate_record::verdict_judge_for(candidates);
         let stronger =
-            aura_agent_gate::escalate(&live.stats(), RouteLevel::Turn, ran, candidates).is_some();
+            aura_agent_gate::has_stronger_model(&live.stats(), RouteLevel::Turn, ran, candidates);
         if !stronger {
             return Self {
                 allowed: Allowed {
                     judge: judge.is_some(),
+                    review: ReviewMode::Off,
+                    criteria: ReviewMode::Off,
                     ..Allowed::default()
                 },
                 judge,
@@ -908,12 +910,15 @@ pub(crate) fn commands_run(messages: &[Message], shown: usize) -> String {
 /// status is not the check's is pointed out, since its exiting with
 /// success then says nothing of the check.
 fn check_shown(check: &CheckSeen) -> String {
-    let exited = if check.passed {
-        "exited with success"
-    } else {
-        "failed"
+    let exited = match (check.passed, check.by_output) {
+        (true, false) => "exited with success",
+        (true, true) => {
+            "exited with a failure, but a command after the check may have set it, and what \
+             the check printed shows tests passing"
+        }
+        (false, _) => "failed",
     };
-    let masked = if check.passed && exit_status_masked(&check.command) {
+    let masked = if check.passed && !check.by_output && exit_status_masked(&check.command) {
         " The exit status is that of the command the check's output was piped or chained into, \
          not the check's own, so only the output says how the check went."
     } else {
@@ -1066,6 +1071,50 @@ mod tests {
     }
 
     #[test]
+    fn work_with_no_stronger_model_to_go_to_gets_only_the_judge() {
+        use aura_agent_gate::Candidate;
+        use aura_model::model_catalog::{ModelBackend, ModelTier};
+        const SONNET: &str = "claude/claude-sonnet-4-6";
+        const OPUS: &str = "claude/claude-opus-4-7";
+        let candidate = |id: &str, tier, cost_usd| Candidate {
+            id: id.to_string(),
+            label: id.to_string(),
+            backend: ModelBackend::Claude,
+            tier,
+            cost_usd: Some(cost_usd),
+        };
+        let candidates = [
+            candidate(SONNET, ModelTier::Standard, 3.0),
+            candidate(OPUS, ModelTier::Frontier, 15.0),
+        ];
+        let live = GateLive::new(aura_config::GateConfig {
+            explore_rate: 0.0,
+            ..aura_config::GateConfig::defaults()
+        });
+        let workspace = tempfile::tempdir().unwrap();
+        let at_high = |model| {
+            FollowUp::new(
+                &live,
+                &candidates,
+                (model, Some(ThinkingEffort::High)),
+                workspace.path(),
+            )
+        };
+        assert!(at_high(SONNET).allowed.nudge);
+        let top = at_high(OPUS);
+        assert_eq!(
+            top.allowed,
+            Allowed {
+                judge: top.judge.is_some(),
+                review: ReviewMode::Off,
+                criteria: ReviewMode::Off,
+                ..Allowed::default()
+            },
+            "max on the same model is not somewhere to go"
+        );
+    }
+
+    #[test]
     fn a_nudge_says_what_no_test_names() {
         let plain = nudge_message(&[]);
         assert!(plain.ends_with(NUDGE_PROMPT), "{plain}");
@@ -1131,6 +1180,7 @@ mod tests {
         let piped = CheckSeen {
             command: "pytest -q 2>&1 | head -20".to_string(),
             passed: true,
+            by_output: false,
             output: "TypeError: boom\n9 passed".to_string(),
         };
         let shown = check_shown(&piped);
@@ -1152,6 +1202,18 @@ mod tests {
         assert_eq!(
             check_shown(&plain),
             "`pytest -q` exited with success. It printed:\nTypeError: boom\n9 passed"
+        );
+
+        let decided_by_output = CheckSeen {
+            command: "pytest -q | grep Error".to_string(),
+            passed: true,
+            by_output: true,
+            output: "12 passed".to_string(),
+        };
+        assert_eq!(
+            check_shown(&decided_by_output),
+            "`pytest -q | grep Error` exited with a failure, but a command after the check may \
+             have set it, and what the check printed shows tests passing. It printed:\n12 passed"
         );
     }
 

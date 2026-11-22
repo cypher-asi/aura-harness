@@ -1618,6 +1618,7 @@ async fn run_prompt(
                 sent_back += 1;
             }
             config.initial_todos.clone_from(&session.todos);
+            config.initial_thinking_effort = config.held_thinking_effort();
             session.messages.push(Message::user(message));
             continue;
         }
@@ -1656,6 +1657,7 @@ async fn run_prompt(
                 review = Some(judged.verdict.reasons);
             }
         }
+        let ran_at = config.held_thinking_effort();
         let Some(next) = hub.gate.escalate(
             RouteLevel::Turn,
             category,
@@ -1702,6 +1704,7 @@ async fn run_prompt(
         (attempt_started, attempt_ms) = (Instant::now(), super::processes::now_ms());
         turn_start = session.messages.len();
         config.initial_todos.clone_from(&session.todos);
+        config.initial_thinking_effort = ran_at;
         session.messages.push(Message::user(takeover));
     };
     if let Some(files) = &files {

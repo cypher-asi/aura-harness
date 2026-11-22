@@ -1157,13 +1157,13 @@ fn parse_run_args(args: &serde_json::Value, ctx: &ToolContext) -> RunArgs {
     let shell_script = args["shell_script"]
         .as_str()
         .or_else(|| args["command"].as_str())
-        .map(String::from);
+        .map(without_stray_zero_width);
 
     let cmd_args: Vec<String> = args["args"]
         .as_array()
         .map(|arr| {
             arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
+                .filter_map(|v| v.as_str().map(without_stray_zero_width))
                 .collect()
         })
         .unwrap_or_default();
@@ -1171,8 +1171,8 @@ fn parse_run_args(args: &serde_json::Value, ctx: &ToolContext) -> RunArgs {
     // to it adds nothing.
     let program = args["program"]
         .as_str()
-        .filter(|p| !(shell_script.is_some() && cmd_args.is_empty() && is_shell_program(p)))
-        .map(String::from);
+        .map(without_stray_zero_width)
+        .filter(|p| !(shell_script.is_some() && cmd_args.is_empty() && is_shell_program(p)));
 
     let tty_cols = args["tty_cols"]
         .as_u64()
@@ -1189,6 +1189,31 @@ fn parse_run_args(args: &serde_json::Value, ctx: &ToolContext) -> RunArgs {
         tty_cols,
         background: args["background"].as_bool().unwrap_or(false),
     }
+}
+
+/// Characters that print as nothing.
+const ZERO_WIDTH: [char; 5] = ['\u{200b}', '\u{200c}', '\u{200d}', '\u{2060}', '\u{feff}'];
+
+/// `text` without the zero-width characters next to ASCII or at its ends.
+/// There they can only be slips, and one in a command word makes another
+/// command (`python\u{200b}: command not found`). Between other characters
+/// they join emoji or shape a script's letters, so they stay.
+fn without_stray_zero_width(text: &str) -> String {
+    if !text.contains(&ZERO_WIDTH[..]) {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let ascii_or_end =
+        |at: Option<usize>| at.and_then(|at| chars.get(at)).is_none_or(char::is_ascii);
+    chars
+        .iter()
+        .enumerate()
+        .filter(|&(at, c)| {
+            !ZERO_WIDTH.contains(c)
+                || !(ascii_or_end(at.checked_sub(1)) || ascii_or_end(Some(at + 1)))
+        })
+        .map(|(_, c)| *c)
+        .collect()
 }
 
 /// Apply every policy gate to a parsed [`RunArgs`].

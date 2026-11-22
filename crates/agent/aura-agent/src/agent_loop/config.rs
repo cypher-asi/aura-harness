@@ -187,6 +187,12 @@ pub struct AgentLoopConfig {
     /// iteration like [`Self::user_thinking_effort`], which wins over it.
     /// `None` keeps the heuristic.
     pub routed_thinking_effort: Option<aura_model::ThinkingEffort>,
+    /// Reasoning effort the conversation's last request ran at, when this
+    /// run carries on an attempt in the same conversation (Gate's nudge,
+    /// send-back or takeover). The run then records a `thinking_effort`
+    /// decision only if its first request runs at another effort. `None`
+    /// records the first request's effort as a change.
+    pub initial_thinking_effort: Option<aura_model::ThinkingEffort>,
     /// Layer E.1: hard cap on the number of *turns* one task may run.
     /// A turn is the unit of work between "model starts talking" and
     /// "model goes quiet without follow-up signal"; codex's
@@ -351,6 +357,7 @@ impl AgentLoopConfig {
             disable_thinking_iteration_0: false,
             user_thinking_effort: None,
             routed_thinking_effort: None,
+            initial_thinking_effort: None,
             max_turns_per_task: aura_core_types::MAX_TURNS,
             max_iterations_per_task: aura_core_types::MAX_TURNS,
             stream_event_timeout: Duration::from_secs(90),
@@ -373,6 +380,14 @@ impl AgentLoopConfig {
             continue_open_todos: false,
             trace_blobs: None,
         }
+    }
+
+    /// The effort every request of a run on this config is held at: the
+    /// user's, else the router's. `None` when the loop picks it per
+    /// request.
+    #[must_use]
+    pub fn held_thinking_effort(&self) -> Option<aura_model::ThinkingEffort> {
+        self.user_thinking_effort.or(self.routed_thinking_effort)
     }
 }
 

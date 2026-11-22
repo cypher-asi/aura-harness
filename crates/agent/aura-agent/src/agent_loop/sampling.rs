@@ -163,7 +163,7 @@ pub(crate) async fn run_sampling_request(
     };
 
     if let Some(effort) = request.thinking_effort {
-        let next = format!("{effort:?}").to_lowercase();
+        let next = decisions::effort_name(effort);
         if state.last_thinking_effort.as_deref() != Some(next.as_str()) {
             let decision = decisions::thinking_effort(
                 state.last_thinking_effort.as_deref(),

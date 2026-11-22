@@ -560,6 +560,21 @@ pub fn escalate(
     decide(model, effort.unwrap_or(ThinkingEffort::Medium))
 }
 
+/// Whether work at `level` that `ran` on a model, at an effort as
+/// [`escalate`] takes it, has a stronger model to go on to among
+/// `candidates`. One effort higher on the same model is not one: work on
+/// the strongest model that checked nothing gets only the judge's
+/// verdict ([`crate::followup`]).
+#[must_use]
+pub fn has_stronger_model(
+    stats: &GateStats,
+    level: RouteLevel,
+    ran: (&str, Option<ThinkingEffort>),
+    candidates: &[Candidate],
+) -> bool {
+    escalate(stats, level, ran, candidates).is_some_and(|next| next.model.id != ran.0)
+}
+
 /// What a subtask is first routed among when the agent dispatching it
 /// works on `lead`: the `candidates` below the frontier tier when `lead`
 /// is a frontier model and a standard one is among them, so the most
@@ -1125,6 +1140,20 @@ mod tests {
                 None,
                 "no max step on a model that folds max into high"
             );
+        }
+
+        #[test]
+        fn only_another_model_is_a_stronger_one() {
+            let empty = GateStats::default();
+            let stronger = |ran: &str, effort| {
+                has_stronger_model(&empty, RouteLevel::Turn, (ran, Some(effort)), &claude())
+            };
+            assert!(stronger(SONNET, ThinkingEffort::High));
+            assert!(
+                !stronger(OPUS, ThinkingEffort::High),
+                "max on the same model is not a stronger model"
+            );
+            assert!(!stronger(OPUS, ThinkingEffort::Max));
         }
 
         #[test]

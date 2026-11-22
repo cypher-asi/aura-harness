@@ -224,7 +224,7 @@ impl Evidence {
 
 /// What a command printed, from the result the model was shown: the
 /// `stdout` and `stderr` of a JSON result, else the result as it is.
-fn printed(result: &str) -> String {
+pub(crate) fn printed(result: &str) -> String {
     let Ok(Value::Object(fields)) = serde_json::from_str::<Value>(result) else {
         return result.to_string();
     };

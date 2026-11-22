@@ -306,6 +306,11 @@ pub(super) fn from_tool_results(
     out
 }
 
+/// How a [`thinking_effort`] decision names `effort`, e.g. `high`.
+pub(super) fn effort_name(effort: aura_model::ThinkingEffort) -> String {
+    format!("{effort:?}").to_lowercase()
+}
+
 /// The reasoning effort for the next request changed.
 pub(super) fn thinking_effort(
     previous: Option<&str>,
@@ -327,7 +332,13 @@ pub(super) fn thinking_effort(
         "user_pinned": user_pinned,
         "submit_plan_called": state.submit_plan_called,
     }))
-    .with_alternatives(&["effort_low", "effort_medium", "effort_high"])
+    .with_alternatives(&[
+        "effort_low",
+        "effort_medium",
+        "effort_high",
+        "effort_xhigh",
+        "effort_max",
+    ])
 }
 
 fn first_line(text: &str) -> String {
@@ -489,6 +500,23 @@ mod tests {
             }
         );
         assert!((d.trigger["pressure"].as_f64().unwrap() - 0.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_run_that_carries_on_records_only_a_change_of_effort() {
+        let mut config = super::super::AgentLoopConfig::for_agent("claude-test-model");
+        let fresh = LoopState::new_for_tests(&config, Vec::new());
+        assert_eq!(fresh.last_thinking_effort, None);
+        config.initial_thinking_effort = Some(aura_model::ThinkingEffort::High);
+        let carried_on = LoopState::new_for_tests(&config, Vec::new());
+        assert_eq!(carried_on.last_thinking_effort.as_deref(), Some("high"));
+        let raised = thinking_effort(Some("high"), "max", false, &carried_on);
+        assert_eq!(raised.trigger["previous"], "high");
+        assert!(
+            raised.alternatives.iter().any(|a| a == "effort_max"),
+            "{:?}",
+            raised.alternatives
+        );
     }
 
     #[test]

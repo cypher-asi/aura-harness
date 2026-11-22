@@ -1051,6 +1051,7 @@ async fn run_attempts(
                 ui.send(system_message(notice)).await;
                 let mut config = turn.agent_loop.config().clone();
                 config.initial_todos.clone_from(&session.todos);
+                config.initial_thinking_effort = config.held_thinking_effort();
                 *turn.agent_loop = AgentLoop::new(config);
                 continue 'attempts;
             }
@@ -1180,6 +1181,7 @@ async fn run_attempts(
         ui.send(system_message(route_line(&next, category))).await;
         let mut config = turn.agent_loop.config().clone();
         config.initial_todos.clone_from(&session.todos);
+        config.initial_thinking_effort = config.held_thinking_effort();
         *turn.agent_loop = AgentLoop::new(config);
         gate.point(agent, &mut turn.agent_loop, &next);
         gate.show(ui, &next).await;

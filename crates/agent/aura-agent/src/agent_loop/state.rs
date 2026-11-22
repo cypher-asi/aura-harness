@@ -168,7 +168,9 @@ impl LoopState {
             ),
             failed_edit_attempts: std::collections::HashMap::new(),
             decisions: Vec::new(),
-            last_thinking_effort: None,
+            last_thinking_effort: config
+                .initial_thinking_effort
+                .map(super::decisions::effort_name),
             todos_at_last_nudge: None,
             stalled_todo_nudges: 0,
             reported_tool_results: std::collections::HashSet::new(),

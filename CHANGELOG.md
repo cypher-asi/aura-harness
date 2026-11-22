@@ -7,6 +7,33 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Gate stops spending on the strongest model when nothing failed
+
+##### Fixed
+
+- A check whose failing exit status a later command may have set
+  (`pytest -q | grep -m2 Error` that matched nothing, `pytest; python -m
+  pyflakes x` with pyflakes not installed) is decided by what the check
+  printed: `12 passed` passes it, failures fail it, and output showing
+  neither says nothing. Such a check used to count as failed, and on
+  Opus that retried correct work at max effort: in Compare #31 two such
+  retries cost at least $4.55 of Gate's $8.61, against $3.87 for Opus
+  alone. The judge is told when a check's verdict came from its output.
+  Failed tests or a judged failure on Opus still move it to max effort.
+- Work on the strongest model is no longer nudged to check its change
+  or checked by the harness: raising its effort is not a stronger model
+  to go to. Only the judge looks at its unchecked work, as the docs
+  say. The two nudges on Opus in Compare #31 cost $0.49.
+- A zero-width space typed into a command (`python\u200b -m pytest`)
+  is dropped before the command runs, instead of failing with `command
+  not found` and costing a retry, as four calls in Compare #31 did.
+  Zero-width characters between non-ASCII characters, as in emoji and
+  some scripts, are kept.
+- A run that carries on an attempt (a nudge, a send-back or a stronger
+  model taking over) records a `thinking_effort` decision only when its
+  effort changes, and the decision lists `xhigh` and `max` among the
+  alternatives.
+
 ### Gate writes down a code turn's acceptance criteria before the work starts
 
 ##### Added
