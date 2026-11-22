@@ -69,7 +69,8 @@
 //! - `step`: the next [`Step`] for a turn, from how it [`Ended`]
 //! - `review`: [`Why`] work about to stand is reviewed, and when
 //! - `suspicion`: why a turn with no check looks wrong ([`Suspicion`])
-//! - `prompts`: what the model is told when its work is sent back
+//! - `prompts`: what the model is told when its work is sent back, or
+//!   goes on to a stronger model ([`takeover_prompt`], [`retry_prompt`])
 
 #![deny(clippy::too_many_lines)]
 
@@ -81,7 +82,8 @@ mod suspicion;
 mod tests;
 
 pub use prompts::{
-    repair_prompt, sign_repair_prompt, uncovered_prompt, NUDGE_PROMPT, REPAIR_OPENING,
+    repair_prompt, retry_prompt, sign_repair_prompt, takeover_prompt, uncovered_prompt,
+    NUDGE_PROMPT, REPAIR_OPENING,
 };
 pub use review::Why;
 pub use step::{next, Allowed, Ended, Step, Taken};

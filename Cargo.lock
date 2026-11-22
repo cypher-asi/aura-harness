@@ -918,6 +918,7 @@ version = "0.1.0"
 dependencies = [
  "aura-core-auth",
  "aura-core-types",
+ "aura-gate-evidence",
  "aura-gate-followup",
  "aura-gate-route",
  "aura-model",

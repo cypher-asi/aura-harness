@@ -30,7 +30,6 @@
 use super::agent_events::AgentUi;
 use super::agents::{AgentSession, KernelFactory};
 use super::approvals::TerminalApprovals;
-use super::gate_followup;
 use super::gate_subtask::{explicit_model, GateBase, SubtaskGate, SubtaskLabel};
 use super::handlers::{handle_agent_success, run_agent_turn, system_message};
 use super::host::{agent_tool_definitions, TerminalAgents};
@@ -67,7 +66,7 @@ use aura_exec_tools::todo::{task_report_line, TODO_WRITE_TOOL_NAME};
 use aura_exec_tools::SubagentDispatchHook;
 use aura_gate::compare::{tally, PlanReading};
 use aura_gate::followup;
-use aura_gate::judge::turn::{Failed, Unverified, Verdict};
+use aura_gate::judge::turn::{shown_to_judge, Failed, Unverified, Verdict};
 use aura_gate::lead::lead_tools;
 use aura_gate::live::{self, GateLive};
 use aura_gate::route::{Candidate, Decision};
@@ -1353,7 +1352,7 @@ impl AgentHub {
         if let Some(snapshot) = snapshot {
             restore_workspace(snapshot).await;
         }
-        let prompt = task_check::retry_prompt(&request.prompt, &first.model, &why);
+        let prompt = followup::retry_prompt(&request.prompt, &first.model, &why);
         let retry = match self
             .open_task(&request, &definition, prompt, Some((decision, category)))
             .await
@@ -2319,8 +2318,7 @@ async fn run_task_turn(
     };
     let text = result.final_text.clone();
     let llm_error = result.llm_error.as_ref().map(ToString::to_string);
-    end.shown =
-        gate_followup::shown_to_judge(result.messages.get(turn_start..).unwrap_or_default());
+    end.shown = shown_to_judge(result.messages.get(turn_start..).unwrap_or_default());
     end.files = result
         .file_changes
         .iter()

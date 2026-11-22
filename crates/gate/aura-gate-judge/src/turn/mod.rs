@@ -24,10 +24,12 @@
 //! - `unverified`: the judge of a turn no check vouches for
 //! - `standing`: the review of work about to stand
 //! - `parts`: the parts of a turn its judges are shown, cut to their limits
+//! - `shown`: what they are shown of the commands and checks it ran
 //! - `verdict`: what a judge answered, read out of its reply
 
 mod failed;
 mod parts;
+mod shown;
 mod standing;
 #[cfg(test)]
 mod tests;
@@ -35,6 +37,7 @@ mod unverified;
 mod verdict;
 
 pub use failed::{judges, request, Failed, SYSTEM_PROMPT};
+pub use shown::{shown_to_judge, shown_to_reviewer};
 pub use standing::{review_prompt, review_request, ReviewVariant, Standing, REVIEW_SYSTEM_PROMPT};
 pub use unverified::{unverified_request, Unverified, UNVERIFIED_SYSTEM_PROMPT};
 pub use verdict::{parse_answer, Answer, Verdict};

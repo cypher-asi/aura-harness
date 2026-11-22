@@ -9,7 +9,7 @@ use super::agent_events::AgentUi;
 use super::agent_events::ForwarderState;
 use super::agents::AgentSession;
 use super::attachments::{expand_mentions_in, mentioned_paths};
-use super::gate_followup::{
+use super::gate::followup::{
     check_review, check_signal, harness_check, joined, judge_unchecked, may_review, nudge_message,
     nudge_notice, repair_message, repair_notice, sign_repair_message, sign_repair_notice, At,
     Before, FollowUp, Reviewing, Unchecked,
@@ -18,7 +18,6 @@ use super::handlers::{handle_agent_success, record_response, run_agent_turn, sys
 use super::run_command::run_user_command;
 use super::steering::{SteerSource, Steering};
 use super::subagents::{AgentHub, LeadProfile};
-use super::task_check::takeover_prompt;
 use super::tasks::{request_state, summary_of};
 use crate::long_run::LongRunSettings;
 use crate::model_selection::{routed_effort, ModelLimits};
@@ -31,7 +30,7 @@ use aura_core_types::{
 use aura_gate::attempts::Terms;
 use aura_gate::evidence::checks::{last_check, last_check_seen};
 use aura_gate::evidence::outcome::{calls_for_stronger, turn_signal};
-use aura_gate::followup::Step;
+use aura_gate::followup::{takeover_prompt, Step};
 use aura_gate::judge::criteria::Criteria;
 use aura_gate::judge::turn::Failed;
 use aura_gate::live::{self, GateLive};
@@ -799,7 +798,7 @@ struct Asked<'a> {
 /// Run the turn of the prompt `asked`. When Gate routes it, Gate is asked
 /// again while a route refuses the user's sign-in. An attempt that ran
 /// no check of its own gets Gate's follow-up first (see
-/// [`gate_followup`]): when it changed files it is asked once to check
+/// [`gate::followup`](super::gate::followup)): when it changed files it is asked once to check
 /// them, then the harness runs the project's tests, and work still
 /// unchecked gets the judge's verdict. Work that is hard or shows a sign of
 /// failure is reviewed against the request before it stands; what the

@@ -35,26 +35,21 @@ use aura_gate::attempts::{
     self, below_strongest, Attempt, AttemptLog, CopyAt, Line, Review, Stood, Tier, Tiers,
     TruthSource,
 };
+use aura_gate::evidence::transcript::reply::final_reply;
 use aura_gate::evidence::{flags, Evidence, Flag};
 use aura_gate::followup::Why;
 use aura_gate::judge::criteria::{self, Criteria};
-use aura_gate::judge::turn::{self, Answer, ReviewVariant, Standing};
+use aura_gate::judge::turn::{self, shown_to_reviewer, Answer, ReviewVariant, Standing};
 use aura_model::model_catalog::{estimate_cost_usd, infer_tier, route_label, ModelTier};
 use aura_model::{Message, ModelProvider, StopReason, Usage};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-use crate::event_loop::gate_followup::{
-    checks_shown, commands_run, final_reply_in, tally as criteria_tally,
-};
 use crate::event_loop::processes::now_ms;
 use crate::event_loop::tasks::TASKS_DIR;
 use crate::isolation::changes;
 use crate::session_checkpoint::Checkpoints;
 use aura_gate::live::sent_text;
-
-/// Commands shown to the reviewer, latest last.
-const SHOWN_COMMANDS: usize = 40;
 
 /// How long one review may take.
 const REVIEW_TIMEOUT: Duration = Duration::from_secs(420);
@@ -289,6 +284,7 @@ fn prepare(pick: &Pick<'_>, sessions: &Checkpoints, tiers: &Tiers) -> Result<Pre
         .flatten()
         .collect::<Vec<_>>()
         .join(" ");
+    let (commands, checks) = shown_to_reviewer(messages);
     Ok(Prepared {
         attempt: Attempt {
             evidence,
@@ -299,9 +295,9 @@ fn prepare(pick: &Pick<'_>, sessions: &Checkpoints, tiers: &Tiers) -> Result<Pre
         right: truth.passed,
         task,
         diff,
-        commands: commands_run(messages, SHOWN_COMMANDS),
-        checks: checks_shown(messages),
-        reply: final_reply_in(messages),
+        commands,
+        checks,
+        reply: final_reply(messages),
         why,
         signs,
         criteria: None,
@@ -575,7 +571,7 @@ async fn ask(
         }
     }
     let criteria = match (&answer, prepared.criteria.as_deref()) {
-        (Ok((_, findings, _)), Some(held)) => criteria_tally(&criteria::checked(held, findings)),
+        (Ok((_, findings, _)), Some(held)) => criteria::tally(&criteria::checked(held, findings)),
         _ => String::new(),
     };
     Asked {

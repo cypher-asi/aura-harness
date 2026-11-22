@@ -3,8 +3,9 @@
 //! - [`RUN_COMMAND`] and [`FILE_TOOLS`]: the tools that run commands and
 //!   change files
 //! - `command`: the command lines of the `run_command` calls
+//!   ([`command_lines`])
 //! - `output`: what a command printed, read once from its result
-//! - [`reply`]: what the final reply says of the work
+//! - [`reply`]: the final reply, and what it says of the work
 //! - [`said`]: Gate's own messages among them
 
 use aura_model::{ContentBlock, Message, ToolResultContent};
@@ -15,6 +16,7 @@ mod output;
 pub mod reply;
 pub mod said;
 
+pub use command::command_lines;
 pub(crate) use output::{shows_failures, Output};
 
 /// Name of the tool that runs commands.

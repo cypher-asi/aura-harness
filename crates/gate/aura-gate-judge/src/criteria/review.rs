@@ -84,6 +84,24 @@ pub fn checked(criteria: &Criteria, findings: &str) -> Vec<Checked> {
         .collect()
 }
 
+/// How many of the criteria `checked` the reviewer found met, e.g.
+/// `, criteria 3/5 met, 1 unmet, 1 untested`; empty when there were none.
+#[must_use]
+pub fn tally(checked: &[Checked]) -> String {
+    if checked.is_empty() {
+        return String::new();
+    }
+    let count = |status: Status| checked.iter().filter(|c| c.status == Some(status)).count();
+    let mut said = format!(", criteria {}/{} met", count(Status::Met), checked.len());
+    for status in [Status::Unmet, Status::Untested] {
+        let n = count(status);
+        if n > 0 {
+            said.push_str(&format!(", {n} {}", status.word().to_lowercase()));
+        }
+    }
+    said
+}
+
 /// The number and the status of `line` when it is a criterion's line,
 /// `CRITERION <n>: <status>` in any case, after any list or bold
 /// markers; the status is `None` when its word names none.

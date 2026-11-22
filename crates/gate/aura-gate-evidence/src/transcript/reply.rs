@@ -144,6 +144,19 @@ pub fn says_unverified(reply: &str) -> bool {
     Reply::read(reply).says_unverified()
 }
 
+/// The text of the last message in `messages` that can be a turn's final
+/// reply ([`is_reply`]): what the turn ended by saying, without what the
+/// model narrated along the way. Empty when there is none.
+#[must_use]
+pub fn final_reply(messages: &[Message]) -> String {
+    messages
+        .iter()
+        .rev()
+        .find(|message| is_reply(message))
+        .map(Message::text_content)
+        .unwrap_or_default()
+}
+
 /// Whether `message` can be a turn's final reply: the model's, with text
 /// that is not blank.
 pub(crate) fn is_reply(message: &Message) -> bool {
@@ -224,6 +237,20 @@ mod tests {
         ] {
             assert!(!is_reply(&not_a_reply), "{not_a_reply:?}");
         }
+    }
+
+    #[test]
+    fn the_final_reply_is_the_last_the_model_wrote() {
+        let messages = [
+            reply("I couldn't find it at first."),
+            Message::user("ok"),
+            reply("Done: fixed the parser."),
+            call("1", "read_file", json!({"path": "a"})),
+            reply(" \n"),
+        ];
+        assert_eq!(final_reply(&messages), "Done: fixed the parser.");
+        assert_eq!(final_reply(&messages[..2]), "I couldn't find it at first.");
+        assert_eq!(final_reply(&[]), "");
     }
 
     #[test]

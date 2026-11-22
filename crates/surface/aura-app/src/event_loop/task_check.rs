@@ -211,50 +211,6 @@ pub(super) fn compact(last: &Attempted<'_>, retried: Option<(&str, &str)>) -> St
     parts.join("\n\n")
 }
 
-/// The prompt of the retry of `prompt`, whose first attempt on `model`
-/// failed for `why`.
-pub(super) fn retry_prompt(prompt: &str, model: &str, why: &str) -> String {
-    format!(
-        "{prompt}\n\n---\nA first attempt at this task on {model} failed: {why}\n\
-         Its file changes were undone, so start again from the files as they are now."
-    )
-}
-
-/// What the model that goes on with a turn is told, the work on `model`
-/// having ended with `signal`, with what the judge found wrong when it
-/// reviewed the work: a `stronger` model that it takes over, or the same
-/// model, reasoning harder, that it goes over its work again. The
-/// conversation and the files stay as that work left them.
-pub(crate) fn takeover_prompt(
-    model: &str,
-    stronger: bool,
-    signal: OutcomeSignal,
-    review: Option<&str>,
-) -> String {
-    let how = match signal {
-        OutcomeSignal::ChecksFailed => "with its last test or build command failing",
-        OutcomeSignal::JudgedFail => "without checking its work, which looked unfinished",
-        _ => "in an error",
-    };
-    let review = review
-        .map(str::trim)
-        .filter(|review| !review.is_empty())
-        .map(|review| format!(" A reviewer of that work found: {review}"))
-        .unwrap_or_default();
-    if !stronger {
-        return format!(
-            "The work above ended {how}.{review} No stronger model is left to take it over, so \
-             go over it once more yourself, reasoning harder this time. The files are as that \
-             work left them: check what was changed, find what is wrong and finish the request."
-        );
-    }
-    format!(
-        "The work above was done on {model} and ended {how}.{review} You are a stronger model \
-         taking over this turn. The files are as that work left them: check what it changed, \
-         find what is wrong and finish the request."
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,32 +239,6 @@ mod tests {
         let unrun = check(None, None, "denied");
         assert!(unrun.describe().contains("could not run"));
         assert_eq!(unrun.signal(), None);
-    }
-
-    #[test]
-    fn a_takeover_says_whether_the_model_is_a_stronger_one() {
-        let stronger = takeover_prompt(
-            "claude-sonnet-5-5 (claude plan)",
-            true,
-            OutcomeSignal::ChecksFailed,
-            Some("the new test fails"),
-        );
-        assert!(stronger.starts_with(
-            "The work above was done on claude-sonnet-5-5 (claude plan) and ended with its last \
-             test or build command failing. A reviewer of that work found: the new test fails"
-        ));
-        assert!(stronger.contains("You are a stronger model taking over this turn."));
-        let same = takeover_prompt(
-            "claude-opus-5-5 (claude plan)",
-            false,
-            OutcomeSignal::JudgedFail,
-            None,
-        );
-        assert!(same.starts_with(
-            "The work above ended without checking its work, which looked unfinished. No \
-             stronger model is left"
-        ));
-        assert!(!same.contains("You are a stronger model"), "{same}");
     }
 
     #[test]
@@ -380,6 +310,5 @@ mod tests {
             attempt.failure().as_deref(),
             Some("it stopped with an error: the model fell over")
         );
-        assert!(retry_prompt("Fix it", "m", "boom").starts_with("Fix it\n\n---\nA first attempt"));
     }
 }

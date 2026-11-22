@@ -1,17 +1,21 @@
 //! The judges of a turn: their requests, and the answers read out of
 //! their replies.
 
+use aura_gate_evidence::checks::CheckSeen;
+use aura_gate_evidence::test_support::{ran, run};
 use aura_gate_followup::Suspicion;
 use aura_gate_route::Candidate;
 use aura_model::model_catalog::{ModelBackend, ModelTier};
-use aura_model::ToolChoice;
+use aura_model::{Message, ToolChoice};
+use serde_json::json;
 
 use super::failed::prompt;
 use super::parts::MAX_FAILURE;
+use super::shown::check_shown;
 use super::unverified::unverified_prompt;
 use super::{
-    judges, parse_answer, request, review_prompt, unverified_request, Answer, Failed, Standing,
-    Unverified, UNVERIFIED_SYSTEM_PROMPT,
+    judges, parse_answer, request, review_prompt, shown_to_judge, shown_to_reviewer,
+    unverified_request, Answer, Failed, Standing, Unverified, UNVERIFIED_SYSTEM_PROMPT,
 };
 use crate::criteria::{Criteria, Criterion, Kind};
 
@@ -235,4 +239,84 @@ fn only_work_below_the_judges_tier_is_judged() {
         judges(OPUS, "house-model", &listed),
         "a candidate's tier wins over its name"
     );
+}
+
+#[test]
+fn the_judges_see_the_last_commands_run() {
+    let messages: Vec<Message> = (0..50)
+        .map(|n| run(&n.to_string(), json!({"command": format!("cmd {n}")})))
+        .collect();
+    let (judged, last_check) = shown_to_judge(&messages);
+    assert_eq!(judged.lines().count(), 15);
+    assert!(
+        judged.starts_with("cmd 35\n") && judged.ends_with("cmd 49"),
+        "{judged}"
+    );
+    assert_eq!(last_check, "", "none of them is a test or build");
+    let (reviewed, checks) = shown_to_reviewer(&messages);
+    assert_eq!(reviewed.lines().count(), 40);
+    assert!(reviewed.starts_with("cmd 10\n"), "{reviewed}");
+    assert_eq!(checks, "");
+    assert_eq!(shown_to_judge(&[]), (String::new(), String::new()));
+}
+
+#[test]
+fn the_reviewer_sees_the_last_three_checks_and_the_judge_the_last() {
+    let messages: Vec<Message> = (0..5)
+        .flat_map(|n| {
+            let command = format!("cargo test -p crate{n}");
+            ran(&n.to_string(), &command, "test result: ok", false)
+        })
+        .collect();
+    let (_, checks) = shown_to_reviewer(&messages);
+    assert_eq!(checks.matches("exited with success").count(), 3, "{checks}");
+    assert!(
+        checks.starts_with("`cargo test -p crate2` exited with success. It printed:\n"),
+        "{checks}"
+    );
+    let (_, last_check) = shown_to_judge(&messages);
+    assert!(
+        last_check.starts_with("`cargo test -p crate4` exited with success."),
+        "{last_check}"
+    );
+}
+
+#[test]
+fn the_judge_is_told_when_a_checks_exit_status_is_not_its_own() {
+    let plain = CheckSeen {
+        command: "pytest -q".to_string(),
+        passed: true,
+        by_output: false,
+        output: "12 passed".to_string(),
+    };
+    assert_eq!(
+        check_shown(&plain),
+        "`pytest -q` exited with success. It printed:\n12 passed"
+    );
+    let piped = CheckSeen {
+        command: "pytest -q 2>&1 | tail -3".to_string(),
+        by_output: true,
+        ..plain.clone()
+    };
+    assert_eq!(
+        check_shown(&piped),
+        "`pytest -q 2>&1 | tail -3` may have exited as a command after the check did, so \
+         what the check printed decided how it went: it shows tests passing. It printed:\n\
+         12 passed"
+    );
+    let never_ran = CheckSeen {
+        passed: false,
+        output: "no tests ran in 0.00s\nERROR: file not found: test/units/urls".to_string(),
+        ..piped
+    };
+    let shown = check_shown(&never_ran);
+    assert!(
+        shown.contains("it shows failures, or that the tests never ran."),
+        "{shown}"
+    );
+    let failed = CheckSeen {
+        by_output: false,
+        ..never_ran
+    };
+    assert!(check_shown(&failed).starts_with("`pytest -q 2>&1 | tail -3` failed. It printed:"));
 }

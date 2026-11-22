@@ -7,7 +7,7 @@
 use super::output::{ExitReason, Output, RunReport, StreamEvent, UsageReport};
 use super::sink::{CallLimits, HeadlessSink, TurnTally};
 use super::tools::ToolFilter;
-use crate::event_loop::gate_followup::{
+use crate::event_loop::gate::followup::{
     check_review, check_signal, harness_check, joined, judge_unchecked, nudge_message,
     nudge_notice, repair_message, repair_notice, sign_repair_message, sign_repair_notice, At,
     Before, FollowUp, Reviewing, Unchecked,
@@ -19,7 +19,6 @@ use crate::event_loop::notices::{completion_notice, record_completion, Notice};
 use crate::event_loop::processes::stop_background_commands;
 use crate::event_loop::steering::{SteerSource, Steering};
 use crate::event_loop::subagents::lock;
-use crate::event_loop::task_check::takeover_prompt;
 use crate::event_loop::turns::{drain_stale_inbox, ended_signal, failure_text, record_prompt};
 use crate::event_loop::{AgentHub, AgentSession};
 use crate::model_selection::routed_effort;
@@ -35,7 +34,7 @@ use aura_core_types::{
 use aura_exec_tools::BackgroundProcessHook;
 use aura_gate::attempts::Terms;
 use aura_gate::evidence::outcome::calls_for_stronger;
-use aura_gate::followup::Step;
+use aura_gate::followup::{takeover_prompt, Step};
 use aura_gate::judge::criteria::Criteria;
 use aura_gate::judge::turn::Failed;
 use aura_gate::live::{self, Judged};
@@ -556,7 +555,7 @@ impl Headless {
 
     /// Follow up `turn`, a turn of `session` answering `task` that Gate
     /// routed, as Gate's settings allow (see
-    /// [`gate_followup`](crate::event_loop::gate_followup)): one that ran
+    /// [`gate::followup`](crate::event_loop::gate::followup)): one that ran
     /// no check of its own is asked once to check its change, else the
     /// harness runs the project's tests, else the judge looks at work
     /// that seems unfinished; and work that is hard or shows a sign of

@@ -37,7 +37,7 @@ pub use kind::Kind;
 pub use list::{worker_note, Criteria, Criterion};
 pub use prompt::{request, CRITERIA_TOOL, SYSTEM_PROMPT};
 pub(crate) use review::review_section;
-pub use review::{checked, Checked, Status};
+pub use review::{checked, tally, Checked, Status};
 
 /// Most criteria kept: more than this many are rarely all checkable, and
 /// the review has to go through each.

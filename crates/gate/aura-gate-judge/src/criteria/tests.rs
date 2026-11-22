@@ -7,8 +7,8 @@ use serde_json::{json, Value};
 use super::answer::{criteria_in, MAX_TEXT};
 use super::review::review_section;
 use super::{
-    checked, none_because, request, worker_note, Criteria, Criterion, Kind, Status, CRITERIA_TOOL,
-    EXACTING_ITEMS, MAX_ITEMS, SYSTEM_PROMPT,
+    checked, none_because, request, tally, worker_note, Criteria, Criterion, Kind, Status,
+    CRITERIA_TOOL, EXACTING_ITEMS, MAX_ITEMS, SYSTEM_PROMPT,
 };
 
 const SONNET: &str = "claude/claude-sonnet-5-5";
@@ -290,6 +290,21 @@ fn the_reviewers_lines_give_each_criterion_its_status() {
         .map(|c| c.status)
         .collect();
     assert_eq!(statuses, [Some(Status::Met), Some(Status::Untested), None]);
+}
+
+#[test]
+fn the_tally_counts_the_met_of_all_and_names_the_rest() {
+    let criteria = of(&[Kind::Interface; 5], false);
+    let findings = "CRITERION 1: MET\nCRITERION 2: MET\nCRITERION 3: UNMET\nCRITERION 4: UNTESTED";
+    assert_eq!(
+        tally(&checked(&criteria, findings)),
+        ", criteria 2/5 met, 1 unmet, 1 untested"
+    );
+    assert_eq!(
+        tally(&checked(&criteria, "CRITERION 5: MET")),
+        ", criteria 1/5 met"
+    );
+    assert_eq!(tally(&[]), "");
 }
 
 #[test]

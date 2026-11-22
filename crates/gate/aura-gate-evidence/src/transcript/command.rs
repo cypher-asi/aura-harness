@@ -1,9 +1,19 @@
 //! The command lines of a turn's `run_command` calls.
 
+use super::{tools, Tool};
+use aura_model::Message;
 use serde_json::Value;
 
 /// Zero-width characters a command may hold by a slip.
 const ZERO_WIDTH: [char; 5] = ['\u{200b}', '\u{200c}', '\u{200d}', '\u{2060}', '\u{feff}'];
+
+/// The command lines of the `run_command` calls in `messages`, in order.
+pub fn command_lines(messages: &[Message]) -> impl Iterator<Item = String> + '_ {
+    tools(messages).filter_map(|tool| match tool {
+        Tool::Command { line, .. } => Some(line),
+        _ => None,
+    })
+}
 
 /// The command line a `run_command` call runs: its script, or its program
 /// and arguments, without the stray zero-width characters that
@@ -48,7 +58,21 @@ fn without_stray_zero_width(text: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{call, ran, run};
     use serde_json::json;
+
+    #[test]
+    fn a_turns_command_lines_are_its_run_command_calls_in_order() {
+        let [first, printed] = ran("1", "cargo build", "Finished", false);
+        let messages = [
+            first,
+            printed,
+            call("2", "read_file", json!({"path": "src/lib.rs"})),
+            run("3", json!({"program": "cargo", "args": ["test", "-q"]})),
+        ];
+        let lines: Vec<String> = command_lines(&messages).collect();
+        assert_eq!(lines, ["cargo build", "cargo test -q"]);
+    }
 
     #[test]
     fn a_stray_zero_width_character_is_dropped_and_one_that_joins_is_kept() {

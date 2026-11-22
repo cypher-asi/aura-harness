@@ -31,7 +31,7 @@ use super::agent_events::AgentUi;
 use super::agents::AgentSession;
 use super::bench_source::{self, StartFile};
 use super::compare_view::{duration, money, render};
-use super::gate_followup::{
+use super::gate::followup::{
     check_review, check_signal, harness_check, joined, judge_unchecked, nudge_message,
     nudge_notice, repair_message, repair_notice, sign_repair_message, sign_repair_notice, At,
     Before, FollowUp, Reviewing, Unchecked,
@@ -41,7 +41,7 @@ use super::modes::Permissions;
 use super::processes::{now_ms, turn_id};
 use super::steering::{SteerSource, Steering};
 use super::subagents::{lock, AgentHub, ArmRouting};
-use super::task_check::{self, takeover_prompt};
+use super::task_check;
 use super::tasks::TASKS_DIR;
 use super::turns::{ended_signal, failure_text, record_prompt};
 use crate::agent_registry::RegisteredAgent;
@@ -67,7 +67,7 @@ use aura_gate::compare::{
     Schedule,
 };
 use aura_gate::evidence::outcome::calls_for_stronger;
-use aura_gate::followup::Step;
+use aura_gate::followup::{takeover_prompt, Step};
 use aura_gate::judge::blind;
 use aura_gate::judge::turn::Failed;
 use aura_gate::live::{self, RunOf};
