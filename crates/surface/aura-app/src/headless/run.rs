@@ -142,7 +142,8 @@ pub(crate) fn parse_session_id(id: &str, default_agent: AgentId) -> Result<(Agen
 
 /// How one agent turn ended.
 struct TurnOutcome {
-    /// The `Outcome` recorded for the turn, when Gate routed it
+    /// How the turn went, when Gate routed it: the `Outcome` [`Headless::drive`]
+    /// records once Gate's follow-up has had its say
     ended: Option<OutcomePayload>,
     result: Option<AgentLoopResult>,
     /// Model calls and tokens of the turn
@@ -160,8 +161,8 @@ struct TurnOutcome {
     turn_start: usize,
     /// What the turn ran under, for Gate's attempt log
     terms: Terms,
-    /// Whether nothing has said yet how the turn went: its `Outcome`
-    /// waits for Gate's follow-up to settle it and is not recorded yet
+    /// Whether nothing has said yet how the turn went, which leaves its
+    /// `Outcome` for Gate's follow-up to settle
     unchecked: bool,
 }
 
@@ -287,14 +288,15 @@ impl Headless {
     /// it; `started` is when the run began. When Gate routes `prompt`'s
     /// turn, Gate follows it up first ([`Self::follow_up`]): a turn that
     /// ran no check is asked for one, and work that is hard or shows a
-    /// sign of failure is reviewed before it stands. When it ends in a
-    /// model error, with its last
-    /// check or the harness's failing, or with its unchecked work judged
-    /// unfinished, Gate's judge says whether the model was at fault
-    /// ([`Self::judge`]). If it was, or nothing judged the turn, it goes
-    /// on in the same conversation on the next stronger model, tier by
-    /// tier. Also returns the `Outcome` recorded for the last of those
-    /// turns, when Gate routed them.
+    /// sign of failure is reviewed before it stands. Each routed turn's
+    /// `Outcome` and attempt line are written once, after its follow-up,
+    /// unless its model carries on with the work. When it ends in a model
+    /// error, with its last check or the harness's failing, or with its
+    /// unchecked work judged unfinished, Gate's judge says whether the
+    /// model was at fault ([`Self::judge`]). If it was, or nothing judged
+    /// the turn, it goes on in the same conversation on the next stronger
+    /// model, tier by tier. Also returns the `Outcome` recorded for the
+    /// last of those turns, when Gate routed them.
     pub(super) async fn drive(
         &mut self,
         session: &mut AgentSession,
@@ -377,13 +379,16 @@ impl Headless {
                     outcome.failure.clone_from(&found.harness);
                 }
             }
-            // Work the follow-up could not settle stands as it is, unless
-            // its model carries on with it.
-            if outcome.unchecked && found.carry_on.is_none() {
+            // The turn's outcome stands once the follow-up has had its say,
+            // unless its model carries on with the work.
+            if found.carry_on.is_none() {
                 if let Some(ended) = &outcome.ended {
+                    let left = (outcome.result.as_ref())
+                        .map(|result| follow.1.evidence(result, attempt_start));
+                    let gate = &self.hub.gate;
+                    gate.log_attempt(session.agent_id(), ended, outcome.terms, left);
                     live::record(&session.kernel, session.agent_id(), ended).await;
                 }
-                outcome.unchecked = false;
             }
             // What the turn's signal said, and what the judge found wrong
             // with it.
@@ -557,10 +562,10 @@ impl Headless {
     /// that seems unfinished; and work that is hard or shows a sign of
     /// failure is reviewed before it stands, going back to its model once
     /// with what the review finds. What the harness's check, the judge or
-    /// the review finds is recorded as a later `Outcome` of the turn's
-    /// prompt and becomes `turn`'s. `follow` holds the steps the attempt
-    /// on `follow.0` has taken, `before` the workspace as it was when the
-    /// run began, and `since` is where that attempt's messages start.
+    /// the review finds becomes `turn`'s `Outcome`. `follow` holds the
+    /// steps the attempt on `follow.0` has taken, `before` the workspace
+    /// as it was when the run began, and `since` is where that attempt's
+    /// messages start.
     async fn follow_up(
         &mut self,
         session: &AgentSession,
@@ -576,13 +581,7 @@ impl Headless {
         let (Some(ended), Some(result)) = (turn.ended.as_mut(), turn.result.as_ref()) else {
             return found;
         };
-        // What the follow-up makes of the attempt replaces its line in
-        // Gate's attempt log.
         let gate = Arc::clone(&self.hub.gate);
-        let relog = |follow: &FollowUp, ended: &OutcomePayload| {
-            let left = follow.evidence(result, since);
-            gate.log_attempt(session.agent_id(), ended, terms, Some(left));
-        };
         let Some(candidates) = self.hub.gate_candidates(session.definition.as_deref()) else {
             return found;
         };
@@ -663,14 +662,10 @@ impl Headless {
                         }
                         *ended = ended.with_signal(OutcomeSignal::JudgedFail);
                         *unchecked = false;
-                        relog(&follow.1, ended);
-                        live::record(&session.kernel, session.agent_id(), ended).await;
                         found.unchecked = Some(reviewed.findings);
                     } else if let Some(verdict) = reviewed.verdict().filter(|_| *unchecked) {
                         *ended = ended.with_signal(verdict);
                         *unchecked = false;
-                        relog(&follow.1, ended);
-                        live::record(&session.kernel, session.agent_id(), ended).await;
                     }
                 }
                 Step::HarnessCheck => {
@@ -688,8 +683,6 @@ impl Headless {
                     if let Some(signal) = signal {
                         *ended = ended.with_signal(signal);
                         *unchecked = false;
-                        relog(&follow.1, ended);
-                        live::record(&session.kernel, session.agent_id(), ended).await;
                         found.harness =
                             (signal == OutcomeSignal::ChecksFailed).then(|| check_review(&check));
                     }
@@ -723,8 +716,6 @@ impl Headless {
                     if failed || *unchecked {
                         *ended = ended.with_signal(verdict);
                         *unchecked = false;
-                        relog(&follow.1, ended);
-                        live::record(&session.kernel, session.agent_id(), ended).await;
                     }
                     if failed {
                         found.unchecked = Some(judged.verdict.reasons.clone());
@@ -732,10 +723,6 @@ impl Headless {
                     self.judged.push(judged);
                 }
             }
-        }
-        // The files the attempt changed by any means belong in its line.
-        if found.carry_on.is_none() && follow.1.changed_paths(result).is_some() {
-            relog(&follow.1, ended);
         }
         found
     }
@@ -1067,16 +1054,6 @@ impl Headless {
                 outcome.cost_usd += before.cost_usd;
                 outcome.subtask_cost_usd += before.subtask_cost_usd;
                 outcome.latency_ms = outcome.latency_ms.saturating_add(before.latency_ms);
-            }
-            let left = result
-                .as_ref()
-                .and_then(|result| result.as_ref().ok())
-                .map(|result| live::evidence(result, turn_start));
-            self.hub
-                .gate
-                .log_attempt(session.agent_id(), &outcome, terms, left);
-            if !unchecked {
-                live::record(&session.kernel, session.agent_id(), &outcome).await;
             }
             Some(outcome)
         } else {

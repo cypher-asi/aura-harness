@@ -1495,19 +1495,28 @@ async fn a_change_made_without_a_check_is_checked_before_the_turn_ends() {
         ],
         "the unchecked turn's outcome waits for the check it is asked for"
     );
-    let unchecked = &attempts[0];
+    let sonnet: Vec<_> = attempts.iter().filter(|a| a.model == GATE_SONNET).collect();
     assert_eq!(
-        (unchecked.model.as_str(), unchecked.signal),
-        (GATE_SONNET, OutcomeSignal::Unavailable)
+        sonnet.len(),
+        1,
+        "the turn and the check it was asked for are logged once: {attempts:?}"
     );
     assert_eq!(
-        outcomes[0].prompt_tx.to_hex(),
-        unchecked.prompt_tx,
-        "the check speaks for the turn that made the change"
+        (sonnet[0].signal, sonnet[0].prompt_tx.as_str()),
+        (
+            OutcomeSignal::ChecksFailed,
+            outcomes[0].prompt_tx.to_hex().as_str()
+        ),
+        "the attempt's line says what its record says"
     );
+    let price =
+        aura_model::model_catalog::estimate_cost_usd(GATE_SONNET, &aura_model::Usage::new(100, 50))
+            .unwrap();
     assert!(
-        outcomes[0].cost_usd > unchecked.cost_usd,
-        "and its cost includes the turn's"
+        (outcomes[0].cost_usd - 4.0 * price).abs() < 1e-9,
+        "the check speaks for the turn that made the change, whose two calls it costs \
+         along with its own two: {}",
+        outcomes[0].cost_usd
     );
     let ran: Vec<(&str, Option<Difficulty>)> = attempts
         .iter()
@@ -1637,4 +1646,44 @@ async fn unchecked_work_that_looks_unfinished_goes_to_the_judge_then_moves_up() 
         ],
         "the judge's verdict is the unchecked work's outcome"
     );
+}
+
+#[tokio::test]
+async fn a_turn_whose_follow_up_changes_its_signal_is_recorded_once() {
+    use aura_core_types::OutcomeSignal;
+    let provider = MockProvider::new()
+        .with_response(MockResponse::text("debugging easy"))
+        .with_response(no_criteria())
+        .with_response(MockResponse::tool_use(
+            "c0",
+            "run_command",
+            json!({"program": "cargo", "args": ["check", "--help"]}),
+        ))
+        .with_response(MockResponse::text(
+            "I made the change, but it isn't verified.",
+        ))
+        .with_response(MockResponse::text(
+            "The change is untested and wrong.\nVERDICT: MODEL",
+        ))
+        .with_response(MockResponse::text("Fixed it."));
+    let (report, _, _, outcomes, attempts) = run_routed(provider).await;
+
+    assert_eq!(report.model, GATE_OPUS, "{:?}", report.error);
+    let signals: Vec<(&str, OutcomeSignal)> = outcomes
+        .iter()
+        .map(|o| (o.model.as_str(), o.signal))
+        .collect();
+    assert_eq!(
+        signals,
+        [
+            (GATE_SONNET, OutcomeSignal::JudgedFail),
+            (GATE_OPUS, OutcomeSignal::Unavailable),
+        ],
+        "the check that passed is not recorded once the judge finds the work unfinished"
+    );
+    let logged: Vec<(&str, OutcomeSignal)> = attempts
+        .iter()
+        .map(|a| (a.model.as_str(), a.signal))
+        .collect();
+    assert_eq!(logged, signals, "each attempt is logged once, as recorded");
 }
