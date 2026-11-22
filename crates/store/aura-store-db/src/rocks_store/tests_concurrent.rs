@@ -129,6 +129,40 @@ async fn test_concurrent_writes_different_agents() {
     }
 }
 
+#[test]
+fn appends_racing_for_one_agents_next_seq_commit_once() {
+    const RACERS: u8 = 8;
+    let (store, _dir) = create_test_store();
+    let store = Arc::new(store);
+    let agent_id = AgentId::generate();
+    let start = Arc::new(std::sync::Barrier::new(usize::from(RACERS)));
+    let racers: Vec<_> = (0..RACERS)
+        .map(|n| {
+            let (store, start) = (Arc::clone(&store), Arc::clone(&start));
+            std::thread::spawn(move || {
+                let tx = Transaction::new(
+                    Hash::from_content(&[n]),
+                    agent_id,
+                    1000,
+                    TransactionType::UserPrompt,
+                    Bytes::from_static(b"racing"),
+                );
+                let entry = RecordEntry::builder(1, tx).build();
+                start.wait();
+                store.append_entry_direct(agent_id, 1, &entry)
+            })
+        })
+        .collect();
+    let results: Vec<_> = racers.into_iter().map(|r| r.join().unwrap()).collect();
+
+    assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+    assert!(results
+        .iter()
+        .filter_map(|r| r.as_ref().err())
+        .all(|e| matches!(e, StoreError::SequenceMismatch { .. })));
+    assert_eq!(store.get_head_seq(agent_id).unwrap(), 1);
+}
+
 #[tokio::test]
 async fn test_concurrent_processing_claim_only_one_wins() {
     let dir = TempDir::new().unwrap();
