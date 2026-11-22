@@ -381,19 +381,15 @@ struct Fixture {
 
 /// Gate settings for tests: the defaults, without exploring.
 fn steady_gate() -> GateLive {
-    GateLive::new(aura_config::GateConfig {
-        explore_rate: 0.0,
-        ..aura_config::GateConfig::defaults()
-    })
+    GateLive::new(aura_config::GateConfig::defaults().without_exploring())
 }
 
 /// [`steady_gate`] whose lead keeps its own file tools and commands, as
 /// with `AURA_GATE_DELEGATE=off`.
 fn steady_gate_without_delegation() -> GateLive {
     GateLive::new(aura_config::GateConfig {
-        explore_rate: 0.0,
         delegate: false,
-        ..aura_config::GateConfig::defaults()
+        ..aura_config::GateConfig::defaults().without_exploring()
     })
 }
 

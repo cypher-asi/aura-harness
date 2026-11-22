@@ -21,7 +21,6 @@ use super::LoopState;
 use crate::agent_registry::RegisteredAgent;
 use crate::bench_pack::{self, ExampleTask};
 use aura_agent_kernel::Kernel;
-use aura_config::GateConfig;
 use aura_context_prompts::model_messages::build_plan::build_plan_prompt;
 use aura_core_types::{
     AgentId, ArmSpec, BenchSource, CompareArm, ComparePayload, CompareStatus, RouteLevel,
@@ -363,10 +362,7 @@ pub(super) async fn prepare(
     } else {
         None
     };
-    let no_exploring = GateConfig {
-        explore_rate: 0.0,
-        ..*state.hub.gate.settings()
-    };
+    let no_exploring = state.hub.gate.settings().without_exploring();
     let expected = match category {
         Some(category) => aura_gate::route::pick(
             &state.hub.gate.stats(),

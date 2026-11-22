@@ -205,10 +205,7 @@ impl GateView<'_> {
         if logged.is_empty() {
             return;
         }
-        let no_exploring = GateConfig {
-            explore_rate: 0.0,
-            ..*self.settings
-        };
+        let no_exploring = self.settings.without_exploring();
         let gate_now = replay::estimate(&logged, |prompt| {
             aura_gate::route::pick(
                 self.stats,
@@ -355,10 +352,7 @@ impl GateView<'_> {
     /// easy work when that is another model, then every other model with
     /// outcomes there, cheapest first.
     fn lines(&self, level: RouteLevel, category: PromptCategory) -> Vec<Line> {
-        let no_exploring = GateConfig {
-            explore_rate: 0.0,
-            ..*self.settings
-        };
+        let no_exploring = self.settings.without_exploring();
         let pick = |work: &aura_gate::route::Work<'_>| {
             aura_gate::route::pick(
                 self.stats,

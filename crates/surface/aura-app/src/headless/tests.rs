@@ -151,10 +151,7 @@ fn harness(
             gate,
         },
         // Runs never explore, so they go the same way every time.
-        gate: aura_config::GateConfig {
-            explore_rate: 0.0,
-            ..aura_config::GateConfig::defaults()
-        },
+        gate: aura_config::GateConfig::defaults().without_exploring(),
         policy: filter.apply(mode_policy(permissions, &tool_names), &tool_names),
         record_observer: None,
         record_panel: crate::event_loop::RecordPanelAgent::default(),

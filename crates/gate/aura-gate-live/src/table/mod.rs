@@ -152,14 +152,7 @@ impl GateLive {
     /// [`Self::decide`] with no exploring: where work goes again when the
     /// model first chosen can't take it.
     pub fn redecide(&self, work: &Work<'_>, candidates: &[Candidate]) -> Option<Decision> {
-        self.decide_with(work, candidates, &self.no_exploring())
-    }
-
-    fn no_exploring(&self) -> GateConfig {
-        GateConfig {
-            explore_rate: 0.0,
-            ..self.settings
-        }
+        self.decide_with(work, candidates, &self.settings.without_exploring())
     }
 
     fn decide_with(
@@ -210,7 +203,7 @@ impl GateLive {
         let settings = if explore {
             self.settings
         } else {
-            self.no_exploring()
+            self.settings.without_exploring()
         };
         let stats = lock(&self.stats);
         let mut rng = lock(&self.rng);
