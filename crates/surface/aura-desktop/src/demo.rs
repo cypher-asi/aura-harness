@@ -5,8 +5,8 @@
 use crate::shell::Handles;
 use aura_ui::events::{
     AgentDefinitionSummary, AgentSummary, CallUsage, MessageData, MessageRole, ModelOptionView,
-    ProcessKind, ProcessStatus, ProcessSummary, RecordStatus, RecordSummary, ToolData, UiCommand,
-    UiEvent,
+    ProcessKind, ProcessStatus, ProcessSummary, RecordStatus, RecordSummary, SourceUsage, ToolData,
+    UiCommand, UiEvent,
 };
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -153,20 +153,28 @@ impl Demo {
             .await;
     }
 
-    /// Make `id` the active agent; `reload` sends its (empty) chat too.
+    /// Make `id` the active agent; `reload` sends its (empty) chat too,
+    /// or, for the agent whose chat the demo keeps live, word that it is
+    /// current, so a window that switched to it ahead stops waiting.
     async fn show_agent(&mut self, id: String, reload: bool) {
         if !self.agents.iter().any(|(known, ..)| *known == id) {
             self.send(UiCommand::ShowError("Unknown agent".into()))
                 .await;
+            self.send(UiCommand::SwitchFailed(id)).await;
             return;
         }
         self.active.clone_from(&id);
         self.send(UiCommand::SetActiveAgent(id.clone())).await;
         self.send(UiCommand::ClearRecords).await;
-        if reload && id != AGENT_ID {
+        if reload {
+            let command = if id == AGENT_ID {
+                UiCommand::ChatReady
+            } else {
+                UiCommand::LoadConversation(Vec::new())
+            };
             self.send(UiCommand::ForAgent {
                 agent_id: id.clone(),
-                command: Box::new(UiCommand::LoadConversation(Vec::new())),
+                command: Box::new(command),
             })
             .await;
         }
@@ -222,10 +230,12 @@ impl Demo {
             AgentDefinitionSummary {
                 name: "reviewer".into(),
                 description: "Reviews a diff for bugs and missing tests.".into(),
+                abbreviation: Some("RE".into()),
             },
             AgentDefinitionSummary {
                 name: "researcher".into(),
                 description: "Reads docs and code to answer a question.".into(),
+                abbreviation: Some("RES".into()),
             },
         ]))
         .await;
@@ -381,6 +391,11 @@ impl Demo {
                 tokens: 4_812,
                 cost_usd: None,
             }),
+            sources: vec![SourceUsage {
+                label: "local".into(),
+                tokens: 4_812,
+                cost_usd: None,
+            }],
         })
         .await;
         self.finish(process, ProcessStatus::Exited).await;

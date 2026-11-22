@@ -4,7 +4,7 @@ use super::markdown::{render_markdown_flow, wrap_spans};
 use super::text::{display_width, wrap_words, Measure};
 use crate::app::format::{format_cost, format_tokens};
 use crate::components::{CodeBlock, MessageRole};
-use crate::events::CallUsage;
+use crate::events::{CallUsage, SourceUsage};
 use crate::Theme;
 use ratatui::{
     style::Style,
@@ -82,6 +82,30 @@ pub(super) fn reply_meta(model: Option<&str>, usage: Option<CallUsage>) -> Vec<S
         parts.extend(usage.cost_usd.map(format_cost));
     }
     parts
+}
+
+/// Parts of a reply's second footer line, who paid for the turn's
+/// tokens: `via Claude plan 25.1k tok`, then `OpenRouter 2.8k tok $0.004`
+/// for each other sign-in. Each sign-in's cost is shown when its calls
+/// were priced. Empty when no call reported its usage.
+pub(super) fn source_meta(sources: &[SourceUsage]) -> Vec<String> {
+    sources
+        .iter()
+        .enumerate()
+        .map(|(i, source)| {
+            let mut part = format!(
+                "{}{} {} tok",
+                if i == 0 { "via " } else { "" },
+                source.label,
+                format_tokens(source.tokens)
+            );
+            if let Some(cost) = source.cost_usd {
+                part.push(' ');
+                part.push_str(&format_cost(cost));
+            }
+            part
+        })
+        .collect()
 }
 
 /// The prompt before a message's first row, its color, and the color of

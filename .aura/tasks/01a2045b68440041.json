@@ -1,0 +1,22 @@
+{
+  "id": "01a2045b68440041",
+  "title": "If an agent is in plan mode, put a (P) that is accent color at the end of the agent name, until it's out of plan mode. …",
+  "state": "completed",
+  "agent_id": "2150e8692bf934b4454c6ce36e98a46482410210c501934e08ffd5b057a4ec63",
+  "agent_name": "Agent 905",
+  "items": [
+    {
+      "content": "Add plan_mode to AgentSummary, fill from hub, update live on SetMode, render accent (P) in Agents panel",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Review the change",
+      "state": "completed",
+      "assignee": "tests"
+    }
+  ],
+  "summary": "Mode changes need an open session, which the fixture's second agent doesn't have (existing behavior, unrelated to this feature). I'll adjust the test to toggle the first agent instead.",
+  "updated_ms": 1795370727088,
+  "created_ms": 1795369429060
+}

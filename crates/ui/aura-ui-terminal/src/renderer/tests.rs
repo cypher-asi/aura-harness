@@ -231,6 +231,7 @@ fn test_default_layout_shows_agents_column() {
         AgentDefinitionSummary {
             name: "reviewer".to_string(),
             description: "Reviews diffs".to_string(),
+            ..Default::default()
         },
     ]));
 
@@ -394,6 +395,144 @@ fn test_default_layout_shows_agents_column() {
         &rows[new_agent..=new_agent + 1]
     );
     assert!(new_agent > rows.iter().position(|r| r.contains("@  reviewer")).unwrap() + 1);
+}
+
+/// An app showing the roster of `definitions`, each a name and its
+/// abbreviation.
+fn roster_app(definitions: &[(&str, Option<&str>)]) -> crate::App {
+    use crate::app::{AgentsTab, PaneTab};
+    use crate::events::{AgentDefinitionSummary, UiCommand};
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetAgentDefinitions(
+        definitions
+            .iter()
+            .map(|&(name, abbreviation)| AgentDefinitionSummary {
+                name: name.to_string(),
+                description: format!("What {name} does"),
+                abbreviation: abbreviation.map(str::to_string),
+            })
+            .collect(),
+    ));
+    app.select_pane_tab(PaneTab::Agents(AgentsTab::Roster));
+    app
+}
+
+/// The text of each of `lines`.
+fn line_texts(lines: &[ratatui::text::Line<'_>]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn roster_rows_end_in_their_abbreviation_lined_up_at_the_far_right() {
+    let mut app = roster_app(&[
+        ("rust-engineer", Some("RE")),
+        ("reviewer", Some("REV")),
+        ("explorer", Some("EX")),
+    ]);
+    let rows = render_rows(&mut app, 120);
+    // The panel's text from just after the name to its right border.
+    let end_of = |name: &str| -> String {
+        let row = &rows[line_with(&rows, &format!("@  {name}"))];
+        let after = &row[row.find(name).unwrap() + name.len()..];
+        after[..after.find('│').expect("border")].to_string()
+    };
+    for (name, abbreviation) in [
+        ("rust-engineer", "RE "),
+        ("reviewer", "REV"),
+        ("explorer", "EX "),
+    ] {
+        let end = end_of(name);
+        assert!(
+            end.ends_with(&format!(" {abbreviation} ")),
+            "{name}: {end:?}"
+        );
+        assert!(
+            end.trim_start().starts_with(abbreviation.trim_end()),
+            "{end:?}"
+        );
+    }
+    let column = |name: &str| {
+        let row = &rows[line_with(&rows, &format!("@  {name}"))];
+        char_column(row, name) + name.len() + end_of(name).len() - 4
+    };
+    assert_eq!(column("rust-engineer"), column("reviewer"));
+    assert_eq!(column("reviewer"), column("explorer"));
+
+    // "+ New agent" has none.
+    let new_agent = &rows[line_with(&rows, "+  New agent")];
+    let after = &new_agent[new_agent.find("New agent").unwrap() + "New agent".len()..];
+    let after = &after[..after.find('│').expect("border")];
+    assert!(after.chars().all(|c| c == ' '), "{new_agent:?}");
+
+    // The abbreviation is in the time color on the row's fill, on the
+    // selected first row as on the others.
+    let theme = test_theme();
+    let buffer = render_buffer(&mut app, 120);
+    for (name, abbreviation) in [("rust-engineer", "RE"), ("explorer", "EX")] {
+        let line = row_of(&buffer, name);
+        let (_, cell) = find_cell(&buffer, line, &format!("{abbreviation} ")).unwrap();
+        let (_, at) = find_cell(&buffer, line, "@").unwrap();
+        assert_eq!(cell.bg, at.bg, "{name}");
+        let time = if name == "rust-engineer" {
+            theme.colors.on_selection
+        } else {
+            theme.colors.muted
+        };
+        assert_eq!(cell.fg, Some(time), "{name}");
+    }
+}
+
+#[test]
+fn a_narrow_roster_cuts_the_name_then_drops_the_abbreviation() {
+    use crate::animation::AURA_WIDTH;
+    let app = roster_app(&[("rust-engineer", Some("RE")), ("reviewer", Some("REV"))]);
+    let theme = test_theme();
+    // ` `, the icon column and its pad, then ` REV `.
+    let around = 1 + AURA_WIDTH + 1 + 5;
+    for width in around..=around + 20 {
+        let inner = Rect::new(0, 0, u16::try_from(width).unwrap(), 10);
+        let lines = super::panels::build_definition_lines(&app, inner, &theme);
+        let texts = line_texts(&lines);
+        for (line, text) in lines.iter().zip(&texts) {
+            assert_eq!(line.width(), width, "width {width}: {text:?}");
+        }
+        let [engineer, reviewer, new_agent] = &texts[..] else {
+            panic!("{texts:?}");
+        };
+        if width >= around + 4 {
+            assert!(engineer.ends_with(" RE  "), "{engineer:?}");
+            assert!(reviewer.ends_with(" REV "), "{reviewer:?}");
+            assert!(
+                engineer.contains("rust-engineer") || engineer.contains('…'),
+                "the name is cut first: {engineer:?}"
+            );
+        } else {
+            assert!(!engineer.contains("RE"), "{engineer:?}");
+            assert!(!reviewer.contains("REV"), "{reviewer:?}");
+        }
+        let lead = " ".repeat(AURA_WIDTH);
+        assert!(new_agent.starts_with(&format!(" +{lead}")), "{new_agent:?}");
+        assert!(!new_agent.contains("RE"), "{new_agent:?}");
+    }
+
+    // Roster rows without an abbreviation keep the plain layout.
+    let plain = roster_app(&[("reviewer", None)]);
+    let inner = Rect::new(0, 0, 24, 10);
+    let texts = line_texts(&super::panels::build_definition_lines(
+        &plain, inner, &theme,
+    ));
+    let lead = " ".repeat(AURA_WIDTH);
+    let name_width = 24 - 2 - AURA_WIDTH;
+    assert_eq!(texts[0], format!(" @{lead}{:<name_width$}", "reviewer"));
+    assert_eq!(texts[1], format!(" +{lead}{:<name_width$}", "New agent"));
 }
 
 #[test]
@@ -1407,12 +1546,23 @@ fn test_plans_tab_lists_plans_with_their_todos() {
         rows[auth]
     );
     assert_eq!(row_with("Add session table"), auth + 1);
-    assert!(rows[auth + 1].contains('✓'));
+    assert!(rows[auth + 1].contains('☒'));
     assert!(
-        rows[auth + 2].contains("▸  Write the login handler"),
+        rows[auth + 2].contains("▣  Write the login handler"),
         "{}",
         rows[auth + 2]
     );
+    // A todo's box sits under its plan's fold arrow.
+    let last_column = |row: usize, glyph: char| {
+        rows[row]
+            .chars()
+            .enumerate()
+            .filter_map(|(i, c)| (c == glyph).then_some(i))
+            .last()
+            .unwrap_or_else(|| panic!("no {glyph} in {:?}", rows[row]))
+    };
+    assert_eq!(last_column(auth + 1, '☒'), last_column(auth, '▾'));
+    assert_eq!(last_column(auth + 2, '▣'), last_column(auth, '▾'));
     let parser = row_with("Parser cleanup");
     assert_eq!(parser, auth + 3);
     assert!(rows[parser].contains("1/1"));
@@ -1421,8 +1571,9 @@ fn test_plans_tab_lists_plans_with_their_todos() {
         "done plans start folded"
     );
 
-    // One tone rule: open items white, closed ones gray; the ✓ is green.
-    // Unfocused, so no row wears the selection colors.
+    // Plans: open ones white, settled ones gray. Todos look as in the
+    // checklist that follows the conversation: done ones faint, the one in
+    // progress bold white. Unfocused, so no row wears the selection colors.
     while app.focus() == PanelFocus::Sandbox {
         let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
@@ -1434,12 +1585,24 @@ fn test_plans_tab_lists_plans_with_their_todos() {
     };
     let muted = Some(theme.colors.muted);
     let foreground = Some(theme.colors.foreground);
-    assert_eq!(fg_of("Add session table"), muted, "completed todo");
+    let faint = Some(theme.colors.faint);
+    assert_eq!(fg_of("Add session table"), faint, "completed todo");
+    assert_eq!(
+        fg_of("Write the login handler"),
+        foreground,
+        "todo in progress"
+    );
+    let doing_row = row_of(&buffer, "Write the login handler");
+    let (_, doing) = find_cell(&buffer, doing_row, "Write the login handler").unwrap();
+    assert!(
+        doing.add_modifier.contains(Modifier::BOLD),
+        "todo in progress"
+    );
     assert_eq!(fg_of("Parser cleanup"), muted, "plan with nothing left");
     assert_eq!(fg_of("Auth rework"), foreground, "plan with todos left");
     let check_row = row_of(&buffer, "Add session table");
-    let (_, check) = find_cell(&buffer, check_row, "✓").unwrap();
-    assert_eq!(check.fg, Some(theme.colors.success));
+    let (_, check) = find_cell(&buffer, check_row, "☒").unwrap();
+    assert_eq!(check.fg, faint);
 }
 
 #[test]
@@ -1553,6 +1716,47 @@ fn test_thinking_level_sits_after_the_model() {
         thinking: Some("high".to_string()),
     });
     assert!(footer(&mut app).contains("qwen3:4b · high thinking"));
+}
+
+#[test]
+fn test_thinking_level_outlasts_the_stats_after_a_turn() {
+    use crate::events::{CallStats, UiCommand};
+
+    let mut app = app_with_model(None);
+    app.process_command(UiCommand::SetApproval(crate::ApprovalLevel::Ask));
+    app.process_command(UiCommand::CallStats(CallStats {
+        model: "local/qwen3:4b".to_string(),
+        input_tokens: 4_000,
+        cache_read_tokens: 120_000,
+        cost_usd: Some(3.42),
+        context_limit: Some(200_000),
+        ..CallStats::default()
+    }));
+    let footer = |app: &mut crate::App, width| {
+        render_rows(app, width)
+            .into_iter()
+            .find(|row| row.contains("qwen3:4b"))
+            .expect("the footer shows the model")
+    };
+    let narrow = footer(&mut app, 120);
+    assert!(
+        narrow.contains("ASK · qwen3:4b · auto thinking"),
+        "{narrow:?}"
+    );
+    assert!(
+        !narrow.contains("context"),
+        "the stats give way: {narrow:?}"
+    );
+
+    let wider = footer(&mut app, 160);
+    assert!(
+        wider.contains("ASK · qwen3:4b · auto thinking · 62% context used"),
+        "{wider:?}"
+    );
+    assert!(
+        !wider.contains("1 call"),
+        "a later stat gives way: {wider:?}"
+    );
 }
 
 #[test]
@@ -1751,10 +1955,10 @@ fn test_input_shows_image_chips_and_pasted_newlines() {
     app.attach_image(b"\x89PNG\r\n\x1a\nimage").unwrap();
     let rows = render_rows(&mut app, 120);
     let input_row = &rows[rows.len() - INPUT_FROM_BOTTOM];
-    assert!(
-        input_row.contains("first↵second [image 1]"),
-        "{input_row:?}"
-    );
+    let first_row = &rows[rows.len() - INPUT_FROM_BOTTOM - 1];
+    assert!(input_row.contains("│   second [image 1]"), "{input_row:?}");
+    assert!(first_row.contains("│ → first "), "{first_row:?}");
+    assert!(!first_row.contains('↵') && !input_row.contains('↵'));
 
     let spans = super::input::prose_spans("see @src/a.rs and [image 2] me@x", &theme);
     let picked: Vec<&str> = spans
@@ -1805,10 +2009,12 @@ fn test_agent_space_shows_permanent_agents_to_add() {
         AgentDefinitionSummary {
             name: "explorer".to_string(),
             description: "Reads code\nand more".to_string(),
+            ..Default::default()
         },
         AgentDefinitionSummary {
             name: "reviewer".to_string(),
             description: "Reviews diffs".to_string(),
+            ..Default::default()
         },
     ]));
     type_text(&mut app, "/agent ");
@@ -1961,6 +2167,192 @@ fn test_prompt_pushes_typing_right_without_gutter() {
     assert!(input_row.starts_with(" │ → hello"), "{input_row:?}");
 }
 
+/// `chars[from..to]` as a string.
+fn columns(chars: &[char], from: usize, to: usize) -> String {
+    chars[from..to].iter().collect()
+}
+
+#[test]
+fn test_busy_input_shows_a_stop_button_at_the_right_edge() {
+    let mut app = app_with_model(None);
+    submit_message(&mut app, "hi");
+    assert!(app.is_busy());
+    let rows = render_rows(&mut app, 120);
+    let y = rows.len() - INPUT_FROM_BOTTOM;
+    let (_, chat_left, chat_right) = chat_panel(&rows);
+    let chars: Vec<char> = rows[y].chars().collect();
+    let in_box = columns(&chars, chat_left, chat_right + 1);
+    assert!(in_box.ends_with(" ■ Stop │"), "{in_box:?}");
+    assert!(in_box.starts_with("│ → "), "{in_box:?}");
+
+    let stop = app.input_stop_area().expect("the button's cells");
+    assert_eq!((usize::from(stop.y), stop.width, stop.height), (y, 6, 1));
+    let (x, end) = (usize::from(stop.x), usize::from(stop.right()));
+    assert_eq!(columns(&chars, x, end), "■ Stop");
+    assert_eq!(end + 1, chat_right, "a column of padding before the border");
+}
+
+#[test]
+fn test_idle_input_has_no_stop_button() {
+    let mut app = app_with_model(None);
+    let screen = render_rows(&mut app, 120).join("\n");
+    assert!(!screen.contains("Stop"), "{screen}");
+    assert_eq!(app.input_stop_area(), None);
+
+    // It comes with a turn and goes with it.
+    submit_message(&mut app, "hi");
+    render_rows(&mut app, 120);
+    assert!(app.input_stop_area().is_some());
+    app.cancel();
+    let screen = render_rows(&mut app, 120).join("\n");
+    assert!(!screen.contains("■ Stop"), "{screen}");
+    assert_eq!(app.input_stop_area(), None);
+}
+
+#[test]
+fn test_typing_beside_the_stop_button_wraps_before_it() {
+    let mut app = app_with_model(None);
+    submit_message(&mut app, "hi");
+    let typed = "abcdefghij".repeat(10);
+    type_text(&mut app, &typed);
+    let rows = render_rows(&mut app, 120);
+    let last = rows.len() - INPUT_FROM_BOTTOM;
+    let (_, chat_left, chat_right) = chat_panel(&rows);
+    let typing = chat_left + 4;
+    let stop = app.input_stop_area().expect("the button's cells");
+    let (x, y) = (usize::from(stop.x), usize::from(stop.y));
+    assert!(y < last, "the text wraps onto more rows: {rows:#?}");
+
+    let first: Vec<char> = rows[y].chars().collect();
+    assert_eq!(columns(&first, x, x + 6), "■ Stop", "{:?}", rows[y]);
+    assert_eq!(first[x - 1], ' ', "a gap before the button");
+    assert!(first[x - 2].is_ascii_lowercase(), "{:?}", rows[y]);
+
+    let mut shown = String::new();
+    for row in &rows[y..=last] {
+        let chars: Vec<char> = row.chars().collect();
+        shown += columns(&chars, typing, x - 1).trim_end();
+        if row != &rows[y] {
+            let beyond = columns(&chars, x - 1, chat_right);
+            assert!(beyond.trim().is_empty(), "under the button: {row:?}");
+        }
+    }
+    assert_eq!(shown, typed, "every letter is drawn left of the button");
+}
+
+#[test]
+fn test_typed_newlines_grow_the_input_box_a_row_each() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let theme = test_theme();
+    let area = Rect::new(0, 0, 60, 20);
+    let shift_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
+    let mut app = app_with_model(None);
+    type_text(&mut app, "a");
+    assert_eq!(super::input::input_rows(area, &app, &theme, 20), 1);
+    for c in ["b", "c"] {
+        app.handle_key(shift_enter);
+        type_text(&mut app, c);
+    }
+    assert_eq!(app.input(), "a\nb\nc");
+    assert_eq!(super::input::input_rows(area, &app, &theme, 20), 3);
+
+    let (rows, (x, y)) = render_with_cursor(&mut app, 120);
+    let n = rows.len();
+    let (_, chat_left, chat_right) = chat_panel(&rows);
+    let typing = chat_left + 4;
+    let in_box = |row: &String| -> String {
+        let chars: Vec<char> = row.chars().collect();
+        columns(&chars, chat_left, chat_right + 1)
+    };
+    assert!(in_box(&rows[n - 5]).starts_with("│ → a "), "{rows:#?}");
+    assert!(in_box(&rows[n - 4]).starts_with("│   b "), "{rows:#?}");
+    assert!(in_box(&rows[n - 3]).starts_with("│   c "), "{rows:#?}");
+    let divider: Vec<char> = rows[n - 6].chars().collect();
+    assert_eq!(
+        (divider[chat_left], divider[chat_right]),
+        ('├', '┤'),
+        "the box starts three rows up: {:?}",
+        rows[n - 6]
+    );
+    assert_eq!((usize::from(x), usize::from(y)), (typing + 1, n - 3));
+
+    // A trailing break opens an empty row with the cursor at its start.
+    app.handle_key(shift_enter);
+    assert_eq!(super::input::input_rows(area, &app, &theme, 20), 4);
+    let (rows, (x, y)) = render_with_cursor(&mut app, 120);
+    let n = rows.len();
+    assert!(in_box(&rows[n - 4]).starts_with("│   c "), "{rows:#?}");
+    assert!(in_box(&rows[n - 3]).trim_matches('│').trim().is_empty());
+    assert_eq!((usize::from(x), usize::from(y)), (typing, n - 3));
+    assert!(!rows.join("\n").contains('↵'));
+}
+
+/// Shift+Enter on an empty prompt opens a second row, wherever the focus
+/// is and whether or not a turn is running.
+#[test]
+fn test_shift_enter_on_an_empty_prompt_grows_the_box() {
+    use crate::app::PanelFocus;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let theme = test_theme();
+    let area = Rect::new(0, 0, 60, 20);
+    let shift_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
+    for focus in [
+        PanelFocus::Chat,
+        PanelFocus::Swarm,
+        PanelFocus::Records,
+        PanelFocus::Sandbox,
+    ] {
+        for busy in [false, true] {
+            let mut app = app_with_model(None);
+            if busy {
+                submit_message(&mut app, "hi");
+                assert!(app.is_busy());
+            }
+            render_with_cursor(&mut app, 120);
+            for _ in 0..4 {
+                if app.focus() == focus {
+                    break;
+                }
+                app.handle_key(KeyEvent::from(KeyCode::Tab));
+            }
+            assert_eq!(app.focus(), focus);
+            assert_eq!(super::input::input_rows(area, &app, &theme, 20), 1);
+            let (before, _) = render_with_cursor(&mut app, 120);
+
+            app.handle_key(shift_enter);
+            assert_eq!(app.input(), "\n", "{focus:?} busy={busy}");
+            assert_eq!(
+                super::input::input_rows(area, &app, &theme, 20),
+                2,
+                "{focus:?} busy={busy}"
+            );
+            app.handle_key(shift_enter);
+            assert_eq!(super::input::input_rows(area, &app, &theme, 20), 3);
+
+            let (rows, (_, y)) = render_with_cursor(&mut app, 120);
+            let divider_row = |rows: &[String]| {
+                let (_, chat_left, _) = chat_panel(rows);
+                rows.iter()
+                    .rposition(|row| row.chars().nth(chat_left) == Some('├'))
+                    .unwrap()
+            };
+            assert_eq!(
+                divider_row(&before) - divider_row(&rows),
+                2,
+                "the box grows two rows: {rows:#?}"
+            );
+            // The cursor hides while the agent thinks.
+            if focus == PanelFocus::Chat && !busy {
+                assert_eq!(usize::from(y), divider_row(&rows) + 3, "busy={busy}");
+            }
+            assert!(!rows.join("\n").contains("Add a follow-up"));
+            assert!(!rows.join("\n").contains("Ask anything"));
+        }
+    }
+}
+
 /// Draw `app` and return the screen rows and where the cursor is.
 fn render_with_cursor(app: &mut crate::App, width: u16) -> (Vec<String>, (u16, u16)) {
     let mut terminal =
@@ -2079,7 +2471,7 @@ fn test_chat_panel_tabs_switch_between_chat_and_terminal() {
 }
 
 #[test]
-fn test_hovered_agent_row_shows_open_and_archive_buttons_left_of_its_time() {
+fn test_hovered_agent_row_shows_an_archive_button_left_of_its_time() {
     use crate::app::HoverTarget;
     use crate::events::{AgentSummary, UiCommand};
     use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
@@ -2118,35 +2510,34 @@ fn test_hovered_agent_row_shows_open_and_archive_buttons_left_of_its_time() {
         .position(|r| r.contains("Terminal Agent"))
         .expect("agent row");
     assert!(!before[line].contains('✕'), "{}", before[line]);
-    assert!(!before[line].contains('↗'), "{}", before[line]);
     let time = char_col(&before[line], " 3m ") + 1;
     let name = char_col(&before[line], "Terminal Agent");
 
-    // Hovering the row anywhere shows ` ↗ ✕` just left of ` 3m `.
+    // Hovering the row anywhere shows ` ✕` just left of ` 3m `, and no
+    // other button.
     app.handle_mouse(moved(name, line));
     let row_index = match app.hover() {
         Some(HoverTarget::ProjectRow(index)) => index,
         other => panic!("{other:?}"),
     };
     let hovered = render_rows(&mut app, 120);
-    assert!(hovered[line].contains(" ↗ ✕ 3m "), "{}", hovered[line]);
+    assert!(hovered[line].contains(" ✕ 3m "), "{}", hovered[line]);
+    assert!(!hovered[line].contains('↗'), "{}", hovered[line]);
     assert_eq!(glyph_at(&hovered[line], time - 2), Some('✕'));
-    assert_eq!(glyph_at(&hovered[line], time - 4), Some('↗'));
+    assert_eq!(glyph_at(&hovered[line], time - 4), Some(' '));
     assert_eq!(char_col(&hovered[line], " 3m ") + 1, time, "the time stays");
 
-    // The glyphs are where the hit test puts the buttons.
+    // The glyph is where the hit test puts the button; left of it is the
+    // row.
     app.handle_mouse(moved(time - 2, line));
     assert_eq!(app.hover(), Some(HoverTarget::ArchiveAgent(row_index)));
     let on_button = render_rows(&mut app, 120);
     assert_eq!(glyph_at(&on_button[line], time - 2), Some('✕'));
-    assert_eq!(glyph_at(&on_button[line], time - 4), Some('↗'));
     app.handle_mouse(moved(time - 4, line));
-    assert_eq!(app.hover(), Some(HoverTarget::OpenAgent(row_index)));
-    let on_open = render_rows(&mut app, 120);
-    assert!(on_open[line].contains(" ↗ ✕ 3m "), "{}", on_open[line]);
+    assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(row_index)));
 
     // An agent with no time has its archive button one column in from
-    // the edge, and its open button two left of that.
+    // the edge.
     let other = before
         .iter()
         .position(|r| r.contains("Researcher"))
@@ -2159,26 +2550,20 @@ fn test_hovered_agent_row_shows_open_and_archive_buttons_left_of_its_time() {
         .find(|&(_, c)| c == '│')
         .map(|(i, _)| i)
         .expect("panel border");
+    app.handle_mouse(moved(edge - 4, other));
+    assert!(matches!(app.hover(), Some(HoverTarget::ProjectRow(_))));
+    // Off the button it stays muted like the time; on it, it lights up.
+    let colors = test_theme().colors;
+    let row = u16::try_from(other).unwrap();
+    let buffer = render_buffer(&mut app, 120);
+    let (_, archive) = find_cell(&buffer, row, "✕").expect("archive button");
+    assert_eq!(archive.fg, Some(colors.muted));
     app.handle_mouse(moved(edge - 2, other));
     assert!(matches!(app.hover(), Some(HoverTarget::ArchiveAgent(_))));
     let no_time = render_rows(&mut app, 120);
     assert_eq!(glyph_at(&no_time[other], edge - 2), Some('✕'));
-    assert_eq!(glyph_at(&no_time[other], edge - 4), Some('↗'));
-    app.handle_mouse(moved(edge - 4, other));
-    assert!(matches!(app.hover(), Some(HoverTarget::OpenAgent(_))));
-    // The hovered button lights up; the other stays muted like the time.
-    let colors = test_theme().colors;
-    let row = u16::try_from(other).unwrap();
     let buffer = render_buffer(&mut app, 120);
-    let (_, open) = find_cell(&buffer, row, "↗").expect("open button");
     let (_, archive) = find_cell(&buffer, row, "✕").expect("archive button");
-    assert_eq!(open.fg, Some(colors.foreground));
-    assert_eq!(archive.fg, Some(colors.muted));
-    app.handle_mouse(moved(edge - 2, other));
-    let buffer = render_buffer(&mut app, 120);
-    let (_, open) = find_cell(&buffer, row, "↗").expect("open button");
-    let (_, archive) = find_cell(&buffer, row, "✕").expect("archive button");
-    assert_eq!(open.fg, Some(colors.muted));
     assert_eq!(archive.fg, Some(colors.foreground));
 
     // Off the rows, they look as they did.
@@ -2717,7 +3102,7 @@ fn test_status_line_on_one_model_measures_context_against_its_window() {
     let rows = render_rows(&mut app, 160);
     let status = &rows[rows.len() - 1];
     assert!(
-        status.contains("Claude Haiku 4.5 · 20% context used"),
+        status.contains("Claude Haiku 4.5 · auto thinking · 20% context used"),
         "{status:?}"
     );
     assert!(!status.contains("model"), "{status:?}");
@@ -2812,6 +3197,7 @@ fn reply_footer_row(model: &str, usage: Option<CallUsage>, width: u16) -> String
     app.process_command(UiCommand::SetReplyModel {
         model: model.to_string(),
         usage,
+        sources: Vec::new(),
     });
     app.process_command(UiCommand::Complete);
 
@@ -4195,10 +4581,21 @@ fn test_todo_checklist_and_list() {
             .unwrap_or_else(|| panic!("{needle:?} not in:\n{}", rows.join("\n")))
     };
     let header = row("⬢ Working on 3 to-dos");
-    assert_eq!(row("  ☒ Read the parser"), header + 1);
-    assert_eq!(row("  ▣ Write the lexer"), header + 2);
-    assert_eq!(row("  ☐ Run the tests"), header + 3);
+    assert_eq!(row("☒ Read the parser"), header + 1);
+    assert_eq!(row("▣ Write the lexer"), header + 2);
+    assert_eq!(row("☐ Run the tests"), header + 3);
     assert_eq!(row("⬢ Thinking…"), header + 5);
+    // The boxes line up under the header's `⬢`.
+    let column = |row: usize, glyph: char| {
+        rows[row]
+            .chars()
+            .position(|c| c == glyph)
+            .unwrap_or_else(|| panic!("no {glyph} in {:?}", rows[row]))
+    };
+    let hex = column(header, '⬢');
+    assert_eq!(column(header + 1, '☒'), hex);
+    assert_eq!(column(header + 2, '▣'), hex);
+    assert_eq!(column(header + 3, '☐'), hex);
 
     app.process_command(UiCommand::SetTodos(Vec::new()));
     let screen = render_rows(&mut app, 160).join("\n");
@@ -4583,15 +4980,26 @@ fn test_tasks_tab_lists_requests_with_their_parts() {
         rows[request]
     );
     assert!(
-        rows[request + 1].contains("✓  Write the parser  → coder"),
+        rows[request + 1].contains("☒  Write the parser  → coder"),
         "{}",
         rows[request + 1]
     );
     assert!(
-        rows[request + 2].contains("○  Write the checker"),
+        rows[request + 2].contains("☐  Write the checker"),
         "{}",
         rows[request + 2]
     );
+    // An item's box sits under its task's icon.
+    let last_column = |row: usize, glyph: char| {
+        rows[row]
+            .chars()
+            .enumerate()
+            .filter_map(|(i, c)| (c == glyph).then_some(i))
+            .last()
+            .unwrap_or_else(|| panic!("no {glyph} in {:?}", rows[row]))
+    };
+    assert_eq!(last_column(request + 1, '☒'), last_column(request, '○'));
+    assert_eq!(last_column(request + 2, '☐'), last_column(request, '○'));
     let part = row_with("Parse the source  → coder");
     assert!(
         part > request + 2,
@@ -4801,5 +5209,650 @@ fn clicking_copy_log_copies_the_log_and_says_so() {
     assert!(
         find_cell(&buffer, row, "✓ Copied").is_some(),
         "the button says so"
+    );
+}
+
+// ========================================================================
+// Plan mode badge
+// ========================================================================
+
+/// `Lead`, on screen and in plan mode, and `Researcher`, in neither.
+fn plan_mode_app() -> crate::App {
+    use crate::events::{AgentSummary, UiCommand};
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetAgents(vec![
+        AgentSummary {
+            id: "aa".to_string(),
+            name: "Lead".to_string(),
+            plan_mode: true,
+            ..AgentSummary::default()
+        },
+        AgentSummary {
+            id: "bb".to_string(),
+            name: "Researcher".to_string(),
+            ..AgentSummary::default()
+        },
+    ]));
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    app
+}
+
+/// `mode` for agent `agent_id`, as the session sends a mode switch.
+fn set_mode_for(agent_id: &str, mode: crate::PermissionMode) -> crate::events::UiCommand {
+    crate::events::UiCommand::ForAgent {
+        agent_id: agent_id.to_string(),
+        command: Box::new(crate::events::UiCommand::SetMode(mode)),
+    }
+}
+
+/// Asserts the three cells of `(P)` on row `y`, starting at `x`, are drawn
+/// in the accent color on `bg`.
+fn assert_plan_badge_cells(buffer: &ratatui::buffer::Buffer, (x, y): (u16, u16), bg: Color) {
+    let colors = test_theme().colors;
+    for cx in x..x + 3 {
+        let style = buffer[(cx, y)].style();
+        assert_eq!(style.fg, Some(colors.success), "column {cx}");
+        assert_eq!(style.bg, Some(bg), "column {cx}");
+    }
+}
+
+#[test]
+fn an_agent_in_plan_mode_shows_the_plan_badge_in_the_accent_color() {
+    let mut app = plan_mode_app();
+    let colors = test_theme().colors;
+    assert_ne!(
+        colors.success, colors.on_selection,
+        "the check below needs it"
+    );
+
+    // Lead is on screen, so its row is the selected one: the badge keeps
+    // its color on the selection, unlike the name.
+    let buffer = render_buffer(&mut app, 120);
+    let row = row_of(&buffer, "Lead (P)");
+    let (name_at, name) = find_cell(&buffer, row, "Lead").unwrap();
+    assert_eq!(name.bg, Some(colors.selection), "Lead is the selected row");
+    assert_eq!(name.fg, Some(colors.on_selection));
+    let (badge_at, _) = find_cell(&buffer, row, "(P)").unwrap();
+    assert_eq!(badge_at, name_at + 5, "` (P)` right after the name");
+    assert_plan_badge_cells(&buffer, (badge_at, row), colors.selection);
+    assert_eq!(
+        buffer[(badge_at - 1, row)].style().bg,
+        Some(colors.selection),
+        "the badge's space sits on the selection too"
+    );
+
+    // On screen elsewhere, its row is plain and the badge still accented.
+    app.process_command(crate::events::UiCommand::SetActiveAgent("bb".to_string()));
+    let buffer = render_buffer(&mut app, 120);
+    let row = row_of(&buffer, "Lead (P)");
+    let (_, name) = find_cell(&buffer, row, "Lead").unwrap();
+    assert_eq!(name.bg, Some(Color::Reset), "Lead is not selected");
+    let (badge_at, _) = find_cell(&buffer, row, "(P)").unwrap();
+    assert_plan_badge_cells(&buffer, (badge_at, row), Color::Reset);
+}
+
+#[test]
+fn an_agent_out_of_plan_mode_shows_no_plan_badge() {
+    let mut app = plan_mode_app();
+    let panel = agents_panel(&render_rows(&mut app, 120));
+    assert!(
+        row_naming(&panel, "Lead").contains("Lead (P)"),
+        "{panel:#?}"
+    );
+    let researcher = row_naming(&panel, "Researcher");
+    assert!(!researcher.contains("(P)"), "{researcher:?}");
+    assert_eq!(
+        panel.iter().filter(|row| row.contains("(P)")).count(),
+        1,
+        "{panel:#?}"
+    );
+}
+
+#[test]
+fn the_plan_badge_follows_mode_switches_live() {
+    use crate::PermissionMode;
+    let mut app = plan_mode_app();
+
+    // Researcher, off screen, goes into plan mode; Lead, on screen, out.
+    app.process_command(set_mode_for("bb", PermissionMode::Plan));
+    app.process_command(set_mode_for("aa", PermissionMode::Agent));
+    let panel = agents_panel(&render_rows(&mut app, 120));
+    assert!(
+        row_naming(&panel, "Researcher").contains("Researcher (P)"),
+        "{panel:#?}"
+    );
+    assert!(!row_naming(&panel, "Lead").contains("(P)"), "{panel:#?}");
+
+    let buffer = render_buffer(&mut app, 120);
+    let row = row_of(&buffer, "Researcher (P)");
+    let (badge_at, _) = find_cell(&buffer, row, "(P)").unwrap();
+    assert_plan_badge_cells(&buffer, (badge_at, row), Color::Reset);
+
+    app.process_command(set_mode_for("bb", PermissionMode::ReadOnly));
+    let panel = agents_panel(&render_rows(&mut app, 120));
+    assert!(panel.iter().all(|row| !row.contains("(P)")), "{panel:#?}");
+}
+
+#[test]
+fn a_long_name_in_plan_mode_is_cut_and_keeps_its_plan_badge() {
+    use crate::events::{AgentSummary, UiCommand};
+    let name = "An agent with a very long name that never ends";
+    let three_minutes_ago = super::panels::now_ms() - 3 * 60 * 1000;
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetAgents(vec![AgentSummary {
+        id: "aa".to_string(),
+        name: name.to_string(),
+        plan_mode: true,
+        last_active_ms: Some(three_minutes_ago),
+        ..AgentSummary::default()
+    }]));
+    // Off screen, so the row is not selected and its cells are plain.
+    app.process_command(UiCommand::SetActiveAgent("zz".to_string()));
+
+    let rows = render_rows(&mut app, 120);
+    let row_at = |rows: &[String]| {
+        rows.iter()
+            .position(|row| row.contains("An agent"))
+            .unwrap_or_else(|| panic!("no agent row in:\n{}", rows.join("\n")))
+    };
+    let at = row_at(&rows);
+    let row = &rows[at];
+    assert!(!row.contains(name), "the name is cut: {row:?}");
+    assert!(row.contains("… (P) 3m │"), "{row:?}");
+    // The cut name, `…` included, and the badge fill the room the whole
+    // name has without it: the row is as wide as any other in the panel.
+    let right_border = |row: &str| row.chars().skip(2).position(|c| c == '│');
+    assert_eq!(right_border(row), right_border(&rows[at - 1]), "{rows:#?}");
+    let shown_name = |row: &str| {
+        let start = row.find("An agent").unwrap();
+        let end = row.find('…').unwrap();
+        row[start..end].chars().count()
+    };
+    let with_badge = shown_name(row);
+
+    let buffer = render_buffer(&mut app, 120);
+    let y = u16::try_from(at).unwrap();
+    let (badge_at, _) = find_cell(&buffer, y, "(P)").unwrap();
+    assert_plan_badge_cells(&buffer, (badge_at, y), Color::Reset);
+    assert_eq!(buffer[(badge_at - 2, y)].symbol(), "…");
+
+    // Out of plan mode the name takes the badge's columns back.
+    app.process_command(set_mode_for("aa", crate::PermissionMode::Agent));
+    let rows = render_rows(&mut app, 120);
+    let row = &rows[row_at(&rows)];
+    assert!(!row.contains("(P)"), "{row:?}");
+    assert!(row.contains("… 3m │"), "{row:?}");
+    assert_eq!(shown_name(row), with_badge + PLAN_BADGE_WIDTH, "{row:?}");
+    assert_eq!(right_border(row), right_border(&rows[at - 1]));
+}
+
+/// Columns of [`super::panels::PLAN_BADGE`].
+const PLAN_BADGE_WIDTH: usize = 4;
+
+#[test]
+fn a_tree_row_keeps_its_width_with_the_plan_badge_and_drops_it_when_too_narrow() {
+    use super::panels::{cell_style, tree_row, CellState, RowBadge, StatusIcon, PLAN_BADGE};
+    let theme = test_theme();
+    assert_eq!(display_width(PLAN_BADGE), PLAN_BADGE_WIDTH);
+    let badge = RowBadge {
+        text: PLAN_BADGE,
+        color: theme.colors.success,
+    };
+    let row = |width: usize, badge: Option<RowBadge<'_>>| {
+        let cell = cell_style(&theme, CellState::Normal, Style::default());
+        let icon = StatusIcon::new("", theme.colors.muted);
+        tree_row(
+            width,
+            ("", theme.colors.muted),
+            icon,
+            ("Researcher", badge),
+            cell,
+            &crate::app::AgentRowEnd::time(Some("3m")),
+            &[],
+        )
+    };
+    let text = |line: &ratatui::text::Line<'_>| -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    };
+    // ` `, the icon column and its pad, then the name, then ` 3m `.
+    let around = 1 + crate::animation::AURA_WIDTH + 1 + 4;
+    for width in around + 1..=around + 20 {
+        let plain = row(width, None);
+        let marked = row(width, Some(badge));
+        assert_eq!(plain.width(), width, "width {width}");
+        assert_eq!(marked.width(), width, "width {width}");
+        let name_room = width - around;
+        let marked_text = text(&marked);
+        if name_room >= PLAN_BADGE_WIDTH + 2 {
+            let badge_span = marked
+                .spans
+                .iter()
+                .find(|span| span.content == PLAN_BADGE)
+                .unwrap_or_else(|| panic!("no badge at width {width}: {marked_text:?}"));
+            assert_eq!(badge_span.style.fg, Some(theme.colors.success));
+            let name = marked_text.trim_start().split(PLAN_BADGE).next().unwrap();
+            assert!(!name.is_empty(), "width {width}: {marked_text:?}");
+            if name_room - PLAN_BADGE_WIDTH < "Researcher".len() {
+                assert!(name.ends_with('…'), "width {width}: {marked_text:?}");
+            } else {
+                assert_eq!(name, "Researcher", "width {width}");
+            }
+        } else {
+            assert!(
+                !marked_text.contains("(P)"),
+                "fewer than 2 name columns drop the badge, width {width}: {marked_text:?}"
+            );
+            assert_eq!(marked_text, text(&plain), "width {width}");
+        }
+    }
+}
+
+/// Agents `aa` ("Terminal Agent", active three minutes ago) and `bb`
+/// ("Researcher", no time), with codes `aa_code` and `bb_code`.
+fn app_with_coded_agents(aa_code: Option<&str>, bb_code: Option<&str>) -> crate::App {
+    use crate::events::{AgentSummary, UiCommand};
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetAgents(vec![
+        AgentSummary {
+            id: "aa".to_string(),
+            name: "Terminal Agent".to_string(),
+            last_active_ms: Some(super::now_ms() - 3 * 60 * 1000),
+            code: aa_code.map(str::to_string),
+            ..Default::default()
+        },
+        AgentSummary {
+            id: "bb".to_string(),
+            name: "Researcher".to_string(),
+            code: bb_code.map(str::to_string),
+            ..Default::default()
+        },
+    ]));
+    app
+}
+
+/// Index of the first of `rows` that contains `needle`.
+fn line_with(rows: &[String], needle: &str) -> usize {
+    rows.iter()
+        .position(|row| row.contains(needle))
+        .unwrap_or_else(|| panic!("{needle:?} not in:\n{}", rows.join("\n")))
+}
+
+/// Column of `needle` in `row`, counted in characters.
+fn char_column(row: &str, needle: &str) -> usize {
+    let i = row
+        .find(needle)
+        .unwrap_or_else(|| panic!("{needle:?} not in {row:?}"));
+    row[..i].chars().count()
+}
+
+#[test]
+fn agent_rows_end_in_their_codes_lined_up_at_the_right_edge() {
+    use crate::events::UiCommand;
+    let mut app = app_with_coded_agents(Some("RE36"), Some("AG1"));
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+
+    let rows = render_rows(&mut app, 120);
+    let aa = line_with(&rows, "Terminal Ag");
+    let bb = line_with(&rows, "Researcher");
+    assert!(rows[aa].contains(" 3m RE36 │"), "{:?}", rows[aa]);
+    // The shorter code is padded, so both start in the same column.
+    assert!(rows[bb].contains(" AG1  │"), "{:?}", rows[bb]);
+    assert_eq!(
+        char_column(&rows[aa], "RE36"),
+        char_column(&rows[bb], "AG1")
+    );
+
+    // Muted like the time, on the selected row's fill.
+    let colors = test_theme().colors;
+    let buffer = render_buffer(&mut app, 120);
+    let (aa, bb) = (u16::try_from(aa).unwrap(), u16::try_from(bb).unwrap());
+    let (_, code) = find_cell(&buffer, aa, "RE36").expect("code");
+    let (_, time) = find_cell(&buffer, aa, "3m").expect("time");
+    let (_, name) = find_cell(&buffer, aa, "Terminal").expect("name");
+    assert_eq!(code.fg, time.fg);
+    assert_eq!(code.bg, name.bg);
+    assert!(name.bg.is_some_and(|bg| bg != Color::Reset), "{name:?}");
+    let (_, code) = find_cell(&buffer, bb, "AG1").expect("code");
+    assert_eq!(code.fg, Some(colors.muted));
+}
+
+#[test]
+fn hovered_agent_row_draws_its_button_where_the_hit_test_puts_it_beside_a_code() {
+    use crate::app::{agent_button_offset, AgentButton, AgentRowEnd, HoverTarget};
+    use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+    let moved = |column: usize, row: usize| MouseEvent {
+        kind: MouseEventKind::Moved,
+        column: u16::try_from(column).unwrap(),
+        row: u16::try_from(row).unwrap(),
+        modifiers: KeyModifiers::empty(),
+    };
+    let mut app = app_with_coded_agents(Some("RE36"), Some("AG1"));
+
+    let before = render_rows(&mut app, 120);
+    let line = line_with(&before, "Terminal Ag");
+    let row: Vec<char> = before[line].chars().collect();
+    let name = char_column(&before[line], "Terminal Ag");
+    let left = row[..name].iter().rposition(|&c| c == '│').expect("border");
+    let edge = name + row[name..].iter().position(|&c| c == '│').expect("border");
+    let list_x = left + 1;
+    let width = edge - list_x;
+    let end = AgentRowEnd::agent(width, 0, Some("3m"), (Some("RE36"), 4));
+    let offset = |button| {
+        let width = u16::try_from(width).unwrap();
+        list_x + usize::from(agent_button_offset(width, &end, button))
+    };
+
+    app.handle_mouse(moved(name, line));
+    let hovered = render_rows(&mut app, 120);
+    assert!(
+        hovered[line].contains(" ✕ 3m RE36 │"),
+        "{:?}",
+        hovered[line]
+    );
+    let glyph_at = |row: &str, column: usize| row.chars().nth(column);
+    assert_eq!(
+        glyph_at(&hovered[line], offset(AgentButton::Archive)),
+        Some('✕')
+    );
+    assert_eq!(
+        char_column(&hovered[line], " 3m RE36 "),
+        char_column(&before[line], " 3m RE36 "),
+        "the time and code stay put on hover"
+    );
+
+    app.handle_mouse(moved(offset(AgentButton::Archive), line));
+    assert!(matches!(app.hover(), Some(HoverTarget::ArchiveAgent(_))));
+    app.handle_mouse(moved(offset(AgentButton::Archive) - 2, line));
+    assert!(matches!(app.hover(), Some(HoverTarget::ProjectRow(_))));
+    app.handle_mouse(moved(char_column(&before[line], "RE36"), line));
+    assert!(matches!(app.hover(), Some(HoverTarget::ProjectRow(_))));
+}
+
+#[test]
+fn a_tree_row_drops_its_code_when_the_name_gets_too_narrow_and_still_fits() {
+    use super::panels::{cell_style, tree_row, CellState, StatusIcon};
+    use crate::app::{AgentButton, AgentRowEnd};
+    let theme = test_theme();
+    let text = |line: &ratatui::text::Line<'_>| -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    };
+    let buttons = AgentButton::ALL.map(|button| (button, theme.colors.muted));
+    // ` `, the icon column and its pad, ` ✕`, then ` 3m RE36 `.
+    let around = 1 + crate::animation::AURA_WIDTH + 1 + 2 + 9;
+    for width in around..=around + 10 {
+        let end = AgentRowEnd::agent(width, 0, Some("3m"), (Some("RE36"), 4));
+        for buttons in [&buttons[..], &[]] {
+            let cell = cell_style(&theme, CellState::Normal, Style::default());
+            let icon = StatusIcon::new("", theme.colors.muted);
+            let line = tree_row(
+                width,
+                ("", theme.colors.muted),
+                icon,
+                ("Researcher", None),
+                cell,
+                &end,
+                buttons,
+            );
+            let line_text = text(&line);
+            assert_eq!(line.width(), width, "width {width}: {line_text:?}");
+            if width >= around + 4 {
+                assert!(line_text.ends_with(" 3m RE36 "), "{line_text:?}");
+            } else {
+                assert!(!line_text.contains("RE36"), "{line_text:?}");
+                assert!(line_text.ends_with(" 3m "), "{line_text:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn agent_rows_without_codes_are_laid_out_as_before() {
+    use super::panels::{cell_style, tree_row, CellState, StatusIcon};
+    use crate::animation::AURA_WIDTH;
+    use crate::app::{agent_code_width, AgentButton, AgentRowEnd};
+    let theme = test_theme();
+    let text = |line: &ratatui::text::Line<'_>| -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    };
+    let buttons = AgentButton::ALL.map(|button| (button, theme.colors.muted));
+    let row = |ago: Option<&str>, buttons: &[(AgentButton, Color)]| {
+        let cell = cell_style(&theme, CellState::Normal, Style::default());
+        let icon = StatusIcon::new("", theme.colors.muted);
+        let end = AgentRowEnd::agent(24, 0, ago, (None, 0));
+        text(&tree_row(
+            24,
+            ("", theme.colors.muted),
+            icon,
+            ("Researcher", None),
+            cell,
+            &end,
+            buttons,
+        ))
+    };
+    let lead = format!(" {}", " ".repeat(AURA_WIDTH + 1));
+    assert_eq!(
+        row(Some("3m"), &[]),
+        format!("{lead}{:<16} 3m ", "Researcher")
+    );
+    assert_eq!(row(None, &[]), format!("{lead}{:<20}", "Researcher"));
+    assert_eq!(
+        row(Some("3m"), &buttons),
+        format!("{lead}{:<14} ✕ 3m ", "Researcher")
+    );
+    assert_eq!(
+        row(None, &buttons),
+        format!("{lead}{:<17} ✕ ", "Researcher")
+    );
+
+    // In the panel, a list with no codes has no code column.
+    let mut app = app_with_coded_agents(None, None);
+    assert_eq!(agent_code_width(app.agents()), 0);
+    let rows = render_rows(&mut app, 120);
+    let aa = &rows[line_with(&rows, "Terminal Ag")];
+    assert!(aa.contains(" 3m │"), "{aa:?}");
+    let bb = &rows[line_with(&rows, "Researcher")];
+    let after_name = &bb[bb.find("Researcher").unwrap() + "Researcher".len()..];
+    let pad = after_name.find('│').expect("border");
+    assert!(after_name[..pad].chars().all(|c| c == ' '), "{bb:?}");
+}
+
+/// `/model` on an app holding `count` local models (all ready) and one
+/// Claude plan model that needs `/login claude`, drawn `height` rows tall.
+fn model_selector_app(count: usize) -> crate::App {
+    use crate::events::{ModelOptionView, UiCommand};
+
+    let model = |id: String, label: String, group: &str, provider: Option<&str>, available| {
+        ModelOptionView {
+            id,
+            label,
+            local: provider.is_none(),
+            installed: true,
+            group: group.to_string(),
+            provider: provider.map(str::to_string),
+            available,
+            context_window: None,
+        }
+    };
+    let mut options: Vec<ModelOptionView> = (0..count)
+        .map(|i| {
+            model(
+                format!("local/m{i:02}"),
+                format!("Model {i:02}"),
+                "Local",
+                None,
+                true,
+            )
+        })
+        .collect();
+    options.push(model(
+        "claude/claude-sonnet-4-6".to_string(),
+        "Claude Sonnet 4.6".to_string(),
+        "Claude plan",
+        Some("claude"),
+        false,
+    ));
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetModels {
+        options,
+        current: "local/m00".to_string(),
+        route: None,
+        user: None,
+        plans: Vec::new(),
+        thinking: None,
+    });
+    type_text(&mut app, "/model");
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyModifiers::empty(),
+    ));
+    app
+}
+
+fn render_rows_tall(app: &mut crate::App, width: u16, height: u16) -> Vec<String> {
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+    terminal
+        .draw(|frame| super::render(frame, app, &test_theme()))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn test_model_selector_shows_tabs_and_counts() {
+    let mut app = model_selector_app(3);
+    let screen = render_rows_tall(&mut app, 100, 30).join("\n");
+    assert!(screen.contains("Select model"), "{screen}");
+    assert!(screen.contains("Ready (3)"), "{screen}");
+    assert!(screen.contains("Sign in (1)"), "{screen}");
+    assert!(screen.contains("Type to filter"), "{screen}");
+    assert!(screen.contains("● Model 00"), "{screen}");
+    assert!(
+        !screen.contains("Claude Sonnet 4.6"),
+        "the signed-out model waits on the other tab: {screen}"
+    );
+}
+
+#[test]
+fn test_model_selector_scrolls_to_keep_the_cursor_in_view() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = model_selector_app(60);
+    let screen = render_rows_tall(&mut app, 100, 20).join("\n");
+    assert!(screen.contains("Model 00"), "{screen}");
+    assert!(screen.contains("↓ more"), "{screen}");
+    assert!(!screen.contains("Model 59"), "{screen}");
+
+    app.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::empty()));
+    let screen = render_rows_tall(&mut app, 100, 20).join("\n");
+    assert!(screen.contains("›   Model 59"), "{screen}");
+    assert!(screen.contains("↑ more"), "{screen}");
+    assert!(!screen.contains("│    Model 00"), "{screen}");
+    assert!(
+        !screen.contains("↓ more"),
+        "nothing is hidden below: {screen}"
+    );
+}
+
+#[test]
+fn test_model_selector_sign_in_tab_shows_the_login_to_run() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = model_selector_app(3);
+    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()));
+    let screen = render_rows_tall(&mut app, 100, 30).join("\n");
+    assert!(
+        screen.contains("›   Claude Sonnet 4.6  /login claude"),
+        "{screen}"
+    );
+    assert!(!screen.contains("│    Model 00"), "{screen}");
+}
+
+#[test]
+fn test_model_selector_filters_as_you_type() {
+    let mut app = model_selector_app(12);
+    type_text(&mut app, "l 1");
+    let screen = render_rows_tall(&mut app, 100, 30).join("\n");
+    assert!(screen.contains("/ l 1█"), "{screen}");
+    assert!(
+        screen.contains("Model 10") && screen.contains("Model 11"),
+        "{screen}"
+    );
+    assert!(!screen.contains("│    Model 02"), "{screen}");
+
+    type_text(&mut app, "zz");
+    let screen = render_rows_tall(&mut app, 100, 30).join("\n");
+    assert!(screen.contains("No models match"), "{screen}");
+}
+
+#[test]
+fn test_reply_footer_says_who_paid_for_the_tokens() {
+    use crate::events::{SourceUsage, UiCommand};
+
+    let mut app = crate::App::new();
+    submit_message(&mut app, "hi");
+    app.process_command(UiCommand::StartStreaming);
+    app.process_command(UiCommand::AppendText("hello".to_string()));
+    app.process_command(UiCommand::SetReplyModel {
+        model: "claude-sonnet-4-6 · claude-haiku-4.5".to_string(),
+        usage: Some(CallUsage {
+            tokens: 27_900,
+            cost_usd: Some(0.004),
+        }),
+        sources: vec![
+            SourceUsage {
+                label: "Claude plan".to_string(),
+                tokens: 25_100,
+                cost_usd: None,
+            },
+            SourceUsage {
+                label: "OpenRouter".to_string(),
+                tokens: 2_800,
+                cost_usd: Some(0.004),
+            },
+        ],
+    });
+    app.process_command(UiCommand::Complete);
+
+    let rows = render_rows(&mut app, 140);
+    let footer = rows
+        .iter()
+        .position(|r| r.contains("[claude-sonnet-4-6 · claude-haiku-4.5"))
+        .expect("the model footer");
+    assert!(
+        rows[footer + 1].contains("[via Claude plan 25.1k tok"),
+        "the sign-ins go on the line under the models: {:?}",
+        &rows[footer..=footer + 1]
+    );
+    assert_eq!(
+        super::segments::source_meta(&[
+            SourceUsage {
+                label: "Claude plan".to_string(),
+                tokens: 25_100,
+                cost_usd: None,
+            },
+            SourceUsage {
+                label: "OpenRouter".to_string(),
+                tokens: 2_800,
+                cost_usd: Some(0.004),
+            },
+        ])
+        .join(" · "),
+        "via Claude plan 25.1k tok · OpenRouter 2.8k tok <$0.01"
     );
 }

@@ -17,6 +17,7 @@ use super::compare_run::{self, patches, remove_copies, save, ComparePlan};
 use super::compare_view::{self, arm_label, split_patch, EstimateView};
 use super::handlers::system_message;
 use super::subagents::{lock, AgentHub};
+use super::titles;
 use super::LoopState;
 use crate::agent_registry::RegisteredAgent;
 use crate::bench_pack::{self, ExampleTask};
@@ -488,7 +489,7 @@ pub(super) async fn start(state: &mut LoopState<'_>) -> Result<String, String> {
         let mut registry = lock(&state.hub.registry);
         // Asked from a comparison, or from a run of one, it goes beside
         // that comparison rather than inside it.
-        let parent = registry
+        let (parent_id, untitled, parent) = registry
             .ancestry(plan.user)
             .into_iter()
             .filter_map(|id| registry.find(id))
@@ -497,11 +498,22 @@ pub(super) async fn start(state: &mut LoopState<'_>) -> Result<String, String> {
                     && !agent.is_compare_arm()
                     && !registry.under_compare(agent.agent_id())
             })
-            .map(|agent| agent.zns_id.clone())
+            .map(|agent| (agent.agent_id(), agent.needs_title(), agent.zns_id.clone()))
             .ok_or("The agent that asked for the comparison is gone")?;
-        registry
+        let host = registry
             .create_compare(&parent)
-            .map_err(|e| format!("Could not register the comparison: {e:#}"))?
+            .map_err(|e| format!("Could not register the comparison: {e:#}"))?;
+        // An agent opened only to run a benchmark never runs a typed turn,
+        // so it would keep its placeholder name in the Agents panel: name
+        // it after the benchmark instead. Names the user gave are kept.
+        if untitled {
+            if let Err(e) =
+                registry.set_title(parent_id, &titles::bench_title(&plan.source, &plan.task))
+            {
+                warn!(agent = %parent_id, error = %e, "Could not save the benchmark title");
+            }
+        }
+        host
     };
     state.hub.send_agent_list().await;
     info!(

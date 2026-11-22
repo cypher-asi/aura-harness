@@ -5,12 +5,13 @@
 //! Composition root for Aura authentication. Each auth method is its
 //! own unit:
 //!
-//! | Method  | Where                | Role                                  |
-//! |---------|----------------------|---------------------------------------|
-//! | local   | [`Identity::Local`]  | identity with no account              |
-//! | zOS     | `aura-auth-zos`      | identity; JWT for aura-router         |
-//! | ChatGPT | `aura-auth-chatgpt`  | subscription; OpenAI Responses        |
-//! | Claude  | `aura-auth-claude`   | subscription; Anthropic Messages      |
+//! | Method     | Where                  | Role                                                                    |
+//! |------------|------------------------|-------------------------------------------------------------------------|
+//! | local      | [`Identity::Local`]    | identity with no account                                                |
+//! | zOS        | `aura-auth-zos`        | identity; JWT for aura-router                                           |
+//! | ChatGPT    | `aura-auth-chatgpt`    | subscription; OpenAI Responses                                          |
+//! | Claude     | `aura-auth-claude`     | subscription; Anthropic Messages                                        |
+//! | OpenRouter | `aura-auth-openrouter` | subscription; OpenRouter Messages API, billed to the account's credits |
 //!
 //! Shared OAuth plumbing is in `aura-auth-kit`; the provider traits and
 //! primitives are in `aura-core-auth`. This crate adds the [`Vault`]

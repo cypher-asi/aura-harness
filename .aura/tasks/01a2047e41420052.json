@@ -1,0 +1,31 @@
+{
+  "id": "01a2047e41420052",
+  "title": "Agents should also have a short code name, like rust-engineer #36 should be RE-36, it should show this far right of age…",
+  "state": "open",
+  "agent_id": "357cd979c801d7a1a11f0406a472b339ac403ffee1ebd52c91f842bc23e32635",
+  "agent_name": "Agent 931",
+  "items": [
+    {
+      "content": "Registry: persisted unique agent codes + AgentSummary plumbing (done, untested)",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Review the change for bugs, uniqueness edge cases, and hit-testing regressions",
+      "state": "pending"
+    },
+    {
+      "content": "Render code column + shared layout helper for hit-testing, update/add terminal tests, docs",
+      "state": "pending",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Registry tests for agent code names",
+      "state": "pending",
+      "assignee": "tests"
+    }
+  ],
+  "summary": "Two agents are now working in the background:",
+  "updated_ms": 1795372871437,
+  "created_ms": 1795371712834
+}

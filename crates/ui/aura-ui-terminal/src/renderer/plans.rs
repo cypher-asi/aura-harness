@@ -2,9 +2,9 @@
 //!
 //! ```text
 //!  ▾  Auth rework              1/3
-//!    ✓  Add session table
-//!    ▸  Write the login handler
-//!    ○  Wire the middleware
+//!  ☒  Add session table
+//!  ▣  Write the login handler
+//!  ☐  Wire the middleware
 //!  ▸  Parser cleanup           5/5
 //! ```
 
@@ -26,44 +26,34 @@ use ratatui::{
     Frame,
 };
 
+/// A todo's box, as in the to-do checklist that follows the conversation:
+/// crossed when done, filled while in progress, empty otherwise.
 pub(super) const fn marker(status: TodoState) -> &'static str {
     match status {
-        TodoState::Pending => "○",
-        TodoState::InProgress => "▸",
-        TodoState::Completed => "✓",
-        TodoState::Cancelled => "✗",
+        TodoState::Pending | TodoState::Cancelled => "☐",
+        TodoState::InProgress => "▣",
+        TodoState::Completed => "☒",
     }
 }
 
-/// Color of a todo's marker: the status color, as on every side-panel icon.
+/// Color of a todo's box: closed todos fade, the one in progress stands
+/// out, pending ones wait in gray.
 pub(super) const fn marker_color(state: TodoState, theme: &Theme) -> Color {
     match state {
-        TodoState::InProgress => theme.colors.pending,
-        TodoState::Pending | TodoState::Cancelled => theme.colors.muted,
-        TodoState::Completed => theme.colors.success,
+        TodoState::InProgress => theme.colors.foreground,
+        TodoState::Pending => theme.colors.muted,
+        TodoState::Completed | TodoState::Cancelled => theme.colors.faint,
     }
 }
 
-/// How a todo's text is drawn: the shared tone (open todos `Active`,
-/// closed ones `Settled`), struck through when cancelled.
+/// How a todo's text is drawn, everywhere a todo shows: in its box's
+/// color, bold while in progress, struck through when cancelled.
 pub(super) fn todo_style(state: TodoState, theme: &Theme) -> Style {
-    let style = name_style(Tone::active_if(!state.is_closed()), theme);
-    if state == TodoState::Cancelled {
-        style.add_modifier(Modifier::CROSSED_OUT)
-    } else {
-        style
-    }
-}
-
-/// How a todo under a plan is drawn: always muted gray, even while open,
-/// so the plan's own name stands out. Struck through when cancelled.
-/// The TASKS panel keeps the shared `todo_style`.
-pub(super) fn plan_todo_style(state: TodoState, theme: &Theme) -> Style {
-    let style = name_style(Tone::Settled, theme);
-    if state == TodoState::Cancelled {
-        style.add_modifier(Modifier::CROSSED_OUT)
-    } else {
-        style
+    let style = Style::default().fg(marker_color(state, theme));
+    match state {
+        TodoState::InProgress => style.add_modifier(Modifier::BOLD),
+        TodoState::Cancelled => style.add_modifier(Modifier::CROSSED_OUT),
+        TodoState::Pending | TodoState::Completed => style,
     }
 }
 
@@ -129,12 +119,13 @@ pub(super) fn render_plans(
                     let icon = StatusIcon::new(marker(todo.state), marker_color(todo.state, theme));
                     let content = todo.content.lines().next().unwrap_or("");
                     let agent = todo.assignee.as_deref().map(|agent| format!("→ {agent}"));
+                    // Depth 0: the box sits under the plan's fold arrow.
                     list_row_with_detail(
                         width,
-                        1,
+                        0,
                         icon,
                         (content, agent.as_deref()),
-                        cell_style(theme, state, plan_todo_style(todo.state, theme)),
+                        cell_style(theme, state, todo_style(todo.state, theme)),
                         None,
                     )
                 }

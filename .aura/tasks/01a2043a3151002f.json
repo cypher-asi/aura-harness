@@ -1,0 +1,14 @@
+{
+  "id": "01a2043a3151002f",
+  "title": "In `crates/ui/aura-ui-terminal` there are uncommitted changes adding Shift+Enter/Alt+Enter/Ctrl+J newline insertion in …",
+  "state": "completed",
+  "agent_id": "10dc24f35f24723a0cb6ae17846c2324f4185f8e7af22e2de5116d0f5a6b52e5",
+  "agent_name": "rust-engineer #40",
+  "assignee": "rust-engineer",
+  "parent": "01a2042561c8001c",
+  "items": [],
+  "summary": "All four fixes are in, each with a test, but I haven't run the tests yet, nor `cargo fmt` or `cargo clippy`. The only check run was `cargo check -p aura-ui-terminal --tests`, which compiled cleanly. An earlier attempt failed on a missing `UiCommand::SetPolicies` arm: someone else's in-progress \"policies tab\" change in `aura-ui/src/events.rs`. I didn't touch it, and the next check passed without i…",
+  "updated_ms": 1795367662694,
+  "created_ms": 1795367252305,
+  "tool_use_id": "toolu_01Esk14tjms9oU7CmtbEjmG9"
+}

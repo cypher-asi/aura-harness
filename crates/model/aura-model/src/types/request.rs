@@ -32,7 +32,10 @@ pub struct ThinkingConfig {
 /// Anthropic provider falls through to the legacy `max_tokens > 2048`
 /// auto-enable path so existing callers do not change behaviour during
 /// rollout. New callers (e.g. the dev-loop) should set this explicitly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Variants are declared from least to most thinking, so the derived
+/// ordering compares levels (`Off < Minimal < … < Max`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ThinkingEffort {
     /// Extended thinking disabled for this request.
     Off,
@@ -80,6 +83,24 @@ impl ThinkingEffort {
             "xhigh" => Some(Self::XHigh),
             "max" => Some(Self::Max),
             _ => None,
+        }
+    }
+
+    /// The level's lowercase name (`off`, `minimal`, `low`, `medium`,
+    /// `high`, `xhigh`, `max`), as recorded with a model call and shown
+    /// to the user. Unlike [`Self::reasoning_effort_wire`], `Off` has a
+    /// name too, so a record can say thinking was turned off. Round-trips
+    /// through [`Self::from_wire`].
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+            Self::Max => "max",
         }
     }
 
@@ -631,6 +652,23 @@ mod thinking_effort_tests {
             Some("medium")
         );
         assert_eq!(ThinkingEffort::Max.reasoning_effort_wire(), Some("max"));
+    }
+
+    #[test]
+    fn as_str_round_trips_and_levels_are_ordered() {
+        let levels = [
+            ThinkingEffort::Off,
+            ThinkingEffort::Minimal,
+            ThinkingEffort::Low,
+            ThinkingEffort::Medium,
+            ThinkingEffort::High,
+            ThinkingEffort::XHigh,
+            ThinkingEffort::Max,
+        ];
+        for level in levels {
+            assert_eq!(ThinkingEffort::from_wire(level.as_str()), Some(level));
+        }
+        assert!(levels.windows(2).all(|pair| pair[0] < pair[1]));
     }
 }
 

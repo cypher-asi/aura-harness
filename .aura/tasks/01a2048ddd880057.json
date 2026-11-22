@@ -1,0 +1,15 @@
+{
+  "id": "01a2048ddd880057",
+  "title": "Repo: /home/n3o/code/aura-harness. Work fast. The files under `crates/ui/aura-ui-terminal/src/app/` already carry unrel…",
+  "state": "completed",
+  "agent_id": "d4160548e971446ceb1cc2b5e52fe8b411da579337397dabf535bdc96891271c",
+  "agent_name": "rust-engineer #55",
+  "assignee": "rust-engineer",
+  "parent": "01a2045abd210040",
+  "plan": ".aura/plans/openrouter-integration_0f77685d.plan.md",
+  "items": [],
+  "summary": "The `/model` selector now has the two tabs and type-to-filter on the app side. `cargo test -p aura-ui-terminal --lib` passed (987 tests, 2 ignored) and `cargo clippy -p aura-ui-terminal --all-targets -- -D warnings` is clean.",
+  "updated_ms": 1795372970965,
+  "created_ms": 1795372735880,
+  "tool_use_id": "toolu_014S7NpjrbVBKZHyymasoQYW"
+}

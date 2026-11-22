@@ -1,0 +1,14 @@
+{
+  "id": "01a2043c64900033",
+  "title": "Rework the chat panel's LOG tab in the Rust TUI (also used by the desktop app, which renders the same TUI). Repo root i…",
+  "state": "failed",
+  "agent_id": "f58d0b8bd4e199c8f59b46ede21d5fc3c5800edaf383f2eef6d8a15733472c8b",
+  "agent_name": "rust-engineer #41",
+  "assignee": "rust-engineer",
+  "parent": "01a20439354f002c",
+  "items": [],
+  "summary": "ran out of time: it stopped after 5 minutes without a reply",
+  "updated_ms": 1795367966574,
+  "created_ms": 1795367396496,
+  "tool_use_id": "toolu_012P5KXBze3m8pfQ5Z66BW4H"
+}

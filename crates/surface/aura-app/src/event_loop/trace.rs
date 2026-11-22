@@ -325,7 +325,7 @@ impl Traces {
                 Ok(Some((log, _))) => others.push(log),
                 Ok(None) => {}
                 Err(e) => {
-                    warn!(agent = %other.to_hex(), error = %e, "Could not read a run for the log")
+                    warn!(agent = %other.to_hex(), error = %e, "Could not read a run for the log");
                 }
             }
         }

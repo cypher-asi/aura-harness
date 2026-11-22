@@ -1,0 +1,14 @@
+{
+  "id": "01a204bfefad0001",
+  "title": "Repo: /home/n3o/code/aura-harness (Rust workspace). Crate: crates/ui/aura-ui-terminal.",
+  "state": "completed",
+  "agent_id": "4c34bfff65dd69937011f5e5826387aebf691885f321cbdcc533f1c705697870",
+  "agent_name": "rust-engineer #61",
+  "assignee": "rust-engineer",
+  "parent": "01a204bee5190000",
+  "items": [],
+  "summary": "I removed the open button (↗). Hovered agent rows now show only the archive button (✕), and the time and code no longer shift on hover. fmt and clippy are clean, but `cargo test -p aura-ui-terminal` has one failure: 1002 passed, 1 failed, 2 ignored. The failing test is `renderer::tests::test_shift_enter_on_an_empty_prompt_grows_the_box`, in the input box code. I didn't touch it and think the fail…",
+  "updated_ms": 1795376211338,
+  "created_ms": 1795376017325,
+  "tool_use_id": "toolu_01JiZacZ7kFz44zjw9S5eF9A"
+}

@@ -1,11 +1,13 @@
 //! Gate's candidates and the model it picks for a turn or subtask.
 //!
 //! The candidates are the catalog models the user can run right now:
-//! installed local models, and cloud models whose sign-in or plan is
-//! active. An upstream model reachable on two routes (a linked plan and
-//! the cloud router) is kept once, on the plan, since the plan is
-//! already paid for. Candidates are ordered by the list price of a
-//! typical turn, local models first.
+//! installed local models, and cloud models whose sign-in, plan or
+//! OpenRouter key is active. OpenRouter lists hundreds of models; only
+//! those with a curated list price are candidates. An upstream model
+//! reachable on several routes is kept once, on the preferred one: a
+//! linked plan (already paid for), then the cloud router, then
+//! OpenRouter. Candidates are ordered by the list price of a typical
+//! turn, local models first.
 //!
 //! [`pick`] chooses among them for one category: the cheapest model that
 //! has proven itself there, or the model the category starts on when
@@ -82,14 +84,38 @@ impl Candidate {
     }
 }
 
-const fn is_plan(backend: ModelBackend) -> bool {
-    matches!(backend, ModelBackend::Claude | ModelBackend::Chatgpt)
+/// Which route serves an upstream model reachable on several, lower
+/// first: a linked plan (already paid for), then the cloud router, then
+/// OpenRouter (billed per call to the user's key), then anything else.
+const fn route_rank(backend: ModelBackend) -> u8 {
+    match backend {
+        ModelBackend::Claude | ModelBackend::Chatgpt => 0,
+        ModelBackend::Router => 1,
+        ModelBackend::OpenRouter => 2,
+        ModelBackend::Local => 3,
+    }
+}
+
+/// Whether the upstream model `id` names has a curated list price.
+///
+/// The model is asked for in its router-alias form (`aura-<key>`): the
+/// live price table is keyed by full OpenRouter ids, so the alias only
+/// ever hits the curated table. OpenRouter lists hundreds of models;
+/// Gate routes only to those it has a curated price, and so a tier, for.
+fn has_curated_price(id: &str) -> bool {
+    estimate_cost_usd(&format!("aura-{}", model_key(id)), &REFERENCE_TURN).is_some()
+}
+
+/// Whether Gate may route to `option` at all: OpenRouter options only
+/// with a curated price ([`has_curated_price`]).
+fn is_routable(option: &ModelOption) -> bool {
+    option.backend != ModelBackend::OpenRouter || has_curated_price(&option.id)
 }
 
 /// The models Gate may route to, cheapest first: the `catalog` options
 /// that are installed (local) or whose provider `can_use` allows,
-/// leaving out those `dropped` says to, with one route per upstream
-/// model.
+/// leaving out those `dropped` says to and OpenRouter models without a
+/// curated price, with one route per upstream model ([`route_rank`]).
 #[must_use]
 pub fn candidates(
     catalog: &[ModelOption],
@@ -102,12 +128,14 @@ pub fn candidates(
         None => o.installed,
         Some(provider) => can_use(provider),
     });
-    for option in usable.filter(|o| !dropped(&o.id)) {
+    for option in usable.filter(|o| is_routable(o) && !dropped(&o.id)) {
         let candidate = Candidate::from_option(option);
         match by_key.get(&model_key(&option.id)) {
             Some(&i) => {
-                if is_plan(candidate.backend) && !is_plan(out[i].backend) {
-                    out[i] = candidate;
+                if let Some(kept) = out.get_mut(i) {
+                    if route_rank(candidate.backend) < route_rank(kept.backend) {
+                        *kept = candidate;
+                    }
                 }
             }
             None => {
@@ -870,6 +898,81 @@ mod tests {
             fixed_pick(&all).map(|c| c.id.as_str()),
             Some("claude/claude-sonnet-4-6")
         );
+    }
+
+    fn option(id: &str, backend: ModelBackend, tier: ModelTier) -> ModelOption {
+        ModelOption {
+            id: id.to_string(),
+            label: id.to_string(),
+            backend,
+            installed: true,
+            tier,
+        }
+    }
+
+    const OPENROUTER_SONNET: &str = "openrouter/anthropic/claude-sonnet-4.6";
+
+    fn sonnet_on_every_route() -> Vec<ModelOption> {
+        vec![
+            option(
+                OPENROUTER_SONNET,
+                ModelBackend::OpenRouter,
+                ModelTier::Standard,
+            ),
+            option(
+                "aura-claude-sonnet-4-6",
+                ModelBackend::Router,
+                ModelTier::Standard,
+            ),
+            option(
+                "claude/claude-sonnet-4-6",
+                ModelBackend::Claude,
+                ModelTier::Standard,
+            ),
+        ]
+    }
+
+    #[test]
+    fn openrouter_models_are_candidates_only_with_a_curated_price() {
+        let options = [
+            option(
+                OPENROUTER_SONNET,
+                ModelBackend::OpenRouter,
+                ModelTier::Standard,
+            ),
+            option(
+                "openrouter/acme/unknown-model",
+                ModelBackend::OpenRouter,
+                ModelTier::Standard,
+            ),
+        ];
+        let openrouter = candidates(&options, signed_in(&[ProviderKind::OpenRouter]), |_| false);
+        assert_eq!(ids(&openrouter), [OPENROUTER_SONNET]);
+        assert!(openrouter[0].cost_usd.is_some());
+    }
+
+    #[test]
+    fn the_router_route_is_kept_over_openrouter() {
+        let both = candidates(
+            &sonnet_on_every_route(),
+            signed_in(&[ProviderKind::Zos, ProviderKind::OpenRouter]),
+            |_| false,
+        );
+        assert_eq!(ids(&both), ["aura-claude-sonnet-4-6"]);
+    }
+
+    #[test]
+    fn the_plan_route_is_kept_over_router_and_openrouter() {
+        let all = candidates(
+            &sonnet_on_every_route(),
+            signed_in(&[
+                ProviderKind::Zos,
+                ProviderKind::OpenRouter,
+                ProviderKind::Claude,
+            ]),
+            |_| false,
+        );
+        assert_eq!(ids(&all), ["claude/claude-sonnet-4-6"]);
     }
 
     #[test]

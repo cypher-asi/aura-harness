@@ -63,7 +63,9 @@ themes keep working:
 - **Error (`✗`)**: `error`
 - **To-dos**: `☒` done in `faint`, `▣` in progress in bold `foreground`,
   `☐` pending in `muted`, cancelled `☐` struck through in `faint`. Past
-  ten, the rest are counted on a `muted` `N more` row.
+  ten, the rest are counted on a `muted` `N more` row. The boxes line up
+  under the `⬢` above them. The PLANS and TASKS tabs draw their todos the
+  same way, with the boxes under the plan's fold arrow or the task's icon.
 
 ### Borders and Panels
 
@@ -111,12 +113,13 @@ Its rows use the Processes tab's status glyphs, and `lead`, `task` or
 
 The POLICIES tab is a read-only document in sections (STATUS,
 CAPABILITIES, TOOLS, ALWAYS ALLOW, SESSION GRANTS, INTEGRATIONS), each
-headed in bold `primary` with a `muted` note after it. STATUS rows put a
-`muted` label column before the value. TOOLS rows mark each tool `✓ on`
-in `success`, `? ask` in `warning` or `✗ off` in `error`, followed by the
-deciding rule in `muted`. What weakens the guardrails (`yolo`, commands
-that can't be confined, no live prompts) is shown in `warning`, and the
-header's `MODE/APPROVAL` info turns `warning` under `yolo`.
+headed in bold accent (`success`) with a `muted` note after it. STATUS
+rows put a `muted` label column before the value. TOOLS rows mark each
+tool `✓ on`, `? ask` or `✗ off`, all in the accent, followed by the
+deciding rule in `muted`. Every highlight on the tab uses the accent:
+what weakens the guardrails (`yolo`, commands that can't be confined, no
+live prompts) is shown in it, and the header's `MODE/APPROVAL` info turns
+the accent under `yolo`.
 
 - **Frame and dividers**: the panel's border color
 - **Active tab**: bold. While the panel is focused it is filled with `selection` and labelled in `on_selection`; otherwise the label is `foreground` with no fill
@@ -139,8 +142,8 @@ under three columns.
 │      2 steps (click to expand)               │
 │                                              │
 │  ⬢ Working on 2 to-dos                       │
-│    ☒ Read the handler                        │
-│    ▣ Fix the redirect                        │
+│  ☒ Read the handler                          │
+│  ▣ Fix the redirect                          │
 │                                              │
 │  ⬢ Thinking… 12s                             │
 └──────────────────────────────────────────────┘

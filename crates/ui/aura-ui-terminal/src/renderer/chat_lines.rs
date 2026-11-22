@@ -2,13 +2,15 @@
 
 mod stream;
 
-use super::activity::{activity_lines, collapsed_hint, group_header, records_link, GroupView};
+use super::activity::{
+    activity_lines, collapsed_hint, group_header, records_link, GroupView, StepNumber,
+};
 use super::command::shell_lines;
 use super::diff::diff_message_lines;
 use super::markdown::{parse_content_segments, ContentSegment};
 use super::segments::{
     message_style, prefixed_lines, render_code_segment, render_text_segment, reply_footer,
-    reply_meta,
+    reply_meta, source_meta,
 };
 use super::text::Measure;
 use crate::app::{ImageHit, ToggleRow, ToggleTarget};
@@ -37,6 +39,9 @@ struct TurnPlace {
     /// Model, tokens and cost of the turn's latest reply, drawn after the
     /// block when it is the turn's last from the agent
     footer: Vec<String>,
+    /// Who paid for the turn's tokens, drawn as a second footer line:
+    /// `via Claude plan 25.1k tok · OpenRouter 2.8k tok $0.004`
+    sources: Vec<String>,
     /// Number of the block's first step, counted from 1 across the turn
     first_step: usize,
     /// When the turn's prompt was sent, in Unix milliseconds
@@ -48,6 +53,7 @@ impl TurnPlace {
     const fn alone() -> Self {
         Self {
             footer: Vec::new(),
+            sources: Vec::new(),
             first_step: 1,
             started_ms: 0,
         }
@@ -239,6 +245,7 @@ impl ChatLineCache {
                         lines.push(Line::from(""));
                     }
                     lines.push(footer);
+                    lines.extend(reply_footer(&place.sources, width, theme));
                 }
                 let user =
                     !self.terminal && members.len() == 1 && members[0].role() == MessageRole::User;
@@ -337,7 +344,7 @@ fn is_notice(message: &Message) -> bool {
 fn turn_places(shown: &[&Message], runs: &[Range<usize>]) -> Vec<TurnPlace> {
     let mut places: Vec<TurnPlace> = Vec::with_capacity(runs.len());
     let mut last_agent: Option<usize> = None;
-    let mut meta: Vec<String> = Vec::new();
+    let mut meta: (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
     let mut steps = 0;
     let mut started_ms = shown.first().map_or(0, |m| m.timestamp_ms());
     for run in runs {
@@ -353,6 +360,7 @@ fn turn_places(shown: &[&Message], runs: &[Range<usize>]) -> Vec<TurnPlace> {
         }
         places.push(TurnPlace {
             footer: Vec::new(),
+            sources: Vec::new(),
             first_step: steps + 1,
             started_ms,
         });
@@ -361,17 +369,26 @@ fn turn_places(shown: &[&Message], runs: &[Range<usize>]) -> Vec<TurnPlace> {
             .filter(|m| m.activity_step().is_some())
             .count();
         if agent && first.activity_step().is_none() && first.model().is_some() {
-            meta = reply_meta(first.model(), first.usage());
+            meta = (
+                reply_meta(first.model(), first.usage()),
+                source_meta(first.sources()),
+            );
         }
     }
     close_turn(&mut places, last_agent, meta);
     places
 }
 
-/// Put a turn's `meta` under its last block from the agent, at `last`.
-fn close_turn(places: &mut [TurnPlace], last: Option<usize>, meta: Vec<String>) {
+/// Put a turn's `meta` (its footer and who paid for it) under its last
+/// block from the agent, at `last`.
+fn close_turn(
+    places: &mut [TurnPlace],
+    last: Option<usize>,
+    (footer, sources): (Vec<String>, Vec<String>),
+) {
     if let Some(place) = last.and_then(|at| places.get_mut(at)) {
-        place.footer = meta;
+        place.footer = footer;
+        place.sources = sources;
     }
 }
 
@@ -439,10 +456,12 @@ fn group_lines(
         return (lines, toggles);
     }
     let mut number = place.first_step;
+    let last = place.first_step + steps.len().saturating_sub(1);
     for member in members {
         let Some(step) = member.activity_step() else {
             continue;
         };
+        let step_number = StepNumber::new(number, last);
         toggles.push(ToggleRow {
             line: lines.len(),
             target: ToggleTarget::Step(member.version().0),
@@ -451,7 +470,7 @@ fn group_lines(
         lines.extend(activity_lines(
             step,
             member.is_expanded(),
-            Some(number),
+            Some(step_number),
             spinner,
             width,
             theme,
@@ -460,7 +479,7 @@ fn group_lines(
             &mut lines,
             &mut toggles,
             (step, member.is_expanded()),
-            Some(number),
+            Some(step_number),
             place,
             (width, theme),
         );
@@ -475,7 +494,7 @@ fn push_records_link(
     lines: &mut Vec<Line<'static>>,
     toggles: &mut Vec<ToggleRow>,
     (step, expanded): (&Activity, bool),
-    number: Option<usize>,
+    number: Option<StepNumber>,
     place: &TurnPlace,
     (width, theme): (usize, &Theme),
 ) {

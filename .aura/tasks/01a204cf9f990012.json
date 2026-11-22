@@ -1,0 +1,14 @@
+{
+  "id": "01a204cf9f990012",
+  "title": "Implement the UI-crate part of the plan at `.aura/plans/instant-agent-switching-with-fade-in_d66607c4.plan.md` (read it…",
+  "state": "failed",
+  "agent_id": "c05148e5361c272e89652d773461be115162a862a5c36e91ffd0c85d7888cc3d",
+  "agent_name": "rust-engineer #64",
+  "assignee": "rust-engineer",
+  "parent": "01a204cf0ffa0011",
+  "items": [],
+  "summary": "ran out of time: it stopped after 4 minutes without a reply",
+  "updated_ms": 1795377615561,
+  "created_ms": 1795377045401,
+  "tool_use_id": "toolu_01MFycCk8CYGcmGErrw9yN6o"
+}

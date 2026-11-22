@@ -935,6 +935,28 @@ fn enter_opens_the_node_as_json_and_closing_it_comes_back() {
 }
 
 #[test]
+fn shift_enter_on_an_empty_line_is_the_graphs_enter() {
+    let mut app = app_with_flow();
+    press(&mut app, KeyCode::Home);
+    for _ in 0..3 {
+        press(&mut app, KeyCode::Down);
+    }
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+    assert_eq!(app.input(), "", "no line break on GRAPH");
+    assert!(
+        matches!(app.detail_view(), Some(DetailView::File(_))),
+        "the node opens: {:?}",
+        app.detail_view()
+    );
+    app.handle_key(KeyEvent::from(KeyCode::Esc));
+
+    // A line already started takes the break.
+    press(&mut app, KeyCode::Char('/'));
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+    assert_eq!(app.input(), "/\n");
+}
+
+#[test]
 fn an_opened_turn_shows_its_totals_and_a_spawned_agent_who_started_it() {
     let (lanes, mut nodes) = delegation();
     nodes[0].at_ms = 1_700_000_000_123;
@@ -994,11 +1016,8 @@ fn o_opens_the_agent_of_the_selected_card() {
 
     press(&mut app, KeyCode::Home);
     press(&mut app, KeyCode::Char(']'));
-    press(&mut app, KeyCode::Char('o'));
-    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == CODER));
-
-    // The tester runs in the background and has no chat.
     press(&mut app, KeyCode::Char(']'));
+    // The tester runs in the background and has no chat.
     assert_eq!(selected(&app), "cc:1");
     press(&mut app, KeyCode::Char('o'));
     assert!(rx.try_recv().is_err());
@@ -1007,6 +1026,17 @@ fn o_opens_the_agent_of_the_selected_card() {
     press(&mut app, KeyCode::Char('r'));
     let (message, _) = app.notification().unwrap();
     assert!(message.contains("tester #1"), "{message}");
+
+    press(&mut app, KeyCode::Home);
+    press(&mut app, KeyCode::Char(']'));
+    assert_eq!(selected(&app), "bb:1");
+    press(&mut app, KeyCode::Char('o'));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == CODER));
+    assert_eq!(
+        app.active_agent_id(),
+        CODER,
+        "the coder comes on screen at once"
+    );
 }
 
 #[test]

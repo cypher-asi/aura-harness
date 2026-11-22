@@ -1,0 +1,11 @@
+{
+  "id": "01a204c43e040007",
+  "title": "still shows previous text before log ui loads,",
+  "state": "completed",
+  "agent_id": "65a0bcd334007e45c0bb2f4afdac73aa0d1b9f889682b07eb97beea9c43dc933",
+  "agent_name": "Agent 899",
+  "items": [],
+  "summary": "Now the state side: hold back the cached log on entering the tab or switching agents until the fresh one arrives.",
+  "updated_ms": 1795376853170,
+  "created_ms": 1795376299524
+}

@@ -7,6 +7,59 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### OpenRouter sign-in
+
+##### Added
+
+- `aura login openrouter` (`/login openrouter` in the TUI) links your
+  OpenRouter account through the browser (OAuth PKCE, localhost
+  callback), which returns an API key you own. `--paste` (`/login
+  openrouter paste`) works on headless machines and also accepts an
+  existing `sk-or-…` key. `aura logout openrouter` unlinks it. The key
+  is kept in the same vault as plan links, so it survives restarts, and
+  belongs to the active identity (local or zOS).
+- `openrouter/<vendor>/<model>` models (for example
+  `openrouter/anthropic/claude-sonnet-4.6`) go to OpenRouter's
+  Anthropic-compatible Messages API and are billed to your OpenRouter
+  credits. The account's tool-capable models are loaded from
+  `GET /v1/models` and cached in `AURA_HOME/openrouter_models.json`;
+  their context windows, output limits and prices come from that list.
+- `AURA_OPENROUTER_URL` (default `https://openrouter.ai/api`) sets the
+  API base. Values that are not HTTPS and not loopback are ignored.
+- New crate `aura-auth-openrouter` with `OpenRouterProvider`.
+- The reply footer has a second line saying who paid for the turn's
+  tokens, such as `[via Claude plan 25.1k tok · OpenRouter 2.8k tok
+  $0.004]`. `/cost` adds a "By sign-in" breakdown.
+- Each model call's record entry has `route`, the requested model id
+  with its route prefix.
+
+##### Changed
+
+- `/model` has two tabs, "Ready" and "Sign in". Tab or ←/→ switches
+  tabs, typing filters by id or label, Backspace edits the filter and
+  Esc clears it, then closes. The list scrolls. j/k/q no longer
+  navigate.
+- Gate routes to OpenRouter models only when their list price is known.
+  A model reachable more than one way goes to a linked plan first, then
+  aura-router, then OpenRouter.
+- One chat can switch providers turn by turn: each provider gets only
+  the reasoning blocks it produced, and tool-call ids are normalized.
+
+### To-do boxes are bigger and match in every list
+
+##### Changed
+
+- The desktop window draws the to-do boxes (`☐ ☒ ▣`) larger, with a
+  larger cross and fill inside, so they read at a glance.
+- The PLANS and TASKS tabs draw their todos like the checklist that
+  follows the conversation: `☒` done and faded, `▣` in progress in bold
+  white, `☐` pending in gray, and cancelled ones struck through. They
+  used to show `✓ ▸ ○ ✗` in the status colors.
+- The to-do boxes line up under the icon above them: under the `⬢` of
+  the checklist that follows the conversation, under the plan's fold
+  arrow in PLANS, and under the task's icon in TASKS. They used to be
+  indented two columns.
+
 ### POLICIES tab in the Kernel panel
 
 ##### Added
@@ -23,8 +76,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   remembered this session, and INTEGRATIONS what is installed. The tool
   states are worked out before a call's arguments, so checks that
   depend on paths can still decide a real call differently.
-- The header shows the agent's `MODE/APPROVAL`, in the warning color
-  under `yolo`. The view refreshes when the agent comes on screen, when
+- The header shows the agent's `MODE/APPROVAL`, in the accent color
+  under `yolo`. Every highlight on the tab (section titles, warnings,
+  and the on/ask/off marks) uses the theme's accent color. The view
+  refreshes when the agent comes on screen, when
   its mode or approval level changes, after an "always allow" answer,
   and whenever the tab opens.
 - Open the tab with `/policies` (also `/perms`), or press

@@ -1,0 +1,14 @@
+{
+  "id": "01a20432230f0023",
+  "title": "Goal: in the terminal UI, the footer row below the chat input shows `ASK · qwen3:4b · auto thinking · 23% context used …",
+  "state": "failed",
+  "agent_id": "1026c62cf3f459a93996e66dec27e7a2559fafd33b66a6caf9fde7a6bac9de9f",
+  "agent_name": "rust-engineer #38",
+  "assignee": "rust-engineer",
+  "parent": "01a2043060400021",
+  "items": [],
+  "summary": "ran out of time: it stopped after 1 minutes without a reply",
+  "updated_ms": 1795367294405,
+  "created_ms": 1795366724367,
+  "tool_use_id": "toolu_01KBrrqDyoRRj5mr4xy3uVr3"
+}

@@ -480,8 +480,10 @@ dependencies = [
  "aura-auth-chatgpt",
  "aura-auth-claude",
  "aura-auth-kit",
+ "aura-auth-openrouter",
  "aura-auth-zos",
  "aura-core-auth",
+ "axum",
  "chrono",
  "dirs",
  "keyring",
@@ -547,6 +549,23 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "aura-auth-openrouter"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "aura-auth-kit",
+ "aura-core-auth",
+ "axum",
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "url",
 ]
 
 [[package]]

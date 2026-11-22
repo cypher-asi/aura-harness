@@ -1,9 +1,10 @@
 //! Key event handling for the App.
 
+use super::model_picker::PAGE_STEP;
 use super::processes::SIDE_PAGE;
 use super::{
-    line_edit::LineEdit, AgentsTab, App, AppState, ChatTab, NotificationType, PanelFocus,
-    RecordsTab, SidePanelTab,
+    line_edit::{is_newline_key, LineEdit},
+    AgentsTab, App, AppState, ChatTab, NotificationType, PanelFocus, RecordsTab, SidePanelTab,
 };
 use crate::{events::UiEvent, input::InputHistory, terminal::KeyResult};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -283,23 +284,37 @@ impl App {
 
     /// Handle key while the model selector is open.
     fn handle_model_selector_key(&mut self, key: KeyEvent) -> KeyResult {
-        let last = self.models.len().saturating_sub(1);
+        let models = &self.models;
+        let picker = &mut self.model_picker;
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.state = AppState::Idle,
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.model_cursor = self.model_cursor.saturating_sub(1);
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.model_cursor = (self.model_cursor + 1).min(last);
-            }
-            KeyCode::Home => self.model_cursor = 0,
-            KeyCode::End => self.model_cursor = last,
-            KeyCode::Enter => {
-                if let Some(id) = self.models.get(self.model_cursor).map(|m| m.id.clone()) {
-                    self.choose_model(&id);
-                } else {
+            KeyCode::Esc => {
+                if !picker.clear_filter() {
                     self.state = AppState::Idle;
                 }
+            }
+            KeyCode::Up => picker.move_by(models, -1),
+            KeyCode::Down => picker.move_by(models, 1),
+            KeyCode::PageUp => picker.move_by(models, -PAGE_STEP),
+            KeyCode::PageDown => picker.move_by(models, PAGE_STEP),
+            KeyCode::Home => picker.home(),
+            KeyCode::End => picker.end(models),
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Right => {
+                picker.switch_tab();
+            }
+            KeyCode::Backspace => picker.pop(),
+            KeyCode::Enter => {
+                if let Some(id) = picker.selected(models).map(|m| m.id.clone()) {
+                    self.choose_model(&id);
+                } else if picker.filter().is_empty() {
+                    self.state = AppState::Idle;
+                }
+            }
+            KeyCode::Char(c)
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                picker.push(c);
             }
             _ => {}
         }
@@ -312,6 +327,11 @@ impl App {
             || self.handle_pending_remove_project(key)
             || self.handle_pending_kill(key)
         {
+            return KeyResult::continue_running();
+        }
+        // Before the menus, which take Enter to pick a row: a line break
+        // is never a pick or a send.
+        if self.insert_newline_key(key) {
             return KeyResult::continue_running();
         }
         if let Some(result) = self.handle_mention_menu_key(key) {
@@ -533,6 +553,25 @@ impl App {
         }
     }
 
+    /// Shift+Enter, or Alt+Enter or Ctrl+J, breaks the line at the cursor
+    /// in the chat or terminal prompt. Typing goes to the input from any
+    /// panel, so the break does too, empty line or not. The one exception
+    /// is an empty line while the focused chat panel shows GRAPH, TIME,
+    /// LOG or BENCH: those tabs keep the key for their rows (Shift+Enter
+    /// opens agent cards on GRAPH). Returns whether the key was used.
+    fn insert_newline_key(&mut self, key: KeyEvent) -> bool {
+        let tab_owns_keys = self.focus == PanelFocus::Chat
+            && !matches!(self.chat_tab(), ChatTab::Chat | ChatTab::Terminal);
+        let prompt_owns_keys =
+            self.queue_selected().is_none() && (!self.input.is_empty() || !tab_owns_keys);
+        if !(is_newline_key(key) && prompt_owns_keys) {
+            return false;
+        }
+        self.insert_newline();
+        self.reset_slash_menu();
+        true
+    }
+
     /// `$` on an empty line opens the TERMINAL tab; Esc, or Backspace on an
     /// empty line, goes back to CHAT. Returns whether the key was used.
     fn toggle_terminal_mode(&mut self, key: KeyEvent) -> bool {
@@ -613,18 +652,22 @@ impl App {
         }
         match key.code {
             KeyCode::Enter => {
-                if !self.input.is_empty() {
+                if !self.input.trim().is_empty() {
                     return self.submit_input();
                 }
-                // Enter on an empty prompt sends the oldest queued message
-                // now, cancelling the turn that is running.
+                // Enter on an empty (or blank) prompt sends the oldest
+                // queued message now, cancelling the turn that is running.
                 if self.state == AppState::Processing && self.hud.queued() > 0 {
                     self.send_queued_now();
                 }
             }
             // A recalled `/command` keeps the slash menu closed so Up/Down
-            // stay on history.
+            // stay on history. In a multi-line input they move between its
+            // lines first, and recall history from the first or last one.
             KeyCode::Up => {
+                if self.move_cursor_line(true) {
+                    return KeyResult::continue_running();
+                }
                 if let Some(prev) = self.history().previous().map(str::to_string) {
                     self.input = prev;
                     self.cursor_pos = self.input.len();
@@ -632,6 +675,15 @@ impl App {
                 }
             }
             KeyCode::Down => {
+                if self.move_cursor_line(false) {
+                    return KeyResult::continue_running();
+                }
+                // A typed draft is not history: Down on its last line only
+                // goes to its end.
+                if !self.history().is_browsing() {
+                    self.cursor_pos = self.input.len();
+                    return KeyResult::continue_running();
+                }
                 if let Some(newer) = self.history().next_newer().map(str::to_string) {
                     self.input = newer;
                     self.cursor_pos = self.input.len();

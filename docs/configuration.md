@@ -4,7 +4,7 @@ The node reads configuration from environment variables via `NodeConfig::from_en
 
 ## LLM routing
 
-All cloud LLM traffic goes through the AURA router (proxy) with a per-request JWT. There is no direct-provider path: `aura-harness` never calls Anthropic or any other provider itself. The terminal UI can also send `local/*` models to a local Anthropic-compatible server (Ollama); those requests never carry the JWT. Headless `aura-node` is router-only.
+Cloud LLM traffic billed to the zOS account goes through the AURA router (proxy) with a per-request JWT. The terminal UI also calls providers directly for models you link yourself: `claude/*` and `chatgpt/*` with a linked plan, and `openrouter/*` with a linked OpenRouter account, each with your own credentials. The JWT is never sent to them. `local/*` models go to a local Anthropic-compatible server (Ollama); those requests never carry the JWT either. Headless `aura-node` is router-only.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -12,6 +12,7 @@ All cloud LLM traffic goes through the AURA router (proxy) with a per-request JW
 | `AURA_LOCAL_MODEL_URL` | `http://127.0.0.1:11434` | Local Anthropic-compatible server (Ollama 0.14+). |
 | `AURA_LOCAL_CONTEXT_TOKENS` | `32768` | Context window assumed for local models. Start Ollama with a matching `OLLAMA_CONTEXT_LENGTH`. |
 | `AURA_ROUTER_URL` | `https://aura-router.onrender.com` | Proxy router endpoint. |
+| `AURA_OPENROUTER_URL` | `https://openrouter.ai/api` | OpenRouter API base for `openrouter/*` models (`/v1/messages`, `/v1/models`); the sign-in page is derived from it. A value that is not HTTPS and not loopback is ignored. |
 | `AURA_ROUTER_JWT` | — | JWT for terminal/CLI sessions (or run `aura login`). WebSocket clients supply their own. |
 | `AURA_DEFAULT_MODEL` | `claude-opus-4-6` | Model sent to the router only when the request did not pin one. In the terminal UI, setting it overrides `gate` and the saved `/model` choice. Legacy `AURA_ANTHROPIC_MODEL` is still read as a fallback. |
 | `AURA_MEMORY_MODEL` | `aura-claude-haiku-4-5` | Low-cost model for background memory extraction and consolidation, independent of the chat model. |

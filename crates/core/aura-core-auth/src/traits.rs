@@ -65,6 +65,22 @@ pub trait SubscriptionProvider: Send + Sync {
 
     /// Request credentials for model calls.
     fn credential(&self, tokens: &OAuthTokens) -> InferenceCredential;
+
+    /// Link with an API key the user pasted instead of an authorization
+    /// code, for providers that issue long-lived keys (OpenRouter).
+    /// The default refuses: OAuth-only providers have no such key.
+    async fn accept_api_key(&self, _key: &str) -> Result<LinkGrant, AuthError> {
+        Err(AuthError::Invalid(format!(
+            "{} does not take an API key; paste the code its sign-in page shows",
+            self.kind().label()
+        )))
+    }
+
+    /// Whether `pasted` looks like an API key this provider would take
+    /// through [`Self::accept_api_key`] rather than an authorization code.
+    fn is_api_key(&self, _pasted: &str) -> bool {
+        false
+    }
 }
 
 /// Supplies fresh subscription credentials to the model layer.

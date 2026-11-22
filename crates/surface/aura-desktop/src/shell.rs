@@ -367,11 +367,17 @@ impl Shell {
         self.painter.scene()
     }
 
-    /// Whether an agent of any tab is working, so spinners turn, or the
-    /// chat in front scrolls under a selection held past its edge.
+    /// Whether an agent of any tab is working, so spinners turn, the
+    /// chat in front scrolls under a selection held past its edge, or a
+    /// tab in front animates (a running benchmark, the LOG tab or the
+    /// chat loading or fading in).
     fn busy(&self) -> bool {
         let front = &self.tabs.front().tui;
-        self.tabs.iter().any(Tab::busy) || front.selection_scrolling() || front.bench_animating()
+        self.tabs.iter().any(Tab::busy)
+            || front.selection_scrolling()
+            || front.bench_animating()
+            || front.log_animating()
+            || front.chat_animating()
     }
 
     /// Whether the cursor is on screen and blinking.

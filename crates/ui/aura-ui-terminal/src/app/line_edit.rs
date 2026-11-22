@@ -68,6 +68,81 @@ impl App {
         self.cursor_pos = start;
         Some(LineEdit::Changed)
     }
+
+    /// Break the input line at the cursor.
+    pub(super) fn insert_newline(&mut self) {
+        let pos = self.cursor_pos.min(self.input.len());
+        self.input.insert(pos, '\n');
+        self.cursor_pos = pos + 1;
+    }
+
+    /// Move the cursor to the same column on the line above (`up`) or
+    /// below in a multi-line input. Returns `false`, leaving the cursor
+    /// where it was, when there is no line that way, so the key can recall
+    /// history instead.
+    pub(super) fn move_cursor_line(&mut self, up: bool) -> bool {
+        let pos = self.cursor_pos.min(self.input.len());
+        let target = if up {
+            line_above(&self.input, pos)
+        } else {
+            line_below(&self.input, pos)
+        };
+        match target {
+            Some(target) => {
+                self.cursor_pos = target;
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// Whether `key` asks for a line break rather than a send: Shift+Enter
+/// where the terminal reports it, and Alt+Enter and Ctrl+J for those that
+/// cannot tell Shift+Enter from Enter (in raw mode a typed line feed
+/// arrives as Ctrl+J). Ctrl+Enter is left alone; it sends.
+pub(super) fn is_newline_key(key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Enter => {
+            key.modifiers
+                .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT)
+                && !key.modifiers.contains(KeyModifiers::CONTROL)
+        }
+        KeyCode::Char('j') => key.modifiers == KeyModifiers::CONTROL,
+        _ => false,
+    }
+}
+
+/// Byte offset of the start of the line holding `pos`.
+fn line_start(text: &str, pos: usize) -> usize {
+    text[..pos].rfind('\n').map_or(0, |i| i + 1)
+}
+
+/// Byte offset of the `col`-th char of `line`, or its end when it is
+/// shorter.
+fn column_offset(line: &str, col: usize) -> usize {
+    line.char_indices().nth(col).map_or(line.len(), |(i, _)| i)
+}
+
+/// Cursor on the line above `pos`, at the same char column or the end of
+/// that line when it is shorter. `None` on the first line.
+fn line_above(text: &str, pos: usize) -> Option<usize> {
+    let start = line_start(text, pos);
+    let above_end = start.checked_sub(1)?;
+    let col = text[start..pos].chars().count();
+    let above_start = line_start(text, above_end);
+    Some(above_start + column_offset(&text[above_start..above_end], col))
+}
+
+/// Cursor on the line below `pos`, as [`line_above`]. `None` on the last
+/// line.
+fn line_below(text: &str, pos: usize) -> Option<usize> {
+    let below_start = pos + text[pos..].find('\n')? + 1;
+    let col = text[line_start(text, pos)..pos].chars().count();
+    let below_end = text[below_start..]
+        .find('\n')
+        .map_or(text.len(), |i| below_start + i);
+    Some(below_start + column_offset(&text[below_start..below_end], col))
 }
 
 fn prev_char(text: &str, pos: usize) -> usize {
@@ -220,6 +295,44 @@ mod tests {
         assert_eq!(app.input, "héllo wrld");
         press(&mut app, KeyCode::Backspace, KeyModifiers::CONTROL);
         assert_eq!(app.input, "héllo rld");
+    }
+
+    #[test]
+    fn newline_keys_are_shift_or_alt_enter_and_ctrl_j() {
+        let cases = [
+            (KeyCode::Enter, KeyModifiers::SHIFT, true),
+            (KeyCode::Enter, KeyModifiers::ALT, true),
+            (KeyCode::Char('j'), KeyModifiers::CONTROL, true),
+            (KeyCode::Enter, KeyModifiers::NONE, false),
+            (KeyCode::Enter, KeyModifiers::CONTROL, false),
+            (KeyCode::Char('j'), KeyModifiers::NONE, false),
+            (
+                KeyCode::Char('j'),
+                KeyModifiers::CONTROL | KeyModifiers::ALT,
+                false,
+            ),
+        ];
+        for (code, modifiers, expected) in cases {
+            assert_eq!(
+                is_newline_key(KeyEvent::new(code, modifiers)),
+                expected,
+                "{code:?} {modifiers:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cursor_moves_between_lines_at_the_same_column() {
+        // "abc\nx\nhello": lines start at bytes 0, 4 and 6.
+        let text = "abc\nx\nhello";
+        assert_eq!(line_above(text, 9), Some(5), "clamped to the short line");
+        assert_eq!(line_above(text, 5), Some(1));
+        assert_eq!(line_above(text, 2), None, "first line");
+        assert_eq!(line_below(text, 2), Some(5), "clamped to the short line");
+        assert_eq!(line_below(text, 4), Some(6));
+        assert_eq!(line_below(text, 8), None, "last line");
+        assert_eq!(line_below("ab\n", 1), Some(3), "onto an empty last line");
+        assert_eq!(line_above("é\nab", 4), Some(2), "columns count chars");
     }
 
     #[test]

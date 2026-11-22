@@ -1,0 +1,12 @@
+{
+  "id": "01a20459f849003e",
+  "title": "commit this",
+  "state": "completed",
+  "agent_id": "35b3970d8b959c471f21d9a2d2d95af29b1992f0cc060d1ac8491a6da24f9d7f",
+  "agent_name": "Agent 886",
+  "plan": ".aura/plans/policies-tab-in-the-kernel-panel_e259935f.plan.md",
+  "items": [],
+  "summary": "The worktree also holds other sessions' uncommitted work, so I won't use `git add -A`. I'll stage only this feature's changes. Let me check which of my files also contain other people's edits.",
+  "updated_ms": 1795370058232,
+  "created_ms": 1795369334857
+}

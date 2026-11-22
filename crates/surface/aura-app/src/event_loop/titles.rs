@@ -4,18 +4,23 @@
 //! is about ("Task build issue"), shown in place of placeholder names like
 //! `Agent 2`. The call goes through the agent's kernel like every model
 //! call, after the turn, while the turn's task still owns the session.
+//!
+//! Subtasks get a subtitle the same way: when a `task` call spawns an
+//! instance of a permanent agent, the same model names the subtask from
+//! its prompt, shown as `<code>: <subtask>` (`RE36: Fix parser escapes`).
 
 use super::subagents::AgentHub;
 use aura_agent::{AgentLoopConfig, KernelModelGateway};
 use aura_context_prompts::auxiliary::chat_title::{
     chat_title_user_prompt, CHAT_TITLE_SYSTEM_PROMPT,
 };
-use aura_core_types::AgentId;
+use aura_core_types::{AgentId, BenchSource};
 use aura_model::{
     Message, ModelCallPurpose, ModelProvider, ModelRequest, ModelRequestKind, Role, ThinkingEffort,
     ToolChoice,
 };
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{info, warn};
 
 /// Environment variable naming the model that writes titles.
@@ -26,6 +31,11 @@ const MAX_SIDE_CHARS: usize = 2_000;
 const MAX_TITLE_CHARS: usize = 50;
 /// Longest title made from the prompt when the model gives none.
 const MAX_FALLBACK_CHARS: usize = 40;
+/// How long the title model gets to answer before the title is made from
+/// the prompt instead. A title is cosmetic and its call runs beside the
+/// turn, so a stalled provider must not leave the job (and its kernel
+/// gateway) waiting for ever; a small model answers well within this.
+const TITLE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The model that titles chats: `AURA_TITLE_MODEL` when set, else
 /// `classifier`, the cheap model Gate classifies prompts with.
@@ -58,9 +68,37 @@ pub(super) fn spawn(
     });
 }
 
+/// Name the subtask `agent` was spawned for from its task `prompt` in the
+/// background, the way [`spawn`] titles a chat, so the Agents panel shows
+/// `<code>: <subtask>` while the subtask still runs.
+pub(super) fn spawn_subtitle(
+    hub: Arc<AgentHub>,
+    agent: AgentId,
+    gateway: KernelModelGateway,
+    config: AgentLoopConfig,
+    model: String,
+    prompt: String,
+) {
+    tokio::spawn(async move {
+        let subtitle = generate(&gateway, &config, &model, &prompt, &[]).await;
+        hub.apply_subtitle(agent, &subtitle).await;
+    });
+}
+
+/// The subtitle of a subtask spawned under a benchmark's run: the start of
+/// its `prompt`, without a model call, as [`bench_title`] names the
+/// benchmark, so a run costs only what it measures.
+pub(super) fn bench_subtitle(prompt: &str) -> String {
+    fallback_title(prompt)
+}
+
 /// A title for the chat that opened with `prompt` and got `messages` in
 /// reply, written by `model` through `provider`. Falls back to the start
-/// of `prompt` when the call fails or says nothing usable.
+/// of `prompt` when the call fails, says nothing usable or takes longer
+/// than [`TITLE_TIMEOUT`].
+///
+/// Logs never carry the prompt: a title the model wrote is logged, one
+/// made from the prompt is not.
 pub(super) async fn generate(
     provider: &dyn ModelProvider,
     config: &AgentLoopConfig,
@@ -86,21 +124,39 @@ pub(super) async fn generate(
         .purpose(ModelCallPurpose::Title)
         .try_build();
     let titled = match request {
-        Ok(request) => match provider.complete(request).await {
-            Ok(response) => sanitize(&response.message.text_content()),
-            Err(e) => {
-                warn!(%model, error = %e, "Could not title the chat");
-                None
+        Ok(request) => {
+            match tokio::time::timeout(TITLE_TIMEOUT, provider.complete(request)).await {
+                Ok(Ok(response)) => sanitize(&response.message.text_content()),
+                Ok(Err(e)) => {
+                    warn!(%model, error = %e, "Could not title the chat");
+                    None
+                }
+                Err(_) => {
+                    warn!(
+                        %model,
+                        timeout_secs = TITLE_TIMEOUT.as_secs(),
+                        "The title model did not answer in time; titling from the prompt"
+                    );
+                    None
+                }
             }
-        },
+        }
         Err(e) => {
             warn!(%model, error = %e, "Could not build the chat title request");
             None
         }
     };
-    let title = titled.unwrap_or_else(|| fallback_title(prompt));
-    info!(%model, %title, "Titled chat");
-    title
+    match titled {
+        Some(title) => {
+            info!(%model, %title, "Titled chat");
+            title
+        }
+        None => {
+            // Made from the prompt, so the title itself is not logged.
+            info!(%model, "Titled chat from its prompt");
+            fallback_title(prompt)
+        }
+    }
 }
 
 /// Text of the latest assistant message in `messages`.
@@ -129,6 +185,17 @@ fn sanitize(reply: &str) -> Option<String> {
         .trim();
     let title = cut_at_word(line, MAX_TITLE_CHARS);
     (!title.is_empty()).then_some(title)
+}
+
+/// The title of an agent that ran a benchmark of `task` from `source`
+/// before it got one: what the BENCH tab names the benchmark, without a
+/// model call.
+pub(super) fn bench_title(source: &BenchSource, task: &str) -> String {
+    match source {
+        BenchSource::Session { title, .. } => fallback_title(title),
+        BenchSource::Prompt => fallback_title(task),
+        BenchSource::Examples { .. } => fallback_title(&format!("Bench: {task}")),
+    }
 }
 
 /// A title made from the start of the user's `prompt`.
@@ -218,6 +285,21 @@ mod tests {
     }
 
     #[test]
+    fn bench_title_names_the_benchmark() {
+        assert_eq!(
+            bench_title(&BenchSource::Prompt, "fix the build\nthen run tests"),
+            "fix the build"
+        );
+        assert_eq!(
+            bench_title(
+                &BenchSource::Examples { tasks: Vec::new() },
+                "3 example coding tasks"
+            ),
+            "Bench: 3 example coding tasks"
+        );
+    }
+
+    #[test]
     fn last_reply_skips_empty_assistant_messages() {
         let messages = vec![
             Message::user("hi"),
@@ -242,5 +324,43 @@ mod tests {
         )
         .await;
         assert_eq!(title, "Task build issue");
+    }
+
+    /// A provider whose calls never return.
+    struct Silent;
+
+    #[async_trait::async_trait]
+    impl ModelProvider for Silent {
+        fn name(&self) -> &'static str {
+            "silent"
+        }
+
+        async fn complete(
+            &self,
+            _request: ModelRequest,
+        ) -> Result<aura_model::ModelResponse, aura_model::ReasonerError> {
+            std::future::pending().await
+        }
+
+        async fn health_check(&self) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_title_model_that_never_answers_gives_way_to_the_prompt() {
+        let config = AgentLoopConfig::for_agent("aura-claude-opus-4-7");
+        let started = tokio::time::Instant::now();
+        let title = generate(
+            &Silent,
+            &config,
+            "aura-claude-haiku-4-5",
+            "fix the build\nthen run tests",
+            &[],
+        )
+        .await;
+        assert_eq!(title, "fix the build");
+        // The paused clock jumps straight to the deadline, no sooner.
+        assert_eq!(started.elapsed(), TITLE_TIMEOUT);
     }
 }

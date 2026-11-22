@@ -163,6 +163,7 @@ pub async fn start_api_server(
                             activity: None,
                             model: None,
                             usage: None,
+                            sources: Vec::new(),
                         },
                     ));
                 }

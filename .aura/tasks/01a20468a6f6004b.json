@@ -1,0 +1,16 @@
+{
+  "id": "01a20468a6f6004b",
+  "title": "Repo: /home/n3o/code/aura-harness (Rust workspace). IMPORTANT: the working tree has many unrelated uncommitted changes …",
+  "state": "failed",
+  "agent_id": "3325a1a880c5ea4b5de641bdc5b0f7b8e1af95a26fb829b0ed28cfd69353ed4a",
+  "agent_name": "rust-engineer #46",
+  "assignee": "rust-engineer",
+  "parent": "01a2045abd210040",
+  "plan": ".aura/plans/openrouter-integration_0f77685d.plan.md",
+  "plan_todo": "catalog",
+  "items": [],
+  "summary": "ran out of time: it stopped after 3 minutes without a reply",
+  "updated_ms": 1795370866965,
+  "created_ms": 1795370297078,
+  "tool_use_id": "toolu_01C6GZTvmzQ4CufrkLE2WtuB"
+}

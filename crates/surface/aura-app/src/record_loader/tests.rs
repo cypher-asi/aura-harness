@@ -679,6 +679,50 @@ fn reply_footer_counts_the_classifier_before_its_prompt_and_the_title_after_it()
 }
 
 #[test]
+fn reply_footer_shows_the_thinking_level_again_on_reload() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RocksStore::open(dir.path(), false).unwrap();
+    let agent = AgentId::generate();
+    let call = |effort: &str| {
+        let payload = json!({
+            "model": "claude/claude-sonnet-5-5",
+            "input_tokens": 100,
+            "output_tokens": 10,
+            "thinking_effort": effort,
+        });
+        text_tx(agent, TransactionType::Reasoning, &payload.to_string())
+    };
+    let entries = [
+        text_tx(agent, TransactionType::UserPrompt, "first"),
+        call("high"),
+        text_tx(agent, TransactionType::AgentMsg, "answer one"),
+        text_tx(agent, TransactionType::UserPrompt, "second"),
+        call("low"),
+        call("high"),
+        text_tx(agent, TransactionType::AgentMsg, "answer two"),
+    ];
+    for (seq, tx) in (1..).zip(entries) {
+        append(&store, seq, tx);
+    }
+
+    let history = conversation_history(&store, agent).unwrap();
+    let footer = |content: &str| {
+        history
+            .iter()
+            .find(|m| m.content == content)
+            .and_then(|m| m.model.clone())
+    };
+    assert_eq!(
+        footer("answer one").as_deref(),
+        Some("claude-sonnet-5-5 · high thinking")
+    );
+    assert_eq!(
+        footer("answer two").as_deref(),
+        Some("claude-sonnet-5-5 ×2 · low–high thinking")
+    );
+}
+
+#[test]
 fn reply_restores_the_tokens_and_cost_of_its_call() {
     let dir = tempfile::tempdir().unwrap();
     let store = RocksStore::open(dir.path(), false).unwrap();
@@ -948,6 +992,11 @@ fn an_unstarted_spawn_left_active_is_archived_and_not_opened() {
         text_tx(ran.agent_id(), TransactionType::UserPrompt, "look"),
     );
     registry.set_active(stuck.agent_id()).unwrap();
+    // Named after its subtask before the app closed; the archive's note
+    // must still show.
+    registry
+        .set_subtitle(stuck.agent_id(), "Fix parser escapes")
+        .unwrap();
 
     let archived = archive_unstarted_spawns(&mut registry, &store);
 
@@ -961,6 +1010,12 @@ fn an_unstarted_spawn_left_active_is_archived_and_not_opened() {
     assert_eq!(
         stuck.title.as_deref(),
         Some("Did not start before the app closed")
+    );
+    let code = stuck.code.as_deref().unwrap();
+    assert_eq!(
+        stuck.display_name(),
+        format!("{code}: Did not start before the app closed"),
+        "the note wins over the subtitle and keeps the code"
     );
     let mut reloaded = reloaded;
     assert!(archive_unstarted_spawns(&mut reloaded, &store).is_empty());

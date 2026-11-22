@@ -1,0 +1,16 @@
+{
+  "id": "01a2043499560027",
+  "title": "Add read-only policy introspection to the `aura-agent-kernel` crate (repo root is the workspace; crate at `crates/agent…",
+  "state": "completed",
+  "agent_id": "06ebaf5966891bbf1f2e3c79fb178f85cd52735f631f27e82c5f9de7d8b6244c",
+  "agent_name": "rust-engineer #39",
+  "assignee": "rust-engineer",
+  "parent": "01a204341dd00026",
+  "plan": ".aura/plans/policies-tab-in-the-kernel-panel_e259935f.plan.md",
+  "plan_todo": "kernel-api",
+  "items": [],
+  "summary": "I added the read-only policy introspection, and `cargo test -p aura-agent-kernel policy` passes (24 passed, 0 failed, including the 4 new tests). The clippy run failed, but both errors are in committed code I didn't change, described below. Existing authorization behaves the same: the delegate refactor only moved code, and gate order and trace contents are unchanged.",
+  "updated_ms": 1795367456201,
+  "created_ms": 1795366885718,
+  "tool_use_id": "toolu_012dDJB3xo4Jwxxsk4uDsR7j"
+}

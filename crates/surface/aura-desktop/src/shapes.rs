@@ -953,11 +953,13 @@ fn symbol(pen: &mut Pen, c: char, cell: Rectangle) {
             }
         }
         '☐' | '☒' | '▣' => {
-            let s = 0.36;
+            // Wider than the cell's other squares: the to-do boxes are read
+            // at a glance, and the space after them leaves room to overhang.
+            let s = 0.5;
             let square = Outline::polygon(&[p(-s, -s), p(s, -s), p(s, s), p(-s, s)]);
             stroke(pen, square, thin);
             if c == '☒' {
-                let s = 0.2;
+                let s = 0.28;
                 let mut cross = Outline::new();
                 cross.move_to(p(-s, -s));
                 cross.line_to(p(s, s));
@@ -965,7 +967,7 @@ fn symbol(pen: &mut Pen, c: char, cell: Rectangle) {
                 cross.line_to(p(-s, s));
                 stroke(pen, cross, thin);
             } else if c == '▣' {
-                let s = 0.18;
+                let s = 0.26;
                 pen.fill(Outline::polygon(&[p(-s, -s), p(s, -s), p(s, s), p(-s, s)]));
             }
         }

@@ -1,0 +1,16 @@
+{
+  "id": "01a204747c06004d",
+  "title": "Repo: /home/n3o/code/aura-harness. Work fast and stay focused. Touch only `crates/model/aura-model/src/{routed.rs,provi…",
+  "state": "completed",
+  "agent_id": "f6198ebcec29d7a7896ed2fcdc56134684d7b83f213649ee157744448815ac26",
+  "agent_name": "rust-engineer #48",
+  "assignee": "rust-engineer",
+  "parent": "01a2045abd210040",
+  "plan": ".aura/plans/openrouter-integration_0f77685d.plan.md",
+  "plan_todo": "provider",
+  "items": [],
+  "summary": "`openrouter/*` model ids now go to OpenRouter's Messages endpoint, signed with the user's OpenRouter key. The new tests pass, and nothing is committed yet.",
+  "updated_ms": 1795371211138,
+  "created_ms": 1795371072518,
+  "tool_use_id": "toolu_01U3SdbZVuFPFbixJtzYSDnh"
+}

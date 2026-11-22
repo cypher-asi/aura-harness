@@ -134,12 +134,20 @@ struct QueueSelection {
     at: usize,
 }
 
-/// What the input held, set aside.
-#[derive(Debug)]
-struct Draft {
+/// What the input held, set aside: during a queue edit, or while another
+/// agent is on screen.
+#[derive(Debug, Default)]
+pub(crate) struct Draft {
     text: String,
     cursor: usize,
     images: Vec<PendingImage>,
+}
+
+impl Draft {
+    /// Whether nothing was typed or pasted.
+    pub(super) fn is_empty(&self) -> bool {
+        self.text.is_empty() && self.images.is_empty()
+    }
 }
 
 /// A queued message loaded into the input for editing, and what the input
@@ -581,7 +589,7 @@ impl App {
     }
 
     /// Put `text` in the input and return what it held.
-    fn take_draft(&mut self, text: String) -> Draft {
+    pub(super) fn take_draft(&mut self, text: String) -> Draft {
         let text = std::mem::replace(&mut self.input, text);
         let cursor = std::mem::replace(&mut self.cursor_pos, self.input.len());
         let images = std::mem::take(&mut self.images);
@@ -600,7 +608,7 @@ impl App {
         self.restore_draft(edit.draft);
     }
 
-    fn restore_draft(&mut self, draft: Draft) {
+    pub(super) fn restore_draft(&mut self, draft: Draft) {
         self.input = draft.text;
         self.cursor_pos = draft.cursor.min(self.input.len());
         self.images = draft.images;

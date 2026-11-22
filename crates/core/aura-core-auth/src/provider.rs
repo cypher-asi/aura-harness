@@ -20,11 +20,14 @@ pub enum ProviderKind {
     Chatgpt,
     /// Personal Claude Pro/Max plan.
     Claude,
+    /// OpenRouter account (user-owned API key, billed to its credits).
+    #[serde(rename = "openrouter")]
+    OpenRouter,
 }
 
 impl ProviderKind {
     /// Every subscription provider, in display order.
-    pub const SUBSCRIPTIONS: [Self; 2] = [Self::Chatgpt, Self::Claude];
+    pub const SUBSCRIPTIONS: [Self; 3] = [Self::Chatgpt, Self::Claude, Self::OpenRouter];
 
     /// Stable lowercase id used on the CLI and on disk.
     #[must_use]
@@ -34,6 +37,7 @@ impl ProviderKind {
             Self::Zos => "zos",
             Self::Chatgpt => "chatgpt",
             Self::Claude => "claude",
+            Self::OpenRouter => "openrouter",
         }
     }
 
@@ -45,13 +49,14 @@ impl ProviderKind {
             Self::Zos => "zOS",
             Self::Chatgpt => "ChatGPT",
             Self::Claude => "Claude",
+            Self::OpenRouter => "OpenRouter",
         }
     }
 
     /// Whether this provider supplies inference credentials linked to an identity.
     #[must_use]
     pub const fn is_subscription(self) -> bool {
-        matches!(self, Self::Chatgpt | Self::Claude)
+        matches!(self, Self::Chatgpt | Self::Claude | Self::OpenRouter)
     }
 }
 
@@ -63,7 +68,7 @@ impl fmt::Display for ProviderKind {
 
 /// Returned when parsing an unrecognised provider id.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("unknown auth provider `{0}` (expected local, zos, chatgpt or claude)")]
+#[error("unknown auth provider `{0}` (expected local, zos, chatgpt, claude or openrouter)")]
 pub struct UnknownProvider(pub String);
 
 impl FromStr for ProviderKind {
@@ -75,6 +80,7 @@ impl FromStr for ProviderKind {
             "zos" | "zero" => Ok(Self::Zos),
             "chatgpt" | "openai" => Ok(Self::Chatgpt),
             "claude" | "anthropic" => Ok(Self::Claude),
+            "openrouter" | "open-router" | "or" => Ok(Self::OpenRouter),
             other => Err(UnknownProvider(other.to_string())),
         }
     }
@@ -113,9 +119,20 @@ mod tests {
             ProviderKind::Zos,
             ProviderKind::Chatgpt,
             ProviderKind::Claude,
+            ProviderKind::OpenRouter,
         ] {
             assert_eq!(kind.id().parse::<ProviderKind>().unwrap(), kind);
+            assert_eq!(
+                serde_json::to_value(kind).unwrap(),
+                serde_json::json!(kind.id()),
+                "serialized id matches the CLI id"
+            );
         }
+        assert_eq!(
+            "or".parse::<ProviderKind>().unwrap(),
+            ProviderKind::OpenRouter
+        );
+        assert!(ProviderKind::OpenRouter.is_subscription());
         assert_eq!(
             "Anthropic".parse::<ProviderKind>().unwrap(),
             ProviderKind::Claude

@@ -1,0 +1,15 @@
+{
+  "id": "01a2047f124d0053",
+  "title": "Repo: /home/n3o/code/aura-harness. Work fast; touch only `crates/agent/aura-agent-gate/src/router.rs` (and its tests). …",
+  "state": "completed",
+  "agent_id": "bc623ae9f76e610cc164c722fe49992c8342ca00340d8b6d9f24f199268e1ae5",
+  "agent_name": "rust-engineer #51",
+  "assignee": "rust-engineer",
+  "parent": "01a2045abd210040",
+  "plan": ".aura/plans/openrouter-integration_0f77685d.plan.md",
+  "items": [],
+  "summary": "I changed `candidates()` in `crates/agent/aura-agent-gate/src/router.rs`. All 38 router tests pass, including the four new ones. Clippy reports nothing in `router.rs`. The strict `cargo clippy -p aura-agent-gate --all-targets -- -D warnings` stops before it reaches the gate crate, because of an existing lint error in `aura-core-types` (`needless_pass_by_value` on `mode_change_with`). I left that …",
+  "updated_ms": 1795371873903,
+  "created_ms": 1795371766349,
+  "tool_use_id": "toolu_01Pwo6N7BPPxDt4RuKp1mGys"
+}

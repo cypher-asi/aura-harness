@@ -429,14 +429,19 @@ pub enum UiCommand {
     /// Finalize the streaming message and display it.
     FinishStreaming,
 
-    /// The models of the turn so far, for the replies shown since the last
-    /// user message (sent again as each model call finishes)
+    /// The models of the turn so far and the level they thought at, for
+    /// the replies shown since the last user message (sent again as each
+    /// model call finishes)
     SetReplyModel {
-        /// The models the turn ran on, e.g. `claude-sonnet-5-5 ×2 · gate:
-        /// claude-haiku-5-5`
+        /// The models the turn ran on and their thinking level, e.g.
+        /// `claude-sonnet-5-5 ×2 · high thinking · gate: claude-haiku-5-5`.
+        /// The level is left out when the turn's calls recorded none.
         model: String,
         /// Tokens and cost of all the turn's calls, when any reported usage
         usage: Option<CallUsage>,
+        /// Those tokens split by the sign-in that paid for them, in the
+        /// order each was first used
+        sources: Vec<SourceUsage>,
     },
 
     /// Append text to the current thinking block.
@@ -615,6 +620,19 @@ pub enum UiCommand {
 
     /// Set the currently active agent
     SetActiveAgent(String),
+
+    /// The session could not make the agent with this hex id the active
+    /// one (its session failed to open). A UI that already switched to it
+    /// on screen goes back to the agent the session last confirmed, so it
+    /// never waits for a [`Self::SetActiveAgent`] that will not come.
+    SwitchFailed(String),
+
+    /// Sent inside [`Self::ForAgent`] instead of a
+    /// [`Self::LoadConversation`] when the session leaves the agent's chat
+    /// as it is: the agent is running, so the chat the UI holds is live
+    /// and a reload would drop what is streaming. It ends the chat's
+    /// loading state.
+    ChatReady,
 
     /// Update the list of permanent agents
     SetAgentDefinitions(Vec<AgentDefinitionSummary>),
@@ -934,6 +952,22 @@ pub struct MessageData {
     /// Tokens and cost of that turn's model calls
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<CallUsage>,
+    /// Those tokens split by the sign-in that paid for them
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<SourceUsage>,
+}
+
+/// Tokens of a turn that one sign-in paid for: `Claude plan`,
+/// `OpenRouter`, `aura-router`, `ChatGPT plan` or `local`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SourceUsage {
+    /// Who paid, as the footer names it
+    pub label: String,
+    /// Whole prompt (cached or not) plus output of the calls it paid for
+    pub tokens: u64,
+    /// Estimated cost of those calls at list prices; `None` when none was priced
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
 }
 
 /// Tokens model calls used and what they cost.
@@ -1200,6 +1234,7 @@ impl MessageData {
             activity: None,
             model: None,
             usage: None,
+            sources: Vec::new(),
         }
     }
 }
@@ -1366,6 +1401,11 @@ pub struct AgentDefinitionSummary {
     pub name: String,
     /// What it does and when to spawn it
     pub description: String,
+    /// Its unique abbreviation, the prefix of its instances' codes (`RE`
+    /// for `rust-engineer`, whose instances are `RE1`, `RE2`, …), when
+    /// known
+    #[serde(default)]
+    pub abbreviation: Option<String>,
 }
 
 /// Summary of an agent for display in the Swarm panel.
@@ -1405,6 +1445,19 @@ pub struct AgentSummary {
     /// Name of the project it is in
     #[serde(default)]
     pub project: Option<String>,
+    /// Whether it is in plan mode: it researches and writes a plan instead
+    /// of changing code
+    #[serde(default)]
+    pub plan_mode: bool,
+    /// Short code name, such as `RE36`, unique among the agents and never
+    /// changed; shown at the right end of the agent's row
+    #[serde(default)]
+    pub code: Option<String>,
+    /// Short name of the subtask a spawned agent works on, such as
+    /// `Fix parser escapes`. `name` already shows it after the code
+    /// (`RE36: Fix parser escapes`); kept apart so UIs can style it.
+    #[serde(default)]
+    pub subtitle: Option<String>,
 }
 
 impl AgentSummary {

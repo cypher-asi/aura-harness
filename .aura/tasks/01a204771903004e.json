@@ -1,0 +1,15 @@
+{
+  "id": "01a204771903004e",
+  "title": "Repo: /home/n3o/code/aura-harness. Work fast; stay inside `crates/model/aura-model/src/anthropic/` (mod.rs, convert.rs,…",
+  "state": "completed",
+  "agent_id": "f0bdc5250722dc21e354077191d394c777a71f6840bba6ea3f939c50a199357b",
+  "agent_name": "rust-engineer #49",
+  "assignee": "rust-engineer",
+  "parent": "01a2045abd210040",
+  "plan": ".aura/plans/openrouter-integration_0f77685d.plan.md",
+  "items": [],
+  "summary": "Part 1 is done: each provider now only receives reasoning blocks it produced itself, and tool ids are made valid on both sides of every tool call. The crate's tests pass (384) and clippy is clean for `aura-model`.",
+  "updated_ms": 1795371471273,
+  "created_ms": 1795371243779,
+  "tool_use_id": "toolu_01KnvLPPdhfZP41rF3ZFq8JU"
+}

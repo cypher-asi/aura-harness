@@ -5,13 +5,26 @@
 //! fields the rest of the UI reads; the chats of the other agents are kept
 //! as [`AgentView`]s and swapped in when their agent becomes active. Each
 //! view also keeps the chat panel's tab its agent was left on, so the
-//! agent comes back on it; an agent never shown opens on CHAT.
+//! agent comes back on it; an agent never shown opens on CHAT. What was
+//! typed on the input line stays with its agent too: leaving an agent puts
+//! its draft aside, and coming back to it puts the draft back.
+//!
+//! A chat that holds its agent's history (`loaded`) comes back on screen
+//! at once. One that doesn't waits for it blank, says it is loading after
+//! [`LOADING_DELAY`], and fades in over [`FADE_IN`](super::run_log::FADE_IN)
+//! once the history (a
+//! `LoadConversation`) or word that the live chat is current
+//! (`ChatReady`) arrives. The loading state is swapped with the rest of
+//! the chat, so an answer for an agent no longer on screen still ends its
+//! wait.
 
+use super::run_log::{fade_progress, LOADING_DELAY};
 use super::{hud::Hud, App, AppState, ChatTab, NotificationType, PendingApproval};
 use crate::{
     components::Message,
     events::UiCommand,
     renderer::{format_elapsed, ChatLineCache},
+    PermissionMode,
 };
 use std::collections::{HashMap, VecDeque};
 use std::mem;
@@ -32,6 +45,14 @@ pub(crate) struct AgentView {
     chat_tab: ChatTab,
     /// Whether the agent has a turn in flight
     busy: bool,
+    /// Whether the chat holds the agent's history, so showing it again
+    /// needs no reload. A chat built only from what the agent sent while
+    /// off screen does not.
+    pub(super) loaded: bool,
+    /// When the chat started waiting for its history
+    loading_since: Option<Instant>,
+    /// When the history it waited for arrived, to fade it in
+    revealed_at: Option<Instant>,
 }
 
 impl Default for AgentView {
@@ -48,6 +69,9 @@ impl Default for AgentView {
             hud: Hud::default(),
             chat_tab: ChatTab::Chat,
             busy: false,
+            loaded: false,
+            loading_since: None,
+            revealed_at: None,
         }
     }
 }
@@ -65,6 +89,15 @@ const fn is_modal(state: AppState) -> bool {
     )
 }
 
+/// Whether the input line holds an answer to a prompt (an email, a
+/// password, a sign-in code) instead of the chat's draft.
+const fn input_is_prompt_answer(state: AppState) -> bool {
+    matches!(
+        state,
+        AppState::LoginEmail | AppState::LoginPassword | AppState::LinkCode
+    )
+}
+
 impl App {
     /// Exchange the chat on screen with `view`.
     fn swap_chat(&mut self, view: &mut AgentView) {
@@ -77,6 +110,56 @@ impl App {
         mem::swap(&mut self.chat_lines, &mut view.chat_lines);
         mem::swap(&mut self.pending_approvals, &mut view.pending_approvals);
         mem::swap(&mut self.hud, &mut view.hud);
+        mem::swap(&mut self.chat_loaded, &mut view.loaded);
+        mem::swap(&mut self.chat_loading_since, &mut view.loading_since);
+        mem::swap(&mut self.chat_revealed_at, &mut view.revealed_at);
+    }
+
+    /// Have the chat on screen wait for its history when it doesn't hold
+    /// it: nothing of it is drawn until the history arrives, so the panel
+    /// never shows a partial or out-of-date chat that then jumps.
+    pub(super) fn start_chat_loading(&mut self) {
+        if !self.chat_loaded {
+            self.chat_loading_since = Some(Instant::now());
+            self.chat_revealed_at = None;
+        }
+    }
+
+    /// The chat on screen holds its agent's history now. One that was
+    /// waiting for it fades in; one shown all along stays as it is.
+    pub(super) fn reveal_chat(&mut self) {
+        self.chat_loaded = true;
+        if self.chat_loading_since.take().is_some() {
+            self.chat_revealed_at = Some(Instant::now());
+        }
+    }
+
+    /// Whether the chat on screen waits for its agent's history.
+    #[must_use]
+    pub const fn chat_loading(&self) -> bool {
+        self.chat_loading_since.is_some()
+    }
+
+    /// Whether the chat has waited long enough to say it is loading, so a
+    /// quick load shows no message at all.
+    #[must_use]
+    pub fn chat_loading_shown(&self) -> bool {
+        self.chat_loading_since
+            .is_some_and(|at| at.elapsed() >= LOADING_DELAY)
+    }
+
+    /// How far the chat on screen has faded in since its history arrived,
+    /// as milliseconds of [`super::run_log::FADE_IN`], while it still is.
+    #[must_use]
+    pub fn chat_fading(&self) -> Option<(usize, usize)> {
+        fade_progress(self.chat_revealed_at)
+    }
+
+    /// Whether the chat on screen changes from frame to frame: it waits
+    /// for its history or fades in, on the CHAT tab.
+    #[must_use]
+    pub fn chat_animating(&self) -> bool {
+        self.chat_tab() == ChatTab::Chat && (self.chat_loading() || self.chat_fading().is_some())
     }
 
     /// Whether the agent with hex id `agent_id` has a turn in flight.
@@ -100,6 +183,9 @@ impl App {
             return None;
         }
         self.leave_queue_panel();
+        if !input_is_prompt_answer(self.state) {
+            self.swap_draft(&previous, agent_id);
+        }
         let mut view = self.views.remove(agent_id).unwrap_or_default();
         let busy = view.busy;
         let tab = mem::replace(&mut view.chat_tab, self.chat_tab());
@@ -112,6 +198,26 @@ impl App {
         self.close_detail();
         self.clear_selection();
         Some(tab)
+    }
+
+    /// Put the input's draft aside for `previous` and bring back the one
+    /// `agent_id` was left with, an empty input for an agent with none.
+    /// Runs after a queue edit gave the input back its draft, so that
+    /// draft is the one kept. A draft put aside while a prompt held the
+    /// input (see [`input_is_prompt_answer`]) was never taken back, and
+    /// still waits for its agent's next return.
+    fn swap_draft(&mut self, previous: &str, agent_id: &str) {
+        let incoming = self.drafts.remove(agent_id).unwrap_or_default();
+        let outgoing = self.take_draft(String::new());
+        self.restore_draft(incoming);
+        if !outgoing.is_empty() {
+            self.drafts.insert(previous.to_string(), outgoing);
+        }
+        // Menus and history browsing followed the old text.
+        self.reset_slash_menu();
+        self.close_mentions();
+        self.input_history.reset();
+        self.command_history.reset();
     }
 
     /// State of the chat swapped in, whose agent is `busy` or not. A turn
@@ -160,6 +266,11 @@ impl App {
     /// Apply `command` to the chat of `agent_id`, on screen or not.
     pub(super) fn process_agent_command(&mut self, agent_id: &str, command: UiCommand) {
         self.queue_alert(agent_id, &command);
+        if let UiCommand::SetMode(mode) = &command {
+            // The Agents panel marks every agent in plan mode, on screen
+            // or not; the chat's mode line follows below as before.
+            self.set_agent_plan_mode(agent_id, *mode == PermissionMode::Plan);
+        }
         if let UiCommand::GraphUpsert { run_id, nodes } = command {
             self.trace_feed.push(agent_id, &run_id, &nodes);
             self.upsert_graph(&run_id, nodes);
@@ -240,5 +351,13 @@ impl App {
             .iter()
             .find(|a| a.id == agent_id)
             .map_or_else(|| "Agent".to_string(), |a| a.name.clone())
+    }
+
+    /// Note in the Agents panel whether the agent with hex id `agent_id`
+    /// is in plan mode, until the next list says otherwise.
+    fn set_agent_plan_mode(&mut self, agent_id: &str, on: bool) {
+        if let Some(agent) = self.agents.iter_mut().find(|a| a.id == agent_id) {
+            agent.plan_mode = on;
+        }
     }
 }

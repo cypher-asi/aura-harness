@@ -1,0 +1,16 @@
+{
+  "id": "01a204b00e0c0061",
+  "title": "Repo: /home/n3o/code/aura-harness. Docs-only task; edit only the markdown files named here, keep each file's existing s…",
+  "state": "completed",
+  "agent_id": "32ca225cb3dc798e5c962afa829d33607f906c5bad5fe683aca490e1989abd52",
+  "agent_name": "engineer #3",
+  "assignee": "engineer",
+  "parent": "01a2045abd210040",
+  "plan": ".aura/plans/openrouter-integration_0f77685d.plan.md",
+  "plan_todo": "cli-docs",
+  "items": [],
+  "summary": "I updated all six files. Nothing needed building; a grep confirms the OpenRouter text is in each of the four docs files.",
+  "updated_ms": 1795375064188,
+  "created_ms": 1795374976524,
+  "tool_use_id": "toolu_01CxyS82Jc7HJzBqJqNq13nF"
+}

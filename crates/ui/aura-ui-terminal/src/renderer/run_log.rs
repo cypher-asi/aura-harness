@@ -1,12 +1,21 @@
-//! Draw the chat panel's LOG tab: where the log is stored and a `Copy log`
-//! button on top, then the run and the runs below it as panels that fold
-//! open and shut, and the keys at the bottom.
+//! Draw the chat panel's LOG tab: a header of three lines (the run's
+//! status, title and `Copy log`; its totals and where the log is stored;
+//! a rule), the heads of the tokens, cost and time columns, the run's
+//! panels that fold open and shut, and the keys at the bottom.
+//!
+//! The header and the column heads keep their height in every state, so
+//! nothing moves when the log arrives. A log waited for leaves the tab
+//! blank for a moment ([`LOADING_DELAY`]) before it says it is loading, so
+//! a quick load shows no message at all; a log coming where none was shown
+//! fades in ([`crate::app::run_log::FADE_IN`]). Only the log of the agent
+//! on screen is ever drawn.
 
 use super::benchmarks::fit;
 use super::panels::body_block;
 use super::text::{display_width, wrap_words};
+use crate::animation::{fade_in, shimmer_spans};
 use crate::app::run_log::{LogPanel, LogRow, LogState};
-use crate::events::{LogField, LogSection, LogStatus};
+use crate::events::{LogField, LogSection, LogStatus, LogView};
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
@@ -30,6 +39,9 @@ const COPIED_BUTTON: &str = "  ✓ Copied  ";
 /// step rows.
 const COLUMN_WIDTHS: [usize; 3] = [8, 7, 7];
 
+/// What the columns hold, over them.
+const COLUMN_HEADS: [&str; 3] = ["tokens", "cost", "time"];
+
 /// Narrowest row with room for all three columns; narrower rows keep the
 /// time.
 const ALL_COLUMNS: usize = 72;
@@ -37,8 +49,28 @@ const ALL_COLUMNS: usize = 72;
 /// Width of a step's kind column, `decision` and a space.
 const KIND_WIDTH: usize = 9;
 
-const KEYS: &str =
-    "c copy log · y copy panel · p copy path · o open file · Enter fold · e/E all · J json · r refresh · Esc chat";
+/// Width of the status mark at the very left of every row, so what went
+/// wrong lines up down the tab.
+const GUTTER: usize = 2;
+
+/// Lines above the panels: the header's three and the column heads.
+const TOP_LINES: u16 = 4;
+
+/// The keys at the bottom, each with what it does.
+const KEYS: [(&str, &str); 9] = [
+    ("↑↓", "move"),
+    ("⏎", "fold"),
+    ("e/E", "all"),
+    ("J", "json"),
+    ("y", "copy"),
+    ("c", "copy log"),
+    ("o", "open"),
+    ("r", "reload"),
+    ("esc", "back"),
+];
+
+/// What the tab says while it waits for a log.
+const LOADING: &str = "Loading log…";
 
 /// Draw the LOG tab in `area`, the chat panel below its header bar.
 pub(super) fn render_run_log(
@@ -60,19 +92,36 @@ pub(super) fn render_run_log(
         width: inner.width.saturating_sub(2),
         ..inner
     };
-    if padded.width < 16 || padded.height < 5 {
+    if padded.width < 16 || padded.height < TOP_LINES + 3 {
         app.run_log_mut().set_hits(Vec::new(), None);
         return;
     }
     let width = usize::from(padded.width);
+    let spinner = app.spinner_char();
+    let animation = app.animation_frame();
     let state = app.run_log();
+    let view = state.shown(app.active_agent_id());
+    let fade = state.fading();
 
-    let (top, button) = header_lines(state, padded, theme);
-    let top_height = u16::try_from(top.len()).unwrap_or(3);
+    let (mut top, button) = header_lines(state, view, padded, spinner, theme);
+    top.push(if view.is_some() {
+        column_heads(width, theme)
+    } else {
+        Line::default()
+    });
+    let (mut lines, owners, selected_line) = if view.is_some() {
+        document(state, width, spinner, theme)
+    } else {
+        placeholder(state, width, animation, theme)
+    };
+    if let Some(progress) = fade {
+        fade_in(&mut top, progress, theme);
+        fade_in(&mut lines, progress, theme);
+    }
     frame.render_widget(
         Paragraph::new(top),
         Rect {
-            height: top_height,
+            height: TOP_LINES,
             ..padded
         },
     );
@@ -81,20 +130,13 @@ pub(super) fn render_run_log(
         height: 1,
         ..padded
     };
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            fit(KEYS, width),
-            Style::default().fg(theme.colors.faint),
-        ))),
-        footer,
-    );
+    frame.render_widget(Paragraph::new(keys_line(width, theme)), footer);
     let body = Rect {
-        y: padded.y + top_height,
-        height: padded.height.saturating_sub(top_height + 1),
+        y: padded.y + TOP_LINES,
+        height: padded.height.saturating_sub(TOP_LINES + 1),
         ..padded
     };
 
-    let (lines, owners, selected_line) = document(state, width, theme);
     let height = usize::from(body.height);
     let mut scroll = state.scroll;
     if state.follow {
@@ -127,53 +169,55 @@ pub(super) fn render_run_log(
     state.set_hits(hits, button);
 }
 
-/// The title with `Copy log`, the log's path, and a rule; and where the
-/// button was drawn. A title too long for its line goes on over the next.
-fn header_lines(state: &LogState, area: Rect, theme: &Theme) -> (Vec<Line<'static>>, Option<Rect>) {
+/// The header's three lines, and where `Copy log` was drawn: the run's
+/// status and title with the button, its totals with where the log is
+/// stored, and a rule. With no log shown, the same three lines hold only
+/// the tab's name, so the tab doesn't move when the log arrives.
+fn header_lines(
+    state: &LogState,
+    view: Option<&LogView>,
+    area: Rect,
+    spinner: &'static str,
+    theme: &Theme,
+) -> (Vec<Line<'static>>, Option<Rect>) {
     let width = usize::from(area.width);
     let muted = Style::default().fg(theme.colors.muted);
+    let faint = Style::default().fg(theme.colors.faint);
     let bold = Style::default()
         .fg(theme.colors.text)
         .add_modifier(Modifier::BOLD);
-    let Some(view) = &state.view else {
-        let note = if state.loading {
-            "Loading the log…".to_string()
-        } else {
-            state
-                .notice
-                .clone()
-                .unwrap_or_else(|| "No log yet".to_string())
-        };
+    let Some(view) = view else {
         return (
             vec![
-                Line::from(Span::styled("Run log", bold)),
-                Line::from(Span::styled(fit(&note, width), muted)),
+                Line::from(Span::styled("Run log", muted)),
+                Line::default(),
                 rule(width, theme),
             ],
             None,
         );
     };
-    let button_width = display_width(COPY_BUTTON);
-    let title = view.root().map_or("", |r| r.title.as_str());
-    let lead = "Run log  ";
-    let lead_width = display_width(lead);
-    let text = Style::default().fg(theme.colors.text);
-    let room = width.saturating_sub(lead_width + button_width + 1);
-    let (first, rest) = split_at_width(title, room);
-    let mut spans = vec![Span::styled(lead, bold), Span::styled(first, text)];
-    let used: usize = spans.iter().map(|s| display_width(&s.content)).sum();
+    let root = view.root();
+    let status = root.map_or(LogStatus::Ok, |r| r.status);
+    let title = root.map_or("Run log", |r| r.title.as_str());
+
     let (label, color) = if state.just_copied() {
         (COPIED_BUTTON, theme.colors.success)
     } else {
-        (COPY_BUTTON, theme.colors.primary)
+        (COPY_BUTTON, theme.colors.text)
     };
+    let button_width = display_width(label);
+    let mut spans = vec![root_glyph(status, spinner, theme), Span::raw(" ")];
+    let lead: usize = spans.iter().map(|s| display_width(&s.content)).sum();
+    let room = width.saturating_sub(lead + button_width + 2);
+    spans.push(Span::styled(fit(title, room), bold));
+    let used: usize = spans.iter().map(|s| display_width(&s.content)).sum();
     let button = (width > used + button_width).then(|| {
         spans.push(Span::raw(" ".repeat(width - used - button_width)));
         spans.push(Span::styled(
             label,
             Style::default()
-                .fg(theme.colors.background)
-                .bg(color)
+                .fg(color)
+                .bg(theme.colors.surface)
                 .add_modifier(Modifier::BOLD),
         ));
         Rect {
@@ -183,49 +227,82 @@ fn header_lines(state: &LogState, area: Rect, theme: &Theme) -> (Vec<Line<'stati
             height: 1,
         }
     });
-    let label = "Stored at ";
-    let path = fit_start(&view.path, width.saturating_sub(label.len()));
-    let mut where_line = vec![
-        Span::styled(label, muted),
-        Span::styled(path, Style::default().fg(theme.colors.primary)),
+
+    let live = status == LogStatus::Running;
+    let detail = root.map_or("", |r| r.detail.as_str());
+    let live_width = if live { display_width(" · live") } else { 0 };
+    let mut info = vec![
+        Span::raw(" ".repeat(lead)),
+        Span::styled(fit(detail, width.saturating_sub(lead + live_width)), muted),
     ];
-    if view.root().is_some_and(|r| r.status == LogStatus::Running) {
-        where_line.push(Span::styled(
-            "  ● live",
+    if live {
+        if !detail.is_empty() {
+            info.push(Span::styled(" · ", muted));
+        }
+        info.push(Span::styled(
+            "live",
             Style::default().fg(theme.colors.success),
         ));
-    } else if state.loading {
-        where_line.push(Span::styled("  refreshing…", muted));
     }
-    let mut lines = vec![Line::from(spans)];
-    if !rest.is_empty() {
-        lines.push(Line::from(vec![
-            Span::raw(" ".repeat(lead_width)),
-            Span::styled(fit(&rest, width.saturating_sub(lead_width)), text),
-        ]));
+    let used: usize = info.iter().map(|s| display_width(&s.content)).sum();
+    // The path goes at the right when a useful part of it fits.
+    let left = width.saturating_sub(used + 3);
+    if left >= 12 {
+        let path = fit_start(&view.path, left);
+        let gap = width - used - display_width(&path);
+        info.push(Span::raw(" ".repeat(gap)));
+        info.push(Span::styled(path, faint));
     }
-    lines.extend([Line::from(where_line), rule(width, theme)]);
-    (lines, button)
+    (
+        vec![Line::from(spans), Line::from(info), rule(width, theme)],
+        button,
+    )
 }
 
-/// `text` cut at the last space that leaves the first part within `max`
-/// columns, and the rest; cut short when no space does.
-fn split_at_width(text: &str, max: usize) -> (String, String) {
-    if display_width(text) <= max {
-        return (text.to_string(), String::new());
+/// The run's status before its title: a spinner while it runs, else a
+/// dot in the colour of how it went.
+fn root_glyph(status: LogStatus, spinner: &'static str, theme: &Theme) -> Span<'static> {
+    let (glyph, color) = match status {
+        LogStatus::Running => (spinner, theme.colors.pending),
+        LogStatus::Ok => ("●", theme.colors.success),
+        LogStatus::Warn => ("●", theme.colors.warning),
+        LogStatus::Error => ("●", theme.colors.error),
+    };
+    Span::styled(glyph, Style::default().fg(color))
+}
+
+/// The heads of the columns, over the columns of the rows below.
+fn column_heads(width: usize, theme: &Theme) -> Line<'static> {
+    let heads = columns(COLUMN_HEADS, width);
+    if heads.trim().is_empty() {
+        return Line::default();
     }
-    let end = text
-        .match_indices(' ')
-        .map(|(i, _)| i)
-        .take_while(|&i| display_width(&text[..i]) <= max)
-        .last();
-    match end {
-        Some(end) if end > 0 => (
-            text[..end].to_string(),
-            text[end..].trim_start().to_string(),
-        ),
-        _ => (fit(text, max), String::new()),
+    Line::from(vec![
+        Span::raw(" ".repeat(width.saturating_sub(display_width(&heads)))),
+        Span::styled(heads, Style::default().fg(theme.colors.faint)),
+    ])
+}
+
+/// The keys at the bottom, as many as fit in `width`.
+fn keys_line(width: usize, theme: &Theme) -> Line<'static> {
+    let key = Style::default().fg(theme.colors.muted);
+    let what = Style::default().fg(theme.colors.faint);
+    let mut spans = Vec::new();
+    let mut used = 0;
+    for (i, (k, does)) in KEYS.iter().enumerate() {
+        let gap = if i == 0 { 0 } else { 2 };
+        let needs = gap + display_width(k) + 1 + display_width(does);
+        if used + needs > width {
+            break;
+        }
+        if gap > 0 {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(*k, key));
+        spans.push(Span::styled(format!(" {does}"), what));
+        used += needs;
     }
+    Line::from(spans)
 }
 
 fn rule(width: usize, theme: &Theme) -> Line<'static> {
@@ -296,13 +373,14 @@ fn prose_wrap(text: &str, width: usize) -> Vec<String> {
     out
 }
 
-/// A mark for what didn't simply go well; blank, as wide, for what did.
-fn status_mark(status: LogStatus, theme: &Theme) -> Span<'static> {
+/// The mark in a row's gutter: blank for what simply went well, else
+/// what went wrong, or a spinner for what still runs.
+fn status_mark(status: LogStatus, spinner: &'static str, theme: &Theme) -> Span<'static> {
     let (mark, color) = match status {
-        LogStatus::Ok => ("  ", theme.colors.muted),
-        LogStatus::Warn => ("! ", theme.colors.warning),
-        LogStatus::Error => ("✗ ", theme.colors.error),
-        LogStatus::Running => ("◌ ", theme.colors.pending),
+        LogStatus::Ok => ("  ".to_string(), theme.colors.muted),
+        LogStatus::Warn => ("! ".to_string(), theme.colors.warning),
+        LogStatus::Error => ("✗ ".to_string(), theme.colors.error),
+        LogStatus::Running => (format!("{spinner} "), theme.colors.pending),
     };
     Span::styled(mark, Style::default().fg(color))
 }
@@ -359,49 +437,96 @@ fn fit_pair(label: &str, summary: &str, room: usize) -> (String, String) {
     (label, summary)
 }
 
+/// Lines and owners of a panel list, and the line of the selected
+/// panel's header.
+type Document = (Vec<Line<'static>>, Vec<Option<LogPanel>>, Option<usize>);
+
+/// What the tab shows with no log of the agent on screen: why there is
+/// none; that it is loading, once it has waited a moment; or, before
+/// that, nothing.
+fn placeholder(state: &LogState, width: usize, animation: usize, theme: &Theme) -> Document {
+    let muted = Style::default().fg(theme.colors.muted);
+    let faint = Style::default().fg(theme.colors.faint);
+    let room = width.saturating_sub(GUTTER);
+    let indent = || Span::raw(" ".repeat(GUTTER));
+    let mut lines = vec![Line::default()];
+    // A notice from an earlier load is not shown while the log is asked
+    // for again: it may no longer hold.
+    if let Some(notice) = state.notice.as_ref().filter(|_| !state.is_loading()) {
+        for line in prose_wrap(notice, room) {
+            lines.push(Line::from(vec![indent(), Span::styled(line, muted)]));
+        }
+        lines.push(Line::default());
+        lines.push(Line::from(vec![
+            indent(),
+            Span::styled("r", muted),
+            Span::styled(" to retry", faint),
+        ]));
+    } else if state.is_loading() {
+        if state.loading_shown() {
+            let mut spans = vec![indent()];
+            spans.extend(shimmer_spans(
+                LOADING,
+                animation,
+                Style::default(),
+                (theme.colors.muted, theme.colors.text),
+            ));
+            lines.push(Line::from(spans));
+        }
+    } else {
+        let text = "The log of the agent on screen shows here once it has run a turn: every \
+                    turn, model call, thought, tool call and harness decision, with the runs of \
+                    the agents it spawned.";
+        for line in prose_wrap(text, room) {
+            lines.push(Line::from(vec![indent(), Span::styled(line, muted)]));
+        }
+    }
+    let owners = vec![None; lines.len()];
+    (lines, owners, None)
+}
+
 /// Every line of the panels on screen; the panel whose header each line
-/// is; and the line of the selected panel's header.
-fn document(
-    state: &LogState,
-    width: usize,
-    theme: &Theme,
-) -> (Vec<Line<'static>>, Vec<Option<LogPanel>>, Option<usize>) {
+/// is; and the line of the selected panel's header. An open panel's body
+/// is followed by a blank line, so blocks stand apart.
+fn document(state: &LogState, width: usize, spinner: &'static str, theme: &Theme) -> Document {
     let mut lines = Vec::new();
     let mut owners = Vec::new();
     let mut selected = None;
-    if state.view.is_none() {
-        let muted = Style::default().fg(theme.colors.muted);
-        let text = if state.loading {
-            "Reading the run log of the agent on screen…"
-        } else {
-            "The log of the agent on screen shows here once it has run a turn: every turn, model \
-             call, thought, tool call and harness decision, with the runs of the agents it spawned. \
-             r tries again."
-        };
-        for line in prose_wrap(text, width) {
-            lines.push(Line::from(Span::styled(line, muted)));
-            owners.push(None);
-        }
-        return (lines, owners, None);
-    }
     for row in state.rows() {
-        if state.selected.as_ref() == Some(&row.panel) {
+        let picked = state.selected.as_ref() == Some(&row.panel);
+        if picked {
             selected = Some(lines.len());
         }
-        let picked = state.selected.as_ref() == Some(&row.panel);
-        lines.push(header_line(state, &row, width, picked, theme));
+        lines.push(header_line(state, &row, width, picked, spinner, theme));
         owners.push(Some(row.panel.clone()));
         if state.is_expanded(&row.panel) {
-            let indent = row.depth * 2 + 4;
-            for line in body_lines(state, &row.panel, width.saturating_sub(indent), theme) {
+            let indent = GUTTER + row.depth * 2 + 2;
+            let body = body_lines(state, &row.panel, width.saturating_sub(indent), theme);
+            if body.is_empty() {
+                continue;
+            }
+            for line in body {
                 let mut spans = vec![Span::raw(" ".repeat(indent))];
                 spans.extend(line.spans);
                 lines.push(Line::from(spans));
                 owners.push(None);
             }
+            lines.push(Line::default());
+            owners.push(None);
         }
     }
     (lines, owners, selected)
+}
+
+/// What a row shows after its marks: its label and summary with their
+/// styles, and the text at its right with its style.
+struct RowText<'a> {
+    label: &'a str,
+    label_style: Style,
+    summary: &'a str,
+    summary_style: Style,
+    right: String,
+    right_style: Style,
 }
 
 fn header_line(
@@ -409,12 +534,22 @@ fn header_line(
     row: &LogRow,
     width: usize,
     picked: bool,
+    spinner: &'static str,
     theme: &Theme,
 ) -> Line<'static> {
     let muted = Style::default().fg(theme.colors.muted);
     let faint = Style::default().fg(theme.colors.faint);
     let text = Style::default().fg(theme.colors.text);
     let bold = text.add_modifier(Modifier::BOLD);
+    let status = match &row.panel {
+        LogPanel::Run(id) => state.run(id).map(|r| r.status),
+        LogPanel::Details(id) => state.run(id).map(|_| LogStatus::Ok),
+        LogPanel::Turn(id, n) => state.turn(id, *n).map(|t| t.status),
+        LogPanel::Step(id, seq) => state.step(id, *seq).map(|s| s.status),
+    };
+    let Some(status) = status else {
+        return Line::default();
+    };
     let open = state.is_expanded(&row.panel);
     // Every step opens, so only an open one is marked.
     let marker = match &row.panel {
@@ -424,89 +559,97 @@ fn header_line(
         _ => "  ",
     };
     let mut spans = vec![
+        status_mark(status, spinner, theme),
         Span::raw("  ".repeat(row.depth)),
-        Span::styled(marker, muted),
+        Span::styled(marker, faint),
     ];
-    let (label, label_style, summary, summary_style, right) = match &row.panel {
+    let row_text = match &row.panel {
         LogPanel::Run(id) => {
             let Some(run) = state.run(id) else {
                 return Line::default();
             };
-            spans.push(status_mark(run.status, theme));
-            let (kind, style) = if run.depth == 0 {
-                ("RUN  ", bold)
-            } else {
-                (
-                    "SUBAGENT  ",
-                    Style::default()
-                        .fg(theme.colors.secondary)
-                        .add_modifier(Modifier::BOLD),
-                )
-            };
-            spans.push(Span::styled(kind, style));
-            (run.title.as_str(), bold, "", muted, run.detail.clone())
+            RowText {
+                label: run.title.as_str(),
+                label_style: Style::default()
+                    .fg(theme.colors.secondary)
+                    .add_modifier(Modifier::BOLD),
+                summary: run.detail.as_str(),
+                summary_style: muted,
+                right: String::new(),
+                right_style: muted,
+            }
         }
         LogPanel::Details(id) => {
             let problems = state.run(id).map_or(0, |r| r.problems.len());
-            let detail = if problems > 0 {
-                format!("{problems} problem{}", if problems == 1 { "" } else { "s" })
-            } else {
-                String::new()
+            let right = match problems {
+                0 => String::new(),
+                1 => "1 problem".to_string(),
+                n => format!("{n} problems"),
             };
-            ("Details", text, "", muted, detail)
+            RowText {
+                label: "Details",
+                label_style: muted,
+                summary: "",
+                summary_style: muted,
+                right,
+                right_style: Style::default().fg(theme.colors.warning),
+            }
         }
-        LogPanel::Files(_) => ("Files on disk", text, "", muted, String::new()),
         LogPanel::Turn(id, n) => {
             let Some(turn) = state.turn(id, *n) else {
                 return Line::default();
             };
-            spans.push(status_mark(turn.status, theme));
             spans.push(Span::styled(format!("Turn {n}  "), bold));
-            let right = columns([&turn.tokens, &turn.cost, &turn.took], width);
             let (label, summary) = if turn.prompt.is_empty() {
                 (turn.detail.as_str(), "")
             } else {
                 (turn.prompt.as_str(), turn.detail.as_str())
             };
-            let style = if turn.prompt.is_empty() { muted } else { text };
-            (label, style, summary, muted, right)
+            RowText {
+                label,
+                label_style: if turn.prompt.is_empty() { muted } else { text },
+                summary,
+                summary_style: muted,
+                right: columns([&turn.tokens, &turn.cost, &turn.took], width),
+                right_style: muted,
+            }
         }
         LogPanel::Step(id, seq) => {
             let Some(step) = state.step(id, *seq) else {
                 return Line::default();
             };
-            spans.push(status_mark(step.status, theme));
-            spans.push(Span::styled(format!("{seq:>3} "), faint));
             if step.parent.is_some() {
                 spans.push(Span::raw(" ".repeat(KIND_WIDTH)));
                 spans.push(Span::styled("↳ ", faint));
             } else {
-                spans.push(Span::styled(format!("{:<KIND_WIDTH$}", step.kind), muted));
+                spans.push(Span::styled(format!("{:<KIND_WIDTH$}", step.kind), faint));
             }
-            let right = columns([&step.tokens, &step.cost, &step.took], width);
-            (
-                step.label.as_str(),
-                text,
-                step.summary.as_str(),
-                summary_style(step.status, theme),
-                right,
-            )
+            RowText {
+                label: step.label.as_str(),
+                // The end of a turn is said quietly; what it did is in its turn.
+                label_style: if step.kind == "end" { muted } else { text },
+                summary: step.summary.as_str(),
+                summary_style: summary_style(step.status, theme),
+                right: columns([&step.tokens, &step.cost, &step.took], width),
+                right_style: muted,
+            }
         }
     };
     let used: usize = spans.iter().map(|s| display_width(&s.content)).sum();
+    let right = row_text.right;
     let right_width = if right.trim().is_empty() {
         0
     } else {
         display_width(&right)
     };
     let room = width.saturating_sub(used + if right_width == 0 { 0 } else { right_width + 2 });
-    let (label, summary) = fit_pair(label, summary, room);
+    let (label, summary) = fit_pair(row_text.label, row_text.summary, room);
     let drawn = used + display_width(&label) + display_width(&summary);
-    spans.push(Span::styled(label, label_style));
-    spans.push(Span::styled(summary, summary_style));
+    spans.push(Span::styled(label, row_text.label_style));
+    spans.push(Span::styled(summary, row_text.summary_style));
     if right_width > 0 && drawn + right_width <= width {
         spans.push(Span::raw(" ".repeat(width - drawn - right_width)));
-        spans.push(Span::styled(right, muted));
+        spans.push(Span::styled(right, row_text.right_style));
     } else if picked {
         spans.push(Span::raw(" ".repeat(width.saturating_sub(drawn))));
     }
@@ -624,18 +767,11 @@ fn body_lines(
                     )));
                 }
             }
-            lines
-        }
-        LogPanel::Files(id) => {
-            let Some(run) = state.run(id) else {
-                return Vec::new();
-            };
-            let mut lines = field_lines(&run.files, width, theme, Some("log"));
-            if run.depth == 0 {
-                lines.push(Line::from(Span::styled(
-                    "log.json holds this run and every subagent's: c or Copy log copies it",
-                    Style::default().fg(theme.colors.muted),
-                )));
+            if !run.files.is_empty() {
+                if !lines.is_empty() {
+                    lines.push(Line::default());
+                }
+                lines.extend(field_lines(&run.files, width, theme, Some("log")));
             }
             lines
         }
@@ -663,8 +799,10 @@ fn body_lines(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{LogRunView, LogStepView, LogTurnView, LogView, UiCommand};
+    use crate::app::run_log::LOADING_DELAY;
+    use crate::events::{LogRunView, LogStepView, LogTurnView, UiCommand};
     use ratatui::{backend::TestBackend, Terminal};
+    use std::time::Instant;
 
     fn view() -> LogView {
         LogView {
@@ -760,21 +898,44 @@ mod tests {
             .join("\n")
     }
 
+    /// The row of `screen` that holds `needle`.
+    fn row<'a>(screen: &'a str, needle: &str) -> &'a str {
+        screen
+            .lines()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} not on screen:\n{screen}"))
+    }
+
+    /// The index of the header's rule on `screen`.
+    fn rule_row(screen: &str) -> usize {
+        screen
+            .lines()
+            .position(|line| line.contains("│ ────────"))
+            .unwrap_or_else(|| panic!("no rule:\n{screen}"))
+    }
+
     #[test]
-    fn shows_where_the_log_is_the_copy_button_and_nested_subagents() {
+    fn shows_the_run_the_copy_button_and_nested_subagents() {
         let mut app = App::new();
         app.process_command(UiCommand::LogView(Box::new(view())));
         app.run_log_mut().toggle(&LogPanel::Step("1a-x".into(), 2));
         let text = screen(&mut app);
-        assert!(text.contains("Copy log"), "{text}");
+        let top = row(&text, "fix the parser");
+        assert!(top.contains("Copy log"), "{text}");
+        assert!(top.contains('●'), "the run's status leads: {top}");
+        let info = row(&text, "sonnet-5-5 · 1 turn");
+        assert!(info.contains("/home/me/.aura/runs/1a-x/log.json"), "{text}");
         assert!(
-            text.contains("Stored at /home/me/.aura/runs/1a-x/log.json"),
+            !text.contains("RUN  ") && !text.contains("SUBAGENT"),
             "{text}"
         );
-        assert!(text.contains("RUN  fix the parser"), "{text}");
         assert!(text.contains("Turn 1"), "{text}");
         assert!(text.contains("the parser drops the last token"), "{text}");
-        assert!(text.contains("SUBAGENT  find the token bug"), "{text}");
+        let child = text
+            .lines()
+            .find(|l| l.contains("find the token bug") && !l.contains("task @explore"))
+            .unwrap_or_else(|| panic!("the subagent's row:\n{text}"));
+        assert!(child.contains('▸'), "{child}");
 
         let button = app.run_log().copy_button_area().expect("drawn");
         assert!(app.click_log(button.x + 1, button.y));
@@ -787,30 +948,25 @@ mod tests {
         );
     }
 
-    /// The row of `screen` that holds `needle`.
-    fn row<'a>(screen: &'a str, needle: &str) -> &'a str {
-        screen
-            .lines()
-            .find(|line| line.contains(needle))
-            .unwrap_or_else(|| panic!("{needle:?} not on screen:\n{screen}"))
-    }
-
     #[test]
     fn steps_read_as_calls_and_results_with_their_columns_lined_up() {
         let mut app = App::new();
         app.process_command(UiCommand::LogView(Box::new(view())));
         let text = screen(&mut app);
-        let model = row(&text, "  3 model");
-        assert!(
-            model.contains("read_file src/parser.rs · run_command cargo test"),
-            "{text}"
-        );
+        let model = row(&text, "read_file src/parser.rs · run_command cargo test");
+        assert!(model.contains("model"), "{text}");
         let read = row(&text, "↳ read_file src/parser.rs  340 lines");
         let failed = row(&text, "↳ run_command cargo test  exit 101 · 40 lines");
-        assert!(failed.contains("✗"), "a failure is marked: {failed}");
+        assert!(failed.contains('✗'), "a failure is marked: {failed}");
         for line in [model, read, failed] {
             assert!(!line.contains('✓') && !line.contains('▸'), "{line}");
         }
+        let at = |line: &str, c: char| line.chars().position(|x| x == c);
+        assert_eq!(
+            at(failed, '✗'),
+            at(row(&text, "Turn 1"), 'T').map(|t| t - 4),
+            "the failure sits in the gutter, left of every row:\n{text}"
+        );
         let end = |line: &str, cell: &str| {
             line.find(cell)
                 .map(|at| line[..at].chars().count() + cell.chars().count())
@@ -825,10 +981,29 @@ mod tests {
         assert_eq!(end(read, "19ms"), end(model, "3s"), "{text}");
         assert_eq!(end(model, "$0.0091"), end(turn, "$1.45"), "{text}");
         assert_eq!(end(model, "14k tok"), end(turn, "2.2M tok"), "{text}");
+        let heads = row(&text, "tokens");
+        assert_eq!(end(heads, "time"), end(turn, "4m 02s"), "{text}");
+        assert_eq!(end(heads, "cost"), end(turn, "$1.45"), "{text}");
     }
 
     #[test]
-    fn a_long_title_goes_on_over_the_next_line() {
+    fn the_details_start_shut_and_hold_the_files() {
+        let mut app = App::new();
+        app.process_command(UiCommand::LogView(Box::new(view())));
+        let text = screen(&mut app);
+        assert!(row(&text, "Details").contains('▸'), "{text}");
+        assert!(!text.contains("claude/claude-sonnet-5-5"), "{text}");
+        app.run_log_mut().toggle(&LogPanel::Details("1a-x".into()));
+        let text = screen(&mut app);
+        assert!(text.contains("claude/claude-sonnet-5-5"), "{text}");
+        assert!(
+            row(&text, "log  /home").contains("/home/me/.aura/runs/1a-x/log.json"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_long_title_is_cut_so_the_header_keeps_three_lines() {
         let mut log = view();
         log.runs[0].title = "remember the tab selected with each agent, and default to the chat \
             tab when none was selected before, in the terminal and the desktop app"
@@ -837,10 +1012,45 @@ mod tests {
         app.process_command(UiCommand::LogView(Box::new(log)));
         let text = screen(&mut app);
         let lines: Vec<&str> = text.lines().collect();
-        let top = lines.iter().position(|l| l.contains("Run log")).unwrap();
-        assert!(lines[top].contains("Copy log"), "{text}");
-        assert!(lines[top + 1].contains("the desktop app"), "{text}");
-        assert!(lines[top + 2].contains("Stored at"), "{text}");
+        let top = lines.iter().position(|l| l.contains("Copy log")).unwrap();
+        assert!(lines[top].contains('…'), "{text}");
+        assert!(!text.contains("the desktop app"), "{text}");
+        assert!(lines[top + 1].contains("log.json"), "{text}");
+        assert_eq!(rule_row(&text), top + 2, "{text}");
+    }
+
+    #[test]
+    fn the_header_keeps_its_height_with_or_without_a_log() {
+        let mut app = App::new();
+        app.process_command(UiCommand::LogNotice {
+            agent_id: String::new(),
+            notice: "This agent has no run log yet; send it a prompt".into(),
+        });
+        let empty = screen(&mut app);
+        app.process_command(UiCommand::LogView(Box::new(view())));
+        let loaded = screen(&mut app);
+        assert_eq!(rule_row(&empty), rule_row(&loaded), "{empty}\n{loaded}");
+    }
+
+    #[test]
+    fn coming_back_draws_neither_the_old_log_nor_an_old_notice() {
+        let mut app = App::new();
+        app.select_pane_tab(crate::PaneTab::Chat(crate::ChatTab::Log));
+        app.process_command(UiCommand::LogView(Box::new(view())));
+        app.select_pane_tab(crate::PaneTab::Chat(crate::ChatTab::Chat));
+        app.select_pane_tab(crate::PaneTab::Chat(crate::ChatTab::Log));
+        let text = screen(&mut app);
+        assert!(!text.contains("fix the parser"), "{text}");
+        assert!(!text.contains("Copy log"), "{text}");
+
+        app.process_command(UiCommand::LogNotice {
+            agent_id: String::new(),
+            notice: "This agent has no run log yet; send it a prompt".into(),
+        });
+        app.select_pane_tab(crate::PaneTab::Chat(crate::ChatTab::Chat));
+        app.select_pane_tab(crate::PaneTab::Chat(crate::ChatTab::Log));
+        let text = screen(&mut app);
+        assert!(!text.contains("no run log yet"), "{text}");
     }
 
     #[test]
@@ -852,6 +1062,35 @@ mod tests {
         });
         let text = screen(&mut app);
         assert!(text.contains("no run log yet"), "{text}");
+        assert!(text.contains("r to retry"), "{text}");
         assert!(!text.contains("Copy log"));
+    }
+
+    #[test]
+    fn a_log_waited_for_says_it_is_loading_only_after_a_moment() {
+        let mut app = App::new();
+        app.run_log_mut().loading_since = Some(Instant::now());
+        let text = screen(&mut app);
+        assert!(
+            !text.contains("Loading"),
+            "a quick load shows nothing:\n{text}"
+        );
+        assert!(!text.contains("once it has run a turn"), "{text}");
+        app.run_log_mut().loading_since = Instant::now().checked_sub(LOADING_DELAY);
+        let text = screen(&mut app);
+        assert!(text.contains(LOADING), "{text}");
+    }
+
+    #[test]
+    fn the_log_of_another_agent_is_never_drawn() {
+        let mut app = App::new();
+        app.run_log_mut().view = Some(LogView {
+            agent_id: "someone-else".into(),
+            ..view()
+        });
+        let text = screen(&mut app);
+        assert!(!text.contains("fix the parser"), "{text}");
+        assert!(!text.contains("Copy log"), "{text}");
+        assert!(app.run_log().copy_button_area().is_none());
     }
 }

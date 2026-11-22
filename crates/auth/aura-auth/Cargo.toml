@@ -12,6 +12,7 @@ aura-auth-kit = { path = "../aura-auth-kit" }
 aura-auth-zos = { path = "../aura-auth-zos" }
 aura-auth-chatgpt = { path = "../aura-auth-chatgpt" }
 aura-auth-claude = { path = "../aura-auth-claude" }
+aura-auth-openrouter = { path = "../aura-auth-openrouter" }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -24,6 +25,7 @@ keyring = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+axum = { workspace = true }
 reqwest = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }

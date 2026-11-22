@@ -232,9 +232,10 @@ impl ProcessTable {
 
     /// [`Self::name_agent`] for each of `agents`, under one lock, leaving
     /// names that haven't changed as they are.
-    pub fn name_agents<'a>(&self, agents: impl IntoIterator<Item = (AgentId, &'a str)>) {
+    pub fn name_agents<N: AsRef<str>>(&self, agents: impl IntoIterator<Item = (AgentId, N)>) {
         let mut inner = lock(&self.inner);
         for (agent, name) in agents {
+            let name = name.as_ref();
             let hex = agent.to_hex();
             if inner.names.get(&hex).map(String::as_str) != Some(name) {
                 inner.names.insert(hex, name.to_string());

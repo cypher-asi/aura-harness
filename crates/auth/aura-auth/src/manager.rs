@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use aura_auth_kit::{LoopbackListener, CALLBACK_TIMEOUT};
 use aura_core_auth::{
     AuthError as ProviderError, AuthorizationRequest, CredentialResolver, IdentityProvider,
-    InferenceCredential, LinkStatus, LinkedAccount, OAuthTokens, Owner, ProviderKind,
+    InferenceCredential, LinkGrant, LinkStatus, LinkedAccount, OAuthTokens, Owner, ProviderKind,
     StoredSession, SubscriptionProvider,
 };
 use chrono::Utc;
@@ -100,7 +100,8 @@ pub struct AuthManager {
 }
 
 impl AuthManager {
-    /// Production manager: `~/.aura` vault, zOS, ChatGPT and Claude.
+    /// Production manager: `~/.aura` vault, zOS, ChatGPT, Claude and
+    /// OpenRouter.
     ///
     /// # Errors
     ///
@@ -113,7 +114,8 @@ impl AuthManager {
         Ok(
             Self::with_identity(vault, Arc::new(aura_auth_zos::ZosIdentity::new()?))
                 .with_subscription(Arc::new(aura_auth_chatgpt::ChatgptProvider::new(host_id)))
-                .with_subscription(Arc::new(aura_auth_claude::ClaudeProvider::new())),
+                .with_subscription(Arc::new(aura_auth_claude::ClaudeProvider::new()))
+                .with_subscription(Arc::new(aura_auth_openrouter::OpenRouterProvider::new())),
         )
     }
 
@@ -321,16 +323,65 @@ impl AuthManager {
     /// Finish a sign-in started by [`Self::begin_link`], storing the
     /// link under the identity that started it.
     ///
+    /// In paste mode, input the provider recognises as an API key (see
+    /// [`SubscriptionProvider::is_api_key`]) is checked and stored as the
+    /// credential instead of being exchanged as an authorization code.
+    ///
     /// # Errors
     ///
     /// Fails on expiry, a declined or invalid callback, a failed code
-    /// exchange, or when the active identity changed mid-sign-in.
+    /// exchange, a rejected API key, or when the active identity changed
+    /// mid-sign-in.
     pub async fn finish_link(
         &self,
         pending: PendingLink,
         pasted: Option<&str>,
     ) -> Result<LinkedAccount, AuthError> {
-        let adapter = self.subscription(pending.provider)?;
+        let provider = pending.provider;
+        let owner = pending.owner.clone();
+        let adapter = self.subscription(provider)?;
+        let api_key = pasted.filter(|p| pending.needs_paste() && adapter.is_api_key(p));
+        let grant = match api_key {
+            Some(key) => {
+                self.ensure_owner(&owner)?;
+                adapter.accept_api_key(key.trim()).await?
+            }
+            None => {
+                self.exchange_code(adapter.as_ref(), pending, pasted)
+                    .await?
+            }
+        };
+        self.store_grant(adapter.as_ref(), provider, &owner, grant)
+            .await
+    }
+
+    /// Link `provider` to the active identity with an API key, without
+    /// a browser sign-in. Only providers that issue long-lived keys
+    /// (OpenRouter) accept one.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the provider is unknown or takes no API key, the key
+    /// is malformed or rejected, or on storage failures.
+    pub async fn link_api_key(
+        &self,
+        provider: ProviderKind,
+        key: &str,
+    ) -> Result<LinkedAccount, AuthError> {
+        let adapter = self.subscription(provider)?;
+        let owner = self.owner();
+        let grant = adapter.accept_api_key(key.trim()).await?;
+        self.store_grant(adapter.as_ref(), provider, &owner, grant)
+            .await
+    }
+
+    /// Wait for (or parse the pasted) authorization code and exchange it.
+    async fn exchange_code(
+        &self,
+        adapter: &dyn SubscriptionProvider,
+        pending: PendingLink,
+        pasted: Option<&str>,
+    ) -> Result<LinkGrant, AuthError> {
         let callback = match pending.listener {
             Some(listener) => listener.wait(CALLBACK_TIMEOUT).await?,
             None => aura_auth_kit::parse_pasted_code(
@@ -338,16 +389,11 @@ impl AuthManager {
                 &pending.request.state,
             )?,
         };
-        if self.owner() != pending.owner {
-            return Err(ProviderError::Invalid(
-                "The signed-in account changed during sign-in; start again".into(),
-            )
-            .into());
-        }
-        let existing = self.vault.link(&pending.owner, pending.provider);
-        let grant = match adapter.exchange(&pending.request, &callback).await {
-            Ok(grant) => grant,
+        self.ensure_owner(&pending.owner)?;
+        match adapter.exchange(&pending.request, &callback).await {
+            Ok(grant) => Ok(grant),
             Err(e) => {
+                let existing = self.vault.link(&pending.owner, pending.provider);
                 if existing.is_none() {
                     if let Some(issued) = &callback.client_id {
                         self.vault.set_issued_client(
@@ -357,9 +403,32 @@ impl AuthManager {
                         )?;
                     }
                 }
-                return Err(e.into());
+                Err(e.into())
             }
-        };
+        }
+    }
+
+    /// Fails when the active identity is no longer `owner`.
+    fn ensure_owner(&self, owner: &Owner) -> Result<(), AuthError> {
+        if self.owner() != *owner {
+            return Err(ProviderError::Invalid(
+                "The signed-in account changed during sign-in; start again".into(),
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    /// Store `grant` as `owner`'s link to `provider`, replacing any
+    /// existing link and keeping its details where the grant has none.
+    async fn store_grant(
+        &self,
+        adapter: &dyn SubscriptionProvider,
+        provider: ProviderKind,
+        owner: &Owner,
+        grant: LinkGrant,
+    ) -> Result<LinkedAccount, AuthError> {
+        let existing = self.vault.link(owner, provider);
         let now = Utc::now();
         let plan = adapter
             .plan_tier(&grant.tokens)
@@ -367,8 +436,8 @@ impl AuthManager {
             .or_else(|| existing.as_ref().and_then(|l| l.plan.clone()));
         let link = LinkedAccount {
             id: uuid::Uuid::new_v4().to_string(),
-            provider: pending.provider,
-            owner: pending.owner.clone(),
+            provider,
+            owner: owner.clone(),
             subject: grant
                 .subject
                 .or_else(|| existing.as_ref().map(|l| l.subject.clone()))
@@ -385,8 +454,7 @@ impl AuthManager {
             plan,
         };
         self.vault.put_link(&link, &grant.tokens)?;
-        self.vault
-            .set_issued_client(pending.provider, &pending.owner, None)?;
+        self.vault.set_issued_client(provider, owner, None)?;
         info!(provider = %link.provider, owner = %link.owner, "Subscription linked");
         Ok(link)
     }

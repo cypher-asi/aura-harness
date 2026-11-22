@@ -59,6 +59,7 @@ members = [
     "crates/auth/aura-auth-zos",
     "crates/auth/aura-auth-chatgpt",
     "crates/auth/aura-auth-claude",
+    "crates/auth/aura-auth-openrouter",
     "crates/auth/aura-auth",
     "crates/engine/aura-engine-automaton",
     "crates/engine/aura-engine",

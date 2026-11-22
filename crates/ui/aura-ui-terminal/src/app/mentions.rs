@@ -282,6 +282,15 @@ pub(crate) struct MentionMenu {
 }
 
 impl App {
+    /// Close the `@` picker, as when another agent's draft comes into the
+    /// input; the next key opens it again on an `@word` there.
+    pub(super) fn close_mentions(&mut self) {
+        self.mentions.query = None;
+        self.mentions.matches.clear();
+        self.mentions.cursor = 0;
+        self.mentions.dismissed = None;
+    }
+
     /// Files and folders matching the `@word` at the cursor. Empty while
     /// the picker is closed, and while an approval prompt or another modal
     /// state has the keyboard: those can start without a key press (a tool

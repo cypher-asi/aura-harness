@@ -28,6 +28,7 @@ impl Kernel {
         let timeout = std::time::Duration::from_millis(self.config.proposal_timeout_ms);
         let started = std::time::Instant::now();
         let purpose = request.metadata.purpose;
+        let thinking_effort = request.thinking_effort;
         let model = request.model.clone();
         let response = match tokio::time::timeout(timeout, self.provider.complete(request)).await {
             Ok(Ok(r)) => r,
@@ -79,6 +80,7 @@ impl Kernel {
 
         let mut reasoning_payload = serde_json::json!({
             "model": response.trace.model,
+            "route": model,
             "stop_reason": format!("{:?}", response.stop_reason),
             "input_tokens": response.usage.input_tokens,
             "output_tokens": response.usage.output_tokens,
@@ -89,6 +91,7 @@ impl Kernel {
         if let Some(purpose) = purpose {
             reasoning_payload["purpose"] = serde_json::json!(purpose);
         }
+        super::stream::add_thinking_effort(&mut reasoning_payload, thinking_effort);
         let thinking: String = response
             .message
             .content
@@ -158,6 +161,7 @@ impl Kernel {
         let timeout = std::time::Duration::from_millis(self.config.proposal_timeout_ms);
         let started = std::time::Instant::now();
         let (model, purpose) = (request.model.clone(), request.metadata.purpose);
+        let thinking_effort = request.thinking_effort;
         let stream =
             match tokio::time::timeout(timeout, self.provider.complete_streaming(request)).await {
                 Ok(Ok(s)) => s,
@@ -217,6 +221,8 @@ impl Kernel {
             observer: self.config.record_observer.clone(),
             started,
             plan_usage: Vec::new(),
+            thinking_effort,
+            route: model.to_string(),
         };
 
         Ok((handle, stream))
@@ -235,6 +241,7 @@ impl Kernel {
     ) -> Result<(), crate::KernelError> {
         let mut payload = serde_json::json!({
             "model": model,
+            "route": model,
             "stop_reason": "Error",
             "stage": stage,
             "error": error_reason,

@@ -1,0 +1,13 @@
+{
+  "id": "01a204e389010019",
+  "title": "Review a focused change, read-only. Be fast: you have about 3 minutes, so report what you find, not a full audit.",
+  "state": "completed",
+  "agent_id": "bfe907e4497bba012a7bd10ab8f8b0e91b5335a5bba387e8a17519a1c71c8aaf",
+  "agent_name": "reviewer #26",
+  "assignee": "reviewer",
+  "parent": "01a204cf0ffa0011",
+  "items": [],
+  "updated_ms": 1795378351175,
+  "created_ms": 1795378350337,
+  "tool_use_id": "toolu_011k3W1J7gVwRfiAQtjnoPKs"
+}

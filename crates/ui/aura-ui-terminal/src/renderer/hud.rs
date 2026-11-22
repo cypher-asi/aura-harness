@@ -172,34 +172,12 @@ fn spans_width(spans: &[Span<'_>]) -> usize {
     spans.iter().map(|s| display_width(&s.content)).sum()
 }
 
-/// `parts` fitted to `room`, with the thinking level at `at`, beside the
-/// model, only when it leaves room for every part that fits without it.
-fn with_thinking<'a>(
-    mut parts: Vec<Vec<Span<'a>>>,
-    at: usize,
-    room: usize,
-    app: &App,
-    theme: &Theme,
-) -> Vec<Span<'a>> {
-    let thinking = super::thinking_indicator_spans(app, theme);
-    let thinking_width = spans_width(&thinking);
-    let without = fitting(parts.clone(), room, theme);
-    if thinking_width == 0 {
-        return without;
-    }
-    parts.insert(at, thinking);
-    let with = fitting(parts, room, theme);
-    if spans_width(&with) == spans_width(&without) + display_width(SEPARATOR) + thinking_width {
-        with
-    } else {
-        without
-    }
-}
-
-/// Render the footer into `area`: the model and what the agent has used on
-/// the left, with its status at the right. Returns where a notice can go
-/// on the row: the gap between the two, or everything left of the status
-/// when that gap is too narrow to read.
+/// Render the footer into `area`: the model, its thinking level and what
+/// the agent has used on the left, with its status at the right. Parts
+/// that don't fit drop from the end, so the stats give way before the
+/// thinking level, and it gives way before the model. Returns where a
+/// notice can go on the row: the gap between the two, or everything left
+/// of the status when that gap is too narrow to read.
 pub(super) fn render_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) -> Rect {
     if area.height == 0 || area.width == 0 {
         return Rect { height: 0, ..area };
@@ -217,9 +195,9 @@ pub(super) fn render_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Th
         }
     }
     parts.push(super::model_indicator_spans(app, theme));
-    let thinking_at = parts.len();
+    parts.push(super::thinking_indicator_spans(app, theme));
     parts.extend(stats.map(|(text, color)| vec![Span::styled(text, Style::default().fg(color))]));
-    let stats = with_thinking(parts, thinking_at, room, app, theme);
+    let stats = fitting(parts, room, theme);
     let stats_width = spans_width(&stats);
     frame.render_widget(Paragraph::new(Line::from(stats)), row);
     frame.render_widget(
@@ -461,27 +439,39 @@ pub(super) fn render_todo_panel(frame: &mut Frame, chat: Rect, app: &App, theme:
 }
 
 /// `⬢ Working on 3 to-dos` over the to-do list, as the chat's live tail
-/// while a turn is in flight.
-pub(super) fn todo_checklist(hud: &Hud, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+/// while a turn is in flight. With an animation `frame`, a band of light
+/// sweeps across `Working` to show the work goes on.
+pub(super) fn todo_checklist(
+    hud: &Hud,
+    width: usize,
+    theme: &Theme,
+    frame: Option<usize>,
+) -> Vec<Line<'static>> {
     if hud.todos.is_empty() {
         return Vec::new();
     }
     let (_, total) = hud.todo_progress();
     let plural = if total == 1 { "" } else { "s" };
-    let mut lines = vec![Line::from(vec![
-        Span::styled("⬢ ", Style::default().fg(theme.colors.faint)),
-        Span::styled(
+    let label_style = Style::default().add_modifier(Modifier::BOLD);
+    let mut header = vec![Span::styled("⬢ ", Style::default().fg(theme.colors.faint))];
+    match frame {
+        Some(frame) => header.extend(crate::animation::shimmer_spans(
             "Working",
-            Style::default()
-                .fg(theme.colors.foreground)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" on {total} to-do{plural}"),
-            Style::default().fg(theme.colors.secondary),
-        ),
-    ])];
-    let room = width.saturating_sub(4);
+            frame,
+            label_style,
+            (theme.colors.muted, theme.colors.foreground),
+        )),
+        None => header.push(Span::styled(
+            "Working",
+            label_style.fg(theme.colors.foreground),
+        )),
+    }
+    header.push(Span::styled(
+        format!(" on {total} to-do{plural}"),
+        Style::default().fg(theme.colors.secondary),
+    ));
+    let mut lines = vec![Line::from(header)];
+    let room = width.saturating_sub(2);
     lines.extend(
         hud.todos
             .iter()
@@ -491,41 +481,19 @@ pub(super) fn todo_checklist(hud: &Hud, width: usize, theme: &Theme) -> Vec<Line
     let more = hud.todos.len().saturating_sub(MAX_TODO_ROWS);
     if more > 0 {
         lines.push(Line::from(Span::styled(
-            format!("    {more} more"),
+            format!("  {more} more"),
             Style::default().fg(theme.colors.muted),
         )));
     }
     lines
 }
 
-/// `  ▣ Write the parser`: a to-do's box, then its text.
+/// `▣ Write the parser`: a to-do's box, under the header's `⬢`, then its
+/// text.
 fn todo_line(todo: &TodoView, room: usize, theme: &Theme) -> Line<'static> {
-    let (mark, mark_color, text_style) = match todo.state {
-        TodoState::Completed => (
-            "☒",
-            theme.colors.faint,
-            Style::default().fg(theme.colors.faint),
-        ),
-        TodoState::InProgress => (
-            "▣",
-            theme.colors.foreground,
-            Style::default()
-                .fg(theme.colors.foreground)
-                .add_modifier(Modifier::BOLD),
-        ),
-        TodoState::Pending => (
-            "☐",
-            theme.colors.muted,
-            Style::default().fg(theme.colors.muted),
-        ),
-        TodoState::Cancelled => (
-            "☐",
-            theme.colors.faint,
-            Style::default()
-                .fg(theme.colors.faint)
-                .add_modifier(Modifier::CROSSED_OUT),
-        ),
-    };
+    let mark = super::plans::marker(todo.state);
+    let mark_color = super::plans::marker_color(todo.state, theme);
+    let text_style = super::plans::todo_style(todo.state, theme);
     let agent = todo
         .assignee
         .as_deref()
@@ -534,7 +502,7 @@ fn todo_line(todo: &TodoView, room: usize, theme: &Theme) -> Line<'static> {
         .unwrap_or_default();
     let room = room.saturating_sub(display_width(&agent));
     Line::from(vec![
-        Span::styled(format!("  {mark} "), Style::default().fg(mark_color)),
+        Span::styled(format!("{mark} "), Style::default().fg(mark_color)),
         Span::styled(truncate(&todo.content, room), text_style),
         Span::styled(agent, Style::default().fg(theme.colors.faint)),
     ])
@@ -602,17 +570,17 @@ mod tests {
             ],
             ..Hud::default()
         };
-        let lines = todo_checklist(&hud, 40, &theme);
+        let lines = todo_checklist(&hud, 40, &theme, None);
         let text = |line: &Line<'_>| -> String { line.spans.iter().map(|s| &*s.content).collect() };
         let rows: Vec<String> = lines.iter().map(text).collect();
         assert_eq!(
             rows,
             [
                 "⬢ Working on 3 to-dos",
-                "  ☒ read",
-                "  ▣ fix",
-                "  ☐ test",
-                "  ☐ drop"
+                "☒ read",
+                "▣ fix",
+                "☐ test",
+                "☐ drop"
             ]
         );
         let item = |row: usize| lines[row].spans[1].style;
@@ -621,6 +589,36 @@ mod tests {
         assert!(item(2).add_modifier.contains(Modifier::BOLD));
         assert_eq!(item(3).fg, Some(theme.colors.muted));
         assert!(item(4).add_modifier.contains(Modifier::CROSSED_OUT));
+    }
+
+    #[test]
+    fn checklist_working_label_shimmers_when_animated() {
+        let theme = Theme::default();
+        let hud = Hud {
+            todos: vec![TodoView {
+                content: "fix".to_string(),
+                state: TodoState::InProgress,
+                assignee: None,
+                task: None,
+            }],
+            ..Hud::default()
+        };
+        let header = |frame| {
+            let lines = todo_checklist(&hud, 40, &theme, frame);
+            lines[0].spans.clone()
+        };
+        let text = |spans: &[Span<'_>]| -> String { spans.iter().map(|s| &*s.content).collect() };
+        // Mid-pass, the band lights part of `Working` and leaves the rest.
+        let lit = header(Some(4));
+        assert_eq!(text(&lit), "⬢ Working on 1 to-do");
+        assert!(lit.len() > 3, "band splits the label: {lit:?}");
+        assert!(lit[1..lit.len() - 1]
+            .iter()
+            .all(|s| s.style.add_modifier.contains(Modifier::BOLD)));
+        // Without animation the label is one steady span.
+        let steady = header(None);
+        assert_eq!(steady.len(), 3);
+        assert_eq!(steady[1].style.fg, Some(theme.colors.foreground));
     }
 
     #[test]
@@ -637,7 +635,7 @@ mod tests {
                 .collect(),
             ..Hud::default()
         };
-        let lines = todo_checklist(&hud, 40, &theme);
+        let lines = todo_checklist(&hud, 40, &theme, None);
         assert_eq!(lines.len(), MAX_TODO_ROWS + 2);
         let last: String = lines[MAX_TODO_ROWS + 1]
             .spans

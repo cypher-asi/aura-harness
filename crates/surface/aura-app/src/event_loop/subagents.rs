@@ -686,28 +686,57 @@ impl AgentHub {
         lock(&self.definitions).reload()
     }
 
-    /// Rows for the roster (the agents panel's Agents tab).
+    /// Rows for the roster (the agents panel's Agents tab), each with its
+    /// abbreviation. Definitions without one yet reserve it now, in roster
+    /// order (see [`AgentRegistry::reserve_prefixes`]); when that cannot
+    /// be saved the roster still shows them, and the next save keeps them.
     pub fn definition_summaries(&self) -> Vec<AgentDefinitionSummary> {
-        lock(&self.definitions)
+        let mut summaries: Vec<AgentDefinitionSummary> = lock(&self.definitions)
             .all()
             .iter()
             .map(|d| AgentDefinitionSummary {
                 name: d.name.clone(),
                 description: d.description.clone(),
+                abbreviation: None,
             })
-            .collect()
+            .collect();
+        let names: Vec<&str> = summaries.iter().map(|s| s.name.as_str()).collect();
+        let abbreviations = {
+            let mut registry = lock(&self.registry);
+            registry.reserve_prefixes(&names).or_else(|error| {
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    "could not save the permanent agents' abbreviations"
+                );
+                // Reserved in memory all the same, so asking again
+                // reserves nothing new and saves nothing.
+                registry.reserve_prefixes(&names)
+            })
+        }
+        .unwrap_or_default();
+        for (summary, abbreviation) in summaries.iter_mut().zip(abbreviations) {
+            summary.abbreviation = Some(abbreviation);
+        }
+        summaries
     }
 
     /// Rows for the Agents panel.
     pub fn agent_summaries(&self) -> Vec<AgentSummary> {
         let registry = lock(&self.registry);
         let running: HashSet<AgentId> = lock(&self.running).keys().copied().collect();
-        agent_summaries(
+        let mut rows = agent_summaries(
             &registry,
             self.factory.store.as_ref(),
             registry.active().agent_id(),
             &running,
-        )
+        );
+        drop(registry);
+        for row in &mut rows {
+            if let Ok(agent_id) = AgentId::from_hex(&row.id) {
+                self.mark_plan_mode(agent_id, row);
+            }
+        }
+        rows
     }
 
     /// Archive spawns from an earlier run of the app that never got to
@@ -752,6 +781,60 @@ impl AgentHub {
         }
     }
 
+    /// Name `agent` after its subtask, `subtitle`, and show it in the
+    /// Agents panel right away, unless it was named meanwhile or is no
+    /// spawned instance.
+    pub(super) async fn apply_subtitle(&self, agent: AgentId, subtitle: &str) {
+        if self.set_subtitle_if_needed(agent, subtitle) {
+            self.send_agent_list().await;
+        }
+    }
+
+    /// Save `subtitle` for `agent` when it still needs one. Returns whether
+    /// it was saved.
+    fn set_subtitle_if_needed(&self, agent: AgentId, subtitle: &str) -> bool {
+        let mut registry = lock(&self.registry);
+        let wanted = registry
+            .find(agent)
+            .is_some_and(crate::agent_registry::RegisteredAgent::needs_subtitle);
+        wanted
+            && match registry.set_subtitle(agent, subtitle) {
+                Ok(()) => true,
+                Err(e) => {
+                    warn!(%agent, error = %e, "Could not save the subtask's subtitle");
+                    false
+                }
+            }
+    }
+
+    /// Name the subtask `child` was spawned for with `prompt`: by the
+    /// title model in the background, through the child's `kernel` with
+    /// `config`'s credentials, or at once from the prompt under a
+    /// benchmark's run, whose agents are named without model calls.
+    async fn name_subtask(
+        self: &Arc<Self>,
+        request: &SubagentDispatchRequest,
+        child: AgentId,
+        kernel: &Arc<Kernel>,
+        config: &AgentLoopConfig,
+        prompt: &str,
+    ) {
+        if self.in_bench(request.parent_agent_id) {
+            self.apply_subtitle(child, &super::titles::bench_subtitle(prompt))
+                .await;
+            return;
+        }
+        let classifier = lock(&self.base).gate.classifier.clone();
+        super::titles::spawn_subtitle(
+            Arc::clone(self),
+            child,
+            aura_agent::KernelModelGateway::new(Arc::clone(kernel)),
+            config.clone(),
+            super::titles::title_model(classifier),
+            prompt.to_string(),
+        );
+    }
+
     /// The projects, the Agents panel rows and the Archive, in the order
     /// the UI takes them: the projects first, so one with every agent
     /// archived is known when the rows arrive. Also returns the agent the
@@ -773,8 +856,18 @@ impl AgentHub {
             crate::record_loader::ListRows::build(&registry, &running)
         };
         rows.read_activity(self.factory.store.as_ref(), &mut lock(&self.last_active));
+        for (agent_id, row) in &mut rows.listed {
+            self.mark_plan_mode(*agent_id, row);
+        }
         let active = rows.active;
         (rows.into_commands(), active)
+    }
+
+    /// Mark `row`, the Agents panel row of `agent_id`, when the agent is
+    /// in plan mode. Archived agents run no turns, so their rows are left
+    /// unmarked.
+    fn mark_plan_mode(&self, agent_id: AgentId, row: &mut AgentSummary) {
+        row.plan_mode = self.mode_of(agent_id) == PermissionMode::Plan;
     }
 
     /// The projects, the Agents panel rows and the Archive, in the order
@@ -1192,6 +1285,10 @@ impl AgentHub {
         config.initial_todos.clone_from(&session.todos);
         // Observers report on the agent they were installed for, not this one.
         config.observers.clear();
+        // Named beside the turn, not after it, so the name shows within a
+        // second or two.
+        self.name_subtask(request, child_id, &session.kernel, &config, &prompt)
+            .await;
         if let Some(addendum) = request
             .system_prompt_addendum
             .as_deref()
@@ -1242,11 +1339,28 @@ impl AgentHub {
         })
     }
 
-    /// Whether `agent` runs a benchmark's run.
+    /// Whether `agent` works under a benchmark: it, or an agent above it
+    /// in the registry, runs a benchmark's run (its trace is a bench
+    /// run), or it is a `/compare` run or a subtask of one. So a subtask
+    /// nested under a run (bench arm, `RE1`, `REV1`) is treated like the
+    /// run's direct subtasks, though its own trace is a TUI run.
+    /// [`AgentRegistry::ancestry`] stops after as many steps as there are
+    /// agents, so a hand-edited parent cycle cannot loop.
     fn in_bench(&self, agent: AgentId) -> bool {
-        self.traces
-            .recorder(agent)
-            .is_some_and(|rec| rec.meta().source == RunSource::Bench)
+        let (mut ancestry, under_compare) = {
+            let registry = lock(&self.registry);
+            (registry.ancestry(agent), registry.under_compare(agent))
+        };
+        if ancestry.is_empty() {
+            // Unregistered: only its own trace can say.
+            ancestry.push(agent);
+        }
+        under_compare
+            || ancestry.into_iter().any(|id| {
+                self.traces
+                    .recorder(id)
+                    .is_some_and(|rec| rec.meta().source == RunSource::Bench)
+            })
     }
 
     /// Run `subtask` to its end: wait for its workspace when it writes

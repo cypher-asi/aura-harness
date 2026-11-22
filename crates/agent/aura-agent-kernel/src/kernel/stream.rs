@@ -8,7 +8,7 @@
 use super::RecordObserver;
 use crate::context::hash_tx_with_window;
 use aura_core_types::{AgentId, PlanUsage, RecordEntry, Transaction, TransactionType};
-use aura_model::{StopReason, Usage};
+use aura_model::{StopReason, ThinkingEffort, Usage};
 use aura_store_db::Store;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -37,6 +37,15 @@ pub struct ReasonStreamHandle {
     /// Plan usage the stream's response headers reported, recorded with
     /// the completed entry.
     pub(super) plan_usage: Vec<PlanUsage>,
+    /// The thinking level the request asked for, recorded with the
+    /// completed entry so the reply's footer can show it, live and when
+    /// the chat is loaded again.
+    pub(super) thinking_effort: Option<ThinkingEffort>,
+    /// The model id the request asked for, route prefix included
+    /// (`claude/…`, `openrouter/…`). Recorded as `route` on both
+    /// finalizations, because the model the upstream echoes back
+    /// (`model`) no longer says which sign-in served the call.
+    pub(super) route: String,
 }
 
 impl ReasonStreamHandle {
@@ -106,6 +115,7 @@ impl ReasonStreamHandle {
     ) -> Result<RecordEntry, crate::KernelError> {
         let mut reasoning_payload = serde_json::json!({
             "model": model,
+            "route": self.route,
             "stop_reason": format!("{stop_reason:?}"),
             "input_tokens": usage.input_tokens,
             "output_tokens": usage.output_tokens,
@@ -114,6 +124,7 @@ impl ReasonStreamHandle {
         });
         add_cache_usage(&mut reasoning_payload, usage);
         add_plan_usage(&mut reasoning_payload, &self.plan_usage);
+        add_thinking_effort(&mut reasoning_payload, self.thinking_effort);
         add_thinking(&mut reasoning_payload, thinking, thinking_ms);
         let payload_bytes = serde_json::to_vec(&reasoning_payload)
             .map_err(|e| crate::KernelError::Serialization(e.to_string()))?;
@@ -137,6 +148,7 @@ impl ReasonStreamHandle {
     /// Returns error if serialization or store append fails.
     pub fn record_failed(self, error: &str) -> Result<RecordEntry, crate::KernelError> {
         let reasoning_payload = serde_json::json!({
+            "route": self.route,
             "error": error,
             "status": "failed",
             "duration_ms": elapsed_ms(self.started),
@@ -178,6 +190,15 @@ pub(crate) fn add_plan_usage(payload: &mut serde_json::Value, plan_usage: &[Plan
     }
     if let Ok(value) = serde_json::to_value(plan_usage) {
         payload["plan_usage"] = value;
+    }
+}
+
+/// Add the thinking level the request asked for to a `Reasoning` payload,
+/// under `thinking_effort`, when it asked for one. Requests that left the
+/// level to the provider record nothing, so no level is shown for them.
+pub(crate) fn add_thinking_effort(payload: &mut serde_json::Value, effort: Option<ThinkingEffort>) {
+    if let Some(effort) = effort {
+        payload["thinking_effort"] = serde_json::Value::from(effort.as_str());
     }
 }
 

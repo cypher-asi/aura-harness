@@ -235,6 +235,7 @@ async fn emit_response_to_ui(
                 activity: None,
                 model: None,
                 usage: None,
+                sources: Vec::new(),
             }))
             .await;
         }
@@ -451,6 +452,7 @@ pub(super) fn system_message(content: String) -> UiCommand {
         activity: None,
         model: None,
         usage: None,
+        sources: Vec::new(),
     })
 }
 

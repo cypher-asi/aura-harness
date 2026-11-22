@@ -1,0 +1,55 @@
+{
+  "id": "01a204e52dc7001d",
+  "title": "Harness notice:",
+  "state": "running",
+  "agent_id": "357cd979c801d7a1a11f0406a472b339ac403ffee1ebd52c91f842bc23e32635",
+  "agent_name": "Agent 931",
+  "items": [
+    {
+      "content": "Registry: persisted unique agent codes + AgentSummary plumbing (done, untested)",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Review codes, subtitles, roster abbreviations for bugs and regressions",
+      "state": "completed",
+      "assignee": "reviewer"
+    },
+    {
+      "content": "Render code column + shared layout helper for hit-testing, update/add terminal tests, docs",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Registry tests for agent code names",
+      "state": "completed",
+      "assignee": "tests"
+    },
+    {
+      "content": "Spawned subtask agents get a Haiku-written subtitle shown as '<CODE>: <subtask name>'",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Fix new_instance numbering to use max existing #n + 1 so names never repeat (after subtitle work lands, same file)",
+      "state": "completed"
+    },
+    {
+      "content": "Show each permanent agent's unique abbreviation (e.g. RE) at far right of AGENTS (roster) tab rows; reserve unique prefixes per definition in registry",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Code format RE36: no hyphen, letters-only prefix of 2 chars, 3 only when needed for uniqueness; migrate saved codes; update UI/tests/labels",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Fix review findings: H1 code/name reuse high-water mark, M1 subtitle vs title precedence, M2 nested bench spawns, M3 title-call timeout",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    }
+  ],
+  "updated_ms": 1795378476515,
+  "created_ms": 1795378458055
+}

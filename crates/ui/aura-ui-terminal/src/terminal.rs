@@ -7,10 +7,14 @@ use crossterm::{
     cursor::{SetCursorStyle, Show},
     event::{
         self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, KeyCode, KeyEventKind, KeyModifiers,
+        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{
+        disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement, EnterAlternateScreen,
+        LeaveAlternateScreen,
+    },
 };
 use ratatui::{backend::CrosstermBackend, Frame, Terminal as RatatuiTerminal};
 use std::io::{self, Stdout, Write};
@@ -38,6 +42,13 @@ pub struct Terminal {
     /// Kitty graphics protocol state; a no-op when the terminal doesn't
     /// support it.
     graphics: graphics::GraphicsState,
+    /// Whether the terminal speaks the kitty keyboard protocol, so
+    /// [`enable_keyboard_enhancement`] can be pushed again after the
+    /// editor hands the screen back.
+    keyboard_supported: bool,
+    /// Whether our keyboard enhancement flags are on the terminal's stack
+    /// for the alternate screen, and so must be popped before leaving it.
+    keyboard_enhanced: bool,
 }
 
 impl Terminal {
@@ -57,6 +68,8 @@ impl Terminal {
             SetCursorStyle::BlinkingBar
         )?;
         enable_bracketed_paste(&mut stdout);
+        let keyboard_supported = keyboard_enhancement_supported();
+        let keyboard_enhanced = keyboard_supported && enable_keyboard_enhancement(&mut stdout);
         let backend = CrosstermBackend::new(stdout);
         let mut inner = RatatuiTerminal::new(backend)?;
         inner.clear()?;
@@ -70,6 +83,8 @@ impl Terminal {
             height: size.height,
             mouse_capture_enabled: true,
             graphics: graphics::GraphicsState::new(protocol),
+            keyboard_supported,
+            keyboard_enhanced,
         })
     }
 
@@ -217,6 +232,7 @@ impl Terminal {
                 if key.kind != KeyEventKind::Press {
                     return false;
                 }
+                let key = legacy_control_key(key);
 
                 if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
                     // Ctrl+C: copy the mouse selection, else cancel or quit
@@ -271,6 +287,9 @@ impl Terminal {
     /// Hand the screen to the user's editor (`$VISUAL`, then `$EDITOR`,
     /// then `vi`) on `path` and take it back once the editor exits.
     fn edit_file(&mut self, path: &Path) -> io::Result<()> {
+        // The flags would make the editor's keys arrive as CSI u codes it
+        // may not read; they belong to the alternate screen we leave.
+        self.disable_keyboard_enhancement();
         disable_raw_mode()?;
         let _ = execute!(self.inner.backend_mut(), DisableBracketedPaste);
         execute!(
@@ -287,11 +306,25 @@ impl Terminal {
             EnableMouseCapture
         )?;
         enable_bracketed_paste(self.inner.backend_mut());
+        self.keyboard_enhanced =
+            self.keyboard_supported && enable_keyboard_enhancement(self.inner.backend_mut());
         self.mouse_capture_enabled = true;
         self.inner.clear()?;
         match status? {
             status if status.success() => Ok(()),
             status => Err(io::Error::other(format!("editor exited with {status}"))),
+        }
+    }
+
+    /// Pop the keyboard enhancement flags pushed by [`Self::new`], if they
+    /// are on. A failure is only logged: the worst outcome is a terminal
+    /// that keeps reporting keys as CSI u codes.
+    fn disable_keyboard_enhancement(&mut self) {
+        if !std::mem::take(&mut self.keyboard_enhanced) {
+            return;
+        }
+        if let Err(e) = execute!(self.inner.backend_mut(), PopKeyboardEnhancementFlags) {
+            tracing::debug!(error = %e, "Failed to pop keyboard enhancement flags");
         }
     }
 
@@ -319,7 +352,9 @@ impl Terminal {
 
 impl Drop for Terminal {
     fn drop(&mut self) {
-        // Always restore terminal state on exit
+        // Always restore terminal state on exit. The keyboard flags go
+        // first: each screen keeps its own stack of them.
+        self.disable_keyboard_enhancement();
         if let Err(e) = disable_raw_mode() {
             error!(error = %e, "Failed to disable raw mode");
         }
@@ -356,6 +391,54 @@ fn wait_for_input(app: &mut App) -> io::Result<bool> {
 fn enable_bracketed_paste(out: &mut impl io::Write) {
     if let Err(e) = execute!(out, EnableBracketedPaste) {
         tracing::debug!(error = %e, "Bracketed paste is not available");
+    }
+}
+
+/// Whether the terminal answers the kitty keyboard protocol query. Legacy
+/// and Windows terminals say no or fail; either way the UI starts with
+/// Alt+Enter and Ctrl+J as its line-break keys, so an error is no reason
+/// to stop.
+fn keyboard_enhancement_supported() -> bool {
+    supports_keyboard_enhancement().unwrap_or_else(|e| {
+        tracing::debug!(error = %e, "Keyboard enhancement query failed");
+        false
+    })
+}
+
+/// Ask the terminal to report modified keys unambiguously, so Shift+Enter
+/// arrives apart from Enter. Only the disambiguation flag is pushed: event
+/// types or every key as an escape code would change how plain typing
+/// arrives. Returns whether the flags were pushed.
+fn enable_keyboard_enhancement(out: &mut impl io::Write) -> bool {
+    let flags = PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES);
+    match execute!(out, flags) {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::debug!(error = %e, "Keyboard enhancement is not available");
+            false
+        }
+    }
+}
+
+/// Report Ctrl+[, Ctrl+M and Ctrl+I as the Esc, Enter and Tab they are
+/// without the kitty keyboard protocol. With [`enable_keyboard_enhancement`]
+/// on, the terminal sends them as the letter with Control, and the UI's
+/// keys are written for the legacy codes. Only plain Control is mapped, so
+/// Ctrl+Shift+M and the like stay what they are.
+fn legacy_control_key(key: KeyEvent) -> KeyEvent {
+    if key.modifiers != KeyModifiers::CONTROL {
+        return key;
+    }
+    let code = match key.code {
+        KeyCode::Char('[') => KeyCode::Esc,
+        KeyCode::Char('m') => KeyCode::Enter,
+        KeyCode::Char('i') => KeyCode::Tab,
+        _ => return key,
+    };
+    KeyEvent {
+        code,
+        modifiers: KeyModifiers::NONE,
+        ..key
     }
 }
 
@@ -411,5 +494,48 @@ mod tests {
 
         let result = KeyResult::quit();
         assert!(result.should_quit());
+    }
+
+    #[test]
+    fn kitty_control_letters_map_back_to_their_legacy_keys() {
+        let ctrl = KeyModifiers::CONTROL;
+        let cases = [
+            (
+                (KeyCode::Char('['), ctrl),
+                (KeyCode::Esc, KeyModifiers::NONE),
+            ),
+            (
+                (KeyCode::Char('m'), ctrl),
+                (KeyCode::Enter, KeyModifiers::NONE),
+            ),
+            (
+                (KeyCode::Char('i'), ctrl),
+                (KeyCode::Tab, KeyModifiers::NONE),
+            ),
+            // Anything else, or with more than Control held, is left alone.
+            ((KeyCode::Char('j'), ctrl), (KeyCode::Char('j'), ctrl)),
+            (
+                (KeyCode::Char('m'), ctrl | KeyModifiers::SHIFT),
+                (KeyCode::Char('m'), ctrl | KeyModifiers::SHIFT),
+            ),
+            (
+                (KeyCode::Char('i'), ctrl | KeyModifiers::ALT),
+                (KeyCode::Char('i'), ctrl | KeyModifiers::ALT),
+            ),
+            (
+                (KeyCode::Char('m'), KeyModifiers::NONE),
+                (KeyCode::Char('m'), KeyModifiers::NONE),
+            ),
+            ((KeyCode::Esc, ctrl), (KeyCode::Esc, ctrl)),
+        ];
+        for ((code, modifiers), (want_code, want_modifiers)) in cases {
+            let key = legacy_control_key(KeyEvent::new(code, modifiers));
+            assert_eq!(
+                (key.code, key.modifiers),
+                (want_code, want_modifiers),
+                "{code:?} {modifiers:?}"
+            );
+            assert_eq!(key.kind, KeyEventKind::Press);
+        }
     }
 }

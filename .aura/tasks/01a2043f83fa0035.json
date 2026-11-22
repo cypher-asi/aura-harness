@@ -1,0 +1,16 @@
+{
+  "id": "01a2043f83fa0035",
+  "title": "Implement the event-loop side of a new \"POLICIES\" tab in the `aura-app` crate (`crates/surface/aura-app`). The UI tab s…",
+  "state": "failed",
+  "agent_id": "36fb0bd10e3a31d9cc04527be36fcc25ae945631348b6d167a72d64302e161ea",
+  "agent_name": "rust-engineer #42",
+  "assignee": "rust-engineer",
+  "parent": "01a204341dd00026",
+  "plan": ".aura/plans/policies-tab-in-the-kernel-panel_e259935f.plan.md",
+  "plan_todo": "app-builder",
+  "items": [],
+  "summary": "ran out of time: it stopped after 3 minutes without a reply",
+  "updated_ms": 1795368171139,
+  "created_ms": 1795367601146,
+  "tool_use_id": "toolu_018yXye4Ddcr69Hs3yKGhYAP"
+}

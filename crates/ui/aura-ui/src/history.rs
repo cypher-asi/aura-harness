@@ -78,6 +78,13 @@ impl InputHistory {
         }
     }
 
+    /// Whether a recalled entry is current, i.e. [`Self::previous`] was
+    /// called since the last add, reset, or step back past the newest.
+    #[must_use]
+    pub const fn is_browsing(&self) -> bool {
+        self.position.is_some()
+    }
+
     /// Reset the browsing position.
     pub fn reset(&mut self) {
         self.position = None;
@@ -197,6 +204,20 @@ mod tests {
         history.add("  hello  ");
         assert_eq!(history.len(), 1);
         assert_eq!(history.previous(), Some("hello"));
+    }
+
+    #[test]
+    fn test_history_is_browsing_tracks_recall() {
+        let mut history = InputHistory::new();
+        history.add("first");
+        assert!(!history.is_browsing());
+        let _ = history.previous();
+        assert!(history.is_browsing());
+        assert!(history.next_newer().is_none());
+        assert!(!history.is_browsing(), "past the newest entry");
+        let _ = history.previous();
+        history.reset();
+        assert!(!history.is_browsing());
     }
 
     #[test]

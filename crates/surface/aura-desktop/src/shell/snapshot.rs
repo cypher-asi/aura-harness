@@ -23,7 +23,7 @@ use crate::{raster, text};
 use aura_ui::events::{
     AgentDefinitionSummary, AgentSummary, CallUsage, FlowKind, FlowLane, FlowNode, FlowUsage,
     MessageData, MessageRole, ModelOptionView, ProcessKind, ProcessStatus, ProcessSummary,
-    TodoState, TodoView, ToolData, TraceNodeStatus, UiCommand,
+    SourceUsage, TodoState, TodoView, ToolData, TraceNodeStatus, UiCommand,
 };
 use aura_ui_terminal::{AgentsTab, ChatTab, Pane, PaneTab, RecordsTab};
 use winit::event::MouseButton;
@@ -131,6 +131,13 @@ pub fn seed(h: &mut Stage) {
                     Some("claude"),
                     false,
                 ),
+                model(
+                    "openrouter/anthropic/claude-sonnet-4.6",
+                    "Claude Sonnet 4.6",
+                    "OpenRouter · anthropic",
+                    Some("openrouter"),
+                    false,
+                ),
             ],
             current: "local/qwen3-coder".into(),
             route: None,
@@ -146,6 +153,7 @@ pub fn seed(h: &mut Stage) {
         UiCommand::SetAgentDefinitions(vec![AgentDefinitionSummary {
             name: "reviewer".into(),
             description: "Reviews a diff for bugs and missing tests.".into(),
+            abbreviation: None,
         }]),
         UiCommand::SetApiStatus {
             url: Some("http://127.0.0.1:8787".into()),
@@ -237,6 +245,11 @@ fn reply(h: &mut Stage) {
                 tokens: 4_812,
                 cost_usd: None,
             }),
+            sources: vec![SourceUsage {
+                label: "local".into(),
+                tokens: 4_812,
+                cost_usd: None,
+            }],
         },
         UiCommand::Complete,
     ]);
