@@ -1,0 +1,12 @@
+{
+  "id": "01a2022bef990010",
+  "title": "create a POLICIES next to members tab top right panel, and show the current policies installed on this kernel and gener…",
+  "state": "completed",
+  "agent_id": "35b3970d8b959c471f21d9a2d2d95af29b1992f0cc060d1ac8491a6da24f9d7f",
+  "agent_name": "Agent 886",
+  "plan": ".aura/plans/policies-tab-in-the-kernel-panel_e259935f.plan.md",
+  "items": [],
+  "summary": "I've written the plan for a POLICIES tab next to KERNEL and MEMBERS in the top-right Kernel panel. Nothing is built yet.",
+  "updated_ms": 1795333014279,
+  "created_ms": 1795332763545
+}

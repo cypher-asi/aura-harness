@@ -7,6 +7,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Enter again after queueing a message sends it now
+
+##### Fixed
+
+- In the terminal UI, pressing Enter on the empty prompt right after a
+  message went into a busy agent's queue now sends that message at once,
+  cancelling the running turn. Before, this Enter did nothing if the
+  event loop had not yet sent back the queue, or if a panel other than
+  the chat had the keys. Only the next key counts: any other key in
+  between falls back to the old rule, where Enter on an empty chat
+  prompt sends the oldest queued message.
+
 ### BENCH shows each arm's total time
 
 ##### Added

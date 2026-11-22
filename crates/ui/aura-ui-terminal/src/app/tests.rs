@@ -671,6 +671,8 @@ fn enter_on_an_empty_prompt_sends_the_queued_message_now() {
     assert!(rx.try_recv().is_ok());
     submit(&mut app, "second");
     assert!(rx.try_recv().is_ok());
+    // Another key ends the "just queued" window.
+    app.handle_key(KeyEvent::from(KeyCode::Left));
 
     // Nothing is queued yet as far as the status line knows.
     app.handle_key(KeyEvent::from(KeyCode::Enter));
@@ -687,6 +689,40 @@ fn enter_on_an_empty_prompt_sends_the_queued_message_now() {
         Ok(UiEvent::SendQueuedNow(id)) if id == "aa"
     ));
     assert_eq!(app.state(), AppState::Processing);
+}
+
+#[test]
+fn enter_again_right_after_queueing_sends_the_message_now() {
+    let (mut app, mut rx) = app_with_agents();
+    submit(&mut app, "first");
+    assert!(rx.try_recv().is_ok());
+    submit(&mut app, "second");
+    assert!(rx.try_recv().is_ok());
+
+    // Before the event loop's `SetQueue` arrives, and with another panel
+    // holding the keys.
+    submit(&mut app, "third");
+    assert!(rx.try_recv().is_ok());
+    app.focus = super::PanelFocus::Swarm;
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SendQueuedNow(id)) if id == "aa"
+    ));
+    assert_eq!(app.state(), AppState::Processing);
+
+    // Only the first Enter after queueing does it.
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn enter_after_a_message_to_an_idle_agent_sends_nothing() {
+    let (mut app, mut rx) = app_with_agents();
+    submit(&mut app, "first");
+    assert!(rx.try_recv().is_ok());
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert!(rx.try_recv().is_err());
 }
 
 #[test]

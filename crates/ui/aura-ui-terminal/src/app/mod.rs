@@ -356,6 +356,11 @@ pub struct App {
     /// Images of messages sent to a busy agent, by message text, until
     /// the chat shows the message
     pub(super) queued_images: VecDeque<(String, Vec<std::sync::Arc<image_preview::ImagePreview>>)>,
+    /// Agent (hex id) whose queue the last key put a message in. The next
+    /// key, if it is Enter on an empty prompt, sends that message now even
+    /// before the event loop's `SetQueue` shows it, and whatever panel has
+    /// the keys; any other key clears it.
+    pub(super) just_queued: Option<String>,
     /// Image thumbnails in the chat in the last frame
     pub(super) image_hits: Vec<ImageHit>,
     /// Thumbnails of the images waiting in the input, in the last frame
@@ -910,6 +915,7 @@ impl App {
             images: Vec::new(),
             paste_requested: false,
             queued_images: VecDeque::new(),
+            just_queued: None,
             image_hits: Vec::new(),
             pending_image_areas: Vec::new(),
             detail_image_rect: None,

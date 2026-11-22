@@ -1,0 +1,49 @@
+{
+  "id": "01a2021a703d000d",
+  "title": "Implement the plan in `.aura/plans/blog-post-the-design-of-the-gate-router_4eb966ab.plan.md`. Read it first. Your todo …",
+  "state": "completed",
+  "agent_id": "fc8d0aa9b2227293869c25c4a18b00f7ea3d8cd7248d108c70a489b89d3f4316",
+  "agent_name": "Agent 884",
+  "plan": ".aura/plans/blog-post-the-design-of-the-gate-router_4eb966ab.plan.md",
+  "items": [
+    {
+      "content": "Research prior work via arXiv API and web_fetch; verify each source and write a source table with notes",
+      "state": "completed"
+    },
+    {
+      "content": "Wait for Compare #37 to finish; write scripts/compare_summary.py and export Compares #28-#37",
+      "state": "completed"
+    },
+    {
+      "content": "Derive per-call spend by purpose and get blind-judge verdicts from /compare show 37",
+      "state": "completed"
+    },
+    {
+      "content": "Add GATE_* datasets to charts/data.ts with run-id provenance",
+      "state": "completed"
+    },
+    {
+      "content": "Build gate-architecture flow diagram (FlowSteps) in Roadmap style",
+      "state": "completed"
+    },
+    {
+      "content": "Build gate-savings, gate-swe-tasks (PairedBars), gate-spend, gate-iterations and register them",
+      "state": "completed"
+    },
+    {
+      "content": "Write the post: abstract, simple idea, how others route + comparison table, layers, walkthrough, evaluation, validity, sources",
+      "state": "completed"
+    },
+    {
+      "content": "Add vitest for chart names; run npm run typecheck and npm test",
+      "state": "completed"
+    },
+    {
+      "content": "Verify every citation, symbol, default and number against sources, aura-harness HEAD and exported data",
+      "state": "completed"
+    }
+  ],
+  "summary": "Now industry posts.",
+  "updated_ms": 1795333195528,
+  "created_ms": 1795331616829
+}

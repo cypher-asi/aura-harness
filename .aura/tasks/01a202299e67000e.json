@@ -1,0 +1,15 @@
+{
+  "id": "01a202299e67000e",
+  "title": "Review a technical blog post for factual accuracy. Report discrepancies only. Do not edit any files.",
+  "state": "completed",
+  "agent_id": "abc346e320176b767de15c5b80422806ff2166ea130aa1b792a5987cd629580a",
+  "agent_name": "reviewer #20",
+  "assignee": "reviewer",
+  "parent": "01a2021a703d000d",
+  "plan": ".aura/plans/blog-post-the-design-of-the-gate-router_4eb966ab.plan.md",
+  "items": [],
+  "summary": "I found 15 discrepancies in the post and 4 places where its claims about papers go further than the research notes support. Most of the numbers do recompute from `compares.json`. The biggest problems are how many tasks #37 really ran, how two judged turns are described, and one fix that the post dates to before #36 but that landed after #37. I did not edit any files.",
+  "updated_ms": 1795332978164,
+  "created_ms": 1795332611687,
+  "tool_use_id": "toolu_017smC6PhptdQUYY3Kde8z6F"
+}

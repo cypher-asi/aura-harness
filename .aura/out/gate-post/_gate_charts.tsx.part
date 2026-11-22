@@ -1,0 +1,333 @@
+/* Gate: the router behind Aura's `gate` model id. Data in data.ts (GATE_FLOW) and gate-data.ts. */
+
+const gateUsd = (n: number) => (n < 0.1 ? `$${n.toFixed(3)}` : `$${n.toFixed(2)}`);
+const gateRatio = (n: number) => `${n.toFixed(2)}×`;
+const minutes = (n: number) => `${Math.round(n)} min`;
+const HEAD = GATE_RESULTS.headline;
+const OPUS_ARM = 'Opus 5.5 alone';
+
+/** The stages of a turn left to right, the learning loop under them, then the three layers. */
+function GateArchitecture(): ReactElement {
+  return (
+    <Figure
+      title="How Gate handles one turn"
+      subtitle="Seven stages, a loop that learns from every outcome, and three layers that keep the decisions pure and replayable."
+      sources={[]}
+    >
+      <GateFlow />
+    </Figure>
+  );
+}
+
+function GateFlow(): ReactElement {
+  const { active } = useContext(TipContext);
+  const target = useTipTarget();
+  const { stages, learn, layers } = GATE_FLOW;
+  return (
+    <div className={styles.flow} data-has-active={active !== null || undefined}>
+      <ol className={styles.stages}>
+        {stages.map((stage, i) => {
+          const rows: [string, string][] = [['Module', stage.module]];
+          if (stage.ranOn) rows.push([`Ran on in #${HEAD.compare}`, stage.ranOn]);
+          if (stage.spend) {
+            rows.push([`Calls in #${HEAD.compare}`, String(GATE_RESULTS.calls[stage.spend])]);
+            rows.push([`Cost in #${HEAD.compare}`, gateUsd(GATE_RESULTS.spend[stage.spend])]);
+          }
+          return (
+            <li
+              key={stage.id}
+              className={styles.stage}
+              data-accent={stage.id === 'verify' || undefined}
+              {...target(stage.id, {
+                title: `${i + 1}. ${stage.name}: ${stage.does}`,
+                rows,
+                list: { heading: 'What it does', items: stage.points },
+              })}
+            >
+              <span className={styles.stageNo} data-anchor="center">
+                {String(i + 1).padStart(2, '0')}
+              </span>
+              <span className={styles.stageName}>{stage.name}</span>
+              <span className={styles.stageDoes}>{stage.does}</span>
+            </li>
+          );
+        })}
+      </ol>
+      <div
+        className={styles.loop}
+        {...target('learn', {
+          title: 'Learn: the table is a fold over the record',
+          rows: [
+            ['Module', 'stats.rs · gate_live.rs'],
+            ['Proven at', '10 tries, 85% success'],
+            ['Ruled out', 'once 85% is out of reach'],
+            ['Exploration', '5% of turns'],
+          ],
+          note: learn,
+        })}
+      >
+        <span className={styles.loopArrow} data-anchor="center" aria-hidden="true">
+          ↰
+        </span>
+        <span className={styles.loopLabel}>Learn</span>
+        <span className={styles.loopText}>Each outcome updates the table the next pick reads</span>
+      </div>
+      <p className={styles.group}>Layers</p>
+      <ul className={styles.layers}>
+        {layers.map((layer) => (
+          <li
+            key={layer.name}
+            className={styles.layer}
+            {...target(layer.name, { title: `${layer.name}: ${layer.crate}`, rows: [], note: layer.holds })}
+          >
+            <span className={styles.layerName} data-anchor="center">
+              {layer.name}
+            </span>
+            <span className={styles.layerCrate}>{layer.crate}</span>
+            <span className={styles.layerHolds}>{layer.holds}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function GateSavings(): ReactElement {
+  const { gate, opus } = HEAD;
+  const saved = 1 - gate.cost / opus.cost;
+  const second = GATE_RESULTS.second;
+  const arm = (
+    group: string,
+    gateValue: number,
+    opusValue: number,
+    shown: (n: number) => string,
+    rows: (isGate: boolean) => [string, string][],
+  ): Bar[] => [
+    {
+      id: `${group}-opus`,
+      label: OPUS_ARM,
+      value: opusValue,
+      shown: shown(opusValue),
+      tip: { title: `${OPUS_ARM}: ${group.toLowerCase()}`, rows: rows(false) },
+    },
+    {
+      id: `${group}-gate`,
+      label: 'Gate',
+      detail: group === 'Cost' ? `${Math.round(saved * 100)}% less` : undefined,
+      value: gateValue,
+      shown: shown(gateValue),
+      accent: true,
+      tip: { title: `Gate: ${group.toLowerCase()}`, rows: rows(true) },
+    },
+  ];
+  return (
+    <Figure
+      title={`Gate against Opus 5.5 alone on ${HEAD.pairs} SWE-Bench Pro hard tasks`}
+      subtitle={`Compare #${HEAD.compare}: each task once on each arm, graded by the task's hidden tests. List-price USD, Gate's own calls included.`}
+      sources={GATE_SOURCES}
+    >
+      <p className={styles.group}>Cost</p>
+      <Bars
+        max={Math.ceil(opus.cost)}
+        rows={arm('Cost', gate.cost, opus.cost, (n) => `$${n.toFixed(2)}`, (isGate) => [
+          ['Total', `$${(isGate ? gate : opus).cost.toFixed(2)}`],
+          ['Per task', `$${((isGate ? gate : opus).cost / HEAD.pairs).toFixed(2)}`],
+          ['Gate ÷ Opus', gateRatio(gate.cost / opus.cost)],
+        ])}
+      />
+      <p className={styles.group}>Wall time</p>
+      <Bars
+        max={Math.ceil(opus.wallMin / 10) * 10}
+        rows={arm('Wall time', gate.wallMin, opus.wallMin, minutes, (isGate) => [
+          ['Total', minutes((isGate ? gate : opus).wallMin)],
+          ['Per task', minutes((isGate ? gate : opus).wallMin / HEAD.pairs)],
+        ])}
+      />
+      <p className={styles.group}>Hidden tests passed</p>
+      <Bars
+        max={HEAD.pairs}
+        rows={arm('Passed', gate.passed, opus.passed, (n) => `${n} of ${HEAD.pairs}`, (isGate) => [
+          ['Passed', `${(isGate ? gate : opus).passed} of ${HEAD.pairs}`],
+        ])}
+      />
+      <p className={styles.footnote}>
+        Compare #{second.compare}, an earlier run of the same design on {second.pairs} of these tasks: Gate $
+        {second.gate.cost.toFixed(2)}, Opus ${second.opus.cost.toFixed(2)}, {second.gate.passed} of {second.pairs}{' '}
+        passed on each.
+      </p>
+    </Figure>
+  );
+}
+
+/** Per task, Gate's cost and Opus's cost as two bars on one row. */
+function GateSweTasks(): ReactElement {
+  const max = Math.max(...GATE_RESULTS.tasks.flatMap((t) => [t.gate.cost, t.opus.cost]));
+  const repos = [...new Set(GATE_RESULTS.tasks.map((t) => t.repo))];
+  return (
+    <Figure
+      title="Cost of each task, Gate against Opus 5.5 alone"
+      subtitle={`Compare #${HEAD.compare}, SWE-Bench Pro hard. Every run on both arms passed the task's hidden tests.`}
+      sources={GATE_SOURCES}
+    >
+      <p className={styles.legend} aria-hidden="true">
+        <span className={styles.swatch} data-accent="" /> Gate
+        <span className={styles.swatch} /> {OPUS_ARM}
+      </p>
+      {repos.map((repo) => (
+        <Fragment key={repo}>
+          <p className={styles.group}>{repo}</p>
+          <PairedBars max={max} tasks={GATE_RESULTS.tasks.filter((t) => t.repo === repo)} />
+        </Fragment>
+      ))}
+    </Figure>
+  );
+}
+
+function PairedBars({
+  tasks,
+  max,
+}: {
+  tasks: readonly (typeof GATE_RESULTS.tasks)[number][];
+  max: number;
+}): ReactElement {
+  const { active } = useContext(TipContext);
+  const target = useTipTarget();
+  const pct = (n: number) => `${Math.min(n / max, 1) * 100}%`;
+  return (
+    <ul className={styles.bars} data-has-active={tasks.some((t) => t.task === active) || undefined}>
+      {tasks.map((t) => {
+        const moved = t.gate.route.length > 1;
+        return (
+          <li
+            key={t.task}
+            className={styles.row}
+            {...target(t.task, {
+              title: t.task,
+              rows: [
+                ['Gate', `$${t.gate.cost.toFixed(2)} · ${minutes(t.gate.wallMin)}`],
+                [OPUS_ARM, `$${t.opus.cost.toFixed(2)} · ${minutes(t.opus.wallMin)}`],
+                ['Gate ÷ Opus', gateRatio(t.gate.cost / t.opus.cost)],
+                ['Gate ran on', t.gate.route.join(', then ')],
+                ["Gate's own calls", gateUsd(t.gate.ownCalls)],
+                ['Hidden tests', t.gate.passed && t.opus.passed ? 'both passed' : 'see run'],
+              ],
+              note: t.title,
+            })}
+          >
+            <span className={styles.rowLabel}>
+              {t.task.slice(t.repo.length + 1)}
+              <span className={styles.rowDetail}>{moved ? 'Sonnet, then Opus' : (t.category ?? '').replace(/_/g, ' ')}</span>
+            </span>
+            <span className={styles.pair}>
+              <span className={styles.track}>
+                <span className={styles.bar} data-anchor="end" data-accent="" style={{ width: pct(t.gate.cost) }} />
+              </span>
+              <span className={styles.track}>
+                <span className={styles.bar} style={{ width: pct(t.opus.cost) }} />
+              </span>
+            </span>
+            <span className={styles.rowValue}>
+              ${t.gate.cost.toFixed(2)}
+              <span className={styles.rowValueSub}>${t.opus.cost.toFixed(2)}</span>
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function GateSpend(): ReactElement {
+  const { spend, calls } = GATE_RESULTS;
+  const own = spend['gate:classify'] + spend['gate:criteria'] + spend['gate:judge'];
+  const total = HEAD.gate.cost;
+  const row = (
+    key: keyof typeof spend,
+    label: string,
+    detail: string,
+    note: string,
+    accent = false,
+  ): Bar => ({
+    label,
+    detail: `${calls[key]} calls · ${detail}`,
+    value: spend[key],
+    shown: gateUsd(spend[key]),
+    accent,
+    tip: {
+      title: label,
+      rows: [
+        ['Cost', gateUsd(spend[key])],
+        ['Calls', String(calls[key])],
+        ['Share of Gate', `${((spend[key] / total) * 100).toFixed(1)}%`],
+      ],
+      note,
+    },
+  });
+  return (
+    <Figure
+      title={`Where Gate's $${total.toFixed(2)} went`}
+      subtitle={`Compare #${HEAD.compare}, ${HEAD.pairs} tasks, priced per call from recorded token usage.`}
+      sources={GATE_SOURCES}
+    >
+      <p className={styles.group}>The work</p>
+      <Bars
+        max={Math.ceil(spend.work)}
+        rows={[
+          row('work', 'Work on Sonnet 5.5', 'every task', 'The agent loop on the model Gate picked, at high effort.', true),
+          row('escalated', 'Moved up to Opus 5.5', '1 task', 'The one task the judge sent up, finished on Opus.'),
+        ]}
+      />
+      <p className={styles.group}>Gate&apos;s own calls</p>
+      <Bars
+        max={Math.ceil(spend.work)}
+        rows={[
+          row('gate:judge', 'Judge and review', 'after the work', 'Deciding whether failed or unchecked work was the model’s fault.'),
+          row('gate:criteria', 'Acceptance criteria', 'before the work', 'What done means for each code turn, written on Sonnet.'),
+          row('gate:classify', 'Classifier', 'one per prompt', 'Labelling each prompt on Haiku 5.5.'),
+        ]}
+      />
+      <p className={styles.footnote}>
+        Gate&apos;s own calls cost {gateUsd(own)}, {Math.round((own / total) * 100)}% of its total. Opus alone spent $
+        {HEAD.opus.cost.toFixed(2)} on the same tasks.
+      </p>
+    </Figure>
+  );
+}
+
+function GateIterations(): ReactElement {
+  const runs = GATE_RESULTS.iterations;
+  const last = runs[runs.length - 1];
+  return (
+    <Figure
+      title="Gate's cost against Opus alone, run by run"
+      subtitle={`The same ${GATE_RESULTS.core.length} SWE-Bench Pro tasks in each Compare, from the first design to the current one. Below 1× Gate costs less.`}
+      sources={GATE_SOURCES}
+    >
+      <Bars
+        max={Math.ceil(Math.max(...runs.map((r) => r.ratio)))}
+        marker={{ at: 1, label: OPUS_ARM }}
+        rows={runs.map((r) => ({
+          label: `#${r.compare}`,
+          detail: `${r.at} · passed ${r.gate.passed} of ${r.gate.runs} (Opus ${r.opus.passed})`,
+          value: r.ratio,
+          shown: gateRatio(r.ratio),
+          accent: r === last,
+          tip: {
+            title: `Compare #${r.compare}, ${r.at}`,
+            rows: [
+              ['Gate', `$${r.gate.cost.toFixed(2)} · ${r.gate.passed} of ${r.gate.runs} passed`],
+              [OPUS_ARM, `$${r.opus.cost.toFixed(2)} · ${r.opus.passed} of ${r.opus.runs} passed`],
+              ['Gate ÷ Opus', gateRatio(r.ratio)],
+            ],
+            note: r.found,
+            list: { heading: 'Changed before this run', items: [r.before] },
+          },
+        }))}
+      />
+      <p className={styles.footnote}>
+        Tasks: {GATE_RESULTS.core.join(', ')}. Runs before #33 predate the logging of Gate&apos;s own calls, so their
+        Gate cost leaves out the classifier and judge.
+      </p>
+    </Figure>
+  );
+}

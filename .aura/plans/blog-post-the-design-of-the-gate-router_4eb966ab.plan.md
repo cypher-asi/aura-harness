@@ -1,57 +1,61 @@
 ---
-name: 'Blog post: the design of the Gate router, with SWE-Bench Pro results'
-overview: Write a research-paper-style but accessible post for the Cypher site that explains Gate in simple terms, walks through each layer and stage of a turn, and reports real Compare results from the SWE-Bench Pro hard tasks. It adds an architecture diagram and benchmark charts to the site's existing `chart` figure system, in the same style as "The Industrialization of Intelligence".
+name: 'Blog post: the design of the Gate router, with SWE-Bench Pro results and prior work'
+overview: Write a post for the Cypher site in the style of a research paper that stays accessible. It explains Gate in simple terms, places it among published routing approaches with numbered citations, walks through each layer and stage, and reports real Compare results from the SWE-Bench Pro hard tasks. It adds an architecture diagram and benchmark charts to the site's existing `chart` figure system.
 todos:
+- id: research
+  content: Research prior work via arXiv API and web_fetch; verify each source and write a source table with notes
+  status: completed
 - id: export-data
-  content: 'Wait for Compare #37 to finish; write scripts/compare_summary.py and export Compares #28-#37 to JSON'
-  status: pending
+  content: 'Wait for Compare #37 to finish; write scripts/compare_summary.py and export Compares #28-#37'
+  status: completed
 - id: judge-spend
-  content: Derive per-call spend by purpose and get blind-judge verdicts from /compare show 37 (or ask user)
-  status: pending
+  content: Derive per-call spend by purpose and get blind-judge verdicts from /compare show 37
+  status: completed
 - id: data-ts
   content: Add GATE_* datasets to charts/data.ts with run-id provenance
-  status: pending
+  status: completed
 - id: diagram
   content: Build gate-architecture flow diagram (FlowSteps) in Roadmap style
-  status: pending
+  status: completed
 - id: charts
-  content: Build gate-swe-tasks (PairedBars), gate-savings, gate-iterations, gate-spend figures and register them
-  status: pending
+  content: Build gate-savings, gate-swe-tasks (PairedBars), gate-spend, gate-iterations and register them
+  status: completed
 - id: post
-  content: 'Write content/posts/gate-router-design.md: abstract, layers, stage walkthrough, evaluation, validity, related work, sources'
-  status: pending
+  content: 'Write the post: abstract, simple idea, how others route + comparison table, layers, walkthrough, evaluation, validity, sources'
+  status: completed
 - id: test
-  content: Add vitest that post chart names are registered; run npm run typecheck and npm test
-  status: pending
+  content: Add vitest for chart names; run npm run typecheck and npm test
+  status: completed
 - id: verify
-  content: Verify every cited symbol, default and number against aura-harness HEAD and the exported data
-  status: pending
+  content: Verify every citation, symbol, default and number against sources, aura-harness HEAD and exported data
+  status: completed
 ---
 
-# Blog post: the design of the Gate router, with SWE-Bench Pro results
+# Blog post: the design of the Gate router, with SWE-Bench Pro results and prior work
 
-Write a research-paper-style but accessible post for the Cypher site that explains Gate in simple terms, walks through each layer and stage of a turn, and reports real Compare results from the SWE-Bench Pro hard tasks. It adds an architecture diagram and benchmark charts to the site's existing `chart` figure system, in the same style as "The Industrialization of Intelligence".
+Write a post for the Cypher site in the style of a research paper that stays accessible. It explains Gate in simple terms, places it among published routing approaches with numbered citations, walks through each layer and stage, and reports real Compare results from the SWE-Bench Pro hard tasks. It adds an architecture diagram and benchmark charts to the site's existing `chart` figure system.
 
 ## Todos
 
-- [ ] Wait for Compare #37 to finish; write scripts/compare_summary.py and export Compares #28-#37 to JSON
-- [ ] Derive per-call spend by purpose and get blind-judge verdicts from /compare show 37 (or ask user)
-- [ ] Add GATE_* datasets to charts/data.ts with run-id provenance
-- [ ] Build gate-architecture flow diagram (FlowSteps) in Roadmap style
-- [ ] Build gate-swe-tasks (PairedBars), gate-savings, gate-iterations, gate-spend figures and register them
-- [ ] Write content/posts/gate-router-design.md: abstract, layers, stage walkthrough, evaluation, validity, related work, sources
-- [ ] Add vitest that post chart names are registered; run npm run typecheck and npm test
-- [ ] Verify every cited symbol, default and number against aura-harness HEAD and the exported data
+- [x] Research prior work via arXiv API and web_fetch; verify each source and write a source table with notes
+- [x] Wait for Compare #37 to finish; write scripts/compare_summary.py and export Compares #28-#37
+- [x] Derive per-call spend by purpose and get blind-judge verdicts from /compare show 37
+- [x] Add GATE_* datasets to charts/data.ts with run-id provenance
+- [x] Build gate-architecture flow diagram (FlowSteps) in Roadmap style
+- [x] Build gate-savings, gate-swe-tasks (PairedBars), gate-spend, gate-iterations and register them
+- [x] Write the post: abstract, simple idea, how others route + comparison table, layers, walkthrough, evaluation, validity, sources
+- [x] Add vitest for chart names; run npm run typecheck and npm test
+- [x] Verify every citation, symbol, default and number against sources, aura-harness HEAD and exported data
 
 <!-- end of generated header: edit below -->
 
 ## What I found
 
-**How the site draws figures.** "The Industrialization of Intelligence" embeds figures with fenced blocks such as `chart` / `roadmap`. `Reader.tsx` swaps each block for `<PostChart name>`. The figures are React components in `src/features/terminal/charts/PostChart.tsx`, registered in `CHARTS`, with their numbers in `charts/data.ts`. They are HTML/CSS inside a shared `Figure` frame (title, subtitle, sources caption, tooltip on every mark), drawn with `Bars` and the stepped `Roadmap` diagram. Any new diagram or graph is therefore code in the website repo plus a name in the post.
+**How the site cites sources.** The live "Industrialization of Intelligence" post cites sources inline as `[n](url)`, which the site renders as superscripts, and ends with a numbered `## Sources` list: `Author/Org, [Title](url), venue, date.` Each URL is indexed into `research_sources` and shows in the Sources panel, so the Gate post must follow that format exactly.
 
-**The real data on this machine.** It lives in `~/.aura/runs/*/{meta.json,summary.json,steps.jsonl}`. `meta.title` = `Compare #n <slot>: <task>`, `meta.arm` = `A · gate` / `B · claude-opus-5-5`, and `task_id` = `swe_bench_pro_hard/<task>`. `summary.cost_usd`, `wall_ms` and `outcome` hold the hidden-test verdict. `steps.jsonl` holds each `route` decision (model, effort, category, difficulty) and Gate's own calls by `purpose` (`classify`, `criteria`, `judge`).
+**How the site draws figures.** A post embeds a figure with a fenced block (`chart` / `<name>`). `Reader.tsx` swaps the block for `<PostChart name>`. The figures are React components in `src/features/terminal/charts/PostChart.tsx`, registered in `CHARTS`, with their data in `charts/data.ts`. They are HTML/CSS inside a shared `Figure` frame (title, subtitle, sources caption, tooltips), built from `Bars` and the stepped `Roadmap` diagram. New diagrams and graphs are therefore code in the website repo.
 
-SWE-Bench Pro hard Compares, counting pairs where both runs finished:
+**The benchmark data** is in `~/.aura/runs/*/{meta,summary,steps}`: title `Compare #n <slot>: <task>`, arm, `swe_bench_pro_hard/<task>`, `cost_usd`, `wall_ms`, `outcome` (hidden tests), `route` decisions, and Gate's own calls by `purpose`. Pairs where both runs finished:
 
 | Compare | Pairs | Gate cost | Opus cost | Gate/Opus | Pass (Gate/Opus) |
 |---|---|---|---|---|---|
@@ -64,53 +68,72 @@ SWE-Bench Pro hard Compares, counting pairs where both runs finished:
 | #36 | 4 | $1.23 | $3.09 | 0.40× | 4/4 |
 | #37 | 14 of 16 | $5.81 | $12.04 | 0.48× | 14/14 |
 
-Compare #37 started at 01:14, after `d07d3e3a` (01:12), so it ran the current design. It was still running when I checked: 2 flipt tasks had not finished. Every Gate run in #37 went to Sonnet 5.5 (one also moved up to Opus), and none dropped to Haiku. Earlier Compares ran earlier designs, and the CHANGELOG ties several fixes to them (#31: max-effort retries on Opus; #32: medium work sent to Haiku).
+#37 ran on `d07d3e3a`, the current design, and was still running (2 tasks) when I checked.
 
-## Decisions (say if you want any changed)
+**Prior work.** The arXiv API (`export.arxiv.org/api/query`) works through `web_fetch`; `web_search` is not configured. I confirmed these IDs exist and are relevant:
 
-- **Headline = Compare #37** (current design, 16 tasks across ansible, element-web and flipt), with #36 as a second run on the same design. Per-task graphs come from #37.
-- **Earlier Compares are shown as an iteration chart**, not hidden. The cost ratio by Compare, each annotated with the design change that came before it, is the research-paper part: it shows what each fix bought. It also keeps the savings claim honest, since early versions cost more than Opus.
-- **Opus 5.5 alone is the baseline**, at list prices, and Gate's cost includes its own classifier, criteria and judge calls. This holds from `f156b01d`/`a1ab2bfe` on; I'll check that per run.
-- **Blind-judge quality** comes from `/compare show 37`. That data is in the RocksDB record, not the run bundles. If I can't read it, I'll ask you to paste the output; if it isn't available, the post reports hidden-test pass rates only.
+| Thread | Sources confirmed so far |
+|---|---|
+| Cascades (try cheap, defer on doubt) | FrugalGPT 2305.05176; Mixture-of-Thoughts cascades 2310.03094 (ICLR 2024); token-level deferral 2404.10136 |
+| Learned pre-hoc routers | RouteLLM 2406.18665 (+ LMSYS blog); Hybrid LLM 2404.14618; AutoMix 2310.12963 (self-verification) |
+| Router benchmarks and theory | RouterBench 2403.12031; routing survey 2502.00409 |
+| Routing as policy or RL | Router-R1 2506.09033; Arch-Router 2506.16655 (preference-aligned) |
+| Agentic and coding routing (closest to Gate) | TwinRouterBench 2605.18859 (step-level routing on SWE-bench, downgrade-and-cascade); Triage 2604.07494 (Haiku/Sonnet/Opus tiers and a verification gate on SWE-bench Lite); "When the Cheapest Feasible Router Fails" 2611.20417 (deployment commitment, which matches Gate's min-tries/target promotion) |
+| Judging and retry-with-feedback | LLM-as-a-judge / MT-Bench 2306.05685; Reflexion 2303.11366 |
+| Exploration with logged propensities | contextual bandits, Li et al. 1003.0146 (Gate logs `explored`/`propensity` for offline replay) |
+| Benchmark | SWE-Bench Pro 2509.16941 + `scaleapi/SWE-bench_Pro-os` |
+
+Still to find and verify by fetching each URL: industry posts. Candidates are OpenAI's GPT-5 system card (real-time router), Anthropic's "Building effective agents" (routing workflow), OpenRouter Auto Router docs, Not Diamond and Martian, and Anthropic's model pricing page for list prices. I'll also look for 2026 papers on cost-aware agent routing.
+
+## Approach to the related-work section
+
+- An early **"2. How others route"** section. It keeps the post's tone: short paragraphs, one thread each, 1–3 citations per thread.
+- It ends with a GFM **comparison table** that places Gate on five axes: when it decides (before the work vs after a failure), what signal it routes on (learned score, uncertainty, verification), how it learns (offline training vs an online fold), unit (query vs turn or subtask), and how it verifies (none, self-check, tests plus a judge).
+- The **claim to make, and back with citations**: most routers decide once, before the work, from a model trained on preference or benchmark data, and are scored on one-shot prompts (RouterBench, RouteLLM). Gate is a verified cascade for agent turns that learns online from its own record. It is closest to TwinRouterBench's downgrade-and-cascade protocol and to Triage's tiers behind a verification gate. "The cheapest feasible router fails" is the risk Gate's promotion thresholds and judge address.
+- Every citation is fetched and checked (title, authors, date) before it goes in. There are no uncited claims about others' results.
+
+## Decisions (as before; say if you want any changed)
+
+- **Headline = Compare #37** (current design), with #36 as a second run. Per-task graphs come from #37.
+- **Earlier Compares are shown as an iteration chart**, each with the design change before it, so the savings claim stays honest.
+- **Baseline = Opus 5.5 alone** at list prices. Gate's own classifier, criteria and judge calls are included.
+- **Blind-judge verdicts** come from `/compare show 37`, which you paste if I can't read them from the record.
 
 ## Deliverables
 
 | Repo | File | What |
 |---|---|---|
-| aura-harness | `scripts/compare_summary.py` | Read-only exporter: `AURA_HOME/runs` → JSON per Compare/task/arm (cost, wall, outcome, routes, Gate call counts and cost by purpose). Makes every number in the post reproducible. |
-| website | `content/posts/gate-router-design.md` | The post, with front matter (`title`, `slug`, `summary`) like the fixture, and a numbered `## Sources` list. |
-| website | `src/features/terminal/charts/data.ts` | `GATE_FLOW`, `GATE_SWE_TASKS`, `GATE_TOTALS`, `GATE_ITERATIONS`, `GATE_SPEND`, each noting the Compare numbers and run ids they come from. |
-| website | `src/features/terminal/charts/PostChart.tsx` + `.module.css` | Five new figures, registered in `CHARTS`. |
-| website | a small vitest | Every `chart` block in the post names a registered chart (`isChart`). |
+| aura-harness | `scripts/compare_summary.py` | Read-only exporter: `AURA_HOME/runs` → JSON per Compare/task/arm. Makes every number reproducible. |
+| website | `content/posts/gate-router-design.md` | The post, with front matter like the fixture, inline `[n](url)` citations and a numbered `## Sources` list. |
+| website | `charts/data.ts` | `GATE_FLOW`, `GATE_SWE_TASKS`, `GATE_TOTALS`, `GATE_ITERATIONS`, `GATE_SPEND`, each with its Compare and run ids. Figure `sources` point at SWE-Bench Pro and the harness. |
+| website | `charts/PostChart.tsx` + `.module.css` | Five new figures registered in `CHARTS`: `FlowSteps` and `PairedBars`, plus reuse of `Bars`. |
+| website | vitest | Every `chart` block in the post is registered (`isChart`). |
 
 ## Figures
 
-1. `gate-architecture`: the diagram, in the Roadmap's style (steps in a `Figure`, mono labels, one accent, tooltips that list what each stage does and its module). The stages are Classify → Pick → Criteria → Work → Verify → Judge → Escalate, with a "Learn" return band that feeds the table back into Pick. Below them sit the three layers: pure `aura-agent-gate`, the event loop in `aura-app`, and the kernel and its record.
-2. `gate-swe-tasks`: per task in #37, paired horizontal bars, Gate (accent) vs Opus cost. Each pair shows a pass/fail mark. Tooltips give wall time, routed model and effort, and Gate's own calls.
-3. `gate-savings`: overall #37 (and #36) totals, with cost, wall time and pass rate per arm, and the saving in % with a 1.0× marker.
-4. `gate-iterations`: Gate/Opus cost ratio by Compare #28→#37 with a 1.0× marker. Each bar's tooltip names the commits before it.
-5. `gate-spend`: where Gate's dollars go in #37: the work model, escalations, and classifier, criteria and judge overhead. Included only if per-call usd can be derived from `log.json`/usage plus list prices.
+1. `gate-architecture`: the flow diagram in the Roadmap's style. The stages are Classify → Pick → Criteria → Work → Verify → Judge → Escalate, with a Learn loop back into Pick and the three layers underneath. Tooltips list what each stage does and its module.
+2. `gate-savings`: totals for #37 (and #36): cost, wall time and pass rate per arm, the saving in %, and a 1.0× marker.
+3. `gate-swe-tasks`: per task, paired Gate vs Opus cost bars with pass marks. Tooltips give the model and effort, wall time and Gate's own calls.
+4. `gate-spend`: Gate's dollars split into the work model, escalations, and classifier, criteria and judge overhead (only if per-call cost can be derived).
+5. `gate-iterations`: Gate/Opus cost ratio by Compare #28→#37. Tooltips name the commits before each one.
 
-`Bars` already handles 3–5. Figure 2 needs a paired variant (`PairedBars`). Figure 1 is a new `FlowSteps` layout next to `RoadmapSteps`.
+## Post structure (about 3,500 words, 25–35 sources)
 
-## Post structure (about 3,000 words)
-
-- **Abstract** (one paragraph): the result in numbers.
-- **1. The idea in simple terms**: one model for everything overpays or underdelivers. Gate starts cheap, checks the work, moves up only when it fails, and learns which model is good enough for each kind of work. An analogy and the route line `gate → model (route) at effort · category, reason`.
-- **2. Architecture in layers** → `chart gate-architecture`. Pure decision logic with no I/O; the event loop that runs it; the kernel and append-only record that make it auditable and replayable.
-- **3. Walking through a turn**, one subsection per stage, each with what it does, why, and the module: 3.1 candidates and tiers · 3.2 classify · 3.3 pick and effort · 3.4 acceptance criteria · 3.5 the work (and leading with subtasks) · 3.6 verify (checks, follow-ups, disowned passes, own-tests-only, review) · 3.7 judge · 3.8 escalate · 3.9 learn. Each subsection is illustrated with a real route or verdict line taken from a #37 run.
-- **4. Evaluation**
-  - **Method**: SWE-Bench Pro HARD-51, hidden tests in Docker, isolated worktrees, list prices, Gate's own calls counted.
-  - **Results**: `chart gate-savings`, then `chart gate-swe-tasks`, then `chart gate-spend`.
-  - **How the design got here**: `chart gate-iterations`, with 3–4 short "what broke, what we changed" notes taken from the CHANGELOG.
-- **5. Threats to validity**: small samples, one repeat per task, a single provider (Claude plan), the pass-rate ceiling when both arms pass, list price vs plan usage, and Gate still changing.
-- **6. Related work**: FrugalGPT, RouteLLM, cascades (links checked before citing).
-- **7. Limits and next steps**, then a settings appendix (`AURA_GATE_*`, defaults from `aura-config/src/gate.rs`).
-- **Sources**: a numbered list like the fixture's, using the `[n](url)` citations the site indexes.
+- **Abstract**: the result in numbers.
+- **1. The idea in simple terms.** An analogy and the route line.
+- **2. How others route.** Cascades; learned routers; benchmarks; RL and preference routers; agentic and coding routing; judges and feedback. Ends with the comparison table.
+- **3. Architecture in layers** → `gate-architecture`.
+- **4. Walking through a turn**: 4.1 candidates and tiers · 4.2 classify · 4.3 pick and effort · 4.4 criteria · 4.5 work and leading · 4.6 verify · 4.7 judge · 4.8 escalate · 4.9 learn. Each step uses a real line from a #37 run and links back to the related work it borrows from or differs from.
+- **5. Evaluation**: method (SWE-Bench Pro HARD-51, Docker hidden tests, worktrees, list prices); results → `gate-savings`, `gate-swe-tasks`, `gate-spend`; how the design got here → `gate-iterations`.
+- **6. Threats to validity.**
+- **7. Limits and next steps.**
+- **Appendix**: `AURA_GATE_*` settings.
+- **Sources**: a numbered list.
 
 ## Risks
 
-- #37 is still running, so the numbers are frozen only after it finishes. Unfinished pairs are left out and the post says so.
-- Small n: the post states sample sizes on every figure.
-- Gate changes daily. The post pins the commit (`d07d3e3a`) that the results ran on.
-- The `aura` company has no `siteId` in `src/lib/site.ts`, so publishing it under Aura needs a site created first. Publishing is out of scope.
+- #37 must finish before the numbers are frozen. Unfinished pairs are left out and the post says so.
+- Small n: every figure states its n.
+- Some sources are dated 2026 and could not be checked from training knowledge. Each is fetched and checked, and dropped if it doesn't resolve.
+- Gate keeps changing. The post pins `d07d3e3a`.
+- Publishing under Aura needs a site created first (no `siteId` in `src/lib/site.ts`). Publishing is out of scope.

@@ -1,0 +1,803 @@
+/*
+ * Charts inside a post's prose (PostBody.module.css). Lists here are layout,
+ * so the rules are scoped under .figure to outrank the prose's list styles.
+ * The foreground carries the data, and one mark per chart takes the accent.
+ */
+figure.figure {
+  position: relative;
+  margin: 2.2em 0;
+  padding: 20px 22px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-inset);
+  line-height: 1.45;
+}
+
+.head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.figure .group {
+  margin: 20px 0 0;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.figure .sources {
+  margin-top: 18px;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+/* Bars */
+
+.figure .bars {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.figure .row,
+.figure .markerRow {
+  display: grid;
+  grid-template-columns: minmax(0, 15rem) minmax(0, 1fr) 7.5rem;
+  grid-template-areas: "label track value";
+  align-items: center;
+  gap: 4px 14px;
+  margin: 0;
+}
+
+.figure .markerRow {
+  margin-top: -8px;
+}
+
+.row > :nth-child(1),
+.markerRow > :nth-child(1) {
+  grid-area: label;
+}
+
+.row > :nth-child(2),
+.markerRow > :nth-child(2) {
+  grid-area: track;
+}
+
+.row > :nth-child(3),
+.markerRow > :nth-child(3) {
+  grid-area: value;
+}
+
+.rowLabel {
+  display: flex;
+  flex-direction: column;
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.rowDetail {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+.track {
+  position: relative;
+  height: 12px;
+}
+
+.bar {
+  display: block;
+  min-width: 2px;
+  height: 100%;
+  background: var(--color-text-primary);
+}
+
+.bar[data-accent] {
+  background: var(--color-accent);
+}
+
+.track[data-marker]::after {
+  position: absolute;
+  top: -5px;
+  bottom: -5px;
+  left: var(--marker);
+  width: 1px;
+  background: var(--color-text-secondary);
+  content: "";
+}
+
+.rowValue {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.markerLabel {
+  padding-left: var(--marker);
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 600px) {
+  figure.figure {
+    padding: 16px;
+  }
+
+  .figure .row,
+  .figure .markerRow {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "label value"
+      "track track";
+  }
+
+  .figure .markerRow {
+    grid-template-areas: "track track";
+    margin-top: -10px;
+  }
+
+  .markerRow > :nth-child(1),
+  .markerRow > :nth-child(3) {
+    display: none;
+  }
+}
+
+/* Line */
+
+.plot {
+  position: relative;
+  height: 200px;
+  margin: 28px 8px 0 52px;
+}
+
+.gridLine {
+  position: absolute;
+  right: 0;
+  left: 0;
+  border-top: 1px dashed var(--color-border-strong);
+}
+
+.gridLabel {
+  position: absolute;
+  right: 100%;
+  padding-right: 10px;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+  transform: translateY(-50%);
+}
+
+.line {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.line polyline {
+  fill: none;
+  stroke: var(--color-text-primary);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.point {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--color-text-primary);
+  transform: translate(-50%, -50%);
+}
+
+.point[data-accent] {
+  background: var(--color-accent);
+}
+
+.pointLabel {
+  position: absolute;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+  transform: translate(8px, 6px);
+}
+
+.pointLabel[data-end] {
+  transform: translate(-100%, calc(-100% - 8px));
+}
+
+.figure .axis {
+  display: flex;
+  justify-content: space-between;
+  margin: 10px 8px 0 52px;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
+/* Steps */
+
+.figure .steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.figure .step {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+
+.stepCol {
+  display: flex;
+  align-items: flex-end;
+  height: 170px;
+  border-bottom: 1px solid var(--color-border-strong);
+}
+
+.stepBar {
+  position: relative;
+  width: 100%;
+  background: var(--color-text-primary);
+}
+
+.stepBar[data-accent] {
+  background: var(--color-accent);
+}
+
+.stepValue {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  padding-bottom: 6px;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.stepStage {
+  margin-top: 10px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.stepDetail {
+  margin-top: 2px;
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+}
+
+.stepStage,
+.stepDetail {
+  overflow-wrap: normal;
+}
+
+@media (max-width: 600px) {
+  .figure .steps {
+    gap: 8px;
+  }
+
+  .stepStage {
+    font-size: var(--text-xs);
+  }
+
+  .track[data-marker]::after {
+    top: -2px;
+    bottom: -2px;
+  }
+}
+
+/* Interaction: every mark opens a tooltip; the others dim while one is active. */
+
+.figure .row,
+.figure .step,
+.plot {
+  cursor: default;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.figure .row:focus-visible,
+.figure .step:focus-visible,
+.plot:focus-visible {
+  border-radius: var(--radius-control);
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 4px;
+}
+
+.bar,
+.stepBar,
+.rowLabel,
+.rowValue,
+.stepStage,
+.stepDetail {
+  transition: opacity var(--duration-base) ease;
+}
+
+.bars[data-has-active] .row:not([data-active]) :is(.bar, .rowLabel, .rowValue),
+.steps[data-has-active] .step:not([data-active]) :is(.stepBar, .stepStage, .stepDetail) {
+  opacity: 0.35;
+}
+
+.cursor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--color-border-strong);
+  pointer-events: none;
+}
+
+.point[data-hover] {
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--color-bg);
+  pointer-events: none;
+}
+
+.tip {
+  position: absolute;
+  z-index: 2;
+  width: max-content;
+  min-width: 170px;
+  max-width: min(280px, 80%);
+  padding: 9px 11px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-inset);
+  background: var(--color-bg-elevated);
+  box-shadow: var(--shadow-md);
+  color: var(--color-text-primary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  pointer-events: none;
+  transform: translate(-50%, calc(-100% - 10px));
+  animation: tipIn var(--duration-fast) var(--ease-out);
+}
+
+.tip[data-side="start"] {
+  transform: translate(-16px, calc(-100% - 10px));
+}
+
+.tip[data-side="end"] {
+  transform: translate(calc(-100% + 16px), calc(-100% - 10px));
+}
+
+.tip[data-below] {
+  transform: translate(-50%, 10px);
+}
+
+.tip[data-below][data-side="start"] {
+  transform: translate(-16px, 10px);
+}
+
+.tip[data-below][data-side="end"] {
+  transform: translate(calc(-100% + 16px), 10px);
+}
+
+.figure .tipTitle {
+  margin: 0 0 5px;
+  font-weight: 600;
+}
+
+.figure .tipRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+
+.tipRow > :last-child {
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.figure .tipNote {
+  margin: 6px 0 0;
+  padding-top: 6px;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-tertiary);
+}
+
+.tipList {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--color-border);
+}
+
+.figure .tipListHeading {
+  margin: 0 0 3px;
+  color: var(--color-text-secondary);
+  font-weight: 600;
+}
+
+.figure .tipList ul {
+  margin: 0;
+  padding-left: 1.1em;
+  list-style: disc;
+}
+
+.figure .tipList li {
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+
+.figure .tipList li + li {
+  margin-top: 2px;
+}
+
+.figure .tipList li::marker {
+  color: var(--color-text-tertiary);
+}
+
+/* Detailed line chart: shaded area, daily dots, a reference rate and the step-ups. */
+
+.plot[data-tall] {
+  height: 240px;
+}
+
+.line .area {
+  fill: var(--color-surface-tint);
+  stroke: none;
+}
+
+.dayDot {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--color-text-secondary);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.gridLine[data-reference] {
+  border-top: 1px solid var(--color-text-tertiary);
+}
+
+.referenceLabel {
+  position: absolute;
+  right: 0;
+  bottom: 4px;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.stepBand {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--color-surface-tint);
+  pointer-events: none;
+}
+
+.stepBandLabel {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+.figure .axis[data-ticks] {
+  position: relative;
+  display: block;
+  height: 1.4em;
+}
+
+.axis[data-ticks] > span {
+  position: absolute;
+  top: 0;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+.axis[data-ticks] > span:first-child {
+  transform: none;
+}
+
+.axis[data-ticks] > span:last-child {
+  transform: translateX(-100%);
+}
+
+.figure .footnote {
+  margin: 14px 0 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+
+@keyframes tipIn {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tip {
+    animation: none;
+  }
+}
+
+/* Gate: a turn's stages left to right, a learning loop under them, then the layers. */
+
+.flow {
+  --flow-gap: 10px;
+  margin-top: 18px;
+  container-type: inline-size;
+}
+
+.figure .stages {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: var(--flow-gap);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.figure .stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 92px;
+  margin: 0;
+  padding: 10px 10px 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-inset);
+}
+
+.figure .stage[data-accent] {
+  border-color: var(--color-accent);
+}
+
+/* An arrow in the gap before every stage but the first. */
+.figure .stage + .stage::before {
+  position: absolute;
+  top: 50%;
+  left: calc(-1 * var(--flow-gap) - 1px);
+  width: var(--flow-gap);
+  color: var(--color-text-tertiary);
+  font-size: var(--text-2xs);
+  line-height: 1;
+  text-align: center;
+  transform: translateY(-50%);
+  content: "›";
+}
+
+.stageNo {
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.06em;
+}
+
+.stage[data-accent] .stageNo {
+  color: var(--color-accent);
+}
+
+.stageName {
+  margin-top: 6px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  overflow-wrap: normal;
+}
+
+.stageDoes {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  overflow-wrap: normal;
+}
+
+/* The loop runs under stages 2 to 7 and points back up at Pick. */
+.loop {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: var(--flow-gap) 0 0 calc((100% - 6 * var(--flow-gap)) / 7 + var(--flow-gap));
+  padding: 8px 12px;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-inset);
+}
+
+.loopArrow {
+  color: var(--color-accent);
+  font-size: var(--text-sm);
+  line-height: 1;
+}
+
+.loopLabel {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.loopText {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+}
+
+.figure .layers {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.figure .layer {
+  display: grid;
+  grid-template-columns: 5rem 11rem minmax(0, 1fr);
+  align-items: baseline;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-inset);
+  background: var(--color-overlay-subtle);
+}
+
+.layerName {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.layerCrate {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.layerHolds {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+}
+
+/* Sized by the chart's own width, since the reader is a narrow middle panel on wide screens. */
+@container (max-width: 760px) {
+  .figure .stages {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .figure .stage {
+    min-height: 0;
+  }
+
+  .figure .stage + .stage::before {
+    content: none;
+  }
+
+  .loop {
+    margin-left: 0;
+  }
+
+  .figure .layer {
+    grid-template-columns: 5rem minmax(0, 1fr);
+  }
+
+  .figure .layerHolds {
+    grid-column: 1 / -1;
+  }
+}
+
+@container (max-width: 460px) {
+  .figure .stages {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .figure .layer {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.figure .stage,
+.figure .layer,
+.loop {
+  cursor: default;
+  outline: none;
+  transition: opacity var(--duration-base) ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.figure .stage:focus-visible,
+.figure .layer:focus-visible,
+.loop:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 3px;
+}
+
+.flow[data-has-active] :is(.stage, .layer, .loop):not([data-active]) {
+  opacity: 0.35;
+}
+
+/* Gate: two bars per row, Gate's on top in the accent. */
+
+.figure .legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 14px 0 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+}
+
+.swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  background: var(--color-text-primary);
+}
+
+.swatch + .swatch,
+.legend > .swatch:not(:first-child) {
+  margin-left: 12px;
+}
+
+.swatch[data-accent] {
+  background: var(--color-accent);
+}
+
+.pair {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.pair > .track {
+  height: 7px;
+}
+
+.rowValueSub {
+  display: block;
+  color: var(--color-text-tertiary);
+}
+
+/* Dimming comes from the shared .bar and .rowValue rule, so the pair's bars and sub-values dim once. */

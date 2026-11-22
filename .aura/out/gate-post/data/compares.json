@@ -1,0 +1,4232 @@
+[
+  {
+    "compare": 28,
+    "tasks": {
+      "swe_bench_pro_hard/ansible-b748edea": {
+        "claude-opus-5-5": {
+          "compare": 28,
+          "slot": "b-2",
+          "title": "ansible: Lack of a public helper to build multipart/form-data request bodies",
+          "run_id": "1a1ffbfc066-61d8939a",
+          "task": "swe_bench_pro_hard/ansible-b748edea",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795292119142,
+          "ended_at_ms": 1795294274305,
+          "cost_usd": 3.7859327999999994,
+          "wall_ms": 2103085,
+          "outcome": 1.0,
+          "model_calls": 37,
+          "files_changed": 7,
+          "routes": [],
+          "calls": {
+            "work": 37
+          },
+          "spend_usd": {
+            "work": 3.785933
+          },
+          "priced_usd": 3.785933,
+          "unpriced_calls": 0
+        },
+        "gate": {
+          "compare": 28,
+          "slot": "a-2",
+          "title": "ansible: Lack of a public helper to build multipart/form-data request bodies",
+          "run_id": "1a1ffbfc09f-9563f19f",
+          "task": "swe_bench_pro_hard/ansible-b748edea",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795292119199,
+          "ended_at_ms": 1795293716314,
+          "cost_usd": 4.000276100000001,
+          "wall_ms": 1556473,
+          "outcome": 1.0,
+          "model_calls": 41,
+          "files_changed": 4,
+          "routes": [],
+          "calls": {
+            "work": 41
+          },
+          "spend_usd": {
+            "work": 4.000276
+          },
+          "priced_usd": 4.000276,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-40ade1f8": {
+        "gate": {
+          "compare": 28,
+          "slot": "a-1",
+          "title": "ansible: Mount information cannot be gathered from most of a host's mount sources",
+          "run_id": "1a1ffbfc0d5-821161e0",
+          "task": "swe_bench_pro_hard/ansible-40ade1f8",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795292119253,
+          "ended_at_ms": 1795294051913,
+          "cost_usd": 5.548097199999999,
+          "wall_ms": 1898171,
+          "outcome": 1.0,
+          "model_calls": 67,
+          "files_changed": 6,
+          "routes": [],
+          "calls": {
+            "work": 67
+          },
+          "spend_usd": {
+            "work": 5.548097
+          },
+          "priced_usd": 5.548097,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 28,
+          "slot": "b-1",
+          "title": "ansible: Mount information cannot be gathered from most of a host's mount sources",
+          "run_id": "1a1ffbfc0ff-987e0d16",
+          "task": "swe_bench_pro_hard/ansible-40ade1f8",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795292119295,
+          "ended_at_ms": 1795293838876,
+          "cost_usd": 4.0669993999999985,
+          "wall_ms": 1681664,
+          "outcome": 1.0,
+          "model_calls": 41,
+          "files_changed": 3,
+          "routes": [],
+          "calls": {
+            "work": 41
+          },
+          "spend_usd": {
+            "work": 4.066999
+          },
+          "priced_usd": 4.066999,
+          "unpriced_calls": 0
+        }
+      }
+    },
+    "pairs_finished": 2,
+    "totals_finished_pairs": {
+      "claude-opus-5-5": {
+        "cost_usd": 7.852932,
+        "wall_ms": 3784749,
+        "passed": 2,
+        "runs": 2
+      },
+      "gate": {
+        "cost_usd": 9.548373,
+        "wall_ms": 3454644,
+        "passed": 2,
+        "runs": 2
+      }
+    }
+  },
+  {
+    "compare": 29,
+    "tasks": {
+      "swe_bench_pro_hard/ansible-40ade1f8": {
+        "gate": {
+          "compare": 29,
+          "slot": "a-1",
+          "title": "ansible: Mount information cannot be gathered from most of a host's mount sources",
+          "run_id": "1a20014e42a-776e2c30",
+          "task": "swe_bench_pro_hard/ansible-40ade1f8",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795297698858,
+          "ended_at_ms": 1795298221406,
+          "cost_usd": 1.6594824,
+          "wall_ms": 489489,
+          "outcome": 1.0,
+          "model_calls": 11,
+          "files_changed": 4,
+          "routes": [],
+          "calls": {
+            "work": 11
+          },
+          "spend_usd": {
+            "work": 1.659482
+          },
+          "priced_usd": 1.659482,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 29,
+          "slot": "b-1",
+          "title": "ansible: Mount information cannot be gathered from most of a host's mount sources",
+          "run_id": "1a20014e43b-814cc1f6",
+          "task": "swe_bench_pro_hard/ansible-40ade1f8",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795297698875,
+          "ended_at_ms": 1795298193278,
+          "cost_usd": 1.5538085999999998,
+          "wall_ms": 457074,
+          "outcome": 1.0,
+          "model_calls": 11,
+          "files_changed": 3,
+          "routes": [],
+          "calls": {
+            "work": 11
+          },
+          "spend_usd": {
+            "work": 1.553809
+          },
+          "priced_usd": 1.553809,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-b748edea": {
+        "gate": {
+          "compare": 29,
+          "slot": "a-2",
+          "title": "ansible: Lack of a public helper to build multipart/form-data request bodies",
+          "run_id": "1a20014e434-832132c1",
+          "task": "swe_bench_pro_hard/ansible-b748edea",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795297698868,
+          "ended_at_ms": 1795297896593,
+          "cost_usd": 0.023882034999999996,
+          "wall_ms": 170336,
+          "outcome": 0.0,
+          "model_calls": 22,
+          "files_changed": 2,
+          "routes": [],
+          "calls": {
+            "work": 22
+          },
+          "spend_usd": {
+            "work": 0.023882
+          },
+          "priced_usd": 0.023882,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 29,
+          "slot": "b-2",
+          "title": "ansible: Lack of a public helper to build multipart/form-data request bodies",
+          "run_id": "1a20014e44b-06e3d36d",
+          "task": "swe_bench_pro_hard/ansible-b748edea",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795297698891,
+          "ended_at_ms": 1795297879757,
+          "cost_usd": 0.46924940000000004,
+          "wall_ms": 153863,
+          "outcome": 1.0,
+          "model_calls": 13,
+          "files_changed": 3,
+          "routes": [],
+          "calls": {
+            "work": 13
+          },
+          "spend_usd": {
+            "work": 0.469249
+          },
+          "priced_usd": 0.469249,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-c1f2df47": {
+        "gate": {
+          "compare": 29,
+          "slot": "a-3",
+          "title": "ansible: BIG-IP message routing routes cannot be managed from Ansible",
+          "run_id": "1a20017af25-0df5e03f",
+          "task": "swe_bench_pro_hard/ansible-c1f2df47",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795297881893,
+          "ended_at_ms": 1795298085845,
+          "cost_usd": 0.22526190000000001,
+          "wall_ms": 72497,
+          "outcome": 1.0,
+          "model_calls": 11,
+          "files_changed": 2,
+          "routes": [],
+          "calls": {
+            "work": 11
+          },
+          "spend_usd": {
+            "work": 0.225262
+          },
+          "priced_usd": 0.225262,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 29,
+          "slot": "b-3",
+          "title": "ansible: BIG-IP message routing routes cannot be managed from Ansible",
+          "run_id": "1a20017f103-c54a9daf",
+          "task": "swe_bench_pro_hard/ansible-c1f2df47",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795297898755,
+          "ended_at_ms": 1795298150362,
+          "cost_usd": 0.44239139999999993,
+          "wall_ms": 143079,
+          "outcome": 1.0,
+          "model_calls": 13,
+          "files_changed": 3,
+          "routes": [],
+          "calls": {
+            "work": 13
+          },
+          "spend_usd": {
+            "work": 0.442391
+          },
+          "priced_usd": 0.442391,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-d33bedc4": {
+        "gate": {
+          "compare": 29,
+          "slot": "a-4",
+          "title": "ansible: Config value type coercion loses tags and handles several input types inconsistently",
+          "run_id": "1a2001ad308-6e3994fe",
+          "task": "swe_bench_pro_hard/ansible-d33bedc4",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795298087688,
+          "ended_at_ms": 1795298427016,
+          "cost_usd": 0.8602828,
+          "wall_ms": 276281,
+          "outcome": 1.0,
+          "model_calls": 34,
+          "files_changed": 6,
+          "routes": [],
+          "calls": {
+            "work": 34
+          },
+          "spend_usd": {
+            "work": 0.860283
+          },
+          "priced_usd": 0.860283,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 29,
+          "slot": "b-4",
+          "title": "ansible: Config value type coercion loses tags and handles several input types inconsistently",
+          "run_id": "1a2001bcea1-f74b66e9",
+          "task": "swe_bench_pro_hard/ansible-d33bedc4",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795298152097,
+          "ended_at_ms": 1795298569771,
+          "cost_usd": 0.7523069999999998,
+          "wall_ms": 382801,
+          "outcome": 1.0,
+          "model_calls": 35,
+          "files_changed": 4,
+          "routes": [],
+          "calls": {
+            "work": 35
+          },
+          "spend_usd": {
+            "work": 0.752307
+          },
+          "priced_usd": 0.752307,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-d62496fe": {
+        "gate": {
+          "compare": 29,
+          "slot": "a-5",
+          "title": "ansible: The human_to_bytes filter converts malformed size strings instead of rejecting them",
+          "run_id": "1a2001c7627-78b61e1b",
+          "task": "swe_bench_pro_hard/ansible-d62496fe",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795298194983,
+          "ended_at_ms": 1795298271241,
+          "cost_usd": 0.0076535299999999995,
+          "wall_ms": 46938,
+          "outcome": 1.0,
+          "model_calls": 7,
+          "files_changed": 1,
+          "routes": [],
+          "calls": {
+            "work": 7
+          },
+          "spend_usd": {
+            "work": 0.007654
+          },
+          "priced_usd": 0.007654,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 29,
+          "slot": "b-5",
+          "title": "ansible: The human_to_bytes filter converts malformed size strings instead of rejecting them",
+          "run_id": "1a2001ce46b-2b403876",
+          "task": "swe_bench_pro_hard/ansible-d62496fe",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795298223211,
+          "ended_at_ms": 1795298335355,
+          "cost_usd": 0.211874,
+          "wall_ms": 82004,
+          "outcome": 1.0,
+          "model_calls": 10,
+          "files_changed": 3,
+          "routes": [],
+          "calls": {
+            "work": 10
+          },
+          "spend_usd": {
+            "work": 0.211874
+          },
+          "priced_usd": 0.211874,
+          "unpriced_calls": 0
+        }
+      }
+    },
+    "pairs_finished": 5,
+    "totals_finished_pairs": {
+      "gate": {
+        "cost_usd": 2.776563,
+        "wall_ms": 1055541,
+        "passed": 4,
+        "runs": 5
+      },
+      "claude-opus-5-5": {
+        "cost_usd": 3.42963,
+        "wall_ms": 1218821,
+        "passed": 5,
+        "runs": 5
+      }
+    }
+  },
+  {
+    "compare": 30,
+    "tasks": {
+      "swe_bench_pro_hard/ansible-b748edea": {
+        "gate": {
+          "compare": 30,
+          "slot": "a-2",
+          "title": "ansible: Lack of a public helper to build multipart/form-data request bodies",
+          "run_id": "1a2002430bc-2e659ff3",
+          "task": "swe_bench_pro_hard/ansible-b748edea",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795298701500,
+          "ended_at_ms": 1795298955644,
+          "cost_usd": 0.17712943499999997,
+          "wall_ms": 210157,
+          "outcome": 1.0,
+          "model_calls": 25,
+          "files_changed": 2,
+          "routes": [],
+          "calls": {
+            "work": 25
+          },
+          "spend_usd": {
+            "work": 0.177129
+          },
+          "priced_usd": 0.177129,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 30,
+          "slot": "b-2",
+          "title": "ansible: Lack of a public helper to build multipart/form-data request bodies",
+          "run_id": "1a2002430c8-93048308",
+          "task": "swe_bench_pro_hard/ansible-b748edea",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795298701512,
+          "ended_at_ms": 1795298833827,
+          "cost_usd": 0.23407279999999997,
+          "wall_ms": 94266,
+          "outcome": 1.0,
+          "model_calls": 10,
+          "files_changed": 3,
+          "routes": [],
+          "calls": {
+            "work": 10
+          },
+          "spend_usd": {
+            "work": 0.234073
+          },
+          "priced_usd": 0.234073,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-40ade1f8": {
+        "gate": {
+          "compare": 30,
+          "slot": "a-1",
+          "title": "ansible: Mount information cannot be gathered from most of a host's mount sources",
+          "run_id": "1a2002430d6-e7af86b6",
+          "task": "swe_bench_pro_hard/ansible-40ade1f8",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795298701526,
+          "ended_at_ms": 1795300649897,
+          "cost_usd": 3.2123030000000004,
+          "wall_ms": 1913231,
+          "outcome": 1.0,
+          "model_calls": 12,
+          "files_changed": 3,
+          "routes": [],
+          "calls": {
+            "work": 12
+          },
+          "spend_usd": {
+            "work": 3.212303
+          },
+          "priced_usd": 3.212303,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 30,
+          "slot": "b-1",
+          "title": "ansible: Mount information cannot be gathered from most of a host's mount sources",
+          "run_id": "1a2002430e6-f3ee5016",
+          "task": "swe_bench_pro_hard/ansible-40ade1f8",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795298701542,
+          "ended_at_ms": 1795299116135,
+          "cost_usd": 1.0945441999999999,
+          "wall_ms": 362258,
+          "outcome": 1.0,
+          "model_calls": 14,
+          "files_changed": 3,
+          "routes": [],
+          "calls": {
+            "work": 14
+          },
+          "spend_usd": {
+            "work": 1.094544
+          },
+          "priced_usd": 1.094544,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-c1f2df47": {
+        "gate": {
+          "compare": 30,
+          "slot": "a-3",
+          "title": "ansible: BIG-IP message routing routes cannot be managed from Ansible",
+          "run_id": "1a200264634-a654938c",
+          "task": "swe_bench_pro_hard/ansible-c1f2df47",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795298838068,
+          "ended_at_ms": 1795299111750,
+          "cost_usd": 0.20994689999999996,
+          "wall_ms": 73844,
+          "outcome": 1.0,
+          "model_calls": 9,
+          "files_changed": 2,
+          "routes": [],
+          "calls": {
+            "work": 9
+          },
+          "spend_usd": {
+            "work": 0.209947
+          },
+          "priced_usd": 0.209947,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 30,
+          "slot": "b-3",
+          "title": "ansible: BIG-IP message routing routes cannot be managed from Ansible",
+          "run_id": "1a200282e18-09eddb3a",
+          "task": "swe_bench_pro_hard/ansible-c1f2df47",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795298962968,
+          "ended_at_ms": 1795299235643,
+          "cost_usd": 0.44820280000000007,
+          "wall_ms": 157758,
+          "outcome": 1.0,
+          "model_calls": 15,
+          "files_changed": 3,
+          "routes": [],
+          "calls": {
+            "work": 15
+          },
+          "spend_usd": {
+            "work": 0.448203
+          },
+          "priced_usd": 0.448203,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-d33bedc4": {
+        "gate": {
+          "compare": 30,
+          "slot": "a-4",
+          "title": "ansible: Config value type coercion loses tags and handles several input types inconsistently",
+          "run_id": "1a2002a816b-5ea1c266",
+          "task": "swe_bench_pro_hard/ansible-d33bedc4",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795299115371,
+          "ended_at_ms": 1795299439025,
+          "cost_usd": 0.7839506000000003,
+          "wall_ms": 288558,
+          "outcome": 1.0,
+          "model_calls": 35,
+          "files_changed": 3,
+          "routes": [],
+          "calls": {
+            "work": 35
+          },
+          "spend_usd": {
+            "work": 0.783951
+          },
+          "priced_usd": 0.783951,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 30,
+          "slot": "b-4",
+          "title": "ansible: Config value type coercion loses tags and handles several input types inconsistently",
+          "run_id": "1a2002a90d7-5e6c8dff",
+          "task": "swe_bench_pro_hard/ansible-d33bedc4",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795299119319,
+          "ended_at_ms": 1795299525142,
+          "cost_usd": 0.8768290000000001,
+          "wall_ms": 373198,
+          "outcome": 1.0,
+          "model_calls": 36,
+          "files_changed": 5,
+          "routes": [],
+          "calls": {
+            "work": 36
+          },
+          "spend_usd": {
+            "work": 0.876829
+          },
+          "priced_usd": 0.876829,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-d62496fe": {
+        "gate": {
+          "compare": 30,
+          "slot": "a-5",
+          "title": "ansible: The human_to_bytes filter converts malformed size strings instead of rejecting them",
+          "run_id": "1a2002c5e82-f06ce019",
+          "task": "swe_bench_pro_hard/ansible-d62496fe",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795299237506,
+          "ended_at_ms": 1795299319151,
+          "cost_usd": 0.008495145,
+          "wall_ms": 51332,
+          "outcome": 1.0,
+          "model_calls": 7,
+          "files_changed": 1,
+          "routes": [],
+          "calls": {
+            "work": 7
+          },
+          "spend_usd": {
+            "work": 0.008495
+          },
+          "priced_usd": 0.008495,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 30,
+          "slot": "b-5",
+          "title": "ansible: The human_to_bytes filter converts malformed size strings instead of rejecting them",
+          "run_id": "1a2002da3a3-b1fb9c14",
+          "task": "swe_bench_pro_hard/ansible-d62496fe",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795299320739,
+          "ended_at_ms": 1795299416577,
+          "cost_usd": 0.22607679999999997,
+          "wall_ms": 65147,
+          "outcome": 1.0,
+          "model_calls": 10,
+          "files_changed": 3,
+          "routes": [],
+          "calls": {
+            "work": 10
+          },
+          "spend_usd": {
+            "work": 0.226077
+          },
+          "priced_usd": 0.226077,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-d72025be": {
+        "gate": {
+          "compare": 30,
+          "slot": "a-6",
+          "title": "ansible: nxos_interfaces does not handle enabled/shutdown correctly with device defaults",
+          "run_id": "1a2002f2a92-a70fac67",
+          "task": "swe_bench_pro_hard/ansible-d72025be",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795299420818,
+          "ended_at_ms": 1795300788767,
+          "cost_usd": 1.124512,
+          "wall_ms": 1196398,
+          "outcome": 1.0,
+          "model_calls": 16,
+          "files_changed": 6,
+          "routes": [],
+          "calls": {
+            "work": 16
+          },
+          "spend_usd": {
+            "work": 1.124512
+          },
+          "priced_usd": 1.124512,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 30,
+          "slot": "b-6",
+          "title": "ansible: nxos_interfaces does not handle enabled/shutdown correctly with device defaults",
+          "run_id": "1a2002f7c3f-29c5da57",
+          "task": "swe_bench_pro_hard/ansible-d72025be",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795299441727,
+          "ended_at_ms": 1795300790009,
+          "cost_usd": 0.9233262000000001,
+          "wall_ms": 1174503,
+          "outcome": 0.0,
+          "model_calls": 13,
+          "files_changed": 4,
+          "routes": [],
+          "calls": {
+            "work": 13
+          },
+          "spend_usd": {
+            "work": 0.923326
+          },
+          "priced_usd": 0.923326,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-de5858f4": {
+        "gate": {
+          "compare": 30,
+          "slot": "a-7",
+          "title": "ansible: Collection operations repeatedly fetch the same metadata",
+          "run_id": "1a20030c8aa-8ee82b83",
+          "task": "swe_bench_pro_hard/ansible-de5858f4",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795299526826,
+          "ended_at_ms": 1795300642319,
+          "cost_usd": 0.6870324000000001,
+          "wall_ms": 1089782,
+          "outcome": 1.0,
+          "model_calls": 18,
+          "files_changed": 5,
+          "routes": [],
+          "calls": {
+            "work": 18
+          },
+          "spend_usd": {
+            "work": 0.687032
+          },
+          "priced_usd": 0.687032,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 30,
+          "slot": "b-7",
+          "title": "ansible: Collection operations repeatedly fetch the same metadata",
+          "run_id": "1a20041d4e3-c5e10fa0",
+          "task": "swe_bench_pro_hard/ansible-de5858f4",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795300644067,
+          "ended_at_ms": 1795300669738,
+          "cost_usd": 0.0,
+          "wall_ms": 0,
+          "outcome": 0.0,
+          "model_calls": 0,
+          "files_changed": 0,
+          "routes": [],
+          "calls": {},
+          "spend_usd": {},
+          "priced_usd": 0,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-e9e60012": {
+        "gate": {
+          "compare": 30,
+          "slot": "a-8",
+          "title": "ansible: WinRM Kerberos: Obtaining the TGT with kinit fails or is inconsistent depending on the environment and the presence o...",
+          "run_id": "1a20041f57d-5e432ca1",
+          "task": "swe_bench_pro_hard/ansible-e9e60012",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795300652413,
+          "ended_at_ms": 1795300687519,
+          "cost_usd": 0.0,
+          "wall_ms": 0,
+          "outcome": 0.0,
+          "model_calls": 0,
+          "files_changed": 0,
+          "routes": [],
+          "calls": {},
+          "spend_usd": {},
+          "priced_usd": 0,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 30,
+          "slot": "b-8",
+          "title": "ansible: WinRM Kerberos: Obtaining the TGT with kinit fails or is inconsistent depending on the environment and the presence o...",
+          "run_id": "1a200424034-d48160e7",
+          "task": "swe_bench_pro_hard/ansible-e9e60012",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795300671540,
+          "ended_at_ms": 1795300707410,
+          "cost_usd": 0.0,
+          "wall_ms": 0,
+          "outcome": 0.0,
+          "model_calls": 0,
+          "files_changed": 0,
+          "routes": [],
+          "calls": {},
+          "spend_usd": {},
+          "priced_usd": 0,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/element-web-5dfde12c": {
+        "gate": {
+          "compare": 30,
+          "slot": "a-9",
+          "title": "element-web: Session information and voice broadcast state can be unreliable",
+          "run_id": "1a200428753-9693bdde",
+          "task": "swe_bench_pro_hard/element-web-5dfde12c",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795300689747,
+          "ended_at_ms": 1795300722402,
+          "cost_usd": 0.0,
+          "wall_ms": 0,
+          "outcome": 0.0,
+          "model_calls": 0,
+          "files_changed": 0,
+          "routes": [],
+          "calls": {},
+          "spend_usd": {},
+          "priced_usd": 0,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 30,
+          "slot": "b-9",
+          "title": "element-web: Session information and voice broadcast state can be unreliable",
+          "run_id": "1a20042d3fa-1f58e743",
+          "task": "swe_bench_pro_hard/element-web-5dfde12c",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795300709370,
+          "ended_at_ms": 1795300741484,
+          "cost_usd": 0.0,
+          "wall_ms": 0,
+          "outcome": 0.0,
+          "model_calls": 0,
+          "files_changed": 0,
+          "routes": [],
+          "calls": {},
+          "spend_usd": {},
+          "priced_usd": 0,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/element-web-66d0b318": {
+        "gate": {
+          "compare": 30,
+          "slot": "a-10",
+          "title": "element-web: Add seekbar support for voice broadcast playback",
+          "run_id": "1a200430fea-97326be7",
+          "task": "swe_bench_pro_hard/element-web-66d0b318",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795300724714,
+          "ended_at_ms": 1795300748124,
+          "cost_usd": 0.0,
+          "wall_ms": 0,
+          "outcome": 0.0,
+          "model_calls": 0,
+          "files_changed": 0,
+          "routes": [],
+          "calls": {},
+          "spend_usd": {},
+          "priced_usd": 0,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 30,
+          "slot": "b-10",
+          "title": "element-web: Add seekbar support for voice broadcast playback",
+          "run_id": "1a200435944-d0c97e22",
+          "task": "swe_bench_pro_hard/element-web-66d0b318",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795300743492,
+          "ended_at_ms": 1795300766323,
+          "cost_usd": 0.0,
+          "wall_ms": 0,
+          "outcome": 0.0,
+          "model_calls": 0,
+          "files_changed": 0,
+          "routes": [],
+          "calls": {},
+          "spend_usd": {},
+          "priced_usd": 0,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/element-web-772df302": {
+        "gate": {
+          "compare": 30,
+          "slot": "a-11",
+          "title": "element-web: Device management does not support signing out of multiple sessions at once",
+          "run_id": "1a20043740d-4ac02079",
+          "task": "swe_bench_pro_hard/element-web-772df302",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795300750349,
+          "ended_at_ms": 1795300784596,
+          "cost_usd": 0.0,
+          "wall_ms": 0,
+          "outcome": 0.0,
+          "model_calls": 0,
+          "files_changed": 0,
+          "routes": [],
+          "calls": {},
+          "spend_usd": {},
+          "priced_usd": 0,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 30,
+          "slot": "b-11",
+          "title": "element-web: Device management does not support signing out of multiple sessions at once",
+          "run_id": "1a20043ba74-4f7377f4",
+          "task": "swe_bench_pro_hard/element-web-772df302",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795300768372,
+          "ended_at_ms": 1795300801847,
+          "cost_usd": 0.0,
+          "wall_ms": 0,
+          "outcome": 0.0,
+          "model_calls": 0,
+          "files_changed": 0,
+          "routes": [],
+          "calls": {},
+          "spend_usd": {},
+          "priced_usd": 0,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/element-web-ecfd1736": {
+        "gate": {
+          "compare": 30,
+          "slot": "a-12",
+          "title": "element-web: Combine search results when the query is present in multiple successive messages",
+          "run_id": "1a200440248-fbe3831c",
+          "task": "swe_bench_pro_hard/element-web-ecfd1736",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795300786760,
+          "ended_at_ms": 1795300817794,
+          "cost_usd": 0.0,
+          "wall_ms": 0,
+          "outcome": 0.0,
+          "model_calls": 0,
+          "files_changed": 0,
+          "routes": [],
+          "calls": {},
+          "spend_usd": {},
+          "priced_usd": 0,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 30,
+          "slot": "b-12",
+          "title": "element-web: Combine search results when the query is present in multiple successive messages",
+          "run_id": "1a200441167-0e55cfdf",
+          "task": "swe_bench_pro_hard/element-web-ecfd1736",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795300790631,
+          "ended_at_ms": 1795300826075,
+          "cost_usd": 0.0,
+          "wall_ms": 0,
+          "outcome": 0.0,
+          "model_calls": 0,
+          "files_changed": 0,
+          "routes": [],
+          "calls": {},
+          "spend_usd": {},
+          "priced_usd": 0,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/flipt-2ca5dfb3": {
+        "gate": {
+          "compare": 30,
+          "slot": "a-13",
+          "title": "flipt: Support multiple metrics exporters (Prometheus, OpenTelemetry)",
+          "run_id": "1a20044150e-e85af517",
+          "task": "swe_bench_pro_hard/flipt-2ca5dfb3",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795300791566,
+          "ended_at_ms": 1795300834542,
+          "cost_usd": 0.0,
+          "wall_ms": 0,
+          "outcome": 0.0,
+          "model_calls": 0,
+          "files_changed": 0,
+          "routes": [],
+          "calls": {},
+          "spend_usd": {},
+          "priced_usd": 0,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 30,
+          "slot": "b-13",
+          "title": "flipt: Support multiple metrics exporters (Prometheus, OpenTelemetry)",
+          "run_id": "1a20044460b-58d0d203",
+          "task": "swe_bench_pro_hard/flipt-2ca5dfb3",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795300804107,
+          "ended_at_ms": 1795301098044,
+          "cost_usd": 1.1194042,
+          "wall_ms": 291569,
+          "outcome": null,
+          "model_calls": 31,
+          "files_changed": 8,
+          "routes": [],
+          "calls": {
+            "work": 31
+          },
+          "spend_usd": {
+            "work": 1.119404
+          },
+          "priced_usd": 1.119404,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/flipt-3d5a345f": {
+        "gate": {
+          "compare": 30,
+          "slot": "a-14",
+          "title": "flipt: Make tracing sampling ratio and context propagators configurable",
+          "run_id": "1a2004484be-93ea27e3",
+          "task": "swe_bench_pro_hard/flipt-3d5a345f",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795300820158,
+          "ended_at_ms": 1795301100477,
+          "cost_usd": 0.8139398000000001,
+          "wall_ms": 275548,
+          "outcome": null,
+          "model_calls": 37,
+          "files_changed": 8,
+          "routes": [],
+          "calls": {
+            "work": 37
+          },
+          "spend_usd": {
+            "work": 0.81394
+          },
+          "priced_usd": 0.81394,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 30,
+          "slot": "b-14",
+          "title": "flipt: Make tracing sampling ratio and context propagators configurable",
+          "run_id": "1a20044a403-eb24ba7b",
+          "task": "swe_bench_pro_hard/flipt-3d5a345f",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795300828163,
+          "ended_at_ms": 1795301119140,
+          "cost_usd": 0.6810935999999999,
+          "wall_ms": 267621,
+          "outcome": null,
+          "model_calls": 26,
+          "files_changed": 0,
+          "routes": [],
+          "calls": {
+            "work": 26
+          },
+          "spend_usd": {
+            "work": 0.681094
+          },
+          "priced_usd": 0.681094,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/flipt-524f2773": {
+        "gate": {
+          "compare": 30,
+          "slot": "a-15",
+          "title": "flipt: Support dual-format segment targeting in feature flag rules",
+          "run_id": "1a20044c25e-8d65326a",
+          "task": "swe_bench_pro_hard/flipt-524f2773",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795300835934,
+          "ended_at_ms": 1795301100437,
+          "cost_usd": 0.29995260000000007,
+          "wall_ms": 258339,
+          "outcome": null,
+          "model_calls": 20,
+          "files_changed": 7,
+          "routes": [],
+          "calls": {
+            "work": 20
+          },
+          "spend_usd": {
+            "work": 0.299953
+          },
+          "priced_usd": 0.299953,
+          "unpriced_calls": 0
+        }
+      }
+    },
+    "pairs_finished": 12,
+    "totals_finished_pairs": {
+      "gate": {
+        "cost_usd": 6.203369,
+        "wall_ms": 4823302,
+        "passed": 7,
+        "runs": 12
+      },
+      "claude-opus-5-5": {
+        "cost_usd": 3.803052,
+        "wall_ms": 2227130,
+        "passed": 5,
+        "runs": 12
+      }
+    }
+  },
+  {
+    "compare": 31,
+    "tasks": {
+      "swe_bench_pro_hard/ansible-b748edea": {
+        "gate": {
+          "compare": 31,
+          "slot": "a-2",
+          "title": "ansible: Lack of a public helper to build multipart/form-data request bodies",
+          "run_id": "1a2006203d6-8714183b",
+          "task": "swe_bench_pro_hard/ansible-b748edea",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795302753238,
+          "ended_at_ms": 1795302982170,
+          "cost_usd": 0.6027759999999999,
+          "wall_ms": 189168,
+          "outcome": 1.0,
+          "model_calls": 18,
+          "files_changed": 5,
+          "routes": [],
+          "calls": {
+            "work": 18
+          },
+          "spend_usd": {
+            "work": 0.602776
+          },
+          "priced_usd": 0.602776,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 31,
+          "slot": "b-2",
+          "title": "ansible: Lack of a public helper to build multipart/form-data request bodies",
+          "run_id": "1a2006203f6-800bd564",
+          "task": "swe_bench_pro_hard/ansible-b748edea",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795302753270,
+          "ended_at_ms": 1795302870619,
+          "cost_usd": 0.2739072,
+          "wall_ms": 90514,
+          "outcome": 1.0,
+          "model_calls": 12,
+          "files_changed": 3,
+          "routes": [],
+          "calls": {
+            "work": 12
+          },
+          "spend_usd": {
+            "work": 0.273907
+          },
+          "priced_usd": 0.273907,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-40ade1f8": {
+        "gate": {
+          "compare": 31,
+          "slot": "a-1",
+          "title": "ansible: Mount information cannot be gathered from most of a host's mount sources",
+          "run_id": "1a200620453-42b11c73",
+          "task": "swe_bench_pro_hard/ansible-40ade1f8",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795302753363,
+          "ended_at_ms": 1795305054548,
+          "cost_usd": 9.0731618,
+          "wall_ms": 2266853,
+          "outcome": 1.0,
+          "model_calls": 72,
+          "files_changed": 21,
+          "routes": [],
+          "calls": {
+            "work": 72
+          },
+          "spend_usd": {
+            "work": 9.073162
+          },
+          "priced_usd": 9.073162,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 31,
+          "slot": "b-1",
+          "title": "ansible: Mount information cannot be gathered from most of a host's mount sources",
+          "run_id": "1a200620464-5429d300",
+          "task": "swe_bench_pro_hard/ansible-40ade1f8",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795302753380,
+          "ended_at_ms": 1795303281088,
+          "cost_usd": 1.7180451999999995,
+          "wall_ms": 491641,
+          "outcome": 1.0,
+          "model_calls": 15,
+          "files_changed": 3,
+          "routes": [],
+          "calls": {
+            "work": 15
+          },
+          "spend_usd": {
+            "work": 1.718045
+          },
+          "priced_usd": 1.718045,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-c1f2df47": {
+        "gate": {
+          "compare": 31,
+          "slot": "a-3",
+          "title": "ansible: BIG-IP message routing routes cannot be managed from Ansible",
+          "run_id": "1a20063d395-60b01c72",
+          "task": "swe_bench_pro_hard/ansible-c1f2df47",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795302871957,
+          "ended_at_ms": 1795303620234,
+          "cost_usd": 2.5110660000000005,
+          "wall_ms": 641977,
+          "outcome": 1.0,
+          "model_calls": 43,
+          "files_changed": 5,
+          "routes": [],
+          "calls": {
+            "work": 43
+          },
+          "spend_usd": {
+            "work": 2.511066
+          },
+          "priced_usd": 2.511066,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 31,
+          "slot": "b-3",
+          "title": "ansible: BIG-IP message routing routes cannot be managed from Ansible",
+          "run_id": "1a200658698-4a485a76",
+          "task": "swe_bench_pro_hard/ansible-c1f2df47",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795302983320,
+          "ended_at_ms": 1795303224553,
+          "cost_usd": 0.4842032,
+          "wall_ms": 137397,
+          "outcome": 1.0,
+          "model_calls": 14,
+          "files_changed": 3,
+          "routes": [],
+          "calls": {
+            "work": 14
+          },
+          "spend_usd": {
+            "work": 0.484203
+          },
+          "priced_usd": 0.484203,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-d33bedc4": {
+        "gate": {
+          "compare": 31,
+          "slot": "a-4",
+          "title": "ansible: Config value type coercion loses tags and handles several input types inconsistently",
+          "run_id": "1a2006936cf-14344472",
+          "task": "swe_bench_pro_hard/ansible-d33bedc4",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795303225039,
+          "ended_at_ms": 1795303502857,
+          "cost_usd": 0.6627611999999998,
+          "wall_ms": 244380,
+          "outcome": 1.0,
+          "model_calls": 24,
+          "files_changed": 4,
+          "routes": [],
+          "calls": {
+            "work": 24
+          },
+          "spend_usd": {
+            "work": 0.662761
+          },
+          "priced_usd": 0.662761,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 31,
+          "slot": "b-4",
+          "title": "ansible: Config value type coercion loses tags and handles several input types inconsistently",
+          "run_id": "1a2006a13eb-2953aa07",
+          "task": "swe_bench_pro_hard/ansible-d33bedc4",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795303281643,
+          "ended_at_ms": 1795303631591,
+          "cost_usd": 0.8647738,
+          "wall_ms": 318688,
+          "outcome": 1.0,
+          "model_calls": 41,
+          "files_changed": 5,
+          "routes": [],
+          "calls": {
+            "work": 41
+          },
+          "spend_usd": {
+            "work": 0.864774
+          },
+          "priced_usd": 0.864774,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-d62496fe": {
+        "gate": {
+          "compare": 31,
+          "slot": "a-5",
+          "title": "ansible: The human_to_bytes filter converts malformed size strings instead of rejecting them",
+          "run_id": "1a2006d75d9-8dec2427",
+          "task": "swe_bench_pro_hard/ansible-d62496fe",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795303503321,
+          "ended_at_ms": 1795303628897,
+          "cost_usd": 0.011515995,
+          "wall_ms": 66683,
+          "outcome": 1.0,
+          "model_calls": 10,
+          "files_changed": 1,
+          "routes": [],
+          "calls": {
+            "work": 10
+          },
+          "spend_usd": {
+            "work": 0.011516
+          },
+          "priced_usd": 0.011516,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 31,
+          "slot": "b-5",
+          "title": "ansible: The human_to_bytes filter converts malformed size strings instead of rejecting them",
+          "run_id": "1a2006f40bc-2cca2f49",
+          "task": "swe_bench_pro_hard/ansible-d62496fe",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795303620796,
+          "ended_at_ms": 1795303719536,
+          "cost_usd": 0.2365582,
+          "wall_ms": 68222,
+          "outcome": 1.0,
+          "model_calls": 8,
+          "files_changed": 3,
+          "routes": [],
+          "calls": {
+            "work": 8
+          },
+          "spend_usd": {
+            "work": 0.236558
+          },
+          "priced_usd": 0.236558,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-d72025be": {
+        "gate": {
+          "compare": 31,
+          "slot": "a-6",
+          "title": "ansible: nxos_interfaces does not handle enabled/shutdown correctly with device defaults",
+          "run_id": "1a2006f6675-7adb8147",
+          "task": "swe_bench_pro_hard/ansible-d72025be",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795303630453,
+          "ended_at_ms": 1795304228061,
+          "cost_usd": 1.4796303999999998,
+          "wall_ms": 435509,
+          "outcome": 1.0,
+          "model_calls": 22,
+          "files_changed": 7,
+          "routes": [],
+          "calls": {
+            "work": 22
+          },
+          "spend_usd": {
+            "work": 1.47963
+          },
+          "priced_usd": 1.47963,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 31,
+          "slot": "b-6",
+          "title": "ansible: nxos_interfaces does not handle enabled/shutdown correctly with device defaults",
+          "run_id": "1a2006f71a5-5f709d9f",
+          "task": "swe_bench_pro_hard/ansible-d72025be",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795303633317,
+          "ended_at_ms": 1795304312008,
+          "cost_usd": 1.6303368,
+          "wall_ms": 516239,
+          "outcome": 1.0,
+          "model_calls": 27,
+          "files_changed": 7,
+          "routes": [],
+          "calls": {
+            "work": 27
+          },
+          "spend_usd": {
+            "work": 1.630337
+          },
+          "priced_usd": 1.630337,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-de5858f4": {
+        "gate": {
+          "compare": 31,
+          "slot": "a-7",
+          "title": "ansible: Collection operations repeatedly fetch the same metadata",
+          "run_id": "1a20070c49a-9b05ef13",
+          "task": "swe_bench_pro_hard/ansible-de5858f4",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795303720090,
+          "ended_at_ms": 1795304059154,
+          "cost_usd": 1.1563680000000003,
+          "wall_ms": 313741,
+          "outcome": 1.0,
+          "model_calls": 33,
+          "files_changed": 5,
+          "routes": [],
+          "calls": {
+            "work": 33
+          },
+          "spend_usd": {
+            "work": 1.156368
+          },
+          "priced_usd": 1.156368,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 31,
+          "slot": "b-7",
+          "title": "ansible: Collection operations repeatedly fetch the same metadata",
+          "run_id": "1a20075f32c-7563064d",
+          "task": "swe_bench_pro_hard/ansible-de5858f4",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795304059692,
+          "ended_at_ms": 1795304392809,
+          "cost_usd": 0.9016648000000002,
+          "wall_ms": 307061,
+          "outcome": 1.0,
+          "model_calls": 31,
+          "files_changed": 3,
+          "routes": [],
+          "calls": {
+            "work": 31
+          },
+          "spend_usd": {
+            "work": 0.901665
+          },
+          "priced_usd": 0.901665,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-e9e60012": {
+        "gate": {
+          "compare": 31,
+          "slot": "a-8",
+          "title": "ansible: WinRM Kerberos: Obtaining the TGT with kinit fails or is inconsistent depending on the environment and the presence o...",
+          "run_id": "1a200788869-1f72cb4f",
+          "task": "swe_bench_pro_hard/ansible-e9e60012",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795304228969,
+          "ended_at_ms": 1795304326745,
+          "cost_usd": 0.30786840000000004,
+          "wall_ms": 65720,
+          "outcome": 1.0,
+          "model_calls": 12,
+          "files_changed": 2,
+          "routes": [],
+          "calls": {
+            "work": 12
+          },
+          "spend_usd": {
+            "work": 0.307868
+          },
+          "priced_usd": 0.307868,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 31,
+          "slot": "b-8",
+          "title": "ansible: WinRM Kerberos: Obtaining the TGT with kinit fails or is inconsistent depending on the environment and the presence o...",
+          "run_id": "1a20079ced1-39ce3d49",
+          "task": "swe_bench_pro_hard/ansible-e9e60012",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795304312529,
+          "ended_at_ms": 1795304414368,
+          "cost_usd": 0.3234426,
+          "wall_ms": 67461,
+          "outcome": 1.0,
+          "model_calls": 12,
+          "files_changed": 3,
+          "routes": [],
+          "calls": {
+            "work": 12
+          },
+          "spend_usd": {
+            "work": 0.323443
+          },
+          "priced_usd": 0.323443,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/element-web-5dfde12c": {
+        "gate": {
+          "compare": 31,
+          "slot": "a-9",
+          "title": "element-web: Session information and voice broadcast state can be unreliable",
+          "run_id": "1a2007a08d9-711e448a",
+          "task": "swe_bench_pro_hard/element-web-5dfde12c",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795304327385,
+          "ended_at_ms": 1795304683687,
+          "cost_usd": 0.32087730000000003,
+          "wall_ms": 315380,
+          "outcome": 1.0,
+          "model_calls": 29,
+          "files_changed": 2,
+          "routes": [],
+          "calls": {
+            "work": 29
+          },
+          "spend_usd": {
+            "work": 0.320877
+          },
+          "priced_usd": 0.320877,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 31,
+          "slot": "b-9",
+          "title": "element-web: Session information and voice broadcast state can be unreliable",
+          "run_id": "1a2007b0af6-dae945ef",
+          "task": "swe_bench_pro_hard/element-web-5dfde12c",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795304393463,
+          "ended_at_ms": 1795304599237,
+          "cost_usd": 0.4357764,
+          "wall_ms": 174087,
+          "outcome": 1.0,
+          "model_calls": 23,
+          "files_changed": 5,
+          "routes": [],
+          "calls": {
+            "work": 23
+          },
+          "spend_usd": {
+            "work": 0.435776
+          },
+          "priced_usd": 0.435776,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/element-web-66d0b318": {
+        "gate": {
+          "compare": 31,
+          "slot": "a-10",
+          "title": "element-web: Add seekbar support for voice broadcast playback",
+          "run_id": "1a2007b5f5e-0000f4e7",
+          "task": "swe_bench_pro_hard/element-web-66d0b318",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795304415070,
+          "ended_at_ms": 1795304767429,
+          "cost_usd": 1.031054,
+          "wall_ms": 332102,
+          "outcome": 1.0,
+          "model_calls": 26,
+          "files_changed": 8,
+          "routes": [],
+          "calls": {
+            "work": 26
+          },
+          "spend_usd": {
+            "work": 1.031054
+          },
+          "priced_usd": 1.031054,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 31,
+          "slot": "b-10",
+          "title": "element-web: Add seekbar support for voice broadcast playback",
+          "run_id": "1a2007e331c-d478519a",
+          "task": "swe_bench_pro_hard/element-web-66d0b318",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795304600348,
+          "ended_at_ms": 1795304934411,
+          "cost_usd": 0.9958140000000001,
+          "wall_ms": 315496,
+          "outcome": 1.0,
+          "model_calls": 29,
+          "files_changed": 5,
+          "routes": [],
+          "calls": {
+            "work": 29
+          },
+          "spend_usd": {
+            "work": 0.995814
+          },
+          "priced_usd": 0.995814,
+          "unpriced_calls": 0
+        }
+      }
+    },
+    "pairs_finished": 10,
+    "totals_finished_pairs": {
+      "gate": {
+        "cost_usd": 17.157078,
+        "wall_ms": 4871513,
+        "passed": 10,
+        "runs": 10
+      },
+      "claude-opus-5-5": {
+        "cost_usd": 7.864522,
+        "wall_ms": 2486806,
+        "passed": 10,
+        "runs": 10
+      }
+    }
+  },
+  {
+    "compare": 32,
+    "tasks": {
+      "swe_bench_pro_hard/ansible-b748edea": {
+        "gate": {
+          "compare": 32,
+          "slot": "a-2",
+          "title": "ansible: Lack of a public helper to build multipart/form-data request bodies",
+          "run_id": "1a2009b7e07-d04718d4",
+          "task": "swe_bench_pro_hard/ansible-b748edea",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795306520071,
+          "ended_at_ms": 1795306677810,
+          "cost_usd": 0.019310195000000002,
+          "wall_ms": 132434,
+          "outcome": 0.0,
+          "model_calls": 16,
+          "files_changed": 2,
+          "routes": [],
+          "calls": {
+            "work": 16
+          },
+          "spend_usd": {
+            "work": 0.01931
+          },
+          "priced_usd": 0.01931,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 32,
+          "slot": "b-2",
+          "title": "ansible: Lack of a public helper to build multipart/form-data request bodies",
+          "run_id": "1a2009b7e26-858e2ffd",
+          "task": "swe_bench_pro_hard/ansible-b748edea",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795306520102,
+          "ended_at_ms": 1795306668500,
+          "cost_usd": 0.43459480000000006,
+          "wall_ms": 123448,
+          "outcome": 1.0,
+          "model_calls": 13,
+          "files_changed": 4,
+          "routes": [],
+          "calls": {
+            "work": 13
+          },
+          "spend_usd": {
+            "work": 0.434595
+          },
+          "priced_usd": 0.434595,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-40ade1f8": {
+        "claude-opus-5-5": {
+          "compare": 32,
+          "slot": "b-1",
+          "title": "ansible: Mount information cannot be gathered from most of a host's mount sources",
+          "run_id": "1a2009b7e72-08b5490e",
+          "task": "swe_bench_pro_hard/ansible-40ade1f8",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795306520178,
+          "ended_at_ms": 1795307103430,
+          "cost_usd": 1.5694066,
+          "wall_ms": 551486,
+          "outcome": 1.0,
+          "model_calls": 13,
+          "files_changed": 4,
+          "routes": [],
+          "calls": {
+            "work": 13
+          },
+          "spend_usd": {
+            "work": 1.569407
+          },
+          "priced_usd": 1.569407,
+          "unpriced_calls": 0
+        },
+        "gate": {
+          "compare": 32,
+          "slot": "a-1",
+          "title": "ansible: Mount information cannot be gathered from most of a host's mount sources",
+          "run_id": "1a2009b7e76-92da0782",
+          "task": "swe_bench_pro_hard/ansible-40ade1f8",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795306520182,
+          "ended_at_ms": 1795306983705,
+          "cost_usd": 1.5018240000000003,
+          "wall_ms": 433546,
+          "outcome": 1.0,
+          "model_calls": 11,
+          "files_changed": 4,
+          "routes": [],
+          "calls": {
+            "work": 11
+          },
+          "spend_usd": {
+            "work": 1.501824
+          },
+          "priced_usd": 1.501824,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-c1f2df47": {
+        "gate": {
+          "compare": 32,
+          "slot": "a-3",
+          "title": "ansible: BIG-IP message routing routes cannot be managed from Ansible",
+          "run_id": "1a2009dc700-89fca7a2",
+          "task": "swe_bench_pro_hard/ansible-c1f2df47",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795306669824,
+          "ended_at_ms": 1795306921970,
+          "cost_usd": 0.541681,
+          "wall_ms": 129826,
+          "outcome": 1.0,
+          "model_calls": 15,
+          "files_changed": 3,
+          "routes": [],
+          "calls": {
+            "work": 15
+          },
+          "spend_usd": {
+            "work": 0.541681
+          },
+          "priced_usd": 0.541681,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 32,
+          "slot": "b-3",
+          "title": "ansible: BIG-IP message routing routes cannot be managed from Ansible",
+          "run_id": "1a2009deb52-013fa952",
+          "task": "swe_bench_pro_hard/ansible-c1f2df47",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795306679122,
+          "ended_at_ms": 1795306902342,
+          "cost_usd": 0.4925052,
+          "wall_ms": 116066,
+          "outcome": 1.0,
+          "model_calls": 12,
+          "files_changed": 3,
+          "routes": [],
+          "calls": {
+            "work": 12
+          },
+          "spend_usd": {
+            "work": 0.492505
+          },
+          "priced_usd": 0.492505,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-d33bedc4": {
+        "gate": {
+          "compare": 32,
+          "slot": "a-4",
+          "title": "ansible: Config value type coercion loses tags and handles several input types inconsistently",
+          "run_id": "1a200a1577b-a9c88e88",
+          "task": "swe_bench_pro_hard/ansible-d33bedc4",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795306903419,
+          "ended_at_ms": 1795307283898,
+          "cost_usd": 1.0833812,
+          "wall_ms": 346950,
+          "outcome": 1.0,
+          "model_calls": 43,
+          "files_changed": 6,
+          "routes": [],
+          "calls": {
+            "work": 43
+          },
+          "spend_usd": {
+            "work": 1.083381
+          },
+          "priced_usd": 1.083381,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 32,
+          "slot": "b-4",
+          "title": "ansible: Config value type coercion loses tags and handles several input types inconsistently",
+          "run_id": "1a200a1a23b-6a57e7fe",
+          "task": "swe_bench_pro_hard/ansible-d33bedc4",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795306922555,
+          "ended_at_ms": 1795307302507,
+          "cost_usd": 0.8377144000000001,
+          "wall_ms": 348287,
+          "outcome": 1.0,
+          "model_calls": 39,
+          "files_changed": 4,
+          "routes": [],
+          "calls": {
+            "work": 39
+          },
+          "spend_usd": {
+            "work": 0.837714
+          },
+          "priced_usd": 0.837714,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-d62496fe": {
+        "gate": {
+          "compare": 32,
+          "slot": "a-5",
+          "title": "ansible: The human_to_bytes filter converts malformed size strings instead of rejecting them",
+          "run_id": "1a200a293c0-402842ed",
+          "task": "swe_bench_pro_hard/ansible-d62496fe",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795306984384,
+          "ended_at_ms": 1795307101820,
+          "cost_usd": 0.107498,
+          "wall_ms": 43559,
+          "outcome": 1.0,
+          "model_calls": 8,
+          "files_changed": 1,
+          "routes": [],
+          "calls": {
+            "work": 8
+          },
+          "spend_usd": {
+            "work": 0.107498
+          },
+          "priced_usd": 0.107498,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 32,
+          "slot": "b-5",
+          "title": "ansible: The human_to_bytes filter converts malformed size strings instead of rejecting them",
+          "run_id": "1a200a4607b-48874086",
+          "task": "swe_bench_pro_hard/ansible-d62496fe",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795307102331,
+          "ended_at_ms": 1795307191301,
+          "cost_usd": 0.1754352,
+          "wall_ms": 58337,
+          "outcome": 1.0,
+          "model_calls": 9,
+          "files_changed": 2,
+          "routes": [],
+          "calls": {
+            "work": 9
+          },
+          "spend_usd": {
+            "work": 0.175435
+          },
+          "priced_usd": 0.175435,
+          "unpriced_calls": 0
+        }
+      }
+    },
+    "pairs_finished": 5,
+    "totals_finished_pairs": {
+      "gate": {
+        "cost_usd": 3.253694,
+        "wall_ms": 1086315,
+        "passed": 4,
+        "runs": 5
+      },
+      "claude-opus-5-5": {
+        "cost_usd": 3.509656,
+        "wall_ms": 1197624,
+        "passed": 5,
+        "runs": 5
+      }
+    }
+  },
+  {
+    "compare": 33,
+    "tasks": {
+      "swe_bench_pro_hard/ansible-b748edea": {
+        "claude-opus-5-5": {
+          "compare": 33,
+          "slot": "b-2",
+          "title": "ansible: Lack of a public helper to build multipart/form-data request bodies",
+          "run_id": "1a20185de2a-31f72b4d",
+          "task": "swe_bench_pro_hard/ansible-b748edea",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795321880106,
+          "ended_at_ms": 1795322019486,
+          "cost_usd": 0.41835244999999993,
+          "wall_ms": 111799,
+          "outcome": 1.0,
+          "model_calls": 16,
+          "files_changed": 4,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 15
+          },
+          "spend_usd": {
+            "gate:classify": 0.000413,
+            "work": 0.417939
+          },
+          "priced_usd": 0.418352,
+          "unpriced_calls": 0
+        },
+        "gate": {
+          "compare": 33,
+          "slot": "a-2",
+          "title": "ansible: Lack of a public helper to build multipart/form-data request bodies",
+          "run_id": "1a20185de4b-c1231291",
+          "task": "swe_bench_pro_hard/ansible-b748edea",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795321880139,
+          "ended_at_ms": 1795322813764,
+          "cost_usd": 2.429961750000001,
+          "wall_ms": 906370,
+          "outcome": 1.0,
+          "model_calls": 41,
+          "files_changed": 5,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": "high",
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            },
+            {
+              "model": "claude-opus-5-5",
+              "effort": "max",
+              "category": "multi_file_change",
+              "difficulty": null,
+              "reason": "escalate",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 39
+          },
+          "spend_usd": {
+            "gate:classify": 0.000413,
+            "gate:criteria": 0.020191,
+            "work": 2.409358
+          },
+          "priced_usd": 2.429962,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-40ade1f8": {
+        "gate": {
+          "compare": 33,
+          "slot": "a-1",
+          "title": "ansible: Mount information cannot be gathered from most of a host's mount sources",
+          "run_id": "1a20185de70-bef27a85",
+          "task": "swe_bench_pro_hard/ansible-40ade1f8",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795321880176,
+          "ended_at_ms": 1795322301224,
+          "cost_usd": 1.3098734749999998,
+          "wall_ms": 392192,
+          "outcome": 1.0,
+          "model_calls": 12,
+          "files_changed": 2,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": "high",
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 10
+          },
+          "spend_usd": {
+            "gate:classify": 0.000874,
+            "gate:criteria": 0.061438,
+            "work": 1.247561
+          },
+          "priced_usd": 1.309873,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 33,
+          "slot": "b-1",
+          "title": "ansible: Mount information cannot be gathered from most of a host's mount sources",
+          "run_id": "1a20185de77-42835b08",
+          "task": "swe_bench_pro_hard/ansible-40ade1f8",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795321880183,
+          "ended_at_ms": 1795322421190,
+          "cost_usd": 1.8312634749999996,
+          "wall_ms": 512775,
+          "outcome": 1.0,
+          "model_calls": 26,
+          "files_changed": 4,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 25
+          },
+          "spend_usd": {
+            "gate:classify": 0.000874,
+            "work": 1.830389
+          },
+          "priced_usd": 1.831263,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-c1f2df47": {
+        "gate": {
+          "compare": 33,
+          "slot": "a-3",
+          "title": "ansible: BIG-IP message routing routes cannot be managed from Ansible",
+          "run_id": "1a20188035c-0b2f0a8b",
+          "task": "swe_bench_pro_hard/ansible-c1f2df47",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795322020700,
+          "ended_at_ms": 1795322226933,
+          "cost_usd": 0.3682935450000001,
+          "wall_ms": 105717,
+          "outcome": 1.0,
+          "model_calls": 18,
+          "files_changed": 2,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "small_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 15,
+            "gate:judge": 1
+          },
+          "spend_usd": {
+            "gate:classify": 0.000519,
+            "gate:criteria": 0.022038,
+            "work": 0.243351,
+            "gate:judge": 0.102386
+          },
+          "priced_usd": 0.368294,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 33,
+          "slot": "b-3",
+          "title": "ansible: BIG-IP message routing routes cannot be managed from Ansible",
+          "run_id": "1a2018b2db8-7e377056",
+          "task": "swe_bench_pro_hard/ansible-c1f2df47",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795322228152,
+          "ended_at_ms": 1795322459151,
+          "cost_usd": 0.48996872000000014,
+          "wall_ms": 127814,
+          "outcome": 1.0,
+          "model_calls": 14,
+          "files_changed": 3,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "small_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 13
+          },
+          "spend_usd": {
+            "gate:classify": 7.8e-05,
+            "work": 0.489891
+          },
+          "priced_usd": 0.489969,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-d33bedc4": {
+        "gate": {
+          "compare": 33,
+          "slot": "a-4",
+          "title": "ansible: Config value type coercion loses tags and handles several input types inconsistently",
+          "run_id": "1a2018c4d38-d496bca3",
+          "task": "swe_bench_pro_hard/ansible-d33bedc4",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795322301752,
+          "ended_at_ms": 1795322561134,
+          "cost_usd": 0.4407264699999999,
+          "wall_ms": 229375,
+          "outcome": 1.0,
+          "model_calls": 32,
+          "files_changed": 4,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "small_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 29,
+            "gate:judge": 1
+          },
+          "spend_usd": {
+            "gate:classify": 0.000278,
+            "gate:criteria": 0.01758,
+            "work": 0.351032,
+            "gate:judge": 0.071836
+          },
+          "priced_usd": 0.440726,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 33,
+          "slot": "b-4",
+          "title": "ansible: Config value type coercion loses tags and handles several input types inconsistently",
+          "run_id": "1a2018e21cb-c8b34dd7",
+          "task": "swe_bench_pro_hard/ansible-d33bedc4",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795322421707,
+          "ended_at_ms": 1795322775247,
+          "cost_usd": 0.68226869,
+          "wall_ms": 320589,
+          "outcome": 1.0,
+          "model_calls": 33,
+          "files_changed": 4,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "small_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 32
+          },
+          "spend_usd": {
+            "gate:classify": 5.8e-05,
+            "work": 0.68221
+          },
+          "priced_usd": 0.682269,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-d62496fe": {
+        "gate": {
+          "compare": 33,
+          "slot": "a-5",
+          "title": "ansible: The human_to_bytes filter converts malformed size strings instead of rejecting them",
+          "run_id": "1a2018eb61d-5878866c",
+          "task": "swe_bench_pro_hard/ansible-d62496fe",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795322459677,
+          "ended_at_ms": 1795322573287,
+          "cost_usd": 0.21626097,
+          "wall_ms": 86204,
+          "outcome": 1.0,
+          "model_calls": 11,
+          "files_changed": 1,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "debugging",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 8,
+            "gate:judge": 1
+          },
+          "spend_usd": {
+            "gate:classify": 0.000198,
+            "gate:criteria": 0.01027,
+            "work": 0.099812,
+            "gate:judge": 0.105981
+          },
+          "priced_usd": 0.216261,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 33,
+          "slot": "b-5",
+          "title": "ansible: The human_to_bytes filter converts malformed size strings instead of rejecting them",
+          "run_id": "1a20190446d-fb28f7b6",
+          "task": "swe_bench_pro_hard/ansible-d62496fe",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795322561646,
+          "ended_at_ms": 1795322695200,
+          "cost_usd": 0.32820245,
+          "wall_ms": 103882,
+          "outcome": 1.0,
+          "model_calls": 12,
+          "files_changed": 3,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "debugging",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 11
+          },
+          "spend_usd": {
+            "gate:classify": 5.2e-05,
+            "work": 0.32815
+          },
+          "priced_usd": 0.328202,
+          "unpriced_calls": 0
+        }
+      }
+    },
+    "pairs_finished": 5,
+    "totals_finished_pairs": {
+      "claude-opus-5-5": {
+        "cost_usd": 3.750055,
+        "wall_ms": 1176859,
+        "passed": 5,
+        "runs": 5
+      },
+      "gate": {
+        "cost_usd": 4.765116,
+        "wall_ms": 1719858,
+        "passed": 5,
+        "runs": 5
+      }
+    }
+  },
+  {
+    "compare": 36,
+    "tasks": {
+      "swe_bench_pro_hard/ansible-b748edea": {
+        "claude-opus-5-5": {
+          "compare": 36,
+          "slot": "b-2",
+          "title": "ansible: Lack of a public helper to build multipart/form-data request bodies",
+          "run_id": "1a201c8f290-60a53ffd",
+          "task": "swe_bench_pro_hard/ansible-b748edea",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795326276240,
+          "ended_at_ms": 1795326516775,
+          "cost_usd": 0.60471485,
+          "wall_ms": 213555,
+          "outcome": 1.0,
+          "model_calls": 21,
+          "files_changed": 4,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 20
+          },
+          "spend_usd": {
+            "gate:classify": 0.000413,
+            "work": 0.604301
+          },
+          "priced_usd": 0.604715,
+          "unpriced_calls": 0
+        },
+        "gate": {
+          "compare": 36,
+          "slot": "a-2",
+          "title": "ansible: Lack of a public helper to build multipart/form-data request bodies",
+          "run_id": "1a201c8f29e-1a89abc2",
+          "task": "swe_bench_pro_hard/ansible-b748edea",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795326276254,
+          "ended_at_ms": 1795326387220,
+          "cost_usd": 0.20133755,
+          "wall_ms": 85820,
+          "outcome": 1.0,
+          "model_calls": 17,
+          "files_changed": 4,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 15
+          },
+          "spend_usd": {
+            "gate:classify": 0.000413,
+            "gate:criteria": 0.020241,
+            "work": 0.180684
+          },
+          "priced_usd": 0.201338,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-40ade1f8": {
+        "claude-opus-5-5": {
+          "compare": 36,
+          "slot": "b-1",
+          "title": "ansible: Mount information cannot be gathered from most of a host's mount sources",
+          "run_id": "1a201c8f313-4acc8b14",
+          "task": "swe_bench_pro_hard/ansible-40ade1f8",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795326276371,
+          "ended_at_ms": 1795326810788,
+          "cost_usd": 1.7575736750000002,
+          "wall_ms": 502311,
+          "outcome": 1.0,
+          "model_calls": 14,
+          "files_changed": 3,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 13
+          },
+          "spend_usd": {
+            "gate:classify": 0.000874,
+            "work": 1.7567
+          },
+          "priced_usd": 1.757574,
+          "unpriced_calls": 0
+        },
+        "gate": {
+          "compare": 36,
+          "slot": "a-1",
+          "title": "ansible: Mount information cannot be gathered from most of a host's mount sources",
+          "run_id": "1a201c8f33d-2e1eabfb",
+          "task": "swe_bench_pro_hard/ansible-40ade1f8",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795326276413,
+          "ended_at_ms": 1795326580478,
+          "cost_usd": 0.633229775,
+          "wall_ms": 273580,
+          "outcome": 1.0,
+          "model_calls": 15,
+          "files_changed": 2,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 12,
+            "gate:judge": 1
+          },
+          "spend_usd": {
+            "gate:classify": 0.000874,
+            "gate:criteria": 0.064088,
+            "work": 0.530047,
+            "gate:judge": 0.038221
+          },
+          "priced_usd": 0.63323,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-c1f2df47": {
+        "gate": {
+          "compare": 36,
+          "slot": "a-3",
+          "title": "ansible: BIG-IP message routing routes cannot be managed from Ansible",
+          "run_id": "1a201caabbe-7e7a454f",
+          "task": "swe_bench_pro_hard/ansible-c1f2df47",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795326389182,
+          "ended_at_ms": 1795326603360,
+          "cost_usd": 0.289460445,
+          "wall_ms": 103403,
+          "outcome": 1.0,
+          "model_calls": 15,
+          "files_changed": 2,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "small_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 12,
+            "gate:judge": 1
+          },
+          "spend_usd": {
+            "gate:classify": 0.000519,
+            "gate:criteria": 0.021368,
+            "work": 0.229061,
+            "gate:judge": 0.038513
+          },
+          "priced_usd": 0.28946,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 36,
+          "slot": "b-3",
+          "title": "ansible: BIG-IP message routing routes cannot be managed from Ansible",
+          "run_id": "1a201cca88a-70cc18ba",
+          "task": "swe_bench_pro_hard/ansible-c1f2df47",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795326519434,
+          "ended_at_ms": 1795326767496,
+          "cost_usd": 0.50610252,
+          "wall_ms": 135234,
+          "outcome": 1.0,
+          "model_calls": 15,
+          "files_changed": 3,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "small_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 14
+          },
+          "spend_usd": {
+            "gate:classify": 7.8e-05,
+            "work": 0.506025
+          },
+          "priced_usd": 0.506103,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-d33bedc4": {
+        "gate": {
+          "compare": 36,
+          "slot": "a-4",
+          "title": "ansible: Config value type coercion loses tags and handles several input types inconsistently",
+          "run_id": "1a201cd9ac3-cc0fb51c",
+          "task": "swe_bench_pro_hard/ansible-d33bedc4",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795326581443,
+          "ended_at_ms": 1795327672481,
+          "cost_usd": 1.4336497699999995,
+          "wall_ms": 1091032,
+          "outcome": null,
+          "model_calls": 63,
+          "files_changed": 1,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "small_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            },
+            {
+              "model": "claude-opus-5-5",
+              "effort": "high",
+              "category": "small_change",
+              "difficulty": null,
+              "reason": "escalate",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 27,
+            "gate:judge": 1,
+            "escalated": 33
+          },
+          "spend_usd": {
+            "gate:classify": 0.000278,
+            "gate:criteria": 0.01775,
+            "work": 0.318081,
+            "gate:judge": 0.065441,
+            "escalated": 1.032099
+          },
+          "priced_usd": 1.43365,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 36,
+          "slot": "b-4",
+          "title": "ansible: Config value type coercion loses tags and handles several input types inconsistently",
+          "run_id": "1a201cdf24e-b0569843",
+          "task": "swe_bench_pro_hard/ansible-d33bedc4",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795326603854,
+          "ended_at_ms": 1795326972128,
+          "cost_usd": 0.8828406899999997,
+          "wall_ms": 332941,
+          "outcome": 1.0,
+          "model_calls": 40,
+          "files_changed": 3,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "small_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 39
+          },
+          "spend_usd": {
+            "gate:classify": 5.8e-05,
+            "work": 0.882782
+          },
+          "priced_usd": 0.882841,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-d62496fe": {
+        "gate": {
+          "compare": 36,
+          "slot": "a-5",
+          "title": "ansible: The human_to_bytes filter converts malformed size strings instead of rejecting them",
+          "run_id": "1a201d07580-7320c8fc",
+          "task": "swe_bench_pro_hard/ansible-d62496fe",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795326768512,
+          "ended_at_ms": 1795326849872,
+          "cost_usd": 0.10498896999999999,
+          "wall_ms": 51084,
+          "outcome": 1.0,
+          "model_calls": 10,
+          "files_changed": 1,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "debugging",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 8
+          },
+          "spend_usd": {
+            "gate:classify": 0.000198,
+            "gate:criteria": 0.01055,
+            "work": 0.094241
+          },
+          "priced_usd": 0.104989,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 36,
+          "slot": "b-5",
+          "title": "ansible: The human_to_bytes filter converts malformed size strings instead of rejecting them",
+          "run_id": "1a201d11c9a-bc6eed9c",
+          "task": "swe_bench_pro_hard/ansible-d62496fe",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795326811290,
+          "ended_at_ms": 1795326919670,
+          "cost_usd": 0.22016664999999996,
+          "wall_ms": 75707,
+          "outcome": 1.0,
+          "model_calls": 11,
+          "files_changed": 2,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "debugging",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 10
+          },
+          "spend_usd": {
+            "gate:classify": 5.2e-05,
+            "work": 0.220115
+          },
+          "priced_usd": 0.220167,
+          "unpriced_calls": 0
+        }
+      }
+    },
+    "pairs_finished": 4,
+    "totals_finished_pairs": {
+      "claude-opus-5-5": {
+        "cost_usd": 3.088559,
+        "wall_ms": 926807,
+        "passed": 4,
+        "runs": 4
+      },
+      "gate": {
+        "cost_usd": 1.229017,
+        "wall_ms": 513887,
+        "passed": 4,
+        "runs": 4
+      }
+    }
+  },
+  {
+    "compare": 37,
+    "tasks": {
+      "swe_bench_pro_hard/ansible-40ade1f8": {
+        "gate": {
+          "compare": 37,
+          "slot": "a-1",
+          "title": "ansible: Mount information cannot be gathered from most of a host's mount sources",
+          "run_id": "1a201e451bc-c24ca6a0",
+          "task": "swe_bench_pro_hard/ansible-40ade1f8",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795328070076,
+          "ended_at_ms": 1795328391104,
+          "cost_usd": 0.697193475,
+          "wall_ms": 289132,
+          "outcome": 1.0,
+          "model_calls": 17,
+          "files_changed": 3,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 14,
+            "gate:judge": 1
+          },
+          "spend_usd": {
+            "gate:classify": 0.000874,
+            "gate:criteria": 0.060708,
+            "work": 0.587196,
+            "gate:judge": 0.048416
+          },
+          "priced_usd": 0.697193,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 37,
+          "slot": "b-1",
+          "title": "ansible: Mount information cannot be gathered from most of a host's mount sources",
+          "run_id": "1a201e451c5-7518b662",
+          "task": "swe_bench_pro_hard/ansible-40ade1f8",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795328070085,
+          "ended_at_ms": 1795328406806,
+          "cost_usd": 1.0828628749999998,
+          "wall_ms": 303287,
+          "outcome": 1.0,
+          "model_calls": 11,
+          "files_changed": 3,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 10
+          },
+          "spend_usd": {
+            "gate:classify": 0.000874,
+            "work": 1.081989
+          },
+          "priced_usd": 1.082863,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-b748edea": {
+        "claude-opus-5-5": {
+          "compare": 37,
+          "slot": "b-2",
+          "title": "ansible: Lack of a public helper to build multipart/form-data request bodies",
+          "run_id": "1a201e451c9-0ea0bbce",
+          "task": "swe_bench_pro_hard/ansible-b748edea",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795328070089,
+          "ended_at_ms": 1795328260366,
+          "cost_usd": 0.5568394500000002,
+          "wall_ms": 164462,
+          "outcome": 1.0,
+          "model_calls": 14,
+          "files_changed": 4,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 13
+          },
+          "spend_usd": {
+            "gate:classify": 0.000413,
+            "work": 0.556426
+          },
+          "priced_usd": 0.556839,
+          "unpriced_calls": 0
+        },
+        "gate": {
+          "compare": 37,
+          "slot": "a-2",
+          "title": "ansible: Lack of a public helper to build multipart/form-data request bodies",
+          "run_id": "1a201e451ce-0f1457ed",
+          "task": "swe_bench_pro_hard/ansible-b748edea",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795328070094,
+          "ended_at_ms": 1795328195737,
+          "cost_usd": 0.23640695,
+          "wall_ms": 97301,
+          "outcome": 1.0,
+          "model_calls": 18,
+          "files_changed": 3,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 16
+          },
+          "spend_usd": {
+            "gate:classify": 0.000413,
+            "gate:criteria": 0.020441,
+            "work": 0.215553
+          },
+          "priced_usd": 0.236407,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-c1f2df47": {
+        "gate": {
+          "compare": 37,
+          "slot": "a-3",
+          "title": "ansible: BIG-IP message routing routes cannot be managed from Ansible",
+          "run_id": "1a201e6442a-d329f5df",
+          "task": "swe_bench_pro_hard/ansible-c1f2df47",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795328197674,
+          "ended_at_ms": 1795328380678,
+          "cost_usd": 0.225131445,
+          "wall_ms": 77289,
+          "outcome": 1.0,
+          "model_calls": 11,
+          "files_changed": 2,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "small_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 9
+          },
+          "spend_usd": {
+            "gate:classify": 0.000519,
+            "gate:criteria": 0.022028,
+            "work": 0.202585
+          },
+          "priced_usd": 0.225131,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 37,
+          "slot": "b-3",
+          "title": "ansible: BIG-IP message routing routes cannot be managed from Ansible",
+          "run_id": "1a201e73dae-f503371c",
+          "task": "swe_bench_pro_hard/ansible-c1f2df47",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795328261550,
+          "ended_at_ms": 1795328487961,
+          "cost_usd": 0.44921632,
+          "wall_ms": 115654,
+          "outcome": 1.0,
+          "model_calls": 11,
+          "files_changed": 3,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "small_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 10
+          },
+          "spend_usd": {
+            "gate:classify": 7.8e-05,
+            "work": 0.449139
+          },
+          "priced_usd": 0.449216,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-d33bedc4": {
+        "gate": {
+          "compare": 37,
+          "slot": "a-4",
+          "title": "ansible: Config value type coercion loses tags and handles several input types inconsistently",
+          "run_id": "1a201e91417-9dcc3bf1",
+          "task": "swe_bench_pro_hard/ansible-d33bedc4",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795328381975,
+          "ended_at_ms": 1795328559398,
+          "cost_usd": 0.33113367,
+          "wall_ms": 142157,
+          "outcome": 1.0,
+          "model_calls": 18,
+          "files_changed": 4,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "small_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 15,
+            "gate:judge": 1
+          },
+          "spend_usd": {
+            "gate:classify": 0.000278,
+            "gate:criteria": 0.01763,
+            "work": 0.252031,
+            "gate:judge": 0.061193
+          },
+          "priced_usd": 0.331134,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 37,
+          "slot": "b-4",
+          "title": "ansible: Config value type coercion loses tags and handles several input types inconsistently",
+          "run_id": "1a201e93aaf-625be59e",
+          "task": "swe_bench_pro_hard/ansible-d33bedc4",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795328391855,
+          "ended_at_ms": 1795328746136,
+          "cost_usd": 0.7762550900000001,
+          "wall_ms": 320510,
+          "outcome": 1.0,
+          "model_calls": 37,
+          "files_changed": 4,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "small_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 36
+          },
+          "spend_usd": {
+            "gate:classify": 5.8e-05,
+            "work": 0.776197
+          },
+          "priced_usd": 0.776255,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-d62496fe": {
+        "gate": {
+          "compare": 37,
+          "slot": "a-5",
+          "title": "ansible: The human_to_bytes filter converts malformed size strings instead of rejecting them",
+          "run_id": "1a201e978d9-47ded780",
+          "task": "swe_bench_pro_hard/ansible-d62496fe",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795328407769,
+          "ended_at_ms": 1795328560063,
+          "cost_usd": 0.34736916999999995,
+          "wall_ms": 120395,
+          "outcome": 1.0,
+          "model_calls": 20,
+          "files_changed": 2,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "debugging",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            },
+            {
+              "model": "claude-opus-5-5",
+              "effort": "high",
+              "category": "debugging",
+              "difficulty": null,
+              "reason": "escalate",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 9,
+            "gate:judge": 1,
+            "escalated": 8
+          },
+          "spend_usd": {
+            "gate:classify": 0.000198,
+            "gate:criteria": 0.01024,
+            "work": 0.092598,
+            "gate:judge": 0.034284,
+            "escalated": 0.210049
+          },
+          "priced_usd": 0.347369,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 37,
+          "slot": "b-5",
+          "title": "ansible: The human_to_bytes filter converts malformed size strings instead of rejecting them",
+          "run_id": "1a201eab663-ce99eb97",
+          "task": "swe_bench_pro_hard/ansible-d62496fe",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795328489059,
+          "ended_at_ms": 1795328618292,
+          "cost_usd": 0.29750365,
+          "wall_ms": 98536,
+          "outcome": 1.0,
+          "model_calls": 14,
+          "files_changed": 4,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "debugging",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 13
+          },
+          "spend_usd": {
+            "gate:classify": 5.2e-05,
+            "work": 0.297452
+          },
+          "priced_usd": 0.297504,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-d72025be": {
+        "gate": {
+          "compare": 37,
+          "slot": "a-6",
+          "title": "ansible: nxos_interfaces does not handle enabled/shutdown correctly with device defaults",
+          "run_id": "1a201ebd5c6-f9f02158",
+          "task": "swe_bench_pro_hard/ansible-d72025be",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795328562630,
+          "ended_at_ms": 1795329028555,
+          "cost_usd": 0.75458517,
+          "wall_ms": 302249,
+          "outcome": 1.0,
+          "model_calls": 29,
+          "files_changed": 7,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 26,
+            "gate:judge": 1
+          },
+          "spend_usd": {
+            "gate:classify": 0.000526,
+            "gate:criteria": 0.0316,
+            "work": 0.678251,
+            "gate:judge": 0.044208
+          },
+          "priced_usd": 0.754585,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 37,
+          "slot": "b-6",
+          "title": "ansible: nxos_interfaces does not handle enabled/shutdown correctly with device defaults",
+          "run_id": "1a201ebd5ce-670eb5aa",
+          "task": "swe_bench_pro_hard/ansible-d72025be",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795328562638,
+          "ended_at_ms": 1795329189214,
+          "cost_usd": 1.49100647,
+          "wall_ms": 416138,
+          "outcome": 1.0,
+          "model_calls": 24,
+          "files_changed": 7,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 23
+          },
+          "spend_usd": {
+            "gate:classify": 0.000526,
+            "work": 1.490481
+          },
+          "priced_usd": 1.491006,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-de5858f4": {
+        "gate": {
+          "compare": 37,
+          "slot": "a-7",
+          "title": "ansible: Collection operations repeatedly fetch the same metadata",
+          "run_id": "1a201ecb2a9-28712b48",
+          "task": "swe_bench_pro_hard/ansible-de5858f4",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795328619177,
+          "ended_at_ms": 1795328766093,
+          "cost_usd": 0.30705347000000005,
+          "wall_ms": 122565,
+          "outcome": 1.0,
+          "model_calls": 23,
+          "files_changed": 4,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "small_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 20,
+            "gate:judge": 1
+          },
+          "spend_usd": {
+            "gate:classify": 0.000274,
+            "gate:criteria": 0.01723,
+            "work": 0.239303,
+            "gate:judge": 0.050246
+          },
+          "priced_usd": 0.307053,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 37,
+          "slot": "b-7",
+          "title": "ansible: Collection operations repeatedly fetch the same metadata",
+          "run_id": "1a201eea748-382aee04",
+          "task": "swe_bench_pro_hard/ansible-de5858f4",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795328747336,
+          "ended_at_ms": 1795329154849,
+          "cost_usd": 1.17604697,
+          "wall_ms": 375236,
+          "outcome": 1.0,
+          "model_calls": 37,
+          "files_changed": 7,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "small_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 36
+          },
+          "spend_usd": {
+            "gate:classify": 5.8e-05,
+            "work": 1.175989
+          },
+          "priced_usd": 1.176047,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/ansible-e9e60012": {
+        "gate": {
+          "compare": 37,
+          "slot": "a-8",
+          "title": "ansible: WinRM Kerberos: Obtaining the TGT with kinit fails or is inconsistent depending on the environment and the presence o...",
+          "run_id": "1a201eef405-ef57eb43",
+          "task": "swe_bench_pro_hard/ansible-e9e60012",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795328766981,
+          "ended_at_ms": 1795328858499,
+          "cost_usd": 0.18708619499999998,
+          "wall_ms": 61509,
+          "outcome": 1.0,
+          "model_calls": 18,
+          "files_changed": 2,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 16
+          },
+          "spend_usd": {
+            "gate:classify": 0.000324,
+            "gate:criteria": 0.015553,
+            "work": 0.171209
+          },
+          "priced_usd": 0.187086,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 37,
+          "slot": "b-8",
+          "title": "ansible: WinRM Kerberos: Obtaining the TGT with kinit fails or is inconsistent depending on the environment and the presence o...",
+          "run_id": "1a201f05be0-e05b7586",
+          "task": "swe_bench_pro_hard/ansible-e9e60012",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795328859104,
+          "ended_at_ms": 1795328970521,
+          "cost_usd": 0.33250322,
+          "wall_ms": 77105,
+          "outcome": 1.0,
+          "model_calls": 14,
+          "files_changed": 3,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "debugging",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 13
+          },
+          "spend_usd": {
+            "gate:classify": 6.2e-05,
+            "work": 0.332441
+          },
+          "priced_usd": 0.332503,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/element-web-5dfde12c": {
+        "gate": {
+          "compare": 37,
+          "slot": "a-9",
+          "title": "element-web: Session information and voice broadcast state can be unreliable",
+          "run_id": "1a201f2127b-4e421890",
+          "task": "swe_bench_pro_hard/element-web-5dfde12c",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795328971387,
+          "ended_at_ms": 1795329295286,
+          "cost_usd": 0.275582145,
+          "wall_ms": 298502,
+          "outcome": 1.0,
+          "model_calls": 21,
+          "files_changed": 5,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "small_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 18,
+            "gate:judge": 1
+          },
+          "spend_usd": {
+            "gate:classify": 0.000249,
+            "gate:criteria": 0.013648,
+            "work": 0.211049,
+            "gate:judge": 0.050636
+          },
+          "priced_usd": 0.275582,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 37,
+          "slot": "b-9",
+          "title": "element-web: Session information and voice broadcast state can be unreliable",
+          "run_id": "1a201f2f8a9-9d05efba",
+          "task": "swe_bench_pro_hard/element-web-5dfde12c",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795329030313,
+          "ended_at_ms": 1795329284251,
+          "cost_usd": 0.51684816,
+          "wall_ms": 228713,
+          "outcome": 1.0,
+          "model_calls": 25,
+          "files_changed": 6,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "small_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 24
+          },
+          "spend_usd": {
+            "gate:classify": 5.6e-05,
+            "work": 0.516792
+          },
+          "priced_usd": 0.516848,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/element-web-66d0b318": {
+        "gate": {
+          "compare": 37,
+          "slot": "a-10",
+          "title": "element-web: Add seekbar support for voice broadcast playback",
+          "run_id": "1a201f4e34c-260a08d4",
+          "task": "swe_bench_pro_hard/element-web-66d0b318",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795329155916,
+          "ended_at_ms": 1795329445342,
+          "cost_usd": 0.44842507,
+          "wall_ms": 264767,
+          "outcome": 1.0,
+          "model_calls": 28,
+          "files_changed": 1,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 25,
+            "gate:judge": 1
+          },
+          "spend_usd": {
+            "gate:classify": 0.000456,
+            "gate:criteria": 0.02514,
+            "work": 0.37336,
+            "gate:judge": 0.049468
+          },
+          "priced_usd": 0.448425,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 37,
+          "slot": "b-10",
+          "title": "element-web: Add seekbar support for voice broadcast playback",
+          "run_id": "1a201f568a3-a62b4697",
+          "task": "swe_bench_pro_hard/element-web-66d0b318",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795329190051,
+          "ended_at_ms": 1795329627599,
+          "cost_usd": 1.2592955100000003,
+          "wall_ms": 416889,
+          "outcome": 1.0,
+          "model_calls": 29,
+          "files_changed": 9,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 28
+          },
+          "spend_usd": {
+            "gate:classify": 7.4e-05,
+            "work": 1.259221
+          },
+          "priced_usd": 1.259296,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/element-web-772df302": {
+        "gate": {
+          "compare": 37,
+          "slot": "a-11",
+          "title": "element-web: Device management does not support signing out of multiple sessions at once",
+          "run_id": "1a201f6dc04-2c58ca45",
+          "task": "swe_bench_pro_hard/element-web-772df302",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795329285124,
+          "ended_at_ms": 1795329480554,
+          "cost_usd": 0.353894645,
+          "wall_ms": 163354,
+          "outcome": 1.0,
+          "model_calls": 22,
+          "files_changed": 4,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 19,
+            "gate:judge": 1
+          },
+          "spend_usd": {
+            "gate:classify": 0.000172,
+            "gate:criteria": 0.009218,
+            "work": 0.289707,
+            "gate:judge": 0.054798
+          },
+          "priced_usd": 0.353895,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 37,
+          "slot": "b-11",
+          "title": "element-web: Device management does not support signing out of multiple sessions at once",
+          "run_id": "1a201f70658-f8740001",
+          "task": "swe_bench_pro_hard/element-web-772df302",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795329295960,
+          "ended_at_ms": 1795329578875,
+          "cost_usd": 0.76669038,
+          "wall_ms": 247890,
+          "outcome": 1.0,
+          "model_calls": 32,
+          "files_changed": 6,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 31
+          },
+          "spend_usd": {
+            "gate:classify": 5.1e-05,
+            "work": 0.766639
+          },
+          "priced_usd": 0.76669,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/element-web-ecfd1736": {
+        "gate": {
+          "compare": 37,
+          "slot": "a-12",
+          "title": "element-web: Combine search results when the query is present in multiple successive messages",
+          "run_id": "1a201f9513e-40abb1cc",
+          "task": "swe_bench_pro_hard/element-web-ecfd1736",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795329446206,
+          "ended_at_ms": 1795329617595,
+          "cost_usd": 0.24016776999999997,
+          "wall_ms": 152491,
+          "outcome": 1.0,
+          "model_calls": 15,
+          "files_changed": 1,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 12,
+            "gate:judge": 1
+          },
+          "spend_usd": {
+            "gate:classify": 0.000249,
+            "gate:criteria": 0.01179,
+            "work": 0.138767,
+            "gate:judge": 0.089361
+          },
+          "priced_usd": 0.240168,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 37,
+          "slot": "b-12",
+          "title": "element-web: Combine search results when the query is present in multiple successive messages",
+          "run_id": "1a201f9da13-1d319c12",
+          "task": "swe_bench_pro_hard/element-web-ecfd1736",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795329481235,
+          "ended_at_ms": 1795329689003,
+          "cost_usd": 0.37096575000000004,
+          "wall_ms": 177477,
+          "outcome": 1.0,
+          "model_calls": 17,
+          "files_changed": 2,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 16
+          },
+          "spend_usd": {
+            "gate:classify": 5.8e-05,
+            "work": 0.370908
+          },
+          "priced_usd": 0.370966,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/flipt-2ca5dfb3": {
+        "gate": {
+          "compare": 37,
+          "slot": "a-13",
+          "title": "flipt: Support multiple metrics exporters (Prometheus, OpenTelemetry)",
+          "run_id": "1a201fb5967-4caac587",
+          "task": "swe_bench_pro_hard/flipt-2ca5dfb3",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795329579367,
+          "ended_at_ms": 1795331320365,
+          "cost_usd": 0.8346457950000001,
+          "wall_ms": 1591792,
+          "outcome": 1.0,
+          "model_calls": 46,
+          "files_changed": 14,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 43,
+            "gate:judge": 1
+          },
+          "spend_usd": {
+            "gate:classify": 0.000389,
+            "gate:criteria": 0.017763,
+            "work": 0.778776,
+            "gate:judge": 0.037718
+          },
+          "priced_usd": 0.834646,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 37,
+          "slot": "b-13",
+          "title": "flipt: Support multiple metrics exporters (Prometheus, OpenTelemetry)",
+          "run_id": "1a201fbf088-ba4d342e",
+          "task": "swe_bench_pro_hard/flipt-2ca5dfb3",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795329618056,
+          "ended_at_ms": 1795331307217,
+          "cost_usd": 1.9026109199999999,
+          "wall_ms": 1527428,
+          "outcome": 1.0,
+          "model_calls": 41,
+          "files_changed": 7,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 40
+          },
+          "spend_usd": {
+            "gate:classify": 6.9e-05,
+            "work": 1.902542
+          },
+          "priced_usd": 1.902611,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/flipt-3d5a345f": {
+        "gate": {
+          "compare": 37,
+          "slot": "a-14",
+          "title": "flipt: Make tracing sampling ratio and context propagators configurable",
+          "run_id": "1a201fc17b0-2b3cc21a",
+          "task": "swe_bench_pro_hard/flipt-3d5a345f",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795329628080,
+          "ended_at_ms": 1795330670712,
+          "cost_usd": 0.5670197700000001,
+          "wall_ms": 777875,
+          "outcome": 1.0,
+          "model_calls": 30,
+          "files_changed": 0,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 27,
+            "gate:judge": 1
+          },
+          "spend_usd": {
+            "gate:classify": 0.000521,
+            "gate:criteria": 0.02653,
+            "work": 0.498605,
+            "gate:judge": 0.041363
+          },
+          "priced_usd": 0.56702,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 37,
+          "slot": "b-14",
+          "title": "flipt: Make tracing sampling ratio and context propagators configurable",
+          "run_id": "1a201fd0730-c17ee2fd",
+          "task": "swe_bench_pro_hard/flipt-3d5a345f",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795329689392,
+          "ended_at_ms": 1795330902992,
+          "cost_usd": 1.06176027,
+          "wall_ms": 957763,
+          "outcome": 1.0,
+          "model_calls": 37,
+          "files_changed": 6,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 36
+          },
+          "spend_usd": {
+            "gate:classify": 7.9e-05,
+            "work": 1.061681
+          },
+          "priced_usd": 1.06176,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/flipt-524f2773": {
+        "gate": {
+          "compare": 37,
+          "slot": "a-15",
+          "title": "flipt: Support dual-format segment targeting in feature flag rules",
+          "run_id": "1a2020c08cf-40065824",
+          "task": "swe_bench_pro_hard/flipt-524f2773",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795330672847,
+          "ended_at_ms": 1795331546579,
+          "cost_usd": 0.527311775,
+          "wall_ms": 811774,
+          "outcome": 1.0,
+          "model_calls": 35,
+          "files_changed": 9,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 32,
+            "gate:judge": 1
+          },
+          "spend_usd": {
+            "gate:classify": 0.000303,
+            "gate:criteria": 0.013483,
+            "work": 0.478033,
+            "gate:judge": 0.035493
+          },
+          "priced_usd": 0.527312,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 37,
+          "slot": "b-15",
+          "title": "flipt: Support dual-format segment targeting in feature flag rules",
+          "run_id": "1a2020f94c7-a3beb747",
+          "task": "swe_bench_pro_hard/flipt-524f2773",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795330905287,
+          "ended_at_ms": 1795331516926,
+          "cost_usd": 0.83347641,
+          "wall_ms": 522441,
+          "outcome": 1.0,
+          "model_calls": 33,
+          "files_changed": 6,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 32
+          },
+          "spend_usd": {
+            "gate:classify": 5.3e-05,
+            "work": 0.833423
+          },
+          "priced_usd": 0.833476,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/flipt-c1728053": {
+        "gate": {
+          "compare": 37,
+          "slot": "a-16",
+          "title": "flipt: Add CUE-based validation of Flipt feature configuration YAML",
+          "run_id": "1a20215bb04-971decad",
+          "task": "swe_bench_pro_hard/flipt-c1728053",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795331308292,
+          "ended_at_ms": 1795331480033,
+          "cost_usd": 0.203883425,
+          "wall_ms": 138916,
+          "outcome": 1.0,
+          "model_calls": 19,
+          "files_changed": 0,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 16,
+            "gate:judge": 1
+          },
+          "spend_usd": {
+            "gate:classify": 0.000361,
+            "gate:criteria": 0.014758,
+            "work": 0.141264,
+            "gate:judge": 0.047501
+          },
+          "priced_usd": 0.203883,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 37,
+          "slot": "b-16",
+          "title": "flipt: Add CUE-based validation of Flipt feature configuration YAML",
+          "run_id": "1a20215ec76-e3409fa0",
+          "task": "swe_bench_pro_hard/flipt-c1728053",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795331320950,
+          "ended_at_ms": 1795331569272,
+          "cost_usd": 0.35375123,
+          "wall_ms": 238460,
+          "outcome": 1.0,
+          "model_calls": 21,
+          "files_changed": 0,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 20
+          },
+          "spend_usd": {
+            "gate:classify": 5.8e-05,
+            "work": 0.353693
+          },
+          "priced_usd": 0.353751,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/flipt-c188284f": {
+        "gate": {
+          "compare": 37,
+          "slot": "a-17",
+          "title": "flipt: OCI storage cannot authenticate against AWS ECR registries",
+          "run_id": "1a202185caa-f0b30621",
+          "task": "swe_bench_pro_hard/flipt-c188284f",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795331480746,
+          "ended_at_ms": 1795331781669,
+          "cost_usd": 0.44941084500000006,
+          "wall_ms": 215548,
+          "outcome": 1.0,
+          "model_calls": 29,
+          "files_changed": 13,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 26,
+            "gate:judge": 1
+          },
+          "spend_usd": {
+            "gate:classify": 0.000509,
+            "gate:criteria": 0.026968,
+            "work": 0.379101,
+            "gate:judge": 0.042833
+          },
+          "priced_usd": 0.449411,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 37,
+          "slot": "b-17",
+          "title": "flipt: OCI storage cannot authenticate against AWS ECR registries",
+          "run_id": "1a20218ecae-af873b58",
+          "task": "swe_bench_pro_hard/flipt-c188284f",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795331517614,
+          "ended_at_ms": 1795331983247,
+          "cost_usd": 0.8238501,
+          "wall_ms": 386231,
+          "outcome": 1.0,
+          "model_calls": 27,
+          "files_changed": 6,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 26
+          },
+          "spend_usd": {
+            "gate:classify": 7.8e-05,
+            "work": 0.823772
+          },
+          "priced_usd": 0.82385,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/flipt-cd18e54a": {
+        "gate": {
+          "compare": 37,
+          "slot": "a-18",
+          "title": "flipt: Default Flipt configuration does not validate against the CUE schema",
+          "run_id": "1a202195f0d-e5085c85",
+          "task": "swe_bench_pro_hard/flipt-cd18e54a",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795331546893,
+          "ended_at_ms": 1795332148681,
+          "cost_usd": 0.672883245,
+          "wall_ms": 566472,
+          "outcome": 1.0,
+          "model_calls": 31,
+          "files_changed": 2,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 29
+          },
+          "spend_usd": {
+            "gate:classify": 0.000365,
+            "gate:criteria": 0.019948,
+            "work": 0.652571
+          },
+          "priced_usd": 0.672883,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 37,
+          "slot": "b-18",
+          "title": "flipt: Default Flipt configuration does not validate against the CUE schema",
+          "run_id": "1a20219b79e-0f9fa203",
+          "task": "swe_bench_pro_hard/flipt-cd18e54a",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795331569566,
+          "ended_at_ms": 1795332300986,
+          "cost_usd": 1.2204793800000002,
+          "wall_ms": 714285,
+          "outcome": 1.0,
+          "model_calls": 30,
+          "files_changed": 4,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 29
+          },
+          "spend_usd": {
+            "gate:classify": 6.7e-05,
+            "work": 1.220413
+          },
+          "priced_usd": 1.220479,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/flipt-e2bd19da": {
+        "gate": {
+          "compare": 37,
+          "slot": "a-19",
+          "title": "flipt: Flag lookups are cached only in the gRPC interceptor and clients cannot opt out of cached values",
+          "run_id": "1a2021cf66a-7622bd07",
+          "task": "swe_bench_pro_hard/flipt-e2bd19da",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795331782250,
+          "ended_at_ms": 1795332170951,
+          "cost_usd": 0.43299746999999994,
+          "wall_ms": 364569,
+          "outcome": 1.0,
+          "model_calls": 27,
+          "files_changed": 5,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 24,
+            "gate:judge": 1
+          },
+          "spend_usd": {
+            "gate:classify": 0.000362,
+            "gate:criteria": 0.01964,
+            "work": 0.342879,
+            "gate:judge": 0.070116
+          },
+          "priced_usd": 0.432997,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 37,
+          "slot": "b-19",
+          "title": "flipt: Flag lookups are cached only in the gRPC interceptor and clients cannot opt out of cached values",
+          "run_id": "1a202200940-036382ea",
+          "task": "swe_bench_pro_hard/flipt-e2bd19da",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795331983680,
+          "ended_at_ms": 1795332256879,
+          "cost_usd": 0.49432659,
+          "wall_ms": 246409,
+          "outcome": 1.0,
+          "model_calls": 21,
+          "files_changed": 6,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 20
+          },
+          "spend_usd": {
+            "gate:classify": 6.7e-05,
+            "work": 0.49426
+          },
+          "priced_usd": 0.494327,
+          "unpriced_calls": 0
+        }
+      },
+      "swe_bench_pro_hard/navidrome-69e0a266": {
+        "gate": {
+          "compare": 37,
+          "slot": "a-20",
+          "title": "navidrome: Remove size from public image ID JWT",
+          "run_id": "1a20222904d-e6f14dcb",
+          "task": "swe_bench_pro_hard/navidrome-69e0a266",
+          "arm": "A \u00b7 gate",
+          "started_at_ms": 1795332149325,
+          "ended_at_ms": 1795332281622,
+          "cost_usd": 0.311421445,
+          "wall_ms": 128636,
+          "outcome": 1.0,
+          "model_calls": 19,
+          "files_changed": 6,
+          "routes": [
+            {
+              "model": "claude-sonnet-5-5",
+              "effort": "high",
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "gate:criteria": 1,
+            "work": 16,
+            "gate:judge": 1
+          },
+          "spend_usd": {
+            "gate:classify": 0.000226,
+            "gate:criteria": 0.013945,
+            "work": 0.233139,
+            "gate:judge": 0.064111
+          },
+          "priced_usd": 0.311421,
+          "unpriced_calls": 0
+        },
+        "claude-opus-5-5": {
+          "compare": 37,
+          "slot": "b-20",
+          "title": "navidrome: Remove size from public image ID JWT",
+          "run_id": "1a20222e6f2-36f1e908",
+          "task": "swe_bench_pro_hard/navidrome-69e0a266",
+          "arm": "B \u00b7 claude-opus-5-5",
+          "started_at_ms": 1795332171506,
+          "ended_at_ms": 1795332312205,
+          "cost_usd": 0.43270746,
+          "wall_ms": 137056,
+          "outcome": 1.0,
+          "model_calls": 19,
+          "files_changed": 6,
+          "routes": [
+            {
+              "model": "claude-opus-5-5",
+              "effort": null,
+              "category": "multi_file_change",
+              "difficulty": "hard",
+              "reason": "compare",
+              "explored": false
+            }
+          ],
+          "calls": {
+            "gate:classify": 1,
+            "work": 18
+          },
+          "spend_usd": {
+            "gate:classify": 5.6e-05,
+            "work": 0.432652
+          },
+          "priced_usd": 0.432707,
+          "unpriced_calls": 0
+        }
+      }
+    },
+    "pairs_finished": 20,
+    "totals_finished_pairs": {
+      "gate": {
+        "cost_usd": 8.403601,
+        "wall_ms": 6687293,
+        "passed": 20,
+        "runs": 20
+      },
+      "claude-opus-5-5": {
+        "cost_usd": 16.198994,
+        "wall_ms": 7671970,
+        "passed": 20,
+        "runs": 20
+      }
+    }
+  }
+]

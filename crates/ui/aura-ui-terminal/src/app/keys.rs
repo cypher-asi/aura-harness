@@ -13,6 +13,22 @@ impl App {
     pub fn handle_key(&mut self, key: KeyEvent) -> KeyResult {
         self.notification = None;
         self.clear_selection();
+        let just_queued = self.just_queued.take();
+
+        // Enter right after queueing a message sends it now: the event
+        // loop gets the message first, so its queue holds it even when the
+        // `SetQueue` showing it has not arrived yet.
+        if just_queued.as_deref() == Some(self.active_agent_id.as_str())
+            && key.code == KeyCode::Enter
+            && key.modifiers.is_empty()
+            && self.input.is_empty()
+            && self.state == AppState::Processing
+            && self.context_menu.is_none()
+            && self.detail.is_none()
+        {
+            self.send_queued_now();
+            return KeyResult::continue_running();
+        }
 
         if self.context_menu.is_some() && self.handle_context_menu_key(key) {
             return KeyResult::continue_running();
@@ -599,13 +615,7 @@ impl App {
                 // Enter on an empty prompt sends the oldest queued message
                 // now, cancelling the turn that is running.
                 if self.state == AppState::Processing && self.hud.queued() > 0 {
-                    if let Some(tx) = &self.event_tx {
-                        let _ = tx.try_send(UiEvent::SendQueuedNow(self.active_agent_id.clone()));
-                    }
-                    self.notification = Some((
-                        "Sending the queued message now".to_string(),
-                        NotificationType::Success,
-                    ));
+                    self.send_queued_now();
                 }
             }
             // A recalled `/command` keeps the slash menu closed so Up/Down
@@ -809,12 +819,27 @@ impl App {
 
         if let Some(tx) = &self.event_tx {
             let _ = tx.try_send(UiEvent::UserMessage {
-                agent_id,
+                agent_id: agent_id.clone(),
                 text,
                 shown: !busy,
                 images,
             });
         }
+        if busy {
+            self.just_queued = Some(agent_id);
+        }
         KeyResult::continue_running()
+    }
+
+    /// Ask the event loop to run the oldest queued message of the agent on
+    /// screen now, cancelling its running turn.
+    fn send_queued_now(&mut self) {
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::SendQueuedNow(self.active_agent_id.clone()));
+        }
+        self.notification = Some((
+            "Sending the queued message now".to_string(),
+            NotificationType::Success,
+        ));
     }
 }
