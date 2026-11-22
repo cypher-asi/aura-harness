@@ -756,9 +756,24 @@ impl App {
         }
     }
 
+    /// Whether `cmd` lists the agents, projects or processes just as the
+    /// app has them. The session sends its lists again whenever any
+    /// agent's state moves, mostly unchanged.
+    fn lists_nothing_new(&self, cmd: &UiCommand) -> bool {
+        match cmd {
+            UiCommand::SetAgents(agents) => *agents == self.agents,
+            UiCommand::SetProjects(projects) => *projects == self.projects,
+            UiCommand::SetProcesses(processes) => *processes == self.all_processes,
+            _ => false,
+        }
+    }
+
     /// Process a UI command from the kernel.
     pub fn process_command(&mut self, cmd: UiCommand) {
         debug!(?cmd, "Processing UI command");
+        if self.lists_nothing_new(&cmd) {
+            return;
+        }
         if !matches!(cmd, UiCommand::ForAgent { .. }) {
             self.redraw = true;
         }

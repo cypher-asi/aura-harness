@@ -1440,7 +1440,7 @@ pub struct AgentDefinitionSummary {
 }
 
 /// Summary of an agent for display in the Swarm panel.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSummary {
     /// Agent ID (hex encoded)
     pub id: String,

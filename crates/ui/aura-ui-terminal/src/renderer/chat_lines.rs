@@ -34,25 +34,36 @@ pub(crate) struct GroupState<'a> {
 }
 
 /// Where a block falls in its turn: everything from one prompt to the next.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct TurnPlace {
-    /// Model, tokens, cost and who paid for the turn's latest reply, drawn
-    /// as one line after the block when it is the turn's last from the agent
-    footer: Vec<String>,
+#[derive(Debug, Clone, Copy)]
+struct TurnPlace<'a> {
+    /// The turn's latest reply, when the block is the turn's last from
+    /// the agent. Its model, tokens, cost and who paid for them are drawn
+    /// as one line after the block.
+    meta: Option<&'a Message>,
     /// Number of the block's first step, counted from 1 across the turn
     first_step: usize,
     /// When the turn's prompt was sent, in Unix milliseconds
     started_ms: u64,
 }
 
-impl TurnPlace {
+impl TurnPlace<'_> {
     /// A block outside any turn.
     const fn alone() -> Self {
         Self {
-            footer: Vec::new(),
+            meta: None,
             first_step: 1,
             started_ms: 0,
         }
+    }
+}
+
+impl Hash for TurnPlace<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // A reply's version changes with what its footer is drawn from,
+        // so the footer is only formatted when the block is drawn.
+        self.meta.map(Message::version).hash(state);
+        self.first_step.hash(state);
+        self.started_ms.hash(state);
     }
 }
 
@@ -230,17 +241,8 @@ impl ChatLineCache {
                     }));
                     lines.extend(more);
                 }
-                if let Some(footer) = reply_footer(&place.footer, width, theme) {
-                    // Separate the closing meta line from the reply body (or the
-                    // activity lines above it) with a blank row so it reads as a
-                    // distinct footer rather than another content line.
-                    let separated = lines
-                        .last()
-                        .is_none_or(|line| line.spans.iter().all(|s| s.content.trim().is_empty()));
-                    if !separated {
-                        lines.push(Line::from(""));
-                    }
-                    lines.push(footer);
+                if let Some(reply) = place.meta {
+                    push_footer(&mut lines, reply, width, theme);
                 }
                 let user =
                     !self.terminal && members.len() == 1 && members[0].role() == MessageRole::User;
@@ -274,6 +276,26 @@ impl ChatLineCache {
     pub(crate) fn blocks(&self) -> impl Iterator<Item = &BlockLines> {
         self.order.iter().filter_map(|key| self.entries.get(key))
     }
+}
+
+/// The footer of `reply`, a turn's latest, under the `lines` of the
+/// turn's last block from the agent: the model, tokens, cost and who paid
+/// for them, on one line.
+fn push_footer(lines: &mut Vec<Line<'static>>, reply: &Message, width: usize, theme: &Theme) {
+    let meta = reply_meta(reply.model(), reply.usage(), reply.sources());
+    let Some(footer) = reply_footer(&meta, width, theme) else {
+        return;
+    };
+    // Separate the closing meta line from the reply body (or the
+    // activity lines above it) with a blank row so it reads as a
+    // distinct footer rather than another content line.
+    let separated = lines
+        .last()
+        .is_none_or(|line| line.spans.iter().all(|s| s.content.trim().is_empty()));
+    if !separated {
+        lines.push(Line::from(""));
+    }
+    lines.push(footer);
 }
 
 /// Blank rows above and below a user's message: the frame's border, then
@@ -336,16 +358,16 @@ fn is_notice(message: &Message) -> bool {
 /// Each block's place in its turn. A prompt starts a turn; the agent's
 /// last block in it carries the footer of the turn's latest reply, and
 /// steps are numbered in order across the turn.
-fn turn_places(shown: &[&Message], runs: &[Range<usize>]) -> Vec<TurnPlace> {
-    let mut places: Vec<TurnPlace> = Vec::with_capacity(runs.len());
+fn turn_places<'a>(shown: &[&'a Message], runs: &[Range<usize>]) -> Vec<TurnPlace<'a>> {
+    let mut places: Vec<TurnPlace<'a>> = Vec::with_capacity(runs.len());
     let mut last_agent: Option<usize> = None;
-    let mut meta: Vec<String> = Vec::new();
+    let mut meta: Option<&'a Message> = None;
     let mut steps = 0;
     let mut started_ms = shown.first().map_or(0, |m| m.timestamp_ms());
     for run in runs {
         let first = shown[run.start];
         if first.role() == MessageRole::User {
-            close_turn(&mut places, last_agent.take(), std::mem::take(&mut meta));
+            close_turn(&mut places, last_agent.take(), meta.take());
             steps = 0;
             started_ms = first.timestamp_ms();
         }
@@ -354,7 +376,7 @@ fn turn_places(shown: &[&Message], runs: &[Range<usize>]) -> Vec<TurnPlace> {
             last_agent = Some(places.len());
         }
         places.push(TurnPlace {
-            footer: Vec::new(),
+            meta: None,
             first_step: steps + 1,
             started_ms,
         });
@@ -363,18 +385,18 @@ fn turn_places(shown: &[&Message], runs: &[Range<usize>]) -> Vec<TurnPlace> {
             .filter(|m| m.activity_step().is_some())
             .count();
         if agent && first.activity_step().is_none() && first.model().is_some() {
-            meta = reply_meta(first.model(), first.usage(), first.sources());
+            meta = Some(first);
         }
     }
     close_turn(&mut places, last_agent, meta);
     places
 }
 
-/// Put a turn's footer `meta` under its last block from the agent, at
-/// `last`.
-fn close_turn(places: &mut [TurnPlace], last: Option<usize>, meta: Vec<String>) {
+/// Put the footer of a turn's latest reply, `meta`, under its last block
+/// from the agent, at `last`.
+fn close_turn<'a>(places: &mut [TurnPlace<'a>], last: Option<usize>, meta: Option<&'a Message>) {
     if let Some(place) = last.and_then(|at| places.get_mut(at)) {
-        place.footer = meta;
+        place.meta = meta;
     }
 }
 
@@ -391,7 +413,7 @@ fn group_view(open: Option<bool>, expand_all: bool, live: bool) -> GroupView {
 
 /// ` · step 7 · 42s` after a running group's summary: the number of its
 /// latest step in the turn, and how long the group has been going.
-fn group_progress(steps: &[&Activity], place: &TurnPlace) -> String {
+fn group_progress(steps: &[&Activity], place: &TurnPlace<'_>) -> String {
     let mut progress = format!(" · step {}", place.first_step + steps.len() - 1);
     if let Some(elapsed) = steps
         .first()
@@ -411,7 +433,7 @@ fn group_lines(
     members: &[&Message],
     view: GroupView,
     live: bool,
-    place: &TurnPlace,
+    place: &TurnPlace<'_>,
     width: usize,
     theme: &Theme,
     spinner: &str,
@@ -481,7 +503,7 @@ fn push_records_link(
     toggles: &mut Vec<ToggleRow>,
     (step, expanded): (&Activity, bool),
     number: Option<StepNumber>,
-    place: &TurnPlace,
+    place: &TurnPlace<'_>,
     (width, theme): (usize, &Theme),
 ) {
     if !expanded || !matches!(step, Activity::Thinking(_)) {
@@ -498,7 +520,7 @@ fn push_records_link(
 /// A block of one message; a lone agent step toggles on its header.
 fn single_lines(
     message: &Message,
-    place: &TurnPlace,
+    place: &TurnPlace<'_>,
     (width, measure): (usize, Measure),
     theme: &Theme,
     spinner: &str,

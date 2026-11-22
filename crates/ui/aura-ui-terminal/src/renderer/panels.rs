@@ -349,10 +349,18 @@ fn render_chat_lines(
     let mut user_rows = Vec::new();
     let mut line_index = 0usize;
     for (i, block) in cache.blocks().enumerate() {
+        if visible.len() >= rows {
+            break;
+        }
         if i > 0 {
             for _ in 0..gap {
                 push_visible(&mut visible, &mut line_index, start, rows, blank.clone());
             }
+        }
+        // A block above the screen only moves the ones below it down.
+        if line_index + block.lines.len() <= start {
+            line_index += block.lines.len();
+            continue;
         }
         let hovered = |offset: usize| {
             block
