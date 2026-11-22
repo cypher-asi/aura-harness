@@ -55,6 +55,7 @@ fn thinking_mode_for_model(model: &str) -> Option<ThinkingMode> {
         || model.starts_with("claude-fable-5")
         || model.starts_with("claude-mythos-5")
         || model.starts_with("claude-sonnet-5")
+        || model.starts_with("claude-haiku-5")
         || model.starts_with("claude-opus-4")
         || model.starts_with("claude-sonnet-4")
     {
@@ -266,6 +267,18 @@ pub(super) fn resolve_output_config(
             ThinkingEffort::Medium => "medium",
             ThinkingEffort::High | ThinkingEffort::XHigh => "high",
             ThinkingEffort::Max => "max",
+        };
+        return Some(ApiOutputConfig {
+            effort: effort.into(),
+        });
+    }
+    if normalized.starts_with("claude-haiku-5") {
+        // Haiku 5's ladder stops at high (`model_catalog::has_max_effort`).
+        let effort = match request.thinking_effort.unwrap_or(ThinkingEffort::High) {
+            ThinkingEffort::Off => return None,
+            ThinkingEffort::Minimal | ThinkingEffort::Low => "low",
+            ThinkingEffort::Medium => "medium",
+            ThinkingEffort::High | ThinkingEffort::XHigh | ThinkingEffort::Max => "high",
         };
         return Some(ApiOutputConfig {
             effort: effort.into(),

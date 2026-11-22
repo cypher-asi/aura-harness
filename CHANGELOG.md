@@ -7,6 +7,37 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Gate starts medium and harder work on Sonnet, and Haiku thinks on code
+
+##### Changed
+
+- Only work the classifier found `easy` starts on the fast tier
+  (Haiku). Work rated `medium` or `hard`, or not rated, starts on the
+  standard tier (Sonnet) or above, small changes included, and does
+  not go below it when a fast model has proven itself on the category
+  or when Gate explores a cheaper model. In Compare #32 Gate sent a
+  multipart-form task the classifier rated a `medium` small change to
+  Haiku 5.5, which passed tests it wrote for its own code while the
+  benchmark's check failed; Opus got it right.
+- On the fast tier, Gate runs code work (`small_change`,
+  `multi_file_change`, `debugging`) at `medium` effort or above, and
+  other work with thinking off (the route line says `with thinking
+  off`). Work that ran with thinking off moves up to a stronger model
+  at `medium`.
+- `/gate` shows each category's pick for work that is not easy and,
+  when easy work goes to another model, marks that one `pick for easy
+  work`; a fast model proven on a category shows up there.
+
+##### Fixed
+
+- Haiku 5 thinks at the effort a request asks for: it is sent
+  `thinking: {"type": "adaptive", "display": "summarized"}` and
+  `output_config.effort` (`low`, `medium` or `high`; `xhigh` and `max`
+  ask for `high`). It used to be sent neither, so Gate's effort never
+  reached it and its run logs showed no thinking: none in any of
+  Haiku's 16 calls on that task. Effort `off` still sends
+  `{"type": "disabled"}`.
+
 ### Gate stops spending on the strongest model when nothing failed
 
 ##### Fixed

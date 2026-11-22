@@ -2415,14 +2415,22 @@ async fn gate_routes_each_category_and_records_why() {
     state.models = gate_on_zos(&fixture);
     learn_questions(&fixture.hub.gate, "aura-claude-haiku-4-5", 10);
 
-    turn(&mut state, &mut done, &links, first, "what does gate do?").await;
+    turn(
+        &mut state,
+        &mut done,
+        &links,
+        first,
+        "what does gate do? (easy)",
+    )
+    .await;
     turn(&mut state, &mut done, &links, first, "fix the parser").await;
 
     let prompts = prompts_of(&state, first);
     assert_eq!(
         prompts[0].2.route,
-        Route::turn("aura-claude-haiku-4-5", RouteReason::Proven).at_effort("medium"),
-        "ten passing questions prove haiku on questions"
+        Route::turn("aura-claude-haiku-4-5", RouteReason::Proven),
+        "ten passing questions prove haiku on easy questions, which it answers \
+         with thinking off"
     );
     assert_eq!(prompts[1].2.category, Some(PromptCategory::Debugging));
     assert_eq!(
@@ -2440,7 +2448,7 @@ async fn gate_routes_each_category_and_records_why() {
     assert_eq!(
         shown,
         [
-            "gate → aura-claude-haiku-4-5 (cloud) at medium effort · question, proven",
+            "gate → aura-claude-haiku-4-5 (cloud) with thinking off · question, proven",
             "gate → aura-gpt-5-4 (cloud) at medium effort · debugging, default",
         ]
     );
@@ -3030,10 +3038,11 @@ async fn slash_gate_shows_the_table() {
     let text = system_texts(&drain(&mut commands));
     assert!(text.contains("Turns"), "{text}");
     assert!(
-        text.contains("question            → aura-claude-haiku-4-5 (cloud)"),
+        text.contains("question            → aura-claude-sonnet-4-6 (cloud)"),
         "{text}"
     );
-    assert!(text.contains("pick (proven)"), "{text}");
+    assert!(text.contains("→ aura-claude-haiku-4-5 (cloud)"), "{text}");
+    assert!(text.contains("pick for easy work (proven)"), "{text}");
 }
 
 #[tokio::test]

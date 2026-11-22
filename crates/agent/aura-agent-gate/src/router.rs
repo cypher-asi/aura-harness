@@ -16,10 +16,10 @@
 //! work goes on with.
 //!
 //! Gate picks the reasoning effort with the model: work starts at the
-//! effort its difficulty calls for ([`start_effort`]), and only work that
-//! failed on the strongest model is tried again at a higher one, up to
-//! max ([`escalate`]). At max one call can think for minutes, so it is
-//! kept for work nothing less got right.
+//! effort its difficulty calls for on the model it goes to
+//! ([`effort_on`]), and only work that failed on the strongest model is
+//! tried again at a higher one, up to max ([`escalate`]). At max one call
+//! can think for minutes, so it is kept for work nothing less got right.
 
 use std::collections::HashMap;
 
@@ -165,20 +165,19 @@ pub fn fixed_pick(candidates: &[Candidate]) -> Option<&Candidate> {
 /// The tier work asking for `category`, of `difficulty` when the
 /// classifier said, starts on before Gate has learned better.
 ///
-/// Small changes and work the classifier found easy start on the fast
-/// tier, and everything else on the standard one: plans, whatever their
-/// difficulty, and small changes it found hard. A failing test or build
-/// moves code work up a tier, and a category whose start model fails too
-/// often starts higher ([`pick`]). The frontier tier is reached that way,
-/// not by default: on the work it is asked for, it costs several times a
-/// standard model for results the checks rarely tell apart.
+/// Only work the classifier found easy starts on the fast tier, plans
+/// excepted; everything else starts on the standard one: plans, whatever
+/// their difficulty, and medium, hard or unrated work of any kind, small
+/// changes included. A failing test or build moves code work up a tier,
+/// and a category whose start model fails too often starts higher
+/// ([`pick`]). The frontier tier is reached that way, not by default: on
+/// the work it is asked for, it costs several times a standard model for
+/// results the checks rarely tell apart.
 #[must_use]
 pub const fn start_tier(category: PromptCategory, difficulty: Option<Difficulty>) -> ModelTier {
     match (category, difficulty) {
-        (PromptCategory::Planning, _) | (PromptCategory::SmallChange, Some(Difficulty::Hard)) => {
-            ModelTier::Standard
-        }
-        (PromptCategory::SmallChange, _) | (_, Some(Difficulty::Easy)) => ModelTier::Fast,
+        (PromptCategory::Planning, _) => ModelTier::Standard,
+        (_, Some(Difficulty::Easy)) => ModelTier::Fast,
         _ => ModelTier::Standard,
     }
 }
@@ -193,6 +192,26 @@ pub const fn start_effort(difficulty: Option<Difficulty>) -> ThinkingEffort {
         Some(Difficulty::Easy) => ThinkingEffort::Low,
         Some(Difficulty::Hard) => ThinkingEffort::High,
         Some(Difficulty::Medium) | None => ThinkingEffort::Medium,
+    }
+}
+
+/// The reasoning effort `work` starts at on `model`: that of its
+/// difficulty ([`start_effort`]), except on the fast tier, where code
+/// work ([`verifiable`]) reasons at medium effort or above and other work
+/// does not think. At low effort a model may skip thinking on steps it
+/// finds simple, and code is where that costs a failed attempt.
+#[must_use]
+pub const fn effort_on(work: &Work<'_>, model: &Candidate) -> ThinkingEffort {
+    let effort = start_effort(work.difficulty);
+    match model.tier {
+        ModelTier::Fast if !verifiable(work.category) => ThinkingEffort::Off,
+        ModelTier::Fast => match effort {
+            ThinkingEffort::Off | ThinkingEffort::Minimal | ThinkingEffort::Low => {
+                ThinkingEffort::Medium
+            }
+            effort => effort,
+        },
+        _ => effort,
     }
 }
 
@@ -271,14 +290,15 @@ pub struct Decision {
 
 impl Decision {
     /// The model, who serves it and its effort, e.g.
-    /// `claude-sonnet-4-6 (claude plan) at high effort`.
+    /// `claude-sonnet-4-6 (claude plan) at high effort`, or
+    /// `claude-haiku-5-5 (claude plan) with thinking off`.
     #[must_use]
     pub fn label(&self) -> String {
-        format!(
-            "{} at {} effort",
-            self.model.route_label(),
-            self.effort.reasoning_effort_wire().unwrap_or("no")
-        )
+        let model = self.model.route_label();
+        match self.effort.reasoning_effort_wire() {
+            Some(effort) => format!("{model} at {effort} effort"),
+            None => format!("{model} with thinking off"),
+        }
     }
 
     /// The decision as recorded on the prompt of work at `level`.
@@ -455,11 +475,11 @@ pub fn by_expected_cost<'a>(
 ///    comes back when those tries prove it.
 ///
 /// Models are judged by their [`judged`] rows and ordered by
-/// [`by_expected_cost`]. `None` when there are no candidates. Hard work
-/// starts no lower than [`start_floor`], whether proven, by default or
-/// explored, and no work goes to a model a later version supersedes
-/// ([`current`]). Whichever model it is, the work runs at the effort of
-/// its difficulty ([`start_effort`]).
+/// [`by_expected_cost`]. `None` when there are no candidates. Work that
+/// is not easy starts no lower than [`start_floor`], whether proven, by
+/// default or explored, and no work goes to a model a later version
+/// supersedes ([`current`]). The work runs at the effort of its
+/// difficulty on the model it goes to ([`effort_on`]).
 pub fn pick(
     stats: &GateStats,
     work: &Work<'_>,
@@ -501,7 +521,7 @@ pub fn pick(
     let decide = |index: usize, reason, explored, propensity| {
         Some(Decision {
             model: order[index].clone(),
-            effort: start_effort(work.difficulty),
+            effort: effort_on(work, order[index]),
             reason,
             explored,
             propensity,
@@ -524,9 +544,10 @@ pub fn pick(
 /// Where work at `level` that failed on `failed` at `effort` goes next:
 /// the cheapest model (by [`by_expected_cost`]) of the lowest tier above
 /// `failed`'s, among those no later version supersedes ([`current`]), at
-/// the same effort. With no stronger model, the same model one effort
-/// higher ([`raise_effort`]), so max is the last step on the strongest
-/// model. `effort` is `None` when Gate does not choose the effort (the
+/// the same effort, or at medium when it ran with thinking off (not every
+/// stronger model can turn thinking off). With no stronger model, the
+/// same model one effort higher ([`raise_effort`]), so max is the last
+/// step on the strongest model. `effort` is `None` when Gate does not choose the effort (the
 /// user pinned one): then only the model moves. `None` when nothing is
 /// left to try.
 #[must_use]
@@ -557,6 +578,7 @@ pub fn escalate(
         return decide(ran?, effort);
     };
     let model = stronger.into_iter().find(|c| c.tier == next)?;
+    let effort = effort.filter(|&effort| effort != ThinkingEffort::Off);
     decide(model, effort.unwrap_or(ThinkingEffort::Medium))
 }
 
@@ -629,15 +651,16 @@ pub fn judged(
 }
 
 /// The weakest tier work of `difficulty` may start on, among candidates of
-/// `tiers`: the standard tier for hard work when a model at least that
-/// strong is there, else any. Below it, a model's own test passes on hard
-/// work it got wrong (tests it wrote for its own code, or tests that miss
-/// the change), so the work is never moved up.
+/// `tiers`: the standard tier for all but easy work (unrated work counts
+/// as medium) when a model at least that strong is there, else any. Below
+/// it, a model's own test passes on work it got wrong (tests it wrote for
+/// its own code, or tests that miss the change), so the work is never
+/// moved up.
 fn start_floor(
     difficulty: Option<Difficulty>,
     mut tiers: impl Iterator<Item = ModelTier>,
 ) -> Option<ModelTier> {
-    (difficulty == Some(Difficulty::Hard) && tiers.any(|tier| tier >= ModelTier::Standard))
+    (difficulty != Some(Difficulty::Easy) && tiers.any(|tier| tier >= ModelTier::Standard))
         .then_some(ModelTier::Standard)
 }
 
@@ -1006,7 +1029,7 @@ mod tests {
             let chosen = |kind| {
                 let decision = pick(
                     &stats,
-                    &Work::new(RouteLevel::Subtask, category, kind),
+                    &Work::new(RouteLevel::Subtask, category, kind).of(Some(Difficulty::Easy)),
                     &claude(),
                     &no_exploring(),
                     &mut || 0.0,
@@ -1038,20 +1061,29 @@ mod tests {
             );
         }
 
+        /// Where an unrated turn asking for `category` goes, without
+        /// exploring.
         fn chosen(
             stats: &GateStats,
             category: PromptCategory,
             candidates: &[Candidate],
         ) -> (String, RouteReason) {
-            let decision = pick(
-                stats,
-                &Work::new(RouteLevel::Turn, category, None),
-                candidates,
-                &no_exploring(),
-                &mut || 0.0,
-            )
-            .unwrap();
+            chosen_at(stats, &Work::turn(category), candidates)
+        }
+
+        /// Where `work` goes, without exploring.
+        fn chosen_at(
+            stats: &GateStats,
+            work: &Work<'_>,
+            candidates: &[Candidate],
+        ) -> (String, RouteReason) {
+            let decision = pick(stats, work, candidates, &no_exploring(), &mut || 0.0).unwrap();
             (decision.model.id, decision.reason)
+        }
+
+        /// A turn asking for `category` the classifier found easy.
+        fn easy(category: PromptCategory) -> Work<'static> {
+            Work::turn(category).of(Some(Difficulty::Easy))
         }
 
         #[test]
@@ -1079,21 +1111,30 @@ mod tests {
         #[test]
         fn work_starts_at_its_difficultys_effort_and_only_the_strongest_model_climbs_to_max() {
             let empty = GateStats::default();
-            let effort = |difficulty| {
+            let effort = |difficulty, candidates: &[Candidate]| {
                 pick(
                     &empty,
                     &Work::turn(PromptCategory::MultiFileChange).of(difficulty),
-                    &claude(),
+                    candidates,
                     &no_exploring(),
                     &mut || 0.0,
                 )
                 .unwrap()
                 .effort
             };
-            assert_eq!(effort(Some(Difficulty::Easy)), ThinkingEffort::Low);
-            assert_eq!(effort(None), ThinkingEffort::Medium);
-            assert_eq!(effort(Some(Difficulty::Medium)), ThinkingEffort::Medium);
-            assert_eq!(effort(Some(Difficulty::Hard)), ThinkingEffort::High);
+            assert_eq!(
+                effort(Some(Difficulty::Easy), &no_fast_tier(&claude())),
+                ThinkingEffort::Low
+            );
+            assert_eq!(effort(None, &claude()), ThinkingEffort::Medium);
+            assert_eq!(
+                effort(Some(Difficulty::Medium), &claude()),
+                ThinkingEffort::Medium
+            );
+            assert_eq!(
+                effort(Some(Difficulty::Hard), &claude()),
+                ThinkingEffort::High
+            );
 
             let up = |failed: &str, effort| {
                 escalate(&empty, RouteLevel::Turn, (failed, Some(effort)), &claude())
@@ -1103,6 +1144,11 @@ mod tests {
                 up(SONNET, ThinkingEffort::High),
                 Some((OPUS.to_string(), ThinkingEffort::High)),
                 "a stronger model first, at the same effort"
+            );
+            assert_eq!(
+                up(HAIKU, ThinkingEffort::Off),
+                Some((SONNET.to_string(), ThinkingEffort::Medium)),
+                "work that ran with thinking off moves up at medium"
             );
             assert_eq!(
                 up(OPUS, ThinkingEffort::Medium),
@@ -1157,6 +1203,72 @@ mod tests {
         }
 
         #[test]
+        fn the_fast_tier_thinks_on_code_work_only() {
+            let empty = GateStats::default();
+            let start = |work: &Work<'_>, candidates: &[Candidate]| {
+                pick(&empty, work, candidates, &no_exploring(), &mut || 0.0).unwrap()
+            };
+            for category in [
+                PromptCategory::SmallChange,
+                PromptCategory::MultiFileChange,
+                PromptCategory::Debugging,
+            ] {
+                let decision = start(&easy(category), &claude());
+                assert_eq!(
+                    (decision.model.id.as_str(), decision.effort),
+                    (HAIKU, ThinkingEffort::Medium),
+                    "{category}"
+                );
+            }
+            for category in [
+                PromptCategory::Question,
+                PromptCategory::Research,
+                PromptCategory::Writing,
+                PromptCategory::Other,
+            ] {
+                let decision = start(&easy(category), &claude());
+                assert_eq!(
+                    (decision.model.id.as_str(), decision.effort),
+                    (HAIKU, ThinkingEffort::Off),
+                    "{category}"
+                );
+                assert_eq!(
+                    decision.label(),
+                    "claude-haiku-4-5 (claude plan) with thinking off"
+                );
+                assert_eq!(decision.route(RouteLevel::Turn).effort, None);
+            }
+
+            let below_standard: Vec<Candidate> = claude()
+                .into_iter()
+                .filter(|c| c.tier < ModelTier::Standard)
+                .collect();
+            let hard = start(
+                &Work::turn(PromptCategory::Debugging).of(Some(Difficulty::Hard)),
+                &below_standard,
+            );
+            assert_eq!(
+                (hard.model.id.as_str(), hard.effort),
+                (HAIKU, ThinkingEffort::High),
+                "harder code work it gets keeps its effort"
+            );
+            let other = start(&easy(PromptCategory::Question), &no_fast_tier(&claude()));
+            assert_eq!(
+                (other.model.id.as_str(), other.effort),
+                (SONNET, ThinkingEffort::Low),
+                "other tiers keep the effort of the difficulty"
+            );
+        }
+
+        fn no_fast_tier(candidates: &[Candidate]) -> Vec<Candidate> {
+            candidates
+                .iter()
+                .filter(|c| c.tier != ModelTier::Fast)
+                .cloned()
+                .collect()
+        }
+
+        #[test]
         fn planning_starts_on_the_standard_tier() {
             let empty = GateStats::default();
             assert_eq!(
@@ -1202,21 +1314,25 @@ mod tests {
         }
 
         #[test]
-        fn small_changes_start_on_the_cheapest_fast_model() {
+        fn only_easy_work_starts_on_the_cheapest_fast_model() {
             let empty = GateStats::default();
+            let small = easy(PromptCategory::SmallChange);
             assert_eq!(
-                chosen(&empty, PromptCategory::SmallChange, &all()),
+                chosen_at(&empty, &small, &all()),
                 (HAIKU.to_string(), RouteReason::Default)
             );
-            let no_fast: Vec<Candidate> = claude()
-                .into_iter()
-                .filter(|c| c.tier != ModelTier::Fast)
-                .collect();
             assert_eq!(
-                chosen(&empty, PromptCategory::SmallChange, &no_fast).0,
+                chosen_at(&empty, &small, &no_fast_tier(&claude())).0,
                 SONNET,
                 "the next tier up when there is no fast model"
             );
+            for difficulty in [None, Some(Difficulty::Medium), Some(Difficulty::Hard)] {
+                assert_eq!(
+                    chosen_at(&empty, &small.of(difficulty), &all()),
+                    (SONNET.to_string(), RouteReason::Default),
+                    "{difficulty:?}"
+                );
+            }
         }
 
         #[test]
@@ -1241,19 +1357,15 @@ mod tests {
             );
 
             let mut log = Log::default();
+            let small = easy(PromptCategory::SmallChange);
+            assert_eq!(chosen_at(&log.stats(), &small, &claude()).0, HAIKU);
             log.turns(2, PromptCategory::SmallChange, HAIKU, false);
-            assert_eq!(
-                chosen(&log.stats(), PromptCategory::SmallChange, &claude()).0,
-                SONNET
-            );
+            assert_eq!(chosen_at(&log.stats(), &small, &claude()).0, SONNET);
             log.turns(2, PromptCategory::SmallChange, SONNET, false);
-            assert_eq!(
-                chosen(&log.stats(), PromptCategory::SmallChange, &claude()).0,
-                OPUS
-            );
+            assert_eq!(chosen_at(&log.stats(), &small, &claude()).0, OPUS);
             log.turns(2, PromptCategory::SmallChange, OPUS, false);
             assert_eq!(
-                chosen(&log.stats(), PromptCategory::SmallChange, &claude()).0,
+                chosen_at(&log.stats(), &small, &claude()).0,
                 OPUS,
                 "the strongest model when every tier is ruled out"
             );
@@ -1275,9 +1387,10 @@ mod tests {
         }
 
         #[test]
-        fn other_categories_start_on_the_cheapest_standard_model() {
+        fn unrated_work_starts_on_the_cheapest_standard_model() {
             let empty = GateStats::default();
             for category in [
+                PromptCategory::SmallChange,
                 PromptCategory::Question,
                 PromptCategory::MultiFileChange,
                 PromptCategory::Debugging,
@@ -1317,38 +1430,45 @@ mod tests {
         #[test]
         fn a_model_becomes_the_pick_after_min_tries_successes() {
             let mut log = Log::default();
-            log.turns(9, PromptCategory::Question, HAIKU, true);
+            let question = easy(PromptCategory::Question);
+            log.turns(9, PromptCategory::Question, LOCAL, true);
             assert_eq!(
-                chosen(&log.stats(), PromptCategory::Question, &claude()),
-                (SONNET.to_string(), RouteReason::Default),
+                chosen_at(&log.stats(), &question, &claude()),
+                (HAIKU.to_string(), RouteReason::Default),
                 "nine tries are not enough"
             );
-            log.turns(1, PromptCategory::Question, HAIKU, true);
+            log.turns(1, PromptCategory::Question, LOCAL, true);
             assert_eq!(
-                chosen(&log.stats(), PromptCategory::Question, &claude()),
-                (HAIKU.to_string(), RouteReason::Proven)
+                chosen_at(&log.stats(), &question, &claude()),
+                (LOCAL.to_string(), RouteReason::Proven)
             );
             assert_eq!(
-                chosen(&log.stats(), PromptCategory::Writing, &claude()).0,
-                SONNET,
+                chosen_at(&log.stats(), &easy(PromptCategory::Writing), &claude()).0,
+                HAIKU,
                 "proven on questions says nothing about writing"
+            );
+            assert_eq!(
+                chosen(&log.stats(), PromptCategory::Question, &claude()).0,
+                SONNET,
+                "nor about work that is not easy"
             );
         }
 
         #[test]
         fn a_proven_model_drops_back_after_failures() {
             let mut log = Log::default();
-            log.turns(10, PromptCategory::Question, HAIKU, true);
-            log.turns(1, PromptCategory::Question, HAIKU, false);
+            let question = easy(PromptCategory::Question);
+            log.turns(10, PromptCategory::Question, LOCAL, true);
+            log.turns(1, PromptCategory::Question, LOCAL, false);
             assert_eq!(
-                chosen(&log.stats(), PromptCategory::Question, &claude()),
-                (HAIKU.to_string(), RouteReason::Proven),
+                chosen_at(&log.stats(), &question, &claude()),
+                (LOCAL.to_string(), RouteReason::Proven),
                 "10 of 11 is still above 85%"
             );
-            log.turns(1, PromptCategory::Question, HAIKU, false);
+            log.turns(1, PromptCategory::Question, LOCAL, false);
             assert_eq!(
-                chosen(&log.stats(), PromptCategory::Question, &claude()),
-                (SONNET.to_string(), RouteReason::Default),
+                chosen_at(&log.stats(), &question, &claude()),
+                (HAIKU.to_string(), RouteReason::Default),
                 "10 of 12 is below 85%"
             );
         }
@@ -1364,8 +1484,13 @@ mod tests {
             log.turns(10, PromptCategory::Debugging, HAIKU, true);
             assert_eq!(
                 chosen(&log.stats(), PromptCategory::Debugging, &claude()).0,
-                HAIKU
+                SONNET,
+                "unrated work starts no lower than the standard tier"
             );
+            let debugging = easy(PromptCategory::Debugging);
+            assert_eq!(chosen_at(&log.stats(), &debugging, &claude()).0, HAIKU);
+            log.turns(10, PromptCategory::Debugging, LOCAL, true);
+            assert_eq!(chosen_at(&log.stats(), &debugging, &claude()).0, LOCAL);
         }
 
         #[test]
@@ -1513,47 +1638,45 @@ mod tests {
             let settings = GateConfig {
                 ..GateConfig::defaults()
             };
+            let debugging = easy(PromptCategory::Debugging);
             let explored = |stats: &GateStats| {
-                let decision = pick(
-                    stats,
-                    &Work::new(RouteLevel::Turn, PromptCategory::Debugging, None),
-                    &claude(),
-                    &settings,
-                    &mut || 0.0,
-                )
-                .unwrap();
+                let decision = pick(stats, &debugging, &claude(), &settings, &mut || 0.0).unwrap();
                 assert_eq!(decision.reason, RouteReason::Explore);
                 decision.model.id
             };
             let mut log = Log::default();
-            log.turns(2, PromptCategory::Debugging, SONNET, false);
+            log.turns(2, PromptCategory::Debugging, HAIKU, false);
+            assert_eq!(chosen_at(&log.stats(), &debugging, &claude()).0, SONNET);
             assert_eq!(
-                chosen(&log.stats(), PromptCategory::Debugging, &claude()).0,
-                OPUS
+                explored(&log.stats()),
+                LOCAL,
+                "Haiku is ruled out, the local model is not"
             );
+            log.turns(2, PromptCategory::Debugging, LOCAL, false);
             assert_eq!(
                 explored(&log.stats()),
                 HAIKU,
-                "Sonnet is ruled out, Haiku is not"
-            );
-            log.turns(2, PromptCategory::Debugging, HAIKU, false);
-            let local = claude()
-                .into_iter()
-                .find(|c| c.tier == ModelTier::Local)
-                .unwrap()
-                .id;
-            assert_eq!(explored(&log.stats()), local);
-            log.turns(2, PromptCategory::Debugging, &local, false);
-            assert_eq!(
-                explored(&log.stats()),
-                SONNET,
                 "with every cheaper model ruled out, the nearest gets another try"
             );
-            log.turns(12, PromptCategory::Debugging, SONNET, true);
+            log.turns(12, PromptCategory::Debugging, HAIKU, true);
             assert_eq!(
-                chosen(&log.stats(), PromptCategory::Debugging, &claude()),
-                (SONNET.to_string(), RouteReason::Proven),
+                chosen_at(&log.stats(), &debugging, &claude()),
+                (HAIKU.to_string(), RouteReason::Proven),
                 "and comes back once those tries prove it"
+            );
+            assert_eq!(
+                pick(
+                    &log.stats(),
+                    &Work::turn(PromptCategory::Debugging),
+                    &claude(),
+                    &settings,
+                    &mut || 0.0
+                )
+                .unwrap()
+                .model
+                .id,
+                SONNET,
+                "work that is not easy is never explored below the standard tier"
             );
         }
 
@@ -1561,35 +1684,22 @@ mod tests {
         fn exploring_takes_the_next_cheaper_model() {
             let empty = GateStats::default();
             let settings = GateConfig::defaults();
-            let explored = pick(
-                &empty,
-                &Work::new(RouteLevel::Turn, PromptCategory::Question, None),
-                &claude(),
-                &settings,
-                &mut || 0.0,
-            )
-            .unwrap();
-            assert_eq!(explored.model.id, HAIKU);
+            let debugging = easy(PromptCategory::Debugging);
+            let explored = pick(&empty, &debugging, &claude(), &settings, &mut || 0.0).unwrap();
+            assert_eq!(explored.model.id, LOCAL);
             assert_eq!(explored.reason, RouteReason::Explore);
             assert!(explored.explored);
             assert_eq!(explored.propensity, settings.explore_rate);
 
-            let kept = pick(
-                &empty,
-                &Work::new(RouteLevel::Turn, PromptCategory::Question, None),
-                &claude(),
-                &settings,
-                &mut || 0.99,
-            )
-            .unwrap();
-            assert_eq!(kept.model.id, SONNET);
+            let kept = pick(&empty, &debugging, &claude(), &settings, &mut || 0.99).unwrap();
+            assert_eq!(kept.model.id, HAIKU);
             assert!(!kept.explored);
             assert_eq!(kept.propensity, 1.0 - settings.explore_rate);
             assert_eq!(
                 kept.route(RouteLevel::Subtask),
                 Route {
                     level: RouteLevel::Subtask,
-                    model: SONNET.to_string(),
+                    model: HAIKU.to_string(),
                     reason: RouteReason::Default,
                     explored: false,
                     propensity: 1.0 - settings.explore_rate,
@@ -1611,7 +1721,7 @@ mod tests {
                 .filter(|_| {
                     pick(
                         &empty,
-                        &Work::new(RouteLevel::Turn, PromptCategory::Question, None),
+                        &easy(PromptCategory::Question),
                         &claude(),
                         &settings,
                         &mut rng,
@@ -1634,7 +1744,7 @@ mod tests {
             };
             let decision = pick(
                 &log.stats(),
-                &Work::new(RouteLevel::Turn, PromptCategory::Question, None),
+                &easy(PromptCategory::Question),
                 &claude(),
                 &settings,
                 &mut || 0.0,
@@ -1658,9 +1768,16 @@ mod tests {
                 ModelTier::Standard
             );
             assert_eq!(
-                start_tier(PromptCategory::SmallChange, Some(Hard)),
-                ModelTier::Standard
+                start_tier(PromptCategory::SmallChange, Some(Easy)),
+                ModelTier::Fast
             );
+            for difficulty in [None, Some(Medium), Some(Hard)] {
+                assert_eq!(
+                    start_tier(PromptCategory::SmallChange, difficulty),
+                    ModelTier::Standard,
+                    "{difficulty:?}"
+                );
+            }
             assert_eq!(
                 start_tier(PromptCategory::Planning, Some(Easy)),
                 ModelTier::Standard,
@@ -1682,11 +1799,13 @@ mod tests {
             };
             assert_eq!(start(PromptCategory::Question, Some(Easy)), HAIKU);
             assert_eq!(start(PromptCategory::Question, None), SONNET);
+            assert_eq!(start(PromptCategory::SmallChange, Some(Easy)), HAIKU);
+            assert_eq!(start(PromptCategory::SmallChange, Some(Medium)), SONNET);
             assert_eq!(start(PromptCategory::SmallChange, Some(Hard)), SONNET);
         }
 
         #[test]
-        fn hard_work_never_starts_below_the_standard_tier() {
+        fn work_that_is_not_easy_never_starts_below_the_standard_tier() {
             let mut log = Log::default();
             for _ in 0..12 {
                 log.rated_turn(
@@ -1697,33 +1816,36 @@ mod tests {
                 );
             }
             let stats = log.stats();
-            let hard = Work::turn(PromptCategory::MultiFileChange).of(Some(Difficulty::Hard));
+            let work = Work::turn(PromptCategory::MultiFileChange);
+            let not_easy = [None, Some(Difficulty::Medium), Some(Difficulty::Hard)];
             let start = |settings: &GateConfig, candidates: &[Candidate], work: &Work<'_>| {
                 pick(&stats, work, candidates, settings, &mut || 0.0)
                     .unwrap()
                     .model
                     .id
             };
+            for difficulty in not_easy {
+                assert_eq!(
+                    start(&no_exploring(), &claude(), &work.of(difficulty)),
+                    SONNET,
+                    "not even where it is proven: {difficulty:?}"
+                );
+            }
             assert_eq!(
-                start(&no_exploring(), &claude(), &hard),
-                SONNET,
-                "not even where it is proven"
-            );
-            assert_eq!(
-                start(
-                    &no_exploring(),
-                    &claude(),
-                    &hard.of(Some(Difficulty::Medium))
-                ),
+                start(&no_exploring(), &claude(), &work.of(Some(Difficulty::Easy))),
                 HAIKU,
-                "work that is not hard still starts cheap"
+                "easy work still starts cheap"
             );
             let below_standard: Vec<Candidate> = claude()
                 .into_iter()
                 .filter(|c| c.tier < ModelTier::Standard)
                 .collect();
             assert_eq!(
-                start(&no_exploring(), &below_standard, &hard),
+                start(
+                    &no_exploring(),
+                    &below_standard,
+                    &work.of(Some(Difficulty::Hard))
+                ),
                 HAIKU,
                 "with nothing stronger it starts where it can"
             );
@@ -1733,12 +1855,15 @@ mod tests {
                 explore_rate: 1.0,
                 ..GateConfig::defaults()
             };
-            for _ in 0..200 {
-                let decision = pick(&stats, &hard, &claude(), &settings, &mut rng).unwrap();
-                assert!(
-                    decision.model.tier >= ModelTier::Standard,
-                    "exploring stays at or above the floor: {decision:?}"
-                );
+            for difficulty in not_easy {
+                for _ in 0..200 {
+                    let decision =
+                        pick(&stats, &work.of(difficulty), &claude(), &settings, &mut rng).unwrap();
+                    assert!(
+                        decision.model.tier >= ModelTier::Standard,
+                        "exploring stays at or above the floor: {decision:?}"
+                    );
+                }
             }
         }
 

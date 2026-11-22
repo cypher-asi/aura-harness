@@ -15,7 +15,7 @@ use aura_agent_gate::router::by_expected_cost;
 use aura_agent_gate::stats::Row;
 use aura_agent_gate::{Candidate, GateStats};
 use aura_config::GateConfig;
-use aura_core_types::{AgentId, PromptCategory, RouteLevel, RouteReason};
+use aura_core_types::{AgentId, Difficulty, PromptCategory, RouteLevel, RouteReason};
 use aura_model::model_catalog::route_label;
 use aura_store_db::ReadStore;
 use std::collections::HashMap;
@@ -159,7 +159,9 @@ struct GateView<'a> {
 struct Line {
     model: String,
     row: Option<Row>,
-    pick: Option<&'static str>,
+    /// What Gate picks the model for and why, e.g. `pick (proven)` or
+    /// `pick for easy work (default)`
+    pick: Option<String>,
 }
 
 impl GateView<'_> {
@@ -340,45 +342,58 @@ impl GateView<'_> {
                     "\n  {name:<20}{marker}{:<width$}  {tries:>5}  {success:>7}  {cost:>9}",
                     line.model
                 );
-                if let Some(reason) = line.pick {
-                    let _ = write!(out, "  pick ({reason})");
+                if let Some(pick) = &line.pick {
+                    let _ = write!(out, "  {pick}");
                 }
                 name = "";
             }
         }
     }
 
-    /// Lines for `category` at `level`: Gate's pick now, then every other
-    /// model with outcomes there, cheapest first.
+    /// Lines for `category` at `level`: Gate's pick now, then its pick for
+    /// easy work when that is another model, then every other model with
+    /// outcomes there, cheapest first.
     fn lines(&self, level: RouteLevel, category: PromptCategory) -> Vec<Line> {
         let no_exploring = GateConfig {
             explore_rate: 0.0,
             ..*self.settings
         };
-        let pick = aura_agent_gate::pick(
-            self.stats,
-            &aura_agent_gate::Work::new(level, category, None),
-            self.candidates,
-            &no_exploring,
-            &mut || 1.0,
-        );
+        let pick = |work: &aura_agent_gate::Work<'_>| {
+            aura_agent_gate::pick(
+                self.stats,
+                work,
+                self.candidates,
+                &no_exploring,
+                &mut || 1.0,
+            )
+        };
+        let work = aura_agent_gate::Work::new(level, category, None);
+        let picked = pick(&work);
+        let easy = pick(&work.of(Some(Difficulty::Easy)))
+            .filter(|easy| picked.as_ref().is_none_or(|p| p.model.id != easy.model.id));
         let row = |model: &str| self.stats.row(level, category, model).copied();
-        let mut lines: Vec<Line> = pick
+        let mut lines: Vec<Line> = picked
             .iter()
-            .map(|decision| Line {
+            .map(|decision| (decision, "pick"))
+            .chain(easy.iter().map(|decision| (decision, "pick for easy work")))
+            .map(|(decision, pick)| Line {
                 model: decision.model.route_label(),
                 row: row(&decision.model.id),
-                pick: Some(decision.reason.as_str()),
+                pick: Some(format!("{pick} ({})", decision.reason.as_str())),
             })
             .collect();
-        let picked = pick.as_ref().map(|d| d.model.id.as_str());
+        let shown: Vec<&str> = picked
+            .iter()
+            .chain(easy.iter())
+            .map(|d| d.model.id.as_str())
+            .collect();
         let order = by_expected_cost(self.stats, level, self.candidates);
         let mut tried: Vec<(Option<usize>, &str, Row)> = self
             .stats
             .rows()
             .into_iter()
             .filter(|(key, _)| key.level == level && key.category == category)
-            .filter(|(key, _)| Some(key.model.as_str()) != picked)
+            .filter(|(key, _)| !shown.contains(&key.model.as_str()))
             .map(|(key, row)| {
                 let rank = order.iter().position(|c| c.id == key.model);
                 (rank, key.model.as_str(), *row)
@@ -548,24 +563,39 @@ mod tests {
         };
         assert_eq!(
             line("question"),
-            "question → claude-haiku-4-5 (claude plan) 10 100% $0.020 pick (proven)"
+            "question → claude-sonnet-4-6 (claude plan) 3 67% $0.020 pick (default)",
+            "work that is not easy starts no lower than sonnet, proven haiku or not"
         );
         assert_eq!(
-            line("claude-sonnet-4-6 (claude plan)  "),
-            "claude-sonnet-4-6 (claude plan) 3 67% $0.020"
+            line("pick for easy work (proven)"),
+            "→ claude-haiku-4-5 (claude plan) 10 100% $0.020 pick for easy work (proven)"
         );
         assert_eq!(
             line("debugging"),
             "debugging → claude-sonnet-4-6 (claude plan) - - - pick (default)"
         );
+        let lines: Vec<String> = text
+            .lines()
+            .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect();
+        assert!(
+            lines.contains(&"claude-haiku-4-5 (claude plan) 4 25% $0.020".to_string()),
+            "haiku is out of reach on debugging, so easy debugging goes to sonnet too:\n{text}"
+        );
         assert!(line("writing").ends_with("pick (default)"));
+        assert!(
+            lines.contains(
+                &"→ claude-haiku-4-5 (claude plan) - - - pick for easy work (default)".to_string()
+            ),
+            "{text}"
+        );
         assert!(!text.contains("Subtasks"), "no subtask outcomes yet");
         assert!(text.contains("Replay of 17 recorded turns"), "{text}");
         assert_eq!(line("as recorded"), "as recorded 17 76% $0.020");
         assert_eq!(
             line("Gate's picks now"),
-            "Gate's picks now 10 100% $0.020",
-            "Gate now sends questions to haiku and debugging to sonnet"
+            "Gate's picks now 3 67% $0.020",
+            "Gate now sends unrated questions and debugging to sonnet"
         );
         assert_eq!(
             line("all on claude-haiku-4-5"),
