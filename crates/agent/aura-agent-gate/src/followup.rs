@@ -7,7 +7,9 @@
 //!
 //! 1. [`Step::Nudge`]: code work that changed files is asked once, on the
 //!    same model, to run the tests that cover its change. Its own check
-//!    then says how it went.
+//!    then says how it went. Work that already ran the changed code
+//!    itself ([`crate::own_check`]), as the nudge asks where no test
+//!    covers it, is not asked.
 //! 2. [`Step::HarnessCheck`]: when it still ran none, the harness runs
 //!    the project's tests itself.
 //! 3. [`Step::JudgeUnverified`]: when nothing could be run, the judge
@@ -91,6 +93,9 @@ pub struct Ended<'a> {
     /// its check passed; empty when a test names any of it, or when it
     /// is not known.
     pub uncovered: &'a [String],
+    /// Whether it ran the code it changed itself after its last change,
+    /// and that run succeeded ([`crate::own_check`]).
+    pub ran_own_check: bool,
     /// Whether its acceptance criteria were written down before it
     /// started.
     pub criteria: bool,
@@ -485,7 +490,7 @@ pub fn next(ended: &Ended<'_>, taken: Taken, allowed: Allowed) -> Step {
 fn unchecked(ended: &Ended<'_>, taken: Taken, allowed: Allowed) -> Step {
     let code = verifiable(ended.category);
     let changed = code && ended.files_changed > 0;
-    if changed && allowed.nudge && !taken.nudged && !ended.hit_limit {
+    if changed && allowed.nudge && !taken.nudged && !ended.hit_limit && !ended.ran_own_check {
         return Step::Nudge(ended.uncovered.to_vec());
     }
     if changed && allowed.harness_check && !taken.checked {
@@ -663,6 +668,7 @@ mod tests {
             review_signs: &[],
             acting_signs: &[],
             uncovered: &[],
+            ran_own_check: false,
             criteria: false,
         }
     }
@@ -787,6 +793,28 @@ mod tests {
             ..nudged
         };
         assert_eq!(next(&hard, checked, REVIEWING), review(&[Why::Hard], true));
+    }
+
+    #[test]
+    fn work_that_ran_its_change_itself_is_not_nudged_but_still_checked_and_judged() {
+        let ran = Ended {
+            ran_own_check: true,
+            ..ended(2, "Done; a script that imports it printed the right pages.")
+        };
+        assert_eq!(next(&ran, Taken::default(), ALL), Step::HarnessCheck);
+        let checked = Taken {
+            checked: true,
+            ..Taken::default()
+        };
+        assert_eq!(next(&ran, checked, ALL), Step::JudgeUnverified(Vec::new()));
+
+        let names = ["page".to_string()];
+        let uncovered = Ended {
+            uncovered: &names,
+            ran_own_check: true,
+            ..passed("Done; the tests pass.")
+        };
+        assert_eq!(next(&uncovered, Taken::default(), ALL), Step::HarnessCheck);
     }
 
     #[test]

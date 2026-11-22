@@ -1736,6 +1736,7 @@ impl AgentHub {
                     review_signs: &[],
                     acting_signs: &[],
                     uncovered: &[],
+                    ran_own_check: false,
                     criteria: false,
                 });
                 let unverified = Unverified {

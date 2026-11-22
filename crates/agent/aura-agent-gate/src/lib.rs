@@ -11,6 +11,8 @@
 //! - [`criteria`]: the acceptance criteria a routed code turn is written
 //!   before its work starts, and what the review found of each
 //! - [`checks`]: whether the tests or build a turn ran last passed
+//! - [`own_check`]: whether a turn ran the code it changed itself, where
+//!   no test or build checked it
 //! - [`followup`]: what Gate does about a routed turn that ran no check:
 //!   ask it to verify, run the tests itself, or have the judge review it
 //! - [`outcome`]: the signals that say how a prompt's work went, and
@@ -50,6 +52,7 @@ pub mod followup;
 pub mod judge;
 pub mod lead;
 pub mod outcome;
+pub mod own_check;
 pub mod replay;
 pub mod router;
 pub mod stats;

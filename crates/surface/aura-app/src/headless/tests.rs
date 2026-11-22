@@ -1532,6 +1532,60 @@ async fn a_change_made_without_a_check_is_checked_before_the_turn_ends() {
 }
 
 #[tokio::test]
+async fn a_change_the_model_ran_itself_is_not_nudged_but_still_judged() {
+    use aura_core_types::OutcomeSignal;
+    let provider = MockProvider::new()
+        .with_response(MockResponse::text("debugging medium"))
+        .with_response(no_criteria())
+        .with_response(MockResponse::tool_use(
+            "c0",
+            "write_file",
+            json!({"path": "parser.sh", "content": "printf '%s\\n' \"$@\"\n"}),
+        ))
+        .with_response(MockResponse::tool_use(
+            "c1",
+            "run_command",
+            json!({"program": "sh", "args": ["-n", "parser.sh"]}),
+        ))
+        .with_response(MockResponse::text("Fixed the parser; `sh -n` passes."))
+        .with_response(MockResponse::text("The change is complete.\nVERDICT: OK"));
+    let (report, models, requests, outcomes, _) = run_routed(provider).await;
+
+    assert_eq!(
+        (report.model.as_str(), report.result.as_str()),
+        (GATE_SONNET, "Fixed the parser; `sh -n` passes.")
+    );
+    assert_eq!(
+        models,
+        [
+            GATE_HAIKU,
+            GATE_SONNET,
+            GATE_SONNET,
+            GATE_SONNET,
+            GATE_SONNET,
+            GATE_SONNET
+        ],
+        "the work's three calls, then the judge, with no nudge between"
+    );
+    {
+        let requests = requests.lock().unwrap();
+        assert!(requests
+            .iter()
+            .flat_map(|request| &request.messages)
+            .all(|message| !aura_agent_gate::followup::is_nudge(&message.text_content())));
+        assert_eq!(
+            requests[5].system.as_str(),
+            aura_agent_gate::turn_judge::UNVERIFIED_SYSTEM_PROMPT
+        );
+    }
+    let signals: Vec<(&str, OutcomeSignal)> = outcomes
+        .iter()
+        .map(|o| (o.model.as_str(), o.signal))
+        .collect();
+    assert_eq!(signals, [(GATE_SONNET, OutcomeSignal::JudgedPass)]);
+}
+
+#[tokio::test]
 async fn unchecked_work_that_looks_unfinished_goes_to_the_judge_then_moves_up() {
     use aura_core_types::OutcomeSignal;
     let provider = MockProvider::new()

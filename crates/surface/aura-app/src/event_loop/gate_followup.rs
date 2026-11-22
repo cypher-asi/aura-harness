@@ -36,6 +36,7 @@ use aura_agent_gate::coverage;
 use aura_agent_gate::criteria::{checked, Checked, Criteria, Status};
 use aura_agent_gate::evidence::{flags, is_test_path, Flag};
 use aura_agent_gate::followup::{self, Allowed, Ended, Step, Suspicion, Taken, Why, NUDGE_PROMPT};
+use aura_agent_gate::own_check;
 use aura_agent_gate::router::verifiable;
 use aura_agent_gate::turn_judge::{self, Answer, ReviewVariant, Standing, Unverified, Verdict};
 use aura_agent_gate::Candidate;
@@ -547,6 +548,7 @@ impl FollowUp {
             review_signs: &review_signs,
             acting_signs: &acting_signs,
             uncovered: &uncovered,
+            ran_own_check: own_check::ran(result.messages.get(at.turn_start..).unwrap_or_default()),
             criteria: self.criteria.is_some(),
         };
         let step = followup::next(&ended, self.taken, self.allowed);

@@ -7,6 +7,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Gate does not nudge a turn that ran its change itself
+
+##### Changed
+
+- A routed code turn that, after its last change, ran the changed code
+  itself and saw it succeed is no longer asked to check its change: a
+  script that imports what it changed, or a module it read, and prints
+  or asserts what it returns; the changed script run on a few inputs;
+  or a syntax check such as `python -m py_compile`, `python -m
+  compileall` or `sh -n`. Such a run still counts as no check, so the
+  harness still runs the project's tests where it finds them and the
+  judge still gives the verdict. All 16 nudged runs in Compare #34 and
+  #35 had done this before they were nudged. In Compare #34 the work
+  after the nudge cost $0.147 of the Gate arm's $0.621 and changed no
+  outcome. A command that rewrites a changed file (`sed -i`, `> file`)
+  counts as another change, not a check.
+
 ### Gate's logged reviews run on a quarter of turns
 
 ##### Changed
