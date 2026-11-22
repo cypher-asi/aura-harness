@@ -31,9 +31,7 @@ use super::tasks::TASKS_DIR;
 use crate::isolation::changes;
 use aura_agent::AgentLoopResult;
 use aura_agent_gate::attempt_log::{CopyAt, Review, Tier, Tiers};
-use aura_agent_gate::checks::{
-    checks_seen, command_line, exit_status_masked, last_check_seen, CheckSeen,
-};
+use aura_agent_gate::checks::{checks_seen, command_line, last_check_seen, CheckSeen};
 use aura_agent_gate::coverage;
 use aura_agent_gate::criteria::{checked, Checked, Criteria, Status};
 use aura_agent_gate::evidence::{flags, is_test_path, Flag};
@@ -907,25 +905,23 @@ pub(crate) fn commands_run(messages: &[Message], shown: usize) -> String {
 
 /// The attempt's last check as the judge of unchecked work sees it: its
 /// command, how it exited, and what it printed. A command whose exit
-/// status is not the check's is pointed out, since its exiting with
-/// success then says nothing of the check.
+/// status may not be the check's is pointed out, since only the output
+/// then says how the check went.
 fn check_shown(check: &CheckSeen) -> String {
     let exited = match (check.passed, check.by_output) {
         (true, false) => "exited with success",
+        (false, false) => "failed",
         (true, true) => {
-            "exited with a failure, but a command after the check may have set it, and what \
-             the check printed shows tests passing"
+            "may have exited as a command after the check did, so what the check printed \
+             decided how it went: it shows tests passing"
         }
-        (false, _) => "failed",
-    };
-    let masked = if check.passed && !check.by_output && exit_status_masked(&check.command) {
-        " The exit status is that of the command the check's output was piped or chained into, \
-         not the check's own, so only the output says how the check went."
-    } else {
-        ""
+        (false, true) => {
+            "may have exited as a command after the check did, so what the check printed \
+             decided how it went: it shows failures, or that the tests never ran"
+        }
     };
     format!(
-        "`{}` {exited}.{masked} It printed:\n{}",
+        "`{}` {exited}. It printed:\n{}",
         check.command, check.output
     )
 }
@@ -1177,44 +1173,44 @@ mod tests {
 
     #[test]
     fn the_judge_is_told_when_a_checks_exit_status_is_not_its_own() {
-        let piped = CheckSeen {
-            command: "pytest -q 2>&1 | head -20".to_string(),
-            passed: true,
-            by_output: false,
-            output: "TypeError: boom\n9 passed".to_string(),
-        };
-        let shown = check_shown(&piped);
-        assert!(
-            shown.starts_with(
-                "`pytest -q 2>&1 | head -20` exited with success. The exit status is that of"
-            ),
-            "{shown}"
-        );
-        assert!(
-            shown.ends_with("It printed:\nTypeError: boom\n9 passed"),
-            "{shown}"
-        );
-
         let plain = CheckSeen {
             command: "pytest -q".to_string(),
-            ..piped
-        };
-        assert_eq!(
-            check_shown(&plain),
-            "`pytest -q` exited with success. It printed:\nTypeError: boom\n9 passed"
-        );
-
-        let decided_by_output = CheckSeen {
-            command: "pytest -q | grep Error".to_string(),
             passed: true,
-            by_output: true,
+            by_output: false,
             output: "12 passed".to_string(),
         };
         assert_eq!(
-            check_shown(&decided_by_output),
-            "`pytest -q | grep Error` exited with a failure, but a command after the check may \
-             have set it, and what the check printed shows tests passing. It printed:\n12 passed"
+            check_shown(&plain),
+            "`pytest -q` exited with success. It printed:\n12 passed"
         );
+
+        let piped = CheckSeen {
+            command: "pytest -q 2>&1 | tail -3".to_string(),
+            by_output: true,
+            ..plain.clone()
+        };
+        assert_eq!(
+            check_shown(&piped),
+            "`pytest -q 2>&1 | tail -3` may have exited as a command after the check did, so \
+             what the check printed decided how it went: it shows tests passing. It printed:\n\
+             12 passed"
+        );
+
+        let never_ran = CheckSeen {
+            passed: false,
+            output: "no tests ran in 0.00s\nERROR: file not found: test/units/urls".to_string(),
+            ..piped
+        };
+        assert!(
+            check_shown(&never_ran).contains("it shows failures, or that the tests never ran."),
+            "{}",
+            check_shown(&never_ran)
+        );
+        let failed = CheckSeen {
+            by_output: false,
+            ..never_ran
+        };
+        assert!(check_shown(&failed).starts_with("`pytest -q 2>&1 | tail -3` failed. It printed:"));
     }
 
     #[test]

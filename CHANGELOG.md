@@ -7,6 +7,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### A piped test run passes only when its output shows it passed
+
+##### Fixed
+
+- A test or build whose output was piped on (`pytest | tail -3`), or
+  that another command followed whatever it did, no longer counts as
+  passed because the command exited 0: what it printed decides, as it
+  already did for a failing exit. Failures fail it, and so does output
+  showing that the tests never ran ("no tests ran", "ERROR: file not
+  found", "No module named", "command not found") when no test passed.
+  Output showing neither a failure nor a pass does not count as a
+  check. On a SWE-bench task Claude Haiku 5.5 had two such runs counted
+  as passed: one whose import failed and one that found no tests.
+- A test run with a stray zero-width character in its command
+  (`python\u200b -m pytest`), which `run_command` runs without it, now
+  counts as a check.
+
 ### Gate notices more admitted gaps and work checked by its own tests
 
 ##### Changed

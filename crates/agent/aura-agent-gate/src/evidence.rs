@@ -602,7 +602,10 @@ mod tests {
             ["lib/ansible/module_utils/parsing/convert_bool.py"]
         );
         let check = evidence.last_check().unwrap();
-        assert!(check.passed, "the pipe exited 0");
+        assert!(
+            !check.passed,
+            "the pipe exited 0, but the check printed errors"
+        );
         assert!(check.command.starts_with("sh .swe/run python -m pytest"));
         assert!(
             check.output.starts_with("TypeError: TestFindIniFile"),
@@ -618,7 +621,14 @@ mod tests {
 
     #[test]
     fn a_passing_check_that_proves_nothing_is_flagged() {
-        let evidence = Evidence::of(&a4());
+        let mut evidence = Evidence::of(&a4());
+        assert_eq!(
+            flags(&evidence, PromptCategory::MultiFileChange),
+            [Flag::ReplyUnverified, Flag::NoTestChanged],
+            "what the check printed failed it"
+        );
+        // Attempts already logged may hold such a check as passed.
+        evidence.checks[0].passed = true;
         assert_eq!(
             flags(&evidence, PromptCategory::MultiFileChange),
             [

@@ -4,12 +4,15 @@
 //! A check is a `run_command` call whose command line runs a test suite,
 //! a build or a type check (see [`is_check_command`]). Its result counts
 //! only when the command ran to its end: a passing call, or a failing one
-//! that reports its exit code. A failing exit that a command after the
-//! check may have set (`pytest | grep Error`, `pytest; pyflakes x`) is
-//! decided by what the check printed instead. Calls the policy denied,
-//! that could not start, or that went to the background say nothing, as
-//! does such a failing exit whose output shows neither failures nor
-//! tests that passed.
+//! that reports its exit code. An exit status that may be another
+//! command's is decided by what the check printed instead: a passing one
+//! when the check's output is piped on or a command after it runs
+//! whatever it did (`pytest | tail`, `pytest; echo done`), a failing one
+//! when any command follows the check (`pytest | grep Error`, `pytest;
+//! pyflakes x`). Output that shows the tests never ran (`no tests ran`)
+//! and none passed is a failure. Calls the policy denied, that could not
+//! start, or that went to the background say nothing, as does an exit
+//! status decided by output that shows neither failures nor a pass.
 
 use aura_model::{ContentBlock, Message, ToolResultContent};
 use serde_json::Value;
@@ -23,6 +26,21 @@ const RUN_COMMAND: &str = "run_command";
 /// code of a failed `run_command` call that ran to its end.
 const EXIT_CODE: &str = "exit_code";
 
+/// Text a check prints when its tests never ran: none were collected, a
+/// path it was handed is not there, or the runner, a module the tests
+/// import or the script is missing.
+const NEVER_RAN: &[&str] = &[
+    "no tests ran",
+    "ERROR: file not found",
+    "No module named",
+    "ModuleNotFoundError",
+    "command not found",
+    "Missing script",
+];
+
+/// Zero-width characters a command may hold by a slip.
+const ZERO_WIDTH: [char; 5] = ['\u{200b}', '\u{200c}', '\u{200d}', '\u{2060}', '\u{feff}'];
+
 /// A check that ran to its end.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckSeen {
@@ -30,8 +48,8 @@ pub struct CheckSeen {
     pub command: String,
     /// Whether it passed.
     pub passed: bool,
-    /// Whether it exited with a failure that a command after it may have
-    /// set, so that what it printed decided whether it passed.
+    /// Whether its exit status may have been another command's, so that
+    /// what it printed decided whether it passed.
     pub by_output: bool,
     /// What it printed, as the model was shown it.
     pub output: String,
@@ -123,11 +141,15 @@ pub fn checks_placed(messages: &[Message]) -> Vec<(usize, CheckSeen)> {
 
 /// Pass or fail from the result of a check that ran `command`, `output`
 /// as the model was shown it, and whether what the check printed decided
-/// that; `None` when the command did not run to its end. A failing exit
-/// that a command after the check may have set ([`runs_after_check`]) is
-/// decided by what the check printed ([`output_verdict`]).
+/// that; `None` when the command did not run to its end. What the check
+/// printed ([`output_verdict`]) decides a passing exit that is not the
+/// check's own ([`exit_status_masked`]), and a failing exit that a
+/// command after the check may have set ([`runs_after_check`]).
 fn verdict(output: &str, is_error: bool, command: &str) -> Option<(bool, bool)> {
     if !is_error {
+        if exit_status_masked(command) {
+            return output_verdict(&printed(output)).map(|passed| (passed, true));
+        }
         return Some((true, false));
     }
     let exited = serde_json::from_str::<Value>(output).map_or_else(
@@ -150,24 +172,29 @@ fn verdict(output: &str, is_error: bool, command: &str) -> Option<(bool, bool)> 
 
 /// What a check printed says of how it went, when its exit status may be
 /// another command's: failed when it shows failures or errors
-/// ([`shows_failures`]), passed when it reports tests that passed
-/// ([`reports_passes`]), `None` when it shows neither.
+/// ([`shows_failures`]), or that the tests never ran ([`NEVER_RAN`]) and
+/// no pass; passed when it reports a pass ([`reports_passes`]); `None`
+/// when it shows neither.
 fn output_verdict(printed: &str) -> Option<bool> {
-    if shows_failures(printed) {
+    let passes = reports_passes(printed);
+    if shows_failures(printed) || (!passes && NEVER_RAN.iter().any(|text| printed.contains(text))) {
         Some(false)
     } else {
-        reports_passes(printed).then_some(true)
+        passes.then_some(true)
     }
 }
 
-/// Whether `printed` reports tests that passed: a count above zero before
-/// `passed` or `passing` (`12 passed in 0.46s`, `Tests: 3 passed`, `5
-/// passing`), cargo's `test result: ok`, or go's `ok` line for a package.
+/// Whether `printed` reports tests that passed or a build that finished:
+/// a count above zero before `passed` or `passing` (`12 passed in 0.46s`,
+/// `Tests: 3 passed`, `5 passing`), cargo's `test result: ok` or its
+/// `Finished … target(s) in` line, or go's `ok` line for a package.
 fn reports_passes(printed: &str) -> bool {
     if printed.contains("test result: ok")
-        || printed
-            .lines()
-            .any(|line| line.starts_with("ok  ") || line.starts_with("ok\t"))
+        || printed.lines().any(|line| {
+            line.starts_with("ok  ")
+                || line.starts_with("ok\t")
+                || (line.trim_start().starts_with("Finished ") && line.contains("target(s) in"))
+        })
     {
         return true;
     }
@@ -187,20 +214,43 @@ fn has_exit_code(result: &Value) -> bool {
 }
 
 /// The command line a `run_command` call runs: its script, or its program
-/// and arguments.
+/// and arguments, without the stray zero-width characters that
+/// `run_command` drops before running them ([`without_stray_zero_width`]).
 #[must_use]
 pub fn command_line(input: &Value) -> String {
     if let Some(script) = ["shell_script", "command"]
         .iter()
         .find_map(|key| input[*key].as_str())
     {
-        return script.to_string();
+        return without_stray_zero_width(script);
     }
     let mut words = vec![input["program"].as_str().unwrap_or_default()];
     if let Some(args) = input["args"].as_array() {
         words.extend(args.iter().filter_map(Value::as_str));
     }
-    words.join(" ")
+    without_stray_zero_width(&words.join(" "))
+}
+
+/// `text` without the zero-width characters next to ASCII or at its ends,
+/// where they can only be slips (`python\u{200b} -m pytest`). Between
+/// other characters they join emoji or shape a script's letters, so they
+/// stay. `run_command` drops the same ones, so the two must agree.
+fn without_stray_zero_width(text: &str) -> String {
+    if !text.contains(&ZERO_WIDTH[..]) {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let ascii_or_end =
+        |at: Option<usize>| at.and_then(|at| chars.get(at)).is_none_or(char::is_ascii);
+    chars
+        .iter()
+        .enumerate()
+        .filter(|&(at, c)| {
+            !ZERO_WIDTH.contains(c)
+                || !(ascii_or_end(at.checked_sub(1)) || ascii_or_end(Some(at + 1)))
+        })
+        .map(|(_, c)| *c)
+        .collect()
 }
 
 /// Whether `command` runs tests, a build or a type check in any of its
@@ -441,7 +491,7 @@ mod tests {
             call("b", json!({"command": "ls"})),
             result("b", "src", false),
             call("c", json!({"command": "cargo test | tail -3"})),
-            result("c", "fine", false),
+            result("c", "test result: ok. 3 passed; 0 failed", false),
             call("d", json!({"command": "cargo test", "background": true})),
             result("d", "started", false),
         ];
@@ -623,6 +673,102 @@ mod tests {
         assert!(!seen.passed && !seen.by_output, "{seen:?}");
     }
 
+    /// The checks of run a-2 of Compare #32 (Claude Haiku 5.5 on
+    /// `ansible-b748edea`) with what they printed, as its attempt entry
+    /// kept them. Each exited 0 through `tail`, and all three counted as
+    /// passed.
+    #[test]
+    fn a_passing_exit_another_command_set_goes_by_the_output() {
+        let ran = |command: &str, stdout: &str| {
+            let output = json!({"exit_code": 0, "ok": true, "stderr": "", "stdout": stdout});
+            last_check_seen(&[
+                call("1", json!({"command": command})),
+                result("1", &output.to_string(), false),
+            ])
+        };
+        let broken_import = ran(
+            "PYTHONPATH=lib python -c 'from ansible.module_utils.urls import prepare_multipart' ; \
+             PYTHONPATH=lib python -m pytest -q test/units/module_utils/urls 2>&1 | tail -3",
+            "/usr/bin/python: No module named pytest\n\nTraceback (most recent call last):\n  \
+             File \"<string>\", line 2, in <module>\n    from ansible.module_utils.urls import \
+             prepare_multipart\n  File \"/app/lib/ansible/module_utils/urls.py\", line 57, in \
+             <module>\n    import ansible.module_utils.six.moves.http_cookiejar as cookiejar\n\
+             ModuleNotFoundError: No module named 'ansible.module_utils.six.moves'\n",
+        )
+        .unwrap();
+        assert!(
+            !broken_import.passed && broken_import.by_output,
+            "{broken_import:?}"
+        );
+
+        let missing_path = ran(
+            "sh .swe/run printf 'hello file\\n' > /tmp/sample.txt && cd lib && python -c \
+             \"from ansible.module_utils.urls import prepare_multipart\" ; python -m pytest -q \
+             test/units/module_utils/urls 2>&1 | tail -3",
+            "--===============2249448000726196501==--\r\n\n=============== no tests ran in \
+             0.00s ===============\nERROR: file not found: test/units/module_utils/urls\n\n",
+        )
+        .unwrap();
+        assert!(
+            !missing_path.passed && missing_path.by_output,
+            "{missing_path:?}"
+        );
+
+        let passing = ran(
+            "sh .swe/run python -m pytest -q test/units/module_utils/urls 2>&1 | tail -3; cd lib \
+             && python -c \"from ansible.module_utils.urls import prepare_multipart as p; ct, b \
+             = p({'foo': 'bar'}); print(ct)\"",
+            "\n-- Docs: https://docs.pytest.org/en/latest/warnings.html\n========== 64 passed, \
+             1 warning in 0.34s ==========\nmultipart/form-data; \
+             boundary=\"===============891502969508264522==\"\n",
+        )
+        .unwrap();
+        assert!(passing.passed && passing.by_output, "{passing:?}");
+
+        let built = ran(
+            "cargo build 2>&1 | tail -1",
+            "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s\n",
+        )
+        .unwrap();
+        assert!(built.passed && built.by_output, "{built:?}");
+        assert_eq!(
+            ran(
+                "cargo test 2>&1 | tail -1",
+                "warning: unused variable: `x`\n"
+            ),
+            None,
+            "neither failures nor a pass"
+        );
+    }
+
+    #[test]
+    fn a_stray_zero_width_character_does_not_hide_a_check() {
+        let input = json!({"program": "sh", "args": [".swe/run", "python\u{200b} -m pytest -q \
+            test/units/module_utils/urls/test_prepare_multipart.py 2>&1 | tail -60"]});
+        assert_eq!(
+            command_line(&input),
+            "sh .swe/run python -m pytest -q \
+             test/units/module_utils/urls/test_prepare_multipart.py 2>&1 | tail -60"
+        );
+        let messages = [
+            call("1", input),
+            result(
+                "1",
+                r#"{"exit_code":0,"ok":true,"stderr":"","stdout":"..............    [100%]\n14 passed in 0.31s\n"}"#,
+                false,
+            ),
+        ];
+        let seen = last_check_seen(&messages).unwrap();
+        assert!(seen.passed && seen.by_output, "{seen:?}");
+        assert_eq!(
+            command_line(&json!({"shell_script": "\u{feff}cargo test\u{2060}"})),
+            "cargo test"
+        );
+        for kept in ["echo 👩\u{200d}💻", "echo क्\u{200d}ष"] {
+            assert_eq!(command_line(&json!({"command": kept})), kept);
+        }
+    }
+
     #[test]
     fn test_runner_summaries_report_passes() {
         for printed in [
@@ -631,6 +777,7 @@ mod tests {
             "  5 passing (20ms)",
             "test result: ok. 3 passed; 0 failed; 0 ignored",
             "PASS\nok  \tgithub.com/acme/parser\t0.012s",
+            "   Compiling parser v0.1.0\n    Finished `release` profile [optimized] target(s) in 4.2s",
         ] {
             assert!(reports_passes(printed), "{printed}");
         }
@@ -639,6 +786,7 @@ mod tests {
             "all tests passed",
             "test_parse PASSED",
             "/usr/local/bin/python: No module named pyflakes",
+            "Finished in 0.01 seconds (files took 0.1 seconds to load)",
             "",
         ] {
             assert!(!reports_passes(printed), "{printed}");

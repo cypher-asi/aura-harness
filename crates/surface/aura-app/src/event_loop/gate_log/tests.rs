@@ -169,7 +169,10 @@ fn a_runs_attempts_are_rebuilt_from_its_record_and_session() {
         (Some(Difficulty::Hard), Some(false), true, true),
         "the label of the prompt the turn began with"
     );
-    assert!(flags(&second.evidence, second.category).contains(&Flag::MaskedCheckWithFailures));
+    let check = second.evidence.last_check().unwrap();
+    assert!(check.command.starts_with("pytest -q 2>&1 | grep"));
+    assert!(!check.passed, "the pipe exited 0, but the check printed an error");
+    assert!(flags(&second.evidence, second.category).contains(&Flag::ReplyUnverified));
 }
 
 #[test]
