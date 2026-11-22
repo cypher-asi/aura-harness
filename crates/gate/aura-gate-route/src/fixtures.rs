@@ -93,10 +93,7 @@ pub(crate) fn no_fast_tier(candidates: &[Candidate]) -> Vec<Candidate> {
 
 /// Routing by success rate only, without exploring.
 pub(crate) fn no_exploring() -> GateConfig {
-    GateConfig {
-        explore_rate: 0.0,
-        ..GateConfig::defaults()
-    }
+    GateConfig::defaults().without_exploring()
 }
 
 /// A turn asking for `category` the classifier found easy.

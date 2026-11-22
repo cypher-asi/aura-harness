@@ -8,7 +8,7 @@ license.workspace = true
 
 [features]
 # `GateLive::learn`, which fills the table for other crates' tests.
-test-support = []
+test-support = ["aura-gate-route/test-support"]
 
 [dependencies]
 aura-agent = { path = "../../agent/aura-agent" }

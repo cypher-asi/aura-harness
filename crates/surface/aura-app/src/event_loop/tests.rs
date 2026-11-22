@@ -2672,10 +2672,9 @@ fn reviewing_gate(review: aura_config::ReviewMode) -> (GateLive, TempDir) {
         log.append(&Line::Truth(truth)).unwrap();
     }
     let gate = GateLive::new(aura_config::GateConfig {
-        explore_rate: 0.0,
         review,
         review_sample: 1.0,
-        ..aura_config::GateConfig::defaults()
+        ..aura_config::GateConfig::defaults().without_exploring()
     });
     gate.log_attempts_to(log);
     assert_eq!(
@@ -3059,8 +3058,7 @@ async fn gate_explores_the_next_cheaper_model_and_records_its_propensity() {
 async fn the_next_turn_uses_what_the_last_outcome_taught_gate() {
     let gate = GateLive::new(aura_config::GateConfig {
         min_tries: 1,
-        explore_rate: 0.0,
-        ..aura_config::GateConfig::defaults()
+        ..aura_config::GateConfig::defaults().without_exploring()
     });
     let (fixture, _commands) = fixture_with_gate(gate);
     let mut b = borrowed(&fixture);

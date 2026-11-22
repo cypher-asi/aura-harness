@@ -236,10 +236,7 @@ fn recorded(task: &str, model: &str) -> (f64, bool) {
 
 /// Gate's routing in a benchmark: no exploring.
 fn settings() -> GateConfig {
-    GateConfig {
-        explore_rate: 0.0,
-        ..GateConfig::defaults()
-    }
+    GateConfig::defaults().without_exploring()
 }
 
 /// The benchmark's tasks over again on `stats`: each goes where Gate
