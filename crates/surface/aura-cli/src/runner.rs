@@ -62,6 +62,23 @@ pub fn desktop_launch(cli: &Cli) -> Option<DesktopArgs> {
     }
 }
 
+/// What each thread of the async runtime runs as it starts, when `cli`
+/// runs agents under the terminal UI (the window opens before any
+/// runtime does): the UI has the main thread, and the runtime's threads,
+/// which run the agents, lower themselves below it
+/// ([`aura_app::priority`]). `None` for everything else, which has no UI
+/// to keep responsive.
+#[must_use]
+pub fn runtime_thread_start(cli: &Cli) -> Option<impl Fn() + Send + Sync + 'static> {
+    let terminal = cli.print.is_none()
+        && match &cli.command {
+            Some(Commands::Run(args)) => args.ui == UiMode::Terminal,
+            None => true,
+            Some(_) => false,
+        };
+    terminal.then(aura_app::priority::agent_thread_start)
+}
+
 /// Whether a window can open: always on macOS and Windows, and on other
 /// systems when an X11 or Wayland display is set.
 fn display_available() -> bool {
@@ -419,6 +436,22 @@ mod tests {
     #[test]
     fn test_hello_world_message_exact() {
         assert_eq!(hello_world_message(), "Hello, World!");
+    }
+
+    #[test]
+    fn only_the_terminal_ui_runs_agents_below_itself() {
+        let lowers = |args: &[&str]| {
+            let cli = Cli::try_parse_from(args).expect("parses");
+            runtime_thread_start(&cli).is_some()
+        };
+        assert!(lowers(&["aura", "--terminal"]));
+        assert!(lowers(&["aura", "run"]));
+        assert!(
+            !lowers(&["aura", "run", "--ui", "none"]),
+            "the headless node"
+        );
+        assert!(!lowers(&["aura", "-p", "hi"]));
+        assert!(!lowers(&["aura", "whoami"]));
     }
 
     #[test]

@@ -11,7 +11,8 @@
 //! it waits for the display; the next frame is drawn once that one was
 //! shown. Waiting on the display never holds up input or commands.
 //!
-//! Commands come from the session's thread. They are left in an inbox
+//! Commands come from the session's threads, which run below the window
+//! in priority. A thread of the window's own takes them into an inbox,
 //! and the loop is woken once for however many are waiting.
 
 use super::keys::Press;
@@ -127,7 +128,6 @@ struct Handler {
     shell: Shell,
     inbox: Arc<Inbox>,
     proxy: EventLoopProxy<Wake>,
-    runtime: tokio::runtime::Handle,
     window: Option<Arc<Window>>,
     screen: Option<Screen>,
     clipboard: Option<arboard::Clipboard>,
@@ -161,16 +161,22 @@ pub fn run(handles: Handles, options: &Options, launched: Instant) -> anyhow::Re
     let proxy = event_loop.create_proxy();
     let inbox = Arc::new(Inbox::default());
     let waker = proxy.clone();
-    runtime.spawn(pump(handles.commands, Arc::clone(&inbox), move |wake| {
-        waker.send_event(wake).is_ok()
-    }));
+    let commands = handles.commands;
+    let shared = Arc::clone(&inbox);
+    std::thread::Builder::new()
+        .name("aura-intake".to_string())
+        .spawn(move || {
+            futures::executor::block_on(pump(commands, shared, move |wake| {
+                waker.send_event(wake).is_ok()
+            }));
+        })
+        .context("starting the thread that takes commands")?;
     let waker = proxy.clone();
     runtime.spawn(quit_on_signal(move |wake| waker.send_event(wake).is_ok()));
     let mut handler = Handler {
         shell: Shell::new(handles.events, options, launched),
         inbox,
         proxy,
-        runtime,
         window: None,
         screen: None,
         clipboard: None,
@@ -333,24 +339,35 @@ impl Handler {
     }
 
     /// Run `editor` on `path` for a tab, and wake the loop when it exits.
-    fn edit(&self, tab: u64, editor: &str, path: PathBuf) {
+    /// It is started from a thread of the window's, so it runs at the
+    /// window's priority rather than the agents'.
+    fn edit(&mut self, tab: u64, editor: &str, path: PathBuf) {
         let mut words = editor.split_whitespace().map(str::to_string);
         let program = words.next().unwrap_or_default();
         let arguments: Vec<String> = words.collect();
         let proxy = self.proxy.clone();
-        self.runtime.spawn(async move {
-            let status = tokio::process::Command::new(program)
-                .args(arguments)
-                .arg(&path)
-                .status()
-                .await;
-            let result = match status {
-                Ok(status) if status.success() => Ok(()),
-                Ok(status) => Err(format!("editor exited with {status}")),
-                Err(e) => Err(e.to_string()),
-            };
-            let _ = proxy.send_event(Wake::EditorClosed { tab, path, result });
-        });
+        let edited = path.clone();
+        let started = std::thread::Builder::new()
+            .name("aura-editor".to_string())
+            .spawn(move || {
+                let status = std::process::Command::new(program)
+                    .args(arguments)
+                    .arg(&edited)
+                    .status();
+                let result = match status {
+                    Ok(status) if status.success() => Ok(()),
+                    Ok(status) => Err(format!("editor exited with {status}")),
+                    Err(e) => Err(e.to_string()),
+                };
+                let _ = proxy.send_event(Wake::EditorClosed {
+                    tab,
+                    path: edited,
+                    result,
+                });
+            });
+        if let Err(error) = started {
+            self.shell.editor_closed(tab, path, Err(error.to_string()));
+        }
     }
 }
 
