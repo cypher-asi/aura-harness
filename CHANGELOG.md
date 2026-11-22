@@ -7,6 +7,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### `aura -p` keeps the work's difficulty after a nudge or a move up
+
+##### Fixed
+
+- In `aura -p`, the attempt that runs the check Gate asked for, and
+  the attempt on a stronger model after one failed, carry the
+  difficulty the classifier gave the work, as they do in the TUI. They
+  had none, so hard work whose check passed only once Gate asked for
+  it was not reviewed as hard work is, and their lines in Gate's
+  attempt log had no difficulty.
+- In `aura -p`, the attempt that checks a change is led, or not, as
+  the turn that made the change was. It used to decide that again,
+  from turns of every difficulty.
+
 ### A run's cost reward is counted in dollars
 
 ##### Changed

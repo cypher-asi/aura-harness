@@ -1409,7 +1409,7 @@ async fn run_routed(
 
 #[tokio::test]
 async fn a_change_made_without_a_check_is_checked_before_the_turn_ends() {
-    use aura_core_types::OutcomeSignal;
+    use aura_core_types::{Difficulty, OutcomeSignal};
     let provider = MockProvider::new()
         .with_response(MockResponse::text("debugging medium"))
         .with_response(no_criteria())
@@ -1496,6 +1496,17 @@ async fn a_change_made_without_a_check_is_checked_before_the_turn_ends() {
     assert!(
         outcomes[0].cost_usd > unchecked.cost_usd,
         "and its cost includes the turn's"
+    );
+    let ran: Vec<(&str, Option<Difficulty>)> = attempts
+        .iter()
+        .map(|a| (a.model.as_str(), a.difficulty))
+        .collect();
+    assert!(
+        ran.iter().any(|(model, _)| *model == GATE_OPUS)
+            && ran
+                .iter()
+                .all(|(_, difficulty)| *difficulty == Some(Difficulty::Medium)),
+        "the check it was asked for and the stronger model keep the work's difficulty: {ran:?}"
     );
 }
 

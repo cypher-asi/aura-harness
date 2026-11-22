@@ -185,14 +185,16 @@ impl TurnOutcome {
     }
 }
 
-/// What a turn carries on from the one before it.
+/// What a turn carries on from the one before it, which ran under the
+/// `Terms` each carries.
 enum Carry {
     /// Work a weaker model failed at, on this model, with the work's
-    /// category.
-    Escalate(Decision, PromptCategory),
+    /// category; it keeps the work's difficulty.
+    Escalate(Decision, PromptCategory, Terms),
     /// The same model, asked to check the change of the turn that ended
-    /// as this; the new turn's `Outcome` takes its place.
-    Nudge(OutcomePayload),
+    /// as this; the new turn's `Outcome` takes its place, and it is done
+    /// the same way, of the same difficulty.
+    Nudge(OutcomePayload, Terms),
 }
 
 /// What Gate's follow-up made of a turn.
@@ -343,7 +345,7 @@ impl Headless {
         let mut attempt_start = 0;
         loop {
             totals.agent_turns += 1;
-            let nudged = matches!(carry, Some(Carry::Nudge(_)));
+            let nudged = matches!(carry, Some(Carry::Nudge(..)));
             let mut outcome = self
                 .run_turn(
                     session,
@@ -429,7 +431,7 @@ impl Headless {
                     next.push_str(unseen);
                 }
                 prompt = next;
-                carry = Some(Carry::Nudge(ended));
+                carry = Some(Carry::Nudge(ended, outcome.terms));
                 continue;
             }
             if answering && (outcome.stop.is_none() || outcome.can_go_on) {
@@ -446,7 +448,7 @@ impl Headless {
                     }
                     output.event(&StreamEvent::Notice { text: &next });
                     prompt = format!("{}{next}", SteerSource::Harness.prefix());
-                    carry = Some(Carry::Escalate(decision, ended.category));
+                    carry = Some(Carry::Escalate(decision, ended.category, outcome.terms));
                     continue;
                 }
             }
@@ -832,6 +834,7 @@ impl Headless {
     /// `carry` is set for a turn that goes on from the one before: with
     /// work a weaker model failed at, or on the same model asked to check
     /// its change, which the `Outcome` then speaks for, its cost included.
+    /// Either keeps the difficulty the classifier gave the work.
     #[allow(clippy::too_many_arguments)]
     async fn run_turn(
         &mut self,
@@ -852,10 +855,12 @@ impl Headless {
             config.max_iterations = max;
         }
         let carried = carry.is_some();
-        let (escalation, nudged) = match carry {
-            Some(Carry::Escalate(decision, category)) => (Some((decision, category)), None),
-            Some(Carry::Nudge(ended)) => (None, Some(ended)),
-            None => (None, None),
+        let (escalation, nudged, earlier) = match carry {
+            Some(Carry::Escalate(decision, category, terms)) => {
+                (Some((decision, category)), None, Some(terms))
+            }
+            Some(Carry::Nudge(ended, terms)) => (None, Some(ended), Some(terms)),
+            None => (None, None, None),
         };
         let routing = match &nudged {
             Some(ended) => {
@@ -874,18 +879,25 @@ impl Headless {
             Err(problem) => return TurnOutcome::stopped(problem, session.messages.len()),
         };
         let routed = category.is_some();
+        let difficulty = payload
+            .difficulty
+            .or(earlier.and_then(|terms| terms.difficulty));
         if let (Some(lead), Some(category)) = (lead, category) {
             let explore = payload.route.reason != RouteReason::Escalate && nudged.is_none();
-            let led = self
-                .hub
-                .gate
-                .way((category, payload.difficulty), &config.model, explore)
-                .led;
+            let kept = earlier
+                .filter(|_| nudged.is_some())
+                .and_then(|terms| terms.led);
+            let led = kept.unwrap_or_else(|| {
+                self.hub
+                    .gate
+                    .way((category, difficulty), &config.model, explore)
+                    .led
+            });
             session.lead = lead.apply(led, &mut config, &mut tools);
             payload.led = Some(led);
         }
         let terms = Terms {
-            difficulty: payload.difficulty,
+            difficulty,
             led: payload.led,
             routed,
         };
