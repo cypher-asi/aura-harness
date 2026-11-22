@@ -1750,4 +1750,298 @@ mod tests {
         picked["source"] = "picked".into();
         assert!(serde_json::from_value::<Line>(picked).is_ok());
     }
+
+    const SONNET: &str = "claude/claude-sonnet-5-5";
+    const OPUS: &str = "claude/claude-opus-5-5";
+    const HAIKU: &str = "claude/claude-haiku-4-5";
+
+    /// The sample log: each kind of line as written today, a blank line,
+    /// lines older versions wrote, and two lines that are not lines of
+    /// the log.
+    const LOG: &str = include_str!("fixtures/log.jsonl");
+
+    /// [`tiered`]'s report as text.
+    const RENDERED: &str = include_str!("fixtures/rendered.txt");
+
+    /// [`sample`]'s report as `aura gate eval --json` prints it.
+    const REPORT: &str = include_str!("fixtures/report.json");
+
+    /// An attempt with every field a line can hold.
+    fn full_attempt() -> Attempt {
+        let paths = vec!["src/app.py".to_string(), "tests/test_app.py".to_string()];
+        Attempt {
+            at_ms: 1_700_000_000_000,
+            agent: "a1b2".to_string(),
+            prompt_tx: "c3d4".to_string(),
+            led: Some(true),
+            cost_usd: 0.125,
+            subtask_cost_usd: 0.25,
+            evidence: Evidence {
+                calls: 7,
+                commands: 3,
+                checks_run: 2,
+                nudges: 1,
+                files_edited: paths.clone(),
+                files_written: vec!["tests/test_app.py".to_string()],
+                files_changed: Some(2),
+                changed_paths: Some(paths),
+                changed_after_check: true,
+                hit_limit: Some(false),
+                ..evidence(
+                    "pytest -q",
+                    "9 passed",
+                    "Done; \"the tests\" pass.\nAll of them.",
+                )
+            },
+            backfilled: true,
+            ..attempt("p1", OutcomeSignal::ChecksPassed, Evidence::default())
+        }
+    }
+
+    /// A review with every field a line can hold.
+    fn full_review() -> Review {
+        use aura_gate_judge::criteria::{Criterion, Kind as CriterionKind, Status};
+        let criterion = |text: &str, kind, reference: Option<&str>| Criterion {
+            text: text.to_string(),
+            kind,
+            reference: reference.map(str::to_string),
+        };
+        Review {
+            signs: vec![Flag::ShellEdit, Flag::StaleCheck],
+            criteria: vec![
+                Checked {
+                    criterion: criterion("Prints `ok`", CriterionKind::ExactOutput, Some("ok\n")),
+                    status: Some(Status::Unmet),
+                },
+                Checked {
+                    criterion: criterion("Raises on bad input", CriterionKind::Error, None),
+                    status: None,
+                },
+            ],
+            acted: true,
+            replayed: true,
+            ..review("p1", Answer::Model, "plain+criteria")
+        }
+    }
+
+    /// A truth that came from the user rather than a run.
+    fn users(prompt: &str, source: TruthSource, passed: bool) -> Truth {
+        Truth {
+            compare: None,
+            run: None,
+            task: None,
+            ..truth(prompt, source, passed)
+        }
+    }
+
+    /// The lines [`LOG`] starts with: each kind with every field it can
+    /// hold, then with every field it can leave out.
+    fn written() -> Vec<Line> {
+        let copy = |root: &str, git_dir: Option<&str>, baseline: &str| CopyAt {
+            root: PathBuf::from(root),
+            git_dir: git_dir.map(PathBuf::from),
+            baseline: baseline.to_string(),
+        };
+        let kept = copy(
+            "/home/me/.aura/compare/c1/a-4",
+            Some("/home/me/.aura/compare/c1/a-4.git"),
+            "4b825dc6",
+        );
+        vec![
+            Line::Attempt(full_attempt()),
+            Line::Attempt(Attempt {
+                difficulty: None,
+                led: None,
+                routed: false,
+                ..attempt("p2", OutcomeSignal::Unavailable, Evidence::default())
+            }),
+            Line::Truth(Truth {
+                copy: Some(kept),
+                ..truth("p1", TruthSource::TaskCheck, false)
+            }),
+            Line::Truth(Truth {
+                copy: Some(copy("/work/wt", None, "abc")),
+                ..truth("p1", TruthSource::TaskCheck, true)
+            }),
+            Line::Truth(users("p1", TruthSource::RetryStronger, false)),
+            Line::Review(full_review()),
+            Line::Review(Review {
+                signs: Vec::new(),
+                replayed: false,
+                ..review("p1", Answer::Other, "plain")
+            }),
+        ]
+    }
+
+    /// The lines of [`LOG`] older versions wrote, as they read today.
+    fn older() -> Vec<Line> {
+        vec![
+            Line::Attempt(Attempt {
+                at_ms: 5,
+                prompt_tx: "p0".to_string(),
+                difficulty: None,
+                led: None,
+                model: "claude/claude-sonnet-4-5".to_string(),
+                success: None,
+                cost_usd: 0.5,
+                latency_ms: 1_000,
+                evidence: Evidence {
+                    calls: 1,
+                    reply: "Done.".to_string(),
+                    ..Evidence::default()
+                },
+                ..attempt("p0", OutcomeSignal::Unavailable, Evidence::default())
+            }),
+            Line::Truth(Truth {
+                at_ms: 6,
+                compare: Some("Compare #3".to_string()),
+                run: Some("b-1".to_string()),
+                task: None,
+                ..truth("p0", TruthSource::Picked, true)
+            }),
+        ]
+    }
+
+    /// A log with every part of a report in it.
+    fn sample() -> Vec<Line> {
+        vec![
+            // Let stand, wrong, and flagged.
+            Line::Attempt(attempt("p1", OutcomeSignal::ChecksPassed, masked())),
+            Line::Truth(truth("p1", TruthSource::TaskCheck, false)),
+            // Let stand and right.
+            Line::Attempt(attempt("p2", OutcomeSignal::ChecksPassed, clean())),
+            Line::Truth(truth("p2", TruthSource::TaskCheck, true)),
+            // Another model's work, right but flagged.
+            Line::Attempt(Attempt {
+                model: HAIKU.to_string(),
+                ..attempt(
+                    "p3",
+                    OutcomeSignal::ChecksPassed,
+                    evidence("pytest -q | tail -5", "9 passed", "Done."),
+                )
+            }),
+            Line::Truth(truth("p3", TruthSource::TaskCheck, true)),
+            // Nothing to judge by, and the user rewound it.
+            Line::Attempt(attempt(
+                "p4",
+                OutcomeSignal::Unavailable,
+                Evidence::default(),
+            )),
+            Line::Truth(users("p4", TruthSource::Rewind, false)),
+            // Wrong, with no sign raised.
+            Line::Attempt(attempt("p5", OutcomeSignal::ChecksPassed, clean())),
+            Line::Truth(truth("p5", TruthSource::TaskCheck, false)),
+            // Counted as failed, and right.
+            Line::Attempt(attempt("p6", OutcomeSignal::ChecksFailed, clean())),
+            Line::Truth(truth("p6", TruthSource::TaskCheck, true)),
+            // On the strongest tier, and not routed.
+            Line::Attempt(Attempt {
+                model: OPUS.to_string(),
+                routed: false,
+                ..attempt("p7", OutcomeSignal::ChecksPassed, stale())
+            }),
+            Line::Truth(truth("p7", TruthSource::TaskCheck, true)),
+            // Nothing proved it.
+            Line::Attempt(attempt("p8", OutcomeSignal::ChecksPassed, masked())),
+            Line::Review(review("p1", Answer::Model, "plain")),
+            Line::Review(review("p2", Answer::Ok, "plain")),
+            Line::Review(review("p4", Answer::Model, "plain")),
+            // Sent back, by another reviewer asked another way.
+            Line::Review(Review {
+                judge: SONNET.to_string(),
+                cost_usd: 0.125,
+                signs: vec![Flag::StaleCheck],
+                acted: true,
+                replayed: false,
+                ..review("p5", Answer::Model, "thinking")
+            }),
+            // Of an attempt the log does not hold.
+            Line::Review(review("gone", Answer::Model, "plain")),
+        ]
+    }
+
+    /// [`sample`] with enough attempts for a sign in each tier.
+    fn tiered() -> Vec<Line> {
+        let mut lines = sample();
+        lines.extend(proven("m", 10, 8, &masked()));
+        lines.extend(proven("s", 6, 2, &stale()));
+        lines.extend(proven("c", 20, 0, &clean()));
+        lines
+    }
+
+    #[test]
+    fn each_kind_of_line_is_written_as_the_sample_log_holds_it() {
+        let written = written();
+        let json: Vec<String> = written
+            .iter()
+            .map(|line| serde_json::to_string(line).unwrap())
+            .collect();
+        let held: Vec<&str> = LOG.lines().take(written.len()).collect();
+        assert_eq!(json, held);
+    }
+
+    #[test]
+    fn appending_writes_each_line_as_the_sample_log_holds_it() {
+        let dir = std::env::temp_dir().join(format!("aura-attempt-pin-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let log = AttemptLog::in_data_dir(&dir);
+        let written = written();
+        for line in &written {
+            log.append(line).unwrap();
+        }
+        let held: String = LOG
+            .lines()
+            .take(written.len())
+            .map(|line| format!("{line}\n"))
+            .collect();
+        assert_eq!(fs::read_to_string(log.path()).unwrap(), held);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_sample_log_reads_back_as_written() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fixtures/log.jsonl");
+        let mut lines = written();
+        lines.extend(older());
+        assert_eq!(
+            read(&path).unwrap(),
+            Read {
+                lines,
+                unreadable: 2
+            }
+        );
+    }
+
+    #[test]
+    fn a_report_renders_as_pinned() {
+        assert_eq!(evaluate(&tiered()).render(), RENDERED);
+    }
+
+    #[test]
+    fn a_report_serializes_as_pinned() {
+        let json = serde_json::to_string_pretty(&evaluate(&sample())).unwrap();
+        assert_eq!(format!("{json}\n"), REPORT);
+        let passed = evaluate_where(
+            &sample(),
+            &Filter {
+                passed: true,
+                ..Filter::default()
+            },
+        );
+        assert_eq!(
+            serde_json::to_value(&passed.reviews).unwrap(),
+            serde_json::json!([
+                {
+                    "variant": "plain", "judge": OPUS, "replayed": true,
+                    "reviewed": 2, "known": 2, "wrong": 1,
+                    "unfinished": 1, "caught": 1, "false_alarms": 0, "cost_usd": 0.1
+                },
+                {
+                    "variant": "thinking", "judge": SONNET, "replayed": false,
+                    "reviewed": 1, "known": 1, "wrong": 1,
+                    "unfinished": 1, "caught": 1, "false_alarms": 0, "cost_usd": 0.125
+                }
+            ])
+        );
+    }
 }

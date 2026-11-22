@@ -1,0 +1,325 @@
+{
+  "attempts": 8,
+  "routed": 7,
+  "verdicts": {
+    "known": 7,
+    "right": 4,
+    "false_passes": 2,
+    "unjudged_failures": 1,
+    "false_failures": 1
+  },
+  "models": {
+    "claude/claude-haiku-4-5": {
+      "known": 1,
+      "right": 1,
+      "false_passes": 0,
+      "unjudged_failures": 0,
+      "false_failures": 0
+    },
+    "claude/claude-opus-5-5": {
+      "known": 1,
+      "right": 1,
+      "false_passes": 0,
+      "unjudged_failures": 0,
+      "false_failures": 0
+    },
+    "claude/claude-sonnet-5-5": {
+      "known": 4,
+      "right": 1,
+      "false_passes": 2,
+      "unjudged_failures": 1,
+      "false_failures": 0
+    }
+  },
+  "stood": 6,
+  "stood_wrong": 3,
+  "flags": [
+    {
+      "flag": "masked_check",
+      "raised": 2,
+      "caught": 1,
+      "false_alarms": 1
+    },
+    {
+      "flag": "check_output_failures",
+      "raised": 1,
+      "caught": 1,
+      "false_alarms": 0
+    },
+    {
+      "flag": "masked_check_with_failures",
+      "raised": 1,
+      "caught": 1,
+      "false_alarms": 0
+    },
+    {
+      "flag": "reply_unverified",
+      "raised": 1,
+      "caught": 1,
+      "false_alarms": 0
+    },
+    {
+      "flag": "reply_failures",
+      "raised": 0,
+      "caught": 0,
+      "false_alarms": 0
+    },
+    {
+      "flag": "no_check",
+      "raised": 1,
+      "caught": 1,
+      "false_alarms": 0
+    },
+    {
+      "flag": "no_changes",
+      "raised": 0,
+      "caught": 0,
+      "false_alarms": 0
+    },
+    {
+      "flag": "gave_up",
+      "raised": 0,
+      "caught": 0,
+      "false_alarms": 0
+    },
+    {
+      "flag": "hit_limit",
+      "raised": 0,
+      "caught": 0,
+      "false_alarms": 0
+    },
+    {
+      "flag": "shell_edit",
+      "raised": 0,
+      "caught": 0,
+      "false_alarms": 0
+    },
+    {
+      "flag": "stale_check",
+      "raised": 1,
+      "caught": 0,
+      "false_alarms": 1
+    },
+    {
+      "flag": "reply_not_covered",
+      "raised": 0,
+      "caught": 0,
+      "false_alarms": 0
+    },
+    {
+      "flag": "no_test_changed",
+      "raised": 0,
+      "caught": 0,
+      "false_alarms": 0
+    },
+    {
+      "flag": "own_tests_only",
+      "raised": 0,
+      "caught": 0,
+      "false_alarms": 0
+    }
+  ],
+  "scored": [
+    {
+      "run": "Compare #22 a-4",
+      "task": "ansible-d33bedc4",
+      "model": "claude/claude-sonnet-5-5",
+      "routed": true,
+      "signal": "checks_passed",
+      "right": false,
+      "source": "task_check",
+      "flags": [
+        "masked_check",
+        "check_output_failures",
+        "masked_check_with_failures",
+        "reply_unverified"
+      ]
+    },
+    {
+      "run": "Compare #22 a-4",
+      "task": "ansible-d33bedc4",
+      "model": "claude/claude-sonnet-5-5",
+      "routed": true,
+      "signal": "checks_passed",
+      "right": true,
+      "source": "task_check",
+      "flags": []
+    },
+    {
+      "run": "Compare #22 a-4",
+      "task": "ansible-d33bedc4",
+      "model": "claude/claude-haiku-4-5",
+      "routed": true,
+      "signal": "checks_passed",
+      "right": true,
+      "source": "task_check",
+      "flags": [
+        "masked_check"
+      ]
+    },
+    {
+      "run": "",
+      "task": "",
+      "model": "claude/claude-sonnet-5-5",
+      "routed": true,
+      "signal": "unavailable",
+      "right": false,
+      "source": "rewind",
+      "flags": [
+        "no_check"
+      ]
+    },
+    {
+      "run": "Compare #22 a-4",
+      "task": "ansible-d33bedc4",
+      "model": "claude/claude-sonnet-5-5",
+      "routed": true,
+      "signal": "checks_passed",
+      "right": false,
+      "source": "task_check",
+      "flags": []
+    },
+    {
+      "run": "Compare #22 a-4",
+      "task": "ansible-d33bedc4",
+      "model": "claude/claude-opus-5-5",
+      "routed": false,
+      "signal": "checks_passed",
+      "right": true,
+      "source": "task_check",
+      "flags": [
+        "stale_check"
+      ]
+    }
+  ],
+  "tiers": {
+    "known": 5,
+    "wrong": 3,
+    "signs": [
+      {
+        "flag": "masked_check",
+        "raised": 2,
+        "wrong": 1,
+        "expected": 1.2,
+        "tier": "log"
+      },
+      {
+        "flag": "check_output_failures",
+        "raised": 1,
+        "wrong": 1,
+        "expected": 0.6,
+        "tier": "log"
+      },
+      {
+        "flag": "masked_check_with_failures",
+        "raised": 1,
+        "wrong": 1,
+        "expected": 0.6,
+        "tier": "log"
+      },
+      {
+        "flag": "reply_unverified",
+        "raised": 1,
+        "wrong": 1,
+        "expected": 0.6,
+        "tier": "log"
+      },
+      {
+        "flag": "reply_failures",
+        "raised": 0,
+        "wrong": 0,
+        "expected": 0.0,
+        "tier": "log"
+      },
+      {
+        "flag": "no_check",
+        "raised": 1,
+        "wrong": 1,
+        "expected": 0.6,
+        "tier": "log"
+      },
+      {
+        "flag": "no_changes",
+        "raised": 0,
+        "wrong": 0,
+        "expected": 0.0,
+        "tier": "log"
+      },
+      {
+        "flag": "gave_up",
+        "raised": 0,
+        "wrong": 0,
+        "expected": 0.0,
+        "tier": "log"
+      },
+      {
+        "flag": "hit_limit",
+        "raised": 0,
+        "wrong": 0,
+        "expected": 0.0,
+        "tier": "log"
+      },
+      {
+        "flag": "shell_edit",
+        "raised": 0,
+        "wrong": 0,
+        "expected": 0.0,
+        "tier": "log"
+      },
+      {
+        "flag": "stale_check",
+        "raised": 1,
+        "wrong": 1,
+        "expected": 0.6,
+        "tier": "log"
+      },
+      {
+        "flag": "reply_not_covered",
+        "raised": 0,
+        "wrong": 0,
+        "expected": 0.0,
+        "tier": "log"
+      },
+      {
+        "flag": "no_test_changed",
+        "raised": 0,
+        "wrong": 0,
+        "expected": 0.0,
+        "tier": "log"
+      },
+      {
+        "flag": "own_tests_only",
+        "raised": 0,
+        "wrong": 0,
+        "expected": 0.0,
+        "tier": "log"
+      }
+    ]
+  },
+  "reviews": [
+    {
+      "variant": "plain",
+      "judge": "claude/claude-opus-5-5",
+      "replayed": true,
+      "reviewed": 3,
+      "known": 3,
+      "wrong": 2,
+      "unfinished": 2,
+      "caught": 2,
+      "false_alarms": 0,
+      "cost_usd": 0.15000000000000002
+    },
+    {
+      "variant": "thinking",
+      "judge": "claude/claude-sonnet-5-5",
+      "replayed": false,
+      "reviewed": 1,
+      "known": 1,
+      "wrong": 1,
+      "unfinished": 1,
+      "caught": 1,
+      "false_alarms": 0,
+      "cost_usd": 0.125
+    }
+  ]
+}
