@@ -173,7 +173,7 @@ impl Soft {
         if buffer.len() * 4 != self.pixels.len() {
             return Ok(false);
         }
-        pack(&self.pixels, &mut buffer);
+        pack_rows(&self.pixels, &mut buffer, size.0 as usize);
         before_showing();
         buffer
             .present()
@@ -181,6 +181,22 @@ impl Soft {
             .context("showing the window's pixels")?;
         Ok(true)
     }
+}
+
+/// [`pack`] rows `width` pixels wide, in as many bands, a thread each, as
+/// [`raster::paint`] paints them in.
+fn pack_rows(rgba: &[u8], out: &mut [u32], width: usize) {
+    let height = out.len().checked_div(width).unwrap_or(0);
+    let words = height.div_ceil(raster::bands(height)) * width;
+    if words >= out.len() {
+        pack(rgba, out);
+        return;
+    }
+    std::thread::scope(|scope| {
+        for (out, rgba) in out.chunks_mut(words).zip(rgba.chunks(words * 4)) {
+            scope.spawn(move || pack(rgba, out));
+        }
+    });
 }
 
 /// RGBA bytes as the words a window's pixels are: red, green and blue
@@ -200,5 +216,17 @@ mod tests {
         let mut out = [0; 2];
         pack(&[0x12, 0x34, 0x56, 0xff, 0xff, 0x00, 0x01, 0x80], &mut out);
         assert_eq!(out, [0x0012_3456, 0x00ff_0001]);
+    }
+
+    #[test]
+    fn rows_packed_in_bands_are_packed_as_a_whole() {
+        let (width, height) = (7, 300);
+        let rgba: Vec<u8> = (0..width * height * 4)
+            .map(|i| u8::try_from(i % 251).unwrap_or(0))
+            .collect();
+        let (mut banded, mut whole) = (vec![0; width * height], vec![0; width * height]);
+        pack_rows(&rgba, &mut banded, width);
+        pack(&rgba, &mut whole);
+        assert!(banded == whole);
     }
 }
