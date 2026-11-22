@@ -11,7 +11,7 @@
 //! recomputes from the store.
 
 use super::shared::maybe_summarise_effect_payload;
-use crate::context::hash_tx_with_window;
+use crate::context::hash_tx_with_hashes;
 use crate::kernel::{
     ApprovalRequiredInfo, Kernel, PolicyDecisionRef, ProcessResult, ToolDecision, ToolOutput,
 };
@@ -49,8 +49,8 @@ impl Kernel {
         token: Option<DequeueToken>,
     ) -> Result<RecordEntry, crate::KernelError> {
         let seq = self.next_seq()?;
-        let window = self.load_window(seq)?;
-        let context_hash = hash_tx_with_window(&tx, &window)?;
+        let window = self.window_hashes(seq)?;
+        let context_hash = hash_tx_with_hashes(&tx, &window)?;
         let entry = fill(RecordEntry::builder(seq, tx).context_hash(context_hash)).build();
         match token {
             Some(token) => self

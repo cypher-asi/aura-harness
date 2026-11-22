@@ -5,9 +5,10 @@
 //! finalization methods consume `self`, making double-recording impossible
 //! by construction (Invariant §3).
 
+use super::window::{remember, RecentHashes};
 use super::RecordObserver;
-use crate::context::hash_tx_with_window;
-use aura_core_types::{AgentId, PlanUsage, RecordEntry, Transaction, TransactionType};
+use crate::context::hash_tx_with_hashes;
+use aura_core_types::{AgentId, ContextHash, PlanUsage, RecordEntry, Transaction, TransactionType};
 use aura_model::{StopReason, ThinkingEffort, Usage};
 use aura_store_db::Store;
 use std::sync::{Arc, Mutex};
@@ -29,7 +30,11 @@ pub struct ReasonStreamHandle {
     pub(super) kernel_store: Arc<dyn Store>,
     pub(super) agent_id: AgentId,
     pub(super) seq_counter: Arc<Mutex<u64>>,
-    pub(super) window: Vec<RecordEntry>,
+    /// Context hashes of the window snapshotted at construction
+    pub(super) window: Vec<ContextHash>,
+    /// The kernel's hashes of the newest entries, which keep the one this
+    /// appends
+    pub(super) recent: Arc<Mutex<RecentHashes>>,
     pub(super) observer: Option<Arc<dyn RecordObserver>>,
     /// When the provider call started; the finalized entry records the
     /// elapsed time as `duration_ms`.
@@ -78,7 +83,7 @@ impl ReasonStreamHandle {
         // which is the state the model actually reasoned over
         // (Invariant §6).
         let seq = self.next_seq()?;
-        let context_hash = hash_tx_with_window(&tx, &self.window)?;
+        let context_hash = hash_tx_with_hashes(&tx, &self.window)?;
         let entry = RecordEntry::builder(seq, tx)
             .context_hash(context_hash)
             .build();
@@ -86,6 +91,7 @@ impl ReasonStreamHandle {
         self.kernel_store
             .append_entry_direct(self.agent_id, seq, &entry)
             .map_err(|e| crate::KernelError::Store(format!("append_entry_direct: {e}")))?;
+        remember(&self.recent, &entry);
         if let Some(observer) = self.observer.as_ref() {
             observer.on_entry(&entry);
         }

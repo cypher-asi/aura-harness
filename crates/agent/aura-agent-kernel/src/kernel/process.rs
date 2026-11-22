@@ -10,7 +10,7 @@
 //! decode path.
 
 use super::{Kernel, ProcessResult};
-use crate::context::hash_tx_with_window;
+use crate::context::hash_tx_with_hashes;
 use aura_core_types::{
     AgentMode, ApprovalLevel, ModeChangePayload, RecordEntry, RuntimeCapabilityInstall, SystemKind,
     Transaction, TransactionType, UserToolDefaults,
@@ -186,8 +186,8 @@ impl Kernel {
         tx: &Transaction,
         seq: u64,
     ) -> Result<ProcessResult, crate::KernelError> {
-        let window = self.load_window(seq)?;
-        let context_hash = hash_tx_with_window(tx, &window)?;
+        let window = self.window_hashes(seq)?;
+        let context_hash = hash_tx_with_hashes(tx, &window)?;
 
         match tx.tx_type {
             TransactionType::SessionStart => {

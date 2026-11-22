@@ -11,7 +11,7 @@
 //!   drains.
 
 use super::{Kernel, ReasonResult, ReasonStreamHandle};
-use crate::context::hash_tx_with_window;
+use crate::context::hash_tx_with_hashes;
 use aura_core_types::{RecordEntry, Transaction, TransactionType};
 use aura_model::{ModelCallPurpose, ModelName, ModelRequest, StreamEventStream};
 use tracing::error;
@@ -113,8 +113,8 @@ impl Kernel {
         );
 
         let seq = self.next_seq()?;
-        let window = self.load_window(seq)?;
-        let context_hash = hash_tx_with_window(&tx, &window)?;
+        let window = self.window_hashes(seq)?;
+        let context_hash = hash_tx_with_hashes(&tx, &window)?;
 
         let entry = RecordEntry::builder(seq, tx)
             .context_hash(context_hash)
@@ -151,7 +151,7 @@ impl Kernel {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             *guard
         };
-        let window = self.load_window(projected_seq)?;
+        let window = self.window_hashes(projected_seq)?;
 
         // The streaming provider call only has to return the stream
         // handle inside the timeout — individual chunks are then governed
@@ -218,6 +218,7 @@ impl Kernel {
             agent_id: self.agent_id,
             seq_counter: self.seq.clone(),
             window,
+            recent: self.recent.clone(),
             observer: self.config.record_observer.clone(),
             started,
             plan_usage: Vec::new(),
@@ -257,8 +258,8 @@ impl Kernel {
             payload_bytes,
             None,
         );
-        let window = self.load_window(seq)?;
-        let context_hash = hash_tx_with_window(&tx, &window)?;
+        let window = self.window_hashes(seq)?;
+        let context_hash = hash_tx_with_hashes(&tx, &window)?;
         let entry = RecordEntry::builder(seq, tx)
             .context_hash(context_hash)
             .build();

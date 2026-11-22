@@ -23,6 +23,8 @@
 //! - [`tools`]   — `process_tool_proposal` and the batch `process_tools`.
 //! - [`reason`]  — `reason` / `reason_streaming` and their timeout wrappers.
 //! - [`stream`]  — the `ReasonStreamHandle` finalization handle.
+//! - [`window`]  — the context hashes of the newest entries, kept so an
+//!   append need not read the record window back from the store.
 //! - [`tests`]   — integration tests that exercise the full `Kernel` surface.
 
 use crate::policy::{Policy, PolicyConfig};
@@ -31,7 +33,7 @@ use crate::ExecutorRouter;
 use async_trait::async_trait;
 use aura_core_modes::KernelMode;
 use aura_core_types::{
-    AgentId, Hash, PolicyDecision, RecordEntry, RuntimeCapabilityInstall, ToolState,
+    AgentId, ContextHash, Hash, PolicyDecision, RecordEntry, RuntimeCapabilityInstall, ToolState,
 };
 use aura_model::ModelProvider;
 use aura_plugin_hooks::PluginHookHost;
@@ -51,6 +53,7 @@ mod tests;
 #[cfg(test)]
 mod tool_audit_tests;
 mod tools;
+mod window;
 
 pub use stream::ReasonStreamHandle;
 pub use tools::{PresetToolResult, ToolRun};
@@ -358,6 +361,9 @@ pub struct Kernel {
     /// Agent this kernel instance is bound to.
     pub agent_id: AgentId,
     pub(super) seq: Arc<Mutex<u64>>,
+    /// Context hashes of the agent's newest entries, read in place of
+    /// the store's while they reach its head ([`window`])
+    pub(super) recent: Arc<Mutex<window::RecentHashes>>,
     /// Phase 6b replay outcome — `Some(report)` after a successful
     /// replay sweep at construction time when
     /// [`KernelConfig::replay_from`] is `Some`; `None` for live-mode
@@ -412,6 +418,7 @@ impl Kernel {
             None
         };
 
+        let recent = window::RecentHashes::new(config.record_window_size);
         Ok(Self {
             store,
             provider,
@@ -420,6 +427,7 @@ impl Kernel {
             config,
             agent_id,
             seq: Arc::new(Mutex::new(head_seq + 1)),
+            recent: Arc::new(Mutex::new(recent)),
             replay_report,
         })
     }
@@ -485,7 +493,10 @@ impl Kernel {
         Ok(next)
     }
 
+    /// Pass `entry`, just appended, to the record observer, and keep its
+    /// context hash for the entries after it.
     pub(super) fn notify_entry(&self, entry: &RecordEntry) {
+        window::remember(&self.recent, entry);
         if let Some(observer) = self.config.record_observer.as_ref() {
             observer.on_entry(entry);
         }
@@ -505,14 +516,19 @@ impl Kernel {
     // Context helpers
     // -----------------------------------------------------------------------
 
-    pub(super) fn load_window(
+    /// The context hashes the entry at `next_seq` mixes in: those of the
+    /// last `record_window_size` entries before it.
+    pub(super) fn window_hashes(
         &self,
         next_seq: u64,
-    ) -> Result<Vec<RecordEntry>, crate::KernelError> {
-        let from_seq = next_seq.saturating_sub(self.config.record_window_size as u64);
-        self.store
-            .scan_record(self.agent_id, from_seq, self.config.record_window_size)
-            .map_err(|e| crate::KernelError::Store(format!("scan_record: {e}")))
+    ) -> Result<Vec<ContextHash>, crate::KernelError> {
+        window::window_hashes(
+            &*self.store,
+            self.agent_id,
+            &self.recent,
+            next_seq,
+            self.config.record_window_size,
+        )
     }
 
     pub(super) fn load_runtime_capabilities(

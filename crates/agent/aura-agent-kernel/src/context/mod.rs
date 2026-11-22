@@ -34,12 +34,24 @@ pub fn hash_tx_with_window(
     tx: &Transaction,
     window: &[RecordEntry],
 ) -> Result<ContextHash, crate::KernelError> {
+    hash_tx_with_hashes(tx, window.iter().map(|entry| &entry.context_hash))
+}
+
+/// [`hash_tx_with_window`] from the window entries' context hashes, all
+/// of them it reads.
+///
+/// # Errors
+/// Returns an error if the transaction cannot be serialized.
+pub(crate) fn hash_tx_with_hashes<'a>(
+    tx: &Transaction,
+    window: impl IntoIterator<Item = &'a ContextHash>,
+) -> Result<ContextHash, crate::KernelError> {
     let tx_bytes = serde_json::to_vec(tx)
         .map_err(|e| crate::KernelError::Serialization(format!("serialize tx: {e}")))?;
     let mut hasher = hash::Hasher::new();
     hasher.update(&tx_bytes);
-    for entry in window {
-        hasher.update(entry.context_hash.as_ref());
+    for context_hash in window {
+        hasher.update(context_hash.as_ref());
     }
     Ok(ContextHash::from(hasher.finalize()))
 }
