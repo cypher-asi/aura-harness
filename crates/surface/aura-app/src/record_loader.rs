@@ -11,7 +11,7 @@ use aura_core_types::{
 };
 use aura_exec_tools::plan_tools::{plan_path_from_output, CREATE_PLAN_TOOL_NAME};
 use aura_exec_tools::todo::TODO_WRITE_TOOL_NAME;
-use aura_model::{Message, Usage};
+use aura_model::{Message, ModelCallPurpose, Usage};
 use aura_store_record::{ReadStore, StoreError};
 use aura_ui_terminal::{
     events::{
@@ -339,6 +339,18 @@ pub(crate) fn model_call(tx: &Transaction) -> Option<(String, Usage)> {
         return None;
     }
     Some((reasoning_model(tx)?, call_tokens(tx)?))
+}
+
+/// What the model call `tx` records was made for, when it was made
+/// beside the agent's own work.
+pub(crate) fn call_purpose(tx: &Transaction) -> Option<ModelCallPurpose> {
+    if tx.tx_type != TransactionType::Reasoning {
+        return None;
+    }
+    json_payload(tx)?
+        .get("purpose")
+        .cloned()
+        .and_then(|purpose| serde_json::from_value(purpose).ok())
 }
 
 /// The plan usage the call `tx` records, when it is a model call whose

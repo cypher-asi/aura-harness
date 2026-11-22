@@ -7,6 +7,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### `aura -p` counts Gate's own calls in a run's cost
+
+##### Fixed
+
+- `total_cost_usd` in `aura -p`'s JSON result now includes the calls
+  Gate makes for the run's turns: classifying each prompt, writing
+  down what code work is checked against, and judging and reviewing
+  the work. It left them out, so a run Gate routed read cheaper than
+  it was. `usage` still counts the agent's own calls only, and so does
+  `--max-cost-usd`.
+
+##### Added
+
+- `gate_cost_usd` in the JSON result: the part of `total_cost_usd`
+  that Gate's calls cost, `null` when Gate made none with a price.
+
 ### `aura -p` keeps the work's difficulty after a nudge or a move up
 
 ##### Fixed

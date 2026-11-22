@@ -307,6 +307,7 @@ impl Headless {
     ) -> (RunReport, Option<OutcomePayload>) {
         let deadline = limits.max_time.map(|limit| started + limit);
         let session_id = session_id(session.agent_id(), session.started_ms);
+        let started_ms = crate::event_loop::processes::now_ms();
         let mut totals = Totals::default();
         // Watched from here so the judge can see what a failed turn
         // changed.
@@ -482,6 +483,7 @@ impl Headless {
 
         let (exit_reason, error) = stop.unwrap_or((ExitReason::Success, None));
         let usage = UsageReport::from(&totals.usage);
+        let gate_cost_usd = self.hub.gate_cost_usd(session.agent_id(), started_ms);
         let report = RunReport {
             kind: "result",
             exit_reason,
@@ -492,7 +494,11 @@ impl Headless {
             num_turns: totals.usage.calls,
             agent_turns: totals.agent_turns,
             duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-            total_cost_usd: usage.cost_usd,
+            total_cost_usd: [usage.cost_usd, gate_cost_usd]
+                .into_iter()
+                .flatten()
+                .reduce(|work, gate| work + gate),
+            gate_cost_usd,
             usage,
             compactions: totals.compactions,
             todos: session.todos.clone(),

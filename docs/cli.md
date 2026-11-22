@@ -322,7 +322,7 @@ Each requires `-p`.
 | `--disallowed-tools <TOOLS>` | none | These tools may not run. Wins over `--allowed-tools`. |
 | `--max-turns <N>` | no limit | Stop after N model calls. |
 | `--max-time <DURATION>` | `AURA_TUI_TURN_TIMEOUT` | Stop after this long: `90s`, `45m`, `2h`, or a bare number of minutes. |
-| `--max-cost-usd <USD>` | `AURA_TUI_MAX_TURN_COST_USD` | Stop once model calls cost more than this at API list prices. |
+| `--max-cost-usd <USD>` | `AURA_TUI_MAX_TURN_COST_USD` | Stop once the agent's model calls cost more than this at API list prices. Gate's own calls are not counted. |
 | `-d, --cwd <DIR>` | current directory | Work in this directory. |
 | `--model <MODEL>` | the terminal's choice | Model for this run only; the `/model` choice is not changed. A local model whose server is not ready fails the run at once. |
 | `--provider <anthropic\|mock>` | `anthropic` | `mock` answers without a model, for tests. |
@@ -345,8 +345,9 @@ Each requires `-p`.
   | `num_turns` | Model calls made by this run. |
   | `agent_turns` | Agent turns: the prompt plus one per background-job notice. |
   | `duration_ms` | Wall time. |
-  | `usage` | `calls`, `input_tokens` (neither read from nor written to the cache), `cache_read_tokens`, `cache_write_tokens`, `output_tokens`, `cache_hit_rate` (cache reads over all prompt tokens) and `cost_usd`. |
-  | `total_cost_usd` | Estimated cost at API list prices, or `null` when no call had a price. |
+  | `usage` | The agent's model calls: `calls`, `input_tokens` (neither read from nor written to the cache), `cache_read_tokens`, `cache_write_tokens`, `output_tokens`, `cache_hit_rate` (cache reads over all prompt tokens) and `cost_usd`. |
+  | `total_cost_usd` | Estimated cost at API list prices of the agent's calls and of the calls Gate made for its turns, or `null` when no call had a price. |
+  | `gate_cost_usd` | The part of `total_cost_usd` that Gate's calls cost: classifying the prompts, writing down what the work is checked against, judging and reviewing it. `null` when Gate made none with a price. |
   | `compactions` | History summaries made to stay within the context window. |
   | `todos` | The agent's todo list at the end (`id`, `content`, `status`). |
   | `files_changed` | Files the agent wrote, edited or deleted with its file tools. |

@@ -96,8 +96,13 @@ pub(crate) struct RunReport {
     pub agent_turns: u32,
     pub duration_ms: u64,
     pub usage: UsageReport,
-    /// Same as `usage.cost_usd`, at the top level for quick reading
+    /// What the run cost: the agent's calls (`usage.cost_usd`) and the
+    /// calls Gate made for its turns (`gate_cost_usd`)
     pub total_cost_usd: Option<f64>,
+    /// What Gate's calls for the run's turns cost: classifying their
+    /// prompts, writing down what the work is checked against, judging
+    /// and reviewing it. `None` when Gate made none with a price.
+    pub gate_cost_usd: Option<f64>,
     /// History summaries made to stay within the context window
     pub compactions: u32,
     /// The agent's todo list when the run ended
@@ -123,6 +128,7 @@ impl RunReport {
             duration_ms: 0,
             usage: UsageReport::from(&SessionUsage::default()),
             total_cost_usd: None,
+            gate_cost_usd: None,
             compactions: 0,
             todos: Vec::new(),
             files_changed: Vec::new(),

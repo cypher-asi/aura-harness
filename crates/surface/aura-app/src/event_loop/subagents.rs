@@ -1551,6 +1551,32 @@ impl AgentHub {
         cost_usd
     }
 
+    /// Estimated cost in USD, at API list prices as the agent's own calls
+    /// are, of the calls Gate made for `agent`'s turns from `since_ms` on:
+    /// classifying their prompts, writing down what the work is checked
+    /// against, and judging and reviewing it. `None` when none of them
+    /// had a price.
+    pub(crate) fn gate_cost_usd(&self, agent: AgentId, since_ms: u64) -> Option<f64> {
+        use aura_model::ModelCallPurpose::{Classify, Criteria, Judge};
+        let mut cost_usd = None;
+        self.each_entry_of(vec![agent], |entry| {
+            let gates = matches!(
+                crate::record_loader::call_purpose(&entry.tx),
+                Some(Classify | Criteria | Judge)
+            );
+            if entry.tx.ts_ms < since_ms || !gates {
+                return;
+            }
+            let priced = crate::record_loader::model_call(&entry.tx).and_then(|(model, usage)| {
+                aura_model::model_catalog::estimate_cost_usd(&model, &usage)
+            });
+            if let Some(price) = priced {
+                *cost_usd.get_or_insert(0.0) += price;
+            }
+        });
+        cost_usd
+    }
+
     /// Call `f` with every entry in the records of `agent` and the agents
     /// under it, `agent`'s first.
     fn each_entry(&self, agent: AgentId, f: impl FnMut(&RecordEntry)) {

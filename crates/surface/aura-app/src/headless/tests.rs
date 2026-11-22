@@ -694,6 +694,27 @@ async fn gate_routes_headless_turns_and_records_how_they_went() {
             aura_agent_gate::turn_judge::UNVERIFIED_SYSTEM_PROMPT
         );
     }
+    let price = |model: &str| {
+        aura_model::model_catalog::estimate_cost_usd(model, &aura_model::Usage::new(100, 50))
+            .unwrap()
+    };
+    let about =
+        |cost: Option<f64>, expected: f64| cost.is_some_and(|c| (c - expected).abs() < 1e-9);
+    assert!(
+        about(report.usage.cost_usd, price(SONNET)),
+        "the agent's call: {:?}",
+        report.usage
+    );
+    assert!(
+        about(report.gate_cost_usd, price(HAIKU) + price(SONNET)),
+        "the classifier's call and the judge's: {:?}",
+        report.gate_cost_usd
+    );
+    assert!(
+        about(report.total_cost_usd, price(HAIKU) + 2.0 * price(SONNET)),
+        "the run's cost counts Gate's calls: {:?}",
+        report.total_cost_usd
+    );
     assert_eq!(
         h.setup_lines(),
         [
