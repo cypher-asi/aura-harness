@@ -16,9 +16,9 @@ use cosmic_text::{
     SwashCache, SwashContent, Weight, Wrap,
 };
 use ratatui::style::Modifier;
+use rustc_hash::{FxHashMap, FxHasher};
 use std::cell::RefCell;
-use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::{Arc, OnceLock};
 
@@ -116,7 +116,7 @@ pub struct Run {
 /// A least-recently-used store. Entries are found by a hash of their key
 /// and checked against it, so a lookup allocates nothing.
 struct Lru<K, V> {
-    entries: HashMap<u64, (K, V, u64)>,
+    entries: FxHashMap<u64, (K, V, u64)>,
     clock: u64,
     limit: usize,
 }
@@ -124,7 +124,7 @@ struct Lru<K, V> {
 impl<K, V> Lru<K, V> {
     fn new(limit: usize) -> Self {
         Self {
-            entries: HashMap::new(),
+            entries: FxHashMap::default(),
             clock: 0,
             limit: limit.max(2),
         }
@@ -250,8 +250,8 @@ pub struct Atlas {
     shelves: Vec<Shelf>,
     /// First row below the shelves
     used: u32,
-    glyphs: HashMap<CacheKey, Option<Slot>>,
-    shapes: HashMap<ShapeKey, Option<Slot>>,
+    glyphs: FxHashMap<CacheKey, Option<Slot>>,
+    shapes: FxHashMap<ShapeKey, Option<Slot>>,
     generation: u64,
     dirty: Option<Range<u32>>,
 }
@@ -269,8 +269,8 @@ impl Atlas {
             pixels: vec![0; (Self::WIDTH * Self::START_HEIGHT * 4) as usize],
             shelves: Vec::new(),
             used: 0,
-            glyphs: HashMap::new(),
-            shapes: HashMap::new(),
+            glyphs: FxHashMap::default(),
+            shapes: FxHashMap::default(),
             generation: 0,
             dirty: None,
         }
@@ -699,7 +699,7 @@ impl TextSystem {
 }
 
 fn hash_of(key: &impl Hash) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     key.hash(&mut hasher);
     hasher.finish()
 }
