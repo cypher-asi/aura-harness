@@ -6,9 +6,8 @@
 //!   stronger model.
 //! - [`is_retry_stronger`]: whether the next prompt is the same request
 //!   sent again on a stronger model, which fails the earlier turn.
-//! - [`effective`]: which of a prompt's outcomes counts.
 
-use aura_core_types::{OutcomePayload, OutcomeSignal};
+use aura_core_types::OutcomeSignal;
 use aura_model::model_catalog::infer_tier;
 
 /// Two prompts are the same request when at most one character in this
@@ -42,14 +41,6 @@ pub const fn calls_for_stronger(signal: OutcomeSignal) -> bool {
         signal,
         OutcomeSignal::Error | OutcomeSignal::ChecksFailed | OutcomeSignal::JudgedFail
     )
-}
-
-/// The outcome that counts among those recorded for one prompt, oldest
-/// first: the latest.
-pub fn effective<'a>(
-    outcomes: impl IntoIterator<Item = &'a OutcomePayload>,
-) -> Option<&'a OutcomePayload> {
-    outcomes.into_iter().last()
 }
 
 /// Whether `next`, sent on `next_model`, repeats `previous`, which ran on
@@ -110,20 +101,6 @@ fn edit_distance(a: &[char], b: &[char]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_core_types::{Hash, PromptCategory};
-
-    fn outcome(signal: OutcomeSignal) -> OutcomePayload {
-        OutcomePayload {
-            prompt_tx: Hash::from_content(b"prompt"),
-            category: PromptCategory::Debugging,
-            model: "claude/claude-sonnet-4-6".to_string(),
-            success: signal.success(),
-            signal,
-            cost_usd: 0.1,
-            subtask_cost_usd: 0.0,
-            latency_ms: 1_000,
-        }
-    }
 
     #[test]
     fn turn_end_signals() {
@@ -137,19 +114,6 @@ mod tests {
             Some(OutcomeSignal::ChecksPassed)
         );
         assert_eq!(turn_signal(false, None), None, "the judge has to say");
-    }
-
-    #[test]
-    fn the_latest_outcome_wins() {
-        let recorded = [
-            outcome(OutcomeSignal::ChecksPassed),
-            outcome(OutcomeSignal::Rewind),
-        ];
-        assert_eq!(
-            effective(&recorded).map(|o| o.signal),
-            Some(OutcomeSignal::Rewind)
-        );
-        assert_eq!(effective(&[]), None);
     }
 
     #[test]

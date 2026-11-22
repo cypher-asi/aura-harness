@@ -1,8 +1,8 @@
 //! A turn's `Outcome`s on the record: writing one, reading back the
 //! latest turn's, and the later signals the user gives on a turn by
 //! sending its prompt again to a stronger model or rewinding it. Each
-//! later signal appends another `Outcome` for the same prompt;
-//! [`aura_gate_evidence::outcome::effective`] says which one counts.
+//! later signal appends another `Outcome` for the same prompt, and the
+//! latest one counts.
 
 use aura_agent_kernel::Kernel;
 use aura_core_types::{
