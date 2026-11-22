@@ -12,5 +12,10 @@ aura-model = { path = "../../model/aura-model" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+[features]
+# The builders of a turn's messages in `test_support`, for other crates'
+# tests.
+test-support = []
+
 [lints]
 workspace = true

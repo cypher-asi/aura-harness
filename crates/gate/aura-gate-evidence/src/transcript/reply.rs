@@ -1,5 +1,7 @@
 //! What a turn's final reply says of its own work.
 
+use aura_model::{ContentBlock, Message, Role};
+
 /// Phrases of a reply that gives up, lowercase.
 const GAVE_UP: &[&str] = &[
     "i was unable to",
@@ -21,12 +23,6 @@ const GAVE_UP: &[&str] = &[
     "not yet implemented",
 ];
 
-/// Whether `reply` says the work could not be done.
-#[must_use]
-pub fn gave_up(reply: &str) -> bool {
-    says_any(reply, GAVE_UP)
-}
-
 /// Words that mark a sentence of a reply as about linting or formatting,
 /// lowercase.
 const LINTING: &[&str] = &[
@@ -46,23 +42,6 @@ const LINTING: &[&str] = &[
 /// Words that mark a sentence of a reply as about the work's tests or
 /// build too, lowercase.
 const TESTING: &[&str] = &["test", "build", "compile", "type check", "typecheck"];
-
-/// Whether a sentence of `reply`, lowercase, holds one of `phrases`. A
-/// sentence about linting or formatting alone does not count: that such
-/// a step could not run says nothing of whether the work does what was
-/// asked (`I couldn't run a lint check because pyflakes isn't installed`
-/// after the tests passed).
-fn says_any(reply: &str, phrases: &[&str]) -> bool {
-    let reply = reply.to_lowercase().replace('’', "'");
-    reply
-        .split(['\n', '!', '?', ';'])
-        .flat_map(|line| line.split(". "))
-        .filter(|sentence| {
-            !LINTING.iter().any(|word| sentence.contains(word))
-                || TESTING.iter().any(|word| sentence.contains(word))
-        })
-        .any(|sentence| phrases.iter().any(|phrase| sentence.contains(phrase)))
-}
 
 /// Phrases of a reply that says the work was not verified, lowercase.
 const UNVERIFIED: &[&str] = &[
@@ -122,15 +101,130 @@ const UNVERIFIED: &[&str] = &[
     "didn't run any",
 ];
 
+/// Phrases of a reply that says tests still fail, lowercase.
+const STILL_FAILING: &[&str] = &[
+    "still fail",
+    "tests fail",
+    "test fails",
+    "is failing",
+    "are failing",
+    "doesn't pass",
+    "does not pass",
+    "don't pass",
+    "do not pass",
+];
+
+/// Phrases of a reply that says the tests it ran do not cover the
+/// change, lowercase.
+const NOT_COVERED: &[&str] = &[
+    "don't cover",
+    "doesn't cover",
+    "do not cover",
+    "does not cover",
+    "not covered by",
+    "isn't covered",
+    "aren't covered",
+    "no unit tests exist",
+    "no tests exist",
+    "no test covers",
+    "no tests cover",
+    "nothing covers",
+    "no existing test",
+];
+
+/// Whether `reply` says the work could not be done.
+#[must_use]
+pub fn gave_up(reply: &str) -> bool {
+    Reply::read(reply).gave_up()
+}
+
 /// Whether `reply` says the work, or part of it, was not verified.
 #[must_use]
 pub fn says_unverified(reply: &str) -> bool {
-    says_any(reply, UNVERIFIED)
+    Reply::read(reply).says_unverified()
+}
+
+/// Whether `message` can be a turn's final reply: the model's, with text
+/// that is not blank.
+pub(crate) fn is_reply(message: &Message) -> bool {
+    message.role == Role::Assistant
+        && message
+            .content
+            .iter()
+            .filter_map(ContentBlock::as_text)
+            .any(|text| !text.trim().is_empty())
+}
+
+/// A final reply as its phrases are looked for in it: lowercase, with `’`
+/// read as `'`.
+pub(crate) struct Reply(String);
+
+impl Reply {
+    /// `reply`, lowercased once for all its phrases.
+    pub(crate) fn read(reply: &str) -> Self {
+        Self(reply.to_lowercase().replace('’', "'"))
+    }
+
+    /// Whether it says the work could not be done.
+    pub(crate) fn gave_up(&self) -> bool {
+        self.says_any(GAVE_UP)
+    }
+
+    /// Whether it says the work, or part of it, was not verified.
+    pub(crate) fn says_unverified(&self) -> bool {
+        self.says_any(UNVERIFIED)
+    }
+
+    /// Whether it says tests still fail.
+    pub(crate) fn says_still_failing(&self) -> bool {
+        STILL_FAILING.iter().any(|phrase| self.0.contains(phrase))
+    }
+
+    /// Whether it says the tests it ran do not cover the change.
+    pub(crate) fn says_not_covered(&self) -> bool {
+        NOT_COVERED.iter().any(|phrase| self.0.contains(phrase))
+    }
+
+    /// Whether a sentence of it holds one of `phrases`. A sentence about
+    /// linting or formatting alone does not count: that such a step could
+    /// not run says nothing of whether the work does what was asked (`I
+    /// couldn't run a lint check because pyflakes isn't installed` after
+    /// the tests passed).
+    fn says_any(&self, phrases: &[&str]) -> bool {
+        self.0
+            .split(['\n', '!', '?', ';'])
+            .flat_map(|line| line.split(". "))
+            .filter(|sentence| {
+                !LINTING.iter().any(|word| sentence.contains(word))
+                    || TESTING.iter().any(|word| sentence.contains(word))
+            })
+            .any(|sentence| phrases.iter().any(|phrase| sentence.contains(phrase)))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{call, reply, result};
+    use serde_json::json;
+
+    #[test]
+    fn a_final_reply_is_the_models_with_text() {
+        assert!(is_reply(&reply("Done.")));
+        let mut spoke_and_called = call("1", "read_file", json!({"path": "a"}));
+        assert!(!is_reply(&spoke_and_called), "a call alone");
+        spoke_and_called
+            .content
+            .insert(0, ContentBlock::text("Reading it."));
+        assert!(is_reply(&spoke_and_called));
+        for not_a_reply in [
+            reply(" \n"),
+            Message::user("Fix the parser."),
+            result("1", "fn main() {}", false),
+        ] {
+            assert!(!is_reply(&not_a_reply), "{not_a_reply:?}");
+        }
+    }
 
     #[test]
     fn not_verifying_is_read_from_the_reply() {

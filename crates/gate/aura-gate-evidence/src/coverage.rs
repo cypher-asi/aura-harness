@@ -7,7 +7,7 @@
 //! harness looks for those names in the workspace's tests, and work whose
 //! additions no test names counts as unchecked (see `aura-gate-followup`).
 
-use crate::evidence::is_test_path;
+use crate::is_test_path;
 
 /// Lines of an added test, after leading whitespace.
 const TEST_STARTS: &[&str] = &[
@@ -30,15 +30,12 @@ const TEST_STARTS: &[&str] = &[
 #[must_use]
 pub fn added_names(diff: &str) -> Vec<String> {
     let (mut added, mut removed) = (Vec::new(), Vec::new());
-    let mut path = String::new();
+    let mut path = "";
     let mut in_hunk = false;
     for line in diff.lines() {
         if let Some(names) = line.strip_prefix("diff --git ") {
-            path = names
-                .rsplit_once(" b/")
-                .map_or(names, |(_, new)| new)
-                .to_string();
-            if is_test_path(&path) {
+            path = names.rsplit_once(" b/").map_or(names, |(_, new)| new);
+            if is_test_path(path) {
                 return Vec::new();
             }
             in_hunk = false;
@@ -61,19 +58,22 @@ pub fn added_names(diff: &str) -> Vec<String> {
             return Vec::new();
         }
         let into = if adds { &mut added } else { &mut removed };
-        if let Some(name) = defined(&path, code) {
+        if let Some(name) = defined(path, code) {
             if !into.contains(&name) {
                 into.push(name);
             }
         }
     }
-    added.retain(|name| !removed.contains(name));
     added
+        .into_iter()
+        .filter(|name| !removed.contains(name))
+        .map(String::from)
+        .collect()
 }
 
 /// The public name `code`, a line of the file at `path` without its
 /// indentation, defines, if it starts a definition.
-fn defined(path: &str, code: &str) -> Option<String> {
+fn defined<'a>(path: &str, code: &'a str) -> Option<&'a str> {
     let ext = path.rsplit_once('.').map_or("", |(_, ext)| ext);
     let name = match ext {
         "py" => {
@@ -123,11 +123,12 @@ fn defined(path: &str, code: &str) -> Option<String> {
 }
 
 /// The identifier `code` starts with.
-fn ident(code: &str) -> String {
-    code.trim_start()
-        .chars()
-        .take_while(|c| c.is_alphanumeric() || *c == '_')
-        .collect()
+fn ident(code: &str) -> &str {
+    let code = code.trim_start();
+    let end = code
+        .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .unwrap_or(code.len());
+    &code[..end]
 }
 
 /// Whether `text` has `name` as a whole word.

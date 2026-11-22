@@ -188,7 +188,7 @@ pub fn allows_command(command: &str) -> bool {
                 return false;
             };
             let allowed = if i == 0 {
-                is_check_part(words.clone()) || is_lint(&words) || is_inspection(&words)
+                is_check_part(&words) || is_lint(&words) || is_inspection(&words)
             } else {
                 words.first().is_some_and(|w| FILTERS.contains(&program(w)))
             };
