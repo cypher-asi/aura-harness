@@ -38,6 +38,8 @@ pub async fn cmd_gate(args: GateCommand) -> anyhow::Result<()> {
             dry_run,
             again,
             jobs,
+            criteria,
+            writer,
         } => {
             aura_app::headless::gate_replay(ReplayOptions {
                 data_dir: data_dir.unwrap_or_else(default_data_dir),
@@ -49,6 +51,8 @@ pub async fn cmd_gate(args: GateCommand) -> anyhow::Result<()> {
                 dry_run,
                 again,
                 jobs,
+                criteria,
+                writer,
             })
             .await
         }

@@ -1412,7 +1412,7 @@ async fn run_prompt(
     let (mut attempt_started, mut attempt_ms) = (started, started_ms);
     let (mut escalations, mut nudges, mut sent_back) = (0, 0, 0);
     let mut turn_start = session.messages.len();
-    let note = gate_record::worker_note_for(&hub.gate, criteria.as_deref());
+    let note = gate_record::worker_note_for(criteria.as_deref());
     session
         .messages
         .push(Message::user(format!("{text}{}", note.unwrap_or_default())));
@@ -1711,6 +1711,7 @@ async fn run_prompt(
             RouteLevel::Turn,
             category,
             (&model, routed_effort(&config)),
+            signal,
             &plan.candidates,
         ) else {
             break (signal, reply, error, ended, true);
@@ -1720,6 +1721,7 @@ async fn run_prompt(
             SteerSource::Harness.prefix(),
             takeover_prompt(
                 &aura_model::model_catalog::route_label(&model),
+                next.model.id != model,
                 signal,
                 joined(harness, review).as_deref()
             )

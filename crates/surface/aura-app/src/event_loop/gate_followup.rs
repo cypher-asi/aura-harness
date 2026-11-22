@@ -324,7 +324,7 @@ impl Reviewed {
 
 /// How many of the criteria `checked` the reviewer found met, e.g.
 /// `, criteria 3/5 met, 1 unmet, 1 untested`; empty when there were none.
-fn tally(checked: &[Checked]) -> String {
+pub(crate) fn tally(checked: &[Checked]) -> String {
     if checked.is_empty() {
         return String::new();
     }

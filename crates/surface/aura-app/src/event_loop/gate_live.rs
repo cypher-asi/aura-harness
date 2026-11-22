@@ -21,7 +21,9 @@ use aura_agent_gate::attempt_log::{AttemptLog, Tiers};
 use aura_agent_gate::{Candidate, Decision, GateStats, SplitMix64, Way, Work};
 use aura_agent_kernel::RecordObserver;
 use aura_config::GateConfig;
-use aura_core_types::{AgentId, Difficulty, PromptCategory, RecordEntry, RouteLevel, RouteReason};
+use aura_core_types::{
+    AgentId, Difficulty, OutcomeSignal, PromptCategory, RecordEntry, RouteLevel, RouteReason,
+};
 use aura_model::ThinkingEffort;
 use aura_store_db::ReadStore;
 use std::collections::{HashMap, VecDeque};
@@ -178,19 +180,21 @@ impl GateLive {
     }
 
     /// Where work at `level` asking for `category`, whose attempt on
-    /// `failed` (a model and the effort Gate chose for it) failed, goes
-    /// next among `candidates` (see [`aura_agent_gate::escalate`]),
-    /// remembered for `/gate`. `None` when nothing is left to try.
+    /// `failed` (a model and the effort Gate chose for it) ended with
+    /// `signal`, goes next among `candidates` (see
+    /// [`aura_agent_gate::escalate`]), remembered for `/gate`. `None`
+    /// when nothing is left to try.
     pub(crate) fn escalate(
         &self,
         level: RouteLevel,
         category: PromptCategory,
         failed: (&str, Option<ThinkingEffort>),
+        signal: OutcomeSignal,
         candidates: &[Candidate],
     ) -> Option<Decision> {
         let decision = {
             let stats = lock(&self.stats);
-            aura_agent_gate::escalate(&stats, level, failed, candidates)?
+            aura_agent_gate::escalate(&stats, level, failed, signal, candidates)?
         };
         self.remember(RecentRoute {
             ts_ms: super::processes::now_ms(),
@@ -306,7 +310,7 @@ impl GateLive {
         led: Option<bool>,
         (n, ok): (usize, bool),
     ) {
-        use aura_core_types::{OutcomePayload, OutcomeSignal, PromptPayload, Route, Transaction};
+        use aura_core_types::{OutcomePayload, PromptPayload, Route, Transaction};
         let signal = if ok {
             OutcomeSignal::ChecksPassed
         } else {

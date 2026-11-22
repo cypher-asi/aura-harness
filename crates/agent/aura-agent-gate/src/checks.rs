@@ -13,6 +13,12 @@
 //! and none passed is a failure. Calls the policy denied, that could not
 //! start, or that went to the background say nothing, as does an exit
 //! status decided by output that shows neither failures nor a pass.
+//!
+//! A check run with the change stashed away (`git stash; pytest; git
+//! stash pop`) ran the code as it was before, so it is not the change's
+//! check. When it shows failures, a failing run of the same check with
+//! the change in place is not counted either: those failures were there
+//! before ([`Stashing`]).
 
 use aura_model::{ContentBlock, Message, ToolResultContent};
 use serde_json::Value;
@@ -83,12 +89,12 @@ pub fn checks_seen(messages: &[Message]) -> Vec<CheckSeen> {
 /// calls in `messages` (0 for the first).
 #[must_use]
 pub fn checks_placed(messages: &[Message]) -> Vec<(usize, CheckSeen)> {
-    // Each check's call id, its place, its command and, once it ran to
-    // its end, whether it passed, whether its output decided that, and
-    // what it printed.
-    type Ran = Option<(bool, bool, String)>;
-    let mut checks: Vec<(&str, usize, String, Ran)> = Vec::new();
+    let mut checks: Vec<Called<'_>> = Vec::new();
     let mut calls = 0;
+    // Whether the change is stashed away as of the latest call, and the
+    // calls that changed that, with what it was before them.
+    let mut stashed = false;
+    let mut stashes: Vec<(&str, bool)> = Vec::new();
     for message in messages {
         for block in &message.content {
             match block {
@@ -99,8 +105,19 @@ pub fn checks_placed(messages: &[Message]) -> Vec<(usize, CheckSeen)> {
                         continue;
                     }
                     let command = command_line(input);
+                    let stashing = Stashing::of(&command, stashed);
+                    if stashing.stashed != stashed {
+                        stashes.push((id.as_str(), stashed));
+                        stashed = stashing.stashed;
+                    }
                     if input["background"].as_bool() != Some(true) && is_check_command(&command) {
-                        checks.push((id.as_str(), at, command, None));
+                        checks.push(Called {
+                            id,
+                            at,
+                            command,
+                            stashing,
+                            result: None,
+                        });
                     }
                 }
                 ContentBlock::ToolResult {
@@ -108,35 +125,128 @@ pub fn checks_placed(messages: &[Message]) -> Vec<(usize, CheckSeen)> {
                     content,
                     is_error,
                 } => {
-                    if let Some(check) = checks.iter_mut().find(|(id, ..)| id == tool_use_id) {
+                    // A stash that failed stashed nothing.
+                    if let Some((_, before)) = stashes
+                        .iter()
+                        .find(|(id, _)| *is_error && id == tool_use_id)
+                    {
+                        stashed = *before;
+                    }
+                    if let Some(check) = checks.iter_mut().find(|check| check.id == tool_use_id) {
                         let output = match content {
                             ToolResultContent::Text(text) => text.clone(),
                             ToolResultContent::Json(value) => value.to_string(),
                         };
-                        check.3 = verdict(&output, *is_error, &check.2)
-                            .map(|(passed, by_output)| (passed, by_output, output));
+                        check.result = Some((output, *is_error));
                     }
                 }
                 _ => {}
             }
         }
     }
+    // The checks a run without the change showed failing.
+    let failed_before: Vec<String> = checks
+        .iter()
+        .filter(|check| {
+            check
+                .result
+                .as_ref()
+                .is_some_and(|(output, _)| shows_failures(&printed(output)))
+        })
+        .flat_map(|check| check.stashing.without.iter().cloned())
+        .collect();
     checks
         .into_iter()
-        .filter_map(|(_, at, command, ran)| {
-            ran.map(|(passed, by_output, output)| {
-                (
-                    at,
-                    CheckSeen {
-                        command,
-                        passed,
-                        by_output,
-                        output,
-                    },
-                )
-            })
+        .filter(|check| check.stashing.without.is_empty())
+        .filter_map(|check| {
+            let (output, is_error) = check.result?;
+            let (passed, by_output) = verdict(&output, is_error, &check.command)?;
+            let with = &check.stashing.with;
+            if !passed && !with.is_empty() && with.iter().all(|run| failed_before.contains(run)) {
+                return None;
+            }
+            Some((
+                check.at,
+                CheckSeen {
+                    command: check.command,
+                    passed,
+                    by_output,
+                    output,
+                },
+            ))
         })
         .collect()
+}
+
+/// A `run_command` call that runs a check.
+struct Called<'a> {
+    /// Its call id
+    id: &'a str,
+    /// Its place among the tool calls
+    at: usize,
+    command: String,
+    stashing: Stashing,
+    /// What it printed and whether it failed, once it has a result
+    result: Option<(String, bool)>,
+}
+
+/// Which of a command line's checks ran on the change, and which with
+/// the change stashed away: between a `git stash` and the `git stash
+/// pop` or `apply` that brings it back, the working tree holds the code
+/// as it was before, and a model runs its tests there to see which
+/// failures were there already. Each check is kept as its own words
+/// ([`check_run`]), so the same check with and without the change reads
+/// the same.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Stashing {
+    /// The checks run with the change in place
+    with: Vec<String>,
+    /// The checks run with the change stashed away
+    without: Vec<String>,
+    /// Whether the change is stashed away when the command line ends
+    stashed: bool,
+}
+
+impl Stashing {
+    /// What `command` runs, the change being `stashed` away or not when
+    /// it starts.
+    fn of(command: &str, mut stashed: bool) -> Self {
+        let (mut with, mut without) = (Vec::new(), Vec::new());
+        for (part, _) in parts(command) {
+            let words = simple_command(words(part), true);
+            if let ["git", "stash", rest @ ..] = words.as_slice() {
+                match rest.first().copied() {
+                    Some("pop" | "apply") => stashed = false,
+                    Some("list" | "show" | "drop" | "clear" | "branch" | "create" | "store") => {}
+                    _ => stashed = true,
+                }
+            } else if let Some(run) = check_run(&words) {
+                if stashed {
+                    without.push(run);
+                } else {
+                    with.push(run);
+                }
+            }
+        }
+        Self {
+            with,
+            without,
+            stashed,
+        }
+    }
+}
+
+/// The check `words` (a simple command, as [`simple_command`] leaves it)
+/// runs, without where its output is sent; `None` when it runs none.
+fn check_run(words: &[&str]) -> Option<String> {
+    runs_check(words).then(|| {
+        words
+            .iter()
+            .filter(|word| !word.contains('>'))
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" ")
+    })
 }
 
 /// Pass or fail from the result of a check that ran `command`, `output`
@@ -371,7 +481,15 @@ pub(crate) fn is_check_part(words: Vec<&str>) -> bool {
 
 /// [`is_check_part`], looking through a shell that runs a check when
 /// `through_shells`.
-fn is_check_words(mut words: Vec<&str>, through_shells: bool) -> bool {
+fn is_check_words(words: Vec<&str>, through_shells: bool) -> bool {
+    runs_check(&simple_command(words, through_shells))
+}
+
+/// The command `words` come down to: without leading variable
+/// assignments and wrappers (`env`, `time`, `timeout 600`, `npx`,
+/// `python -m`, ...), and, when `through_shells`, what a shell is handed
+/// to run in place of the shell.
+fn simple_command(mut words: Vec<&str>, through_shells: bool) -> Vec<&str> {
     loop {
         match words.first().copied() {
             Some(word) if word.contains('=') && !word.starts_with('-') => {
@@ -389,16 +507,27 @@ fn is_check_words(mut words: Vec<&str>, through_shells: bool) -> bool {
             Some("python" | "python3") if words.get(1) == Some(&"-m") => {
                 words.drain(..2);
             }
-            _ => break,
+            Some(program)
+                if through_shells
+                    && matches!(
+                        program.rsplit('/').next().unwrap_or(program),
+                        "sh" | "bash" | "zsh" | "dash"
+                    ) =>
+            {
+                words = shell_command(&words[1..]);
+            }
+            _ => return words,
         }
     }
+}
+
+/// Whether `words`, a simple command as [`simple_command`] leaves it,
+/// runs tests, a build or a type check.
+fn runs_check(words: &[&str]) -> bool {
     let Some(&program) = words.first() else {
         return false;
     };
     let program = program.rsplit('/').next().unwrap_or(program);
-    if through_shells && matches!(program, "sh" | "bash" | "zsh" | "dash") {
-        return is_check_words(shell_command(&words[1..]), true);
-    }
     let sub = words.get(1).copied().unwrap_or_default();
     let script = if sub == "run" {
         words.get(2).copied().unwrap_or_default()
@@ -739,6 +868,130 @@ mod tests {
             None,
             "neither failures nor a pass"
         );
+    }
+
+    /// The last three test runs of a-4 of Compare #33 (Claude Sonnet 5.5
+    /// on `ansible-d33bedc4`): the tests of the change pass, a wider
+    /// suite fails, and the same suite fails with the change stashed.
+    /// Gate counted the stashed run as the change's failing check.
+    #[test]
+    fn a_run_without_the_change_is_not_its_check_and_excuses_the_same_run_with_it() {
+        const WIDE: &str = "python -m pytest -q -p no:cacheprovider test/units/plugins \
+                            test/units/cli test/units/utils 2>&1";
+        let ok = |stdout: &str| {
+            json!({"exit_code": 0, "ok": true, "stderr": "", "stdout": stdout}).to_string()
+        };
+        let own = call(
+            "1",
+            json!({"program": "sh", "args": [".swe/run", "python tmp_check.py; python -m pytest \
+                -q -p no:cacheprovider test/units/config/test_manager.py 2>&1 | tail -5"]}),
+        );
+        let own_passed = result("1", &ok("===== 116 passed in 1.02s =====\n"), false);
+        let wide = call(
+            "2",
+            json!({"program": "sh", "args": [".swe/run", format!("{WIDE} | tail -5")]}),
+        );
+        let wide_failed = result(
+            "2",
+            &ok(
+                "ERROR test/units/cli/test_galaxy.py::TestGalaxyInitSkeleton::test_role_dirs\n\
+                 = 96 failed, 1539 passed, 2 skipped, 54 errors in 27.60s =\n",
+            ),
+            false,
+        );
+        let stashed = call(
+            "3",
+            json!({"program": "sh", "args": [".swe/run", format!(
+                "git stash -q; {WIDE} | tail -1; git stash pop -q; git status --short"
+            )]}),
+        );
+        let failed_before = |id: &str| {
+            result(
+                id,
+                &ok("= 96 failed, 1539 passed, 2 skipped, 54 errors in 27.45s =\n M lib/x.py\n"),
+                false,
+            )
+        };
+        let messages = [
+            own.clone(),
+            own_passed.clone(),
+            wide.clone(),
+            wide_failed.clone(),
+            stashed,
+            failed_before("3"),
+        ];
+        let seen = checks_seen(&messages);
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert!(seen[0].passed && seen[0].command.contains("test_manager.py"));
+        assert_eq!(
+            last_check(&messages[2..4]),
+            Some(false),
+            "nothing shows the failures were there before"
+        );
+
+        // The suite passes without the change: the change broke it.
+        let passed_before = [
+            wide.clone(),
+            wide_failed.clone(),
+            call(
+                "3",
+                json!({"command": format!("git stash; sh .swe/run {WIDE} | tail -1; git stash pop")}),
+            ),
+            result("3", &ok("===== 1689 passed in 27.45s =====\n"), false),
+        ];
+        assert_eq!(last_check(&passed_before), Some(false));
+
+        // Stashed in one call, tested in the next, brought back in a third.
+        let over_calls = [
+            wide.clone(),
+            wide_failed.clone(),
+            call("3", json!({"command": "git stash -u"})),
+            result("3", "Saved working directory and index state", false),
+            call(
+                "4",
+                json!({"command": format!("sh .swe/run {WIDE} | tail -1")}),
+            ),
+            failed_before("4"),
+            call("5", json!({"command": "git stash pop"})),
+            result("5", "Dropped refs/stash@{0}", false),
+            own.clone(),
+            own_passed.clone(),
+        ];
+        let seen = checks_seen(&over_calls);
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert!(seen[0].passed);
+
+        // A stash that failed stashed nothing: the run after it is the
+        // change's.
+        let not_stashed = [
+            call("1", json!({"command": "git stash -u"})),
+            result(
+                "1",
+                "exit_code: 128\nstderr:\nfatal: not a git repository",
+                true,
+            ),
+            wide,
+            wide_failed,
+        ];
+        assert_eq!(last_check(&not_stashed), Some(false));
+    }
+
+    #[test]
+    fn a_command_line_says_which_checks_ran_without_the_change() {
+        let ran = Stashing::of(
+            "sh .swe/run pytest -q a 2>&1 | tail -2; git stash -q; python -m pytest -q b | \
+             grep passed; git stash pop -q; cargo test",
+            false,
+        );
+        assert_eq!(ran.with, ["pytest -q a", "cargo test"]);
+        assert_eq!(ran.without, ["pytest -q b"]);
+        assert!(!ran.stashed);
+        assert!(Stashing::of("git stash", false).stashed);
+        assert!(Stashing::of("git stash push -u && pytest", false).stashed);
+        assert!(!Stashing::of("git stash list", false).stashed);
+        assert!(Stashing::of("git stash show -p", true).stashed);
+        assert!(!Stashing::of("git stash apply", true).stashed);
+        assert_eq!(Stashing::of("pytest -q", true).without, ["pytest -q"]);
     }
 
     #[test]

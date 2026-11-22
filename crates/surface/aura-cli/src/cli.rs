@@ -294,6 +294,15 @@ pub enum GateSubcommand {
         /// Reviews asked at a time.
         #[arg(long, default_value_t = 4)]
         jobs: usize,
+        /// Hold the work to acceptance criteria written from its
+        /// request, as a live turn's is, and have the reviewer go through
+        /// them. Each request's criteria are written once and kept.
+        #[arg(long)]
+        criteria: bool,
+        /// Model that writes the criteria (default: the latest
+        /// standard-tier model in the log).
+        #[arg(long, requires = "criteria")]
+        writer: Option<String>,
     },
 }
 
@@ -788,20 +797,33 @@ mod tests {
                         dry_run,
                         again,
                         jobs,
+                        criteria,
+                        writer,
                     },
             })) => (
                 data_dir,
                 task,
                 limit,
-                (thinking, all, dry_run, again),
-                judge,
+                (thinking, all, dry_run, again, criteria),
+                (judge, writer),
                 jobs,
             ),
             _ => panic!("not gate replay: {args:?}"),
         };
         assert_eq!(
             replay(&["gate", "replay"]),
-            (None, None, None, (false, false, false, false), None, 4)
+            (
+                None,
+                None,
+                None,
+                (false, false, false, false, false),
+                (None, None),
+                4
+            )
+        );
+        assert!(
+            parse(&["gate", "replay", "--writer", "claude/claude-sonnet-5-5"]).is_err(),
+            "a writer is named only with --criteria"
         );
         assert_eq!(
             replay(&[
@@ -820,14 +842,20 @@ mod tests {
                 "--dry-run",
                 "--again",
                 "--jobs",
-                "2"
+                "2",
+                "--criteria",
+                "--writer",
+                "claude/claude-sonnet-5-5"
             ]),
             (
                 Some(PathBuf::from("/tmp/data")),
                 Some("ansible".to_string()),
                 Some(5),
-                (true, true, true, true),
-                Some("claude/claude-opus-5-5".to_string()),
+                (true, true, true, true, true),
+                (
+                    Some("claude/claude-opus-5-5".to_string()),
+                    Some("claude/claude-sonnet-5-5".to_string())
+                ),
                 2
             )
         );

@@ -333,13 +333,13 @@ pub(crate) fn criteria_writer_for(
 }
 
 /// Ask `model` through `kernel`, so the call is recorded, for the
-/// acceptance criteria of `text`. `Ok(None)` when the reply gave none:
-/// the work is then reviewed as it would be without them.
+/// acceptance criteria of `text`.
 ///
 /// # Errors
-/// Says why, as a line for the chat, when the request could not be built
-/// or the call failed or timed out. The work goes on without criteria
-/// then too.
+/// Says why, as a line for the chat, when the request could not be
+/// built, the call failed or timed out, or its reply held no criteria
+/// ([`criteria::none_because`]). The work then goes on without criteria,
+/// reviewed as it would be without them.
 pub(crate) async fn write_criteria(
     kernel: &Kernel,
     model: &str,
@@ -368,8 +368,7 @@ pub(crate) async fn write_criteria(
         }
     };
     let Some(found) = criteria::criteria_of(&response) else {
-        warn!(%model, "The reply gave no acceptance criteria");
-        return Ok(None);
+        return failed(criteria::none_because(&response.message));
     };
     info!(%model, criteria = found.items.len(), strict = found.strict, "Wrote the acceptance criteria");
     Ok(Some(Arc::new(found)))
@@ -380,7 +379,7 @@ pub(crate) async fn write_criteria(
 /// settings call for them ([`criteria_writer_for`]). Work they find
 /// exacting is rated hard in `difficulty`, with criteria `log` as with
 /// `on`, so it starts on a model that can meet them. `Ok(None)` when none
-/// are due or the writer gave none.
+/// are due.
 ///
 /// # Errors
 /// Says why, as a line for the chat, when the writer could not be asked
@@ -406,11 +405,12 @@ pub(crate) async fn hold_to_criteria(
     Ok(Some(found))
 }
 
-/// What the worker is told of `criteria` after its prompt, with criteria
-/// `on`; `None` when it is not told.
-pub(crate) fn worker_note_for(live: &GateLive, criteria: Option<&Criteria>) -> Option<String> {
-    let criteria = criteria.filter(|_| live.settings().criteria == ReviewMode::On)?;
-    Some(format!("\n\n{}", criteria::worker_note(criteria)))
+/// What the worker is told of `criteria` after its prompt: the list,
+/// whether or not a review will act on it, so that what the request
+/// demands in passing is in front of the model doing the work. `None`
+/// when none were written.
+pub(crate) fn worker_note_for(criteria: Option<&Criteria>) -> Option<String> {
+    Some(format!("\n\n{}", criteria::worker_note(criteria?)))
 }
 
 /// Write `outcome` to the record of `agent_id` through `kernel`. A failure

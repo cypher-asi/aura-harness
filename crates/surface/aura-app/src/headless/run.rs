@@ -440,6 +440,7 @@ impl Headless {
                     let review = joined(found.harness.take(), review);
                     let mut next = takeover_prompt(
                         &aura_model::model_catalog::route_label(&ended.model),
+                        decision.model.id != ended.model,
                         raw.unwrap_or(ended.signal),
                         review.as_deref(),
                     );
@@ -754,6 +755,7 @@ impl Headless {
             RouteLevel::Turn,
             ended.category,
             (&ended.model, self.effort),
+            ended.signal,
             &candidates,
         )?;
         info!(
@@ -1178,7 +1180,7 @@ impl Headless {
             .await
             .ok()
             .flatten();
-            told = gate_record::worker_note_for(&self.hub.gate, self.criteria.as_deref());
+            told = gate_record::worker_note_for(self.criteria.as_deref());
         }
         let route = match self
             .hub

@@ -1324,10 +1324,20 @@ impl AgentHub {
             info!(child = %first.name, "Too little time left to retry the subtask");
             return TaskReport { first, retry: None };
         }
+        // Only work the judge found unfinished is done again on the
+        // strongest model; a failed check or an error there is reported.
+        let signal = if first.unfinished.is_some() {
+            OutcomeSignal::JudgedFail
+        } else if first.check.is_some() {
+            OutcomeSignal::ChecksFailed
+        } else {
+            OutcomeSignal::Error
+        };
         let escalated = self.gate.escalate(
             RouteLevel::Subtask,
             category,
             (&first.model, first.effort),
+            signal,
             &candidates,
         );
         let Some(decision) = escalated else {

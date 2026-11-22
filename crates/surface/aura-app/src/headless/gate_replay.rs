@@ -11,6 +11,12 @@
 //! (the copy against its baseline), the commands and checks from the
 //! saved session, and the final reply.
 //!
+//! With `--criteria` the work is also held to acceptance criteria, as a
+//! live turn's is ([`aura_agent_gate::criteria`]): a writer lists them
+//! from each request, once per request and writer (they are kept beside
+//! the log, so every reviewer is asked about the same list), and the
+//! reviewer goes through them.
+//!
 //! Each answer is appended to the log as a `review` line marked
 //! `replayed`, which `aura gate eval` scores. The attempt's line is
 //! written again with the files the run changed by any means and those
@@ -19,7 +25,7 @@
 //! touched: no record, no table, no copy.
 
 use std::collections::{BTreeMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,16 +34,19 @@ use aura_agent_gate::attempt_log::{
     self, below_strongest, Attempt, AttemptLog, CopyAt, Line, Review, Stood, Tier, Tiers,
     TruthSource,
 };
+use aura_agent_gate::criteria::{self, Criteria};
 use aura_agent_gate::evidence::{flags, Evidence, Flag};
 use aura_agent_gate::followup::Why;
 use aura_agent_gate::turn_judge::{self, Answer, ReviewVariant, Standing};
-use aura_core_types::{AgentId, Difficulty};
+use aura_core_types::{AgentId, Difficulty, Hash};
 use aura_model::model_catalog::{estimate_cost_usd, infer_tier, route_label, ModelTier};
 use aura_model::{Message, ModelProvider, StopReason, Usage};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-use crate::event_loop::gate_followup::{checks_shown, commands_run, final_reply_in};
+use crate::event_loop::gate_followup::{
+    checks_shown, commands_run, final_reply_in, tally as criteria_tally,
+};
 use crate::event_loop::gate_log::sent_text;
 use crate::event_loop::processes::now_ms;
 use crate::event_loop::tasks::TASKS_DIR;
@@ -50,8 +59,19 @@ const SHOWN_COMMANDS: usize = 40;
 /// How long one review may take.
 const REVIEW_TIMEOUT: Duration = Duration::from_secs(420);
 
+/// How long writing one request's criteria may take.
+const CRITERIA_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Where the criteria written for replays are kept, under the data
+/// directory.
+const CRITERIA_FILE: &str = "gate/replay_criteria.json";
+
+/// What writing one request's criteria is assumed to cost when
+/// estimating, in USD.
+const ESTIMATED_CRITERIA_USD: f64 = 0.03;
+
 /// Characters per token assumed when estimating what the reviews cost.
-const CHARS_PER_TOKEN: f64 = 3.2;
+const ESTIMATE_CHARS_PER_TOKEN: f64 = 3.2;
 
 /// Output tokens assumed per review when estimating: plain, thinking.
 const ESTIMATED_OUTPUT: [u64; 2] = [600, 6_000];
@@ -84,6 +104,11 @@ pub struct ReplayOptions {
     pub again: bool,
     /// Reviews asked at a time
     pub jobs: usize,
+    /// Hold the work to acceptance criteria written from its request
+    pub criteria: bool,
+    /// The model that writes them; by default the latest standard-tier
+    /// model in the log
+    pub writer: Option<String>,
 }
 
 /// An attempt picked for replay.
@@ -175,6 +200,8 @@ struct Prepared {
     why: Vec<(String, String)>,
     /// Every sign its evidence raises
     signs: Vec<Flag>,
+    /// What the work is held to, when the replay holds it to criteria
+    criteria: Option<Arc<Criteria>>,
 }
 
 impl Prepared {
@@ -187,8 +214,19 @@ impl Prepared {
             checks: &self.checks,
             reply: &self.reply,
             why,
-            criteria: None,
+            criteria: self.criteria.as_deref(),
         }
+    }
+
+    /// The same attempt held to `criteria`.
+    fn held_to(mut self, criteria: Arc<Criteria>) -> Self {
+        let why = Why::Criteria;
+        self.why
+            .retain(|(name, _)| name != "replay" && name != why.name());
+        self.why
+            .push((why.name().to_string(), why.describe().to_string()));
+        self.criteria = Some(criteria);
+        self
     }
 
     /// What the reviewer is told of why it reviews.
@@ -266,7 +304,147 @@ fn prepare(pick: &Pick<'_>, sessions: &Checkpoints, tiers: &Tiers) -> Result<Pre
         reply: final_reply_in(messages),
         why,
         signs,
+        criteria: None,
     })
+}
+
+/// How a review asked as `variant` is logged: `plain`, or
+/// `plain+criteria` when the work is held to criteria, as a live review
+/// is.
+fn asked_as(variant: ReviewVariant, criteria: bool) -> String {
+    if criteria {
+        format!("{}+criteria", variant.name())
+    } else {
+        variant.name().to_string()
+    }
+}
+
+/// The latest standard-tier model the attempts in `lines` ran on: the
+/// model that writes the criteria when none is named.
+fn writer_in(lines: &[Line]) -> Option<String> {
+    lines
+        .iter()
+        .filter_map(|line| match line {
+            Line::Attempt(attempt) => Some(attempt.model.as_str()),
+            _ => None,
+        })
+        .filter(|model| infer_tier(model) == ModelTier::Standard)
+        .max()
+        .map(str::to_string)
+}
+
+/// The criteria written for replays, by writer and request.
+#[derive(Debug, Default)]
+struct Written {
+    path: PathBuf,
+    kept: BTreeMap<String, Criteria>,
+}
+
+impl Written {
+    /// Those kept under `data_dir`; none when the file is missing or
+    /// unreadable.
+    fn in_data_dir(data_dir: &Path) -> Self {
+        let path = data_dir.join(CRITERIA_FILE);
+        let kept = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        Self { path, kept }
+    }
+
+    fn key(writer: &str, task: &str) -> String {
+        format!("{writer} {}", Hash::from_content(task.as_bytes()).to_hex())
+    }
+
+    fn get(&self, writer: &str, task: &str) -> Option<Arc<Criteria>> {
+        self.kept
+            .get(&Self::key(writer, task))
+            .map(|found| Arc::new(found.clone()))
+    }
+
+    fn keep(&mut self, writer: &str, task: &str, criteria: &Criteria) -> anyhow::Result<()> {
+        self.kept.insert(Self::key(writer, task), criteria.clone());
+        if let Some(dir) = self.path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(&self.path, serde_json::to_vec_pretty(&self.kept)?)
+            .with_context(|| format!("writing {}", self.path.display()))
+    }
+}
+
+/// Ask `writer` through `provider` for the criteria of `task`, and what
+/// the call cost.
+///
+/// # Errors
+/// Says why when the call failed or its reply held none, with what the
+/// reply cost.
+async fn write_criteria(
+    provider: &Arc<dyn ModelProvider + Send + Sync>,
+    writer: &str,
+    task: &str,
+    auth_token: Option<String>,
+) -> Result<(Criteria, f64), (String, f64)> {
+    let request = criteria::request(writer, task, auth_token)
+        .map_err(|e| (format!("could not build the request: {e}"), 0.0))?;
+    let response = match tokio::time::timeout(CRITERIA_TIMEOUT, provider.complete(request)).await {
+        Err(_) => return Err(("the writer took too long".to_string(), 0.0)),
+        Ok(Err(e)) => return Err((format!("the writer's call failed: {e}"), 0.0)),
+        Ok(Ok(response)) => response,
+    };
+    let cost_usd = estimate_cost_usd(writer, &response.usage).unwrap_or(0.0);
+    match criteria::criteria_of(&response) {
+        Some(found) => Ok((found, cost_usd)),
+        None => Err((criteria::none_because(&response.message), cost_usd)),
+    }
+}
+
+/// Hold each of `prepared` to the criteria of its request, written by
+/// `writer` through `provider` unless `written` already holds them.
+/// Attempts whose request got none are left out, with a line saying why.
+/// Returns the attempts and what the writing cost.
+async fn hold_to_criteria(
+    prepared: Vec<Prepared>,
+    written: &mut Written,
+    writer: &str,
+    (provider, auth_token): (&Arc<dyn ModelProvider + Send + Sync>, Option<String>),
+) -> anyhow::Result<(Vec<Prepared>, f64)> {
+    let mut cost_usd = 0.0;
+    let mut failed: BTreeMap<String, String> = BTreeMap::new();
+    let mut held = Vec::with_capacity(prepared.len());
+    for ready in prepared {
+        if let Some(why) = failed.get(&ready.task) {
+            println!("  left out {} {}: {why}", ready.run, ready.task_id);
+            continue;
+        }
+        let found = match written.get(writer, &ready.task) {
+            Some(found) => found,
+            None => match write_criteria(provider, writer, &ready.task, auth_token.clone()).await {
+                Ok((found, cost)) => {
+                    cost_usd += cost;
+                    written.keep(writer, &ready.task, &found)?;
+                    println!(
+                        "  {:40} {} criteria{} (${cost:.3})",
+                        ready.task_id,
+                        found.items.len(),
+                        if found.strict { ", strict" } else { "" },
+                    );
+                    Arc::new(found)
+                }
+                Err((problem, cost)) => {
+                    cost_usd += cost;
+                    let why = format!(
+                        "{} wrote no criteria for its request: {problem}",
+                        route_label(writer)
+                    );
+                    println!("  left out {} {}: {why}", ready.run, ready.task_id);
+                    failed.insert(ready.task.clone(), why);
+                    continue;
+                }
+            },
+        };
+        held.push(ready.held_to(found));
+    }
+    Ok((held, cost_usd))
 }
 
 /// The strongest model the attempts in `lines` ran on, an Opus when one
@@ -305,7 +483,7 @@ fn estimate(judge: &str, prepared: &[Prepared], variant: ReviewVariant) -> Optio
                 clippy::cast_possible_truncation,
                 clippy::cast_sign_loss
             )]
-            let input = (chars as f64 / CHARS_PER_TOKEN) as u64;
+            let input = (chars as f64 / ESTIMATE_CHARS_PER_TOKEN) as u64;
             estimate_cost_usd(judge, &Usage::new(input, output))
         })
         .sum()
@@ -323,6 +501,9 @@ struct Asked {
     answer: Result<(Answer, String, f64), String>,
     /// What a reply without a verdict cost
     wasted_usd: f64,
+    /// How many of its criteria the reviewer found met, when it was held
+    /// to any
+    criteria: String,
 }
 
 /// Ask `judge` through `provider` about `prepared` as `variant`, and
@@ -377,8 +558,12 @@ async fn ask(
             findings: findings.clone(),
             judge: judge.clone(),
             cost_usd: *cost_usd,
-            variant: variant.name().to_string(),
-            criteria: Vec::new(),
+            variant: asked_as(variant, prepared.criteria.is_some()),
+            criteria: prepared
+                .criteria
+                .as_deref()
+                .map(|held| criteria::checked(held, findings))
+                .unwrap_or_default(),
             acted: false,
             replayed: true,
         });
@@ -389,9 +574,14 @@ async fn ask(
             };
         }
     }
+    let criteria = match (&answer, prepared.criteria.as_deref()) {
+        (Ok((_, findings, _)), Some(held)) => criteria_tally(&criteria::checked(held, findings)),
+        _ => String::new(),
+    };
     Asked {
         answer,
         wasted_usd,
+        criteria,
         ..asked(&prepared)
     }
 }
@@ -404,6 +594,7 @@ fn asked(prepared: &Prepared) -> Asked {
         right: prepared.right,
         answer: Err(String::new()),
         wasted_usd: 0.0,
+        criteria: String::new(),
     }
 }
 
@@ -422,7 +613,7 @@ fn row(asked: &Asked) -> String {
                 Answer::Ok => "done",
                 Answer::Other => "held up",
             };
-            let mut line = format!("{head}  {said:10}  ${cost_usd:.3}");
+            let mut line = format!("{head}  {said:10}  ${cost_usd:.3}{}", asked.criteria);
             if *answer == Answer::Model {
                 for finding in findings.lines().filter(|l| !l.trim().is_empty()).take(6) {
                     line.push_str("\n      ");
@@ -485,7 +676,9 @@ fn provider() -> anyhow::Result<(Arc<dyn ModelProvider + Send + Sync>, Option<St
 ///
 /// # Errors
 /// When the attempt log or the sign-in state cannot be read, or no model
-/// to review with is named or found in the log.
+/// to review with (or to write the criteria with) is named or found in
+/// the log.
+#[allow(clippy::too_many_lines)]
 pub async fn gate_replay(options: ReplayOptions) -> anyhow::Result<()> {
     let log = Arc::new(AttemptLog::in_data_dir(&options.data_dir));
     let read = log
@@ -496,11 +689,18 @@ pub async fn gate_replay(options: ReplayOptions) -> anyhow::Result<()> {
     } else {
         ReviewVariant::Plain
     };
+    let asked_as = asked_as(variant, options.criteria);
+    let judge = options.judge.clone().or_else(|| strongest_in(&read.lines));
+    // Asked the same way: by the same reviewer, held to criteria or not.
     let done: HashSet<(&str, &str)> = read
         .lines
         .iter()
         .filter_map(|line| match line {
-            Line::Review(review) if review.replayed && review.variant == variant.name() => {
+            Line::Review(review)
+                if review.replayed
+                    && review.variant == asked_as
+                    && Some(&review.judge) == judge.as_ref() =>
+            {
                 Some((review.agent.as_str(), review.prompt_tx.as_str()))
             }
             _ => None,
@@ -515,11 +715,13 @@ pub async fn gate_replay(options: ReplayOptions) -> anyhow::Result<()> {
     if picks.is_empty() {
         return Ok(());
     }
-    let judge = options
-        .judge
-        .clone()
-        .or_else(|| strongest_in(&read.lines))
-        .context("no model to review with: name one with --judge")?;
+    let judge = judge.context("no model to review with: name one with --judge")?;
+    let writer = if options.criteria {
+        let writer = options.writer.clone().or_else(|| writer_in(&read.lines));
+        Some(writer.context("no model to write the criteria with: name one with --writer")?)
+    } else {
+        None
+    };
 
     let tiers = attempt_log::tiers(&read.lines);
     let sessions = Checkpoints::new(&options.data_dir);
@@ -536,14 +738,30 @@ pub async fn gate_replay(options: ReplayOptions) -> anyhow::Result<()> {
     }
     let wrong = prepared.iter().filter(|p| !p.right).count();
     println!(
-        "asking {} ({}) about {} attempts, {wrong} of them wrong{}",
+        "asking {} ({asked_as}) about {} attempts, {wrong} of them wrong{}",
         route_label(&judge),
-        variant.name(),
         prepared.len(),
         estimate(&judge, &prepared, variant).map_or_else(String::new, |usd| format!(
             ": about ${usd:.2} at list price"
         )),
     );
+    let mut written = Written::in_data_dir(&options.data_dir);
+    if let Some(writer) = &writer {
+        let requests: HashSet<&str> = prepared.iter().map(|p| p.task.as_str()).collect();
+        let to_write = requests
+            .iter()
+            .filter(|task| written.get(writer, task).is_none())
+            .count();
+        #[allow(clippy::cast_precision_loss)]
+        let about = to_write as f64 * ESTIMATED_CRITERIA_USD;
+        println!(
+            "held to the criteria of {} requests: {to_write} to write with {} (about ${about:.2}), \
+             the rest kept in {}; reviews held to criteria cost somewhat more than estimated",
+            requests.len(),
+            route_label(writer),
+            written.path.display(),
+        );
+    }
     if options.dry_run {
         for ready in &prepared {
             let signs: Vec<&str> = ready.signs.iter().map(|sign| sign.name()).collect();
@@ -570,6 +788,11 @@ pub async fn gate_replay(options: ReplayOptions) -> anyhow::Result<()> {
     }
 
     let (provider, auth_token) = provider()?;
+    let mut criteria_usd = 0.0;
+    if let Some(writer) = &writer {
+        let by = (&provider, auth_token.clone());
+        (prepared, criteria_usd) = hold_to_criteria(prepared, &mut written, writer, by).await?;
+    }
     // The first review goes alone: when the reviewer cannot be reached
     // (not signed in, no network), the rest would only wait as long.
     let mut prepared = prepared.into_iter();
@@ -616,6 +839,12 @@ pub async fn gate_replay(options: ReplayOptions) -> anyhow::Result<()> {
         all.push(asked);
     }
     println!("{}", tally(&all));
+    if let Some(writer) = &writer {
+        println!(
+            "writing the criteria cost ${criteria_usd:.2} on {}",
+            route_label(writer)
+        );
+    }
     println!("`aura gate eval` scores every review in the log.");
     Ok(())
 }
@@ -644,6 +873,8 @@ mod tests {
             dry_run: false,
             again: false,
             jobs: 2,
+            criteria: false,
+            writer: None,
         }
     }
 
@@ -907,5 +1138,127 @@ mod tests {
             summary.contains("right work: 0 of 0 found unfinished"),
             "{summary}"
         );
+    }
+
+    /// A reply that calls the criteria tool with `items`.
+    fn criteria_reply(items: serde_json::Value) -> aura_model::MockResponse {
+        aura_model::MockResponse::tool_use(
+            "toolu_1",
+            criteria::CRITERIA_TOOL,
+            json!({"items": items, "strict": true}),
+        )
+    }
+
+    #[tokio::test]
+    async fn with_criteria_each_request_gets_them_once_and_the_review_goes_through_them() {
+        let dir = TempDir::new().unwrap();
+        let Some(copy) = kept_copy(dir.path()) else {
+            return;
+        };
+        let agent = AgentId::generate();
+        let line = attempt(agent, 0, SONNET, Some(Difficulty::Hard));
+        let proved = Truth {
+            copy: Some(copy),
+            ..truth(&line, false, None)
+        };
+        let sessions = Checkpoints::new(dir.path());
+        let saved = crate::session_checkpoint::SessionCheckpoint::new(
+            5,
+            7,
+            session(),
+            Vec::new(),
+            Default::default(),
+        );
+        sessions.save(agent, &saved).await.unwrap();
+        let lines = [Line::Attempt(line.clone()), Line::Truth(proved)];
+        let (picks, _) = pick(&lines, &options(dir.path()), &HashSet::new());
+        let ready = prepare(&picks[0], &sessions, &Tiers::default()).unwrap();
+        assert_eq!(writer_in(&lines).as_deref(), Some(SONNET));
+
+        // Two attempts at one request: its criteria are written once,
+        // and kept for the next replay.
+        let writer: Arc<dyn ModelProvider + Send + Sync> = Arc::new(
+            aura_model::MockProvider::new().with_response(criteria_reply(json!([
+                {"text": "f() returns 2", "kind": "behaviour"},
+                {"text": "f(-1) raises ValueError", "kind": "error"},
+            ]))),
+        );
+        let mut written = Written::in_data_dir(dir.path());
+        let (held, cost_usd) = hold_to_criteria(
+            vec![ready.clone(), ready.clone()],
+            &mut written,
+            SONNET,
+            (&writer, None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(held.len(), 2);
+        assert!(cost_usd > 0.0);
+        let criteria = held[0].criteria.clone().unwrap();
+        assert_eq!((criteria.items.len(), criteria.strict), (2, true));
+        assert_eq!(
+            held[0].why,
+            [
+                ("hard".to_string(), Why::Hard.describe().to_string()),
+                ("criteria".to_string(), Why::Criteria.describe().to_string()),
+            ]
+        );
+        let kept = Written::in_data_dir(dir.path());
+        assert_eq!(kept.get(SONNET, &ready.task), Some(criteria));
+        assert_eq!(
+            kept.get(OPUS, &ready.task),
+            None,
+            "another writer's are its own"
+        );
+
+        // The reviewer is shown them, and its line for each is logged.
+        let why = held[0].why_told();
+        let shown = turn_judge::review_prompt(&held[0].standing(&why));
+        assert!(
+            shown.contains("2. [error] f(-1) raises ValueError"),
+            "{shown}"
+        );
+        let reviewer = Arc::new(aura_model::MockProvider::simple_response(
+            "CRITERION 1: MET by test_f\nCRITERION 2: UNMET, nothing raises\n\
+             1. Negative input is not rejected.\nVERDICT: MODEL",
+        ));
+        let log = Arc::new(AttemptLog::in_data_dir(dir.path()));
+        let asked = ask(
+            reviewer,
+            OPUS.to_string(),
+            ReviewVariant::Plain,
+            None,
+            Arc::clone(&log),
+            held[0].clone(),
+        )
+        .await;
+        let shown = row(&asked);
+        assert!(
+            shown.contains("unfinished") && shown.contains(", criteria 1/2 met, 1 unmet"),
+            "{shown}"
+        );
+        let written = log.read().unwrap().lines;
+        let [Line::Review(review)] = &written[..] else {
+            panic!("{written:?}");
+        };
+        assert_eq!(review.variant, "plain+criteria");
+        assert_eq!(review.why, ["hard", "criteria"]);
+        assert_eq!(
+            review
+                .criteria
+                .iter()
+                .map(|checked| checked.status)
+                .collect::<Vec<_>>(),
+            [Some(criteria::Status::Met), Some(criteria::Status::Unmet)]
+        );
+
+        // A request the writer gives no criteria for is left out.
+        let silent: Arc<dyn ModelProvider + Send + Sync> =
+            Arc::new(aura_model::MockProvider::new().with_response(criteria_reply(json!([]))));
+        let mut none = Written::in_data_dir(&dir.path().join("elsewhere"));
+        let (held, _) = hold_to_criteria(vec![ready], &mut none, SONNET, (&silent, None))
+            .await
+            .unwrap();
+        assert!(held.is_empty());
     }
 }

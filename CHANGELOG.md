@@ -34,6 +34,86 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   outcome. A command that rewrites a changed file (`sed -i`, `> file`)
   counts as another change, not a check.
 
+### The model doing the work sees its acceptance criteria
+
+##### Changed
+
+- With `AURA_GATE_CRITERIA=log`, the default, the model doing a routed
+  code turn is now shown the acceptance criteria after your prompt, as
+  it was only with `on`, and told to make sure each holds and that
+  something it ran shows it. The record keeps the prompt as typed. The
+  review against the criteria stays logged only: replayed over 43
+  benchmark attempts with Opus as reviewer (`aura gate replay
+  --criteria`), it called 6 of the 8 wrong attempts unfinished, both
+  wrong Haiku attempts at ansible-b748edea from Compare #29 and #32
+  among them, and 16 of the 35 right ones. Sonnet 5.5 as reviewer
+  caught all 8 and called 17 of 39 right ones unfinished. Acting on
+  either would send back about two good attempts for each bad one.
+  Showing the criteria has not been measured on new runs yet.
+
+##### Fixed
+
+- A criteria writer's answer given as a string of JSON (`items` holding
+  the list as text, or the whole answer as text), as a bare list, or
+  with a kind spelled `behavior` or `exact-output`, is read. It used to
+  count as no criteria, without a word.
+- When the writer's reply holds no criteria, the chat says why (`gate:
+  claude-sonnet-5-5 (claude plan) wrote no acceptance criteria: its
+  reply called no tool and holds no JSON object`). Only a failed call was reported before.
+
+##### Added
+
+- `aura gate replay --criteria [--writer <model>]` writes the
+  acceptance criteria of each replayed request (once per request, kept
+  in `gate/replay_criteria.json`) and reviews the attempts against
+  them, logged as `plain+criteria`. `aura gate eval` now scores reviews
+  per reviewer as well, so two reviewers asked the same way can be
+  compared.
+
+### A standard model keeps its work until starting on it costs more
+
+##### Changed
+
+- A standard-tier model (Sonnet) that falls below `AURA_GATE_TARGET`
+  on a kind of work no longer hands all of it to the frontier tier. It
+  does so only when starting there has also become the cheaper way: a
+  turn on it costs at least what a turn on the stronger model does,
+  times the share of its turns that succeeded. Sonnet at $0.35 a turn
+  beside Opus at $1.00 keeps the work at 4 successes in 10 and loses it
+  at 3. A fast-tier model is still sent up by the target alone, since
+  its own tests pass on work it got wrong.
+- A model is judged on its turns of the same difficulty once one has a
+  known result, else on the category's. Two failures on hard work used
+  to send a category's medium work to Opus too.
+- A failed attempt still moves up to the stronger model, so this
+  changes where work starts and not whether it can reach Opus.
+
+### A failed check on the strongest model is not run again at more effort
+
+##### Changed
+
+- A turn on the strongest model that ends in an error or with its own
+  last test run failing now ends there. It used to go on on the same
+  model one effort higher, up to `max`, under a prompt for a stronger
+  model taking over. In Compare #33 that second pass cost $1.93 on a
+  task Opus had already finished correctly for $0.48: its last run was
+  a wide suite in which 27 tests fail with or without the change. Work
+  a judge found unfinished on the strongest model still goes on there
+  one effort higher, and is now told it is the same model going over
+  its own work.
+
+### A test run with the change stashed is not the change's check
+
+##### Fixed
+
+- A test or build run between `git stash` and `git stash pop` (in one
+  command line or across calls) ran the code as it was before the
+  change, so Gate no longer takes it for the turn's check. When that
+  run shows failures, a failing run of the same check with the change
+  in place is not counted either, as those failures were there before.
+  Models do this to compare failures before and after, and Gate read
+  the comparison as `checks_failed`.
+
 ### Gate's logged reviews run on a quarter of turns
 
 ##### Changed

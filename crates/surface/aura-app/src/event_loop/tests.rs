@@ -3157,6 +3157,53 @@ async fn exacting_criteria_rate_the_work_hard_unless_criteria_are_off() {
     );
 }
 
+/// What the model doing a turn answering `text` was sent as its request,
+/// under Gate with acceptance criteria `criteria`.
+async fn request_sent(criteria: aura_config::ReviewMode, text: &str) -> String {
+    let (fixture, _commands) = fixture_with_gate(GateLive::new(aura_config::GateConfig {
+        explore_rate: 0.0,
+        criteria,
+        ..aura_config::GateConfig::defaults()
+    }));
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+    turn(&mut state, &mut done, &links, first, text).await;
+    let sent = user_texts(&state, first).remove(0);
+    assert_eq!(
+        prompts_of(&state, first)[0].2.text,
+        text,
+        "the record keeps the prompt as typed"
+    );
+    sent
+}
+
+#[tokio::test]
+async fn the_worker_is_shown_the_criteria_unless_criteria_are_off() {
+    use aura_config::ReviewMode;
+    let text = "fix the parser (plain criteria)";
+    let note = "the harness wrote down what this work will be checked against";
+    let criterion = "prints the parse tree";
+    for mode in [ReviewMode::Log, ReviewMode::On] {
+        let sent = request_sent(mode, text).await;
+        assert!(sent.starts_with(text), "{mode}: {sent}");
+        assert!(
+            sent.contains(note) && sent.contains(criterion),
+            "{mode}: {sent}"
+        );
+    }
+    assert_eq!(request_sent(ReviewMode::Off, text).await, text);
+    let unlisted = "fix the parser";
+    assert_eq!(
+        request_sent(ReviewMode::Log, unlisted).await,
+        unlisted,
+        "nothing is added when the writer listed none"
+    );
+}
+
 #[tokio::test]
 async fn slash_gate_shows_the_table() {
     let (fixture, mut commands) = fixture();

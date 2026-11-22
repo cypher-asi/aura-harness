@@ -460,7 +460,7 @@ async fn run_prompt(
                         None
                     }
                 };
-                if let Some(note) = gate_record::worker_note_for(&gate.live, criteria.as_deref()) {
+                if let Some(note) = gate_record::worker_note_for(criteria.as_deref()) {
                     prompt.text.push_str(&note);
                 }
                 let agent = session.agent_id();
@@ -1091,6 +1091,7 @@ async fn run_attempts(
                         RouteLevel::Turn,
                         category,
                         (&model, effort),
+                        signal,
                         &gate.candidates,
                     )
                 })
@@ -1161,6 +1162,7 @@ async fn run_attempts(
             SteerSource::Harness.prefix(),
             takeover_prompt(
                 &aura_model::model_catalog::route_label(&model),
+                next.model.id != model,
                 signal,
                 review.as_deref()
             )

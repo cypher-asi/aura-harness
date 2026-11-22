@@ -90,8 +90,9 @@ pub const AURA_GATE_CHECK: &str = "AURA_GATE_CHECK";
 pub const AURA_GATE_REVIEW: &str = "AURA_GATE_REVIEW";
 /// Whether Gate writes down a routed code turn's acceptance criteria
 /// before the work starts and reviews the work against them: `on`, `log`
-/// (write them, let exacting ones rate the work hard, and log the
-/// review's verdict without acting on it) or `off`. Consumed by
+/// (write them, show them to the worker, let exacting ones rate the work
+/// hard, and log the review's verdict without acting on it) or `off`.
+/// Consumed by
 /// [`crate::GateConfig::criteria`].
 pub const AURA_GATE_CRITERIA: &str = "AURA_GATE_CRITERIA";
 /// Share (0..=1) of routed turns whose work gets a review that is only

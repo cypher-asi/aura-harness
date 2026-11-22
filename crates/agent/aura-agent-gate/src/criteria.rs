@@ -128,9 +128,16 @@ impl Kind {
         }
     }
 
-    /// The kind named `name`, as [`Self::as_str`] spells it.
+    /// The kind named `name`, as [`Self::as_str`] spells it, or as a
+    /// writer may: `behavior`, `exact-output`.
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
+        let name = name.replace(['-', ' '], "_");
+        let name = if name == "behavior" {
+            "behaviour"
+        } else {
+            name.as_str()
+        };
         Self::ALL.into_iter().find(|kind| kind.as_str() == name)
     }
 
@@ -403,19 +410,105 @@ pub fn criteria_of(response: &ModelResponse) -> Option<Criteria> {
 /// [`CRITERIA_TOOL`], or, when it called no tool, the JSON object in its
 /// text. Items without a text or a known kind are dropped, repeats are
 /// kept once and at most [`MAX_ITEMS`] stay. `None` when no item is left,
-/// or it called another tool.
+/// or it called another tool ([`none_because`] says which).
 #[must_use]
 pub fn criteria_in(reply: &Message) -> Option<Criteria> {
+    from_input(&answer_in(reply).ok()?)
+}
+
+/// What the writer answered with in `reply`: the arguments of its call to
+/// the [`CRITERIA_TOOL`], or the JSON object in its text when it called
+/// no tool.
+///
+/// # Errors
+/// Says what the reply holds instead.
+fn answer_in(reply: &Message) -> Result<Value, String> {
     let mut calls = reply.content.iter().filter_map(|block| match block {
         ContentBlock::ToolUse { name, input, .. } => Some((name, input)),
         _ => None,
     });
-    let input = match calls.next() {
-        Some((name, input)) if name == CRITERIA_TOOL => input.clone(),
-        Some(_) => return None,
-        None => json_in(&reply.text_content())?,
+    match calls.next() {
+        Some((name, input)) if name == CRITERIA_TOOL => Ok(input.clone()),
+        Some((name, _)) => Err(format!("it called `{name}`, not the criteria tool")),
+        None => {
+            let text = reply.text_content();
+            if text.trim().is_empty() {
+                return Err("its reply was empty".to_string());
+            }
+            json_in(&text)
+                .ok_or_else(|| "its reply called no tool and holds no JSON object".to_string())
+        }
+    }
+}
+
+/// Why [`criteria_in`] finds no criteria in `reply`, in a few words.
+#[must_use]
+pub fn none_because(reply: &Message) -> String {
+    let input = match answer_in(reply) {
+        Ok(input) => input,
+        Err(why) => return why,
     };
-    from_input(&input)
+    let Some(listed) = listed_in(&input) else {
+        let holds = match &input {
+            Value::Object(fields) => {
+                let keys: Vec<&str> = fields.keys().map(String::as_str).collect();
+                match fields.get("items") {
+                    Some(items) => format!("`items` that is {}", shape(items)),
+                    None if keys.is_empty() => "nothing".to_string(),
+                    None => format!("only {}", keys.join(", ")),
+                }
+            }
+            other => shape(other).to_string(),
+        };
+        return format!("its answer holds {holds}, not a list of items");
+    };
+    if listed.is_empty() {
+        return "it listed no criteria".to_string();
+    }
+    let mut kinds: Vec<&str> = listed
+        .iter()
+        .filter_map(|item| item.get("kind").and_then(Value::as_str))
+        .collect();
+    kinds.sort_unstable();
+    kinds.dedup();
+    format!(
+        "none of its {} items has a text and a kind it was given (kinds: {})",
+        listed.len(),
+        if kinds.is_empty() {
+            "none".to_string()
+        } else {
+            kinds.join(", ")
+        }
+    )
+}
+
+/// What kind of JSON value `value` is, in words.
+const fn shape(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "a boolean",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(_) => "a list",
+        Value::Object(_) => "an object",
+    }
+}
+
+/// The items the writer listed in `input`. A model sometimes writes a
+/// long nested argument as a string of JSON: the list is read from that
+/// too, as is an answer that is such a string as a whole.
+fn listed_in(input: &Value) -> Option<Vec<Value>> {
+    let parsed = |text: &str| serde_json::from_str::<Value>(text).ok();
+    match input {
+        Value::String(text) => listed_in(&parsed(text).filter(|v| !v.is_string())?),
+        Value::Array(items) => Some(items.clone()),
+        Value::Object(fields) => match fields.get("items")? {
+            Value::Array(items) => Some(items.clone()),
+            Value::String(text) => parsed(text)?.as_array().cloned(),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// The JSON object in `text`: from its first `{` to its last `}`, after a
@@ -438,7 +531,7 @@ fn from_input(input: &Value) -> Option<Criteria> {
             .map(|text| text.chars().take(MAX_TEXT).collect::<String>())
     };
     let mut items: Vec<Criterion> = Vec::new();
-    for item in input.get("items")?.as_array()? {
+    for item in &listed_in(input)? {
         let Some(said) = text(item.get("text")) else {
             continue;
         };
@@ -461,10 +554,11 @@ fn from_input(input: &Value) -> Option<Criteria> {
             break;
         }
     }
-    let strict = input
-        .get("strict")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let strict = match input.get("strict") {
+        Some(Value::Bool(strict)) => *strict,
+        Some(Value::String(said)) => said.trim().eq_ignore_ascii_case("true"),
+        _ => false,
+    };
     (!items.is_empty()).then_some(Criteria { items, strict })
 }
 
@@ -653,6 +747,80 @@ mod tests {
             )],
         );
         assert_eq!(criteria_in(&other), None);
+
+        for (reply, why) in [
+            (
+                called(json!({"items": [], "strict": false})),
+                "it listed no criteria",
+            ),
+            (
+                called(json!({"strict": true})),
+                "its answer holds only strict, not a list of items",
+            ),
+            (
+                called(json!({"items": 3, "strict": true})),
+                "its answer holds `items` that is a number, not a list of items",
+            ),
+            (
+                called(json!({"items": [
+                    {"text": "a", "kind": "style"},
+                    {"text": "b", "kind": "advice"},
+                    {"kind": "style"},
+                ]})),
+                "none of its 3 items has a text and a kind it was given (kinds: advice, style)",
+            ),
+            (
+                Message::assistant("I'll start by reading"),
+                "its reply called no tool and holds no JSON object",
+            ),
+            (Message::assistant(" "), "its reply was empty"),
+            (other, "it called `read_file`, not the criteria tool"),
+        ] {
+            assert_eq!(criteria_in(&reply), None);
+            assert_eq!(none_because(&reply), why);
+        }
+    }
+
+    /// A long nested argument sometimes comes back as a string of JSON,
+    /// and a kind in another spelling.
+    #[test]
+    fn an_answer_written_as_a_string_of_json_is_read() {
+        let items = json!([
+            {"text": "Raises ValueError on a malformed size", "kind": "error"},
+            {"text": "Keeps the tags of the value", "kind": "behavior"},
+            {"text": "Prints `1.5 KB`", "kind": "exact-output"},
+        ]);
+        let expected = |strict| Criteria {
+            items: vec![
+                Criterion {
+                    text: "Raises ValueError on a malformed size".to_string(),
+                    kind: Kind::Error,
+                    reference: None,
+                },
+                Criterion {
+                    text: "Keeps the tags of the value".to_string(),
+                    kind: Kind::Behaviour,
+                    reference: None,
+                },
+                Criterion {
+                    text: "Prints `1.5 KB`".to_string(),
+                    kind: Kind::ExactOutput,
+                    reference: None,
+                },
+            ],
+            strict,
+        };
+        let as_string = called(json!({"items": items.to_string(), "strict": "true"}));
+        assert_eq!(criteria_in(&as_string), Some(expected(true)));
+        let whole = called(Value::String(
+            json!({"items": items, "strict": false}).to_string(),
+        ));
+        assert_eq!(criteria_in(&whole), Some(expected(false)));
+        assert_eq!(criteria_in(&called(items)), Some(expected(false)));
+        assert_eq!(
+            none_because(&called(json!({"items": "see above"}))),
+            "its answer holds `items` that is a string, not a list of items"
+        );
     }
 
     #[test]

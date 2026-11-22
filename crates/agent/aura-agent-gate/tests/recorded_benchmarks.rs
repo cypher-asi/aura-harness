@@ -12,12 +12,17 @@
 //! three it ran. Gate no longer sends work to a model a later version
 //! supersedes.
 //!
+//! Claude Sonnet 5.5, which had done these tasks for about a third of
+//! Opus's cost and passed nine of ten, was then ruled out of hard
+//! multi-file work by two failed turns on an easy task, so Gate did all
+//! such work on Opus. A standard model is now judged on work of the same
+//! difficulty, and keeps the work until its outcomes show that starting
+//! on it costs more than starting on Opus.
+//!
 //! The test replays the benchmark's tasks on what Gate has recorded, and
-//! holds Gate to the result of the strongest model at no more than its
-//! cost. Claude Sonnet 5.5, which had done these tasks for about a third
-//! of Opus's cost and passed nine of ten, stays ruled out of hard
-//! multi-file work by two failed turns on an easy task until exploring
-//! tries it again, so the replay does every task on Opus.
+//! holds Gate to the result of the strongest model at less than its
+//! cost: the tasks start on Sonnet 5.5, and the one whose recorded
+//! Sonnet run failed its check goes on to Opus.
 
 use aura_agent_gate::router::{candidates, current, escalate, pick, Candidate, Work};
 use aura_agent_gate::GateStats;
@@ -240,7 +245,8 @@ impl Log {
 /// What Gate has recorded: the benchmarks, and Sonnet 5.5's turns
 /// outside them, which are 42 debugging turns that passed and the two
 /// failed turns on an easy multi-file task (a rename) that had ruled it
-/// out of hard multi-file work.
+/// out of hard multi-file work. Those two were recorded before prompts
+/// had a difficulty.
 fn history() -> Log {
     let mut log = Log::default();
     for &(_, _, model, kind, cost_usd, passed) in RUNS.iter().chain(LAST) {
@@ -307,7 +313,13 @@ fn replay(log: &mut Log, settings: &GateConfig) -> (Vec<Vec<String>>, f64, usize
                 None
             } else {
                 // The recordings say how each model did, not at which effort.
-                escalate(&log.stats(), RouteLevel::Turn, (&model, None), &candidates)
+                escalate(
+                    &log.stats(),
+                    RouteLevel::Turn,
+                    (&model, None),
+                    OutcomeSignal::ChecksFailed,
+                    &candidates,
+                )
             };
             tried.push(model);
         }
@@ -351,7 +363,7 @@ fn the_fixture_is_the_recorded_benchmark() {
 }
 
 #[test]
-fn gate_does_the_recorded_tasks_as_well_as_the_strongest_model_for_no_more() {
+fn gate_does_the_recorded_tasks_as_well_as_the_strongest_model_for_less() {
     let mut log = history();
     let (models, cost, passes) = replay(&mut log, &settings());
     let (opus_cost, opus_passes) = on_opus();
@@ -365,15 +377,45 @@ fn gate_does_the_recorded_tasks_as_well_as_the_strongest_model_for_no_more() {
     assert_eq!(
         models,
         [
-            vec![OPUS.to_string()],
-            vec![OPUS.to_string()],
-            vec![OPUS.to_string()],
+            vec![SONNET.to_string()],
+            vec![SONNET.to_string()],
+            vec![SONNET.to_string(), OPUS.to_string()],
         ],
-        "the standard model's failures on multi-file work rule it out"
+        "hard work starts on the standard model, and what fails goes on to the strongest"
     );
     assert_eq!(passes, opus_passes, "on {models:?}");
     assert!(
-        cost <= opus_cost + 1e-9,
+        cost < 0.6 * opus_cost,
         "gate spent {cost} on {models:?}, opus {opus_cost}"
     );
+}
+
+/// Sonnet 5.5 failing hard multi-file work again and again sends that
+/// work to Opus, once starting on Sonnet has come to cost more. Opus has
+/// done such work for $0.54 a turn, so at $0.30 a turn Sonnet must pass
+/// more than 56% of it: after its one recorded pass, five failures in a
+/// row leave it at five in ten at best.
+#[test]
+fn a_standard_model_that_keeps_failing_the_work_loses_it() {
+    let hard = Work::turn(PromptCategory::MultiFileChange).of(Some(Difficulty::Hard));
+    let mut log = history();
+    let start = |log: &Log| {
+        pick(&log.stats(), &hard, &plan(), &settings(), &mut || 1.0)
+            .unwrap()
+            .model
+            .id
+    };
+    let mut failures = 0;
+    while start(&log) == SONNET {
+        assert!(failures < 20, "sonnet keeps the work whatever it fails");
+        log.turn(
+            SONNET,
+            (PromptCategory::MultiFileChange, Some(Difficulty::Hard)),
+            0.3,
+            false,
+        );
+        failures += 1;
+    }
+    assert_eq!(start(&log), OPUS);
+    assert_eq!(failures, 5);
 }

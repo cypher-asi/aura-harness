@@ -853,8 +853,11 @@ async fn outside_git_only_file_tool_changes_are_undone_before_the_retry() {
     assert!(!ws.join("gone.txt").exists());
 }
 
+/// Its own failing check says too little to pay for the work twice: the
+/// check may fail without the change too. Only work a judge found
+/// unfinished is done again on the strongest model.
 #[tokio::test]
-async fn on_the_strongest_model_a_failure_is_retried_one_effort_higher() {
+async fn on_the_strongest_model_a_failed_check_is_not_retried() {
     let (fixture, _commands) = fixture();
     let mut b = borrowed(&fixture);
     let first = fixture.first;
@@ -875,23 +878,16 @@ async fn on_the_strongest_model_a_failure_is_retried_one_effort_higher() {
     .await;
 
     let attempts = children(&fixture, first, "implement");
-    assert_eq!(attempts.len(), 2, "{}", result.final_message);
+    assert_eq!(attempts.len(), 1, "{}", result.final_message);
     let (prompts, outcomes) = record(&fixture, attempts[0]);
     assert_eq!(
         prompts[0].route,
         Route::subtask(GPT, RouteReason::Default).at_effort("medium"),
-        "with Sonnet ruled out, planning goes to the strongest model"
-    );
-    assert_eq!(outcomes[0].signal, OutcomeSignal::ChecksFailed);
-    let (prompts, outcomes) = record(&fixture, attempts[1]);
-    assert_eq!(
-        prompts[0].route,
-        Route::subtask(GPT, RouteReason::Escalate).at_effort("high"),
-        "nothing is stronger, so the same model thinks harder"
+        "with Sonnet sent up, planning goes to the strongest model"
     );
     assert_eq!(outcomes[0].signal, OutcomeSignal::ChecksFailed);
     assert!(
         fixture.workspace.join(format!("notes/{GPT}.txt")).exists(),
-        "a final failure is left for the lead to see"
+        "the failure is left for the lead to see"
     );
 }

@@ -17,15 +17,16 @@
 //!
 //! Gate picks the reasoning effort with the model: work starts at the
 //! effort its difficulty calls for on the model it goes to
-//! ([`effort_on`]), and only work that failed on the strongest model is
-//! tried again at a higher one, up to max ([`escalate`]). At max one call
-//! can think for minutes, so it is kept for work nothing less got right.
+//! ([`effort_on`]), and only work on the strongest model that a judge
+//! found unfinished is tried again at a higher one, up to max
+//! ([`escalate`]). At max one call can think for minutes, so it is kept
+//! for work nothing less got right.
 
 use std::collections::HashMap;
 
 use aura_config::GateConfig;
 use aura_core_auth::ProviderKind;
-use aura_core_types::{Difficulty, PromptCategory, Route, RouteLevel, RouteReason};
+use aura_core_types::{Difficulty, OutcomeSignal, PromptCategory, Route, RouteLevel, RouteReason};
 use aura_model::model_catalog::{
     estimate_cost_usd, has_max_effort, infer_tier, model_key, route_label, supersedes,
     ModelBackend, ModelOption, ModelTier,
@@ -168,11 +169,11 @@ pub fn fixed_pick(candidates: &[Candidate]) -> Option<&Candidate> {
 /// Only work the classifier found easy starts on the fast tier, plans
 /// excepted; everything else starts on the standard one: plans, whatever
 /// their difficulty, and medium, hard or unrated work of any kind, small
-/// changes included. A failing test or build moves code work up a tier,
-/// and a category whose start model fails too often starts higher
-/// ([`pick`]). The frontier tier is reached that way, not by default: on
-/// the work it is asked for, it costs several times a standard model for
-/// results the checks rarely tell apart.
+/// changes included. Work that failed moves up a tier ([`escalate`]),
+/// and work whose start model has shown it is the dearer place to start
+/// starts higher ([`pick`]). The frontier tier is reached that way, not
+/// by default: on the work it is asked for, it costs several times a
+/// standard model for results the checks rarely tell apart.
 #[must_use]
 pub const fn start_tier(category: PromptCategory, difficulty: Option<Difficulty>) -> ModelTier {
     match (category, difficulty) {
@@ -463,18 +464,19 @@ pub fn by_expected_cost<'a>(
 /// them), given what `stats` has learned:
 ///
 /// 1. the cheapest model with at least `min_tries` counted outcomes on
-///    the category and a success rate of at least `target`;
+///    the work and a success rate of at least `target`;
 /// 2. or, when it is cheaper than that (or nothing is proven), the model
 ///    the work starts on: the cheapest model of its [`start_tier`],
-///    or of the next tier up while the category's outcomes on that model
-///    rule it out ([`crate::stats::Row::can_still_reach`]), ending at the strongest;
+///    or of the next tier up while the work's outcomes on that model
+///    send it up ([`start_index`]), ending at the strongest;
 /// 3. with probability `explore_rate`, a cheaper model than that
-///    instead, when there is one: the nearest the category's outcomes
+///    instead, when there is one: the nearest the work's outcomes
 ///    have not ruled out, else the nearest. So a model that was ruled
 ///    out is tried again once nothing cheaper is more promising, and
 ///    comes back when those tries prove it.
 ///
-/// Models are judged by their [`judged`] rows and ordered by
+/// Models are judged by their [`judged`] rows, on work of the same
+/// difficulty where they have done any, and ordered by
 /// [`by_expected_cost`]. `None` when there are no candidates. Work that
 /// is not easy starts no lower than [`start_floor`], whether proven, by
 /// default or explored, and no work goes to a model a later version
@@ -489,13 +491,18 @@ pub fn pick(
 ) -> Option<Decision> {
     let candidates = &current(candidates);
     let Work {
-        level,
-        category,
-        kind,
-        ..
+        level, category, ..
     } = *work;
-    let row = |model: &str| judged(stats, level, category, kind, model, settings.min_tries);
-    let order = by_expected_cost(stats, level, candidates);
+    let row = |model: &str| judged(stats, work, model, settings.min_tries);
+    let expected = expected_costs(stats, level, candidates);
+    let order: Vec<&Candidate> = expected.iter().map(|(c, _)| *c).collect();
+    // What the work costs on a model: what it has cost there, else what
+    // any work is expected to.
+    let cost = |index: usize| {
+        row(&order[index].id)
+            .and_then(|row| row.mean_total_cost_usd())
+            .or(expected[index].1)
+    };
     let floor = start_floor(work.difficulty, order.iter().map(|c| c.tier));
     let may_start = |c: &Candidate| floor.is_none_or(|floor| c.tier >= floor);
     let proven = order.iter().position(|c| {
@@ -508,7 +515,7 @@ pub fn pick(
             })
     });
     let start = start_index(
-        &row,
+        (&row, &cost),
         start_tier(category, work.difficulty),
         &order,
         settings,
@@ -547,14 +554,19 @@ pub fn pick(
 /// the same effort, or at medium when it ran with thinking off (not every
 /// stronger model can turn thinking off). With no stronger model, the
 /// same model one effort higher ([`raise_effort`]), so max is the last
-/// step on the strongest model. `effort` is `None` when Gate does not choose the effort (the
-/// user pinned one): then only the model moves. `None` when nothing is
-/// left to try.
+/// step on the strongest model, and only when a judge found the work
+/// unfinished (`signal` is [`OutcomeSignal::JudgedFail`]). A failing test
+/// run or an error does not send the strongest model over its own work
+/// again: its last test run often fails for reasons the change did not
+/// cause, and the second pass costs several times the first. `effort` is
+/// `None` when Gate does not choose the effort (the user pinned one):
+/// then only the model moves. `None` when nothing is left to try.
 #[must_use]
 pub fn escalate(
     stats: &GateStats,
     level: RouteLevel,
     (failed, effort): (&str, Option<ThinkingEffort>),
+    signal: OutcomeSignal,
     candidates: &[Candidate],
 ) -> Option<Decision> {
     let ran = candidates.iter().find(|c| c.id == failed);
@@ -574,6 +586,9 @@ pub fn escalate(
         })
     };
     let Some(next) = stronger.iter().map(|c| c.tier).min() else {
+        if signal != OutcomeSignal::JudgedFail {
+            return None;
+        }
         let effort = raise_effort(effort?, failed)?;
         return decide(ran?, effort);
     };
@@ -594,7 +609,8 @@ pub fn has_stronger_model(
     ran: (&str, Option<ThinkingEffort>),
     candidates: &[Candidate],
 ) -> bool {
-    escalate(stats, level, ran, candidates).is_some_and(|next| next.model.id != ran.0)
+    escalate(stats, level, ran, OutcomeSignal::JudgedFail, candidates)
+        .is_some_and(|next| next.model.id != ran.0)
 }
 
 /// What a subtask is first routed among when the agent dispatching it
@@ -625,23 +641,28 @@ pub fn below_lead(candidates: &[Candidate], lead: Option<&str>) -> Vec<Candidate
     }
 }
 
-/// The outcomes [`pick`] judges `model` by for work at `level` asking for
-/// `category`: for a subtask, those of subtasks for the permanent agent
-/// `kind` once they number `min_tries`, as a model can suit one agent's
-/// work and not another's, else every subtask on the category; for a
-/// turn, the turns it did itself ([`GateStats::unled_row`]), since a led
-/// turn that failed may have failed in its subtasks.
+/// The outcomes [`pick`] judges `model` by for `work`: for a subtask,
+/// those of subtasks for its permanent agent once they number
+/// `min_tries`, as a model can suit one agent's work and not another's,
+/// else every subtask on the category; for a turn, the turns it did
+/// itself ([`GateStats::unled_row`]), since a led turn that failed may
+/// have failed in its subtasks. A turn the classifier gave a difficulty
+/// is judged by the turns of that difficulty when any has a known
+/// result: failing an easy rename says little of hard work, and passing
+/// one says less.
 #[must_use]
-pub fn judged(
-    stats: &GateStats,
-    level: RouteLevel,
-    category: PromptCategory,
-    kind: Option<&str>,
-    model: &str,
-    min_tries: u32,
-) -> Option<Row> {
+pub fn judged(stats: &GateStats, work: &Work<'_>, model: &str, min_tries: u32) -> Option<Row> {
+    let Work {
+        level,
+        category,
+        difficulty,
+        kind,
+    } = *work;
     match level {
-        RouteLevel::Turn => stats.unled_row(category, model),
+        RouteLevel::Turn => difficulty
+            .and_then(|difficulty| stats.unled_work_row(category, difficulty, model))
+            .filter(|row| row.tries > 0)
+            .or_else(|| stats.unled_row(category, model)),
         RouteLevel::Subtask => kind
             .and_then(|kind| stats.kind_row(category, kind, model))
             .filter(|row| row.settled(min_tries))
@@ -666,11 +687,23 @@ fn start_floor(
 
 /// Position in `order` of the model work starts on: the cheapest model of
 /// its `start` tier ([`start_tier`]), or of the lowest tier above it
-/// whose cheapest model the category's outcomes (`row`) have not ruled
-/// out. The cheapest model of the strongest tier when every tier is ruled
-/// out or none is at or above the start tier.
+/// that the work's outcomes (`row`) do not send higher. The cheapest
+/// model of the strongest tier when every tier below is sent up or none
+/// is at or above the start tier.
+///
+/// A model is sent up once it can no longer reach the target
+/// ([`Row::can_still_reach`]): two failures in its first ten tries.
+/// Below the standard tier that is enough, as moving up from there costs
+/// cents. From the standard tier up the next tier costs several times as
+/// much, so the model's outcomes must also show that starting on it
+/// costs more than starting on the next ([`dearer_start`]): its failures
+/// go on to the next model anyway, which is how the frontier tier is
+/// reached. Where either cost is unknown, the target decides alone.
 fn start_index(
-    row: &impl Fn(&str) -> Option<Row>,
+    (row, cost): (
+        &impl Fn(&str) -> Option<Row>,
+        &impl Fn(usize) -> Option<f64>,
+    ),
     start: ModelTier,
     order: &[&Candidate],
     settings: &GateConfig,
@@ -684,14 +717,51 @@ fn start_index(
         .collect();
     tiers.sort_unstable();
     tiers.dedup();
-    tiers
+    let firsts: Vec<usize> = tiers
         .into_iter()
         .filter_map(|tier| order.iter().position(|c| c.tier == tier))
-        .find(|&index| {
-            row(&order[index].id)
-                .is_none_or(|row| row.can_still_reach(settings.target, settings.min_tries))
+        .collect();
+    firsts
+        .iter()
+        .enumerate()
+        .find(|&(at, &index)| {
+            let Some(row) = row(&order[index].id) else {
+                return true;
+            };
+            if row.can_still_reach(settings.target, settings.min_tries) {
+                return true;
+            }
+            if order[index].tier < ModelTier::Standard {
+                return false;
+            }
+            match firsts.get(at + 1) {
+                None => true,
+                Some(&next) => match (cost(index), cost(next)) {
+                    (Some(cost), Some(next)) if cost > 0.0 && next > 0.0 => {
+                        !dearer_start(&row, cost, next, settings.min_tries)
+                    }
+                    _ => false,
+                },
+            }
         })
+        .map(|(_, &index)| index)
         .or(strongest)
+}
+
+/// Whether work costs more started on a model with the outcomes `row`,
+/// where it costs `cost`, than on the next model up, where it costs
+/// `next`. With the share `rate` of its attempts succeeding, starting on
+/// it costs `cost + (1 - rate) * next` once the failures have gone on to
+/// the next model, against `next` for starting there: no less when
+/// `cost >= rate * next`. Before the row has `min_tries` tries, the ones
+/// it lacks count as successes, as in [`Row::can_still_reach`], so a
+/// model is sent up early only by failures no later success can make up
+/// for.
+fn dearer_start(row: &Row, cost: f64, next: f64, min_tries: u32) -> bool {
+    let lacking = min_tries.saturating_sub(row.tries);
+    let counted = row.tries.max(min_tries).max(1);
+    let rate = f64::from(row.successes + lacking) / f64::from(counted);
+    cost >= rate * next
 }
 
 /// Whether a check verifies work asking for `category`: code changes and
@@ -1090,7 +1160,15 @@ mod tests {
         fn a_failed_attempt_escalates_to_the_cheapest_model_one_tier_up() {
             let empty = GateStats::default();
             let up = |failed: &str, candidates: &[Candidate]| {
-                escalate(&empty, RouteLevel::Subtask, (failed, None), candidates).map(|d| {
+                let signal = OutcomeSignal::ChecksFailed;
+                escalate(
+                    &empty,
+                    RouteLevel::Subtask,
+                    (failed, None),
+                    signal,
+                    candidates,
+                )
+                .map(|d| {
                     assert_eq!(d.reason, RouteReason::Escalate);
                     assert!(!d.explored);
                     d.model.id
@@ -1136,10 +1214,29 @@ mod tests {
                 ThinkingEffort::High
             );
 
-            let up = |failed: &str, effort| {
-                escalate(&empty, RouteLevel::Turn, (failed, Some(effort)), &claude())
-                    .map(|d| (d.model.id, d.effort))
+            let after = |signal, failed: &str, effort| {
+                escalate(
+                    &empty,
+                    RouteLevel::Turn,
+                    (failed, Some(effort)),
+                    signal,
+                    &claude(),
+                )
+                .map(|d| (d.model.id, d.effort))
             };
+            let up = |failed: &str, effort| after(OutcomeSignal::JudgedFail, failed, effort);
+            for signal in [OutcomeSignal::ChecksFailed, OutcomeSignal::Error] {
+                assert_eq!(
+                    after(signal, SONNET, ThinkingEffort::High),
+                    Some((OPUS.to_string(), ThinkingEffort::High)),
+                    "{signal} moves work to a stronger model"
+                );
+                assert_eq!(
+                    after(signal, OPUS, ThinkingEffort::High),
+                    None,
+                    "{signal} does not send the strongest model over its own work again"
+                );
+            }
             assert_eq!(
                 up(SONNET, ThinkingEffort::High),
                 Some((OPUS.to_string(), ThinkingEffort::High)),
@@ -1157,13 +1254,14 @@ mod tests {
             assert_eq!(
                 up(OPUS, ThinkingEffort::High),
                 Some((OPUS.to_string(), ThinkingEffort::Max)),
-                "max only once high failed on the strongest model"
+                "max only once a judge found high unfinished on the strongest model"
             );
             assert_eq!(up(OPUS, ThinkingEffort::Max), None);
             let route = escalate(
                 &empty,
                 RouteLevel::Turn,
                 (OPUS, Some(ThinkingEffort::High)),
+                OutcomeSignal::JudgedFail,
                 &claude(),
             )
             .unwrap()
@@ -1181,6 +1279,7 @@ mod tests {
                     &empty,
                     RouteLevel::Turn,
                     (&top, Some(ThinkingEffort::High)),
+                    OutcomeSignal::JudgedFail,
                     &gpt
                 ),
                 None,
@@ -1305,11 +1404,11 @@ mod tests {
                 ));
             }
             assert_eq!(chosen(&log.stats(), category, &claude()).0, SONNET);
-            log.turns(2, category, SONNET, false);
+            log.turns(10, category, SONNET, false);
             assert_eq!(
                 chosen(&log.stats(), category, &claude()).0,
                 OPUS,
-                "two failures of its own do"
+                "failing every turn of its own does"
             );
         }
 
@@ -1336,39 +1435,124 @@ mod tests {
         }
 
         #[test]
-        fn a_start_model_that_fails_too_often_hands_the_category_up_a_tier() {
-            let mut log = Log::default();
-            log.turns(1, PromptCategory::Debugging, SONNET, false);
-            assert_eq!(
-                chosen(&log.stats(), PromptCategory::Debugging, &claude()).0,
-                SONNET,
-                "nine of ten can still pass"
-            );
-            log.turns(1, PromptCategory::Debugging, SONNET, false);
-            assert_eq!(
-                chosen(&log.stats(), PromptCategory::Debugging, &claude()),
-                (OPUS.to_string(), RouteReason::Default),
-                "eight of ten cannot reach 85%"
-            );
-            assert_eq!(
-                chosen(&log.stats(), PromptCategory::MultiFileChange, &claude()).0,
-                SONNET,
-                "failing at debugging says nothing about other work"
-            );
-
+        fn a_fast_model_that_fails_too_often_hands_the_work_up_a_tier() {
             let mut log = Log::default();
             let small = easy(PromptCategory::SmallChange);
             assert_eq!(chosen_at(&log.stats(), &small, &claude()).0, HAIKU);
-            log.turns(2, PromptCategory::SmallChange, HAIKU, false);
-            assert_eq!(chosen_at(&log.stats(), &small, &claude()).0, SONNET);
+            log.turns(1, PromptCategory::SmallChange, HAIKU, false);
+            assert_eq!(
+                chosen_at(&log.stats(), &small, &claude()).0,
+                HAIKU,
+                "nine of ten can still pass"
+            );
+            log.turns(1, PromptCategory::SmallChange, HAIKU, false);
+            assert_eq!(
+                chosen_at(&log.stats(), &small, &claude()),
+                (SONNET.to_string(), RouteReason::Default),
+                "eight of ten cannot reach 85%"
+            );
+            assert_eq!(
+                chosen_at(&log.stats(), &easy(PromptCategory::Question), &claude()).0,
+                HAIKU,
+                "failing at small changes says nothing about other work"
+            );
             log.turns(2, PromptCategory::SmallChange, SONNET, false);
+            assert_eq!(
+                chosen_at(&log.stats(), &small, &claude()).0,
+                SONNET,
+                "two failures do not send a standard model's work to the frontier"
+            );
+            log.turns(8, PromptCategory::SmallChange, SONNET, false);
             assert_eq!(chosen_at(&log.stats(), &small, &claude()).0, OPUS);
-            log.turns(2, PromptCategory::SmallChange, OPUS, false);
+            log.turns(10, PromptCategory::SmallChange, OPUS, false);
             assert_eq!(
                 chosen_at(&log.stats(), &small, &claude()).0,
                 OPUS,
-                "the strongest model when every tier is ruled out"
+                "the strongest model when every tier is sent up"
             );
+        }
+
+        /// Hard debugging that costs $0.35 a turn on Sonnet and $1.00 on
+        /// Opus: Sonnet's failures go on to Opus, so starting on Sonnet
+        /// costs `0.35 + (1 - rate) * 1.00` against `1.00`, and is the
+        /// cheaper start while more than 35% of its turns pass.
+        #[test]
+        fn a_standard_model_keeps_its_work_until_starting_on_it_costs_more() {
+            let hard = (PromptCategory::Debugging, Some(Difficulty::Hard));
+            let work = Work::turn(hard.0).of(hard.1);
+            let picked = |passes: usize, failures: usize| {
+                let mut log = Log::default();
+                log.priced_turn(hard, OPUS, true, 1.0);
+                for _ in 0..passes {
+                    log.priced_turn(hard, SONNET, true, 0.35);
+                }
+                for _ in 0..failures {
+                    log.priced_turn(hard, SONNET, false, 0.35);
+                }
+                chosen_at(&log.stats(), &work, &claude())
+            };
+            let sonnet = (SONNET.to_string(), RouteReason::Default);
+            let opus = (OPUS.to_string(), RouteReason::Default);
+            assert_eq!(picked(0, 2), sonnet, "eight more could still pass");
+            assert_eq!(picked(5, 5), sonnet, "half fail, and it is still cheaper");
+            assert_eq!(picked(4, 6), sonnet);
+            assert_eq!(picked(3, 7), opus, "0.35 + 0.7 * 1.00 is more than 1.00");
+            assert_eq!(
+                picked(0, 8),
+                opus,
+                "two passes more would not make it cheaper"
+            );
+            assert_eq!(picked(6, 14), opus);
+            assert_eq!(picked(8, 12), sonnet);
+        }
+
+        #[test]
+        fn a_model_is_judged_on_work_of_the_same_difficulty() {
+            let category = PromptCategory::MultiFileChange;
+            let mut log = Log::default();
+            log.priced_turn((category, Some(Difficulty::Hard)), OPUS, true, 1.0);
+            for _ in 0..10 {
+                log.priced_turn((category, Some(Difficulty::Hard)), SONNET, false, 0.3);
+            }
+            let at = |log: &Log, difficulty| {
+                chosen_at(
+                    &log.stats(),
+                    &Work::turn(category).of(Some(difficulty)),
+                    &claude(),
+                )
+                .0
+            };
+            assert_eq!(at(&log, Difficulty::Hard), OPUS);
+            assert_eq!(
+                at(&log, Difficulty::Medium),
+                OPUS,
+                "with no medium turn to go by, the category's"
+            );
+            log.priced_turn((category, Some(Difficulty::Medium)), SONNET, true, 0.1);
+            assert_eq!(
+                at(&log, Difficulty::Medium),
+                SONNET,
+                "failing hard work says little of medium work"
+            );
+            assert_eq!(at(&log, Difficulty::Hard), OPUS);
+            assert_eq!(
+                chosen(&log.stats(), PromptCategory::Debugging, &claude()).0,
+                SONNET,
+                "nor of other work"
+            );
+
+            // Passing easy work does not prove a model on hard work.
+            let mut log = Log::default();
+            for _ in 0..10 {
+                log.priced_turn((category, Some(Difficulty::Easy)), HAIKU, true, 0.01);
+            }
+            log.priced_turn((category, Some(Difficulty::Hard)), HAIKU, false, 0.01);
+            let stats = log.stats();
+            let hard = Work::turn(category).of(Some(Difficulty::Hard));
+            let row = judged(&stats, &hard, HAIKU, 10).unwrap();
+            assert_eq!((row.tries, row.successes), (1, 0));
+            let row = judged(&stats, &Work::turn(category), HAIKU, 10).unwrap();
+            assert_eq!((row.tries, row.successes), (11, 10), "unrated: all of them");
         }
 
         #[test]
@@ -1607,7 +1791,14 @@ mod tests {
                 "work for the strongest model goes to the strongest left"
             );
             assert_eq!(
-                escalate(&empty, RouteLevel::Subtask, (SONNET, None), &claude).map(|d| d.model.id),
+                escalate(
+                    &empty,
+                    RouteLevel::Subtask,
+                    (SONNET, None),
+                    OutcomeSignal::ChecksFailed,
+                    &claude
+                )
+                .map(|d| d.model.id),
                 Some(OPUS.to_string()),
                 "a failed attempt may still go up to the lead's tier"
             );
@@ -1924,7 +2115,7 @@ mod tests {
             // at the same price.
             let category = PromptCategory::MultiFileChange;
             let mut log = Log::default();
-            for _ in 0..3 {
+            for _ in 0..10 {
                 log.rated_turn(category, NEW_SONNET, Difficulty::Medium, false);
             }
             let stats = log.stats();
@@ -1952,10 +2143,16 @@ mod tests {
                 (OLD_SONNET, NEW_OPUS),
             ] {
                 assert_eq!(
-                    escalate(&stats, RouteLevel::Turn, (failed, None), &all)
-                        .unwrap()
-                        .model
-                        .id,
+                    escalate(
+                        &stats,
+                        RouteLevel::Turn,
+                        (failed, None),
+                        OutcomeSignal::ChecksFailed,
+                        &all,
+                    )
+                    .unwrap()
+                    .model
+                    .id,
                     next,
                     "after {failed}"
                 );

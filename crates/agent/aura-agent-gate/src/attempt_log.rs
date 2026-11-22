@@ -592,11 +592,14 @@ impl Tiers {
     }
 }
 
-/// How the reviews asked one way held up against what happened.
+/// How the reviews one model was asked one way held up against what
+/// happened.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReviewScore {
     /// How the judge was asked
     pub variant: String,
+    /// The model that reviewed
+    pub judge: String,
     /// Whether `aura gate replay` asked
     pub replayed: bool,
     /// Attempts reviewed
@@ -948,12 +951,13 @@ pub fn evaluate_where(lines: &[Line], filter: &Filter) -> Report {
         });
     }
 
-    // The last review of each attempt per way of asking.
-    let mut last: BTreeMap<(&str, bool, &str, &str), &Review> = BTreeMap::new();
+    // The last review of each attempt per way of asking and reviewer.
+    let mut last: BTreeMap<(&str, &str, bool, &str, &str), &Review> = BTreeMap::new();
     for review in &joined.reviews {
         last.insert(
             (
                 review.variant.as_str(),
+                review.judge.as_str(),
                 review.replayed,
                 review.agent.as_str(),
                 review.prompt_tx.as_str(),
@@ -961,17 +965,16 @@ pub fn evaluate_where(lines: &[Line], filter: &Filter) -> Report {
             review,
         );
     }
-    for ((variant, replayed, agent, prompt), review) in last {
+    for ((variant, judge, replayed, agent, prompt), review) in last {
         let Some(right) = taken.get(&(agent, prompt)) else {
             continue;
         };
-        if report
-            .reviews
-            .last()
-            .is_none_or(|score| score.variant != variant || score.replayed != replayed)
-        {
+        if report.reviews.last().is_none_or(|score| {
+            score.variant != variant || score.judge != judge || score.replayed != replayed
+        }) {
             report.reviews.push(ReviewScore {
                 variant: variant.to_string(),
+                judge: judge.to_string(),
                 replayed,
                 reviewed: 0,
                 known: 0,
@@ -1149,8 +1152,8 @@ impl Report {
         let _ = writeln!(out, "\nReviews of work that was about to stand:");
         let _ = writeln!(
             out,
-            "  {:20}  reviewed  known  wrong  said unfinished  caught  right but flagged  wrong but passed     cost",
-            "asked"
+            "  {:25}  {:20}  reviewed  known  wrong  said unfinished  caught  right but flagged  wrong but passed     cost",
+            "asked", "reviewer"
         );
         for score in &self.reviews {
             let asked = if score.replayed {
@@ -1158,9 +1161,10 @@ impl Report {
             } else {
                 score.variant.clone()
             };
+            let reviewer = score.judge.rsplit('/').next().unwrap_or_default();
             let _ = writeln!(
                 out,
-                "  {asked:20}  {:>8}  {:>5}  {:>5}  {:>15}  {:>6}  {:>17}  {:>16}  ${:>6.2}",
+                "  {asked:25}  {reviewer:20}  {:>8}  {:>5}  {:>5}  {:>15}  {:>6}  {:>17}  {:>16}  ${:>6.2}",
                 score.reviewed,
                 score.known,
                 score.wrong,
@@ -1650,6 +1654,26 @@ mod tests {
             "{rendered}"
         );
         assert!(rendered.contains("plain (replayed)"), "{rendered}");
+
+        // Another reviewer asked the same way is scored on its own.
+        let mut lines = lines.to_vec();
+        lines.push(Line::Review(Review {
+            judge: "claude/claude-sonnet-5-5".to_string(),
+            ..review("p1", Answer::Ok, "plain")
+        }));
+        let both = evaluate(&lines);
+        let by = |judge: &str| {
+            both.reviews
+                .iter()
+                .find(|score| score.variant == "plain" && score.judge == judge)
+                .unwrap()
+        };
+        assert_eq!(both.reviews.len(), 3);
+        assert_eq!(by("claude/claude-opus-5-5"), plain);
+        let sonnet = by("claude/claude-sonnet-5-5");
+        assert_eq!((sonnet.reviewed, sonnet.wrong, sonnet.caught), (1, 1, 0));
+        let rendered = both.render();
+        assert!(rendered.contains("claude-sonnet-5-5"), "{rendered}");
 
         // A report about some attempts scores the reviews of those only.
         let failed = evaluate_where(
