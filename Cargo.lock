@@ -973,6 +973,7 @@ dependencies = [
  "aura-core-auth",
  "aura-core-types",
  "aura-gate-evidence",
+ "aura-gate-route",
  "aura-model",
 ]
 

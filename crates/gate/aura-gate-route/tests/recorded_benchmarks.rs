@@ -26,10 +26,7 @@
 
 use aura_config::GateConfig;
 use aura_core_auth::ProviderKind;
-use aura_core_types::{
-    AgentId, Difficulty, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, RecordEntry,
-    Route, RouteLevel, RouteReason, Transaction,
-};
+use aura_core_types::{Difficulty, OutcomeSignal, PromptCategory, RouteLevel};
 use aura_gate_route::stats::GateStats;
 use aura_gate_route::{candidates, current, escalate, pick, Candidate, Work};
 use aura_model::model_catalog::{infer_tier, ModelBackend, ModelOption};
@@ -38,6 +35,9 @@ const HAIKU: &str = "claude/claude-haiku-5-5";
 const SONNET: &str = "claude/claude-sonnet-5-5";
 const OLD_SONNET: &str = "claude/claude-sonnet-5";
 const OPUS: &str = "claude/claude-opus-5-5";
+
+/// Hard multi-file work, as the benchmark's prompts are classified now.
+const HARD: Work<'static> = Work::turn(PromptCategory::MultiFileChange).of(Some(Difficulty::Hard));
 
 /// How a run's prompt was classified: not at all (the classifier failed
 /// on long prompts at first, and such outcomes no longer count), or as
@@ -51,11 +51,11 @@ enum Kind {
 use Kind::{DH, MH, U};
 
 impl Kind {
-    const fn work(self) -> Option<(PromptCategory, Option<Difficulty>)> {
+    const fn work(self) -> Option<Work<'static>> {
         match self {
             U => None,
-            DH => Some((PromptCategory::Debugging, Some(Difficulty::Hard))),
-            MH => Some((PromptCategory::MultiFileChange, Some(Difficulty::Hard))),
+            DH => Some(Work::turn(PromptCategory::Debugging).of(Some(Difficulty::Hard))),
+            MH => Some(HARD),
         }
     }
 }
@@ -189,57 +189,16 @@ fn plan() -> Vec<Candidate> {
     )
 }
 
-/// A record of turns, as a benchmark writes them.
-#[derive(Default)]
-struct Log {
-    entries: Vec<RecordEntry>,
-}
-
-impl Log {
-    fn push(&mut self, tx: Transaction) {
-        let seq = u64::try_from(self.entries.len()).unwrap() + 1;
-        self.entries.push(RecordEntry::builder(seq, tx).build());
-    }
-
-    /// A turn on `model` that the agent did itself, with its check's
-    /// verdict.
-    fn turn(
-        &mut self,
-        model: &str,
-        (category, difficulty): (PromptCategory, Option<Difficulty>),
-        cost_usd: f64,
-        passed: bool,
-    ) {
-        let agent = AgentId::generate();
-        let mut prompt = PromptPayload::new(format!("task {}", self.entries.len()));
-        prompt.category = Some(category);
-        prompt.difficulty = difficulty;
-        prompt.led = Some(false);
-        prompt.route = Route::turn(model, RouteReason::Compare);
-        let tx = Transaction::user_prompt_with(agent, &prompt);
-        let prompt_tx = tx.hash;
-        self.push(tx);
-        let signal = if passed {
-            OutcomeSignal::ChecksPassed
-        } else {
-            OutcomeSignal::ChecksFailed
-        };
-        let outcome = OutcomePayload {
-            prompt_tx,
-            category,
-            model: model.to_string(),
-            success: signal.success(),
-            signal,
-            cost_usd,
-            subtask_cost_usd: 0.0,
-            latency_ms: 60_000,
-        };
-        self.push(Transaction::outcome(agent, &outcome));
-    }
-
-    fn stats(&self) -> GateStats {
-        GateStats::from_entries(&self.entries)
-    }
+/// Take in `n` turns of `work` on `model` that the agent did itself, each
+/// costing `cost_usd`, that all passed their check or all failed it.
+fn turns(
+    stats: &mut GateStats,
+    model: &str,
+    work: &Work<'_>,
+    cost_usd: f64,
+    (n, passed): (usize, bool),
+) {
+    stats.learn_costing(work, model, Some(false), (n, passed), (cost_usd, 0.0));
 }
 
 /// What Gate has recorded: the benchmarks, and Sonnet 5.5's turns
@@ -247,20 +206,18 @@ impl Log {
 /// failed turns on an easy multi-file task (a rename) that had ruled it
 /// out of hard multi-file work. Those two were recorded before prompts
 /// had a difficulty.
-fn history() -> Log {
-    let mut log = Log::default();
+fn history() -> GateStats {
+    let mut stats = GateStats::default();
     for &(_, _, model, kind, cost_usd, passed) in RUNS.iter().chain(LAST) {
         if let Some(work) = kind.work() {
-            log.turn(model, work, cost_usd, passed);
+            turns(&mut stats, model, &work, cost_usd, (1, passed));
         }
     }
-    for _ in 0..42 {
-        log.turn(SONNET, (PromptCategory::Debugging, None), 0.018, true);
-    }
-    for _ in 0..2 {
-        log.turn(SONNET, (PromptCategory::MultiFileChange, None), 0.01, false);
-    }
-    log
+    let debugging = Work::turn(PromptCategory::Debugging);
+    turns(&mut stats, SONNET, &debugging, 0.018, (42, true));
+    let rename = Work::turn(PromptCategory::MultiFileChange);
+    turns(&mut stats, SONNET, &rename, 0.01, (2, false));
+    stats
 }
 
 /// What `model` cost on `task` and whether it passed: its latest
@@ -285,28 +242,22 @@ fn settings() -> GateConfig {
     }
 }
 
-/// The benchmark's tasks over again on `log`: each goes where Gate sends
-/// hard multi-file work (as their prompts are classified now), costs and
-/// ends as the record says that model did on it, and is recorded before
-/// the next. A failed attempt goes on with the model Gate moves it up
-/// to, and costs both. Returns the models each task was done on, the
-/// total cost and how many tasks passed.
-fn replay(log: &mut Log, settings: &GateConfig) -> (Vec<Vec<String>>, f64, usize) {
-    let hard = Work::turn(PromptCategory::MultiFileChange).of(Some(Difficulty::Hard));
+/// The benchmark's tasks over again on `stats`: each goes where Gate
+/// sends hard multi-file work (as their prompts are classified now),
+/// costs and ends as the record says that model did on it, and is
+/// recorded before the next. A failed attempt goes on with the model
+/// Gate moves it up to, and costs both. Returns the models each task was
+/// done on, the total cost and how many tasks passed.
+fn replay(stats: &mut GateStats, settings: &GateConfig) -> (Vec<Vec<String>>, f64, usize) {
     let candidates = plan();
     let (mut models, mut cost, mut passes) = (Vec::new(), 0.0, 0);
     for task in TASKS {
-        let mut next = pick(&log.stats(), &hard, &candidates, settings, &mut || 1.0);
+        let mut next = pick(stats, &HARD, &candidates, settings, &mut || 1.0);
         let mut tried = Vec::new();
         while let Some(decision) = next {
             let model = decision.model.id;
             let (cost_usd, passed) = recorded(task, &model);
-            log.turn(
-                &model,
-                (PromptCategory::MultiFileChange, Some(Difficulty::Hard)),
-                cost_usd,
-                passed,
-            );
+            turns(stats, &model, &HARD, cost_usd, (1, passed));
             cost += cost_usd;
             next = if passed {
                 passes += 1;
@@ -314,7 +265,7 @@ fn replay(log: &mut Log, settings: &GateConfig) -> (Vec<Vec<String>>, f64, usize
             } else {
                 // The recordings say how each model did, not at which effort.
                 escalate(
-                    &log.stats(),
+                    stats,
                     RouteLevel::Turn,
                     (&model, None),
                     OutcomeSignal::ChecksFailed,
@@ -364,8 +315,8 @@ fn the_fixture_is_the_recorded_benchmark() {
 
 #[test]
 fn gate_does_the_recorded_tasks_as_well_as_the_strongest_model_for_less() {
-    let mut log = history();
-    let (models, cost, passes) = replay(&mut log, &settings());
+    let mut stats = history();
+    let (models, cost, passes) = replay(&mut stats, &settings());
     let (opus_cost, opus_passes) = on_opus();
     let all = plan();
     for model in models.iter().flatten() {
@@ -397,25 +348,20 @@ fn gate_does_the_recorded_tasks_as_well_as_the_strongest_model_for_less() {
 /// row leave it at five in ten at best.
 #[test]
 fn a_standard_model_that_keeps_failing_the_work_loses_it() {
-    let hard = Work::turn(PromptCategory::MultiFileChange).of(Some(Difficulty::Hard));
-    let mut log = history();
-    let start = |log: &Log| {
-        pick(&log.stats(), &hard, &plan(), &settings(), &mut || 1.0)
+    let candidates = plan();
+    let start = |stats: &GateStats| {
+        pick(stats, &HARD, &candidates, &settings(), &mut || 1.0)
             .unwrap()
             .model
             .id
     };
+    let mut stats = history();
     let mut failures = 0;
-    while start(&log) == SONNET {
+    while start(&stats) == SONNET {
         assert!(failures < 20, "sonnet keeps the work whatever it fails");
-        log.turn(
-            SONNET,
-            (PromptCategory::MultiFileChange, Some(Difficulty::Hard)),
-            0.3,
-            false,
-        );
+        turns(&mut stats, SONNET, &HARD, 0.3, (1, false));
         failures += 1;
     }
-    assert_eq!(start(&log), OPUS);
+    assert_eq!(start(&stats), OPUS);
     assert_eq!(failures, 5);
 }
