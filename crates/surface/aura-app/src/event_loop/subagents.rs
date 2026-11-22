@@ -19,7 +19,7 @@
 //! so their edits never collide. Under Gate the user's own agent leads
 //! the turns that ask for a change across several files or for planning:
 //! [`LeadProfile::apply`] gives such a turn the lead's prompt and, while
-//! delegation is enforced, the lead's tools (see [`super::lead`]). It
+//! delegation is enforced, the lead's tools (see [`aura_gate::lead`]). It
 //! does every other turn itself, on the model Gate routes it to.
 //!
 //! Spawns run inside the parent's tool call, on the parent's turn task, so
@@ -34,7 +34,6 @@ use super::gate_followup;
 use super::gate_subtask::{explicit_model, GateBase, SubtaskGate, SubtaskLabel};
 use super::handlers::{handle_agent_success, run_agent_turn, system_message};
 use super::host::{agent_tool_definitions, TerminalAgents};
-use super::lead::lead_tools;
 use super::modes::Permissions;
 use super::notices::{Notice, NoticeSender};
 use super::processes::{now_ms, task_id, ProcessTable};
@@ -69,6 +68,7 @@ use aura_exec_tools::SubagentDispatchHook;
 use aura_gate::compare::{tally, PlanReading};
 use aura_gate::followup;
 use aura_gate::judge::turn::{Failed, Unverified, Verdict};
+use aura_gate::lead::lead_tools;
 use aura_gate::live::{self, GateLive};
 use aura_gate::route::{Candidate, Decision};
 use aura_model::{Message, ThinkingEffort, ToolDefinition};

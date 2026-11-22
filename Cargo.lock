@@ -929,12 +929,15 @@ dependencies = [
 name = "aura-gate-lead"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "aura-agent",
  "aura-config",
  "aura-core-types",
  "aura-gate-evidence",
  "aura-gate-route",
  "aura-model",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

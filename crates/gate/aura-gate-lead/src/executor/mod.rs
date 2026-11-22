@@ -4,13 +4,13 @@
 //! The turn's tool list drops the file-changing tools ([`lead_tools`]),
 //! and every call goes through [`LeadExecutor`], which refuses those
 //! tools and the commands the lead may not run, and caps what reads and
-//! searches return (see [`aura_gate::lead`]). A refused call is
+//! searches return (see [`crate`]). A refused call is
 //! still recorded, with the refusal as its result, so the record shows
 //! what the lead tried. Subagents get neither.
 
+use crate as lead;
 use async_trait::async_trait;
 use aura_agent::{AgentToolExecutor, AutoBuildResult, BuildBaseline, ToolCallInfo, ToolCallResult};
-use aura_gate::lead;
 use aura_model::ToolDefinition;
 use std::future::Future;
 use std::pin::Pin;
@@ -20,7 +20,8 @@ const LEAD_SOURCE: &str = "gate_lead";
 
 /// `tools` as the lead gets them: without the file-changing tools, and
 /// with the capped tools saying so.
-pub(crate) fn lead_tools(tools: Vec<ToolDefinition>) -> Vec<ToolDefinition> {
+#[must_use]
+pub fn lead_tools(tools: Vec<ToolDefinition>) -> Vec<ToolDefinition> {
     tools
         .into_iter()
         .filter(|tool| lead::keeps_tool(&tool.name))
@@ -86,12 +87,13 @@ fn shape(tool: &str, result: &mut ToolCallResult) {
 }
 
 /// Runs the lead's calls on `inner` within the lead's limits.
-pub(crate) struct LeadExecutor<'a> {
+pub struct LeadExecutor<'a> {
     inner: &'a dyn AgentToolExecutor,
 }
 
 impl<'a> LeadExecutor<'a> {
-    pub(crate) fn new(inner: &'a dyn AgentToolExecutor) -> Self {
+    #[must_use]
+    pub fn new(inner: &'a dyn AgentToolExecutor) -> Self {
         Self { inner }
     }
 }
@@ -278,5 +280,88 @@ mod tests {
             300,
             "other tools are left alone"
         );
+    }
+
+    #[test]
+    fn the_lead_is_told_its_limits_word_for_word() {
+        let tools = lead_tools(
+            [
+                "read_file",
+                "find_files",
+                "search_code",
+                "run_command",
+                "apply_patch",
+                "list_files",
+            ]
+            .map(tool)
+            .to_vec(),
+        );
+        let described: Vec<(&str, &str)> = tools
+            .iter()
+            .map(|tool| (tool.name.as_str(), tool.description.as_str()))
+            .collect();
+        assert_eq!(
+            described,
+            [
+                (
+                    "read_file",
+                    "Does it. You see at most 200 lines per read; delegate heavy reading to an \
+                     explorer subtask."
+                ),
+                ("find_files", "Does it. You see at most 50 hits per search."),
+                (
+                    "search_code",
+                    "Does it. You see at most 50 hits per search."
+                ),
+                (
+                    "run_command",
+                    "Does it. You may only run checks (tests, builds, linters, type checks) and \
+                     inspection commands (git status, git diff, git log, git show, ls, pwd); \
+                     delegate anything else."
+                ),
+                ("list_files", "Does it."),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_call_is_recorded_with_its_refusal_word_for_word() {
+        let inner = Recording::default();
+        let lead = LeadExecutor::new(&inner);
+        let results = lead
+            .execute(&[
+                call("apply_patch", serde_json::json!({"patch": ""})),
+                call(
+                    "run_command",
+                    serde_json::json!({"shell_script": "cat a.rs | head"}),
+                ),
+            ])
+            .await;
+        let tool = "Not run: under Gate you do not change files yourself. Delegate the edit with \
+                    the task tool (an implement subtask, with a check command); `apply_patch` is \
+                    for subagents.";
+        let command = "Not run: under Gate your own run_command only runs checks (tests, builds, \
+                       linters, type checks) and inspection commands (git status, git diff, git \
+                       log, git show, ls, pwd). Delegate `cat a.rs | head` with the task tool: an \
+                       implement subtask for changes, an explorer subtask for reading.";
+        assert_eq!(
+            *inner.preset.lock().unwrap(),
+            [
+                ("apply_patch".to_string(), "gate_lead", tool.to_string()),
+                ("run_command".to_string(), "gate_lead", command.to_string()),
+            ]
+        );
+        let seen: Vec<(&str, bool, &str)> = results
+            .iter()
+            .map(|r| (r.tool_use_id.as_str(), r.is_error, r.content.as_str()))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("toolu_apply_patch", true, tool),
+                ("toolu_run_command", true, command)
+            ]
+        );
+        assert!(inner.ran.lock().unwrap().is_empty());
     }
 }

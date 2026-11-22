@@ -67,7 +67,7 @@ pub struct AgentSession {
     /// todo list is mirrored into the plan file.
     pub building_plan: bool,
     /// Whether its current turn runs as Gate's lead with delegation
-    /// enforced (see [`super::lead`]); set where the turn's tools are put
+    /// enforced (see [`aura_gate::lead`]); set where the turn's tools are put
     /// together.
     pub lead: bool,
     /// Where its work is kept as tasks

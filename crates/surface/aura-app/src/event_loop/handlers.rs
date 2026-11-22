@@ -3,7 +3,6 @@
 use super::agent_events::{AgentUi, CostCap, ForwarderState, TurnPlan};
 use super::agents::AgentSession;
 use super::hud::{context_view, send_session, todo_views};
-use super::lead::LeadExecutor;
 use super::processes::{now_ms, warn_kill_failed};
 use super::record_ui::create_response_transaction;
 use super::steering::Steering;
@@ -17,6 +16,7 @@ use aura_agent::{AgentLoopEvent, AgentToolExecutor, RunOptions, WithPostEditChec
 use aura_context_prompts::model_messages::init_project::init_project_prompt;
 use aura_core_types::AgentId;
 use aura_core_types::{RecordEntry, Transaction};
+use aura_gate::lead::LeadExecutor;
 use aura_ui_terminal::events::{
     MessageData, MessageRole, ProcessKind, ProcessStatus, ProcessSummary,
 };

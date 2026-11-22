@@ -9,11 +9,15 @@
 //! ([`cap_read`], [`cap_search`]) so heavy reading goes to an explore
 //! subtask, and `run_command` only runs checks, linters in check mode and
 //! inspection commands ([`allows_command`]). Subagents are never
-//! restricted this way.
+//! restricted this way. [`lead_tools`] and [`LeadExecutor`] hold a led
+//! turn's tools and calls to these limits.
 //!
 //! [`delegation`] says how much of a lead's work went to subtasks.
 
 pub mod delegation;
+mod executor;
+
+pub use executor::{lead_tools, LeadExecutor};
 
 use aura_config::GateConfig;
 use aura_core_types::{Difficulty, PromptCategory};
@@ -651,5 +655,42 @@ mod tests {
         assert_eq!(capped.lines().count(), SEARCH_HITS + 1);
         assert!(capped.contains("10 more left out"));
         assert_eq!(cap_search("one hit"), None);
+    }
+
+    #[test]
+    fn caps_and_refusals_read_word_for_word() {
+        let file: String = (1..=201).map(|n| format!("{n}\n")).collect();
+        let lines: Vec<String> = (1..=200).map(|n| n.to_string()).collect();
+        assert_eq!(
+            cap_read(&file).unwrap(),
+            format!(
+                "{}\n… [lines capped at 200 for the lead; 1 more left out. Read a narrower \
+                 start_line/end_line range, or delegate heavy reading to an explorer subtask.]",
+                lines.join("\n")
+            )
+        );
+        assert_eq!(cap_read(&"x\n".repeat(READ_LINES)), None, "it fits");
+        assert_eq!(
+            cap_search(&"a\r\n".repeat(52)).unwrap(),
+            format!(
+                "{}\n… [hits capped at 50 for the lead; 2 more left out. Narrow the search, or \
+                 delegate the search to an explorer subtask.]",
+                ["a"; 50].join("\n")
+            ),
+            "line endings come back as new lines"
+        );
+        assert_eq!(
+            refused_command("rm x"),
+            "Not run: under Gate your own run_command only runs checks (tests, builds, linters, \
+             type checks) and inspection commands (git status, git diff, git log, git show, ls, \
+             pwd). Delegate `rm x` with the task tool: an implement subtask for changes, an \
+             explorer subtask for reading."
+        );
+        assert_eq!(
+            refused_tool("write_file"),
+            "Not run: under Gate you do not change files yourself. Delegate the edit with the \
+             task tool (an implement subtask, with a check command); `write_file` is for \
+             subagents."
+        );
     }
 }

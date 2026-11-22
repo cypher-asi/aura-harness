@@ -27,7 +27,6 @@ mod gate_view;
 pub(crate) mod handlers;
 pub(crate) mod host;
 pub(crate) mod hud;
-pub(crate) mod lead;
 mod log_view;
 pub(crate) mod modes;
 pub(crate) use modes::Permissions;
