@@ -1,0 +1,14 @@
+{
+  "id": "01a20201b0ad0006",
+  "title": "One focused fix in /home/n3o/code/aura-harness, crate `crates/ui/aura-ui-terminal`. The working tree has other uncommit…",
+  "state": "completed",
+  "agent_id": "ec776663a8a7951e487d31a27906a797b1560380e68536ee2546f19b700d7fcf",
+  "agent_name": "rust-engineer #34",
+  "assignee": "rust-engineer",
+  "parent": "01a201e4ccd00000",
+  "items": [],
+  "summary": "Clicking or hovering the submenu's border no longer reaches the menu item hidden under it, so the click that archived the agent now does nothing. All three commands pass. I only edited `src/app/context_menu.rs` and didn't commit.",
+  "updated_ms": 1795330261502,
+  "created_ms": 1795329994925,
+  "tool_use_id": "toolu_01Tc7LqfDhPLQpnj9x1Ej1dD"
+}

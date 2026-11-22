@@ -1,6 +1,7 @@
 //! The models a turn ran on, for the footer under its reply:
-//! `claude-sonnet-5-5 ×2 · gate: claude-haiku-5-5 · title: claude-haiku-5-5`,
-//! with the tokens and cost of every call.
+//! `claude-sonnet-5-5 ×2 · gate: claude-haiku-5-5`, with the tokens and
+//! cost of every call. The chat title's model is left out of the list,
+//! but its tokens and cost are counted.
 //!
 //! Every model call is a `Reasoning` entry in the agent's record, so the
 //! footer is read off the record the same way while the turn runs and
@@ -154,7 +155,6 @@ impl Tally {
             (Some(ModelCallPurpose::Classify), classified),
             (Some(ModelCallPurpose::Criteria), "gate: "),
             (Some(ModelCallPurpose::Judge), "gate: "),
-            (Some(ModelCallPurpose::Title), "title: "),
         ];
         let mut parts: Vec<String> = Vec::new();
         for (purpose, label) in groups {
@@ -164,6 +164,11 @@ impl Tally {
                     n => format!("{label}{model} ×{n}"),
                 });
             }
+        }
+        // Only the chat's title has run so far: there is no model of the
+        // turn's own to show yet.
+        if parts.is_empty() {
+            return None;
         }
         let usage = (self.tokens > 0).then(|| CallUsage {
             tokens: self.tokens,
@@ -240,8 +245,8 @@ mod tests {
         );
         let (models, usage) = calls.footer().unwrap();
         assert_eq!(
-            models, "claude-sonnet-5-5 ×2 · gate: claude-haiku-5-5 · title: claude-haiku-5-5",
-            "the earlier turn's Opus call is not this turn's"
+            models, "claude-sonnet-5-5 ×2 · gate: claude-haiku-5-5",
+            "the earlier turn's Opus call is not this turn's, and the title's model is not shown"
         );
         let usage = usage.unwrap();
         assert_eq!(usage.tokens, 4_000 + 1 + 100 + 200 + 5);

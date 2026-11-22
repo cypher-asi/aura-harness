@@ -65,8 +65,8 @@ use aura_agent_trace::{Activity, Doing, RunMeta, RunRecorder, RunSource};
 use aura_core_types::trace::{Reward, RewardKind, RewardTarget};
 use aura_core_types::{
     AgentId, ArmSpec, BenchSource, CompareArm, CompareCopy, CompareJudgment, ComparePayload,
-    CompareRun, CompareStatus, Hash, OutcomePayload, OutcomeSignal, PromptPayload, Route,
-    RouteLevel, RouteReason, RunTurn, SystemKind, Transaction,
+    CompareRun, CompareStatus, Difficulty, Hash, OutcomePayload, OutcomeSignal, PromptCategory,
+    PromptPayload, Route, RouteLevel, RouteReason, RunTurn, SystemKind, Transaction,
 };
 use aura_exec_tools::plan_tools::{is_plan_path, todo_items, PlanFile};
 use aura_model::Message;
@@ -232,6 +232,26 @@ struct Live {
     /// Its agent, and when it started working; `None` while it waits for
     /// its task's files
     working: Option<(AgentId, Instant)>,
+    /// How its prompt under way was classified and routed; `None` until
+    /// it was
+    routed: Option<LiveRoute>,
+}
+
+/// How the prompt a run is on was classified and where it went.
+#[derive(Clone)]
+struct LiveRoute {
+    model: String,
+    category: PromptCategory,
+    difficulty: Option<Difficulty>,
+}
+
+impl Context {
+    /// The prompt the run `name` is on goes to `route`.
+    fn routed(&self, name: &str, route: LiveRoute) {
+        if let Some(live) = lock(&self.live).iter_mut().find(|l| l.name == name) {
+            live.routed = Some(route);
+        }
+    }
 }
 
 /// A run's place in [`Context::live`], given up when it ends however it
@@ -251,6 +271,7 @@ impl<'a> LiveSlot<'a> {
             arm,
             task: task.map(|task| task.id.clone()),
             working: None,
+            routed: None,
         });
         Self {
             ctx,
@@ -392,16 +413,30 @@ async fn show_live(ctx: &Context, payload: &ComparePayload) {
     }
     let live: Vec<_> = lock(&ctx.live)
         .iter()
-        .map(|l| (l.name.clone(), l.arm, l.task.clone(), l.working))
+        .map(|l| {
+            (
+                l.name.clone(),
+                l.arm,
+                l.task.clone(),
+                l.working,
+                l.routed.clone(),
+            )
+        })
         .collect();
     view.live = live
         .into_iter()
-        .map(|(name, arm, task, working)| {
+        .map(|(name, arm, task, working, routed)| {
             let used = working.map_or_else(Vec::new, |(agent, _)| ctx.hub.tokens_by_model(agent));
             BenchLiveRun {
                 name,
                 arm: arm.index(),
                 task,
+                model: routed.as_ref().map(|r| r.model.clone()),
+                category: routed.as_ref().map(|r| r.category.as_str().to_string()),
+                difficulty: routed
+                    .as_ref()
+                    .and_then(|r| r.difficulty)
+                    .map(|d| d.as_str().to_string()),
                 wall_ms: working.map(|(_, since)| {
                     u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX)
                 }),
@@ -1367,6 +1402,12 @@ async fn run_prompt(
         routed_effort(config).and_then(|e| e.reasoning_effort_wire().map(str::to_string))
     };
     let first_effort = effort_of(&config);
+    let route = |model: &str| LiveRoute {
+        model: model.to_string(),
+        category,
+        difficulty,
+    };
+    ctx.routed(name, route(&model));
     let (mut model, mut prompt_tx) = (model, prompt_tx);
     let (mut attempt_started, mut attempt_ms) = (started, started_ms);
     let (mut escalations, mut nudges, mut sent_back) = (0, 0, 0);
@@ -1710,6 +1751,7 @@ async fn run_prompt(
         hub.model_limits().route(&mut config, &next);
         hub.gate.note_model(agent_id, &next.model.id);
         model.clone_from(&next.model.id);
+        ctx.routed(name, route(&model));
         escalations += 1;
         nudged_cost_usd = 0.0;
         (attempt_started, attempt_ms) = (Instant::now(), super::processes::now_ms());

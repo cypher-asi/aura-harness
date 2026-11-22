@@ -1,0 +1,22 @@
+{
+  "id": "01a201e4ccd00000",
+  "title": "Implement this change",
+  "state": "completed",
+  "agent_id": "6a751d869928858d6c498e8721bb6f861db8f8f28963e75ffafaa6fcd09eb284",
+  "agent_name": "Agent 679",
+  "items": [
+    {
+      "content": "Add 'Move to workspace' item + workspace submenu to the projects-list context menu (aura-ui-terminal) and wire the move in the desktop tab router (aura-desktop), with tests",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Review the change for bugs and missing tests",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    }
+  ],
+  "summary": "I missed it before: this repo has a terminal UI (`crates/ui/aura-ui-terminal`) that already has a context menu. Let me look at it.",
+  "updated_ms": 1795329997603,
+  "created_ms": 1795328101584
+}

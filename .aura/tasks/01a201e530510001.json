@@ -1,0 +1,11 @@
+{
+  "id": "01a201e530510001",
+  "title": "when showing what model we are using in the chat we don't need to show the title model [claude-opus-5-5 ×9 · title: cla…",
+  "state": "completed",
+  "agent_id": "3f0033644115386b69ab3c48b1bb3f360bd50c93f130b4fe86e12db7aef863fc",
+  "agent_name": "Agent 877",
+  "items": [],
+  "summary": "Dropping the title group from the label list. The title call's tokens and cost still count toward the turn's total.",
+  "updated_ms": 1795328211284,
+  "created_ms": 1795328127057
+}

@@ -16,7 +16,6 @@ use ratatui::{
     widgets::{Paragraph, Wrap},
     Frame,
 };
-use std::ops::Range;
 use unicode_width::UnicodeWidthChar;
 
 /// `$0.004`, `$1.25`, or `free` for nothing.
@@ -30,7 +29,7 @@ pub(super) fn money(usd: f64) -> String {
     }
 }
 
-/// `850ms`, `42s`, `3m05s`.
+/// `850ms`, `42s`, `3m05s`, `1h05m`.
 fn duration(ms: u64) -> String {
     if ms < 1_000 {
         return format!("{ms}ms");
@@ -39,7 +38,10 @@ fn duration(ms: u64) -> String {
     if secs < 60 {
         return format!("{secs}s");
     }
-    format!("{}m{:02}s", secs / 60, secs % 60)
+    if secs < 3_600 {
+        return format!("{}m{:02}s", secs / 60, secs % 60);
+    }
+    format!("{}h{:02}m", secs / 3_600, secs % 3_600 / 60)
 }
 
 /// `thinking 1m40s · call 12 · restarted 2×`, or `running task 8m12s ›`
@@ -80,8 +82,12 @@ pub(super) fn short_model(model: &str) -> &str {
 /// `multi-file`: what the classifier said a run's first prompt asks for;
 /// empty when nothing was recorded.
 fn category(run: &BenchRun) -> String {
-    run.category
-        .as_deref()
+    category_name(run.category.as_deref())
+}
+
+/// `multi-file` for `multi_file_change`, as stored; empty for `None`.
+fn category_name(category: Option<&str>) -> String {
+    category
         .map_or("", |category| match category {
             "small_change" => "small change",
             "multi_file_change" => "multi-file",
@@ -224,12 +230,13 @@ enum Row {
     Cells(Vec<Cell>),
     /// Cells drawn in a selection style, gaps included
     Picked(Vec<Cell>, Style),
-    /// Cells of something under way, with `status` drawn across the
-    /// columns of `span`, whose own cells stay empty. On a frame, a band
-    /// of light sweeps across the status.
+    /// Cells of something under way up to column `status_at`, with
+    /// `status` drawn from there in the room left on the line. The status
+    /// never widens a column, so the table holds still as it changes. On a
+    /// frame, a band of light sweeps across the status.
     Live {
         cells: Vec<Cell>,
-        span: Range<usize>,
+        status_at: usize,
         status: Cell,
         frame: Option<usize>,
     },
@@ -274,18 +281,6 @@ fn table(
             .map(|(n, &i)| widths[i] + if n == 0 { 0 } else { gap(i) })
             .sum()
     };
-    for row in rows {
-        let Row::Live { span, status, .. } = row else {
-            continue;
-        };
-        let span = span.start.min(cols.len())..span.end.min(cols.len());
-        if span.is_empty() {
-            continue;
-        }
-        let open: Vec<usize> = span.clone().filter(|&i| widths[i] > 0).collect();
-        let short = display_width(&status.0).saturating_sub(across(&open, &widths));
-        widths[open.last().copied().unwrap_or(span.start)] += short;
-    }
     let shown: Vec<usize> = (0..cols.len()).filter(|&i| widths[i] > 0).collect();
     let total = across(&shown, &widths);
     let mut over = total.saturating_sub(width);
@@ -301,31 +296,24 @@ fn table(
         over -= 1;
     }
     let shine = (theme.colors.muted, theme.colors.foreground);
-    type Spanned<'r> = (&'r Range<usize>, &'r Cell, Option<usize>);
-    let line = |cells: &[Cell], picked: Option<Style>, live: Option<Spanned<'_>>| {
-        let open: Vec<usize> = live.map_or_else(Vec::new, |(span, ..)| {
-            shown.iter().copied().filter(|i| span.contains(i)).collect()
-        });
-        let status = live
-            .map(|(_, status, _)| status)
-            .filter(|(text, _)| !text.is_empty());
-        let filled = |i: usize| {
-            cells.get(i).is_some_and(|(text, _)| !text.is_empty())
-                || (status.is_some() && open.first() == Some(&i))
-        };
-        let last = if picked.is_some() {
-            shown.last().copied()
+    type Status<'r> = (usize, &'r Cell, Option<usize>);
+    let line = |cells: &[Cell], picked: Option<Style>, live: Option<Status<'_>>| {
+        let cols_in: Vec<usize> = shown
+            .iter()
+            .copied()
+            .filter(|&i| live.is_none_or(|(at, ..)| i < at))
+            .collect();
+        let filled = |i: usize| cells.get(i).is_some_and(|(text, _)| !text.is_empty());
+        let padded = picked.is_some() || live.is_some();
+        let last = if padded {
+            cols_in.last().copied()
         } else {
-            shown.iter().rev().find(|&&i| filled(i)).copied()
+            cols_in.iter().rev().find(|&&i| filled(i)).copied()
         };
         let mut spans = Vec::new();
-        for (n, &i) in shown.iter().enumerate() {
+        for (n, &i) in cols_in.iter().enumerate() {
             if last.is_some_and(|last| i > last) {
                 break;
-            }
-            let first_open = open.first() == Some(&i);
-            if open.contains(&i) && !first_open {
-                continue;
             }
             if n > 0 {
                 let (text, style) = if cols[i].sep {
@@ -335,34 +323,30 @@ fn table(
                 };
                 spans.push(Span::styled(text, picked.unwrap_or(style)));
             }
-            if first_open {
-                let room = across(&open, &widths);
-                let (text, style) = status.cloned().unwrap_or_default();
-                let text = fit(&text, room);
-                let text = if Some(i) == last {
-                    text
-                } else {
-                    let pad = " ".repeat(room - display_width(&text));
-                    text + &pad
-                };
-                match live.and_then(|(.., frame)| frame) {
-                    Some(frame) => spans.extend(under_way(&text, style, Some(frame), shine)),
-                    None => spans.push(Span::styled(text, style)),
-                }
-                continue;
-            }
             let (text, style) = cells.get(i).cloned().unwrap_or_default();
             let text = fit(&text, widths[i]);
             let pad = " ".repeat(widths[i] - display_width(&text));
             let text = if cols[i].right {
                 pad + &text
-            } else if Some(i) == last && picked.is_none() {
+            } else if Some(i) == last && !padded {
                 text
             } else {
                 text + &pad
             };
             let style = picked.map_or(style, |p| style.patch(p));
             spans.push(Span::styled(text, style));
+        }
+        if let Some((_, (text, style), frame)) = live.filter(|(_, (text, _), _)| !text.is_empty()) {
+            let gap = if cols_in.is_empty() { 0 } else { 2 };
+            let room = width.saturating_sub(across(&cols_in, &widths) + gap);
+            if room > 0 {
+                spans.push(Span::raw(" ".repeat(gap)));
+                let text = fit(text, room);
+                match frame {
+                    Some(frame) => spans.extend(under_way(&text, *style, Some(frame), shine)),
+                    None => spans.push(Span::styled(text, *style)),
+                }
+            }
         }
         Line::from(spans)
     };
@@ -394,10 +378,10 @@ fn table(
             Row::Picked(cells, style) => line(cells, Some(*style), None),
             Row::Live {
                 cells,
-                span,
+                status_at,
                 status,
                 frame,
-            } => line(cells, None, Some((span, status, *frame))),
+            } => line(cells, None, Some((*status_at, status, *frame))),
             Row::Rule => rule(),
         });
     }
@@ -823,6 +807,18 @@ fn detail_lines(
     };
     let spent =
         |arm: usize| view.arms[arm].total_cost_usd + live_of(arm).map(|r| r.cost_usd).sum::<f64>();
+    let worked = |arm: usize| {
+        let ended: u64 = view
+            .runs
+            .iter()
+            .filter(|r| r.arm.min(1) == arm)
+            .map(|r| r.wall_ms)
+            .sum();
+        let live: u64 = live_of(arm).filter_map(|r| r.wall_ms).sum();
+        Some(ended + live)
+            .filter(|&ms| ms > 0)
+            .map_or_else(|| "-".to_string(), duration)
+    };
     let mut summary = Vec::new();
     let mut add = |label: &str, [x, y]: [String; 2], [dx, dy]: [String; 2]| {
         summary.push(Row::Cells(vec![
@@ -839,6 +835,7 @@ fn detail_lines(
         pair(&|arm| arm.median_wall_ms.map_or_else(|| "-".to_string(), duration)),
         none(),
     );
+    add("total time", [worked(0), worked(1)], none());
     add(
         "cost",
         [money(spent(0)), money(spent(1))],
@@ -1275,12 +1272,13 @@ fn live_row(
 ) -> Row {
     let arm = &view.arms[live.arm.min(1)];
     let empty = || (String::new(), text);
+    let model = live.model.as_deref().unwrap_or(&arm.label);
     let cells = vec![
         (" ".to_string(), text),
         (live.name.clone(), text),
-        (short_model(&arm.label).to_string(), text),
-        empty(),
-        empty(),
+        (short_model(model).to_string(), text),
+        (category_name(live.category.as_deref()), text),
+        (live.difficulty.clone().unwrap_or_default(), text),
         empty(),
         empty(),
         (
@@ -1300,16 +1298,15 @@ fn live_row(
     };
     Row::Live {
         cells,
-        span: LIVE_SPAN,
+        status_at: LIVE_STATUS_AT,
         status: (status, pending),
         frame: frame.filter(|_| live.wall_ms.is_some()),
     }
 }
 
-/// The columns of the runs table a run under way shows what it is doing
-/// across: classified, difficulty, moved up and led, which it has no
-/// values for yet.
-const LIVE_SPAN: Range<usize> = 3..7;
+/// The column of the runs table a run under way shows what it is doing
+/// from: the last, after `files`, where an ended run shows its error.
+const LIVE_STATUS_AT: usize = 12;
 
 /// How an arm's value reads in the form.
 fn arm_reads(value: &str, arm_b: bool) -> String {
@@ -1721,7 +1718,7 @@ mod tests {
     }
 
     #[test]
-    fn a_run_under_way_shows_what_it_does_across_its_empty_columns() {
+    fn a_run_under_way_shows_its_route_and_what_it_does_without_moving_the_table() {
         let theme = Theme::default();
         let mut view = view();
         view.status = BenchStatus::Running;
@@ -1731,6 +1728,9 @@ mod tests {
         view.live = vec![BenchLiveRun {
             name: "a-2".to_string(),
             task: Some("ansible-40ade1f8".to_string()),
+            model: Some("claude/claude-opus-5-5".to_string()),
+            category: Some("multi_file_change".to_string()),
+            difficulty: Some("hard".to_string()),
             wall_ms: Some(301_000),
             cost_usd: 0.80,
             doing: Some(BenchDoing {
@@ -1740,20 +1740,51 @@ mod tests {
             }),
             ..BenchLiveRun::default()
         }];
-        let shown = text(&detail_lines(&view, None, &theme, 100, None));
-        let live = shown
-            .lines()
-            .find(|l| l.split_whitespace().next() == Some("a-2"))
-            .unwrap_or_else(|| panic!("no a-2 run in\n{shown}"));
+        let shown = text(&detail_lines(&view, None, &theme, 120, None));
+        let row = |shown: &str, name: &str| {
+            shown
+                .lines()
+                .skip_while(|l| !l.contains("── runs"))
+                .find(|l| l.split_whitespace().next() == Some(name))
+                .unwrap_or_else(|| panic!("no {name} run in\n{shown}"))
+                .to_string()
+        };
+        let live = row(&shown, "a-2");
+        let words: Vec<&str> = live.split_whitespace().collect();
+        assert!(
+            words
+                .windows(3)
+                .any(|w| w == ["opus-5-5", "multi-file", "hard"]),
+            "the model it went to and how it was classified: {live}"
+        );
         let status = live
             .find("writing 49 files")
             .unwrap_or_else(|| panic!("{live}"));
-        let task = live
-            .find("ansible-40ade1f8")
-            .unwrap_or_else(|| panic!("{live}"));
-        assert!(status < task, "the status comes before the task: {live}");
-        assert!(live.trim_end().ends_with("$0.80"), "{live}");
+        let cost = live.find("$0.80").unwrap_or_else(|| panic!("{live}"));
+        assert!(cost < status, "the status comes after the columns: {live}");
         assert!(shown.contains("ansible-b748edea"), "{shown}");
+
+        view.live[0].doing = Some(BenchDoing {
+            what: "running run_command, read_file, write_file, and a long list of tools"
+                .to_string(),
+            for_ms: 3_000,
+            ..BenchDoing::default()
+        });
+        let longer = text(&detail_lines(&view, None, &theme, 120, None));
+        for name in ["a-1", "a-2"] {
+            let (before, after) = (row(&shown, name), row(&longer, name));
+            let at = |line: &str, cell: &str| line.find(cell).unwrap_or_else(|| panic!("{line}"));
+            for cell in ["$", "ansible-"] {
+                assert_eq!(
+                    at(&before, cell),
+                    at(&after, cell),
+                    "{name}:\n{shown}\n{longer}"
+                );
+            }
+        }
+        for line in longer.lines() {
+            assert!(display_width(line) <= 120, "{line}");
+        }
     }
 
     #[test]
@@ -2057,6 +2088,52 @@ mod tests {
         assert_eq!(models, ["opus", "sonnet", "haiku"]);
         assert_eq!(used[1].calls, 2);
         assert!((used[1].cost_usd - 0.3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn runs_under_way_add_to_each_arms_total_time() {
+        let theme = Theme::default();
+        let mut view = view();
+        view.status = BenchStatus::Running;
+        view.runs.push(BenchRun {
+            name: "b-1".to_string(),
+            arm: 1,
+            wall_ms: 3_600_000,
+            ..BenchRun::default()
+        });
+        let live = |name: &str, arm, wall_ms| BenchLiveRun {
+            name: name.to_string(),
+            arm,
+            wall_ms,
+            ..BenchLiveRun::default()
+        };
+        view.live = vec![
+            live("a-2", 0, Some(30_000)),
+            live("b-2", 1, Some(300_000)),
+            live("a-3", 0, None),
+        ];
+        let shown = text(&detail_lines(&view, None, &theme, 120, None));
+        let row = |label: &str| {
+            shown
+                .lines()
+                .find(|l| l.starts_with(&format!("{label} ")))
+                .unwrap_or_else(|| panic!("no {label} row in\n{shown}"))
+                .trim_end()
+                .to_string()
+        };
+        let total = row("total time");
+        assert!(total.contains(" 1m12s "), "42s ended, 30s so far: {total}");
+        assert!(total.ends_with(" 1h05m"), "1h ended, 5m so far: {total}");
+        assert!(row("time").contains(" 42s "), "the median run: {shown}");
+
+        view.runs.clear();
+        view.live.clear();
+        let shown = text(&detail_lines(&view, None, &theme, 120, None));
+        let total = shown
+            .lines()
+            .find(|l| l.starts_with("total time "))
+            .unwrap_or_else(|| panic!("{shown}"));
+        assert!(total.trim_end().ends_with(" -"), "nothing ran yet: {total}");
     }
 
     #[test]

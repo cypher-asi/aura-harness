@@ -17,6 +17,7 @@ use crate::chrome::Divider;
 use crate::demo::{DIFF, LISTING, REPLY, TEST_OUTPUT};
 use crate::geom::{rgba, Point};
 use crate::gpu::Offscreen;
+use crate::router::testing::pick_move;
 use crate::tab_bar::Hit;
 use crate::{raster, text};
 use aura_ui::events::{
@@ -359,6 +360,51 @@ fn tabs_drag_into_a_new_order() {
     // Numbers pick tabs by their new places.
     h.key(ModifiersState::ALT, Press::typing("2"));
     assert_eq!(h.asked(), [r#"FocusAgent("a1")"#]);
+}
+
+#[test]
+fn a_tab_dragged_while_a_move_closes_another_stays_the_one_dragged() {
+    let mut h = stage();
+    seed(&mut h);
+    h.click(Hit::New, MouseButton::Left);
+    h.pick_folder();
+    h.joined("a3", "Agent03");
+    h.click(Hit::New, MouseButton::Left);
+    h.pick_folder();
+    h.apply([
+        UiCommand::SetActiveAgent("a4".into()),
+        UiCommand::SetAgents(vec![
+            agent("a1", "Agent01", 0, Some("aura-harness")),
+            agent("a2", "Reviewer", 1, None),
+            agent("a3", "Agent03", 0, None),
+            agent("a4", "Agent04", 0, None),
+        ]),
+        UiCommand::SetActiveAgent("a4".into()),
+    ]);
+    let tabs = || [vec!["a1"], vec!["a3"], vec!["a4"]];
+    assert_eq!(h.shell.tabs.arrangement(), tabs());
+
+    // a1's tab asks to move its project to a4's: the next update does it
+    // and closes a1's tab.
+    h.shell.frame(h.now);
+    let first = h.shell.tabs.id_at(0).expect("three tabs");
+    let tab = h.shell.tabs.by_id_mut(first).expect("open");
+    pick_move(&mut tab.tui, "Reviewer", "Workspace 3");
+    assert_eq!(h.shell.tabs.arrangement(), tabs(), "not yet");
+
+    // Pressing a3's tab is that update.
+    let a3 = h.shell.bar.spot(Hit::Tab(1)).expect("drawn");
+    h.shell.pointer_moved(a3);
+    h.shell.button(MouseButton::Left, true, h.now);
+    assert_eq!(h.shell.tabs.arrangement(), [vec!["a3"], vec!["a4", "a1"]]);
+
+    // Dragged past a4's, a3's tab goes after it.
+    h.shell.frame(h.now);
+    let last = h.shell.bar.spot(Hit::Tab(1)).expect("drawn");
+    h.shell.pointer_moved(last);
+    h.shell.button(MouseButton::Left, false, h.now);
+    assert_eq!(h.shell.tabs.arrangement(), [vec!["a4", "a1"], vec!["a3"]]);
+    assert_eq!(h.shell.tabs.front().agent(), "a3");
 }
 
 #[test]

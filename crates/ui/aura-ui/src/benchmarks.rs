@@ -258,6 +258,12 @@ pub struct BenchLiveRun {
     pub arm: usize,
     /// The example task it works on
     pub task: Option<String>,
+    /// The model its prompt under way went to; `None` until it was routed
+    pub model: Option<String>,
+    /// What the classifier said that prompt asks for, as stored
+    /// (`multi_file_change`), and how hard (`hard`)
+    pub category: Option<String>,
+    pub difficulty: Option<String>,
     /// How long it has worked; `None` while it waits for its task's files
     pub wall_ms: Option<u64>,
     /// What its model calls have cost so far

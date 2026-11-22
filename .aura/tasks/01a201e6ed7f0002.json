@@ -1,0 +1,14 @@
+{
+  "id": "01a201e6ed7f0002",
+  "title": "Feature request from the user: \"when right clicking an agent or project, should be able to move to another workspace #,…",
+  "state": "completed",
+  "agent_id": "2db1719c9e42c23c9d192b3d461ce7bbc3a1f8507642a9ee1bc2cfd39db1933d",
+  "agent_name": "rust-engineer #31",
+  "assignee": "rust-engineer",
+  "parent": "01a201e4ccd00000",
+  "items": [],
+  "summary": "I ran out of time before finishing. The terminal UI side (menu, submenu, rendering, tests) is done and its tests pass. The desktop router code is written and compiles, but I haven't run its tests and haven't written the router tests or the CHANGELOG entry. Nothing is committed, and I didn't touch the unrelated uncommitted files.",
+  "updated_ms": 1795328688686,
+  "created_ms": 1795328241023,
+  "tool_use_id": "toolu_01Kd5kGt8pmp45fa4PYLemvJ"
+}

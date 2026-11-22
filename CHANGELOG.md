@@ -7,6 +7,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### BENCH shows each arm's total time
+
+##### Added
+
+- A benchmark in the BENCH tab has a `total time` row under `time`, the
+  median run: each arm's run times added up, runs under way included,
+  as `cost` adds up what they spent. Up to 4 runs work at once, so an
+  arm's total can be more than the time since the benchmark started.
+  Times of an hour or more read `1h05m` rather than `65m00s`.
+
 ### Gate does not nudge a turn that ran its change itself
 
 ##### Changed
@@ -266,6 +276,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   model taking over) records a `thinking_effort` decision only when its
   effort changes, and the decision lists `xhigh` and `max` among the
   alternatives.
+
+### BENCH runs under way show their route
+
+##### Changed
+
+- A run under way shows the model its prompt went to (instead of the
+  arm, `gate`) and how the classifier rated it, as soon as it is
+  routed; a move to a stronger model shows at once. What it is doing
+  (`thinking 2m31s · call 4`) comes after the last column, in the room
+  left on the line. It used to sit under `classified` and `difficulty`,
+  where it read as their values, and it no longer widens a column, so
+  the table holds still as it changes.
 
 ### Gate writes down a code turn's acceptance criteria before the work starts
 
@@ -1510,6 +1532,13 @@ mode that used to share the name is gone. See [Gate](docs/cli.md#gate).
   projects to the tab before it. The split is kept in `desktop_tabs` in
   the data directory. `UiEvent::FocusAgent` makes an agent the
   session's active one without reloading its chat.
+- Right-clicking a project or an agent in the projects list offers
+  "Move to workspace ›", whose submenu lists the window's other tabs by
+  number and title, and "New workspace". Picking one moves the project
+  (an agent moves its whole project) to that tab; a tab left with no
+  project closes. "New workspace" is left out for the only project a tab
+  lists, which has a tab of its own already. `App::set_workspaces` tells
+  a UI the tabs, and `App::take_workspace_move` hands the host the move.
 - `aura-desktop`, the terminal UI in a native window (winit) that
   draws itself: a frame is one list of quads over a glyph atlas, drawn
   by the GPU in one call (wgpu) or by the CPU where there is no GPU.

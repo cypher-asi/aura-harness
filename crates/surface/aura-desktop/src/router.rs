@@ -15,13 +15,21 @@
 //!   tab's agent the active one, so the answers come back to it.
 //!
 //! Invariant: every project is in exactly one tab. A new one joins the
-//! tab that asked for it; `+` asks for one in a tab of its own.
+//! tab that asked for it; `+` asks for one in a tab of its own. A project
+//! moves whole from one tab to another (a tab's right-click menu asks,
+//! see [`Tabs::forward_events`]), never split, and a tab left with no
+//! project closes.
+//!
+//! Each tab's UI is told the tabs' titles and its own place among them
+//! (`set_workspaces`) whenever they may have changed, so the indices its
+//! menu offers are those of the tabs as they are.
 
 use crate::tab::{Settings, Tab};
 use aura_ui::events::{
     empty_projects, starts_project, AgentSummary, ProcessSummary, ProjectSummary, UiCommand,
     UiEvent,
 };
+use aura_ui_terminal::WorkspaceTarget;
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 
@@ -178,9 +186,44 @@ impl Tabs {
             .position(|tab| tab.projects.iter().any(|project| project == root))
     }
 
-    /// The tab that gets what the session sends without an address.
+    /// The tab that gets what the session sends without an address: the
+    /// one showing the session's active agent. That is the tab holding it
+    /// once it shows it; until then, as right after a project moved, the
+    /// tab still showing it, so what the session sends lands under that
+    /// agent's chat rather than another's.
     fn active_index(&self) -> usize {
-        self.owner(&self.session_active).unwrap_or(self.front)
+        let agent = self.session_active.as_str();
+        let owner = self.owner(agent);
+        let shows = |index: &usize| {
+            self.tabs
+                .get(*index)
+                .is_some_and(|tab| tab.agent() == agent)
+        };
+        let showing = || {
+            // Tabs that have shown nothing are not showing "no agent".
+            (!agent.is_empty())
+                .then(|| self.tabs.iter().position(|tab| tab.agent() == agent))
+                .flatten()
+        };
+        owner
+            .filter(shows)
+            .or_else(showing)
+            .or(owner)
+            .unwrap_or(self.front)
+    }
+
+    /// The agent the tab at `index` speaks for: the one it shows, or none
+    /// (empty) when it shows none or one whose project moved to another
+    /// tab. An agent not listed, new or archived, still counts.
+    fn shown_by(&self, index: usize) -> &str {
+        let Some(tab) = self.tabs.get(index) else {
+            return "";
+        };
+        let agent = tab.agent();
+        match self.owner(agent) {
+            Some(owner) if owner != index => "",
+            _ => agent,
+        }
     }
 
     /// Apply a command from the session to the tabs it is for.
@@ -436,6 +479,17 @@ impl Tabs {
             tab.tui.process_command(UiCommand::SetProjects(projects));
             tab.tui.process_command(UiCommand::SetAgents(agents));
         }
+        // Tabs may have opened or closed, and titles follow the lists.
+        self.sync_workspaces();
+    }
+
+    /// Tell each tab's UI the tabs' titles and which of them it is, for
+    /// its menu's "Move to workspace".
+    fn sync_workspaces(&mut self) {
+        let titles: Vec<String> = self.tabs.iter().map(Tab::title).collect();
+        for (index, tab) in self.tabs.iter_mut().enumerate() {
+            tab.tui.set_workspaces(titles.clone(), index);
+        }
     }
 
     /// Show each tab the processes of its own agents, and those of none.
@@ -469,6 +523,8 @@ impl Tabs {
         self.tabs[index]
             .tui
             .process_command(UiCommand::SetActiveAgent(agent));
+        // The tab's title follows the agent it shows.
+        self.sync_workspaces();
     }
 
     /// Add a tab with the lists the others have. Returns its index.
@@ -486,6 +542,8 @@ impl Tabs {
     /// a tab of its own once the session lists it; one already listed
     /// brings its tab forward instead.
     pub fn new_tab(&mut self) {
+        // Moves may close tabs here; `front` stays a tab's index, and the
+        // folder is asked for in whichever tab is in front after them.
         self.forward_events();
         let tab = &mut self.tabs[self.front];
         tab.tui.ask_for_project_folder();
@@ -520,6 +578,17 @@ impl Tabs {
         }
     }
 
+    /// Id of the tab at `index`, which stays the same while tabs around
+    /// it open, close and move.
+    pub fn id_at(&self, index: usize) -> Option<u64> {
+        self.tabs.get(index).map(|tab| tab.id)
+    }
+
+    /// Where the tab with id `id` is now, if it is still open.
+    pub fn index_of(&self, id: u64) -> Option<usize> {
+        self.tabs.iter().position(|tab| tab.id == id)
+    }
+
     pub fn next(&mut self) {
         self.focus((self.front + 1) % self.tabs.len());
     }
@@ -543,19 +612,32 @@ impl Tabs {
         } else if to <= self.front && self.front < from {
             self.front += 1;
         }
+        self.sync_workspaces();
     }
 
     /// Close the tab at `index`. Its projects move to the tab before it
-    /// (after it, for the first), so nothing is lost. Returns `false` for
-    /// the last tab, which stays.
+    /// (after it, for the first), so nothing is lost. Returns whether the
+    /// tab is gone: `false` for the last tab, which stays, and for no tab.
+    ///
+    /// The moves the tabs' menus asked for go first, and may close tabs
+    /// and shift the rest, so the tab is followed by its id, not `index`.
     pub fn close(&mut self, index: usize) -> bool {
-        if self.tabs.len() < 2 || index >= self.tabs.len() {
+        let Some(id) = self.tabs.get(index).map(|tab| tab.id) else {
+            return false;
+        };
+        self.forward_events();
+        let Some(index) = self.tabs.iter().position(|tab| tab.id == id) else {
+            // A move emptied it, and it closed then.
+            return true;
+        };
+        if self.tabs.len() < 2 {
             return false;
         }
-        self.forward_events();
         let closed = self.tabs.remove(index);
         let into = index.saturating_sub(1);
-        self.tabs[into].projects.extend(closed.projects);
+        if let Some(tab) = self.tabs.get_mut(into) {
+            tab.projects.extend(closed.projects);
+        }
         if self.front == index {
             self.front = into;
         } else if self.front > index {
@@ -568,12 +650,31 @@ impl Tabs {
     }
 
     /// Send the session what the tabs' UIs asked for since the last call,
-    /// then make sure it follows the tab in front.
+    /// and move the projects their menus asked to move, then make sure the
+    /// session follows the tab in front.
+    ///
+    /// A move names its tab by the index the UI was last told, which is
+    /// the tabs' order as this call finds them. An earlier move in the
+    /// same call may close a tab and shift the rest, so each is looked up
+    /// by id rather than taken as an index of the tabs as they are.
     pub fn forward_events(&mut self) {
-        for index in 0..self.tabs.len() {
+        let told: Vec<u64> = self.tabs.iter().map(|tab| tab.id).collect();
+        let mut index = 0;
+        while index < self.tabs.len() {
             while let Some(event) = self.tabs[index].next_event() {
                 self.forward(index, event);
             }
+            let id = self.tabs[index].id;
+            if let Some(asked) = self.tabs[index].tui.take_workspace_move() {
+                if let Some(to) = self.target_now(&told, asked.to) {
+                    self.move_project(index, &asked.project, to);
+                }
+                if self.tabs.get(index).map(|tab| tab.id) != Some(id) {
+                    // The tab closed, emptied: the next one took its place.
+                    continue;
+                }
+            }
+            index += 1;
         }
         // The browser `+` opened was closed without a pick.
         if let Some(id) = self.picking {
@@ -585,7 +686,129 @@ impl Tabs {
                 self.picking = None;
             }
         }
+        self.sync_workspaces();
         self.sync_focus();
+    }
+
+    /// Move the project with key `key` from the tab at `from` to `to`. A
+    /// tab left with no project closes, and the one the project went to
+    /// takes its place in front if it was there. A tab left without the
+    /// agent it showed loads the first agent of the projects it still has,
+    /// staying where it is; with no agent left to show (its other projects
+    /// have every agent archived), the tab the project went to comes to
+    /// the front and shows that agent instead.
+    ///
+    /// Does nothing when `from` doesn't hold the project, when `to` is
+    /// `from` or no tab, or when the project would go to a new tab from
+    /// one it is alone in: that is already a tab of its own.
+    fn move_project(&mut self, from: usize, key: &str, to: WorkspaceTarget) {
+        let Some(tab) = self.tabs.get(from) else {
+            return;
+        };
+        let Some(at) = tab.projects.iter().position(|project| project == key) else {
+            return;
+        };
+        let alone = tab.projects.len() == 1;
+        let shown = tab.agent().to_string();
+        let shown_moves = self.root_of(&shown) == Some(key);
+        let mut into = match to {
+            WorkspaceTarget::Existing(index) if index != from && index < self.tabs.len() => index,
+            WorkspaceTarget::New if !alone => self.open(),
+            WorkspaceTarget::Existing(_) | WorkspaceTarget::New => return,
+        };
+        let project = self.tabs[from].projects.remove(at);
+        self.tabs[into].projects.push(project);
+        if alone {
+            // `into` is another tab, so this is not the last.
+            self.tabs.remove(from);
+            if into > from {
+                into -= 1;
+            }
+            if self.front == from {
+                self.front = into;
+            } else if self.front > from {
+                self.front -= 1;
+            }
+        } else if shown_moves {
+            match self.first_agent(from) {
+                Some(agent) => self.request(&agent, true),
+                None => {
+                    self.front = into;
+                    self.load_into(into, &shown);
+                }
+            }
+        }
+        self.send_agents();
+        self.send_processes();
+        self.sync_focus();
+    }
+
+    /// Have the session show `agent`, of a project the tab at `index`
+    /// holds, in that tab with its chat. The session reloads the chat
+    /// only of an agent it switches to, so when it has `agent` active
+    /// already it is turned to [`Self::stand_in`] first.
+    fn load_into(&mut self, index: usize, agent: &str) {
+        if self.asked_for(agent) {
+            let Some(other) = self.stand_in(index, agent) else {
+                // The session's only agent: show it, without its past.
+                if let Some(tab) = self.tabs.get_mut(index) {
+                    let command = UiCommand::SetActiveAgent(agent.to_string());
+                    tab.tui.process_command(command);
+                }
+                return;
+            };
+            self.request(&other, false);
+        }
+        self.request(agent, true);
+    }
+
+    /// An agent other than `agent` for the session to turn to on the way.
+    /// Best is one a tab shows and holds, the tab at `index` first, as
+    /// the switch to it changes what no tab shows. Else another agent of
+    /// that tab, which shows it until `agent` comes, or of the session.
+    fn stand_in(&self, index: usize, agent: &str) -> Option<String> {
+        let shown = std::iter::once(index)
+            .chain(0..self.tabs.len())
+            .filter_map(|at| {
+                let shown = self.tabs.get(at)?.agent();
+                (self.owner(shown) == Some(at)).then_some(shown)
+            })
+            .find(|shown| *shown != agent);
+        if let Some(shown) = shown {
+            return Some(shown.to_string());
+        }
+        let projects = self.tabs.get(index).map_or(&[][..], |tab| &tab.projects);
+        let in_tab =
+            |listed: &&AgentSummary| projects.iter().any(|key| key == listed.project_key());
+        self.agents
+            .iter()
+            .filter(|listed| listed.id != agent)
+            .find(in_tab)
+            .or_else(|| self.agents.iter().find(|listed| listed.id != agent))
+            .map(|listed| listed.id.clone())
+    }
+
+    /// `to`, an index into the tabs with ids `told`, as an index into the
+    /// tabs as they are now; `None` when that tab is gone or never was.
+    fn target_now(&self, told: &[u64], to: WorkspaceTarget) -> Option<WorkspaceTarget> {
+        match to {
+            WorkspaceTarget::Existing(index) => {
+                let id = *told.get(index)?;
+                let now = self.tabs.iter().position(|tab| tab.id == id)?;
+                Some(WorkspaceTarget::Existing(now))
+            }
+            WorkspaceTarget::New => Some(WorkspaceTarget::New),
+        }
+    }
+
+    /// The first agent listed of the projects in the tab at `index`.
+    fn first_agent(&self, index: usize) -> Option<String> {
+        self.tabs.get(index)?.projects.iter().find_map(|key| {
+            self.agents
+                .iter()
+                .find(|agent| agent.project_key() == key)
+                .map(|agent| agent.id.clone())
+        })
     }
 
     fn forward(&mut self, from: usize, event: UiEvent) {
@@ -595,7 +818,7 @@ impl Tabs {
                 match self.tab_of_folder(folder) {
                     Some((owner, Some(agent))) => {
                         self.front = owner;
-                        let shown = self.tabs[owner].agent();
+                        let shown = self.shown_by(owner);
                         if self.root_of(shown) != self.root_of(&agent) {
                             self.request(&agent, true);
                         }
@@ -606,7 +829,7 @@ impl Tabs {
                     Some((owner, None)) => {
                         self.front = owner;
                         self.asker = Some(self.tabs[owner].id);
-                        let agent = self.tabs[owner].agent().to_string();
+                        let agent = self.shown_by(owner).to_string();
                         self.request(&agent, false);
                         self.send(event);
                         return;
@@ -614,7 +837,7 @@ impl Tabs {
                     None => {
                         self.opening = true;
                         self.asker = None;
-                        let agent = self.tabs[from].agent().to_string();
+                        let agent = self.shown_by(from).to_string();
                         self.request(&agent, false);
                         self.send(event);
                         return;
@@ -639,28 +862,44 @@ impl Tabs {
             }
             _ => {}
         }
-        let agent = self.tabs[from].agent().to_string();
+        let agent = self.shown_by(from).to_string();
         self.request(&agent, false);
         self.send(event);
     }
 
     /// Make the session follow the tab in front. A tab that has shown
-    /// nothing yet opens on its first project with an agent listed.
+    /// nothing yet opens on its first project with an agent listed, and so
+    /// does one still showing an agent whose project moved to another tab,
+    /// until the session shows it its own; with none, it asks for nothing.
+    /// Nor does a tab in front waiting for the session to show it one of
+    /// its agents: asking for the agent it shows now would undo that.
     fn sync_focus(&mut self) {
-        let tab = self.front();
-        if tab.agent().is_empty() {
-            let first = tab.projects.iter().find_map(|key| {
-                self.agents
-                    .iter()
-                    .find(|agent| agent.project_key() == key)
-                    .map(|agent| agent.id.clone())
-            });
-            if let Some(agent) = first {
+        if self.front_awaits_agent() {
+            return;
+        }
+        let shown = self.shown_by(self.front).to_string();
+        if shown.is_empty() {
+            if let Some(agent) = self.first_agent(self.front) {
                 self.request(&agent, true);
             }
         } else {
-            let agent = tab.agent().to_string();
-            self.request(&agent, false);
+            self.request(&shown, false);
+        }
+    }
+
+    /// Whether the session was asked to switch to an agent of the tab in
+    /// front other than the one it shows, and hasn't yet.
+    fn front_awaits_agent(&self) -> bool {
+        self.focus_sent.as_deref().is_some_and(|sent| {
+            sent != self.front().agent() && self.owner(sent) == Some(self.front)
+        })
+    }
+
+    /// Whether the session has `agent` active, or was last asked to.
+    fn asked_for(&self, agent: &str) -> bool {
+        match &self.focus_sent {
+            Some(sent) => sent == agent,
+            None => self.session_active == agent,
         }
     }
 
@@ -668,21 +907,15 @@ impl Tabs {
     /// was already asked to. `load` asks for the agent's chat as well,
     /// for a tab that doesn't hold it yet.
     fn request(&mut self, agent: &str, load: bool) {
-        if agent.is_empty() {
+        if agent.is_empty() || self.asked_for(agent) {
             return;
         }
-        let asked = match &self.focus_sent {
-            Some(sent) => sent == agent,
-            None => self.session_active == agent,
-        };
-        if !asked {
-            self.focus_sent = Some(agent.to_string());
-            self.send(if load {
-                UiEvent::SelectAgent(agent.to_string())
-            } else {
-                UiEvent::FocusAgent(agent.to_string())
-            });
-        }
+        self.focus_sent = Some(agent.to_string());
+        self.send(if load {
+            UiEvent::SelectAgent(agent.to_string())
+        } else {
+            UiEvent::FocusAgent(agent.to_string())
+        });
     }
 
     fn send(&self, event: UiEvent) {
@@ -692,11 +925,71 @@ impl Tabs {
     }
 }
 
+/// Working a tab's UI as the pointer would, for the tests here and the
+/// shell's.
+#[cfg(test)]
+pub(crate) mod testing {
+    use aura_ui_terminal::App;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    /// `tui`, drawn 120 columns by 30 rows, a line per row.
+    pub fn screen(tui: &mut App) -> Vec<String> {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).expect("never fails");
+        let theme = aura_ui_terminal::Theme::cyber();
+        terminal
+            .draw(|frame| aura_ui_terminal::render(frame, tui, &theme))
+            .expect("a test backend draws");
+        let buffer = terminal.backend().buffer();
+        let width = usize::from(buffer.area.width);
+        buffer
+            .content
+            .chunks(width)
+            .map(|row| row.iter().map(ratatui::buffer::Cell::symbol).collect())
+            .collect()
+    }
+
+    /// The cell where `text` first shows in `rows`.
+    pub fn cell_of(rows: &[String], text: &str) -> (u16, u16) {
+        let row = rows
+            .iter()
+            .position(|row| row.contains(text))
+            .unwrap_or_else(|| panic!("no {text}:\n{}", rows.join("\n")));
+        let line = &rows[row];
+        let column = line[..line.find(text).unwrap_or(0)].chars().count();
+        (
+            u16::try_from(column).expect("on screen"),
+            u16::try_from(row).expect("on screen"),
+        )
+    }
+
+    pub fn click(tui: &mut App, button: MouseButton, (column, row): (u16, u16)) {
+        tui.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(button),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    /// Right-click `name` in the projects list of `tui`, then pick
+    /// `entry` from its "Move to workspace".
+    pub fn pick_move(tui: &mut App, name: &str, entry: &str) {
+        let rows = screen(tui);
+        click(tui, MouseButton::Right, cell_of(&rows, name));
+        let rows = screen(tui);
+        click(tui, MouseButton::Left, cell_of(&rows, "Move to workspace"));
+        let rows = screen(tui);
+        click(tui, MouseButton::Left, cell_of(&rows, entry));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use aura_ui::events::{MessageData, MessageRole};
     use aura_ui_terminal::AlertSettings;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton};
 
     fn tabs_with(restore: &[&[&str]]) -> (Tabs, mpsc::Receiver<UiEvent>) {
         let (session, events) = mpsc::channel(64);
@@ -1258,5 +1551,366 @@ mod tests {
         let (mut tabs, mut events) = two_tabs();
         tabs.forward(1, UiEvent::Quit);
         assert_eq!(sent(&mut events), ["Quit"]);
+    }
+
+    /// Three tabs of one project each, `a3`'s in front.
+    fn three_tabs() -> (Tabs, mpsc::Receiver<UiEvent>) {
+        let (mut tabs, mut events) = tabs_with(&[&["a1"], &["p2"], &["a3"]]);
+        start(&mut tabs, TWO, "a3");
+        assert_eq!(tabs.front_index(), 2);
+        let _ = sent(&mut events);
+        (tabs, events)
+    }
+
+    #[test]
+    fn a_project_moves_to_another_tab() {
+        let (mut tabs, mut events) = two_tabs();
+        tabs.move_project(0, "p2", WorkspaceTarget::Existing(1));
+        assert_eq!(tabs.arrangement(), [vec!["a1"], vec!["a3", "p2"]]);
+        assert_eq!(held(&tabs), [vec!["a1", "a1.1"], vec!["p2", "a3"]]);
+        assert_eq!(shown(&tabs), ["a1", "a3"]);
+        assert_eq!(tabs.front_index(), 1);
+        tabs.forward_events();
+        assert!(sent(&mut events).is_empty(), "no tab lost what it shows");
+    }
+
+    #[test]
+    fn a_project_moves_to_a_new_tab() {
+        let (mut tabs, mut events) = two_tabs();
+        tabs.move_project(0, "p2", WorkspaceTarget::New);
+        assert_eq!(tabs.arrangement(), [vec!["a1"], vec!["a3"], vec!["p2"]]);
+        assert_eq!(held(&tabs), [vec!["a1", "a1.1"], vec!["a3"], vec!["p2"]]);
+        assert_eq!(tabs.front_index(), 1, "the tab in front stays");
+        assert!(sent(&mut events).is_empty());
+
+        // Brought forward, the new tab loads its project.
+        tabs.focus(2);
+        assert_eq!(sent(&mut events), [r#"SelectAgent("p2")"#]);
+    }
+
+    #[test]
+    fn moving_the_last_project_of_a_tab_closes_it() {
+        let (mut tabs, mut events) = two_tabs();
+        tabs.move_project(1, "a3", WorkspaceTarget::Existing(0));
+        assert_eq!(tabs.arrangement(), [["a1", "p2", "a3"]]);
+        assert_eq!(held(&tabs), [["a1", "a1.1", "p2", "a3"]]);
+        assert_eq!(tabs.front_index(), 0, "the tab it went to comes forward");
+        assert_eq!(shown(&tabs), ["a1"]);
+        assert_eq!(sent(&mut events), [r#"FocusAgent("a1")"#]);
+
+        // A tab closing before the one in front shifts it.
+        let (mut tabs, mut events) = three_tabs();
+        tabs.move_project(0, "a1", WorkspaceTarget::Existing(1));
+        assert_eq!(tabs.arrangement(), [vec!["p2", "a1"], vec!["a3"]]);
+        assert_eq!(tabs.front_index(), 1);
+        assert_eq!(tabs.front().agent(), "a3");
+        assert!(sent(&mut events).is_empty());
+
+        // The one in front closing, after the tab it goes to.
+        let (mut tabs, _events) = three_tabs();
+        tabs.move_project(2, "a3", WorkspaceTarget::Existing(1));
+        assert_eq!(tabs.arrangement(), [vec!["a1"], vec!["p2", "a3"]]);
+        assert_eq!(tabs.front_index(), 1);
+    }
+
+    #[test]
+    fn moving_the_project_a_tab_shows_loads_its_next() {
+        let (mut tabs, mut events) = two_tabs();
+        tabs.focus(0);
+        switch(&mut tabs, TWO, "a1");
+        let _ = sent(&mut events);
+
+        tabs.move_project(0, "a1", WorkspaceTarget::Existing(1));
+        assert_eq!(tabs.arrangement(), [vec!["p2"], vec!["a3", "a1"]]);
+        assert_eq!(tabs.front_index(), 0, "the tab in front stays");
+        assert_eq!(sent(&mut events), [r#"SelectAgent("p2")"#]);
+        tabs.forward_events();
+        assert!(sent(&mut events).is_empty(), "asked once");
+
+        switch(&mut tabs, TWO, "p2");
+        assert_eq!(shown(&tabs), ["p2", "a3"]);
+        assert_eq!(held(&tabs), [vec!["p2"], vec!["a1", "a1.1", "a3"]]);
+        assert_eq!(tabs.front_index(), 0);
+        tabs.forward_events();
+        assert!(sent(&mut events).is_empty());
+    }
+
+    #[test]
+    fn moves_that_cannot_be_done_are_ignored() {
+        let (mut tabs, mut events) = two_tabs();
+        let before = (tabs.arrangement(), held(&tabs).concat().len());
+        let cases = [
+            (0, "gone", WorkspaceTarget::Existing(1), "unknown key"),
+            (1, "a1", WorkspaceTarget::Existing(0), "not in the tab"),
+            (0, "a1", WorkspaceTarget::Existing(0), "to the tab it is in"),
+            (0, "a1", WorkspaceTarget::Existing(2), "to no tab"),
+            (1, "a3", WorkspaceTarget::New, "the tab's only project"),
+            (2, "a3", WorkspaceTarget::Existing(0), "from no tab"),
+        ];
+        for (from, key, to, why) in cases {
+            tabs.move_project(from, key, to);
+            assert_eq!(
+                (tabs.arrangement(), held(&tabs).concat().len()),
+                before,
+                "{why}"
+            );
+            assert_eq!(tabs.front_index(), 1, "{why}");
+            assert!(sent(&mut events).is_empty(), "{why}");
+        }
+    }
+
+    /// The index each tab's UI was last told it has among the tabs, with
+    /// the titles it was told.
+    fn places(tabs: &Tabs) -> Vec<(usize, Vec<String>)> {
+        tabs.iter()
+            .map(|tab| {
+                let (labels, current) = tab.tui.workspaces();
+                (current, labels.to_vec())
+            })
+            .collect()
+    }
+
+    /// Each tab's UI knows every tab's title and its own place.
+    fn assert_places(tabs: &Tabs) {
+        let titles: Vec<String> = tabs.iter().map(Tab::title).collect();
+        let want: Vec<_> = (0..tabs.len()).map(|i| (i, titles.clone())).collect();
+        assert_eq!(places(tabs), want);
+    }
+
+    #[test]
+    fn each_tab_knows_its_place_as_tabs_open_close_and_move() {
+        let (mut tabs, _events) = tabs();
+        start(&mut tabs, TWO, "a1");
+        assert_eq!(places(&tabs), [(0, vec!["A1".to_string()])]);
+
+        let (mut tabs, _events) = three_tabs();
+        assert_places(&tabs);
+        assert_eq!(places(&tabs)[0].1, ["", "", "A3"]);
+
+        tabs.move_tab(2, 0);
+        assert_places(&tabs);
+        assert_eq!(places(&tabs)[1].1, ["A3", "", ""]);
+
+        tabs.move_project(0, "a3", WorkspaceTarget::New);
+        assert_eq!(tabs.len(), 3, "a3 was alone: nothing moves");
+        tabs.move_project(1, "a1", WorkspaceTarget::Existing(2));
+        assert_eq!(tabs.len(), 2);
+        assert_places(&tabs);
+
+        tabs.move_project(1, "a1", WorkspaceTarget::New);
+        assert_eq!(tabs.len(), 3);
+        assert_places(&tabs);
+
+        assert!(tabs.close(0));
+        assert_places(&tabs);
+        assert_eq!(places(&tabs).len(), 2);
+
+        // A tab opened for a new project knows its place too.
+        tabs.focus(0);
+        plus(&mut tabs);
+        let more: Agents = &[("a1", 0), ("a1.1", 1), ("p2", 0), ("a3", 0), ("p4", 0)];
+        switch(&mut tabs, more, "p4");
+        assert_eq!(tabs.len(), 3);
+        assert_places(&tabs);
+    }
+
+    /// The UI of the tab at `index`, drawn 120 columns by 30 rows.
+    fn screen(tabs: &mut Tabs, index: usize) -> Vec<String> {
+        testing::screen(&mut tabs.tabs[index].tui)
+    }
+
+    use testing::cell_of;
+
+    fn click(tabs: &mut Tabs, index: usize, button: MouseButton, cell: (u16, u16)) {
+        testing::click(&mut tabs.tabs[index].tui, button, cell);
+    }
+
+    /// Right-click `name` in the projects list of the tab at `index`,
+    /// then pick `entry` from its "Move to workspace".
+    fn pick_move(tabs: &mut Tabs, index: usize, name: &str, entry: &str) {
+        testing::pick_move(&mut tabs.tabs[index].tui, name, entry);
+    }
+
+    #[test]
+    fn the_menu_of_a_tab_moves_a_project_to_another() {
+        let (mut tabs, mut events) = two_tabs();
+        // `two_tabs` picked its folder without the browser `+` opened.
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        tabs.tabs[0].tui.handle_key(esc);
+        tabs.focus(0);
+        switch(&mut tabs, TWO, "a1");
+        tabs.forward_events();
+        let _ = sent(&mut events);
+
+        // The menu offers the other tab, by its place and title.
+        let rows = screen(&mut tabs, 0);
+        click(&mut tabs, 0, MouseButton::Right, cell_of(&rows, "P2"));
+        let rows = screen(&mut tabs, 0);
+        click(
+            &mut tabs,
+            0,
+            MouseButton::Left,
+            cell_of(&rows, "Move to workspace"),
+        );
+        let rows = screen(&mut tabs, 0);
+        assert!(
+            rows.iter().any(|row| row.contains("Workspace 2  A3")),
+            "{}",
+            rows.join("\n")
+        );
+        click(
+            &mut tabs,
+            0,
+            MouseButton::Left,
+            cell_of(&rows, "Workspace 2"),
+        );
+        assert_eq!(tabs.arrangement(), [vec!["a1", "p2"], vec!["a3"]]);
+
+        tabs.forward_events();
+        assert_eq!(tabs.arrangement(), [vec!["a1"], vec!["a3", "p2"]]);
+        assert_eq!(held(&tabs), [vec!["a1", "a1.1"], vec!["p2", "a3"]]);
+        assert_eq!(tabs.front_index(), 0);
+        assert!(sent(&mut events).is_empty(), "the session hears nothing");
+
+        // An agent moves its whole project, and its emptied tab closes.
+        pick_move(&mut tabs, 0, "A1.1", "Workspace 2");
+        tabs.forward_events();
+        assert_eq!(tabs.arrangement(), [["a3", "p2", "a1"]]);
+        assert_eq!(tabs.front_index(), 0);
+    }
+
+    #[test]
+    fn moves_asked_in_one_update_go_to_the_tabs_the_menus_named() {
+        let (mut tabs, _events) = three_tabs();
+        // a1's tab asks to go to a3's, then a3's to p2's: the first move
+        // closes a1's tab and shifts the others.
+        pick_move(&mut tabs, 0, "A1", "Workspace 3");
+        pick_move(&mut tabs, 2, "A3", "Workspace 2");
+        tabs.forward_events();
+        assert_eq!(tabs.arrangement(), [vec!["p2", "a3"], vec!["a1"]]);
+        assert_places(&tabs);
+    }
+
+    /// Each update from now on asks the session nothing more.
+    fn settled(tabs: &mut Tabs, events: &mut mpsc::Receiver<UiEvent>) {
+        for update in 0..3 {
+            tabs.forward_events();
+            assert!(sent(events).is_empty(), "update {update} asked again");
+        }
+    }
+
+    #[test]
+    fn a_tab_left_with_nothing_to_show_hands_the_front_to_its_moved_agent() {
+        // p2 has every agent archived: once a1 goes, its tab shows none.
+        let agents: Agents = &[("a1", 0), ("a1.1", 1), ("a3", 0)];
+        let (mut tabs, mut events) = tabs_with(&[&["a1", "p2"], &["a3"]]);
+        tabs.apply(projects(&["a1", "p2", "a3"]));
+        start(&mut tabs, agents, "a1");
+        tabs.focus(1);
+        switch(&mut tabs, agents, "a3");
+        tabs.focus(0);
+        switch(&mut tabs, agents, "a1");
+        let _ = sent(&mut events);
+        assert_eq!(shown(&tabs), ["a1", "a3"]);
+        assert_eq!(tabs.front_index(), 0);
+
+        tabs.move_project(0, "a1", WorkspaceTarget::Existing(1));
+        assert_eq!(tabs.arrangement(), [vec!["p2"], vec!["a3", "a1"]]);
+        assert_eq!(tabs.front_index(), 1);
+        // The session has a1 already and would send its chat only on a
+        // switch, so it turns to a3, which a3's tab shows, on the way.
+        assert_eq!(
+            sent(&mut events),
+            [r#"FocusAgent("a3")"#, r#"SelectAgent("a1")"#]
+        );
+        settled(&mut tabs, &mut events);
+
+        switch(&mut tabs, agents, "a3");
+        assert_eq!(shown(&tabs), ["a1", "a3"]);
+        assert_eq!(tabs.front_index(), 1);
+        settled(&mut tabs, &mut events);
+
+        // The switch back to a1, with its chat.
+        tabs.apply(UiCommand::SetActiveAgent("a1".into()));
+        tabs.apply(message("the chat of a1"));
+        tabs.apply(list(agents, "a1"));
+        tabs.apply(UiCommand::SetActiveAgent("a1".into()));
+        assert_eq!(shown(&tabs)[1], "a1");
+        assert_eq!(tabs.front_index(), 1);
+        let chat = tabs.tabs[1].tui.messages();
+        assert!(chat.iter().any(|m| m.content() == "the chat of a1"));
+        assert_eq!(held(&tabs), [Vec::<&str>::new(), vec!["a1", "a1.1", "a3"]]);
+        settled(&mut tabs, &mut events);
+
+        // The emptied tab, brought forward, asks for nothing it can't show.
+        tabs.focus(0);
+        settled(&mut tabs, &mut events);
+    }
+
+    #[test]
+    fn the_session_alone_with_the_moved_agent_shows_it_without_a_switch() {
+        let agents: Agents = &[("a1", 0)];
+        let (mut tabs, mut events) = tabs_with(&[&["a1", "p2"], &["p3"]]);
+        tabs.apply(projects(&["a1", "p2", "p3"]));
+        start(&mut tabs, agents, "a1");
+        let _ = sent(&mut events);
+
+        tabs.move_project(0, "a1", WorkspaceTarget::Existing(1));
+        assert_eq!(tabs.arrangement(), [vec!["p2"], vec!["p3", "a1"]]);
+        assert_eq!(tabs.front_index(), 1);
+        assert_eq!(shown(&tabs)[1], "a1");
+        assert!(sent(&mut events).is_empty(), "no agent to turn to");
+        settled(&mut tabs, &mut events);
+    }
+
+    #[test]
+    fn until_the_session_turns_it_speaks_to_the_tab_showing_its_agent() {
+        let (mut tabs, mut events) = two_tabs();
+        tabs.focus(0);
+        switch(&mut tabs, TWO, "a1");
+        let _ = sent(&mut events);
+
+        tabs.move_project(0, "a1", WorkspaceTarget::Existing(1));
+        assert_eq!(sent(&mut events), [r#"SelectAgent("p2")"#]);
+        // The session still has a1: a1's old tab shows it, the other
+        // holds it now.
+        assert_eq!(shown(&tabs), ["a1", "a3"]);
+        let error = |tab: &Tab, text: &str| matches!(tab.tui.notification(), Some((shown, _)) if shown.contains(text));
+        tabs.apply(UiCommand::ShowError("a1 failed".into()));
+        assert!(error(&tabs.tabs[0], "a1 failed"));
+        assert!(!error(&tabs.tabs[1], "a1 failed"));
+
+        // Turned to p2, it speaks to p2's tab.
+        switch(&mut tabs, TWO, "p2");
+        assert_eq!(shown(&tabs), ["p2", "a3"]);
+        tabs.apply(UiCommand::ShowError("p2 failed".into()));
+        assert!(error(&tabs.tabs[0], "p2 failed"));
+        assert!(!error(&tabs.tabs[1], "p2 failed"));
+        settled(&mut tabs, &mut events);
+    }
+
+    #[test]
+    fn closing_a_tab_does_the_moves_asked_before_it() {
+        // a1's tab asks to go to a3's, which closes it and shifts p2's.
+        let (mut tabs, _events) = three_tabs();
+        pick_move(&mut tabs, 0, "A1", "Workspace 3");
+        assert!(tabs.close(1), "p2's tab");
+        assert_eq!(tabs.arrangement(), [["a3", "a1", "p2"]]);
+        assert_eq!(tabs.front_index(), 0);
+
+        // The tab closed is the one the move emptied.
+        let (mut tabs, _events) = three_tabs();
+        pick_move(&mut tabs, 0, "A1", "Workspace 3");
+        assert!(tabs.close(0), "closed, emptied");
+        assert_eq!(tabs.arrangement(), [vec!["p2"], vec!["a3", "a1"]]);
+        assert_eq!(tabs.front_index(), 1);
+
+        // The move leaves one tab, which stays.
+        let (mut tabs, _events) = tabs_with(&[&["a1"], &["a3"]]);
+        start(&mut tabs, &[("a1", 0), ("a3", 0)], "a3");
+        pick_move(&mut tabs, 0, "A1", "Workspace 2");
+        assert!(!tabs.close(1), "the last tab stays");
+        assert_eq!(tabs.arrangement(), [["a3", "a1"]]);
+        assert_eq!(tabs.front_index(), 0);
     }
 }

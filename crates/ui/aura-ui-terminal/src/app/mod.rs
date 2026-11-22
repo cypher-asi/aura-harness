@@ -66,6 +66,7 @@ use crate::{
 };
 pub use chat_tabs::ChatTab;
 pub(crate) use context_menu::MenuTarget;
+pub use context_menu::{WorkspaceMove, WorkspaceTarget};
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 pub use definitions::AgentsTab;
 use file_view::FileView;
@@ -405,6 +406,11 @@ pub struct App {
     pub(super) folder_picker: Option<FolderPicker>,
     /// Menu a right click opened on the projects list
     pub(super) context_menu: Option<context_menu::ContextMenu>,
+    /// The host's workspaces, which the menu offers to move a project to
+    pub(super) workspaces: context_menu::Workspaces,
+    /// A move to another workspace the menu asked for, until the host
+    /// takes it
+    pub(super) workspace_move: Option<WorkspaceMove>,
     /// Usage, todos and jobs of the agent on screen
     pub(super) hud: Hud,
     /// The queued-messages panel above the input
@@ -927,6 +933,8 @@ impl App {
             archived_scroll: 0,
             folder_picker: None,
             context_menu: None,
+            workspaces: context_menu::Workspaces::default(),
+            workspace_move: None,
             hud: Hud::default(),
             queue_panel: queue_panel::QueuePanel::default(),
             bench_panel: bench_progress::BenchPanel::default(),
@@ -1771,7 +1779,12 @@ impl App {
     /// a drag that left the highlight and the selection as they were.
     pub fn handle_mouse(&mut self, mouse: MouseEvent) -> bool {
         let pointing = matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Drag(_));
-        let menu = |app: &Self| app.context_menu.as_ref().map(|menu| menu.selected);
+        let menu = |app: &Self| {
+            app.context_menu.as_ref().map(|menu| {
+                let submenu = menu.submenu.as_ref().map(|submenu| submenu.selected);
+                (menu.selected, submenu)
+            })
+        };
         let ends = |app: &Self| app.selection.as_ref().map(Selection::ends);
         let state = |app: &Self| {
             (

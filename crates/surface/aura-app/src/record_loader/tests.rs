@@ -673,7 +673,7 @@ fn reply_footer_counts_the_classifier_before_its_prompt_and_the_title_after_it()
     let reply = history.iter().find(|m| m.content == "done").unwrap();
     assert_eq!(
         reply.model.as_deref(),
-        Some("claude-sonnet-5-5 ×2 · gate: claude-haiku-5-5 · title: claude-haiku-5-5")
+        Some("claude-sonnet-5-5 ×2 · gate: claude-haiku-5-5")
     );
     assert_eq!(reply.usage.unwrap().tokens, 4 * 110);
 }

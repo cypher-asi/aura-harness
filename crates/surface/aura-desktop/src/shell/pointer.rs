@@ -57,8 +57,9 @@ pub struct Pointer {
     pub(super) on_bar: Option<Point>,
     /// The divider being dragged
     dragging: Option<Divider>,
-    /// Where the tab being dragged along the tab bar is now
-    pub(super) tab_drag: Option<usize>,
+    /// The tab being dragged along the tab bar, by id: moves its menus
+    /// ask for may close tabs mid-drag and shift the rest
+    pub(super) tab_drag: Option<u64>,
     /// The window side or corner under it
     edge: Option<ResizeDirection>,
     /// When empty tab bar space was last pressed, for a double click
@@ -74,12 +75,14 @@ impl Shell {
     pub fn pointer_moved(&mut self, at: Point) {
         let started = Instant::now();
         let hovers = (self.bar.hover(), self.chrome.hover());
-        if let Some(from) = self.pointer.tab_drag {
+        if let Some(id) = self.pointer.tab_drag {
             self.pointer.on_bar = Some(at);
             self.bar.point(Some(at));
-            if let Some(to) = self.bar.slot(at.x).filter(|to| *to != from) {
-                self.tabs.move_tab(from, to);
-                self.pointer.tab_drag = Some(to);
+            // A tab gone mid-drag drags nothing until the button is let go.
+            if let Some(from) = self.tabs.index_of(id) {
+                if let Some(to) = self.bar.slot(at.x).filter(|to| *to != from) {
+                    self.tabs.move_tab(from, to);
+                }
             }
             self.dirty = true;
             return;
@@ -320,7 +323,8 @@ impl Shell {
         match (self.bar.hover(), button) {
             (Some(Hit::Tab(index)), MouseButton::Left) => {
                 self.tabs.focus(index);
-                self.pointer.tab_drag = Some(index);
+                // By id: the `settle` after this press may close tabs.
+                self.pointer.tab_drag = self.tabs.id_at(index);
             }
             (Some(Hit::Tab(index)), MouseButton::Middle) => {
                 self.tabs.close(index);

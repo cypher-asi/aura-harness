@@ -1,0 +1,14 @@
+{
+  "id": "01a20201b3990007",
+  "title": "Finish a fix in /home/n3o/code/aura-harness, crate `crates/surface/aura-desktop`. The working tree has other uncommitte…",
+  "state": "completed",
+  "agent_id": "c71da686078aa52db2bbbb82726e53ba2638f0fd987e67a8a5a9b5f982d7847c",
+  "agent_name": "rust-engineer #35",
+  "assignee": "rust-engineer",
+  "parent": "01a201e4ccd00000",
+  "items": [],
+  "summary": "The fix is finished. Clippy and rustfmt are clean, and all 150 unit tests pass, including the five new ones. Nothing is committed, and the only files edited are `router.rs`, `shell/pointer.rs` and `shell/snapshot.rs`.",
+  "updated_ms": 1795331003264,
+  "created_ms": 1795329995673,
+  "tool_use_id": "toolu_01T8iLPmMnXu99e771SvWEHr"
+}
