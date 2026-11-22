@@ -717,8 +717,10 @@ pub enum RewardKind {
     Outcome,
     /// Local progress signal (edit applied, build fixed, redundant read).
     Process,
-    /// Token, money or time spent.
+    /// Money or time spent.
     Cost,
+    /// Tokens spent.
+    Tokens,
     /// Whether a harness decision changed behavior.
     DecisionEffect,
     /// Explicit human label.
@@ -735,6 +737,7 @@ impl RewardKind {
             Self::Outcome => "outcome",
             Self::Process => "process",
             Self::Cost => "cost",
+            Self::Tokens => "tokens",
             Self::DecisionEffect => "decision_effect",
             Self::HumanExplicit => "human_explicit",
             Self::HumanImplicit => "human_implicit",

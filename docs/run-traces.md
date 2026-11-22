@@ -77,7 +77,8 @@ A reward targets a step or the whole run and has a `kind`, a `name`, a `value` (
 | `human_explicit` | `aura runs label`, or `+`/`-` in the TUI graph. | Stored |
 | `human_implicit` | Interrupts and similar user behavior. | Stored |
 | `process` | Local progress: an edit applied, a build fixed, a redundant read. | Derived (`process/v1`) |
-| `cost` | Tokens, money and time spent. | Derived (`cost/v1`) |
+| `cost` | Money and time spent: each model call's list price (`usd`, none for a model with no known price) and the run's wall time (`wall_minutes`). | Derived (`cost/v2`) |
+| `tokens` | Tokens each model call spent. | Derived (`cost/v2`) |
 | `decision_effect` | Whether the model did what a harness decision intended within 3 model calls. | Derived (`effect/v1`) |
 
 Derived rewards are recomputed from the steps every time a run is loaded, so improving a labeler relabels all past runs. The normalizer assigns credit with a discounted return (gamma 0.95).

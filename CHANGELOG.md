@@ -7,6 +7,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### A run's cost reward is counted in dollars
+
+##### Changed
+
+- The `cost` reward of a run is now each model call's list price
+  (`usd`) and the run's wall time. It counted tokens before, which
+  weigh the same on every model: on a SWE-bench task Gate's Haiku run
+  scored -0.55 on cost to Opus's -0.45, though it cost 22 times less.
+  Tokens are a reward kind of their own, `tokens`, listed apart by
+  `aura runs show`. A call to a model with no known price gets no
+  `usd` reward. The labeler's source is `cost/v2`.
+
 ### Gate's own calls are in the run log and its cost
 
 ##### Fixed

@@ -4,7 +4,7 @@
 //!
 //! - **Stored** rewards come from outside the step log (verification
 //!   outcome, human labels, interrupts) and live in `rewards.jsonl`.
-//! - **Derived** rewards (process, cost, decision effect) are pure
+//! - **Derived** rewards (process, cost, tokens, decision effect) are pure
 //!   functions of the steps. They are recomputed on every load rather
 //!   than stored, so improving a labeler relabels every past run. Each
 //!   labeler stamps a versioned `source` so exports record which
@@ -18,10 +18,12 @@ use aura_core_types::trace::{
 };
 use serde_json::json;
 
+use crate::scorecard::step_cost_usd;
+
 /// Source tag of process rewards.
 pub const PROCESS_SOURCE: &str = "process/v1";
-/// Source tag of cost rewards.
-pub const COST_SOURCE: &str = "cost/v1";
+/// Source tag of cost and token rewards.
+pub const COST_SOURCE: &str = "cost/v2";
 /// Source tag of decision-effect rewards.
 pub const EFFECT_SOURCE: &str = "effect/v1";
 /// Model calls after a harness decision within which its intended
@@ -209,8 +211,9 @@ pub fn process_rewards(steps: &[Step]) -> Vec<Reward> {
     out
 }
 
-/// Token cost per model step and wall time for the run, kept as
-/// separate penalties so weighting is a training-time choice.
+/// Tokens and list price of each model call, and wall time for the
+/// run, kept as separate penalties so weighting is a training-time
+/// choice. A call to a model with no known price has no `usd` reward.
 #[must_use]
 #[allow(clippy::cast_precision_loss)]
 pub fn cost_rewards(steps: &[Step]) -> Vec<Reward> {
@@ -220,12 +223,22 @@ pub fn cost_rewards(steps: &[Step]) -> Vec<Reward> {
             let tokens = usage.input + usage.output + usage.cache_write;
             out.push(reward(
                 step_target(step),
-                RewardKind::Cost,
+                RewardKind::Tokens,
                 "tokens",
                 -(tokens as f64) / 100_000.0,
                 COST_SOURCE,
                 step.at_ms,
             ));
+            if let Some(usd) = step_cost_usd(&step.policy.id, usage) {
+                out.push(reward(
+                    step_target(step),
+                    RewardKind::Cost,
+                    "usd",
+                    -usd,
+                    COST_SOURCE,
+                    step.at_ms,
+                ));
+            }
         }
     }
     if let (Some(first), Some(last)) = (steps.first(), steps.last()) {
@@ -544,6 +557,30 @@ pub(crate) mod tests {
         assert!((effects[0].value - 1.0).abs() < f64::EPSILON);
         let ignored = decision_effects(&[nudge(1, "implement_now"), model(2, &[])]);
         assert!((ignored[0].value + 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn cost_is_priced_per_call_and_tokens_counted_apart() {
+        let mut opus = model(1, &[]);
+        opus.policy.id = "claude-opus-5-5".into();
+        let mut local = model(2, &[]);
+        local.policy.id = "local/qwen3:4b".into();
+        let usd = step_cost_usd("claude-opus-5-5", opus.usage.unwrap()).unwrap();
+        let rewards = cost_rewards(&[opus, local]);
+        let values = |kind: RewardKind, name: &str| -> Vec<f64> {
+            rewards
+                .iter()
+                .filter(|r| r.kind == kind && r.name == name)
+                .map(|r| r.value)
+                .collect()
+        };
+        assert_eq!(values(RewardKind::Tokens, "tokens"), vec![-0.011, -0.011]);
+        assert_eq!(
+            values(RewardKind::Cost, "usd"),
+            vec![-usd],
+            "a model with no known price has no usd reward"
+        );
+        assert_eq!(values(RewardKind::Cost, "wall_minutes").len(), 1);
     }
 
     #[test]
