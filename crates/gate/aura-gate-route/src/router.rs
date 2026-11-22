@@ -2165,6 +2165,81 @@ mod tests {
         }
 
         #[test]
+        fn decisions_record_the_same_route_and_label() {
+            let empty = GateStats::default();
+            let settings = GateConfig::defaults();
+            let debugging = easy(PromptCategory::Debugging);
+            let explored = pick(&empty, &debugging, &claude(), &settings, &mut || 0.0).unwrap();
+            let kept = pick(&empty, &debugging, &claude(), &settings, &mut || 0.99).unwrap();
+            let off = pick(
+                &empty,
+                &easy(PromptCategory::Question),
+                &claude(),
+                &no_exploring(),
+                &mut || 0.0,
+            )
+            .unwrap();
+            let max = escalate(
+                &empty,
+                RouteLevel::Turn,
+                (OPUS, Some(ThinkingEffort::High)),
+                OutcomeSignal::JudgedFail,
+                &claude(),
+            )
+            .unwrap();
+            let up = escalate(
+                &empty,
+                RouteLevel::Subtask,
+                (HAIKU, Some(ThinkingEffort::Off)),
+                OutcomeSignal::ChecksFailed,
+                &all(),
+            )
+            .unwrap();
+            let pinned = [
+                (
+                    explored,
+                    RouteLevel::Turn,
+                    "Route { level: Turn, model: \"local/qwen3:4b\", reason: Explore, \
+                     explored: true, propensity: 0.05, effort: Some(\"low\") }",
+                    "qwen3:4b (local) at low effort",
+                ),
+                (
+                    kept,
+                    RouteLevel::Subtask,
+                    "Route { level: Subtask, model: \"claude/claude-haiku-4-5\", reason: Default, \
+                     explored: false, propensity: 0.95, effort: Some(\"medium\") }",
+                    "claude-haiku-4-5 (claude plan) at medium effort",
+                ),
+                (
+                    off,
+                    RouteLevel::Turn,
+                    "Route { level: Turn, model: \"claude/claude-haiku-4-5\", reason: Default, \
+                     explored: false, propensity: 1.0, effort: None }",
+                    "claude-haiku-4-5 (claude plan) with thinking off",
+                ),
+                (
+                    max,
+                    RouteLevel::Turn,
+                    "Route { level: Turn, model: \"claude/claude-opus-4-7\", reason: Escalate, \
+                     explored: false, propensity: 1.0, effort: Some(\"max\") }",
+                    "claude-opus-4-7 (claude plan) at max effort",
+                ),
+                (
+                    up,
+                    RouteLevel::Subtask,
+                    "Route { level: Subtask, model: \"claude/claude-sonnet-4-6\", \
+                     reason: Escalate, explored: false, propensity: 1.0, \
+                     effort: Some(\"medium\") }",
+                    "claude-sonnet-4-6 (claude plan) at medium effort",
+                ),
+            ];
+            for (decision, level, route, label) in pinned {
+                assert_eq!(format!("{:?}", decision.route(level)), route);
+                assert_eq!(decision.label(), label);
+            }
+        }
+
+        #[test]
         fn seeded_draws_repeat_and_stay_in_range() {
             let mut a = SplitMix64::seeded(42);
             let mut b = SplitMix64::seeded(42);
