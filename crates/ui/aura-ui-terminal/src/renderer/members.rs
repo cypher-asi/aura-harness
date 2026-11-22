@@ -153,7 +153,10 @@ mod tests {
         app.select_pane_tab(crate::PaneTab::Records(RecordsTab::Members));
         let rows = render_rows(&mut app, 200, 30);
         let screen = rows.join("\n");
-        assert!(screen.contains("│ KERNEL  │ MEMBERS │"), "{screen}");
+        assert!(
+            screen.contains("│  KERNEL  │ MEMBERS  │ POLICIES │"),
+            "{screen}"
+        );
         assert!(screen.contains("3 AGENTS │"), "{screen}");
         let lead = rows.iter().find(|row| row.contains("Lead")).unwrap();
         assert!(lead.contains("lead"), "{lead}");
@@ -175,7 +178,10 @@ mod tests {
         let rows = render_rows(&mut app, 200, 30);
         let screen = rows.join("\n");
         assert_eq!(app.records_tab(), RecordsTab::Kernel);
-        assert!(screen.contains("│ KERNEL  │ MEMBERS │"), "{screen}");
+        assert!(
+            screen.contains("│  KERNEL  │ MEMBERS  │ POLICIES │"),
+            "{screen}"
+        );
         assert!(screen.contains("0 RECORDS │"), "{screen}");
         assert!(!screen.contains("bb-worker"), "{screen}");
     }
@@ -191,7 +197,7 @@ mod tests {
     }
 
     #[test]
-    fn hosted_kernel_bars_hand_the_front_end_both_tabs() {
+    fn hosted_kernel_bars_hand_the_front_end_every_tab() {
         let mut app = app_with_members();
         app.set_host_chrome(true);
         app.select_pane_tab(crate::PaneTab::Records(RecordsTab::Members));
@@ -206,6 +212,7 @@ mod tests {
             [
                 crate::PaneTab::Records(RecordsTab::Kernel),
                 crate::PaneTab::Records(RecordsTab::Members),
+                crate::PaneTab::Records(RecordsTab::Policies),
             ]
         );
         assert_eq!(

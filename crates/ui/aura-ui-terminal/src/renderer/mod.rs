@@ -22,6 +22,7 @@ mod mention_menu;
 mod overlays;
 mod panels;
 mod plans;
+mod policies;
 mod processes;
 mod queue_panel;
 mod run_log;

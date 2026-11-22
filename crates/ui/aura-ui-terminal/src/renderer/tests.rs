@@ -1048,11 +1048,17 @@ fn test_sandbox_panel_sits_below_record() {
     ));
     let rows = render_rows(&mut app, 150);
 
-    let (record, _) = header_bar(&rows, "│ KERNEL");
+    let (record, _) = header_bar(&rows, "KERNEL");
     let (sandbox, _) = header_bar(&rows, "SBX");
     assert!(sandbox > record + 10, "record={record} sandbox={sandbox}");
     let column = |row: &str, title: &str| row[..row.find(title).unwrap()].chars().count();
-    let kernel_border = column(&rows[record], "│ KERNEL");
+    // The Kernel panel's left frame: the last border before its first tab.
+    let kernel_border = rows[record][..rows[record].find("KERNEL").unwrap()]
+        .chars()
+        .collect::<Vec<char>>()
+        .iter()
+        .rposition(|&c| c == '│')
+        .unwrap();
     assert_eq!(
         rows[sandbox].chars().nth(kernel_border),
         Some('│'),

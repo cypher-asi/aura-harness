@@ -226,6 +226,7 @@ async fn switch(
             warn_if_unconfined(state, agent_id).await;
         }
     }
+    super::policies::send_policies_of(state, agent_id).await;
     true
 }
 

@@ -33,7 +33,7 @@ use aura_core_types::{
     ActionKind, AgentMode, ApprovalLevel, PermissionLayer, PolicyCheck, PolicyCheckOutcome,
     PolicyRule, PolicySource, Proposal, RuntimeCapabilityInstall, ToolState,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use tracing::{debug, warn};
 use verdict::outcome_of;
@@ -232,6 +232,29 @@ impl Policy {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(tool)
             .copied()
+    }
+
+    /// Snapshot of the tool states remembered for this session, keyed by
+    /// tool name.
+    #[must_use]
+    pub fn session_tool_states(&self) -> BTreeMap<String, ToolState> {
+        self.session_tool_states
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|(tool, state)| (tool.clone(), *state))
+            .collect()
+    }
+
+    /// How `tool` would be decided now, before arguments: mode,
+    /// capability, integration, session grant and tri-state gates.
+    /// Records nothing and prompts no one.
+    #[must_use]
+    pub fn explain_tool(&self, tool: &str) -> PolicyEvaluation {
+        let tool_call = aura_core_types::ToolCall::new(tool, serde_json::json!({}));
+        let mut trace = Vec::new();
+        let (verdict, rule) = self.evaluate_tool_call_explained(&tool_call, None, &mut trace);
+        PolicyEvaluation::new(verdict, rule, trace)
     }
 
     /// Evaluate a proposal through the full authorization pipeline,

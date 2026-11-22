@@ -84,8 +84,9 @@ themes keep working:
 Every panel has its own header bar above its body: a bordered frame of
 equal-width tab cells, then an info cell filling the rest of the width.
 Most tab bars spread their tabs over the whole width. The Kernel panel's
-KERNEL | MEMBERS bar keeps its tabs at their own width and leaves the rest
-to the info cell, which shows the open tab's count on its right. Bars
+KERNEL | MEMBERS | POLICIES bar keeps its tabs at their own width and
+leaves the rest to the info cell, which shows the open tab's count (or,
+on POLICIES, the agent's `MODE/APPROVAL`) on its right. Bars
 without tabs (a record or file shown over the chat) show a title on the
 left of the info cell.
 
@@ -98,15 +99,24 @@ left of the info cell.
 ```
 
 ```text
-┌─────────┬─────────┬──────────────────┐
-│ KERNEL  │▓MEMBERS▓│         3 AGENTS │
-└─────────┴─────────┴──────────────────┘
+┌──────────┬──────────┬──────────┬────────────┐
+│  KERNEL  │▓MEMBERS ▓│ POLICIES │   3 AGENTS │
+└──────────┴──────────┴──────────┴────────────┘
 ```
 
 The MEMBERS tab lists the agent on screen, which leads its run, then the
 agents the run brought in, each indented under the agent that started it.
 Its rows use the Processes tab's status glyphs, and `lead`, `task` or
 `agent` with the time worked in place of a row's time.
+
+The POLICIES tab is a read-only document in sections (STATUS,
+CAPABILITIES, TOOLS, ALWAYS ALLOW, SESSION GRANTS, INTEGRATIONS), each
+headed in bold `primary` with a `muted` note after it. STATUS rows put a
+`muted` label column before the value. TOOLS rows mark each tool `✓ on`
+in `success`, `? ask` in `warning` or `✗ off` in `error`, followed by the
+deciding rule in `muted`. What weakens the guardrails (`yolo`, commands
+that can't be confined, no live prompts) is shown in `warning`, and the
+header's `MODE/APPROVAL` info turns `warning` under `yolo`.
 
 - **Frame and dividers**: the panel's border color
 - **Active tab**: bold. While the panel is focused it is filled with `selection` and labelled in `on_selection`; otherwise the label is `foreground` with no fill

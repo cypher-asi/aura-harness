@@ -7,6 +7,33 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### POLICIES tab in the Kernel panel
+
+##### Added
+
+- The Kernel panel (top right) has a POLICIES tab next to KERNEL and
+  MEMBERS. It shows the policy that the kernel of the agent on screen
+  enforces. STATUS covers the work mode, the approval level, whether
+  commands can be confined to the folder, whether `ask` calls can
+  prompt you, permission hooks, accepted action kinds and the policy
+  hash. CAPABILITIES lists the capabilities the agent holds and its
+  scope. TOOLS shows each tool the agent is offered as on, ask or off,
+  with the rule that decides it. ALWAYS ALLOW lists the project's rules
+  (flagged as ignored at `strict`), SESSION GRANTS the answers
+  remembered this session, and INTEGRATIONS what is installed. The tool
+  states are worked out before a call's arguments, so checks that
+  depend on paths can still decide a real call differently.
+- The header shows the agent's `MODE/APPROVAL`, in the warning color
+  under `yolo`. The view refreshes when the agent comes on screen, when
+  its mode or approval level changes, after an "always allow" answer,
+  and whenever the tab opens.
+- Open the tab with `/policies` (also `/perms`), or press
+  Shift+Left/Right, which now cycles through all three tabs. Up/Down,
+  PgUp/PgDn, Home/End and the wheel scroll it.
+- The kernel's `Policy` gains `explain_tool` (a dry run of the tool
+  gates that records nothing) and `session_tool_states`. `Kernel` gains
+  `has_approval_prompter` and `permission_hook_count`.
+
 ### Enter again after queueing a message sends it now
 
 ##### Fixed

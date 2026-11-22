@@ -225,6 +225,15 @@ impl ProjectRules {
             .is_some_and(|rules| rules.iter().any(|rule| rule.allows(tool, args)))
     }
 
+    /// Labels of the rules kept for `folder`, in the order they were added.
+    fn labels(&self, folder: &Path) -> Vec<String> {
+        self.file
+            .projects
+            .get(&project_key(folder))
+            .map(|rules| rules.iter().map(ApprovalRule::label).collect())
+            .unwrap_or_default()
+    }
+
     /// Add `rule` for `folder`, returning the file contents to save, or
     /// `None` when the rule was already there.
     fn add(&mut self, folder: &Path, rule: ApprovalRule) -> Option<Vec<u8>> {
@@ -348,6 +357,15 @@ impl TerminalApprovals {
         lock(&self.folders).get(&agent_id).cloned()
     }
 
+    /// What the "always allow" rules of `agent_id`'s project folder allow,
+    /// as the prompt words them ("`cargo test` commands"). Empty when the
+    /// agent has no folder or its project no rules.
+    pub(crate) fn rules_for(&self, agent_id: AgentId) -> Vec<String> {
+        self.folder_of(agent_id)
+            .map(|folder| lock(&self.rules).labels(&folder))
+            .unwrap_or_default()
+    }
+
     /// Whether any call of `agent_id` waits for an answer.
     #[must_use]
     pub fn is_waiting(&self, agent_id: AgentId) -> bool {
@@ -356,8 +374,13 @@ impl TerminalApprovals {
             .any(|waiting| waiting.agent_id == agent_id)
     }
 
-    /// Apply the user's answer to the call waiting as `request_id`.
-    pub(crate) async fn answer(&self, request_id: &str, answer: Answer) -> Result<(), AnswerError> {
+    /// Apply the user's answer to the call waiting as `request_id`,
+    /// returning the agent that made the call.
+    pub(crate) async fn answer(
+        &self,
+        request_id: &str,
+        answer: Answer,
+    ) -> Result<AgentId, AnswerError> {
         let waiting = lock(&self.pending)
             .remove(request_id)
             .ok_or(AnswerError::NotWaiting)?;
@@ -374,7 +397,7 @@ impl TerminalApprovals {
         if answer == Answer::Always {
             self.allow_covered(agent_id).await;
         }
-        Ok(())
+        Ok(agent_id)
     }
 
     /// Allow the calls of `agent_id` still waiting that its project's rules

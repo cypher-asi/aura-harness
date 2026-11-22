@@ -1,5 +1,6 @@
 //! The Kernel panel's tabs: KERNEL lists the kernel's records of the
-//! agent on screen, MEMBERS the agents that agent's run brought in.
+//! agent on screen, MEMBERS the agents that agent's run brought in, and
+//! POLICIES the policy its kernel enforces (see [`super::policies`]).
 //!
 //! Members come from the process table ([`UiCommand::SetProcesses`]). Every
 //! `task` spawn and background agent it lists is kept here, so an agent
@@ -31,16 +32,19 @@ pub enum RecordsTab {
     Kernel,
     /// The agents the run of the agent on screen brought in.
     Members,
+    /// The policy the kernel of the agent on screen enforces.
+    Policies,
 }
 
 impl RecordsTab {
-    pub const ALL: [Self; 2] = [Self::Kernel, Self::Members];
+    pub const ALL: [Self; 3] = [Self::Kernel, Self::Members, Self::Policies];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Kernel => "KERNEL",
             Self::Members => "MEMBERS",
+            Self::Policies => "POLICIES",
         }
     }
 
@@ -50,14 +54,25 @@ impl RecordsTab {
         match self {
             Self::Kernel => "KRN",
             Self::Members => "MEM",
+            Self::Policies => "POL",
         }
     }
 
-    /// The other tab: with two, Left and Right both go there.
-    const fn other(self) -> Self {
+    /// The tab after this one, wrapping around, as Shift+Right goes.
+    const fn next(self) -> Self {
         match self {
             Self::Kernel => Self::Members,
+            Self::Members => Self::Policies,
+            Self::Policies => Self::Kernel,
+        }
+    }
+
+    /// The tab before this one, wrapping around, as Shift+Left goes.
+    const fn prev(self) -> Self {
+        match self {
+            Self::Kernel => Self::Policies,
             Self::Members => Self::Kernel,
+            Self::Policies => Self::Members,
         }
     }
 
@@ -271,7 +286,11 @@ impl App {
     }
 
     pub(super) fn show_records_tab(&mut self, tab: RecordsTab) {
+        let opened = tab != self.records_tab;
         self.records_tab = tab;
+        if opened && tab == RecordsTab::Policies {
+            self.request_policies();
+        }
     }
 
     /// Show the Kernel panel's MEMBERS tab, focused, as `/members` does.
@@ -408,6 +427,8 @@ impl App {
                     self.open_selected_member();
                 }
             }
+            // A read-only document: clicks only focus the panel.
+            RecordsTab::Policies => {}
         }
     }
 
@@ -417,8 +438,9 @@ impl App {
     }
 
     /// Keys of the Kernel panel that would otherwise go to the input, used
-    /// while it is empty: Shift+Left/Right switch its tab, and on the
-    /// MEMBERS tab Home/End jump and `o` opens the member's chat.
+    /// while it is empty: Shift+Left/Right switch its tab, on the MEMBERS
+    /// tab Home/End jump and `o` opens the member's chat, and on the
+    /// POLICIES tab Home/End jump.
     pub(super) fn handle_records_shortcut(&mut self, key: KeyEvent) -> bool {
         if key
             .modifiers
@@ -429,8 +451,16 @@ impl App {
         if key.modifiers.contains(KeyModifiers::SHIFT)
             && matches!(key.code, KeyCode::Left | KeyCode::Right)
         {
-            self.show_records_tab(self.records_tab.other());
+            let tab = if key.code == KeyCode::Right {
+                self.records_tab.next()
+            } else {
+                self.records_tab.prev()
+            };
+            self.show_records_tab(tab);
             return true;
+        }
+        if self.records_tab == RecordsTab::Policies {
+            return self.handle_policies_shortcut(key);
         }
         if self.records_tab != RecordsTab::Members {
             return false;

@@ -4,8 +4,8 @@
 
 use super::format::{format_cost, format_tokens};
 use crate::events::{
-    CallStats, ContextView, InstructionFileView, InstructionStatus, JobView, QueuedItemView,
-    SessionTotals, TodoState, TodoView,
+    CallStats, ContextView, InstructionFileView, InstructionStatus, JobView, PolicyView,
+    QueuedItemView, SessionTotals, TodoState, TodoView,
 };
 use crate::mode_command::{ApprovalLevel, PermissionMode};
 
@@ -118,6 +118,9 @@ pub struct Hud {
     /// Project instruction files the agent's turns load; `None` until
     /// the agent reports them
     pub instructions: Option<Vec<InstructionFileView>>,
+    /// The policy the agent's kernel enforces, for the POLICIES tab;
+    /// `None` until the event loop says
+    pub policies: Option<PolicyView>,
 }
 
 impl Hud {

@@ -450,6 +450,23 @@ impl Kernel {
         &self.policy
     }
 
+    /// Whether a live tool-approval prompter is attached, so `ask` tools
+    /// can be put to someone instead of being denied.
+    #[must_use]
+    pub fn has_approval_prompter(&self) -> bool {
+        self.config.tool_approval_prompter.is_some()
+    }
+
+    /// Number of plugin hooks registered for
+    /// [`aura_plugin_hooks::HookEvent::PermissionRequest`]; `0` when no
+    /// hook host is attached.
+    #[must_use]
+    pub fn permission_hook_count(&self) -> usize {
+        self.config.plugin_hooks.as_ref().map_or(0, |host| {
+            host.registered_count(aura_plugin_hooks::HookEvent::PermissionRequest)
+        })
+    }
+
     // -----------------------------------------------------------------------
     // Sequence helpers
     // -----------------------------------------------------------------------

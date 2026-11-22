@@ -37,9 +37,21 @@ impl Policy {
             );
         };
 
+        self.evaluate_tool_call_explained(&tool_call, runtime_capabilities, trace)
+    }
+
+    /// Run the mode gate, the capability + scope check, and the tool gate
+    /// for an already-parsed `tool_call`, recording every gate in `trace`
+    /// and returning the verdict together with the rule that produced it.
+    pub(super) fn evaluate_tool_call_explained(
+        &self,
+        tool_call: &ToolCall,
+        runtime_capabilities: Option<&RuntimeCapabilityInstall>,
+        trace: &mut Vec<PolicyCheck>,
+    ) -> (PolicyVerdict, PolicyRule) {
         let config = self.config();
         let mode_rule = PolicyRule::new(PolicySource::Mode, mode_label(config.mode));
-        if let Some(verdict) = self.check_mode(&tool_call) {
+        if let Some(verdict) = self.check_mode(tool_call) {
             trace.push(PolicyCheck {
                 rule: mode_rule.clone(),
                 outcome: outcome_of(&verdict),
@@ -61,7 +73,7 @@ impl Policy {
                     |cap| format!("requires {cap:?}"),
                 ),
         );
-        if let Some(result) = self.check_agent_permissions(&tool_call) {
+        if let Some(result) = self.check_agent_permissions(tool_call) {
             if !result.allowed {
                 trace.push(PolicyCheck {
                     rule: capability_rule.clone(),

@@ -495,6 +495,10 @@ impl App {
                     self.handle_members_key(key);
                     KeyResult::continue_running()
                 }
+                RecordsTab::Policies => {
+                    self.handle_policies_key(key);
+                    KeyResult::continue_running()
+                }
             },
             PanelFocus::Swarm => match self.agents_tab {
                 AgentsTab::Projects => self.handle_swarm_key(key),

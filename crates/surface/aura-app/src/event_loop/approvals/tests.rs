@@ -150,6 +150,26 @@ async fn always_allow_is_kept_for_the_project_and_survives_a_restart() {
 }
 
 #[tokio::test]
+async fn rules_for_lists_the_always_allow_rules_of_the_agents_project() {
+    let mut h = harness(DEFAULT_TIMEOUT);
+    assert!(h.approvals.rules_for(agent()).is_empty());
+    let call = ask(
+        &h.approvals,
+        prompt("a:toolu_1", "run_command", cargo_test()),
+    );
+    let (_, id, _) = requested(&mut h.commands).await;
+    assert_eq!(h.approvals.answer(&id, Answer::Always).await, Ok(agent()));
+    call.await.unwrap().unwrap();
+
+    assert_eq!(h.approvals.rules_for(agent()), ["`cargo test` commands"]);
+    let stranger = AgentId::new([9; 32]);
+    assert!(
+        h.approvals.rules_for(stranger).is_empty(),
+        "an agent with no folder has no rules"
+    );
+}
+
+#[tokio::test]
 async fn always_allow_also_allows_the_waiting_calls_it_covers() {
     let mut h = harness(DEFAULT_TIMEOUT);
     let first = ask(

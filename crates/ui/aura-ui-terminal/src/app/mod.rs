@@ -26,6 +26,7 @@ mod members;
 pub mod mentions;
 mod panes;
 pub mod plans;
+mod policies;
 mod processes;
 mod project_drag;
 mod prose;
@@ -257,6 +258,8 @@ pub struct App {
     pub(super) records_tab: RecordsTab,
     /// The agents of the run of the agent on screen, for the MEMBERS tab
     pub(super) members: members::Members,
+    /// First line of the POLICIES tab on screen
+    pub(super) policies_scroll: usize,
     /// Record or file shown over the chat panel
     pub(super) detail: Option<DetailView>,
     /// First line of the detail view shown
@@ -869,6 +872,7 @@ impl App {
             records_scroll: 0,
             records_tab: RecordsTab::default(),
             members: members::Members::default(),
+            policies_scroll: 0,
             detail: None,
             detail_scroll: 0,
             detail_shown: 1,
@@ -1312,6 +1316,9 @@ impl App {
             PanelFocus::Records if self.records_tab == RecordsTab::Members => {
                 self.scroll_members(-isize::try_from(lines).unwrap_or(isize::MAX));
             }
+            PanelFocus::Records if self.records_tab == RecordsTab::Policies => {
+                self.scroll_policies(-isize::try_from(lines).unwrap_or(isize::MAX));
+            }
             PanelFocus::Records => {
                 self.selected_record = self.selected_record.saturating_sub(lines);
             }
@@ -1358,6 +1365,9 @@ impl App {
             }
             PanelFocus::Records if self.records_tab == RecordsTab::Members => {
                 self.scroll_members(isize::try_from(lines).unwrap_or(isize::MAX));
+            }
+            PanelFocus::Records if self.records_tab == RecordsTab::Policies => {
+                self.scroll_policies(isize::try_from(lines).unwrap_or(isize::MAX));
             }
             PanelFocus::Records => {
                 if !self.records.is_empty() {

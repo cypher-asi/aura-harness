@@ -1647,9 +1647,9 @@ fn truncate_agent_name(name: &str, max_width: usize) -> String {
     format!("{truncated}…")
 }
 
-/// Render the Kernel panel: a KERNEL | MEMBERS header bar, with the open
-/// tab's count after the tabs, over the kernel's records or the agents of
-/// the run.
+/// Render the Kernel panel: a KERNEL | MEMBERS | POLICIES header bar, with
+/// the open tab's count or permissions after the tabs, over the kernel's
+/// records, the agents of the run, or the policy the kernel enforces.
 pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Records;
     let hosted = app.host_chrome();
@@ -1664,19 +1664,24 @@ pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, 
         _ => None,
     };
     let info = match tab {
-        RecordsTab::Kernel => HeaderInfo::count(app.records().len(), "RECORDS", theme.colors.muted),
+        RecordsTab::Kernel => Some(HeaderInfo::count(
+            app.records().len(),
+            "RECORDS",
+            theme.colors.muted,
+        )),
         RecordsTab::Members => {
             let count = app.members().len();
             let unit = if count == 1 { "AGENT" } else { "AGENTS" };
-            HeaderInfo::count(count, unit, theme.colors.muted)
+            Some(HeaderInfo::count(count, unit, theme.colors.muted))
         }
+        RecordsTab::Policies => super::policies::header_info(app, theme),
     };
     let header = PanelHeader {
         layout: RecordsTab::layout(bar.width),
         active: Some(tab),
         hovered,
         title: None,
-        info: Some(info),
+        info,
         close: None,
         expand: None,
         scope: None,
@@ -1690,6 +1695,10 @@ pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, 
     };
     if tab == RecordsTab::Members {
         super::members::render_members(frame, area, inner, app, theme);
+        return;
+    }
+    if tab == RecordsTab::Policies {
+        super::policies::render_policies(frame, area, inner, app, theme);
         return;
     }
 

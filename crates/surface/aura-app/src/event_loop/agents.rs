@@ -864,6 +864,7 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
         super::hud::send_session_of(state, agent_id).await;
     }
     super::modes::send_mode(state, agent_id).await;
+    super::policies::send_policies_of(state, agent_id).await;
     super::hud::send_instructions_of(state, agent_id).await;
     super::plan_mode::send_plans_of(state, agent_id).await;
     if state.hub.is_running(agent_id) {

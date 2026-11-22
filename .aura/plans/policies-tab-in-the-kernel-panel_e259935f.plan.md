@@ -4,31 +4,33 @@ overview: 'Add a POLICIES tab next to KERNEL and MEMBERS in the top-right Kernel
 todos:
 - id: kernel-api
   content: 'Kernel: extract tool-call evaluation; add `explain_tool`, `session_tool_states`, prompter/hook accessors + tests'
-  status: pending
+  status: completed
+  assignee: rust-engineer
 - id: protocol
   content: 'aura-ui: add `PolicyView`, `ToolPolicyView`, `UiCommand::SetPolicies`, `UiEvent::RequestPolicies`'
-  status: pending
+  status: completed
 - id: app-builder
   content: 'aura-app: new `policies.rs` building the view; `TerminalApprovals::rules_for`; unit tests'
-  status: pending
+  status: completed
+  assignee: rust-engineer
 - id: app-wiring
   content: 'aura-app: send on switch/startup/mode change/always-allow; handle `RequestPolicies`; loop test'
-  status: pending
+  status: completed
 - id: ui-state
   content: 'TUI: `RecordsTab::Policies`, tab cycling, `Hud::policies`, keys/scroll, `/policies` command'
-  status: pending
+  status: completed
 - id: ui-render
   content: 'TUI: `renderer/policies.rs`, header info, hint, empty state'
-  status: pending
+  status: completed
 - id: tests-fix
   content: Update tab-bar string tests (members, renderer, desktop chrome) and add new UI/render tests
-  status: pending
+  status: completed
 - id: docs
   content: STYLEGUIDE bar diagram and CHANGELOG entry
-  status: pending
+  status: completed
 - id: verify
   content: Run fmt, clippy -D warnings, tests for kernel, aura-ui, aura-app, aura-ui-terminal, aura-desktop
-  status: pending
+  status: completed
 ---
 
 # POLICIES tab in the Kernel panel
@@ -37,15 +39,15 @@ Add a POLICIES tab next to KERNEL and MEMBERS in the top-right Kernel panel. It 
 
 ## Todos
 
-- [ ] Kernel: extract tool-call evaluation; add `explain_tool`, `session_tool_states`, prompter/hook accessors + tests
-- [ ] aura-ui: add `PolicyView`, `ToolPolicyView`, `UiCommand::SetPolicies`, `UiEvent::RequestPolicies`
-- [ ] aura-app: new `policies.rs` building the view; `TerminalApprovals::rules_for`; unit tests
-- [ ] aura-app: send on switch/startup/mode change/always-allow; handle `RequestPolicies`; loop test
-- [ ] TUI: `RecordsTab::Policies`, tab cycling, `Hud::policies`, keys/scroll, `/policies` command
-- [ ] TUI: `renderer/policies.rs`, header info, hint, empty state
-- [ ] Update tab-bar string tests (members, renderer, desktop chrome) and add new UI/render tests
-- [ ] STYLEGUIDE bar diagram and CHANGELOG entry
-- [ ] Run fmt, clippy -D warnings, tests for kernel, aura-ui, aura-app, aura-ui-terminal, aura-desktop
+- [x] Kernel: extract tool-call evaluation; add `explain_tool`, `session_tool_states`, prompter/hook accessors + tests (@rust-engineer)
+- [x] aura-ui: add `PolicyView`, `ToolPolicyView`, `UiCommand::SetPolicies`, `UiEvent::RequestPolicies`
+- [x] aura-app: new `policies.rs` building the view; `TerminalApprovals::rules_for`; unit tests (@rust-engineer)
+- [x] aura-app: send on switch/startup/mode change/always-allow; handle `RequestPolicies`; loop test
+- [x] TUI: `RecordsTab::Policies`, tab cycling, `Hud::policies`, keys/scroll, `/policies` command
+- [x] TUI: `renderer/policies.rs`, header info, hint, empty state
+- [x] Update tab-bar string tests (members, renderer, desktop chrome) and add new UI/render tests
+- [x] STYLEGUIDE bar diagram and CHANGELOG entry
+- [x] Run fmt, clippy -D warnings, tests for kernel, aura-ui, aura-app, aura-ui-terminal, aura-desktop
 
 <!-- end of generated header: edit below -->
 

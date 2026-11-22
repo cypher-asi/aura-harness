@@ -50,6 +50,12 @@ impl PluginHookHost {
         self.engine.is_empty(event)
     }
 
+    /// Number of hooks registered for `event`.
+    #[must_use]
+    pub fn registered_count(&self, event: HookEvent) -> usize {
+        self.engine.registered_count(event)
+    }
+
     /// Fire [`HookEvent::UserPromptSubmit`].
     ///
     /// Returns the aggregated outcome:

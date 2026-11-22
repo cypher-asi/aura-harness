@@ -58,6 +58,7 @@ impl App {
                 }
             }
             "members" | "team" => self.show_members(),
+            "policies" | "policy" | "perms" | "permissions" => self.show_policies(),
             "agents" | "swarm" | "sw" => {
                 self.swarm_panel_visible = !self.swarm_panel_visible;
                 if !self.swarm_panel_visible && self.focus == PanelFocus::Swarm {
@@ -866,6 +867,7 @@ impl App {
             UiCommand::SetQueue(queue) => self.set_queue(queue),
             UiCommand::SetSessionTotals(totals) => self.hud.stats.restore(&totals),
             UiCommand::SetInstructions(files) => self.hud.instructions = Some(files),
+            UiCommand::SetPolicies(view) => self.hud.policies = Some(view),
             UiCommand::SetContext(context) => {
                 if context.limit_tokens.is_some() {
                     self.hud.stats.context_limit = context.limit_tokens;

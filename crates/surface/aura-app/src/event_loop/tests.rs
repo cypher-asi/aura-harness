@@ -16,7 +16,7 @@ use aura_model::{
     MockProvider, MockResponse, ModelProvider, ModelRequest, ModelResponse, ReasonerError,
 };
 use aura_store_db::RocksStore;
-use aura_ui_terminal::events::RewindScope;
+use aura_ui_terminal::events::{PolicyView, RewindScope, ToolPolicyState};
 use aura_ui_terminal::{ApprovalLevel, PermissionMode};
 use tempfile::TempDir;
 use tokio::sync::Semaphore;
@@ -1724,6 +1724,56 @@ async fn a_mode_switch_is_recorded_before_it_takes_effect() {
             ]
         ),
         "{shown:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_mode_switch_and_a_request_send_the_agents_policies() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut state = loop_state(&fixture, &mut b);
+    let policies_of = |commands: &mut mpsc::Receiver<UiCommand>| -> Vec<PolicyView> {
+        drain(commands)
+            .into_iter()
+            .filter(|(to, _)| *to == Some(first.to_hex()))
+            .filter_map(|(_, c)| match c {
+                UiCommand::SetPolicies(view) => Some(view),
+                _ => None,
+            })
+            .collect()
+    };
+    drain(&mut commands);
+
+    let set_plan = UiEvent::SetMode {
+        agent_id: first.to_hex(),
+        mode: PermissionMode::Plan,
+    };
+    handle_ui_event(&mut state, set_plan, &links).await;
+    let sent = policies_of(&mut commands);
+    let [view] = sent.as_slice() else {
+        panic!("expected one SetPolicies after the switch, got {sent:?}");
+    };
+    assert_eq!(view.mode, PermissionMode::Plan);
+    assert_eq!(view.approval, ApprovalLevel::Ask);
+    assert_eq!(
+        view.policy_hash,
+        state.idle[&first].kernel.policy().snapshot_hash()
+    );
+    let write = view
+        .tools
+        .iter()
+        .find(|tool| tool.name == "write_file")
+        .expect("write_file is offered");
+    assert_eq!(write.state, ToolPolicyState::Off);
+
+    handle_ui_event(&mut state, UiEvent::RequestPolicies(first.to_hex()), &links).await;
+    let sent = policies_of(&mut commands);
+    assert_eq!(
+        sent.as_slice(),
+        std::slice::from_ref(view),
+        "a request resends the same view"
     );
 }
 

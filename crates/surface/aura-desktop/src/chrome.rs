@@ -576,8 +576,9 @@ mod tests {
         let tabs = vec![
             PaneTab::Records(RecordsTab::Kernel),
             PaneTab::Records(RecordsTab::Members),
+            PaneTab::Records(RecordsTab::Policies),
         ];
-        let mut records = pane(Pane::Records, Rect::new(100, 0, 40, 20), tabs);
+        let mut records = pane(Pane::Records, Rect::new(100, 0, 50, 20), tabs);
         records.active = Some(PaneTab::Records(RecordsTab::Members));
         records.info = Some("3 AGENTS".into());
         let layout = Layout::of(&model(vec![records]));
@@ -588,12 +589,14 @@ mod tests {
             [
                 Kind::Tab(PaneTab::Records(RecordsTab::Kernel)),
                 Kind::Tab(PaneTab::Records(RecordsTab::Members)),
+                Kind::Tab(PaneTab::Records(RecordsTab::Policies)),
             ]
         );
         assert_eq!(bar.boxes[1].text, "MEMBERS");
+        assert_eq!(bar.boxes[2].text, "POLICIES");
         let info = bar.info.as_ref().expect("room for the count");
         assert_eq!(info.text, "3 AGENTS");
-        assert!(info.end.x > bar.boxes[1].rect.x + bar.boxes[1].rect.width);
+        assert!(info.end.x > bar.boxes[2].rect.x + bar.boxes[2].rect.width);
     }
 
     #[test]

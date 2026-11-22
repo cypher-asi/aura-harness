@@ -37,6 +37,7 @@ pub(crate) use modes::Permissions;
 pub(crate) mod notices;
 pub(crate) mod os_processes;
 pub(crate) mod plan_mode;
+pub(crate) mod policies;
 pub(crate) mod processes;
 mod queue;
 pub(crate) mod record_ui;
@@ -263,6 +264,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
     agents::send_sandbox_root(&state).await;
     hud::send_session_of(&state, active).await;
     modes::send_mode(&state, active).await;
+    policies::send_policies_of(&state, active).await;
     modes::warn_if_unconfined(&state, active).await;
     hud::send_instructions_of(&state, active).await;
     plan_mode::send_plan_of(&state, active).await;
@@ -500,6 +502,10 @@ async fn handle_ui_event(
             };
             modes::set_mode(state, agent_id, next).await;
         }
+        UiEvent::RequestPolicies(agent_id) => {
+            let agent_id = state.agent_or_active(&agent_id);
+            policies::send_policies_of(state, agent_id).await;
+        }
         UiEvent::Quit => {
             debug!("Quit received");
             return true;
@@ -680,14 +686,22 @@ async fn handle_ui_event(
     false
 }
 
-/// Hand the user's answer to the tool call waiting as `request_id`.
+/// Hand the user's answer to the tool call waiting as `request_id`. An
+/// "always allow" adds a project rule, so the calling agent's POLICIES
+/// tab is sent again.
 async fn answer_approval(state: &LoopState<'_>, request_id: &str, answer: Answer) {
     debug!(request = %request_id, ?answer, "Approval answered");
-    if let Err(e) = state.approvals.answer(request_id, answer).await {
-        let _ = state
-            .commands
-            .send(UiCommand::ShowWarning(e.to_string()))
-            .await;
+    match state.approvals.answer(request_id, answer).await {
+        Ok(agent_id) if answer == Answer::Always => {
+            policies::send_policies_of(state, agent_id).await;
+        }
+        Ok(_) => {}
+        Err(e) => {
+            let _ = state
+                .commands
+                .send(UiCommand::ShowWarning(e.to_string()))
+                .await;
+        }
     }
 }
 

@@ -342,3 +342,76 @@ fn reconfigure_swaps_user_defaults_without_dropping_session_grants() {
     );
     assert!(matches!(verdict, PolicyVerdict::Deny { .. }));
 }
+
+#[test]
+fn explain_tool_denies_write_file_in_plan_mode_by_mode() {
+    let evaluation = mode_policy(aura_core_modes::AgentMode::Plan).explain_tool("write_file");
+    assert!(matches!(evaluation.verdict, PolicyVerdict::Deny { .. }));
+    assert_eq!(evaluation.decided_by.source, PolicySource::Mode);
+    assert_eq!(evaluation.decided_by.rule, "plan");
+}
+
+#[test]
+fn explain_tool_reports_user_default_per_tool_and_fallback() {
+    let mut per_tool = std::collections::BTreeMap::new();
+    per_tool.insert("read_file".into(), ToolState::Allow);
+    let user_default =
+        aura_core_types::UserToolDefaults::default_permissions(per_tool, ToolState::Ask);
+    let policy = Policy::new(
+        PolicyConfig::default()
+            .with_mode(aura_core_modes::AgentMode::Agent)
+            .with_user_default(user_default),
+    );
+
+    let read = policy.explain_tool("read_file");
+    assert_eq!(read.verdict, PolicyVerdict::Allow);
+    assert_eq!(
+        read.decided_by,
+        PolicyRule::new(PolicySource::UserDefault, "per_tool[read_file]=on"),
+    );
+
+    let write = policy.explain_tool("write_file");
+    assert!(matches!(
+        write.verdict,
+        PolicyVerdict::RequireApproval { prompt: None, .. }
+    ));
+    assert_eq!(
+        write.decided_by,
+        PolicyRule::new(PolicySource::UserDefault, "fallback=ask"),
+    );
+    assert_eq!(
+        write.trace.last().map(|check| &check.rule),
+        Some(&write.decided_by),
+        "the deciding rule closes the trace",
+    );
+}
+
+#[test]
+fn explain_tool_denies_task_without_spawn_capability() {
+    let policy =
+        Policy::new(PolicyConfig::default().with_agent_permissions(AgentPermissions::empty()));
+    let evaluation = policy.explain_tool("task");
+    assert!(matches!(evaluation.verdict, PolicyVerdict::Deny { .. }));
+    assert_eq!(evaluation.decided_by.source, PolicySource::AgentCapability);
+}
+
+#[test]
+fn explain_tool_honours_session_grants_without_recording_any() {
+    let policy = Policy::with_defaults();
+    assert!(policy.session_tool_states().is_empty());
+
+    policy.remember_tool_state_for_session("run_command", ToolState::Deny);
+    let expected = std::collections::BTreeMap::from([("run_command".to_string(), ToolState::Deny)]);
+    assert_eq!(policy.session_tool_states(), expected);
+
+    let evaluation = policy.explain_tool("run_command");
+    assert!(matches!(evaluation.verdict, PolicyVerdict::Deny { .. }));
+    assert_eq!(evaluation.decided_by.source, PolicySource::SessionGrant);
+
+    let _ = policy.explain_tool("read_file");
+    assert_eq!(
+        policy.session_tool_states(),
+        expected,
+        "explain_tool remembers nothing",
+    );
+}
