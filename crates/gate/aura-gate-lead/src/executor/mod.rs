@@ -8,12 +8,12 @@
 //! neither.
 
 use crate::limits::{
-    allows_command, keeps_tool, refused_command, refused_tool, Cap, READ_LINES, RUN_COMMAND,
-    SEARCH_HITS,
+    allows_command, keeps_tool, refused_command, refused_tool, Cap, READ_LINES, SEARCH_HITS,
 };
 use async_trait::async_trait;
 use aura_agent::{AgentToolExecutor, AutoBuildResult, BuildBaseline, ToolCallInfo, ToolCallResult};
 use aura_gate_evidence::checks::command_line;
+use aura_gate_evidence::transcript::RUN_COMMAND;
 use aura_model::ToolDefinition;
 use std::future::Future;
 use std::pin::Pin;

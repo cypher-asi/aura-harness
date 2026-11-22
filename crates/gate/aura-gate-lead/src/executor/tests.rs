@@ -1,9 +1,10 @@
 //! A led turn's tool list, and its calls held to the lead's limits.
 
 use super::{lead_tools, refusal, LeadExecutor, Running, LEAD_SOURCE};
-use crate::limits::{refused_command, READ_LINES, RUN_COMMAND, SEARCH_HITS};
+use crate::limits::{refused_command, READ_LINES, SEARCH_HITS};
 use async_trait::async_trait;
 use aura_agent::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
+use aura_gate_evidence::transcript::RUN_COMMAND;
 use aura_model::ToolDefinition;
 use serde_json::{json, Value};
 use std::sync::Mutex;

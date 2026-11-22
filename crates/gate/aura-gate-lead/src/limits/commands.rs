@@ -4,9 +4,6 @@
 
 use aura_gate_evidence::checks::is_check_part;
 
-/// Name of the tool whose commands [`allows_command`] limits.
-pub(crate) const RUN_COMMAND: &str = "run_command";
-
 /// What a command the lead runs may not contain anywhere: command and
 /// process substitution.
 const SUBSTITUTIONS: [&str; 4] = ["`", "$(", "<(", ">("];
