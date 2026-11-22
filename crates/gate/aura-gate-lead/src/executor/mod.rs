@@ -1,16 +1,19 @@
-//! The main agent's tools when it leads under Gate with delegation
-//! enforced.
+//! A led turn's tools and calls while delegation is enforced.
 //!
 //! The turn's tool list drops the file-changing tools ([`lead_tools`]),
 //! and every call goes through [`LeadExecutor`], which refuses those
 //! tools and the commands the lead may not run, and caps what reads and
-//! searches return (see [`crate`]). A refused call is
-//! still recorded, with the refusal as its result, so the record shows
-//! what the lead tried. Subagents get neither.
+//! searches return. A refused call is still recorded, with the refusal as
+//! its result, so the record shows what the lead tried. Subagents get
+//! neither.
 
-use crate as lead;
+use crate::limits::{
+    allows_command, keeps_tool, refused_command, refused_tool, Cap, READ_LINES, RUN_COMMAND,
+    SEARCH_HITS,
+};
 use async_trait::async_trait;
 use aura_agent::{AgentToolExecutor, AutoBuildResult, BuildBaseline, ToolCallInfo, ToolCallResult};
+use aura_gate_evidence::checks::command_line;
 use aura_model::ToolDefinition;
 use std::future::Future;
 use std::pin::Pin;
@@ -18,72 +21,64 @@ use std::pin::Pin;
 /// `ToolProposal::source` of the lead's refused calls.
 const LEAD_SOURCE: &str = "gate_lead";
 
+/// A call's result to come, borrowing the executor that runs it.
+type Running<'a> = Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>>;
+
 /// `tools` as the lead gets them: without the file-changing tools, and
-/// with the capped tools saying so.
+/// with the capped tools and `run_command` saying what the lead may do
+/// with them.
 #[must_use]
 pub fn lead_tools(tools: Vec<ToolDefinition>) -> Vec<ToolDefinition> {
     tools
         .into_iter()
-        .filter(|tool| lead::keeps_tool(&tool.name))
+        .filter(|tool| keeps_tool(&tool.name))
         .map(|mut tool| {
-            let note = if lead::READ_TOOLS.contains(&tool.name.as_str()) {
-                Some(format!(
-                    " You see at most {} lines per read; delegate heavy reading to an explorer \
-                     subtask.",
-                    lead::READ_LINES
-                ))
-            } else if lead::SEARCH_TOOLS.contains(&tool.name.as_str()) {
-                Some(format!(
-                    " You see at most {} hits per search.",
-                    lead::SEARCH_HITS
-                ))
-            } else if tool.name == lead::RUN_COMMAND {
-                Some(
-                    " You may only run checks (tests, builds, linters, type checks) and \
-                     inspection commands (git status, git diff, git log, git show, ls, pwd); \
-                     delegate anything else."
-                        .to_string(),
-                )
-            } else {
-                None
-            };
-            if let Some(note) = note {
-                tool.description.push_str(&note);
-            }
+            note_limit(&tool.name, &mut tool.description);
             tool
         })
         .collect()
 }
 
-/// Why the lead may not make `call`, if it may not.
-fn refusal(call: &ToolCallInfo) -> Option<String> {
-    if !lead::keeps_tool(&call.name) {
-        return Some(lead::refused_tool(&call.name));
-    }
-    if call.name == lead::RUN_COMMAND {
-        let command = lead::command_of(&call.input);
-        if !lead::allows_command(&command) {
-            return Some(lead::refused_command(&command));
+/// Say at the end of the tool `name`'s `description` what the lead may
+/// do with it, when the lead's limits cover it.
+fn note_limit(name: &str, description: &mut String) {
+    match Cap::of(name) {
+        Some(Cap::Read) => description.push_str(&format!(
+            " You see at most {READ_LINES} lines per read; delegate heavy reading to an \
+             explorer subtask."
+        )),
+        Some(Cap::Search) => {
+            description.push_str(&format!(" You see at most {SEARCH_HITS} hits per search."));
         }
+        None if name == RUN_COMMAND => description.push_str(
+            " You may only run checks (tests, builds, linters, type checks) and inspection \
+             commands (git status, git diff, git log, git show, ls, pwd); delegate anything \
+             else.",
+        ),
+        None => {}
     }
-    None
 }
 
-/// Cap what `result` of a call to `tool` shows the lead.
-fn shape(tool: &str, result: &mut ToolCallResult) {
-    if result.is_error {
-        return;
+/// Why the lead may not make `call`; `None` when it may.
+fn refusal(call: &ToolCallInfo) -> Option<String> {
+    if !keeps_tool(&call.name) {
+        return Some(refused_tool(&call.name));
     }
-    let capped = if lead::READ_TOOLS.contains(&tool) {
-        lead::cap_read(&result.content)
-    } else if lead::SEARCH_TOOLS.contains(&tool) {
-        lead::cap_search(&result.content)
-    } else {
-        None
-    };
-    if let Some(capped) = capped {
-        result.content = capped;
+    if call.name != RUN_COMMAND {
+        return None;
     }
+    let command = command_line(&call.input);
+    (!allows_command(&command)).then(|| refused_command(&command))
+}
+
+/// `result` as the lead sees it under `cap`; an error comes back whole.
+fn capped(cap: Cap, mut result: ToolCallResult) -> ToolCallResult {
+    if !result.is_error {
+        if let Some(content) = cap.apply(&result.content) {
+            result.content = content;
+        }
+    }
+    result
 }
 
 /// Runs the lead's calls on `inner` within the lead's limits.
@@ -92,6 +87,7 @@ pub struct LeadExecutor<'a> {
 }
 
 impl<'a> LeadExecutor<'a> {
+    /// An executor that runs on `inner` the calls the lead may make.
     #[must_use]
     pub fn new(inner: &'a dyn AgentToolExecutor) -> Self {
         Self { inner }
@@ -108,21 +104,16 @@ impl AgentToolExecutor for LeadExecutor<'_> {
         results
     }
 
-    fn spawn_tool_call<'b>(
-        &'b self,
-        call: ToolCallInfo,
-    ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'b>> {
+    fn spawn_tool_call<'b>(&'b self, call: ToolCallInfo) -> Running<'b> {
         if let Some(why) = refusal(&call) {
             let refused = ToolCallResult::error(call.id.clone(), why);
             return self.inner.spawn_preset(call, LEAD_SOURCE, refused);
         }
-        let tool = call.name.clone();
+        let Some(cap) = Cap::of(&call.name) else {
+            return self.inner.spawn_tool_call(call);
+        };
         let run = self.inner.spawn_tool_call(call);
-        Box::pin(async move {
-            let mut result = run.await;
-            shape(&tool, &mut result);
-            result
-        })
+        Box::pin(async move { capped(cap, run.await) })
     }
 
     fn spawn_preset<'b>(
@@ -130,7 +121,7 @@ impl AgentToolExecutor for LeadExecutor<'_> {
         call: ToolCallInfo,
         source: &'static str,
         result: ToolCallResult,
-    ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'b>> {
+    ) -> Running<'b> {
         self.inner.spawn_preset(call, source, result)
     }
 
@@ -138,8 +129,8 @@ impl AgentToolExecutor for LeadExecutor<'_> {
         &'b self,
         call: ToolCallInfo,
         source: &'static str,
-        run: Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'b>>,
-    ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'b>> {
+        run: Running<'b>,
+    ) -> Running<'b> {
         self.inner.spawn_local(call, source, run)
     }
 
@@ -153,215 +144,4 @@ impl AgentToolExecutor for LeadExecutor<'_> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Mutex;
-
-    /// Answers every call with `content` and remembers what ran and
-    /// what was only recorded.
-    #[derive(Default)]
-    struct Recording {
-        content: String,
-        ran: Mutex<Vec<String>>,
-        preset: Mutex<Vec<(String, &'static str, String)>>,
-    }
-
-    #[async_trait]
-    impl AgentToolExecutor for Recording {
-        async fn execute(&self, tool_calls: &[ToolCallInfo]) -> Vec<ToolCallResult> {
-            tool_calls
-                .iter()
-                .map(|call| {
-                    self.ran.lock().unwrap().push(call.name.clone());
-                    ToolCallResult::success(call.id.clone(), self.content.clone())
-                })
-                .collect()
-        }
-
-        fn spawn_preset<'a>(
-            &'a self,
-            call: ToolCallInfo,
-            source: &'static str,
-            result: ToolCallResult,
-        ) -> Pin<Box<dyn Future<Output = ToolCallResult> + Send + 'a>> {
-            self.preset
-                .lock()
-                .unwrap()
-                .push((call.name, source, result.content.clone()));
-            Box::pin(std::future::ready(result))
-        }
-    }
-
-    fn call(name: &str, input: serde_json::Value) -> ToolCallInfo {
-        ToolCallInfo {
-            id: format!("toolu_{name}"),
-            name: name.to_string(),
-            input,
-        }
-    }
-
-    fn tool(name: &str) -> ToolDefinition {
-        ToolDefinition::new(name, "Does it.", serde_json::json!({"type": "object"}))
-    }
-
-    #[test]
-    fn the_lead_has_no_file_tools_and_its_limits_are_described() {
-        let tools = lead_tools(
-            [
-                "read_file",
-                "write_file",
-                "edit_file",
-                "delete_file",
-                "search_code",
-                "run_command",
-                "task",
-            ]
-            .map(tool)
-            .to_vec(),
-        );
-        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, ["read_file", "search_code", "run_command", "task"]);
-        assert!(tools[0].description.contains("200 lines"));
-        assert!(tools[1].description.contains("50 hits"));
-        assert!(tools[2].description.contains("only run checks"));
-        assert_eq!(tools[3].description, "Does it.");
-    }
-
-    #[tokio::test]
-    async fn refused_calls_are_recorded_but_never_run() {
-        let inner = Recording::default();
-        let lead = LeadExecutor::new(&inner);
-        let results = lead
-            .execute(&[
-                call(
-                    "write_file",
-                    serde_json::json!({"path": "a.rs", "content": ""}),
-                ),
-                call("run_command", serde_json::json!({"command": "rm -rf src"})),
-                call(
-                    "run_command",
-                    serde_json::json!({"program": "cargo", "args": ["test"]}),
-                ),
-                call("run_command", serde_json::json!({"command": "git status"})),
-            ])
-            .await;
-        assert!(results[0].is_error);
-        assert!(results[0].content.contains("implement subtask"));
-        assert!(results[1].is_error);
-        assert!(results[1].content.contains("Delegate `rm -rf src`"));
-        assert!(!results[2].is_error);
-        assert!(!results[3].is_error);
-        assert_eq!(*inner.ran.lock().unwrap(), ["run_command", "run_command"]);
-        let preset = inner.preset.lock().unwrap();
-        assert_eq!(preset.len(), 2);
-        assert!(preset.iter().all(|(_, source, _)| *source == LEAD_SOURCE));
-    }
-
-    #[tokio::test]
-    async fn reads_and_searches_come_back_capped() {
-        let inner = Recording {
-            content: (1..=300).map(|n| format!("{n}\n")).collect(),
-            ..Recording::default()
-        };
-        let lead = LeadExecutor::new(&inner);
-        let read = lead
-            .spawn_tool_call(call("read_file", serde_json::json!({"path": "big.rs"})))
-            .await;
-        assert_eq!(read.content.lines().count(), lead::READ_LINES + 1);
-        let search = lead
-            .spawn_tool_call(call("search_code", serde_json::json!({"pattern": "x"})))
-            .await;
-        assert_eq!(search.content.lines().count(), lead::SEARCH_HITS + 1);
-        let listed = lead
-            .spawn_tool_call(call("list_files", serde_json::json!({})))
-            .await;
-        assert_eq!(
-            listed.content.lines().count(),
-            300,
-            "other tools are left alone"
-        );
-    }
-
-    #[test]
-    fn the_lead_is_told_its_limits_word_for_word() {
-        let tools = lead_tools(
-            [
-                "read_file",
-                "find_files",
-                "search_code",
-                "run_command",
-                "apply_patch",
-                "list_files",
-            ]
-            .map(tool)
-            .to_vec(),
-        );
-        let described: Vec<(&str, &str)> = tools
-            .iter()
-            .map(|tool| (tool.name.as_str(), tool.description.as_str()))
-            .collect();
-        assert_eq!(
-            described,
-            [
-                (
-                    "read_file",
-                    "Does it. You see at most 200 lines per read; delegate heavy reading to an \
-                     explorer subtask."
-                ),
-                ("find_files", "Does it. You see at most 50 hits per search."),
-                (
-                    "search_code",
-                    "Does it. You see at most 50 hits per search."
-                ),
-                (
-                    "run_command",
-                    "Does it. You may only run checks (tests, builds, linters, type checks) and \
-                     inspection commands (git status, git diff, git log, git show, ls, pwd); \
-                     delegate anything else."
-                ),
-                ("list_files", "Does it."),
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn a_refused_call_is_recorded_with_its_refusal_word_for_word() {
-        let inner = Recording::default();
-        let lead = LeadExecutor::new(&inner);
-        let results = lead
-            .execute(&[
-                call("apply_patch", serde_json::json!({"patch": ""})),
-                call(
-                    "run_command",
-                    serde_json::json!({"shell_script": "cat a.rs | head"}),
-                ),
-            ])
-            .await;
-        let tool = "Not run: under Gate you do not change files yourself. Delegate the edit with \
-                    the task tool (an implement subtask, with a check command); `apply_patch` is \
-                    for subagents.";
-        let command = "Not run: under Gate your own run_command only runs checks (tests, builds, \
-                       linters, type checks) and inspection commands (git status, git diff, git \
-                       log, git show, ls, pwd). Delegate `cat a.rs | head` with the task tool: an \
-                       implement subtask for changes, an explorer subtask for reading.";
-        assert_eq!(
-            *inner.preset.lock().unwrap(),
-            [
-                ("apply_patch".to_string(), "gate_lead", tool.to_string()),
-                ("run_command".to_string(), "gate_lead", command.to_string()),
-            ]
-        );
-        let seen: Vec<(&str, bool, &str)> = results
-            .iter()
-            .map(|r| (r.tool_use_id.as_str(), r.is_error, r.content.as_str()))
-            .collect();
-        assert_eq!(
-            seen,
-            [
-                ("toolu_apply_patch", true, tool),
-                ("toolu_run_command", true, command)
-            ]
-        );
-        assert!(inner.ran.lock().unwrap().is_empty());
-    }
-}
+mod tests;

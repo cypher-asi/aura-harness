@@ -112,26 +112,26 @@ impl Delegation {
 /// turn for anything earlier).
 #[must_use]
 pub fn summarize(turn_starts: &[u64], calls: &[Call], subtasks: &[Subtask]) -> Delegation {
-    let mut starts = turn_starts.to_vec();
-    starts.sort_unstable();
-    let mut turns: Vec<TurnShare> = starts
+    if turn_starts.is_empty() {
+        return Delegation::default();
+    }
+    let mut turns: Vec<TurnShare> = turn_starts
         .iter()
         .map(|&ts_ms| TurnShare {
             ts_ms,
             share: Share::default(),
         })
         .collect();
-    if turns.is_empty() {
-        return Delegation::default();
-    }
-    let turn_of = |ts_ms: u64| starts.partition_point(|&start| start <= ts_ms).max(1) - 1;
+    turns.sort_unstable_by_key(|turn| turn.ts_ms);
     for call in calls {
-        let share = &mut turns[turn_of(call.ts_ms)].share;
+        let at = turn_of(&turns, call.ts_ms);
+        let share = &mut turns[at].share;
         share.lead_calls += 1;
         share.lead_cost_usd += call.cost_usd;
     }
     for subtask in subtasks {
-        let share = &mut turns[turn_of(subtask.ts_ms)].share;
+        let at = turn_of(&turns, subtask.ts_ms);
+        let share = &mut turns[at].share;
         share.subtask_calls += subtask.calls;
         share.subtask_cost_usd += subtask.cost_usd;
         if subtask.escalated {
@@ -147,64 +147,11 @@ pub fn summarize(turn_starts: &[u64], calls: &[Call], subtasks: &[Subtask]) -> D
     Delegation { turns, overall }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn call(ts_ms: u64, cost_usd: f64) -> Call {
-        Call { ts_ms, cost_usd }
-    }
-
-    fn subtask(ts_ms: u64, escalated: bool, calls: u32, cost_usd: f64) -> Subtask {
-        Subtask {
-            ts_ms,
-            escalated,
-            calls,
-            cost_usd,
-        }
-    }
-
-    #[test]
-    fn calls_and_subtasks_belong_to_the_turn_they_happened_in() {
-        let delegation = summarize(
-            &[100, 200],
-            &[call(110, 0.10), call(150, 0.10), call(210, 0.20)],
-            &[
-                subtask(120, false, 3, 0.30),
-                subtask(130, false, 2, 0.10),
-                subtask(140, true, 4, 0.40),
-                subtask(220, false, 1, 0.05),
-            ],
-        );
-        assert_eq!(delegation.turns.len(), 2);
-        let first = delegation.turns[0].share;
-        assert_eq!(first.lead_calls, 2);
-        assert_eq!(first.subtasks, 2);
-        assert_eq!(first.escalations, 1);
-        assert_eq!(first.subtask_calls, 9);
-        assert!((first.cost_share().unwrap() - 0.8 / 1.0).abs() < 1e-9);
-        assert_eq!(first.escalation_rate(), Some(0.5));
-
-        let overall = delegation.overall;
-        assert_eq!(overall.lead_calls, 3);
-        assert_eq!(overall.subtask_calls, 10);
-        assert_eq!(overall.subtasks, 3);
-        assert!((overall.call_share().unwrap() - 10.0 / 13.0).abs() < 1e-9);
-        assert!((overall.cost_share().unwrap() - 0.85 / 1.25).abs() < 1e-9);
-        assert_eq!(delegation.subtasks_per_turn(), Some(1.5));
-    }
-
-    #[test]
-    fn work_before_the_first_turn_counts_in_it_and_no_turns_say_nothing() {
-        let delegation = summarize(&[100], &[call(90, 0.01)], &[subtask(50, false, 1, 0.02)]);
-        assert_eq!(delegation.turns[0].share.lead_calls, 1);
-        assert_eq!(delegation.turns[0].share.subtasks, 1);
-
-        let none = summarize(&[], &[call(1, 1.0)], &[]);
-        assert!(none.turns.is_empty());
-        assert_eq!(none.subtasks_per_turn(), None);
-        assert_eq!(none.overall.cost_share(), None);
-        assert_eq!(none.overall.call_share(), None);
-        assert_eq!(none.overall.escalation_rate(), None);
-    }
+/// Index of the turn in `turns`, oldest first, that started last at or
+/// before `ts_ms`; the first turn for anything earlier.
+fn turn_of(turns: &[TurnShare], ts_ms: u64) -> usize {
+    turns.partition_point(|turn| turn.ts_ms <= ts_ms).max(1) - 1
 }
+
+#[cfg(test)]
+mod tests;
