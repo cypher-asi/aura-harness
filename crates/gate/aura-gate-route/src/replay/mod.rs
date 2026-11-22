@@ -13,7 +13,7 @@
 
 use aura_core_types::{Difficulty, PromptCategory, RouteLevel};
 
-use crate::router::Work;
+use crate::pick::Work;
 
 /// Smallest propensity weighed, so one unlikely pick can't outweigh the
 /// rest.

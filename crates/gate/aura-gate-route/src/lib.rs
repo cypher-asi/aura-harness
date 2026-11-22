@@ -15,11 +15,11 @@
 //! Gate never calls a model itself: it chooses which model a turn runs
 //! on, and the calls go through the agent's kernel as usual.
 
+mod pick;
 pub mod replay;
-mod router;
 pub mod stats;
 
-pub use router::{
+pub use pick::{
     below_lead, by_expected_cost, candidates, current, escalate, fixed_pick, has_stronger_model,
     pick, Candidate, Decision, Random, SplitMix64, Work,
 };
