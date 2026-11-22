@@ -11,9 +11,12 @@
 //! the display.
 //!
 //! Time is the terminal UI's: its animations count ticks of 50 ms. While
-//! an agent works the shell ticks at that rate and redraws; otherwise it
-//! wakes once a second to catch the ticks up, and at the edges of the
-//! cursor's blink.
+//! an agent works the shell ticks at that rate, and redraws when the tab
+//! in front animates; otherwise it wakes once a second to catch the
+//! ticks up, and at the edges of the cursor's blink. Commands from the
+//! session redraw only when they change the tab in front or the tab
+//! bar's marks: thirty agents streaming behind the chat on screen cost
+//! no frames.
 
 #[cfg(test)]
 mod bench;
@@ -145,6 +148,8 @@ pub struct Shell {
     ticked: Instant,
     /// Whether the window looks different from the last frame
     dirty: bool,
+    /// When the last frame was drawn, as the time passed to it
+    drawn: Instant,
     effects: Vec<Effect>,
     stats: Stats,
 }
@@ -193,6 +198,7 @@ impl Shell {
             cursor_shown: true,
             ticked: now,
             dirty: true,
+            drawn: now,
             effects: Vec::new(),
             stats: Stats::new(launched),
         }
@@ -214,14 +220,17 @@ impl Shell {
         &mut self.stats
     }
 
-    /// Commands from the session, for the tabs they concern.
+    /// Commands from the session, for the tabs they concern. Only the tab
+    /// in front and the tab bar's marks are on screen, so commands for
+    /// chats off screen ask for no frame.
     pub fn commands(&mut self, batch: impl IntoIterator<Item = UiCommand>) {
         let started = Instant::now();
+        let marks = self.bar_marks();
         for command in batch {
             self.tabs.apply(command);
         }
         self.raise_alerts();
-        self.settle(started);
+        self.handled(started, marks);
     }
 
     /// The session closed its end of the command channel.
@@ -290,6 +299,7 @@ impl Shell {
         };
         if owed >= due {
             let started = Instant::now();
+            let marks = self.bar_marks();
             let ticks = u32::try_from(owed.min(MAX_OWED)).unwrap_or(1);
             self.ticked = if owed > MAX_OWED {
                 now
@@ -303,7 +313,12 @@ impl Shell {
                 editor::poll_watch(tab, now);
             }
             self.raise_alerts();
-            self.settle(started);
+            // A tab in front that doesn't animate is still drawn now and
+            // then, for what changes with time alone.
+            if now.saturating_duration_since(self.drawn) >= TICK * IDLE_REDRAW_TICKS {
+                self.dirty = true;
+            }
+            self.handled(started, marks);
             self.stats.report(now);
         }
         if self.blinking() && self.cursor_on(now) != self.cursor_shown {
@@ -343,6 +358,7 @@ impl Shell {
         let cursor_on = self.cursor_on(now);
         self.cursor_shown = cursor_on;
         self.dirty = false;
+        self.drawn = now;
         self.glide.moved = self.easing();
         let view = View {
             size: self.window,
@@ -395,12 +411,31 @@ impl Shell {
         (since / BLINK.as_millis()).is_multiple_of(2)
     }
 
-    /// After something was handled: pass on what the UIs asked of the
-    /// session, and count the time it took.
+    /// After input was handled: pass on what the UIs asked of the
+    /// session, ask for a frame, and count the time it took.
     fn settle(&mut self, started: Instant) {
         self.tabs.forward_events();
         self.dirty = true;
         self.stats.update(started.elapsed());
+    }
+
+    /// After what the session sent or a tick was handled: pass on what
+    /// the UIs asked of the session, ask for a frame when the tab in front
+    /// changed or the tab bar's `marks` did, and count the time it took.
+    fn handled(&mut self, started: Instant, marks: (u64, Vec<bool>)) {
+        self.tabs.forward_events();
+        let front = self.tabs.front_mut().tui.take_redraw();
+        if front || self.bar_marks() != marks {
+            self.dirty = true;
+        }
+        self.stats.update(started.elapsed());
+    }
+
+    /// What the tab bar shows that a tab's agents change: the tab in
+    /// front, by id, and which tabs have an agent at work.
+    fn bar_marks(&self) -> (u64, Vec<bool>) {
+        let busy = self.tabs.iter().map(Tab::busy).collect();
+        (self.tabs.front().id, busy)
     }
 
     fn clear_selections(&mut self) {
@@ -455,6 +490,8 @@ impl Shell {
             tab.terminal.backend_mut().resize(cols, rows, pixels);
         }
         let (tui, tui_theme) = (&mut tab.tui, &self.tui_theme);
+        // This frame shows whatever changed so far.
+        tui.take_redraw();
         match tab
             .terminal
             .draw(|frame| aura_ui_terminal::render(frame, tui, tui_theme))
@@ -675,6 +712,41 @@ mod tests {
         assert!(stage.shell.text().contains("a reply from the agent"));
         assert!(before != after, "the reply is on screen");
         assert!(stage.shell.take_effects().is_empty());
+    }
+
+    #[test]
+    fn commands_for_a_chat_off_screen_ask_for_no_frame() {
+        let mut stage = stage();
+        stage.shell.commands([
+            UiCommand::SetAgents(vec![
+                agent("a1", "agent01", false),
+                agent("a2", "agent02", false),
+            ]),
+            UiCommand::SetActiveAgent("a1".into()),
+        ]);
+        stage.shell.frame(stage.now);
+        let to = |agent: &str, command| UiCommand::ForAgent {
+            agent_id: agent.into(),
+            command: Box::new(command),
+        };
+
+        stage
+            .shell
+            .commands([to("a2", UiCommand::TurnStarted { prompt: None })]);
+        assert!(stage.shell.dirty(), "the tab bar marks the tab at work");
+        let before = stage.shell.frame(stage.now).clone();
+        stage.shell.commands([
+            to("a2", UiCommand::StartStreaming),
+            to("a2", UiCommand::AppendText("off screen".into())),
+        ]);
+        assert!(!stage.shell.dirty(), "its chat is not on screen");
+        assert!(before == *stage.shell.frame(stage.now));
+
+        stage.shell.commands([
+            to("a1", UiCommand::StartStreaming),
+            to("a1", UiCommand::AppendText("on screen".into())),
+        ]);
+        assert!(stage.shell.dirty());
     }
 
     /// What `shell` last drew, painted again with nothing kept.

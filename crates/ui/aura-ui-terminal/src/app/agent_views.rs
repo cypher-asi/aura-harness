@@ -19,7 +19,7 @@
 //! wait.
 
 use super::run_log::{fade_progress, LOADING_DELAY};
-use super::{hud::Hud, App, AppState, ChatTab, NotificationType, PendingApproval};
+use super::{hud::Hud, App, AppState, ChatTab, NotificationType, PendingApproval, SidePanelTab};
 use crate::{
     components::Message,
     events::UiCommand,
@@ -263,7 +263,9 @@ impl App {
         self.alerts.push(message);
     }
 
-    /// Apply `command` to the chat of `agent_id`, on screen or not.
+    /// Apply `command` to the chat of `agent_id`, on screen or not. One
+    /// for a chat off screen asks for a frame ([`Self::take_redraw`]) only
+    /// when it changes something on screen.
     pub(super) fn process_agent_command(&mut self, agent_id: &str, command: UiCommand) {
         self.queue_alert(agent_id, &command);
         if let UiCommand::SetMode(mode) = &command {
@@ -273,9 +275,11 @@ impl App {
         }
         if let UiCommand::GraphUpsert { run_id, nodes } = command {
             self.trace_feed.push(agent_id, &run_id, &nodes);
-            self.upsert_graph(&run_id, nodes);
+            let graphed = self.upsert_graph(&run_id, nodes);
             // Any agent's step may be in the log on screen, as a subagent's.
             self.log.mark_stale();
+            let feed_shown = self.sandbox_panel_visible && self.side_tab == SidePanelTab::Trace;
+            self.redraw |= graphed || feed_shown;
             return;
         }
         if agent_id == self.active_agent_id || self.active_agent_id.is_empty() {
@@ -291,6 +295,8 @@ impl App {
                 .or_default()
                 .hud
                 .queue = queue;
+            // A confirmed rename shows in the chat's queued previews.
+            self.redraw = true;
             return;
         }
         let asks = matches!(command, UiCommand::RequestApproval { .. });
@@ -313,6 +319,7 @@ impl App {
         let mut view = self.views.remove(agent_id).unwrap_or_default();
         let state = self.state;
         let notification = self.notification.take();
+        let redraw = self.redraw;
         let was_busy = view.busy;
         self.swap_chat(&mut view);
         self.state = self.chat_state(was_busy);
@@ -330,9 +337,10 @@ impl App {
         self.swap_chat(&mut view);
         view.busy = busy;
         self.views.insert(agent_id.to_string(), view);
+        self.redraw = redraw;
 
         let name = self.agent_name(agent_id);
-        self.notification = match note {
+        let noticed = match note {
             Some((message, kind)) => Some((format!("{name}: {message}"), kind)),
             None if asks => Some((
                 format!("{name} needs your approval; switch to it to answer"),
@@ -341,8 +349,15 @@ impl App {
             None if was_busy && !busy => {
                 Some((format!("{name} finished"), NotificationType::Success))
             }
-            None => notification,
+            None => None,
         };
+        match noticed {
+            Some(noticed) => {
+                self.notification = Some(noticed);
+                self.redraw = true;
+            }
+            None => self.notification = notification,
+        }
     }
 
     /// Display name of the agent with hex id `agent_id`.
@@ -357,7 +372,10 @@ impl App {
     /// is in plan mode, until the next list says otherwise.
     fn set_agent_plan_mode(&mut self, agent_id: &str, on: bool) {
         if let Some(agent) = self.agents.iter_mut().find(|a| a.id == agent_id) {
-            agent.plan_mode = on;
+            if agent.plan_mode != on {
+                agent.plan_mode = on;
+                self.redraw = true;
+            }
         }
     }
 }

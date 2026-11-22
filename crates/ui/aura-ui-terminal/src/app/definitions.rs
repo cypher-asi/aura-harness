@@ -157,6 +157,7 @@ impl App {
 
     /// Report that the editor opened for `path` exited.
     pub fn editor_closed(&mut self, path: PathBuf, result: &std::io::Result<()>) {
+        self.redraw = true;
         if self.input_editor_closed(&path, result) {
             return;
         }

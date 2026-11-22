@@ -632,6 +632,58 @@ fn test_switching_back_shows_a_turn_that_finished_meanwhile() {
 }
 
 #[test]
+fn only_what_changes_the_screen_asks_for_a_frame() {
+    let (mut app, _rx) = app_with_agents();
+    assert!(app.take_redraw(), "nothing is drawn yet");
+    assert!(!app.take_redraw());
+
+    stream_to(&mut app, "bb", "working on it");
+    assert!(!app.take_redraw(), "a chat off screen is not on screen");
+    stream_to(&mut app, "aa", "on screen");
+    assert!(app.take_redraw());
+
+    let step = |agent_id: &str| UiCommand::ForAgent {
+        agent_id: agent_id.to_string(),
+        command: Box::new(UiCommand::GraphUpsert {
+            run_id: format!("run-{agent_id}"),
+            nodes: Vec::new(),
+        }),
+    };
+    app.process_command(step("bb"));
+    assert!(!app.take_redraw(), "the steps feed is not on screen");
+    app.side_tab = SidePanelTab::Trace;
+    app.process_command(step("bb"));
+    assert!(app.take_redraw(), "the steps feed is on screen");
+
+    for command in [UiCommand::FinishStreaming, UiCommand::Complete] {
+        app.process_command(UiCommand::ForAgent {
+            agent_id: "bb".to_string(),
+            command: Box::new(command),
+        });
+    }
+    assert!(app.take_redraw(), "an agent off screen finishing says so");
+    assert!(app.notification().is_some());
+}
+
+#[test]
+fn a_tick_asks_for_a_frame_only_while_something_moves() {
+    let (mut app, _rx) = app_with_agents();
+    app.take_redraw();
+    app.tick();
+    assert!(!app.take_redraw(), "nothing moves");
+
+    let mut working = agent("bb", "Researcher");
+    working.running = true;
+    app.process_command(UiCommand::SetAgents(vec![
+        agent("aa", "Terminal Agent"),
+        working,
+    ]));
+    app.take_redraw();
+    app.tick();
+    assert!(app.take_redraw(), "a working agent's spinner turns");
+}
+
+#[test]
 fn test_each_agent_has_its_own_trace_feed() {
     let (mut app, _rx) = app_with_agents();
     let step = |agent_id: &str, id: &str| UiCommand::ForAgent {

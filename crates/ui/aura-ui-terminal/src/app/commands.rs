@@ -759,6 +759,9 @@ impl App {
     /// Process a UI command from the kernel.
     pub fn process_command(&mut self, cmd: UiCommand) {
         debug!(?cmd, "Processing UI command");
+        if !matches!(cmd, UiCommand::ForAgent { .. }) {
+            self.redraw = true;
+        }
         match cmd {
             UiCommand::SetStatus(status) => self.status = status,
             UiCommand::StartStreaming => self.cmd_start_streaming(),

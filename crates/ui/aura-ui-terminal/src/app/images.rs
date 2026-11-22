@@ -447,6 +447,7 @@ impl App {
 
     /// Paste what the clipboard held: an image is attached, text is typed.
     pub(crate) fn paste_clipboard(&mut self, clipboard: std::io::Result<Clipboard>) {
+        self.redraw = true;
         match clipboard {
             Ok(Clipboard::Image(bytes)) => {
                 if let Err(problem) = self.attach_image(&bytes) {

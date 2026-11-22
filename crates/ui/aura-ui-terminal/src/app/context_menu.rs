@@ -234,6 +234,7 @@ impl App {
             return;
         }
         self.workspaces = workspaces;
+        self.redraw = true;
         let targets = match self.context_menu.as_ref() {
             Some(menu) => self.workspace_targets(&menu.target),
             None => return,

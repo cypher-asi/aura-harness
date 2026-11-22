@@ -28,6 +28,9 @@ use tracing::{error, warn};
 const MAX_EVENTS_PER_FRAME: usize = 256;
 /// Time between frames without input; spinners advance once a frame.
 const FRAME: Duration = Duration::from_millis(50);
+/// Longest the screen goes undrawn while nothing on it changes, for what
+/// changes with time alone.
+const IDLE_FRAME: Duration = Duration::from_secs(1);
 /// Longest wait for input before taking the agents' commands again.
 const COMMAND_POLL: Duration = Duration::from_millis(5);
 
@@ -131,6 +134,7 @@ impl Terminal {
     ///
     /// Returns error if rendering or event handling fails.
     pub fn run(&mut self, app: &mut App) -> Result<(), crate::TerminalError> {
+        let mut drawn: Option<Instant> = None;
         loop {
             // Process any pending updates from the command channel FIRST
             // This ensures records loaded at startup are displayed on the first frame
@@ -147,37 +151,17 @@ impl Terminal {
             }
 
             // Update size in case of resize
+            let size = (self.width, self.height);
             self.update_size()?;
+            let resized = size != (self.width, self.height);
 
-            // Render current state
-            let theme = self.theme.clone();
-            let frame = self.inner.draw(|frame| {
-                renderer::render(frame, app, &theme);
-            })?;
-            if let Some(text) = app.take_copy_text(frame.buffer) {
-                let result = clipboard::copy(self.inner.backend_mut(), &text);
-                app.notify_copied(text.chars().count(), &result);
-            }
-            // Overlay Kitty graphics-protocol images over the cells ratatui
-            // just painted, if the terminal supports it.  The half-block
-            // rendering already in the buffer acts as an automatic fallback
-            // for terminals that silently ignore APC sequences.
-            if self.graphics.protocol().is_kitty() {
-                let placements = app.visible_image_placements();
-                let wanted: Vec<graphics::Placement<'_>> = placements
-                    .iter()
-                    .filter_map(|(slot, rect, preview)| {
-                        preview.graphics_png().map(|png| graphics::Placement {
-                            image_id: preview.id(),
-                            slot: *slot,
-                            rect: *rect,
-                            png,
-                        })
-                    })
-                    .collect();
-                if let Err(e) = self.graphics.sync(self.inner.backend_mut(), &wanted) {
-                    warn!(error = %e, "Kitty graphics sync failed");
-                }
+            // Draw what changed: what the agents sent, input, a turning
+            // spinner. A screen where nothing moves is drawn now and then
+            // all the same.
+            let stale = drawn.is_none_or(|at| at.elapsed() >= IDLE_FRAME);
+            if app.take_redraw() || resized || stale {
+                self.draw(app)?;
+                drawn = Some(Instant::now());
             }
 
             // Wait for input until the next animation frame, then take every
@@ -196,7 +180,43 @@ impl Terminal {
                     break;
                 }
             }
+            app.request_redraw();
         }
+    }
+
+    /// Draw `app` as it is, copy what it asked to, and lay its images
+    /// over the cells.
+    fn draw(&mut self, app: &mut App) -> io::Result<()> {
+        let theme = self.theme.clone();
+        let frame = self.inner.draw(|frame| {
+            renderer::render(frame, app, &theme);
+        })?;
+        if let Some(text) = app.take_copy_text(frame.buffer) {
+            let result = clipboard::copy(self.inner.backend_mut(), &text);
+            app.notify_copied(text.chars().count(), &result);
+        }
+        // Overlay Kitty graphics-protocol images over the cells ratatui
+        // just painted, if the terminal supports it.  The half-block
+        // rendering already in the buffer acts as an automatic fallback
+        // for terminals that silently ignore APC sequences.
+        if self.graphics.protocol().is_kitty() {
+            let placements = app.visible_image_placements();
+            let wanted: Vec<graphics::Placement<'_>> = placements
+                .iter()
+                .filter_map(|(slot, rect, preview)| {
+                    preview.graphics_png().map(|png| graphics::Placement {
+                        image_id: preview.id(),
+                        slot: *slot,
+                        rect: *rect,
+                        png,
+                    })
+                })
+                .collect();
+            if let Err(e) = self.graphics.sync(self.inner.backend_mut(), &wanted) {
+                warn!(error = %e, "Kitty graphics sync failed");
+            }
+        }
+        Ok(())
     }
 
     /// Ring the bell once for everything `app` wants the user to notice,

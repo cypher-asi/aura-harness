@@ -252,6 +252,9 @@ pub struct App {
     pub(super) sandbox_stale: bool,
     /// Animation frame counter for spinners
     pub(super) animation_frame: usize,
+    /// Whether the screen may look different since the host last drew
+    /// it; see [`Self::take_redraw`]
+    pub(super) redraw: bool,
     /// Kernel records list
     pub(super) records: VecDeque<RecordSummary>,
     /// Selected record index in the list
@@ -1058,6 +1061,7 @@ impl App {
             sandbox: SandboxTree::default(),
             sandbox_stale: false,
             animation_frame: 0,
+            redraw: true,
             records: VecDeque::new(),
             selected_record: 0,
             records_scroll: 0,
@@ -2523,6 +2527,7 @@ impl App {
     /// Report the outcome of copying `chars` characters to the clipboard.
     ///
     pub fn notify_copied(&mut self, chars: usize, result: &std::io::Result<()>) {
+        self.redraw = true;
         let what = self.copy_label.take();
         self.log.copy_finished(result.is_ok());
         self.notification = Some(match result {
@@ -3424,6 +3429,7 @@ impl App {
     /// chat under a selection held past its top or bottom.
     pub fn tick(&mut self) {
         self.animation_frame = self.animation_frame.wrapping_add(1);
+        let shown = self.notification.is_some();
         self.expire_notification();
         if !self.selection_scrolling() {
             self.selection_scrolled = None;
@@ -3438,6 +3444,7 @@ impl App {
         self.receive_commands();
         if std::mem::take(&mut self.sandbox_stale) && self.sandbox_panel_visible {
             self.sandbox.refresh();
+            self.redraw = true;
         }
         self.refresh_live_log();
 
@@ -3449,6 +3456,48 @@ impl App {
         } else {
             self.processing_since = None;
         }
+        if shown || self.animating() {
+            self.redraw = true;
+        }
+    }
+
+    /// Whether the screen may look different since this was last called:
+    /// a command changed what it shows, a tick turned a spinner, or
+    /// something it shows changed with time. Commands for agents off
+    /// screen count only when they change something on it (a
+    /// notification, the projects list's marks). The host draws when this
+    /// says so, and after input, which this doesn't track.
+    pub fn take_redraw(&mut self) -> bool {
+        std::mem::take(&mut self.redraw)
+    }
+
+    /// Have the next [`Self::take_redraw`] say the screen changed.
+    pub fn request_redraw(&mut self) {
+        self.redraw = true;
+    }
+
+    /// Whether the screen changes from tick to tick: a spinner turns for
+    /// an agent, task or process at work, a notification scrolls, a
+    /// selection held past the chat's edge scrolls it, or the chat, LOG
+    /// or BENCH tab animates.
+    #[must_use]
+    pub fn animating(&self) -> bool {
+        self.is_busy()
+            || self.notification.is_some()
+            || self.agents.iter().any(|agent| agent.running)
+            || self
+                .task_list
+                .tasks()
+                .iter()
+                .any(|task| task.state == crate::events::TaskState::Running)
+            || self
+                .processes
+                .iter()
+                .any(|process| process.status == crate::events::ProcessStatus::Running)
+            || self.selection_scrolling()
+            || self.bench_animating()
+            || self.log_animating()
+            || self.chat_animating()
     }
 
     /// Apply every command waiting in the command channel. Between frames
