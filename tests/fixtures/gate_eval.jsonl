@@ -1,0 +1,9 @@
+{"kind":"attempt","at_ms":1,"agent":"aa","prompt_tx":"t1","category":"multi_file_change","routed":true,"model":"claude/claude-sonnet-5-5","signal":"checks_passed","success":true,"cost_usd":0.1,"subtask_cost_usd":0.0,"latency_ms":1000,"evidence":{"calls":2,"commands":1,"checks_run":1,"checks":[{"command":"pytest -q","passed":true,"output":"9 passed"}],"reply":"Done; the tests pass."}}
+{"kind":"truth","at_ms":2,"agent":"aa","prompt_tx":"t1","source":"task_check","passed":true,"compare":"Compare #1","run":"a-1","task":"ansible-1"}
+{"kind":"attempt","at_ms":3,"agent":"aa","prompt_tx":"t2","category":"debugging","routed":true,"model":"claude/claude-haiku-4-5","signal":"checks_failed","success":false,"cost_usd":0.02,"subtask_cost_usd":0.0,"latency_ms":1000,"evidence":{"calls":1,"commands":1,"checks_run":1,"checks":[{"command":"pytest -q","passed":false,"output":"1 failed"}],"reply":"It still fails."}}
+{"kind":"truth","at_ms":4,"agent":"aa","prompt_tx":"t2","source":"task_check","passed":false,"compare":"Compare #1","run":"a-2","task":"django-2"}
+{"kind":"attempt","at_ms":5,"agent":"aa","prompt_tx":"t3","category":"small_change","routed":false,"model":"claude/claude-opus-4-7","signal":"checks_passed","success":true,"cost_usd":0.3,"subtask_cost_usd":0.0,"latency_ms":1000,"evidence":{"calls":1,"commands":0,"checks_run":0,"reply":"Done, though it isn't verified."}}
+{"kind":"truth","at_ms":6,"agent":"aa","prompt_tx":"t3","source":"task_check","passed":false,"compare":"Compare #1","run":"b-3","task":"django-3"}
+not a line of the log
+{"kind":"attempt","at_ms":7,"agent":"aa","prompt_tx":"t4","category":"question","routed":true,"model":"claude/claude-sonnet-5-5","signal":"unavailable","cost_usd":0.05,"subtask_cost_usd":0.0,"latency_ms":1000,"evidence":{"calls":1,"commands":0,"checks_run":0,"reply":"Here it is."}}
+{"kind":"truth","at_ms":8,"agent":"aa","prompt_tx":"t4","source":"rewind","passed":false}

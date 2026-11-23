@@ -680,6 +680,238 @@ mod tests {
         );
     }
 
+    /// The first line of the view under the default settings.
+    const SETTINGS: &str = "Gate: a model becomes a category's pick after 10 counted outcomes \
+                            at 85% success or better; 5% of routes try the next cheaper model.";
+
+    /// `/gate` while Gate routes among Claude's models under the default
+    /// settings, having learned `stats`, with `recent` decisions and
+    /// `delegation`'s figures.
+    fn render(stats: &GateStats, recent: &[RecentRoute], delegation: &Delegation) -> String {
+        GateView {
+            stats,
+            candidates: &claude(),
+            settings: &GateConfig::defaults(),
+            recent,
+            pinned: None,
+            delegation,
+        }
+        .render()
+    }
+
+    /// The section of `text` titled `title`, up to the blank line after it.
+    fn section<'a>(text: &'a str, title: &str) -> &'a str {
+        let start = text
+            .find(&format!("\n\n{title}"))
+            .unwrap_or_else(|| panic!("no {title:?} section in:\n{text}"))
+            + 2;
+        let rest = &text[start..];
+        rest.find("\n\n").map_or(rest, |end| &rest[..end])
+    }
+
+    #[test]
+    fn every_column_of_the_view_is_pinned() {
+        let stats = learned(&[
+            (PromptCategory::Question, "claude/claude-haiku-4-5", 10, 0),
+            (PromptCategory::Question, "claude/claude-sonnet-4-6", 2, 1),
+            (PromptCategory::Debugging, "claude/claude-haiku-4-5", 1, 3),
+        ]);
+        let recent = [RecentRoute {
+            ts_ms: 0,
+            level: RouteLevel::Turn,
+            category: PromptCategory::Question,
+            model: "claude-haiku-4-5 (claude plan)".to_string(),
+            reason: RouteReason::Proven,
+        }];
+        let decision = format!(
+            "  {}  turn     question           claude-haiku-4-5 (claude plan)  proven",
+            format_local_time(0)
+        );
+        let expected = [
+            SETTINGS,
+            "",
+            "Turns",
+            "  category              model                          tries  success   avg cost",
+            "  question            → claude-sonnet-4-6 (claude plan)      3      67%     $0.020  pick (default)",
+            "                      → claude-haiku-4-5 (claude plan)      10     100%     $0.020  pick for easy work (proven)",
+            "  small_change        → claude-sonnet-4-6 (claude plan)      -        -          -  pick (default)",
+            "                      → claude-haiku-4-5 (claude plan)       -        -          -  pick for easy work (default)",
+            "  multi_file_change   → claude-sonnet-4-6 (claude plan)      -        -          -  pick (default)",
+            "                      → claude-haiku-4-5 (claude plan)       -        -          -  pick for easy work (default)",
+            "  debugging           → claude-sonnet-4-6 (claude plan)      -        -          -  pick (default)",
+            "                        claude-haiku-4-5 (claude plan)       4      25%     $0.020",
+            "  research            → claude-sonnet-4-6 (claude plan)      -        -          -  pick (default)",
+            "                      → claude-haiku-4-5 (claude plan)       -        -          -  pick for easy work (default)",
+            "  planning            → claude-sonnet-4-6 (claude plan)      -        -          -  pick (default)",
+            "  writing             → claude-sonnet-4-6 (claude plan)      -        -          -  pick (default)",
+            "                      → claude-haiku-4-5 (claude plan)       -        -          -  pick for easy work (default)",
+            "  other               → claude-sonnet-4-6 (claude plan)      -        -          -  pick (default)",
+            "                      → claude-haiku-4-5 (claude plan)       -        -          -  pick for easy work (default)",
+            "",
+            "Replay of 17 recorded turns, each weighted by how unlikely its route was; a policy is judged on the turns it would have routed the same way",
+            "  policy                                  matched  success   avg cost",
+            "  as recorded                                  17      76%     $0.020",
+            "  Gate's picks now                              3      67%     $0.020",
+            "  all on claude-haiku-4-5 (claude plan)        14      79%     $0.020",
+            "  all on claude-sonnet-4-6 (claude plan)        3      67%     $0.020",
+            "",
+            "Last 1 decisions, newest last",
+            &decision,
+        ];
+        assert_eq!(
+            render(&stats, &recent, &Delegation::default()),
+            expected.join("\n")
+        );
+    }
+
+    /// Take in a subtask asking for `category` on `model` that the user
+    /// cancelled, which counts for what it cost and not as a try. The
+    /// route crate's builder only learns outcomes that passed or failed.
+    fn cancelled(stats: &mut GateStats, category: PromptCategory, model: &str) {
+        let agent = AgentId::generate();
+        let mut prompt = PromptPayload::new("cancelled");
+        prompt.category = Some(category);
+        prompt.route = Route::subtask(model, RouteReason::Default);
+        let prompt = Transaction::user_prompt_with(agent, &prompt);
+        let outcome = OutcomePayload {
+            prompt_tx: prompt.hash,
+            category,
+            model: model.to_string(),
+            success: None,
+            signal: OutcomeSignal::Cancelled,
+            cost_usd: 0.03,
+            subtask_cost_usd: 0.0,
+            latency_ms: 10,
+        };
+        stats.observe(&RecordEntry::builder(1, prompt).build());
+        stats.observe(&RecordEntry::builder(2, Transaction::outcome(agent, &outcome)).build());
+    }
+
+    #[test]
+    fn the_subtask_table_lists_the_categories_with_outcomes_column_for_column() {
+        let mut stats = GateStats::default();
+        let rows = [
+            (
+                PromptCategory::Question,
+                "claude/claude-haiku-4-5",
+                (3, true),
+                0.02,
+            ),
+            (
+                PromptCategory::Debugging,
+                "claude/claude-sonnet-4-6",
+                (1, true),
+                0.004,
+            ),
+            (
+                PromptCategory::Debugging,
+                "claude/claude-sonnet-4-6",
+                (2, false),
+                0.004,
+            ),
+            (PromptCategory::Debugging, "openai/gpt-5.4", (1, true), 0.05),
+            (
+                PromptCategory::Debugging,
+                "claude/claude-opus-4-7",
+                (2, true),
+                0.1,
+            ),
+            (PromptCategory::Debugging, "local/qwen3:4b", (1, false), 0.0),
+        ];
+        for (category, model, outcomes, cost_usd) in rows {
+            let work = aura_gate::route::Work::new(RouteLevel::Subtask, category, None);
+            stats.learn_costing(&work, model, None, outcomes, (cost_usd, 0.0));
+        }
+        cancelled(
+            &mut stats,
+            PromptCategory::Research,
+            "claude/claude-opus-4-7",
+        );
+        let expected = [
+            "Subtasks",
+            "  category              model                          tries  success   avg cost",
+            "  question            → claude-sonnet-4-6 (claude plan)      -        -          -  pick (default)",
+            "                      → claude-haiku-4-5 (claude plan)       3     100%     $0.020  pick for easy work (default)",
+            "  debugging           → claude-sonnet-4-6 (claude plan)      3      33%    $0.0040  pick (default)",
+            "                      → claude-haiku-4-5 (claude plan)       -        -          -  pick for easy work (default)",
+            "                        claude-opus-4-7 (claude plan)        2     100%     $0.100",
+            "                        qwen3:4b (local)                     1       0%       free",
+            "                        openai/gpt-5.4 (cloud)               1     100%     $0.050",
+            "  research            → claude-sonnet-4-6 (claude plan)      -        -          -  pick (default)",
+            "                      → claude-haiku-4-5 (claude plan)       -        -          -  pick for easy work (default)",
+            "                        claude-opus-4-7 (claude plan)        0              $0.030",
+        ];
+        let text = render(&stats, &[], &Delegation::default());
+        assert_eq!(section(&text, "Subtasks"), expected.join("\n"));
+    }
+
+    #[test]
+    fn with_nothing_to_route_to_the_view_is_its_headings() {
+        let text = GateView {
+            stats: &GateStats::default(),
+            candidates: &[],
+            settings: &GateConfig::defaults(),
+            recent: &[],
+            pinned: Some("claude/claude-opus-4-7".to_string()),
+            delegation: &Delegation::default(),
+        }
+        .render();
+        let expected = [
+            SETTINGS,
+            "Your turns run on claude/claude-opus-4-7, which you chose; pick gate in /model to let Gate route them.",
+            "Nothing to route to yet: /login, link a plan, or start a local model.",
+            "",
+            "Turns",
+            "  category              model  tries  success   avg cost",
+            "",
+            "No routing decisions yet in this session.",
+        ];
+        assert_eq!(text, expected.join("\n"));
+    }
+
+    #[test]
+    fn the_delegation_figures_are_pinned() {
+        let calls = [1_100, 2_100].map(|ts_ms| Call {
+            ts_ms,
+            cost_usd: 0.10,
+        });
+        let subtask = |ts_ms, escalated, cost_usd| Subtask {
+            ts_ms,
+            escalated,
+            calls: 3,
+            cost_usd,
+        };
+        let subtasks = [subtask(1_200, false, 0.20), subtask(1_300, true, 0.40)];
+        let delegation = delegation::summarize(&[1_000, 2_000], &calls, &subtasks);
+        let expected = format!(
+            "Delegation in this agent's 2 turns: 0.5 subtasks per turn, escalation rate 100% (1 of 1)\n  \
+             75% of cost in subtasks ($0.600 of $0.800), 75% (6 of 8) of model calls\n  \
+             {}  1 subtask · 86% of cost in subtasks ($0.600 of $0.700), 86% (6 of 7) of model calls\n  \
+             {}  0 subtasks · 0% of cost in subtasks (free of $0.100), 0% (0 of 1) of model calls",
+            format_local_time(1_000),
+            format_local_time(2_000),
+        );
+        let text = render(&GateStats::default(), &[], &delegation);
+        assert_eq!(section(&text, "Delegation"), expected);
+    }
+
+    #[test]
+    fn turns_with_no_calls_have_no_shares_and_only_the_last_five_are_listed() {
+        let starts: Vec<u64> = (1..=7).map(|n| n * 1_000).collect();
+        let delegation = delegation::summarize(&starts, &[], &[]);
+        let mut expected = "Delegation in this agent's 7 turns: 0.0 subtasks per turn, \
+                            escalation rate -\n  no cost, - of model calls"
+            .to_string();
+        for ts_ms in &starts[2..] {
+            expected.push_str(&format!(
+                "\n  {}  0 subtasks · no cost, - of model calls",
+                format_local_time(*ts_ms)
+            ));
+        }
+        let text = render(&GateStats::default(), &[], &delegation);
+        assert_eq!(section(&text, "Delegation"), expected);
+    }
+
     #[test]
     fn costs_read_as_money() {
         assert_eq!(money(0.0), "free");
