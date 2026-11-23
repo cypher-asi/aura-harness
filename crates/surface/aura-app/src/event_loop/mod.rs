@@ -22,8 +22,6 @@ mod compare_view;
 pub(crate) mod flow;
 mod flow_builder;
 pub(crate) mod gate;
-pub(crate) mod gate_subtask;
-mod gate_view;
 pub(crate) mod handlers;
 pub(crate) mod host;
 pub(crate) mod hud;
@@ -52,7 +50,7 @@ pub(crate) use agent_events::forward_agent_events;
 pub use agents::{AgentSession, KernelBuilder, KernelFactory};
 pub use approvals::TerminalApprovals;
 pub use flow::{FlowFeed, FlowInbox};
-pub use gate_subtask::GateBase;
+pub use gate::subtask::GateBase;
 pub use host::{TerminalAgents, TerminalChildKernels};
 pub use processes::{BackgroundCommands, ProcessTable};
 pub use record_ui::{FanoutObserver, RecordPanelAgent, UiRecordObserver};
@@ -584,7 +582,7 @@ async fn handle_ui_event(
                 .await;
         }
         UiEvent::ShowStatus => trace::status_report(state).await,
-        UiEvent::ShowGate => gate_view::show(state).await,
+        UiEvent::ShowGate => gate::view::show(state).await,
         UiEvent::OpenGraph(id) => trace::open_graph(state, id).await,
         UiEvent::OpenFlow(agent_id) => {
             if let Some(flow) = &state.flow {

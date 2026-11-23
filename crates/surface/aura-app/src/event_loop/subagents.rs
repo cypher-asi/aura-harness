@@ -8,7 +8,7 @@
 //! files it changed and how the check went (see [`super::task_check`]).
 //! When the user selected gate, Gate picks the model of a subtask nothing
 //! pins, and every subtask records its prompt and how it went (see
-//! [`super::gate_subtask`]); a routed subtask whose check fails or that
+//! [`super::gate::subtask`]); a routed subtask whose check fails or that
 //! errors has its file changes undone and is retried once on the next
 //! stronger model (`AgentHub::run_subtask` says which changes are
 //! undone). The instance stays in the agents list so the user can open
@@ -30,7 +30,7 @@
 use super::agent_events::AgentUi;
 use super::agents::{AgentSession, KernelFactory};
 use super::approvals::TerminalApprovals;
-use super::gate_subtask::{explicit_model, GateBase, SubtaskGate, SubtaskLabel};
+use super::gate::subtask::{explicit_model, Judgement, SubtaskEnd, SubtaskGate, SubtaskLabel};
 use super::handlers::{handle_agent_success, run_agent_turn, system_message};
 use super::host::{agent_tool_definitions, TerminalAgents};
 use super::mail::{MailSender, Mailbox, TaskMail};
@@ -42,6 +42,7 @@ use super::steering::{SteerSource, Steering};
 use super::task_check;
 use super::tasks::{Spawned, TaskBoard};
 use super::trace::Traces;
+use super::GateBase;
 use crate::agent_definitions::{AgentDefinition, AgentDefinitions};
 use crate::agent_registry::AgentRegistry;
 use crate::event_loop::gate::followup::ended_signal;
@@ -67,7 +68,7 @@ use aura_exec_tools::todo::{task_report_line, TODO_WRITE_TOOL_NAME};
 use aura_exec_tools::SubagentDispatchHook;
 use aura_gate::compare::{tally, PlanReading};
 use aura_gate::followup;
-use aura_gate::judge::turn::{shown_to_judge, Failed, Unverified, Verdict};
+use aura_gate::judge::turn::{shown_to_judge, Verdict};
 use aura_gate::lead::lead_tools;
 use aura_gate::live::{self, GateLive};
 use aura_gate::route::{Candidate, Decision};
@@ -1890,105 +1891,29 @@ impl AgentHub {
         let model = agent_loop.config().model.clone();
         let effort = routed_effort(agent_loop.config());
         let category = end.prompt.map(|(_, category)| category);
-        let mut ended = end.prompt.map(|(prompt_tx, category)| OutcomePayload {
-            prompt_tx,
-            category,
-            model: model.clone(),
-            success: None,
-            signal: end.signal.unwrap_or(OutcomeSignal::Unavailable),
-            cost_usd: end.cost_usd,
-            subtask_cost_usd: 0.0,
-            latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        });
-        let mut judged = None;
-        // Work nothing checked ends with the judge's verdict.
-        let mut unfinished = None;
-        if let (Some(outcome), None, Some(candidates)) =
-            (ended.as_mut(), end.signal, gate.candidates.as_deref())
-        {
-            if let Some(judge) = live::verdict_judge_for(candidates, &model) {
-                let workspace = session.kernel.agent_workspace();
-                let diff = files_before
-                    .as_ref()
-                    .map(|files| files.diff(Some(&workspace)))
-                    .unwrap_or_default();
-                let reply = end.reply.as_deref().unwrap_or_default();
-                let suspicions = followup::suspicions(&followup::Ended {
-                    signal: None,
-                    category: outcome.category,
-                    files_changed: end.files.len(),
-                    reply,
-                    hit_limit: false,
-                    difficulty: None,
-                    review_signs: &[],
-                    acting_signs: &[],
-                    uncovered: &[],
-                    ran_own_check: false,
-                    criteria: false,
-                });
-                let unverified = Unverified {
-                    task: &prompt,
-                    diff: &diff,
-                    reply,
-                    commands: &end.shown.0,
-                    last_check: &end.shown.1,
-                    suspicions: &suspicions,
-                };
-                let auth_token = agent_loop.config().auth_token.clone();
-                if let Some((verdict, found)) = live::judge_unverified(
-                    &session.kernel,
-                    &judge,
-                    &outcome.model,
-                    &unverified,
-                    auth_token,
-                )
-                .await
-                {
-                    ui.send(system_message(found.describe())).await;
-                    outcome.signal = verdict;
-                    if verdict == OutcomeSignal::JudgedFail {
-                        unfinished =
-                            Some("Gate's judge found its unchecked work unfinished.".to_string());
-                        judged = Some(found.verdict);
-                    }
-                }
-            }
-        }
-        if let Some(outcome) = ended.as_mut() {
-            outcome.success = outcome.signal.success();
-            live::record(&session.kernel, child_id, outcome).await;
-        }
-        // A first attempt that failed is reviewed before it is retried on
-        // a stronger model: was the model at fault?
-        if let (Some(outcome), Some(failure), Some(candidates), None) = (
-            ended.as_mut(),
-            &failure,
-            gate.candidates.as_deref(),
-            &gate.escalation,
-        ) {
-            if let Some(judge) = live::judge_for(&self.gate, candidates, outcome) {
-                let workspace = session.kernel.agent_workspace();
-                let diff = files_before
-                    .as_ref()
-                    .map(|files| files.diff(Some(&workspace)))
-                    .unwrap_or_default();
-                let failed = Failed {
-                    task: &prompt,
-                    diff: &diff,
-                    reply: end.reply.as_deref().unwrap_or_default(),
-                    failure,
-                };
-                let auth_token = agent_loop.config().auth_token.clone();
-                if let Some((judged_as, found)) =
-                    live::judge_failed(&session.kernel, &judge, outcome, &failed, auth_token).await
-                {
-                    ui.send(system_message(found.describe())).await;
-                    *outcome = judged_as;
-                    judged = Some(found.verdict);
-                }
-            }
-        }
-        if let Some(redo) = self.end_attempt(parent, child_id, ended) {
+        let Judgement {
+            outcome,
+            judged,
+            unfinished,
+        } = gate
+            .finish(SubtaskEnd {
+                session: &session,
+                ui: &ui,
+                task: &prompt,
+                model: &model,
+                auth_token: agent_loop.config().auth_token.as_deref(),
+                prompt: end.prompt,
+                signal: end.signal,
+                cost_usd: end.cost_usd,
+                started,
+                reply: end.reply.as_deref().unwrap_or_default(),
+                files_changed: end.files.len(),
+                shown: &end.shown,
+                files_before: files_before.as_ref(),
+                failure: failure.as_deref(),
+            })
+            .await;
+        if let Some(redo) = self.end_attempt(parent, child_id, outcome) {
             redo.record().await;
         }
 

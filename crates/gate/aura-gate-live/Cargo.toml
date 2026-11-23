@@ -29,6 +29,9 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 aura-core-auth = { path = "../../core/aura-core-auth" }
+# `GateLive::learn`, which the unit tests use too, fills the table with
+# `test-support`'s builder.
+aura-gate-route = { path = "../aura-gate-route", features = ["test-support"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 

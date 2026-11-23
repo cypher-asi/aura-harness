@@ -143,6 +143,13 @@ impl GateLive {
         lock(&self.stats).clone()
     }
 
+    /// What `f` makes of the table as it is now, without copying it. The
+    /// table stays locked while `f` runs, so routing and the record
+    /// observers wait for it.
+    pub fn with_stats<T>(&self, f: impl FnOnce(&GateStats) -> T) -> T {
+        f(&lock(&self.stats))
+    }
+
     /// Gate's decision for `work` among `candidates`, remembered for
     /// `/gate`. `None` when there are no candidates.
     pub fn decide(&self, work: &Work<'_>, candidates: &[Candidate]) -> Option<Decision> {

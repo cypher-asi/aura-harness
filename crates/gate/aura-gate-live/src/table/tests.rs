@@ -132,6 +132,26 @@ async fn a_background_rebuild_overlapping_live_entries_counts_each_prompt_once()
 }
 
 #[test]
+fn the_table_lent_out_is_the_table_as_it_is_now() {
+    let live = GateLive::default();
+    let tries = |stats: &GateStats| {
+        stats
+            .row(RouteLevel::Turn, PromptCategory::Question, HAIKU)
+            .map(|row| row.tries)
+    };
+    assert_eq!(live.with_stats(tries), None);
+    live.learn(
+        RouteLevel::Turn,
+        (PromptCategory::Question, None),
+        HAIKU,
+        None,
+        (3, true),
+    );
+    assert_eq!(live.with_stats(tries), Some(3));
+    assert_eq!(live.with_stats(tries), tries(&live.stats()));
+}
+
+#[test]
 fn decisions_are_remembered_up_to_the_limit() {
     let live = GateLive::with_rng(GateConfig::defaults(), SplitMix64::seeded(1));
     let candidates = candidates(

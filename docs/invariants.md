@@ -828,7 +828,7 @@ proves a mode switch is recorded before it is enforced, a no-op switch
 writes nothing, and a submitted `mode_change` is rejected.
 [`crates/engine/aura-engine/tests/mode_gate_catalog.rs`](../crates/engine/aura-engine/tests/mode_gate_catalog.rs)
 fails if a catalog tool has no explicit mode classification.
-[`crates/surface/aura-app/src/event_loop/tests/delegation.rs`](../crates/surface/aura-app/src/event_loop/tests/delegation.rs)
+[`crates/surface/aura-app/src/event_loop/tests/delegation/`](../crates/surface/aura-app/src/event_loop/tests/delegation)
 and [`tests/subtasks.rs`](../crates/surface/aura-app/src/event_loop/tests/subtasks.rs)
 cover §4.c: the lead's tool list and refusals, full tools when delegation is
 off or the model is pinned, checks, escalation, and pinned subtasks.

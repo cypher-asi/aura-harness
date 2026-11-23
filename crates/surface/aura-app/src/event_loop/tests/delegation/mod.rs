@@ -550,7 +550,7 @@ async fn a_failed_check_undoes_the_attempt_and_retries_once_on_a_stronger_model(
         .iter()
         .any(|line| line.ends_with("subtask, question, escalate")));
 
-    let delegation = gate_view::delegation_of(&fixture.hub, first);
+    let delegation = gate::view::delegation_of(&fixture.hub, first);
     assert_eq!(delegation.turns.len(), 1);
     let overall = delegation.overall;
     assert_eq!((overall.subtasks, overall.escalations), (1, 1));
