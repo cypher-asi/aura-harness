@@ -7,6 +7,35 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Gate in crates of its own
+
+##### Changed
+
+- Gate's code is a layer of its own under `crates/gate`, a crate per
+  job behind the `aura-gate` facade: the evidence a turn leaves, the
+  routing, the follow-up, the judges, the attempt log, `/compare`, the
+  lead and Gate's live state. No function in it is over 50 lines and
+  no file over 500, and clippy and a test keep it so. Tests pinned
+  what Gate records, shows and sends against the old code, and it is
+  unchanged but for the entries below.
+- `/compare` asks the judge about up to four pairs at once, as many as
+  runs may work at once, rather than one after another. The judgments
+  keep the pairs' order.
+- A turn of `aura -p` that Gate routed records its outcome and its
+  attempt line once, after Gate's follow-up, as the terminal's turns
+  do. A passed check the judge then found wanting used to leave both a
+  `checks_passed` and a `judged_fail` on the record.
+
+##### Fixed
+
+- Two records an agent made at once, such as the answers to two
+  `reason` calls, could take the same sequence number; the second then
+  failed and was lost. Each now gets a number of its own.
+- `aura gate replay` matched each attempt it read with its line in the
+  log by position, so after an attempt it could not read, a line could
+  be written again for nothing, or not written when its run showed
+  more. Each attempt is now matched with its own line.
+
 ### Scrolling stays smooth while many agents work
 
 ##### Fixed
