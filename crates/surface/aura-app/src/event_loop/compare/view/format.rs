@@ -58,7 +58,7 @@ pub(crate) fn headline(text: &str, max: usize) -> String {
 }
 
 /// `s` unless `n` is one, for the noun that counts it.
-pub(super) fn plural<N: From<u8> + PartialEq>(n: N) -> &'static str {
+pub(crate) fn plural<N: From<u8> + PartialEq>(n: N) -> &'static str {
     if n == N::from(1) {
         ""
     } else {
