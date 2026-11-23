@@ -29,28 +29,40 @@ pub(super) fn interrupted(payload: &mut ComparePayload, why: &str) {
     ));
 }
 
-/// Every comparison, oldest first, with its latest state. One whose
-/// record says it runs while this process runs none of it is stopped: Aura
-/// quit, or its task failed, before it recorded how it ended.
+/// Every comparison, oldest first, with its latest state.
 pub(crate) fn comparisons(state: &LoopState<'_>) -> Vec<(AgentId, String, Option<ComparePayload>)> {
-    let hosts: Vec<(AgentId, String)> = lock(&state.hub.registry)
-        .compares()
-        .iter()
-        .map(|agent| (agent.agent_id(), agent.name.clone()))
-        .collect();
-    let store = state.hub.factory.store.as_ref();
+    let hosts = hosts(state);
     let running = state.compare.running_host();
     hosts
         .into_iter()
         .map(|(id, name)| {
-            let mut payload = latest_payload(store, id);
-            if let Some(payload) = payload
-                .as_mut()
-                .filter(|p| p.status == CompareStatus::Running && running != Some(id))
-            {
-                interrupted(payload, "Aura quit or its task failed");
-            }
+            let payload = latest_state(state, running, id);
             (id, name, payload)
         })
         .collect()
+}
+
+/// The agents holding comparisons, oldest first, with their names.
+pub(super) fn hosts(state: &LoopState<'_>) -> Vec<(AgentId, String)> {
+    lock(&state.hub.registry)
+        .compares()
+        .iter()
+        .map(|agent| (agent.agent_id(), agent.name.clone()))
+        .collect()
+}
+
+/// The latest state of the comparison `host` holds, while `running`
+/// holds the one this process runs. One whose record says it runs while
+/// this process runs none of it is stopped: Aura quit, or its task
+/// failed, before it recorded how it ended.
+pub(super) fn latest_state(
+    state: &LoopState<'_>,
+    running: Option<AgentId>,
+    host: AgentId,
+) -> Option<ComparePayload> {
+    let mut payload = latest_payload(state.hub.factory.store.as_ref(), host)?;
+    if payload.status == CompareStatus::Running && running != Some(host) {
+        interrupted(&mut payload, "Aura quit or its task failed");
+    }
+    Some(payload)
 }

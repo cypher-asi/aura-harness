@@ -86,10 +86,6 @@ impl Work {
                 ..Self::new(BenchSource::Examples { tasks })
             });
         }
-        let prompt = |prompts| Self {
-            prompts,
-            ..Self::new(BenchSource::Prompt)
-        };
         match (request.session, &request.plan, &request.prompt) {
             (Some(pick), _, _) => {
                 let Replay {
@@ -108,23 +104,33 @@ impl Work {
             (None, Some(plan), _) if !workspace.join(plan).is_file() => {
                 Err(format!("No plan at {plan} in {}", workspace.display()))
             }
-            (None, Some(plan), _) => Ok(prompt(vec![build_plan_prompt(plan)])),
-            (None, None, Some(given)) => Ok(prompt(vec![given.clone()])),
-            (None, None, None) => {
-                let no_prompt = || {
-                    "No prompt to compare yet: give one, e.g. /compare fix the failing test"
-                        .to_string()
-                };
-                let last = aura_gate::live::last_turn(kernel.store().as_ref(), agent_id)
-                    .ok_or_else(no_prompt)?;
-                let category = Some(last.outcome.category);
-                let text = last.prompt.ok_or_else(no_prompt)?.text;
-                Ok(Self {
-                    category,
-                    ..prompt(vec![text])
-                })
-            }
+            (None, Some(plan), _) => Ok(Self::prompt(build_plan_prompt(plan))),
+            (None, None, Some(given)) => Ok(Self::prompt(given.clone())),
+            (None, None, None) => Self::last_turn(kernel, agent_id),
         }
+    }
+
+    /// The one prompt `text`.
+    fn prompt(text: String) -> Self {
+        Self {
+            prompts: vec![text],
+            ..Self::new(BenchSource::Prompt)
+        }
+    }
+
+    /// The prompt of `agent_id`'s last turn on `kernel`, with what it
+    /// asked for.
+    fn last_turn(kernel: &Kernel, agent_id: AgentId) -> Result<Self, String> {
+        let no_prompt =
+            || "No prompt to compare yet: give one, e.g. /compare fix the failing test".to_string();
+        let last =
+            aura_gate::live::last_turn(kernel.store().as_ref(), agent_id).ok_or_else(no_prompt)?;
+        let category = Some(last.outcome.category);
+        let text = last.prompt.ok_or_else(no_prompt)?.text;
+        Ok(Self {
+            category,
+            ..Self::prompt(text)
+        })
     }
 
     /// What the comparison is about: its first prompt, else how many

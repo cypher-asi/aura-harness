@@ -3,7 +3,7 @@
 //! diffs, or dismiss them; applying and dismissing remove the copies.
 
 use super::kernel_of;
-use super::record::comparisons;
+use super::record::{hosts, latest_state};
 use super::view::{plural, split_patch};
 use crate::event_loop::agent_events::AgentUi;
 use crate::event_loop::compare_run::{patches, remove_copies, save};
@@ -13,23 +13,21 @@ use crate::isolation::changes;
 use aura_core_types::{AgentId, CompareArm, ComparePayload, CompareStatus};
 use aura_ui_terminal::UiCommand;
 
-/// The comparison `host` holds, else the latest, once it has ended, for
-/// apply, diff and dismiss.
+/// The comparison `host` holds, else the latest recorded, once it has
+/// ended, for apply, diff and dismiss.
 fn ended(
     state: &LoopState<'_>,
     host: Option<AgentId>,
 ) -> Result<(AgentId, String, ComparePayload), String> {
-    let all = comparisons(state).into_iter().rev();
-    let (host, name, payload) = match host {
-        Some(wanted) => all
-            .filter(|(id, _, _)| *id == wanted)
-            .find_map(|(id, name, payload)| Some((id, name, payload?)))
-            .ok_or_else(|| "No such benchmark".to_string())?,
-        None => all
-            .filter_map(|(id, name, payload)| Some((id, name, payload?)))
-            .next()
-            .ok_or_else(|| "No comparison yet; /compare [prompt] runs one".to_string())?,
-    };
+    let hosts = hosts(state);
+    let running = state.compare.running_host();
+    let (host, name, payload) = (hosts.into_iter().rev())
+        .filter(|(id, _)| host.is_none_or(|wanted| *id == wanted))
+        .find_map(|(id, name)| Some((id, name, latest_state(state, running, id)?)))
+        .ok_or_else(|| match host {
+            Some(_) => "No such benchmark".to_string(),
+            None => "No comparison yet; /compare [prompt] runs one".to_string(),
+        })?;
     if state.compare.running().is_some_and(|r| r.host == host)
         || payload.status == CompareStatus::Running
     {
