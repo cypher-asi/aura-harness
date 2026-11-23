@@ -132,7 +132,8 @@ pub(super) struct ComparePlan {
     /// Every model the user can run on any route, which a by-difficulty
     /// arm's models are looked up among
     pub runnable: Vec<Candidate>,
-    /// Model that classifies the runs' prompts
+    /// Model that classifies the runs' prompts: the one the benchmark
+    /// named, else Gate's automatic choice
     pub classifier: String,
     /// The user's folder the copies are made from
     pub workspace: PathBuf,
@@ -275,7 +276,8 @@ struct Live {
 #[derive(Clone)]
 struct LiveRoute {
     model: String,
-    category: PromptCategory,
+    /// `None` for a pinned arm's run its classifier gave no label
+    category: Option<PromptCategory>,
     difficulty: Option<Difficulty>,
 }
 
@@ -466,7 +468,10 @@ async fn show_live(ctx: &Context, payload: &ComparePayload) {
                 arm: arm.index(),
                 task,
                 model: routed.as_ref().map(|r| r.model.clone()),
-                category: routed.as_ref().map(|r| r.category.as_str().to_string()),
+                category: routed
+                    .as_ref()
+                    .and_then(|r| r.category)
+                    .map(|c| c.as_str().to_string()),
                 difficulty: routed
                     .as_ref()
                     .and_then(|r| r.difficulty)
@@ -614,6 +619,7 @@ pub(super) async fn run(
         repeats: plan.repeats,
         check: plan.check.clone(),
         budget_usd: plan.budget_usd,
+        classifier: plan.classifier.clone(),
         requested_by: plan.user,
         apply_root: repo.clone().unwrap_or_else(|| plan.workspace.clone()),
         started_ms: now_ms(),
@@ -1316,19 +1322,26 @@ async fn run_prompt(
         )
         .await
     };
-    let label = match classified {
-        Ok(label) => label,
-        Err(problem) => {
+    let label = match (classified, routing) {
+        (Ok(label), _) => Some(label),
+        // A pinned arm needs no label to pick its model, so its run goes
+        // on unclassified, as a turn on a pinned model outside a benchmark
+        // does. It then leaves no outcome for Gate: there is no category
+        // to count it under.
+        (Err(problem), ArmRouting::Pinned(_)) => {
+            warn!(%agent_id, %problem, "A pinned compare run goes on unclassified");
+            ui.send(system_message(format!(
+                "{problem} · the run goes on unclassified"
+            )))
+            .await;
+            None
+        }
+        (Err(problem), ArmRouting::Gate { .. } | ArmRouting::ByDifficulty(_)) => {
             ui.send(UiCommand::ShowWarning(problem.clone())).await;
             ui.send(UiCommand::Complete).await;
             // No model was routed to, so the run is named for its arm:
             // the session's own model is no model of the arm.
-            let model = match routing {
-                ArmRouting::Pinned(model) => model.clone(),
-                ArmRouting::Gate { .. } | ArmRouting::ByDifficulty(_) => {
-                    short_label(&plan.arms[arm.index()]).into_owned()
-                }
-            };
+            let model = short_label(&plan.arms[arm.index()]).into_owned();
             return Turned {
                 prompt_tx: None,
                 model: model.clone(),
@@ -1342,10 +1355,12 @@ async fn run_prompt(
             };
         }
     };
-    let category = label.category;
-    let mut difficulty = Some(label.difficulty);
-    let criteria = match routing {
-        ArmRouting::Gate { .. } => match live::hold_to_criteria(
+    let category = label.map(|label| label.category);
+    let mut difficulty = label.map(|label| label.difficulty);
+    // Gate's arm always has a category here: it stops above without one.
+    let gate_category = category.filter(|_| matches!(routing, ArmRouting::Gate { .. }));
+    let criteria = match gate_category {
+        Some(category) => match live::hold_to_criteria(
             &session.kernel,
             (&hub.gate, &plan.candidates),
             category,
@@ -1361,14 +1376,16 @@ async fn run_prompt(
                 None
             }
         },
-        ArmRouting::Pinned(_) | ArmRouting::ByDifficulty(_) => None,
+        None => None,
     };
-    let work = Work::turn(category).of(difficulty);
-    let decision = match routing {
-        ArmRouting::Gate { .. } if plan.learn => hub.gate.decide(&work, &plan.candidates),
-        ArmRouting::Gate { .. } => hub.gate.redecide(&work, &plan.candidates),
-        ArmRouting::ByDifficulty(routes) => Some(routes.decide(&work)),
-        ArmRouting::Pinned(_) => None,
+    let work = category.map(|category| Work::turn(category).of(difficulty));
+    let decision = match (routing, &work) {
+        (ArmRouting::Gate { .. }, Some(work)) if plan.learn => {
+            hub.gate.decide(work, &plan.candidates)
+        }
+        (ArmRouting::Gate { .. }, Some(work)) => hub.gate.redecide(work, &plan.candidates),
+        (ArmRouting::ByDifficulty(routes), Some(work)) => Some(routes.decide(work)),
+        _ => None,
     };
     match (routing, &decision) {
         (ArmRouting::Gate { .. } | ArmRouting::ByDifficulty(_), Some(decision)) => {
@@ -1380,14 +1397,18 @@ async fn run_prompt(
         _ => {}
     }
     let model = config.model.clone();
-    let led = lead.is_some_and(|lead| {
-        hub.gate.note_model(agent_id, &model);
-        let led = hub.gate.way((category, difficulty), &model, false).led;
-        session.lead = lead.apply(led, &mut config, &mut tools);
-        led
-    });
+    let led = match lead {
+        Some(lead) => {
+            hub.gate.note_model(agent_id, &model);
+            let led = category
+                .is_some_and(|category| hub.gate.way((category, difficulty), &model, false).led);
+            session.lead = lead.apply(led, &mut config, &mut tools);
+            led
+        }
+        None => false,
+    };
     let prompt = PromptPayload {
-        category: Some(category),
+        category,
         classifier: plan.classifier.clone(),
         route: Route {
             explored: decision.as_ref().is_some_and(|d| d.explored),
@@ -1416,10 +1437,11 @@ async fn run_prompt(
         String::new()
     };
     ui.send(system_message(format!(
-        "{} {name} · {} → {} · {category}{step}",
+        "{} {name} · {} → {} · {}{step}",
         ctx.host.name,
         short_label(&plan.arms[arm.index()]),
-        aura_model::model_catalog::route_label(&model)
+        aura_model::model_catalog::route_label(&model),
+        category.map_or("unclassified", PromptCategory::as_str),
     )))
     .await;
 
@@ -1458,7 +1480,7 @@ async fn run_prompt(
     // and an attempt that failed goes to the judge, then on in the same
     // conversation to the next stronger model. The run's own check is
     // not consulted, as no turn outside a benchmark has one.
-    let gate_arm = matches!(routing, ArmRouting::Gate { .. });
+    let gate_arm = gate_category.is_some();
     let files = session.file_checkpoints.clone().filter(|_| gate_arm);
     if let Some(files) = &files {
         files.begin_attempt(agent_id);
@@ -1503,24 +1525,26 @@ async fn run_prompt(
         };
         cut_short = signal == Some(OutcomeSignal::Unavailable);
         let outcome = |signal: OutcomeSignal, model: &str| {
-            prompt_tx.map(|prompt_tx| OutcomePayload {
-                prompt_tx,
-                category,
-                model: model.to_string(),
-                success: signal.success(),
-                signal,
-                cost_usd: nudged_cost_usd + forwarded.usage.cost_usd,
-                subtask_cost_usd: hub.subtask_cost_usd(agent_id, attempt_ms),
-                latency_ms: u64::try_from(attempt_started.elapsed().as_millis())
-                    .unwrap_or(u64::MAX),
-            })
+            prompt_tx
+                .zip(category)
+                .map(|(prompt_tx, category)| OutcomePayload {
+                    prompt_tx,
+                    category,
+                    model: model.to_string(),
+                    success: signal.success(),
+                    signal,
+                    cost_usd: nudged_cost_usd + forwarded.usage.cost_usd,
+                    subtask_cost_usd: hub.subtask_cost_usd(agent_id, attempt_ms),
+                    latency_ms: u64::try_from(attempt_started.elapsed().as_millis())
+                        .unwrap_or(u64::MAX),
+                })
         };
         // What the harness's check printed when it failed, what the judge
         // found wrong with the work, and what the same model is told when
         // it carries on: asked to check its change (a nudge), or sent back
         // with what is wrong, along with what the user is told of that.
         let (mut harness, mut unchecked, mut carry_on) = (None, None, None);
-        if let (true, false, Ok(partial)) = (gate_arm, stopped, &result) {
+        if let (Some(category), false, Ok(partial)) = (gate_category, stopped, &result) {
             let attempt = Attempt {
                 session,
                 live: &hub.gate,
@@ -1600,9 +1624,10 @@ async fn run_prompt(
             continue;
         }
         let ended = outcome(signal, &model);
-        if !(gate_arm && survived && calls_for_stronger(signal)) {
+        let Some(category) = gate_category.filter(|_| survived && calls_for_stronger(signal))
+        else {
             break (signal, reply, error, ended, false);
-        }
+        };
         if let Some(failed) = &ended {
             hub.gate.log_attempt(agent_id, failed, terms, left.take());
             live::record(&session.kernel, agent_id, failed).await;
@@ -1679,7 +1704,7 @@ async fn run_prompt(
     }
     let effort = effort_of(&config);
     let routed = RunTurn {
-        category: Some(category),
+        category,
         difficulty,
         led: Some(led),
         escalations,

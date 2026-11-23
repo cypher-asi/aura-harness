@@ -781,6 +781,50 @@ async fn a_by_difficulty_arm_runs_each_turn_and_subtask_on_its_difficultys_model
 }
 
 #[tokio::test]
+async fn a_pinned_arm_runs_on_unclassified_when_its_prompt_cannot_be_classified() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+    state.sync_turn_base();
+
+    let payload = run_comparison(
+        &mut state,
+        &links,
+        &mut commands,
+        "classifier down: what does gate do? --repeats 1 --a sonnet --against gate",
+    )
+    .await;
+
+    let pinned = payload.run("a-1").unwrap();
+    assert_eq!(pinned.error, None, "the pinned run goes on");
+    assert_eq!(pinned.model, SONNET);
+    let prompt = entries(&state, pinned.agent_id)
+        .iter()
+        .find_map(|e| e.tx.prompt_payload())
+        .unwrap();
+    assert_eq!(prompt.category, None);
+    assert_eq!(prompt.difficulty, None);
+    assert_eq!(prompt.route.model, SONNET);
+    assert!(
+        signals_of(&state, pinned.agent_id).is_empty(),
+        "no category to count it under, so no outcome for Gate"
+    );
+
+    let routed = payload.run("b-1").unwrap();
+    assert!(
+        routed
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("could not classify")),
+        "{:?}",
+        routed.error
+    );
+    assert_eq!(routed.model, "gate", "named for its arm");
+}
+
+#[tokio::test]
 async fn a_comparison_needs_a_prompt_and_waits_to_be_confirmed() {
     let (fixture, mut commands) = fixture();
     let mut b = borrowed(&fixture);
@@ -1073,6 +1117,7 @@ async fn two_models_replay_a_session_from_its_start_prompt_by_prompt() {
         repeats: 1,
         check: None,
         budget_usd: None,
+        classifier: Some("sonnet".to_string()),
     };
     bench(&mut state, &links, BenchRequest::Prepare(spec)).await;
     let estimate = drain(&mut commands)
@@ -1090,7 +1135,7 @@ async fn two_models_replay_a_session_from_its_start_prompt_by_prompt() {
     );
     assert!(
         estimate.contains(
-            "\n  A             aura-claude-sonnet-4-6 (cloud)\n  B             aura-claude-opus-4-7 (cloud)\n"
+            "\n  A             aura-claude-sonnet-4-6 (cloud)\n  B             aura-claude-opus-4-7 (cloud)\n  Classifier    aura-claude-sonnet-4-6 (cloud)\n"
         ),
         "{estimate}"
     );
@@ -1103,6 +1148,7 @@ async fn two_models_replay_a_session_from_its_start_prompt_by_prompt() {
     let payload = latest(&state);
 
     assert_eq!(payload.status, CompareStatus::Done);
+    assert_eq!(payload.classifier, SONNET, "the classifier the form named");
     assert_eq!(
         (&payload.arm_a, &payload.arm_b),
         (
@@ -1159,6 +1205,12 @@ async fn two_models_replay_a_session_from_its_start_prompt_by_prompt() {
             .map(|p| p.text)
             .collect();
         assert_eq!(prompts, ["write the answer", "run failing check"]);
+        let classifiers: Vec<String> = entries(&state, run.agent_id)
+            .iter()
+            .filter_map(|e| e.tx.prompt_payload())
+            .map(|p| p.classifier)
+            .collect();
+        assert_eq!(classifiers, [SONNET, SONNET], "{} classified", run.name);
     }
     assert_eq!(
         std::fs::read_to_string(&notes).unwrap(),
@@ -1188,6 +1240,7 @@ async fn two_models_replay_a_session_from_its_start_prompt_by_prompt() {
     let last = views.last().expect("the BENCH tab follows the benchmark");
     assert_eq!(last.name, "Compare #1");
     assert_eq!(last.prompts.len(), 2);
+    assert_eq!(last.classifier, SONNET);
     assert_eq!(last.arms[0].turns[1].failed, 1);
     assert!(last.has_reference);
     let text = system_texts(&shown);
@@ -1248,6 +1301,7 @@ async fn a_suites_example_tasks_can_be_run_on_their_own() {
         repeats: 1,
         check: None,
         budget_usd: None,
+        classifier: None,
     };
     bench(
         &mut state,
@@ -1283,6 +1337,25 @@ async fn a_suites_example_tasks_can_be_run_on_their_own() {
         .expect("an answer")
         .expect_err("no such suite");
     assert!(problem.contains("gate_hard, polyglot"), "{problem}");
+
+    let unrunnable = BenchSpec {
+        classifier: Some("llama".to_string()),
+        ..spec_for("gate_hard", 1)
+    };
+    bench(&mut state, &links, BenchRequest::Prepare(unrunnable)).await;
+    let problem = drain(&mut commands)
+        .into_iter()
+        .find_map(|(_, c)| match c {
+            UiCommand::BenchEstimate { estimate, .. } => Some(estimate),
+            _ => None,
+        })
+        .expect("an answer")
+        .expect_err("no such model to classify with");
+    assert!(
+        problem.starts_with("Classifier: No available model matches `llama`; available: "),
+        "{problem}"
+    );
+    assert!(problem.contains(SONNET), "{problem}");
 }
 
 #[tokio::test]
@@ -1319,6 +1392,7 @@ async fn example_tasks_run_in_their_own_fixtures_with_their_own_checks() {
         repeats: 1,
         check: None,
         budget_usd: None,
+        classifier: None,
     };
     bench(&mut state, &links, BenchRequest::Prepare(spec)).await;
     let estimate = drain(&mut commands)

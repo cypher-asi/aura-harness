@@ -23,7 +23,7 @@ mod tests;
 
 use aura_core_types::{Difficulty, PromptCategory};
 use aura_gate_route::Candidate;
-use aura_model::model_catalog::ModelTier;
+use aura_model::model_catalog::{ModelBackend, ModelTier};
 use aura_model::{ModelCallPurpose, ModelRequest, ReasonerError, ToolChoice};
 
 use crate::request::{answers_in_text, Ask};
@@ -40,13 +40,22 @@ pub struct Label {
     pub difficulty: Difficulty,
 }
 
-/// The model that classifies prompts: the cheapest fast-tier candidate.
-/// `None` when there is none; then the caller uses its local default.
-/// `candidates` must be ordered as [`aura_gate_route::candidates`]
-/// returns them.
+/// The model that classifies prompts: a fast-tier candidate, a local one
+/// first and then one on a linked Claude or ChatGPT plan, as calls on
+/// either cost nothing more; else the cheapest. `None` when there is
+/// none; then the caller uses its local default. `candidates` must be
+/// ordered as [`aura_gate_route::candidates`] returns them.
 #[must_use]
 pub fn classifier(candidates: &[Candidate]) -> Option<&Candidate> {
-    candidates.iter().find(|c| c.tier == ModelTier::Fast)
+    candidates
+        .iter()
+        .filter(|c| c.tier == ModelTier::Fast)
+        // `min_by_key` keeps the first of equals: the cheapest of a rank.
+        .min_by_key(|c| match c.backend {
+            ModelBackend::Local => 0,
+            ModelBackend::Claude | ModelBackend::Chatgpt => 1,
+            ModelBackend::Router | ModelBackend::OpenRouter => 2,
+        })
 }
 
 /// The request that asks `model` to classify `prompt`, sent with the

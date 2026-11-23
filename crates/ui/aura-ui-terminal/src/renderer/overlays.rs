@@ -17,7 +17,7 @@ use ratatui::{
 use std::path::Path;
 
 /// Render overlay elements (modals, help).
-pub(super) fn render_overlays(frame: &mut Frame, app: &App, theme: &Theme) {
+pub(super) fn render_overlays(frame: &mut Frame, app: &mut App, theme: &Theme) {
     if let Some(approval) = app.pending_approval() {
         render_approval_modal(frame, approval, app.pending_approval_count(), theme);
     }
@@ -108,12 +108,12 @@ const MODEL_SELECTOR_CHROME_ROWS: usize = 7;
 /// Render the model selector: a Ready / Sign-in tab row, the filter, and
 /// the models on the tab grouped by route, scrolled to keep the cursor in
 /// view.
-fn render_model_selector(frame: &mut Frame, app: &App, theme: &Theme) {
+fn render_model_selector(frame: &mut Frame, app: &mut App, theme: &Theme) {
     let picker = app.model_picker();
     let models = picker.visible(app.models());
     let muted = Style::default().fg(theme.colors.muted);
 
-    let (ready, sign_in) = crate::app::ModelPicker::counts(app.models());
+    let (ready, sign_in) = picker.counts(app.models());
     let tab = |label: &str, count: usize, active: bool| {
         let style = if active {
             Style::default()
@@ -183,12 +183,17 @@ fn render_model_selector(frame: &mut Frame, app: &App, theme: &Theme) {
     let markers = room >= 3;
 
     let mut lines = vec![tabs, filter, Line::from("")];
-    for (offset, (line, _)) in rows.into_iter().skip(start).take(room).enumerate() {
+    // The line of the selector each model row is on, with its index.
+    let mut hits: Vec<(usize, usize)> = Vec::new();
+    for (offset, (line, idx)) in rows.into_iter().skip(start).take(room).enumerate() {
         if markers && offset == 0 && start > 0 {
             lines.push(Line::from(Span::styled("  ↑ more", muted)));
         } else if markers && offset + 1 == room && start + room < total {
             lines.push(Line::from(Span::styled("  ↓ more", muted)));
         } else {
+            if let Some(idx) = idx {
+                hits.push((lines.len(), idx));
+            }
             lines.push(line);
         }
     }
@@ -206,11 +211,43 @@ fn render_model_selector(frame: &mut Frame, app: &App, theme: &Theme) {
     let modal_area = centered_rect(modal_width, modal_height, area);
     frame.render_widget(Clear, modal_area);
 
+    let title = match picker.target() {
+        crate::app::PickerTarget::Session => " Select model ".to_string(),
+        crate::app::PickerTarget::BenchDifficulty { arm, difficulty } => format!(
+            " Model for {} work · arm {} ",
+            crate::app::benchmarks::DIFFICULTIES
+                .get(difficulty)
+                .copied()
+                .unwrap_or("medium"),
+            crate::events::arm_letter(arm)
+        ),
+        crate::app::PickerTarget::BenchClassifier => {
+            " Model that classifies the prompts ".to_string()
+        }
+    };
     let block = Block::default()
-        .title(" Select model ")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(muted);
     frame.render_widget(Paragraph::new(lines).block(block), modal_area);
+
+    // Lines past the bottom border are cut, so only rows inside it click.
+    let shown = usize::from(modal_height.saturating_sub(2));
+    let rows = hits
+        .into_iter()
+        .filter(|(line, _)| *line < shown)
+        .filter_map(|(line, idx)| {
+            let y = modal_area
+                .y
+                .checked_add(1)?
+                .checked_add(u16::try_from(line).ok()?)?;
+            Some((y, idx))
+        })
+        .collect();
+    app.set_model_picker_layout(crate::app::PickerLayout {
+        modal: modal_area,
+        rows,
+    });
 }
 
 /// First row of a `room`-row window over `total` rows that shows
@@ -237,7 +274,7 @@ fn model_row<'a>(
     selected: bool,
     theme: &Theme,
 ) -> Line<'a> {
-    let current = model.id == app.current_model();
+    let current = model.id == app.picker_marked();
     let marker = if selected { "› " } else { "  " };
     let check = if current { "● " } else { "  " };
     let note = if model.local && !model.installed {

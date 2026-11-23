@@ -187,8 +187,9 @@ impl ModelSelection {
         aura_gate::route::fixed_pick(&self.gate_candidates()).cloned()
     }
 
-    /// The model that classifies prompts: the cheapest fast-tier model the
-    /// user can run, else the local default.
+    /// The model that classifies prompts: a fast-tier model the user can
+    /// run, a local one or one on a linked plan first (see
+    /// [`aura_gate::judge::classify::classifier`]), else the local default.
     pub fn classifier_model(&self) -> String {
         aura_gate::judge::classify::classifier(&self.gate_candidates())
             .map_or_else(|| self.default_local.clone(), |c| c.id.clone())

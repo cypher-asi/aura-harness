@@ -28,8 +28,8 @@ use aura_core_types::{
     RouteLevel,
 };
 use aura_gate::compare::{
-    default_against, estimate, parse, resolve_arms, CompareCommand, CompareRequest,
-    DEFAULT_CONCURRENCY,
+    default_against, estimate, parse, resolve_arms, resolve_classifier, CompareCommand,
+    CompareRequest, DEFAULT_CONCURRENCY,
 };
 use aura_model::model_catalog::route_label;
 use aura_store_db::ReadStore;
@@ -353,6 +353,11 @@ pub(super) async fn prepare(
         &candidates,
         state.hub.gate.settings().delegate,
     )?;
+    let classifier_named = request.classifier.is_some();
+    let classifier = match request.classifier.as_deref() {
+        Some(query) => resolve_classifier(query, &runnable, &candidates)?,
+        None => state.models.classifier_model(),
+    };
     let judge = strongest.unwrap_or_else(|| {
         [&arm_a, &arm_b]
             .into_iter()
@@ -437,7 +442,7 @@ pub(super) async fn prepare(
         budget_usd: request.budget_usd,
         candidates,
         runnable,
-        classifier: state.models.classifier_model(),
+        classifier,
         workspace,
         user: agent_id,
         root: state.compare.root.clone(),
@@ -461,6 +466,8 @@ pub(super) async fn prepare(
         examples: plan.source.examples(),
         a: reads(&plan.arms[0]),
         b: reads(&plan.arms[1]),
+        classifier: &plan.classifier,
+        classifier_named,
         judge: &plan.judge,
         repeats: plan.repeats,
         check: plan.check.as_deref(),

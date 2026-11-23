@@ -1,0 +1,12 @@
+{
+  "id": "01a2064951d60005",
+  "title": "clicking a model for the difficulty selection phase should bring up the model selector when you press enter (same as /m…",
+  "state": "cancelled",
+  "agent_id": "3368940924675b173207a46516aefe1b8ea82a4877f9b8ec4c11ae6f513f9b71",
+  "agent_name": "Agent 956",
+  "plan": ".aura/plans/benchmark-arm-with-a-model-per-difficulty_4f1701cc.plan.md",
+  "items": [],
+  "summary": "This is a focused change: open the existing `/model` picker from a difficulty row and route the choice back into that row. First, how the picker is drawn so I can add a title:",
+  "updated_ms": 1795401848527,
+  "created_ms": 1795401798102
+}

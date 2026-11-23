@@ -32,7 +32,7 @@ mod summary;
 mod tokens;
 
 pub use args::{parse, CompareCommand, CompareRequest, SessionPick};
-pub use arms::{default_against, resolve_arms, DifficultyRoutes, NO_DELEGATE};
+pub use arms::{default_against, resolve_arms, resolve_classifier, DifficultyRoutes, NO_DELEGATE};
 pub use estimate::{estimate, list_price, Estimate};
 pub use pairs::{judge_pairs, judge_task, seed, EndedRun};
 pub use plan_shares::{plan_shares, PlanReading};

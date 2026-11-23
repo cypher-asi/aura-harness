@@ -7,7 +7,7 @@ use super::{
     AgentsTab, App, AppState, ChatTab, NotificationType, PanelFocus, RecordsTab, SidePanelTab,
 };
 use crate::{events::UiEvent, input::InputHistory, terminal::KeyResult};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 
 impl App {
     /// Handle a key event.
@@ -305,13 +305,7 @@ impl App {
                 picker.switch_tab();
             }
             KeyCode::Backspace => picker.pop(),
-            KeyCode::Enter => {
-                if let Some(id) = picker.selected(models).map(|m| m.id.clone()) {
-                    self.choose_model(&id);
-                } else if picker.filter().is_empty() {
-                    self.state = AppState::Idle;
-                }
-            }
+            KeyCode::Enter => self.pick_in_model_selector(),
             KeyCode::Char(c)
                 if !key
                     .modifiers
@@ -322,6 +316,44 @@ impl App {
             _ => {}
         }
         KeyResult::continue_running()
+    }
+
+    /// Take the highlighted model of the selector for what it was opened
+    /// for: the session's model, or a benchmark row's. With nothing
+    /// highlighted and nothing typed it closes.
+    fn pick_in_model_selector(&mut self) {
+        let picker = &self.model_picker;
+        let picked = picker.selected(&self.models).map(|m| m.id.clone());
+        match (picked, picker.target()) {
+            (Some(id), super::PickerTarget::Session) => self.choose_model(&id),
+            (Some(id), target) => {
+                if let Some(field) = super::benchmarks::FormField::of_picker(target) {
+                    self.pick_bench_model(field, &id);
+                }
+            }
+            (None, _) if picker.filter().is_empty() => self.state = AppState::Idle,
+            (None, _) => {}
+        }
+    }
+
+    /// A mouse event while the model selector is open: a click on a model
+    /// picks it, as Enter would, a click outside the selector closes it,
+    /// and the wheel moves the highlight.
+    pub(super) fn model_selector_mouse(&mut self, kind: MouseEventKind, column: u16, row: u16) {
+        let layout = &self.model_picker_layout;
+        let inside = super::contains(Some(layout.modal), column, row);
+        match kind {
+            MouseEventKind::Down(MouseButton::Left) if !inside => self.state = AppState::Idle,
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(index) = layout.model_at(row) {
+                    self.model_picker.select(&self.models, index);
+                    self.pick_in_model_selector();
+                }
+            }
+            MouseEventKind::ScrollUp => self.model_picker.move_by(&self.models, -1),
+            MouseEventKind::ScrollDown => self.model_picker.move_by(&self.models, 1),
+            _ => {}
+        }
     }
 
     /// Handle key in normal mode.

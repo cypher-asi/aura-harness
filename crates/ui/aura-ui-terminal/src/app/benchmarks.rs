@@ -1,13 +1,16 @@
 //! The chat panel's BENCH tab: benchmarks that run the same work on two
-//! arms (Gate or a pinned model) and compare what they cost and how well
-//! they did. The tab lists them, sets a new one up with a form, and shows
-//! one's numbers; the event loop runs them as `/compare` comparisons.
+//! arms (Gate, a pinned model, or a model per difficulty) and compare
+//! what they cost and how well they did. The tab lists them, sets a new
+//! one up with a form, and shows one's numbers; the event loop runs them
+//! as `/compare` comparisons. Enter on a difficulty's row of the form
+//! opens the `/model` selector to pick its model.
 
-use super::{App, ChatTab, NotificationType};
+use super::{App, AppState, ChatTab, NotificationType, PickerTarget};
 use crate::events::{
     BenchExample, BenchRequest, BenchSession, BenchSpec, BenchStatus, BenchView, BenchWork, UiEvent,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::layout::Rect;
 
 /// What the BENCH tab shows.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -38,6 +41,9 @@ pub enum FormField {
     BEasy,
     BMedium,
     BHard,
+    /// The model that classifies each run's prompt; [`AUTO_CLASSIFIER`]
+    /// for Gate's choice
+    Classifier,
     Repeats,
     Check,
     Budget,
@@ -45,7 +51,7 @@ pub enum FormField {
 }
 
 impl FormField {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::Work,
         Self::Prompt,
         Self::Tasks,
@@ -57,6 +63,7 @@ impl FormField {
         Self::BEasy,
         Self::BMedium,
         Self::BHard,
+        Self::Classifier,
         Self::Repeats,
         Self::Check,
         Self::Budget,
@@ -74,6 +81,7 @@ impl FormField {
             Self::AEasy | Self::BEasy => "  Easy",
             Self::AMedium | Self::BMedium => "  Medium",
             Self::AHard | Self::BHard => "  Hard",
+            Self::Classifier => "Classifier",
             Self::Repeats => "Runs per arm",
             Self::Check => "Check",
             Self::Budget => "Budget (USD)",
@@ -84,7 +92,38 @@ impl FormField {
     /// Whether its value is typed in the input line.
     #[must_use]
     pub const fn is_text(self) -> bool {
-        matches!(self, Self::Prompt | Self::Check | Self::Budget) || self.difficulty().is_some()
+        matches!(self, Self::Prompt | Self::Check | Self::Budget) || self.holds_model()
+    }
+
+    /// Whether the row holds a model, picked in the `/model` selector:
+    /// a difficulty's row, or the classifier's.
+    #[must_use]
+    pub const fn holds_model(self) -> bool {
+        self.picker_target().is_some()
+    }
+
+    /// What the model selector picks for, opened on this row; `None` for
+    /// a row that holds no model.
+    #[must_use]
+    pub const fn picker_target(self) -> Option<PickerTarget> {
+        match self.difficulty() {
+            Some((arm, difficulty)) => Some(PickerTarget::BenchDifficulty { arm, difficulty }),
+            None if matches!(self, Self::Classifier) => Some(PickerTarget::BenchClassifier),
+            None => None,
+        }
+    }
+
+    /// The row the model selector was opened on for `target`; `None` when
+    /// it picks the session's model.
+    #[must_use]
+    pub const fn of_picker(target: PickerTarget) -> Option<Self> {
+        match target {
+            PickerTarget::Session => None,
+            PickerTarget::BenchDifficulty { arm, difficulty } => {
+                Some(Self::of_difficulty(arm, difficulty))
+            }
+            PickerTarget::BenchClassifier => Some(Self::Classifier),
+        }
     }
 
     /// The arm (0 for A, 1 for B) and difficulty (0 easy, 1 medium, 2
@@ -123,6 +162,10 @@ impl FormField {
 /// The arm value that runs each piece of work on the model the form gives
 /// its difficulty.
 pub const BY_DIFFICULTY: &str = "by difficulty";
+
+/// The classifier row's value for Gate's automatic choice: the cheapest
+/// fast model the user can run.
+pub const AUTO_CLASSIFIER: &str = "auto";
 
 /// The names of the difficulties, easiest first, as the arm string has
 /// them.
@@ -175,6 +218,9 @@ pub struct BenchForm {
     pub a_models: [String; 3],
     /// As `a_models`, for arm B
     pub b_models: [String; 3],
+    /// The model that classifies each run's prompt, or
+    /// [`AUTO_CLASSIFIER`] for Gate's choice
+    pub classifier: String,
     pub repeats: u32,
     /// Empty for the project's check
     pub check: String,
@@ -196,6 +242,7 @@ impl Default for BenchForm {
             b: String::new(),
             a_models: Default::default(),
             b_models: Default::default(),
+            classifier: AUTO_CLASSIFIER.to_string(),
             repeats: 3,
             check: String::new(),
             budget: String::new(),
@@ -256,6 +303,31 @@ impl BenchForm {
         Some(self.models(arm)[difficulty].as_str())
     }
 
+    /// The model on `field`, when it is a row that holds one: a
+    /// difficulty's model, or the classifier.
+    #[must_use]
+    pub fn row_model(&self, field: FormField) -> Option<&str> {
+        match field {
+            FormField::Classifier => Some(&self.classifier),
+            _ => self.difficulty_model(field),
+        }
+    }
+
+    fn row_model_mut(&mut self, field: FormField) -> Option<&mut String> {
+        match (field, field.difficulty()) {
+            (FormField::Classifier, _) => Some(&mut self.classifier),
+            (_, Some((arm, difficulty))) => Some(&mut self.models_mut(arm)[difficulty]),
+            (_, None) => None,
+        }
+    }
+
+    /// The model the classifier row names; `None` for Gate's choice.
+    #[must_use]
+    pub fn classifier_model(&self) -> Option<String> {
+        let model = self.classifier.trim();
+        (!model.is_empty() && model != AUTO_CLASSIFIER).then(|| model.to_string())
+    }
+
     /// What arm `arm` is sent as: its value, or the arm string of its
     /// models when it runs work by difficulty. A by-difficulty arm missing
     /// a model gives the row that lacks it.
@@ -297,6 +369,10 @@ pub struct BenchState {
     /// Lines scrolled down in the detail view
     pub scroll: u16,
     pub form: BenchForm,
+    /// Where the form was drawn in the last frame, and the screen row of
+    /// each of its rows, for clicks; empty when the form is not shown
+    form_area: Option<Rect>,
+    form_rows: Vec<(u16, FormField)>,
 }
 
 impl BenchState {
@@ -312,6 +388,26 @@ impl BenchState {
     #[must_use]
     pub const fn loaded(&self) -> bool {
         self.loaded
+    }
+
+    /// Where the form was drawn this frame (`area`) and the screen row of
+    /// each of its rows; `None` when the tab shows something else.
+    fn set_form_rows(&mut self, area: Option<Rect>, rows: Vec<(u16, FormField)>) {
+        self.form_area = area;
+        self.form_rows = rows;
+    }
+
+    /// The form's row drawn at the screen cell, in the last frame.
+    fn form_field_at(&self, column: u16, row: u16) -> Option<FormField> {
+        let area = self.form_area?;
+        let inside = column >= area.x
+            && column < area.x.saturating_add(area.width)
+            && row >= area.y
+            && row < area.y.saturating_add(area.height);
+        inside
+            .then(|| self.form_rows.iter().find(|(y, _)| *y == row))
+            .flatten()
+            .map(|(_, field)| *field)
     }
 
     /// The benchmark the detail view shows.
@@ -487,6 +583,12 @@ impl App {
         &mut self.bench
     }
 
+    /// Where the BENCH form was drawn this frame and the screen row of
+    /// each of its rows, for clicks; `None` when it is not shown.
+    pub(crate) fn set_bench_form_rows(&mut self, area: Option<Rect>, rows: Vec<(u16, FormField)>) {
+        self.bench.set_form_rows(area, rows);
+    }
+
     fn send_bench(&self, request: BenchRequest) {
         if let Some(tx) = &self.event_tx {
             let _ = tx.try_send(UiEvent::Bench {
@@ -530,28 +632,71 @@ impl App {
             .collect()
     }
 
-    /// The model that can run which `text` names: its id or label
-    /// exactly, else the first whose id or label contains it, ignoring
-    /// case.
-    #[must_use]
-    pub fn find_bench_model(&self, text: &str) -> Option<String> {
-        let wanted = text.trim().to_lowercase();
-        if wanted.is_empty() {
-            return None;
-        }
-        let usable = || {
-            self.models
-                .iter()
-                .filter(|m| m.available && m.id != "gate" && (!m.local || m.installed))
+    /// Open the model selector, as `/model` does, to pick the model of the
+    /// form's row `field` (a difficulty's, or the classifier's), filtered
+    /// by `filter` and on the row's model when it has one.
+    pub(super) fn open_bench_model_picker(&mut self, field: FormField, filter: &str) {
+        let Some(target) = field.picker_target() else {
+            return;
         };
-        let lower = |s: &str| s.to_lowercase();
-        usable()
-            .find(|m| lower(&m.id) == wanted || lower(&m.label) == wanted)
-            .or_else(|| {
-                usable()
-                    .find(|m| lower(&m.id).contains(&wanted) || lower(&m.label).contains(&wanted))
-            })
-            .map(|m| m.id.clone())
+        if self.models.is_empty() {
+            self.notification = Some((
+                "Model list not loaded yet".to_string(),
+                NotificationType::Warning,
+            ));
+            return;
+        }
+        let current = self
+            .bench
+            .form
+            .row_model(field)
+            .unwrap_or_default()
+            .to_string();
+        self.model_picker
+            .open_for(&self.models, &current, target, filter);
+        self.state = AppState::SelectingModel;
+    }
+
+    /// Put the model `id` picked in the selector on the form's row
+    /// `field`, and go on to the next row. A model that can't run yet is
+    /// refused with what it needs, and the selector stays open.
+    pub(super) fn pick_bench_model(&mut self, field: FormField, id: &str) {
+        let needs = self.models.iter().find(|m| m.id == id).and_then(|m| {
+            if m.local && !m.installed {
+                Some(format!("{} is not pulled yet", m.label))
+            } else if !m.available {
+                let login = match m.provider.as_deref() {
+                    Some(provider) if provider != "zos" => format!("/login {provider}"),
+                    _ => "/login".to_string(),
+                };
+                Some(format!("{} needs a sign-in first: {login}", m.label))
+            } else {
+                None
+            }
+        });
+        if let Some(needs) = needs {
+            self.notification = Some((needs, NotificationType::Warning));
+            return;
+        }
+        let form = &mut self.bench.form;
+        let Some(model) = form.row_model_mut(field) else {
+            return;
+        };
+        *model = id.to_string();
+        form.estimate = None;
+        form.field = field;
+        self.state = AppState::Idle;
+        self.move_form_field(true);
+    }
+
+    /// The model the selector marks as chosen: the session's, or the
+    /// benchmark row's it was opened for.
+    #[must_use]
+    pub fn picker_marked(&self) -> &str {
+        match FormField::of_picker(self.model_picker.target()) {
+            None => &self.current_model,
+            Some(field) => self.bench.form.row_model(field).unwrap_or_default(),
+        }
     }
 
     /// Whether a running benchmark is on screen, in the BENCH tab or the
@@ -632,19 +777,8 @@ impl App {
         }
         let text = std::mem::take(&mut self.input);
         self.cursor_pos = 0;
-        if let Some((arm, difficulty)) = field.difficulty() {
-            match self.find_bench_model(&text) {
-                Some(model) => {
-                    self.bench.form.models_mut(arm)[difficulty] = model;
-                    self.bench.form.estimate = None;
-                }
-                None => {
-                    self.notification = Some((
-                        format!("No available model matches \"{}\"", text.trim()),
-                        NotificationType::Warning,
-                    ));
-                }
-            }
+        if field.holds_model() {
+            self.open_bench_model_picker(field, &text);
             return true;
         }
         let form = &mut self.bench.form;
@@ -703,6 +837,26 @@ impl App {
         self.bench.form.estimate = None;
         self.bench.form.waiting = false;
         self.send_bench(BenchRequest::Sessions);
+    }
+
+    /// A left click in the BENCH tab: on a row of the form it goes to the
+    /// row, opens the model selector on a difficulty's row, and on the
+    /// last row asks for the estimate or starts the benchmark, as Enter
+    /// does there. Returns whether it hit a row.
+    pub(crate) fn click_bench(&mut self, column: u16, row: u16) -> bool {
+        if self.bench.mode != BenchMode::Form {
+            return false;
+        }
+        let Some(field) = self.bench.form_field_at(column, row) else {
+            return false;
+        };
+        self.bench.form.field = field;
+        if field.holds_model() {
+            self.open_bench_model_picker(field, "");
+        } else if field == FormField::Go {
+            self.submit_bench_form();
+        }
+        true
     }
 
     fn bench_detail_key(&mut self, key: KeyEvent, id: &str) -> bool {
@@ -794,15 +948,17 @@ impl App {
                     FormField::Prompt => form.prompt.clear(),
                     FormField::Check => form.check.clear(),
                     FormField::Budget => form.budget.clear(),
+                    FormField::Classifier => form.classifier = AUTO_CLASSIFIER.to_string(),
                     _ => {
-                        if let Some((arm, difficulty)) = field.difficulty() {
-                            form.models_mut(arm)[difficulty].clear();
+                        if let Some(model) = form.row_model_mut(field) {
+                            model.clear();
                         }
                     }
                 }
                 form.estimate = None;
             }
             KeyCode::Enter if field == FormField::Go => self.submit_bench_form(),
+            KeyCode::Enter if field.holds_model() => self.open_bench_model_picker(field, ""),
             KeyCode::Enter => self.move_form_field(true),
             _ => return false,
         }
@@ -832,10 +988,14 @@ impl App {
 
     fn change_form_value(&mut self, forward: bool) {
         let field = self.bench.form.field;
-        if let Some((arm, difficulty)) = field.difficulty() {
-            let choices = self.bench_model_choices();
-            let value = &mut self.bench.form.models_mut(arm)[difficulty];
-            *value = cycle(&choices, value, forward);
+        if field.holds_model() {
+            let mut choices = self.bench_model_choices();
+            if field == FormField::Classifier {
+                choices.insert(0, AUTO_CLASSIFIER.to_string());
+            }
+            if let Some(value) = self.bench.form.row_model_mut(field) {
+                *value = cycle(&choices, value, forward);
+            }
             self.bench.form.estimate = None;
             return;
         }
@@ -959,6 +1119,7 @@ impl App {
             repeats: form.repeats,
             check: Some(form.check.clone()).filter(|c| !c.is_empty()),
             budget_usd,
+            classifier: form.classifier_model(),
         };
         self.bench.form.waiting = true;
         self.send_bench(BenchRequest::Prepare(spec));
@@ -1225,7 +1386,7 @@ mod tests {
         app.move_form_field(true);
         assert_eq!(
             app.bench.form.field,
-            FormField::Repeats,
+            FormField::Classifier,
             "skips hidden rows"
         );
 
@@ -1233,15 +1394,18 @@ mod tests {
         app.bench.form.field = FormField::B;
         app.move_form_field(true);
         assert_eq!(app.bench.form.field, FormField::BEasy);
-        app.bench.form.field = FormField::Repeats;
+        app.bench.form.field = FormField::Classifier;
         app.move_form_field(false);
         assert_eq!(app.bench.form.field, FormField::BHard);
         assert!(!app.bench.form.shown(FormField::AEasy));
     }
 
     #[test]
-    fn a_difficulty_row_cycles_models_and_takes_part_of_a_name() {
+    fn a_difficulty_row_cycles_models_and_enter_opens_the_model_selector() {
         let mut app = three_models();
+        let session = app.current_model.clone();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        app.event_tx = Some(tx);
         app.bench.mode = BenchMode::Form;
         app.bench.form.a = BY_DIFFICULTY.to_string();
         app.bench.form.field = FormField::AEasy;
@@ -1253,16 +1417,76 @@ mod tests {
             "only models, no Gate"
         );
 
-        app.input = "deepseek".to_string();
-        assert!(app.bench_fill_field());
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert!(app.bench_form_key(key(KeyCode::Enter)));
+        assert_eq!(app.state, AppState::SelectingModel);
+        assert_eq!(
+            app.model_picker.target(),
+            PickerTarget::BenchDifficulty {
+                arm: 0,
+                difficulty: 0
+            }
+        );
+        assert_eq!(app.picker_marked(), "chatgpt/gpt-5.4", "the row's model");
+        for c in "deep".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.state, AppState::Idle);
         assert_eq!(app.bench.form.a_models[0], DEEPSEEK);
-        app.input = "no such model".to_string();
+        assert_eq!(app.bench.form.field, FormField::AMedium, "on to the next");
+        assert_eq!(
+            app.current_model, session,
+            "the session's model is untouched"
+        );
+        assert!(
+            !std::iter::from_fn(|| rx.try_recv().ok())
+                .any(|event| matches!(event, UiEvent::SelectModel(_))),
+            "nothing selects a model for the session"
+        );
+    }
+
+    #[test]
+    fn typing_on_a_difficulty_row_opens_the_selector_filtered() {
+        let mut app = three_models();
+        app.bench.mode = BenchMode::Form;
+        app.bench.form.b = BY_DIFFICULTY.to_string();
+        app.bench.form.field = FormField::BHard;
+        app.input = "gpt".to_string();
         assert!(app.bench_fill_field());
-        assert_eq!(app.bench.form.a_models[0], DEEPSEEK, "kept");
-        assert!(app
-            .notification
-            .as_ref()
-            .is_some_and(|(text, _)| text.contains("No available model matches")));
+        assert_eq!(app.state, AppState::SelectingModel);
+        assert_eq!(app.model_picker.filter(), "gpt");
+        assert!(app.input.is_empty());
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.bench.form.b_models[2], "chatgpt/gpt-5.4");
+    }
+
+    #[test]
+    fn the_selector_refuses_a_model_that_needs_a_sign_in_for_a_row() {
+        let mut app = three_models();
+        app.models.push(crate::events::ModelOptionView {
+            id: "openrouter/qwen/qwen3-coder".to_string(),
+            label: "Qwen3 Coder".to_string(),
+            local: false,
+            installed: true,
+            group: "openrouter".to_string(),
+            provider: Some("openrouter".to_string()),
+            available: false,
+            context_window: None,
+        });
+        app.bench.mode = BenchMode::Form;
+        app.bench.form.a = BY_DIFFICULTY.to_string();
+        app.open_bench_model_picker(FormField::AMedium, "");
+        app.pick_bench_model(FormField::AMedium, "openrouter/qwen/qwen3-coder");
+        assert_eq!(app.state, AppState::SelectingModel, "stays open");
+        assert!(app.bench.form.a_models[1].is_empty());
+        assert!(app.notification.as_ref().is_some_and(|(text, _)| {
+            text == "Qwen3 Coder needs a sign-in first: /login openrouter"
+        }));
+
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.state, AppState::Idle, "Esc leaves the row as it was");
+        assert!(app.bench.form.a_models[1].is_empty());
     }
 
     #[test]
@@ -1297,5 +1521,67 @@ mod tests {
                  medium=claude/claude-sonnet-4-6,hard=chatgpt/gpt-5.4"
             )
         );
+    }
+
+    #[test]
+    fn the_classifier_row_starts_auto_cycles_models_and_is_sent() {
+        let mut app = three_models();
+        app.bench.mode = BenchMode::Form;
+        app.bench.form.field = FormField::B;
+        app.move_form_field(true);
+        assert_eq!(
+            app.bench.form.field,
+            FormField::Classifier,
+            "after the arms"
+        );
+        assert_eq!(app.bench.form.classifier, AUTO_CLASSIFIER);
+        assert_eq!(app.bench.form.classifier_model(), None);
+
+        app.change_form_value(true);
+        assert_eq!(app.bench.form.classifier, "claude/claude-sonnet-4-6");
+        app.change_form_value(false);
+        assert_eq!(
+            app.bench.form.classifier, AUTO_CLASSIFIER,
+            "auto comes first"
+        );
+        app.change_form_value(false);
+        assert_eq!(app.bench.form.classifier, "chatgpt/gpt-5.4", "and wraps");
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        app.event_tx = Some(tx);
+        app.bench.form.field = FormField::Go;
+        app.submit_bench_form();
+        let sent = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| match event {
+            UiEvent::Bench {
+                request: BenchRequest::Prepare(spec),
+                ..
+            } => Some(spec.classifier),
+            _ => None,
+        });
+        assert_eq!(sent, Some(Some("chatgpt/gpt-5.4".to_string())));
+    }
+
+    #[test]
+    fn enter_on_the_classifier_row_picks_it_in_the_selector_and_backspace_resets_it() {
+        let mut app = three_models();
+        app.bench.mode = BenchMode::Form;
+        app.bench.form.field = FormField::Classifier;
+        assert!(app.bench_form_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+        assert_eq!(app.state, AppState::SelectingModel);
+        assert_eq!(app.model_picker.target(), PickerTarget::BenchClassifier);
+
+        app.pick_bench_model(FormField::Classifier, DEEPSEEK);
+        assert_eq!(app.state, AppState::Idle);
+        assert_eq!(app.bench.form.classifier, DEEPSEEK);
+        assert_eq!(app.bench.form.field, FormField::Repeats, "on to the next");
+        assert_eq!(
+            app.current_model,
+            App::new().current_model,
+            "session unchanged"
+        );
+
+        app.bench.form.field = FormField::Classifier;
+        assert!(app.bench_form_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)));
+        assert_eq!(app.bench.form.classifier, AUTO_CLASSIFIER);
     }
 }

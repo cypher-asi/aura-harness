@@ -3,7 +3,9 @@
 
 use super::panels::body_block;
 use super::text::display_width;
-use crate::app::benchmarks::{BenchMode, BenchState, FormField, WorkChoice, BY_DIFFICULTY};
+use crate::app::benchmarks::{
+    BenchMode, BenchState, FormField, WorkChoice, AUTO_CLASSIFIER, BY_DIFFICULTY,
+};
 use crate::events::{
     arm_letter, cost_per_fix, run_order, BenchArm, BenchDoing, BenchLiveRun, BenchRun, BenchStatus,
     BenchTaskCell, BenchTaskSetup, BenchTokens, BenchTurn, BenchVerdict, BenchView,
@@ -459,6 +461,7 @@ pub(super) fn render_benchmarks(
     let state = app.bench();
     // The detail's tables fit the width; wrapping would only break them.
     let wrap = !matches!(state.mode, BenchMode::Detail(_));
+    let mut form_rows = None;
     let (lines, scroll) = match &state.mode {
         BenchMode::List => {
             let lines = list_lines(state, theme, width, frame_no);
@@ -476,8 +479,21 @@ pub(super) fn render_benchmarks(
             }
             None => (vec![muted_line("That benchmark is gone.", theme)], 0),
         },
-        BenchMode::Form => (form_lines(app, theme, width), 0),
+        BenchMode::Form => {
+            let (lines, rows) = form_layout(app, theme, width);
+            form_rows = Some(rows);
+            (lines, 0)
+        }
     };
+    // The form is drawn from its top, so a row's line is its screen row.
+    let form_rows: Vec<(u16, FormField)> = form_rows
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(line, _)| *line < usize::from(padded.height))
+        .filter_map(|(line, field)| Some((padded.y.checked_add(u16::try_from(line).ok()?)?, field)))
+        .collect();
+    let form_area = (!form_rows.is_empty()).then_some(padded);
+    app.set_bench_form_rows(form_area, form_rows);
     app.clamp_bench_scroll(scroll);
     app.set_chat_rows(Some((inner, usize::from(scroll))));
     let mut paragraph = Paragraph::new(lines).scroll((scroll, 0));
@@ -777,6 +793,9 @@ fn detail_lines(
     });
     if let Some(usd) = view.budget_usd {
         about.push(format!("budget {}", money(usd)));
+    }
+    if !view.classifier.is_empty() {
+        about.push(format!("classifier {}", view.classifier));
     }
     lines.push(Line::from(Span::styled(
         fit(&about.join(" · "), width),
@@ -1327,7 +1346,10 @@ fn arm_reads(value: &str, arm_b: bool) -> String {
 /// pick one. Returns whether it reads faint.
 fn difficulty_reads(app: &App, model: &str) -> (String, bool) {
     if model.is_empty() {
-        return ("←/→ or type part of a name, then Enter".to_string(), true);
+        return (
+            "Enter opens the model selector · ←/→ cycles".to_string(),
+            true,
+        );
     }
     let group = app
         .models()
@@ -1341,23 +1363,36 @@ fn difficulty_reads(app: &App, model: &str) -> (String, bool) {
     }
 }
 
+#[cfg(test)]
 fn form_lines<'a>(app: &App, theme: &Theme, width: usize) -> Vec<Line<'a>> {
+    form_layout(app, theme, width).0
+}
+
+/// The form's lines, and the line each of its rows is on. Every line
+/// down to the last row fits `width`, so none wraps and the rows keep
+/// their lines on screen.
+fn form_layout<'a>(
+    app: &App,
+    theme: &Theme,
+    width: usize,
+) -> (Vec<Line<'a>>, Vec<(usize, FormField)>) {
     let state = app.bench();
     let form = &state.form;
     let bold = Style::default()
         .fg(theme.colors.text)
         .add_modifier(Modifier::BOLD);
     let muted = Style::default().fg(theme.colors.muted);
+    const TITLE: &str = "New benchmark";
+    let hint = fit(
+        "   ↑/↓ row · ←/→ change · click or Enter a model row to pick it · text rows take what \
+         you type below, then Enter · Esc back",
+        width.saturating_sub(TITLE.len()),
+    );
     let mut lines = vec![
-        Line::from(vec![
-            Span::styled("New benchmark", bold),
-            Span::styled(
-                "   ↑/↓ row · ←/→ change · text rows take what you type below, then Enter · Esc back",
-                muted,
-            ),
-        ]),
+        Line::from(vec![Span::styled(TITLE, bold), Span::styled(hint, muted)]),
         Line::default(),
     ];
+    let mut rows = Vec::with_capacity(FormField::ALL.len());
     let typed_prompt = matches!(state.work(), WorkChoice::Prompt);
     let examples = matches!(state.work(), WorkChoice::Examples(_));
     for field in FormField::ALL {
@@ -1374,6 +1409,11 @@ fn form_lines<'a>(app: &App, theme: &Theme, width: usize) -> Vec<Line<'a>> {
             | FormField::BHard => {
                 difficulty_reads(app, form.difficulty_model(field).unwrap_or_default())
             }
+            FormField::Classifier if form.classifier_model().is_none() => (
+                format!("{AUTO_CLASSIFIER} · Gate's choice of fast model · Enter picks another"),
+                true,
+            ),
+            FormField::Classifier => difficulty_reads(app, &form.classifier),
             FormField::Work => (
                 match state.work() {
                     WorkChoice::LastPrompt => "your last prompt".to_string(),
@@ -1460,6 +1500,10 @@ fn form_lines<'a>(app: &App, theme: &Theme, width: usize) -> Vec<Line<'a>> {
             FormField::Work | FormField::A | FormField::B | FormField::Repeats
         ) || field.difficulty().is_some()
             || (field == FormField::Tasks && examples);
+        // One screen line per row, so a click finds the row it is on:
+        // the marker and label take 16 columns, `‹ ›` 4 more.
+        let room = width.saturating_sub(if focused && cycles { 20 } else { 16 });
+        let value = fit(&value, room);
         let value = if focused && cycles {
             format!("‹ {value} ›")
         } else {
@@ -1478,6 +1522,7 @@ fn form_lines<'a>(app: &App, theme: &Theme, width: usize) -> Vec<Line<'a>> {
         if field == FormField::Go {
             lines.push(Line::default());
         }
+        rows.push((lines.len(), field));
         lines.push(Line::from(vec![
             Span::styled(if focused { "› " } else { "  " }, style),
             Span::styled(format!("{:<14}", field.label()), muted),
@@ -1503,7 +1548,7 @@ fn form_lines<'a>(app: &App, theme: &Theme, width: usize) -> Vec<Line<'a>> {
         }
         None => {}
     }
-    lines
+    (lines, rows)
 }
 
 #[cfg(test)]
@@ -2287,7 +2332,7 @@ mod tests {
         );
         assert!(shown.contains("  Medium"), "{shown}");
         assert!(
-            shown.contains("←/→ or type part of a name, then Enter"),
+            shown.contains("Enter opens the model selector · ←/→ cycles"),
             "{shown}"
         );
         assert_eq!(

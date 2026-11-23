@@ -77,7 +77,7 @@ use folder_picker::FolderPicker;
 use hud::Hud;
 pub use inbox::{InboxRow, ThreadView};
 pub use members::{MemberRow, RecordsTab};
-pub use model_picker::{ModelPicker, ModelTab};
+pub use model_picker::{ModelPicker, ModelTab, PickerLayout, PickerTarget};
 pub use panes::{Pane, PaneChrome, PaneSplits, PaneTab};
 pub use processes::SidePanelTab;
 pub use prose::{ProseMeasure, ProseRow};
@@ -332,6 +332,8 @@ pub struct App {
     pub(super) active_plan: Option<PlanView>,
     /// Model selector state: tab, filter and highlighted row
     pub(super) model_picker: ModelPicker,
+    /// Where the model selector's rows were drawn, for clicks
+    pub(super) model_picker_layout: PickerLayout,
     /// Cloud model to select once the in-chat login completes
     pub(super) pending_model: Option<String>,
     /// First visible row of the agents list
@@ -1058,6 +1060,7 @@ impl App {
             plans: Vec::new(),
             active_plan: None,
             model_picker: ModelPicker::default(),
+            model_picker_layout: PickerLayout::default(),
             pending_model: None,
             agents_scroll: 0,
             agents_scroll_detached: false,
@@ -2005,7 +2008,13 @@ impl App {
         if self.context_menu.is_none() && self.click_stop_button(mouse) {
             return;
         }
-        if self.state != AppState::Idle && self.state != AppState::Processing {
+        // The selector takes the click whole: one that picks a model and
+        // closes it must not also land on what is under it.
+        let selecting = self.state == AppState::SelectingModel;
+        if selecting {
+            self.model_selector_mouse(mouse.kind, mouse.column, mouse.row);
+        }
+        if selecting || (self.state != AppState::Idle && self.state != AppState::Processing) {
             self.hover = None;
             self.context_menu = None;
             self.project_press = None;
@@ -2161,7 +2170,9 @@ impl App {
                                 && ((self.log.is_open()
                                     && self.click_log(mouse.column, mouse.row))
                                     || (self.flow.is_open()
-                                        && self.click_flow(mouse.column, mouse.row))))
+                                        && self.click_flow(mouse.column, mouse.row))
+                                    || (self.chat_tab() == ChatTab::Bench
+                                        && self.click_bench(mouse.column, mouse.row))))
                         {
                             self.clear_selection();
                         }
@@ -3080,6 +3091,11 @@ impl App {
     #[must_use]
     pub const fn model_picker(&self) -> &ModelPicker {
         &self.model_picker
+    }
+
+    /// Where the model selector and its rows were drawn this frame.
+    pub fn set_model_picker_layout(&mut self, layout: PickerLayout) {
+        self.model_picker_layout = layout;
     }
 
     /// Get the current spinner character for animations.

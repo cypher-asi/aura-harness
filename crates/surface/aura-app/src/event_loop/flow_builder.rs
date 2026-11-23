@@ -1810,6 +1810,7 @@ mod tests {
             repeats: 1,
             check: None,
             budget_usd: None,
+            classifier: String::new(),
             requested_by: lead,
             apply_root: "/repo".into(),
             started_ms: 0,

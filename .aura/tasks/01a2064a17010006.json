@@ -1,0 +1,12 @@
+{
+  "id": "01a2064a17010006",
+  "title": "keep going with opus",
+  "state": "completed",
+  "agent_id": "3368940924675b173207a46516aefe1b8ea82a4877f9b8ec4c11ae6f513f9b71",
+  "agent_name": "Agent 956",
+  "plan": ".aura/plans/benchmark-arm-with-a-model-per-difficulty_4f1701cc.plan.md",
+  "items": [],
+  "summary": "Now the picker gets a target, so the same `/model` selector can fill a benchmark row instead of switching the session's model:",
+  "updated_ms": 1795402036098,
+  "created_ms": 1795401848577
+}

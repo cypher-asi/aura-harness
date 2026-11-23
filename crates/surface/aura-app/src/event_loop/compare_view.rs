@@ -102,6 +102,11 @@ pub(super) struct EstimateView<'a> {
     /// Arm A as it reads, with Gate's likely pick when Gate routes it
     pub a: String,
     pub b: String,
+    /// Model that classifies the runs' prompts
+    pub classifier: &'a str,
+    /// Whether the user named the classifier rather than leaving it to
+    /// Gate
+    pub classifier_named: bool,
     pub judge: &'a str,
     pub repeats: u32,
     pub check: Option<&'a str>,
@@ -136,6 +141,15 @@ impl EstimateView<'_> {
         }
         row(&mut out, "A", &self.a);
         row(&mut out, "B", &self.b);
+        let classifier = if self.classifier_named {
+            route_label(self.classifier)
+        } else {
+            format!(
+                "{} · Gate's choice of fast model; --classifier <model> picks another",
+                route_label(self.classifier)
+            )
+        };
+        row(&mut out, "Classifier", &classifier);
         let repeats = self.repeats as usize;
         let runs = if self.examples.is_empty() {
             format!(
@@ -336,6 +350,9 @@ pub(super) fn render(name: &str, payload: &ComparePayload) -> String {
             None => ", no check command".to_string(),
         },
     );
+    if !payload.classifier.is_empty() {
+        let _ = write!(out, ", classifier {}", route_label(&payload.classifier));
+    }
 
     let width = a_label.chars().count().max(32);
     let row = |out: &mut String, label: &str, a: String, b: String| {
@@ -759,6 +776,7 @@ mod tests {
             repeats: 3,
             check: Some("cargo test".to_string()),
             budget_usd: None,
+            classifier: "aura-claude-haiku-4-5".to_string(),
             requested_by: AgentId::generate(),
             apply_root: PathBuf::from("/repo"),
             started_ms: 0,
@@ -804,6 +822,18 @@ mod tests {
         assert!(
             text.contains("A gate vs B aura-claude-opus-4-7 (cloud), 3 runs each"),
             "{text}"
+        );
+        assert!(
+            text.contains(", check `cargo test`, classifier aura-claude-haiku-4-5 (cloud)\n"),
+            "{text}"
+        );
+        let older = ComparePayload {
+            classifier: String::new(),
+            ..payload()
+        };
+        assert!(
+            !render("Compare #1", &older).contains("classifier"),
+            "older records name no classifier"
         );
         assert_eq!(line(&text, "median time"), ["median time", "42s", "42s"]);
         assert_eq!(
@@ -959,6 +989,8 @@ mod tests {
             examples: &[],
             a: "gate (likely aura-claude-sonnet-4-6 (cloud))".to_string(),
             b: "aura-claude-opus-4-7 (cloud)".to_string(),
+            classifier: "aura-claude-haiku-4-5",
+            classifier_named: false,
             judge: "aura-claude-opus-4-7",
             repeats: 3,
             check: None,
@@ -976,6 +1008,7 @@ mod tests {
         for row in [
             "\n  A             gate (likely aura-claude-sonnet-4-6 (cloud))\n",
             "\n  B             aura-claude-opus-4-7 (cloud)\n",
+            "\n  Classifier    aura-claude-haiku-4-5 (cloud) · Gate's choice of fast model;\n                --classifier <model> picks another\n",
             "\n  Runs          3 per arm, up to 4 at a time,\n                each in its own copy of the workspace\n",
             "\n  Check         none · --check <cmd> or AURA_CHECK_COMMAND counts passes\n",
             "\n  Estimate      ~$5.50 at list prices\n                A ~$1.50 · B ~$4.00\n                judge ~unknown on ",
@@ -1014,6 +1047,8 @@ mod tests {
             examples: &[],
             a: "claude-sonnet-4-6".to_string(),
             b: "claude-opus-4-7".to_string(),
+            classifier: "claude/claude-haiku-4-5",
+            classifier_named: true,
             judge: "claude-opus-4-7",
             repeats: 2,
             check: Some("cargo test"),
@@ -1036,6 +1071,10 @@ mod tests {
         assert!(
             text.contains("\n  A             claude-sonnet-4-6\n"),
             "{text}"
+        );
+        assert!(
+            text.contains("\n  Classifier    claude-haiku-4-5 (claude plan)\n"),
+            "a named classifier reads as itself: {text}"
         );
         assert!(text.contains("\n  Runs          2 per arm"), "{text}");
         assert!(
@@ -1153,6 +1192,8 @@ mod tests {
             examples: &tasks,
             a: "gate".to_string(),
             b: "opus".to_string(),
+            classifier: "haiku",
+            classifier_named: true,
             judge: "opus",
             repeats: 2,
             check: None,

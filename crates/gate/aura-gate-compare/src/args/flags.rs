@@ -11,6 +11,9 @@ const ON: [&str; 4] = ["on", "yes", "true", "1"];
 /// What `--learn=` takes for off.
 const OFF: [&str; 4] = ["off", "no", "false", "0"];
 
+/// What `--classifier` takes for Gate's automatic choice.
+const AUTO: &str = "auto";
+
 /// Set option `--name` of `request` to `value`.
 pub(super) fn set_flag(
     request: &mut CompareRequest,
@@ -26,6 +29,7 @@ pub(super) fn set_flag(
         "a" => request.a = Some(given()?),
         "against" | "vs" | "b" => request.against = Some(given()?),
         "check" => request.check = Some(given()?),
+        "classifier" => request.classifier = classifier(required(name, value)?),
         "learn" => request.learn = learn(value)?,
         "repeats" | "runs" | "n" => request.repeats = repeats(value)?,
         "budget" => request.budget_usd = Some(budget(value)?),
@@ -59,6 +63,11 @@ fn session(value: &str) -> Result<SessionPick, String> {
 fn examples(value: &str) -> Result<usize, String> {
     let tasks = value.trim().parse::<usize>().ok().filter(|n| *n > 0);
     tasks.ok_or_else(|| format!("--examples takes how many example tasks to run, not `{value}`"))
+}
+
+/// The model `--classifier` names; `None` for `auto`, Gate's choice.
+fn classifier(value: &str) -> Option<String> {
+    (!value.eq_ignore_ascii_case(AUTO)).then(|| value.to_string())
 }
 
 /// Whether `--learn=` turns learning on.
