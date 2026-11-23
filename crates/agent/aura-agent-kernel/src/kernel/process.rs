@@ -30,12 +30,12 @@ impl Kernel {
         if tx.tx_type == TransactionType::ToolProposal {
             return self.process_tool_proposal(tx, None).await;
         }
-        let seq = self.next_seq()?;
-        let result = self.process_tx(&tx, seq).await?;
+        let claim = self.claim_seq()?;
+        let result = self.process_tx(&tx, claim.seq)?;
         self.store
             .append_entry_direct_with_runtime_capabilities(
                 self.agent_id,
-                seq,
+                claim.seq,
                 &result.entry,
                 result.runtime_capability_update.as_ref(),
                 result.clear_runtime_capabilities,
@@ -45,7 +45,7 @@ impl Kernel {
                     "append_entry_direct_with_runtime_capabilities: {e}"
                 ))
             })?;
-        self.notify_entry(&result.entry);
+        self.notify_entry(claim, &result.entry);
         Ok(result)
     }
 
@@ -62,12 +62,12 @@ impl Kernel {
         if tx.tx_type == TransactionType::ToolProposal {
             return self.process_tool_proposal(tx, Some(token)).await;
         }
-        let seq = self.next_seq()?;
-        let result = self.process_tx(&tx, seq).await?;
+        let claim = self.claim_seq()?;
+        let result = self.process_tx(&tx, claim.seq)?;
         self.store
             .append_entry_dequeued_with_runtime_capabilities(
                 self.agent_id,
-                seq,
+                claim.seq,
                 &result.entry,
                 token,
                 result.runtime_capability_update.as_ref(),
@@ -78,7 +78,7 @@ impl Kernel {
                     "append_entry_dequeued_with_runtime_capabilities: {e}"
                 ))
             })?;
-        self.notify_entry(&result.entry);
+        self.notify_entry(claim, &result.entry);
         Ok(result)
     }
 
@@ -150,12 +150,12 @@ impl Kernel {
         &self,
         tx: &Transaction,
     ) -> Result<ProcessResult, crate::KernelError> {
-        let seq = self.next_seq()?;
-        let result = self.process_tx(tx, seq).await?;
+        let claim = self.claim_seq()?;
+        let result = self.process_tx(tx, claim.seq)?;
         self.store
-            .append_entry_direct(self.agent_id, seq, &result.entry)
+            .append_entry_direct(self.agent_id, claim.seq, &result.entry)
             .map_err(|e| crate::KernelError::Store(format!("append_entry_direct: {e}")))?;
-        self.notify_entry(&result.entry);
+        self.notify_entry(claim, &result.entry);
         Ok(result)
     }
 
@@ -181,11 +181,7 @@ impl Kernel {
         Ok(())
     }
 
-    pub(super) async fn process_tx(
-        &self,
-        tx: &Transaction,
-        seq: u64,
-    ) -> Result<ProcessResult, crate::KernelError> {
+    fn process_tx(&self, tx: &Transaction, seq: u64) -> Result<ProcessResult, crate::KernelError> {
         let window = self.window_hashes(seq)?;
         let context_hash = hash_tx_with_hashes(tx, &window)?;
 

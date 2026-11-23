@@ -48,7 +48,8 @@ impl Kernel {
         fill: impl FnOnce(RecordEntryBuilder) -> RecordEntryBuilder,
         token: Option<DequeueToken>,
     ) -> Result<RecordEntry, crate::KernelError> {
-        let seq = self.next_seq()?;
+        let claim = self.claim_seq()?;
+        let seq = claim.seq;
         let window = self.window_hashes(seq)?;
         let context_hash = hash_tx_with_hashes(&tx, &window)?;
         let entry = fill(RecordEntry::builder(seq, tx).context_hash(context_hash)).build();
@@ -62,7 +63,7 @@ impl Kernel {
                 .append_entry_direct(self.agent_id, seq, &entry)
                 .map_err(|e| crate::KernelError::Store(format!("append_entry_direct: {e}")))?,
         }
-        self.notify_entry(&entry);
+        self.notify_entry(claim, &entry);
         Ok(entry)
     }
 

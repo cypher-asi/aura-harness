@@ -17,10 +17,10 @@ use std::time::Instant;
 /// Handle returned alongside a streaming response so the caller can finalize
 /// the record entry once the stream completes.
 ///
-/// The handle reserves a sequence number and snapshots the record window at
-/// construction time so that `record_completed`/`record_failed` can produce
-/// a context hash deterministically from the state observed at the start of
-/// the streaming call (Invariant §6).
+/// The handle snapshots the record window at construction time so that
+/// `record_completed`/`record_failed` can produce a context hash
+/// deterministically from the state observed at the start of the streaming
+/// call (Invariant §6). It claims its sequence number when it appends.
 ///
 /// Both finalization methods consume `self` so that Invariant §3 holds by
 /// construction: a given handle can be finalized at most once, and the
@@ -29,6 +29,7 @@ use std::time::Instant;
 pub struct ReasonStreamHandle {
     pub(super) kernel_store: Arc<dyn Store>,
     pub(super) agent_id: AgentId,
+    /// The kernel's sequence lock ([`super::seq::claim`])
     pub(super) seq_counter: Arc<Mutex<u64>>,
     /// Context hashes of the window snapshotted at construction
     pub(super) window: Vec<ContextHash>,
@@ -61,28 +62,15 @@ impl ReasonStreamHandle {
         self
     }
 
-    fn next_seq(&self) -> Result<u64, crate::KernelError> {
-        let head_seq = self
-            .kernel_store
-            .get_head_seq(self.agent_id)
-            .map_err(|e| crate::KernelError::Store(format!("get_head_seq: {e}")))?;
-        let next = head_seq + 1;
-        let mut seq = self
-            .seq_counter
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *seq = next + 1;
-        Ok(next)
-    }
-
     fn append(self, tx: Transaction) -> Result<RecordEntry, crate::KernelError> {
-        // Allocate the sequence atomically with the append so streaming
+        // Claim the sequence number for the append so streaming
         // reasoning interleaves cleanly with other kernel paths that
         // also draw from `Kernel::seq`. The context hash comes from the
         // *snapshot* window captured when `reason_streaming` started,
         // which is the state the model actually reasoned over
         // (Invariant §6).
-        let seq = self.next_seq()?;
+        let claim = super::seq::claim(&*self.kernel_store, self.agent_id, &self.seq_counter)?;
+        let seq = claim.seq;
         let context_hash = hash_tx_with_hashes(&tx, &self.window)?;
         let entry = RecordEntry::builder(seq, tx)
             .context_hash(context_hash)
@@ -92,6 +80,7 @@ impl ReasonStreamHandle {
             .append_entry_direct(self.agent_id, seq, &entry)
             .map_err(|e| crate::KernelError::Store(format!("append_entry_direct: {e}")))?;
         remember(&self.recent, &entry);
+        drop(claim);
         if let Some(observer) = self.observer.as_ref() {
             observer.on_entry(&entry);
         }

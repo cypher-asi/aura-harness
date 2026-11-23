@@ -47,6 +47,7 @@ use std::sync::{Arc, Mutex};
 mod mode_switch_tests;
 mod process;
 mod reason;
+mod seq;
 mod stream;
 #[cfg(test)]
 mod tests;
@@ -360,6 +361,9 @@ pub struct Kernel {
     pub(super) config: KernelConfig,
     /// Agent this kernel instance is bound to.
     pub agent_id: AgentId,
+    /// The sequence number after the last one claimed, under the lock each
+    /// record path holds from claiming its number through its append
+    /// ([`seq::claim`])
     pub(super) seq: Arc<Mutex<u64>>,
     /// Context hashes of the agent's newest entries, read in place of
     /// the store's while they reach its head ([`window`])
@@ -479,24 +483,17 @@ impl Kernel {
     // Sequence helpers
     // -----------------------------------------------------------------------
 
-    pub(super) fn next_seq(&self) -> Result<u64, crate::KernelError> {
-        let head_seq = self
-            .store
-            .get_head_seq(self.agent_id)
-            .map_err(|e| crate::KernelError::Store(format!("get_head_seq: {e}")))?;
-        let next = head_seq + 1;
-        let mut seq = self
-            .seq
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *seq = next + 1;
-        Ok(next)
+    /// Claims the agent's next sequence number ([`seq::claim`]).
+    fn claim_seq(&self) -> Result<seq::Claim<'_>, crate::KernelError> {
+        seq::claim(&*self.store, self.agent_id, &self.seq)
     }
 
-    /// Pass `entry`, just appended, to the record observer, and keep its
-    /// context hash for the entries after it.
-    pub(super) fn notify_entry(&self, entry: &RecordEntry) {
+    /// Keep the context hash of `entry`, just appended at `claim`'s
+    /// number, for the entries after it, then let the claim go and pass
+    /// the entry to the record observer.
+    fn notify_entry(&self, claim: seq::Claim<'_>, entry: &RecordEntry) {
         window::remember(&self.recent, entry);
+        drop(claim);
         if let Some(observer) = self.config.record_observer.as_ref() {
             observer.on_entry(entry);
         }

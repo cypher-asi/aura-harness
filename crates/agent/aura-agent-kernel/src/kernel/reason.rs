@@ -10,6 +10,7 @@
 //!   event stream; the caller finalizes the record when the stream
 //!   drains.
 
+use super::seq::Claim;
 use super::{Kernel, ReasonResult, ReasonStreamHandle};
 use crate::context::hash_tx_with_hashes;
 use aura_core_types::{RecordEntry, Transaction, TransactionType};
@@ -42,9 +43,9 @@ impl Kernel {
                 // variant (rate limit, transient, bad request, …)
                 // instead of string-matching.
                 let reason_str = e.to_string();
-                let seq = self.next_seq()?;
+                let claim = self.claim_seq()?;
                 if let Err(record_err) =
-                    self.record_reasoning_failure(seq, "complete", &reason_str, (&model, purpose))
+                    self.record_reasoning_failure(claim, "complete", &reason_str, (&model, purpose))
                 {
                     error!(
                         kind = "reason_sync",
@@ -60,9 +61,9 @@ impl Kernel {
                     "model provider did not respond within {}ms",
                     self.config.proposal_timeout_ms
                 );
-                let seq = self.next_seq()?;
+                let claim = self.claim_seq()?;
                 if let Err(record_err) = self.record_reasoning_failure(
-                    seq,
+                    claim,
                     "complete_timeout",
                     &reason_str,
                     (&model, purpose),
@@ -112,7 +113,8 @@ impl Kernel {
             None,
         );
 
-        let seq = self.next_seq()?;
+        let claim = self.claim_seq()?;
+        let seq = claim.seq;
         let window = self.window_hashes(seq)?;
         let context_hash = hash_tx_with_hashes(&tx, &window)?;
 
@@ -123,7 +125,7 @@ impl Kernel {
         self.store
             .append_entry_direct(self.agent_id, seq, &entry)
             .map_err(|e| crate::KernelError::Store(format!("append_entry_direct: {e}")))?;
-        self.notify_entry(&entry);
+        self.notify_entry(claim, &entry);
 
         Ok(ReasonResult { entry, response })
     }
@@ -174,9 +176,9 @@ impl Kernel {
                     // the typed `ReasonerError` is preserved through
                     // `KernelError::Reasoner` so the agent loop can keep
                     // its variant-based retry classification.
-                    let seq = self.next_seq()?;
+                    let claim = self.claim_seq()?;
                     if let Err(record_err) = self.record_reasoning_failure(
-                        seq,
+                        claim,
                         "streaming_handshake",
                         &reason_str,
                         (&model, purpose),
@@ -195,9 +197,9 @@ impl Kernel {
                         "streaming model provider did not respond within {}ms",
                         self.config.proposal_timeout_ms
                     );
-                    let seq = self.next_seq()?;
+                    let claim = self.claim_seq()?;
                     if let Err(record_err) = self.record_reasoning_failure(
-                        seq,
+                        claim,
                         "streaming_handshake_timeout",
                         &reason_str,
                         (&model, purpose),
@@ -230,12 +232,13 @@ impl Kernel {
     }
 
     /// Append a `Reasoning` record entry describing a failed provider
-    /// call to `model` made for `purpose`. Used by both `reason` and
-    /// `reason_streaming`'s handshake error paths to keep Invariant §3
-    /// strict: every LLM call attempt produces a record entry.
+    /// call to `model` made for `purpose`, at the claimed number. Used by
+    /// both `reason` and `reason_streaming`'s handshake error paths to
+    /// keep Invariant §3 strict: every LLM call attempt produces a record
+    /// entry.
     fn record_reasoning_failure(
         &self,
-        seq: u64,
+        claim: Claim<'_>,
         stage: &str,
         error_reason: &str,
         (model, purpose): (&ModelName, Option<ModelCallPurpose>),
@@ -258,6 +261,7 @@ impl Kernel {
             payload_bytes,
             None,
         );
+        let seq = claim.seq;
         let window = self.window_hashes(seq)?;
         let context_hash = hash_tx_with_hashes(&tx, &window)?;
         let entry = RecordEntry::builder(seq, tx)
@@ -266,7 +270,7 @@ impl Kernel {
         self.store
             .append_entry_direct(self.agent_id, seq, &entry)
             .map_err(|e| crate::KernelError::Store(format!("append_entry_direct: {e}")))?;
-        self.notify_entry(&entry);
+        self.notify_entry(claim, &entry);
         Ok(())
     }
 }
